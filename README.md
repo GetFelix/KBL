@@ -123,7 +123,10 @@ python3 -m http.server 8000
 ```
 
 `check-frame.mjs` looks for Chrome, Chromium or Edge in the usual install paths; set `CHROME` to a binary
-otherwise. It checks that the page loads without errors at laptop and phone size, that frames later in the run
+otherwise. Chrome gets 60 s to start (`CHROME_STARTUP_MS` changes that); if it exits or never comes up, the error
+includes its exit code and stderr. The launcher is `scripts/lib/browser.mjs`; new checks should use it.
+
+The check confirms that the page loads without errors at laptop and phone size, that frames later in the run
 differ from the empty start, and that each fixture contains the records, and for moving elements the packets,
 behind every row of [the design's element table](docs/design.md#what-each-element-is-drawn-from). That proves the
 fixtures exercise the page, not pixel by pixel that each element is drawn; the stills in `docs/screenshots/` are
