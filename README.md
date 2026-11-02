@@ -91,7 +91,7 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | M | Milestone | What it proves | State |
 |---|---|---|---|
 | 0 | The viewer, locked | The swarm reads well, at 8 workers and at 50, before Felix is involved | In progress: [style frame](docs/art.md) |
-| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names |
+| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names, and `agents-tool` [creates a run](#creating-a-run) |
 | 2 | Shared state | The board and locks never silently overwrite | Planned |
 | 3 | Real models and budgets | A run never spends past its limit | Planned |
 | 4 | Replay a run | Scrub to any moment, then follow live with no gap | Planned, needs range reads in the gateway client |
@@ -126,11 +126,50 @@ begins with a new tenant and an empty log.
 A Felix principal comes from an ID token the tenant trusts, and the stand-in provider signs one for any name, so a
 script can be a different agent per name. Exchange the token at the control plane
 (`POST /v1/tenants/agents/token/exchange`) for a Felix token. The seed script makes `agents-admin` the tenant's
-administrator: `agents-tool` (the command that will create runs, see [docs/design.md](docs/design.md)) signs in as that name to create a run's streams and caches and to grant each agent only
-what its role allows. The stack creates no runs itself. The gateway's scope gives a viewer read-only access to
-`agents.log.<run>` and `agents.blobs.<run>` for one run at a time, and only for a run it was granted.
+administrator: `agents-tool` (see [Creating a run](#creating-a-run)) signs in as that name to create a run's streams and caches. The stack creates no runs itself.
+The gateway's scope gives a viewer read-only access to `agents.log.<run>` and `agents.blobs.<run>` for one run at a time, and only for a run it was granted.
 
 The stand-in provider signs in anyone, so never expose these ports beyond localhost.
+
+## Creating a run
+
+A run is one job: a goal, a budget and a team of agents, with its own set of Felix resources. `agents-tool run create`
+makes those resources: the run log, the tasks stream with its `workers` consumer group, the messages stream, and the
+board, leases, presence, results, artifacts and spend caches (the nine in [docs/design.md](docs/design.md#resources-per-run);
+spend is a cache used as counters). It then writes `run_started` to the log with the goal, the budget and the agents.
+The run's id must be new, and creating one that exists is refused.
+
+With the [dev stack](#running-felix-locally) running:
+
+```bash
+cargo run -p agents-tool -- run create demo --goal "Review PR 12" --budget-usd 5 --workers 4
+```
+
+```text
+created run demo (9 resources)
+  log      agents.log.demo (run_started at offset 1)
+  tasks    agents.tasks.demo (group workers)
+```
+
+The run lists a `planner` and the workers `w1` to `w4`. `--budget-usd` is in dollars (`5` or `0.25`), and a run can
+list 1 to 64 workers.
+
+The defaults match the dev stack. Point the tool at another Felix with these, as flags or environment variables
+(`agents-tool --help` has the flag names):
+
+| Variable | Default | What |
+|---|---|---|
+| `AGENTS_TENANT`, `AGENTS_NAMESPACE` | `agents`, `default` | Where the run lives |
+| `AGENTS_FELIX_CONTROL_PLANE` | `http://127.0.0.1:8443` | Creates the resources |
+| `AGENTS_FELIX_BROKER` | `127.0.0.1:5000` | Writes `run_started` and creates the group |
+| `AGENTS_FELIX_CA_FILE` | `dev/state/broker-cert.pem` | The certificate the broker is trusted by, relative to where you run the tool |
+| `AGENTS_FELIX_BROKER_NAME` | `localhost` | The name in the broker's certificate |
+| `AGENTS_IDP` | `http://127.0.0.1:9400` | The stand-in identity provider that signs in `agents-admin` |
+| `AGENTS_ID_TOKEN` | none | An ID token for the tenant, used instead of the stand-in provider |
+
+The tool connects to the broker before it creates anything, so a wrong certificate path or a broker that is down fails
+without using up the id. If it stops after that (the broker went away, say), the run is left without `run_started` and
+the id cannot be used again, so use a new one.
 
 ## Developing
 
@@ -177,7 +216,7 @@ conflicts never do, and times a frame on the burst fixture against a reference f
 tray, the budget ring, log rows, captions and timeline markers) and checks that each opens the step panel for the
 record behind it.
 
-CI runs six jobs, lint (with the fixture regeneration), style frame, motion rules, step panel, the Rust checks (format, clippy, tests) and the dev stack, and requires the `CI ok` check.
+CI runs six jobs, lint (with the fixture regeneration), style frame, motion rules, step panel, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run and checks that creating it again is refused), and requires the `CI ok` check.
 
 ## Documentation
 
