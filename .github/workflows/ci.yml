@@ -90,6 +90,10 @@ jobs:
             echo "a second create of the same run succeeded" >&2
             exit 1
           fi
+      - name: Start felix-mcp and list its tools
+        run: |
+          cargo build -p felix-mcp
+          node dev/check-mcp.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml logs
       - if: always()

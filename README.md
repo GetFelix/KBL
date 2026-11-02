@@ -91,7 +91,7 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | M | Milestone | What it proves | State |
 |---|---|---|---|
 | 0 | The viewer, locked | The swarm reads well, at 8 workers and at 50, before Felix is involved | In progress: [style frame](docs/art.md) |
-| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names, and `agents-tool` [creates a run](#creating-a-run) |
+| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run), and [`felix-mcp`](#giving-an-agent-its-tools) lists its tools to an MCP host |
 | 2 | Shared state | The board and locks never silently overwrite | Planned |
 | 3 | Real models and budgets | A run never spends past its limit | Planned |
 | 4 | Replay a run | Scrub to any moment, then follow live with no gap | Planned, needs range reads in the gateway client |
@@ -171,6 +171,47 @@ The tool connects to the broker before it creates anything, so a wrong certifica
 without using up the id. If it stops after that (the broker went away, say), the run is left without `run_started` and
 the id cannot be used again, so use a new one.
 
+## Giving an agent its tools
+
+`felix-mcp` is the server an agent reaches Felix through. It speaks [MCP](https://modelcontextprotocol.io) over stdio, so
+any MCP host can start it: Claude Code, the Claude Agent SDK, or a host from another vendor. One `felix-mcp` process
+serves one agent and holds that agent's Felix token, so the agent can do on Felix only what its token allows.
+
+It has one tool so far, `run_info`, which reports the run, the agent's name and the tenant. The task tools come next.
+On start it connects to the broker, and it exits with the broker's error if the token or address is wrong, so a host
+sees a failed server instead of a list of tools that cannot work.
+
+With the [dev stack](#running-felix-locally) running, build it and run the check that starts it the way a host would,
+lists its tools and calls one:
+
+```bash
+cargo build -p felix-mcp
+node dev/check-mcp.mjs
+```
+
+To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mcp add`):
+
+```json
+{
+  "mcpServers": {
+    "felix": {
+      "command": "/path/to/target/debug/felix-mcp",
+      "env": {
+        "AGENTS_RUN": "demo",
+        "AGENTS_AGENT": "w1",
+        "AGENTS_FELIX_TOKEN": "<the agent's Felix token>",
+        "AGENTS_FELIX_CA_FILE": "/path/to/dev/state/broker-cert.pem"
+      }
+    }
+  }
+}
+```
+
+The other settings are the same variables as [`agents-tool`](#creating-a-run) (`AGENTS_TENANT`, `AGENTS_NAMESPACE`,
+`AGENTS_FELIX_BROKER`, `AGENTS_FELIX_BROKER_NAME`), with the same defaults. The agent's token is for the broker.
+Issuing a token per agent is not built yet, so for now `dev/check-mcp.mjs` asks the stand-in identity provider for the
+administrator's.
+
 ## Developing
 
 You need Node 22 or later, Python 3, a Chrome or Chromium, and Rust 1.97 or later for the crates. From the repository root:
@@ -216,7 +257,7 @@ conflicts never do, and times a frame on the burst fixture against a reference f
 tray, the budget ring, log rows, captions and timeline markers) and checks that each opens the step panel for the
 record behind it.
 
-CI runs six jobs, lint (with the fixture regeneration), style frame, motion rules, step panel, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run and checks that creating it again is refused), and requires the `CI ok` check.
+CI runs six jobs, lint (with the fixture regeneration), style frame, motion rules, step panel, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
 
 ## Documentation
 
