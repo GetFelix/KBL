@@ -147,11 +147,12 @@
 <script type="module">
 const FLIGHT = 0.6;      // wall seconds per flight, at any speed
 const MERGE = 0.25;      // same-edge window, wall seconds
-const FLOW_AT = 150;     // packets in flight before busy edges become flow lines
+let FLOW_AT = 150;       // packets in flight before busy edges become flow lines (?flow=N for tests)
 const VIS = 90;          // claim visibility timeout
 const SPEEDS = [1, 4, 8, 16];
 
 const params = new URLSearchParams(location.search);
+if (+params.get('flow') > 0) FLOW_AT = +params.get('flow');
 const root = document.documentElement;
 const reduced = params.get('motion') === 'reduced' || matchMedia('(prefers-reduced-motion: reduce)').matches;
 const theme = params.get('theme') || localGet('fa-theme') || 'dark';
@@ -445,6 +446,25 @@ function alpha(col, a) {
 
 // ---------- drawing ----------
 
+// Layers that only change with the layout or theme are painted once, off screen,
+// and copied each frame; a full-size gradient and a dot grid cost more than the packets.
+const layers = new Map();
+function blit(ctx, name, paint) {
+  if (L.swarmW < 1 || L.swarmH < 1) return;
+  const key = [L.swarmW, L.swarmH, L.cx, L.cy, L.R, DPR, C.dark].join('|');
+  let l = layers.get(name);
+  if (!l || l.key !== key) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.round(L.swarmW * DPR); cv.height = Math.round(L.swarmH * DPR);
+    const c = cv.getContext('2d');
+    c.setTransform(DPR, 0, 0, DPR, 0, 0);
+    paint(c);
+    l = { key, cv };
+    layers.set(name, l);
+  }
+  ctx.drawImage(l.cv, 0, 0, L.swarmW, L.swarmH);
+}
+
 let hits = [];
 let cur = null;
 let WALL = 0;
@@ -459,15 +479,17 @@ function drawScene(T, speed) {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.clearRect(0, 0, L.W, L.H);
   hits = [];
+  shapes = 0;
 
-  // backdrop
-  const g = ctx.createRadialGradient(L.cx, L.cy, 0, L.cx, L.cy, L.R * 1.4);
-  g.addColorStop(0, C.dark ? 'rgba(20, 120, 150, 0.10)' : 'rgba(20, 140, 170, 0.07)');
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, L.swarmW, L.swarmH);
-  ctx.fillStyle = C.line;
-  for (let x = 16; x < L.swarmW; x += 28) for (let y = 16; y < L.swarmH; y += 28) ctx.fillRect(x, y, 1, 1);
+  blit(ctx, 'backdrop', (c) => {
+    const g = c.createRadialGradient(L.cx, L.cy, 0, L.cx, L.cy, L.R * 1.4);
+    g.addColorStop(0, C.dark ? 'rgba(20, 120, 150, 0.10)' : 'rgba(20, 140, 170, 0.07)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    c.fillStyle = g;
+    c.fillRect(0, 0, L.swarmW, L.swarmH);
+    c.fillStyle = C.line;
+    for (let x = 16; x < L.swarmW; x += 28) for (let y = 16; y < L.swarmH; y += 28) c.fillRect(x, y, 1, 1);
+  });
 
   // ring guide and spokes
   ctx.strokeStyle = C.line;
@@ -495,11 +517,13 @@ function drawScene(T, speed) {
   drawBoard(ctx, s, T, w);
   for (const [name, i] of slotOf) drawWorker(ctx, s, name, L.slots[i], T, w);
   drawFlights(ctx, s, T, speed);
-  const vg = ctx.createRadialGradient(L.cx, L.cy, L.R * 0.7, L.cx, L.cy, Math.hypot(L.swarmW, L.swarmH) * 0.62);
-  vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(1, C.dark ? 'rgba(0,0,0,0.45)' : 'rgba(40,70,90,0.08)');
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, L.swarmW, L.swarmH);
+  blit(ctx, 'vignette', (c) => {
+    const vg = c.createRadialGradient(L.cx, L.cy, L.R * 0.7, L.cx, L.cy, Math.hypot(L.swarmW, L.swarmH) * 0.62);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, C.dark ? 'rgba(0,0,0,0.45)' : 'rgba(40,70,90,0.08)');
+    c.fillStyle = vg;
+    c.fillRect(0, 0, L.swarmW, L.swarmH);
+  });
   drawNotes(ctx, s, T, w);
   updateHeader(s, T);
   return s;
@@ -914,7 +938,9 @@ function detail(e) {
   }
 }
 
+let shapes = 0;
 function shapeAt(ctx, cls, x, y, size, n) {
+  shapes++;
   const col = { post: C.cyan, claim: C.cyan, back: C.amber, dead: C.amber, result: C.result, dup: C.result, write: C.result, conflict: C.amber, refused: C.red, msg: C.violet }[cls];
   ctx.fillStyle = col;
   ctx.shadowColor = col;
@@ -944,16 +970,25 @@ function badge(ctx, x, y, label, col) {
   ctx.fillText(label, x + tw / 2, y + 0.5);
 }
 
-function drawFlights(ctx, s, T, speed) {
+// The packets mid-flight at T: [flight, progress, duration]. A pure function of T and speed.
+function activeFlights(T, speed) {
   const w = FLIGHT * speed;
-  const fl = flightsFor(speed);
   const active = [];
-  for (const f of fl) {
+  for (const f of flightsFor(speed)) {
     const dur = f.cls === 'refused' || f.cls === 'conflict' ? w * 2 : f.cls === 'dead' ? w * 1.8 : w;
     const p = (T - f.t) / dur;
     if (p >= 0 && p < 1) active.push([f, p, dur]);
   }
+  return active;
+}
+
+let flowEdges = 0;
+function drawFlights(ctx, s, T, speed) {
+  const w = FLIGHT * speed;
+  const fl = flightsFor(speed);
+  const active = activeFlights(T, speed);
   const flow = active.length > FLOW_AT;
+  flowEdges = 0;
   if (flow) {
     const per = new Map();
     for (const a of active) { const k = a[0].from + '|' + a[0].to; per.set(k, (per.get(k) || []).concat([a])); }
@@ -968,6 +1003,7 @@ function drawFlights(ctx, s, T, speed) {
       ctx.font = '600 11px "JetBrains Mono"'; ctx.fillStyle = C.text; ctx.textAlign = 'center';
       ctx.fillText(String(list.reduce((n, a) => n + a[0].n, 0)), m.x, m.y - 6);
       list.forEach((a) => (a.skip = true));
+      flowEdges++;
     }
   }
   for (const f of fl) {
@@ -1267,6 +1303,12 @@ function drawTimeline(T, s) {
     ctx.fillStyle = C.dark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)';
     ctx.fillRect(gx, y + 1, gw, laneH - 2);
   });
+  // stretches that play at 10x
+  ctx.fillStyle = alpha(C.muted, 0.55);
+  for (const [a, b] of quietSpans(play.speed)) {
+    if (X(b) - X(a) < 6) continue;
+    for (let x = X(a); x < X(b) - 1; x += 5) ctx.fillRect(x, top + 4 + lanes.length * laneH + 1, 3, 2);
+  }
   for (const sp of spans) {
     const i = lanes.indexOf(sp.who);
     if (i < 0) continue;
@@ -1413,6 +1455,21 @@ function quiet(T, speed) {
   return T - prev > w && next - T > 3;
 }
 
+// The stretches quiet() would skip, for the timeline to mark. Same rule, found by walking the flight times.
+const quietCache = new Map();
+function quietSpans(speed) {
+  if (quietCache.has(speed)) return quietCache.get(speed);
+  const w = FLIGHT * speed * 2;
+  const out = [];
+  const edges = [[-Infinity, animTimes[0]], ...animTimes.slice(1).map((t, i) => [animTimes[i], t]), [animTimes[animTimes.length - 1], Infinity]];
+  for (const [prev, next] of edges) {
+    const a = Math.max(0, prev + w), b = Math.min(END, next - 3);
+    if (b > a) out.push([a, b]);
+  }
+  quietCache.set(speed, out);
+  return out;
+}
+
 function render() {
   const s = drawScene(play.T, play.speed);
   drawTimeline(play.T, s);
@@ -1439,6 +1496,15 @@ window.renderAt = (T, speed, wall) => { wallNow = wall ?? null; play.playing = f
 window.runEnd = END;
 // For scripts/check-frame.mjs: what the loaded run contains.
 window.frameInfo = () => ({ kinds: [...new Set(events.map((e) => e.kind))], flights: [...new Set(rawFlights.map((f) => f.cls))], end: END });
+// For scripts/check-motion.mjs.
+window.motionProbe = {
+  inFlight: (T, speed) => activeFlights(T, speed).length,
+  merged: (speed) => flightsFor(speed).map((f) => ({ t: f.t, from: f.from, to: f.to, cls: f.cls, n: f.n, kind: f.ev.kind })),
+  quiet, quietSpans, flowAt: () => FLOW_AT, flowEdges: () => flowEdges, shapes: () => shapes, reduced: () => reduced,
+  state: () => ({ T: play.T, speed: play.speed, wall: wallNow, playing: play.playing }),
+  canvas: () => scene.toDataURL(),
+  dropLayers: () => layers.clear(),
+};
 if (params.has('t')) { root.dataset.ready = '1'; }
 else requestAnimationFrame(tick);
 if (params.get('step')) {

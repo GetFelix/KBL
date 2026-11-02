@@ -112,6 +112,9 @@ python3 prototype/make-fixture.py
 # Play both fixtures in headless Chrome
 node scripts/check-frame.mjs
 
+# Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
+node scripts/check-motion.mjs
+
 # Serve the repository, then open http://localhost:8000/prototype/style-frame.html
 python3 -m http.server 8000
 ```
@@ -123,7 +126,11 @@ behind every row of [the design's element table](docs/design.md#what-each-elemen
 fixtures exercise the page, not pixel by pixel that each element is drawn; the stills in `docs/screenshots/` are
 the visual record.
 
-CI runs `lint.mjs`, the fixture regeneration and `check-frame.mjs` as two jobs, and requires the `CI ok` check.
+`check-motion.mjs` checks the rules in [docs/design.md](docs/design.md) under "Motion and aggregation". It seeks to
+a moment and compares the frame with the one playback drew, checks that bursts of events merge into one packet but refusals and
+conflicts never do, and times a frame on the burst fixture against a budget.
+
+CI runs three jobs, lint (with the fixture regeneration), style frame and motion rules, and requires the `CI ok` check.
 
 ## Documentation
 
