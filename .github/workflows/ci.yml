@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A merge's run on main is never cancelled by the next merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/lint.mjs
+      # The fixtures are generated; the committed files must match the script.
+      - run: python3 prototype/make-fixture.py
+      - run: git diff --exit-code -- prototype
+
+  frame:
+    name: style frame
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Headless Chrome is preinstalled on the runner.
+      - run: node scripts/check-frame.mjs
+
+  # The one check branch protection requires.
+  ci-ok:
+    name: CI ok
+    if: always()
+    needs: [lint, frame]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          test "${{ needs.lint.result }}" = success
+          test "${{ needs.frame.result }}" = success

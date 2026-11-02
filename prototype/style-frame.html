@@ -1437,6 +1437,8 @@ render();
 // Frame-exact rendering for recordings: renderAt(T, speed) draws one frame.
 window.renderAt = (T, speed, wall) => { wallNow = wall ?? null; play.playing = false; play.T = clamp(T, 0, END); play.speed = speed; syncButtons(); render(); return true; };
 window.runEnd = END;
+// For scripts/check-frame.mjs: what the loaded run contains.
+window.frameInfo = () => ({ kinds: [...new Set(events.map((e) => e.kind))], flights: [...new Set(rawFlights.map((f) => f.cls))], end: END });
 if (params.has('t')) { root.dataset.ready = '1'; }
 else requestAnimationFrame(tick);
 if (params.get('step')) {

@@ -98,6 +98,33 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | 6 | Any host, at scale | Claude Code as an agent, 50 agents, broker loss | Planned |
 | 7 | Self-hosting | Anyone can run it | Planned |
 
+## Developing
+
+You need Node 22 or later, Python 3 and a Chrome or Chromium. From the repository root:
+
+```bash
+# Syntax of the page and scripts, and no em dashes in the docs
+node scripts/lint.mjs
+
+# Rewrite the two fixtures; `git diff prototype` should stay empty
+python3 prototype/make-fixture.py
+
+# Play both fixtures in headless Chrome
+node scripts/check-frame.mjs
+
+# Serve the repository, then open http://localhost:8000/prototype/style-frame.html
+python3 -m http.server 8000
+```
+
+`check-frame.mjs` looks for Chrome, Chromium or Edge in the usual install paths; set `CHROME` to a binary
+otherwise. It checks that the page loads without errors at laptop and phone size, that frames later in the run
+differ from the empty start, and that each fixture contains the records, and for moving elements the packets,
+behind every row of [the design's element table](docs/design.md#what-each-element-is-drawn-from). That proves the
+fixtures exercise the page, not pixel by pixel that each element is drawn; the stills in `docs/screenshots/` are
+the visual record.
+
+CI runs `lint.mjs`, the fixture regeneration and `check-frame.mjs` as two jobs, and requires the `CI ok` check.
+
 ## Documentation
 
 - [docs/design.md](docs/design.md): the design, data model and build order
