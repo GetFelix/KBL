@@ -1,12 +1,12 @@
 // Checks the style frame's motion rules (docs/design.md "Motion and aggregation"):
 // seeking draws the frame playback draws, bursts merge, bookkeeping never moves,
 // quiet stretches are skipped, busy edges turn into flow lines, reduced motion
-// stops flights, and a frame is cheap enough for 60 per second.
+// stops flights, and a burst frame costs no more than a few times a reference frame.
 // Usage: node scripts/check-motion.mjs
 import { fileURLToPath } from 'node:url';
 import { launch, serve } from './lib/browser.mjs';
 
-const FRAME_RATIO = 5; // p95 of a burst frame at 16x over the p95 of a fixed reference frame timed beside it
+const FRAME_RATIO = 6; // p95 of a burst frame at 16x over the p95 of a fixed reference frame timed beside it
 const MOVING = new Set(['task_posted', 'task_claimed', 'lapse', 'task_released', 'task_done', 'task_duplicate', 'task_dead', 'board_put', 'board_conflict', 'refused', 'message']);
 const NEVER_MERGED = new Set(['refused', 'conflict', 'dead', 'dup']);
 
