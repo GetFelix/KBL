@@ -147,7 +147,8 @@ function redeem(form, reply) {
 createServer((request, response) => {
   const url = new URL(request.url, ISSUER);
   // The browser reads discovery and redeems its code from the web app's origin.
-  // The direct mint below stays closed to pages: any site could ask for a token.
+  // The direct mint below refuses requests that carry an Origin header. Any page can still run the
+  // sign-in flow, so run this stack only on a machine where that is acceptable.
   const cors =
     url.pathname === "/jwks.json" ||
     url.pathname === "/.well-known/openid-configuration" ||

@@ -1,6 +1,7 @@
 // Checks that the stack carries what a run needs: the IdP is trusted, the
 // control plane creates a run's log and grants a viewer, and the gateway lets
-// that viewer follow it while keeping out a run it was not granted.
+// that viewer subscribe to it while keeping out a run it was not granted.
+// It publishes nothing: the gateway's scope is read only.
 //
 //   node dev/check.mjs
 import { createHash } from "node:crypto";
@@ -39,19 +40,21 @@ const admin = (
 console.log("ok   the control plane exchanged the admin's token");
 
 const tenant = `${CONTROL_PLANE}/v1/tenants/${TENANT}`;
-await request("POST", `${tenant}/namespaces/default/streams`, {
-  token: admin,
-  body: {
-    stream: `agents.log.${RUN}`,
-    kind: "Stream",
-    shards: 1,
-    replication_factor: 1,
-    retention: { max_age_seconds: null, max_size_bytes: null },
-    consistency: "Leader",
-    delivery: "AtLeastOnce",
-    durable: true,
-  },
-});
+const createLog = (run) =>
+  request("POST", `${tenant}/namespaces/default/streams`, {
+    token: admin,
+    body: {
+      stream: `agents.log.${run}`,
+      kind: "Stream",
+      shards: 1,
+      replication_factor: 1,
+      retention: { max_age_seconds: null, max_size_bytes: null },
+      consistency: "Leader",
+      delivery: "AtLeastOnce",
+      durable: true,
+    },
+  });
+await createLog(RUN);
 const role = `role:agents-${RUN}-watch`;
 await request("POST", `${tenant}/rbac/policies`, {
   token: admin,
@@ -84,15 +87,17 @@ function follow(run) {
   });
 }
 
-// A new stream's shard takes a moment to be assigned to the broker.
+// A new stream's shard takes a moment to be assigned to, and opened by, the broker.
 let granted = await follow(RUN);
-for (let attempt = 1; attempt < 20 && /not assigned/.test(granted.message ?? ""); attempt++) {
+for (let attempt = 1; attempt < 30 && granted.code === "subscribe_failed"; attempt++) {
   await new Promise((resolve) => setTimeout(resolve, 1000));
   granted = await follow(RUN);
 }
 if (granted.type !== "subscribed") throw new Error(`the viewer could not follow its run: ${JSON.stringify(granted)}`);
-console.log("ok   the gateway let the viewer follow its run");
+console.log("ok   the gateway let the viewer subscribe to its run");
 
-const refused = await follow("somebody-else");
+// The stream exists, so the refusal is about the grant and not about a missing run.
+await createLog("other");
+const refused = await follow("other");
 if (refused.code !== "forbidden") throw new Error(`expected the join to be forbidden, got ${JSON.stringify(refused)}`);
 console.log("ok   the gateway kept the viewer out of a run it was not granted");
