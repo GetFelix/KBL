@@ -6,7 +6,7 @@
 import { fileURLToPath } from 'node:url';
 import { launch, serve } from './lib/browser.mjs';
 
-const FRAME_BUDGET_MS = 20; // p95 of one frame at 16x on the burst; the aim is 16.7 on a laptop, CI runners are slower
+const FRAME_RATIO = 5; // p95 of a burst frame at 16x over the p95 of a fixed reference frame timed beside it
 const MOVING = new Set(['task_posted', 'task_claimed', 'lapse', 'task_released', 'task_done', 'task_duplicate', 'task_dead', 'board_put', 'board_conflict', 'refused', 'message']);
 const NEVER_MERGED = new Set(['refused', 'conflict', 'dead', 'dup']);
 
@@ -150,24 +150,50 @@ try {
   check(reduced.on && reduced.shapes === 0, `reduced motion still draws ${reduced.shapes} packet shapes`);
   console.log(`ok   reduced motion: ${normal} packets become flashes`);
 
-  // Frame cost on the burst at 16x. headless Chrome rasterises in software and the
+  // Frame cost on the burst at 16x. Headless Chrome rasterises in software and the
   // read-back forces the whole frame, so this is an upper bound for a real GPU canvas.
+  // A shared runner can run several times slower than a laptop, so the verdict is a
+  // ratio: each burst frame is timed next to a fixed reference frame (plain canvas
+  // work, none of the page's code) on the same canvas size, so load slows both alike.
+  // The ratio moves only when the page's frame gets dearer. Absolute ms are printed.
   for (const dpr of [1, 2]) {
     await page.setViewport(1440, 900, dpr);
     await open('fixture=fixture-burst.json&t=1');
-    // Three runs, best p95: a stall on a shared runner should not fail the job. The first pass also warms the JIT and the fonts.
-    let ms = null;
+    // Three runs, best ratio: a stall on a shared runner should not fail the job. The first pass also warms the JIT and the fonts.
+    let best = null;
     for (let run = 0; run < 3; run++) {
       const got = await page.eval(`(() => {
-      const c = document.getElementById('scene').getContext('2d'), end = window.runEnd, t = [];
-      for (let i = 0; i < 240; i++) { const a = performance.now(); renderAt((i / 240) * end, 16, 0); c.getImageData(0, 0, 1, 1); t.push(performance.now() - a); }
-      t.sort((x, y) => x - y);
-      return { p50: t[120], p95: t[228], worst: t[239] };
+      const c = document.getElementById('scene').getContext('2d'), end = window.runEnd;
+      const ref = document.createElement('canvas'); ref.width = c.canvas.width; ref.height = c.canvas.height;
+      const r = ref.getContext('2d');
+      const reference = (i) => {
+        r.clearRect(0, 0, ref.width, ref.height);
+        const g = r.createLinearGradient(0, 0, ref.width, ref.height);
+        g.addColorStop(0, '#223'); g.addColorStop(1, '#645');
+        r.fillStyle = g; r.fillRect(0, 0, ref.width, ref.height);
+        for (let k = 0; k < 400; k++) {
+          const x = (k * 97 + i * 13) % ref.width, y = (k * 53) % ref.height;
+          r.beginPath(); r.arc(x, y, 6 + (k % 9), 0, 6.283); r.fillStyle = k % 3 ? '#4ac' : '#ca4'; r.fill();
+          r.strokeStyle = '#fff8'; r.lineWidth = 1.5; r.stroke();
+        }
+        r.font = '14px sans-serif'; r.fillStyle = '#fff';
+        for (let k = 0; k < 40; k++) r.fillText('reference frame ' + k, 20 + (k % 4) * 300, 30 + k * 20);
+        r.getImageData(0, 0, 1, 1);
+      };
+      const p = (t, q) => t.slice().sort((x, y) => x - y)[Math.floor(q * (t.length - 1))];
+      const burst = [], calm = [];
+      for (let i = 0; i < 240; i++) {
+        const a = performance.now(); renderAt((i / 240) * end, 16, 0); c.getImageData(0, 0, 1, 1);
+        const b = performance.now(); reference(i);
+        burst.push(b - a); calm.push(performance.now() - b);
+      }
+      return { p50: p(burst, 0.5), p95: p(burst, 0.95), worst: p(burst, 1), ref50: p(calm, 0.5), ref95: p(calm, 0.95) };
     })()`);
-      if (!ms || got.p95 < ms.p95) ms = got;
+      got.ratio = got.p95 / got.ref95;
+      if (!best || got.ratio < best.ratio) best = got;
     }
-    console.log(`${dpr === 1 ? 'ok  ' : 'info'} frame cost at ${dpr}x pixels: p50 ${ms.p50.toFixed(1)} ms, p95 ${ms.p95.toFixed(1)} ms, worst ${ms.worst.toFixed(1)} ms`);
-    if (dpr === 1) check(ms.p95 < FRAME_BUDGET_MS, `a burst frame takes ${ms.p95.toFixed(1)} ms at p95, over ${FRAME_BUDGET_MS} ms`);
+    console.log(`info frame cost at ${dpr}x pixels: p50 ${best.p50.toFixed(1)} ms, p95 ${best.p95.toFixed(1)} ms, worst ${best.worst.toFixed(1)} ms; reference frame p95 ${best.ref95.toFixed(1)} ms, ratio ${best.ratio.toFixed(2)}`);
+    if (dpr === 1) check(best.ratio < FRAME_RATIO, `a burst frame costs ${best.ratio.toFixed(2)}x the reference frame at p95, over ${FRAME_RATIO}x`);
   }
   for (const p of page.problems) fail(p);
 } finally {
