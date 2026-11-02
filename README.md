@@ -25,7 +25,7 @@ In the headline demo the workers are AI agents reviewing a pull request. They
 reach Felix through an MCP server, so any MCP host can take part without Felix
 code of its own.
 
-> **Status:** design stage. Nothing runs yet. The plan is in
+> **Status:** design stage. The viewer is a style frame and the only thing that runs against Felix is the [dev stack](#running-felix-locally). The plan is in
 > [docs/design.md](docs/design.md) and the work is tracked in
 > [milestones](https://github.com/GetFelix/felix-agents/milestones).
 
@@ -98,6 +98,39 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | 6 | Any host, at scale | Claude Code as an agent, 50 agents, broker loss | Planned |
 | 7 | Self-hosting | Anyone can run it | Planned |
 
+## Running Felix locally
+
+`dev/up.sh` starts the Felix a run needs, in containers, with nothing to install but Docker (with Compose v2) or
+Podman (with a compose provider that honors `depends_on` conditions, such as podman-compose 1.4 or later) and Node 22.
+Set `CONTAINER_ENGINE=docker` or `podman` to choose. Podman on macOS can only mount directories its machine shares, so
+keep the checkout under your home directory.
+
+```bash
+dev/up.sh            # start from scratch and wait until it serves
+node dev/check.mjs   # create a run's log, follow it through the gateway, and check a stranger's run is refused
+dev/down.sh          # stop it and delete its data
+```
+
+It runs Felix 0.6.2 (a control plane and one broker, which records the principal that published each event) and
+felix-gateway 0.8.0, plus a stand-in identity provider. The stack keeps nothing between starts, so every `up.sh`
+begins with a new tenant and an empty log.
+
+| What | Where |
+|---|---|
+| Control plane (REST) | `http://127.0.0.1:8443`, tenant `agents`, namespace `default` |
+| Broker (QUIC) | `127.0.0.1:5000`, certificate written to `dev/state/broker-cert.pem` |
+| Gateway (WebSocket) | `ws://127.0.0.1:8787/ws`, configured by [dev/scope.toml](dev/scope.toml) |
+| Identity provider | `http://127.0.0.1:9400`; `/token?sub=<name>&aud=felix-agents` mints an ID token for anyone |
+
+A Felix principal comes from an ID token the tenant trusts, and the stand-in provider signs one for any name, so a
+script can be a different agent per name. Exchange the token at the control plane
+(`POST /v1/tenants/agents/token/exchange`) for a Felix token. The seed script makes `agents-admin` the tenant's
+administrator: `agents-tool` signs in as that name to create a run's streams and caches and to grant each agent only
+what its role allows. The stack creates no runs itself. The gateway's scope gives a viewer read-only access to
+`agents.log.<run>` and `agents.blobs.<run>` for one run at a time, and only for a run it was granted.
+
+The stand-in provider signs in anyone, so never expose these ports beyond localhost.
+
 ## Developing
 
 You need Node 22 or later, Python 3 and a Chrome or Chromium. From the repository root:
@@ -130,7 +163,7 @@ the visual record.
 a moment and compares the frame with the one playback drew, checks that bursts of events merge into one packet but refusals and
 conflicts never do, and times a frame on the burst fixture against a budget.
 
-CI runs three jobs, lint (with the fixture regeneration), style frame and motion rules, and requires the `CI ok` check.
+CI runs four jobs, lint (with the fixture regeneration), style frame, motion rules and the dev stack, and requires the `CI ok` check.
 
 ## Documentation
 
