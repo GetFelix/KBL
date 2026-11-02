@@ -115,6 +115,9 @@ node scripts/check-frame.mjs
 # Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
 node scripts/check-motion.mjs
 
+# Click every kind of element and check it opens the step behind it
+node scripts/check-steps.mjs
+
 # Serve the repository, then open http://localhost:8000/prototype/style-frame.html
 python3 -m http.server 8000
 ```
@@ -133,7 +136,11 @@ the visual record.
 a moment and compares the frame with the one playback drew, checks that bursts of events merge into one packet but refusals and
 conflicts never do, and times a frame on the burst fixture against a budget.
 
-CI runs three jobs, lint (with the fixture regeneration), style frame and motion rules, and requires the `CI ok` check.
+`check-steps.mjs` clicks every kind of element the page draws (agents, cards, packets, flow lines, the queue
+tray, the budget ring, log rows, captions and timeline markers) and checks that each opens the step panel for the
+record behind it.
+
+CI runs four jobs, lint (with the fixture regeneration), style frame, motion rules and step panel, and requires the `CI ok` check.
 
 ## Documentation
 

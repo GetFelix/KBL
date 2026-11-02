@@ -83,7 +83,7 @@ planner in the hub once the run is done.
 
 Serve the repository root (`python3 -m http.server`) and open
 `/prototype/style-frame.html`. Space plays and pauses, the arrows step, and
-clicking a worker, card or timeline marker opens the step behind it.
+clicking anything on the scene opens the step behind it: a worker or the planner, a packet or flow line in flight, a board card, the queue tray, the budget ring, a run log row, a caption, or a timeline marker. The timeline's claim bars and message ticks only seek. `node scripts/check-steps.mjs` clicks each of these.
 
 | Parameter | Effect |
 |---|---|

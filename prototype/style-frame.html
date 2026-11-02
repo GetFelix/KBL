@@ -213,7 +213,7 @@ for (const e of events) {
   if (!postedT.has(e.task)) postedT.set(e.task, e.t);
   firstPost = Math.min(firstPost, e.t);
   const b = bursts[bursts.length - 1];
-  if (b && e.t - b.t1 < 2) { b.n++; b.t1 = e.t; } else bursts.push({ t: e.t, t1: e.t, n: 1 });
+  if (b && e.t - b.t1 < 2) { b.n++; b.t1 = e.t; } else bursts.push({ t: e.t, t1: e.t, n: 1, e });
 }
 
 const rawFlights = [];
@@ -279,7 +279,7 @@ function fold(T) {
     if (!s.board.has(k)) s.board.set(k, { key: k, text: null, v: null, writer: null, lock: null, putT: -1e9, conflictT: -1e9, lostT: -1e9, refusedT: -1e9 });
     return s.board.get(k);
   };
-  const note = (e, tone, text) => s.notes.push({ t: e.t, tone, text });
+  const note = (e, tone, text) => s.notes.push({ t: e.t, tone, text, e });
   for (const e of events) {
     if (e.t > T) break;
     if (e.o != null) s.last = e;
@@ -333,7 +333,7 @@ function fold(T) {
   }
   s.reservedSum = [...s.reserved.values()].reduce((x, y) => x + y, 0);
   s.left = Math.max(0, s.budget - s.spent - s.reservedSum);
-  for (const b of bursts) if (b.t <= T && b.n > 1) s.notes.push({ t: b.t, tone: 'cyan', text: `Planner posts ${b.n} tasks in ${Math.max(0.1, b.t1 - b.t).toFixed(1)} s` });
+  for (const b of bursts) if (b.t <= T && b.n > 1) s.notes.push({ t: b.t, tone: 'cyan', e: b.e, text: `Planner posts ${b.n} tasks in ${Math.max(0.1, b.t1 - b.t).toFixed(1)} s` });
   s.notes.sort((a, b) => a.t - b.t);
   return s;
 }
@@ -623,6 +623,9 @@ function drawHub(ctx, s, T, w) {
     ctx.textBaseline = 'alphabetic';
     const rows = Math.max(1, Math.ceil(shown.length / cols));
     ctx.fillText(`queue ${s.queue.length}`, cx, y0 + rows * (cell + gap) + 12);
+    // Neither is drawn once the cat mark replaces them.
+    hits.push({ kind: 'planner', x: P.x, y: P.y, r: pr + 6 });
+    hits.push({ kind: 'tray', x: L.tray.x, y: L.tray.y, r: Math.max(hub * 0.3, tw / 2 + 6) });
   }
   // budget label below the ring
   ctx.textAlign = 'center';
@@ -633,7 +636,7 @@ function drawHub(ctx, s, T, w) {
   ctx.font = '500 10.5px Inter';
   ctx.fillStyle = C.muted;
   ctx.fillText(`left of ${money(s.budget)}` + (s.reservedSum > 0 ? ` · ${money(s.reservedSum)} reserved` : ''), cx, cy + r + 38);
-  hits.push({ kind: 'planner', x: P.x, y: P.y, r: pr + 6 });
+  hits.push({ kind: 'budget', x: cx, y: cy, r: r + 8, rin: r - 14 });
 }
 
 function pulse(ctx, x, y, r, T, weight) {
@@ -909,6 +912,7 @@ function drawLog(ctx, s, T) {
   }
   shown.forEach((e, i) => {
     const y = top + 24 + i * 18;
+    hits.push({ kind: 'event', src: 'log', e, x: bx, y: y - 13, w: bw, h: 18 });
     const tone = KIND_TONE[e.kind];
     ctx.globalAlpha = 1 - i * 0.08;
     ctx.font = '500 11px "JetBrains Mono"';
@@ -1003,6 +1007,7 @@ function drawFlights(ctx, s, T, speed) {
       ctx.font = '600 11px "JetBrains Mono"'; ctx.fillStyle = C.text; ctx.textAlign = 'center';
       ctx.fillText(String(list.reduce((n, a) => n + a[0].n, 0)), m.x, m.y - 6);
       list.forEach((a) => (a.skip = true));
+      hits.push({ kind: 'event', src: 'flow', e: list[0][0].ev, x: m.x, y: m.y - 4, r: 16 });
       flowEdges++;
     }
   }
@@ -1062,6 +1067,8 @@ function drawFlights(ctx, s, T, speed) {
       ctx.strokeStyle = alpha(f.cls === 'refused' ? C.red : f.cls === 'msg' ? C.violet : C.cyan, 0.8 * (1 - p));
       ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.moveTo(e.a.x, e.a.y); ctx.quadraticCurveTo(e.c.x, e.c.y, e.b.x, e.b.y); ctx.stroke();
+      const mid = bez(e, 0.5);
+      hits.push({ kind: 'event', src: 'packet', e: f.ev, x: mid.x, y: mid.y, r: 16 });
       continue;
     }
     let q = ease(p), fade = 1, pt;
@@ -1085,6 +1092,7 @@ function drawFlights(ctx, s, T, speed) {
         ctx.globalAlpha = 1 - p * p;
         badge(ctx, pt2.x + 34, pt2.y - 14, '×' + f.n, C.cyan);
         ctx.globalAlpha = 1;
+        hits.push({ kind: 'event', src: 'packet', e: f.ev, x: pt2.x + 34, y: pt2.y - 14, r: 16 });
       }
       continue;
     }
@@ -1110,6 +1118,7 @@ function drawFlights(ctx, s, T, speed) {
       ctx.stroke(); ctx.lineCap = 'butt';
     }
     shapeAt(ctx, f.cls, pt.x, pt.y, f.cls === 'write' ? 8 : size, f.n);
+    hits.push({ kind: 'event', src: 'packet', e: f.ev, x: pt.x, y: pt.y, r: Math.max(12, size) });
     ctx.globalAlpha = 1;
   }
 }
@@ -1185,6 +1194,7 @@ function drawNotes(ctx, s, T, w) {
     const col = C[n.tone] || C.cyan;
     const y0 = L.swarmH + 4, h = 34;
     ctx.fillStyle = C.dark ? 'rgba(12, 19, 27, 0.92)' : 'rgba(255,255,255,0.94)';
+    hits.push({ kind: 'event', src: 'caption', e: n.e, x: 10, y: y0, w: L.W - 20, h });
     roundRect(ctx, 10, y0, L.W - 20, h, 8); ctx.fill();
     ctx.strokeStyle = alpha(col, 0.45); ctx.lineWidth = 1;
     roundRect(ctx, 10, y0, L.W - 20, h, 8); ctx.stroke();
@@ -1209,6 +1219,7 @@ function drawNotes(ctx, s, T, w) {
     ctx.globalAlpha = (age > 0.8 ? (1 - age) * 5 : 1) * intro;
     const col = C[n.tone] || C.cyan;
     ctx.fillStyle = C.dark ? 'rgba(12, 19, 27, 0.92)' : 'rgba(255,255,255,0.94)';
+    if (ctx.globalAlpha > 0.25) hits.push({ kind: 'event', src: 'caption', e: n.e, x: 16, y: top, w: maxW, h, a: ctx.globalAlpha });
     roundRect(ctx, 16, top, maxW, h, 9); ctx.fill();
     ctx.strokeStyle = alpha(col, 0.45); ctx.lineWidth = 1;
     roundRect(ctx, 16, top, maxW, h, 9); ctx.stroke();
@@ -1251,6 +1262,7 @@ const marks = [];
 {
   const open = new Map();
   for (const e of events) {
+    if (e.t > END) break; // a claim still held at the end lapses after the run, off the timeline
     const who = e.kind === 'model_started' || e.kind === 'model_call' ? e.agent : e.pub;
     if (e.kind === 'task_claimed') open.set(e.task + who, { who, t0: e.t, kind: 'claim' });
     if (['task_done', 'task_released', 'task_dead', 'lapse', 'task_duplicate'].includes(e.kind)) {
@@ -1369,22 +1381,30 @@ function lastFor(pred) {
   for (let i = events.length - 1; i >= 0; i--) if (events[i].t <= play.T && pred(events[i])) return events[i];
   return null;
 }
+const within = (h, x, y) => {
+  if (!h.r) return x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h;
+  const d = Math.hypot(x - h.x, y - h.y);
+  return d < h.r && d >= (h.rin || 0);
+};
+// Later hits were drawn on top of earlier ones, so they win.
+const hitAt = (x, y) => [...hits].reverse().find((h) => within(h, x, y));
+const eventOf = (h) => {
+  if (h.kind === 'agent') return lastFor((e) => e.pub === h.name || e.agent === h.name || e.holder === h.name);
+  if (h.kind === 'card') return lastFor((e) => e.key === h.key);
+  if (h.kind === 'planner') return lastFor((e) => e.pub === 'planner' || e.agent === 'planner');
+  if (h.kind === 'budget') return lastFor((e) => e.kind === 'model_call') || lastFor((e) => e.kind === 'run_started');
+  if (h.kind === 'tray') return lastFor((e) => ['task_posted', 'lapse', 'task_released'].includes(e.kind));
+  return h.e;
+};
 scene.addEventListener('click', (ev) => {
   const r = scene.getBoundingClientRect();
-  const x = ev.clientX - r.left, y = ev.clientY - r.top;
-  for (const h of hits) {
-    const inside = h.r ? Math.hypot(x - h.x, y - h.y) < h.r : x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h;
-    if (!inside) continue;
-    if (h.kind === 'agent') return openStep(lastFor((e) => e.pub === h.name || e.agent === h.name || e.holder === h.name));
-    if (h.kind === 'card') return openStep(lastFor((e) => e.key === h.key));
-    if (h.kind === 'planner') return openStep(lastFor((e) => e.pub === 'planner' || e.agent === 'planner'));
-  }
-  panel.classList.remove('open');
+  const h = hitAt(ev.clientX - r.left, ev.clientY - r.top);
+  const e = h && eventOf(h);
+  if (e) openStep(e); else panel.classList.remove('open');
 });
 scene.addEventListener('mousemove', (ev) => {
   const r = scene.getBoundingClientRect();
-  const x = ev.clientX - r.left, y = ev.clientY - r.top;
-  scene.style.cursor = hits.some((h) => (h.r ? Math.hypot(x - h.x, y - h.y) < h.r : x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h)) ? 'pointer' : 'default';
+  scene.style.cursor = hitAt(ev.clientX - r.left, ev.clientY - r.top) ? 'pointer' : 'default';
 });
 
 // ---------- playback ----------
@@ -1503,6 +1523,13 @@ window.motionProbe = {
   quiet, quietSpans, flowAt: () => FLOW_AT, flowEdges: () => flowEdges, shapes: () => shapes, reduced: () => reduced,
   state: () => ({ T: play.T, speed: play.speed, wall: wallNow, playing: play.playing }),
   canvas: () => scene.toDataURL(),
+  hits: () => { const b = scene.getBoundingClientRect(); return hits.map((h) => ({ kind: h.kind, src: h.src || '', x: b.left + (h.rin ? h.x + (h.r + h.rin) / 2 : h.r ? h.x : h.x + h.w / 2), y: b.top + (h.r ? h.y : h.y + h.h / 2), a: h.a })); },
+  panelOpen: () => panel.classList.contains('open') ? panel.querySelector('h3 span').textContent : null,
+  markers: () => { const b = tl.getBoundingClientRect(); return marks.filter((m) => !m.small && lanes.indexOf(m.who) >= 0).map((m) => ({ x: b.left + TL.gx + (m.e.t / END) * TL.gw, y: b.top + TL.top + 4 + lanes.indexOf(m.who) * TL.laneH + TL.laneH / 2 })); },
+  firstPost: () => firstPost,
+  topAt: (px, py) => { const b = scene.getBoundingClientRect(); const h = hitAt(px - b.left, py - b.top); return h ? h.src || h.kind : null; },
+  lateMarks: () => marks.filter((m) => m.e.t > END).length,
+  closePanel: () => panel.classList.remove('open'),
   dropLayers: () => layers.clear(),
 };
 if (params.has('t')) { root.dataset.ready = '1'; }
