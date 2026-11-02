@@ -4,8 +4,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const failures = [];
 const syntax = (file, label) => {
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); } catch (e) { failures.push(`${label}: ${e.stderr.toString().trim()}`); }
@@ -24,7 +25,7 @@ for (const dir of ['scripts', 'scripts/lib']) {
   for (const f of readdirSync(join(root, dir)).filter((f) => f.endsWith('.mjs'))) syntax(join(root, dir, f), `${dir}/${f}`);
 }
 
-for (const f of ['README.md', 'CONTRIBUTING.md', ...readdirSync(join(root, 'docs')).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`)]) {
+for (const f of ['README.md', 'CONTRIBUTING.md', ...readdirSync(join(root, 'docs'), { recursive: true }).filter((f) => f.endsWith('.md')).map((f) => `docs/${f}`)]) {
   if (readFileSync(join(root, f), 'utf8').includes('—')) failures.push(`${f}: contains an em dash`);
 }
 

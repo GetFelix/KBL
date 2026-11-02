@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A merge's run on main is never cancelled by the next merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -37,13 +38,25 @@ jobs:
       # Headless Chrome is preinstalled on the runner.
       - run: node scripts/check-frame.mjs
 
+  motion:
+    name: motion rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-motion.mjs
+
   # The one check branch protection requires.
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, frame]
+    needs: [lint, frame, motion]
     runs-on: ubuntu-latest
     steps:
       - run: |
           test "${{ needs.lint.result }}" = success
           test "${{ needs.frame.result }}" = success
+          test "${{ needs.motion.result }}" = success

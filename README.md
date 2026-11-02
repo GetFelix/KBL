@@ -100,19 +100,37 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 
 ## Developing
 
-Nothing needs installing beyond Node 22 or later, Python 3 and a Chrome or Chromium. From the repository root:
+You need Node 22 or later, Python 3 and a Chrome or Chromium. From the repository root:
 
 ```bash
-node scripts/lint.mjs            # syntax of the page and scripts, and no em dashes in the docs
-python3 prototype/make-fixture.py   # rewrites the two fixtures; git diff should stay empty
-node scripts/check-frame.mjs     # plays both fixtures in headless Chrome
-python3 -m http.server           # then open /prototype/style-frame.html
+# Syntax of the page and scripts, and no em dashes in the docs
+node scripts/lint.mjs
+
+# Rewrite the two fixtures; `git diff prototype` should stay empty
+python3 prototype/make-fixture.py
+
+# Play both fixtures in headless Chrome
+node scripts/check-frame.mjs
+
+# Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
+node scripts/check-motion.mjs
+
+# Serve the repository, then open http://localhost:8000/prototype/style-frame.html
+python3 -m http.server 8000
 ```
 
-`check-frame.mjs` finds Chrome on the usual paths; set `CHROME` to a binary otherwise. It checks that the page
-loads without errors at laptop and phone size, that a frame drawn at several moments is not blank, and that
-the fixtures contain every record that [the design's element table](docs/design.md#what-each-element-is-drawn-from) draws.
-CI runs the same three commands and requires the `CI ok` check.
+`check-frame.mjs` looks for Chrome, Chromium or Edge in the usual install paths; set `CHROME` to a binary
+otherwise. It checks that the page loads without errors at laptop and phone size, that frames later in the run
+differ from the empty start, and that each fixture contains the records, and for moving elements the packets,
+behind every row of [the design's element table](docs/design.md#what-each-element-is-drawn-from). That proves the
+fixtures exercise the page, not pixel by pixel that each element is drawn; the stills in `docs/screenshots/` are
+the visual record.
+
+`check-motion.mjs` checks the rules in [docs/design.md](docs/design.md) under "Motion and aggregation". It seeks to
+a moment and compares the frame with the one playback drew, checks which events merge and which never do, and
+times a frame on the burst fixture against a budget.
+
+CI runs `lint.mjs` with the fixture regeneration, `check-frame.mjs` and `check-motion.mjs` as three jobs, and requires the `CI ok` check.
 
 ## Documentation
 
