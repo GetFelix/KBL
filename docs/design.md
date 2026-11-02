@@ -171,6 +171,13 @@ only speak for the agent that wrote it.
 | `model_call` | `agents-run` | Prompt and response artifacts, tokens, cost |
 | `refused` | `felix-mcp` | The operation, the resource, Felix's error |
 
+`core` (`core/src/record.rs`) holds the exact fields. Each record is a JSON object whose `kind` is one of the names
+above. Money is in millionths of a dollar, times are milliseconds since the Unix epoch on the writer's clock, and
+every id and key follows the key rule, which decoding checks. A reader skips fields it does not know, so a record can
+gain one without breaking an older viewer. A value that may be big, such as a board entry, is either short text
+inline or an artifact id (`Content` in `core`). The viewer's fixtures predate this format and use display fields such
+as `text` and seconds; the viewer moves to the real format when it reads from Felix.
+
 ## The Felix mapping
 
 ### Handing out tasks

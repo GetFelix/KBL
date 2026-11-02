@@ -90,7 +90,7 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | M | Milestone | What it proves | State |
 |---|---|---|---|
 | 0 | The viewer, locked | The swarm reads well, at 8 workers and at 50, before Felix is involved | In progress: [style frame](docs/art.md) |
-| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | Planned |
+| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names |
 | 2 | Shared state | The board and locks never silently overwrite | Planned |
 | 3 | Real models and budgets | A run never spends past its limit | Planned |
 | 4 | Replay a run | Scrub to any moment, then follow live with no gap | Planned, needs range reads in the gateway client |
@@ -100,7 +100,7 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 
 ## Developing
 
-You need Node 22 or later, Python 3 and a Chrome or Chromium. From the repository root:
+You need Node 22 or later, Python 3, a Chrome or Chromium, and Rust 1.97 or later for the crates. From the repository root:
 
 ```bash
 # Syntax of the page and scripts, and no em dashes in the docs
@@ -111,6 +111,9 @@ python3 prototype/make-fixture.py
 
 # Play both fixtures in headless Chrome
 node scripts/check-frame.mjs
+
+# Build and test the Rust crates
+cargo test --workspace
 
 # Serve the repository, then open http://localhost:8000/prototype/style-frame.html
 python3 -m http.server 8000

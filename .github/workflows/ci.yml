@@ -38,13 +38,24 @@ jobs:
       # Headless Chrome is preinstalled on the runner.
       - run: node scripts/check-frame.mjs
 
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
   # The one check branch protection requires.
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, frame]
+    needs: [lint, frame, rust]
     runs-on: ubuntu-latest
     steps:
       - run: |
           test "${{ needs.lint.result }}" = success
           test "${{ needs.frame.result }}" = success
+          test "${{ needs.rust.result }}" = success
