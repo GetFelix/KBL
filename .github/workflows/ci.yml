@@ -49,6 +49,27 @@ jobs:
           node-version: 22
       - run: node scripts/check-motion.mjs
 
+  steps:
+    name: step panel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-steps.mjs
+
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
   stack:
     name: dev stack
     runs-on: ubuntu-latest
@@ -69,11 +90,13 @@ jobs:
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, frame, motion, stack]
+    needs: [lint, frame, motion, steps, rust, stack]
     runs-on: ubuntu-latest
     steps:
       - run: |
           test "${{ needs.lint.result }}" = success
           test "${{ needs.frame.result }}" = success
           test "${{ needs.motion.result }}" = success
+          test "${{ needs.steps.result }}" = success
+          test "${{ needs.rust.result }}" = success
           test "${{ needs.stack.result }}" = success
