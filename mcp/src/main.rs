@@ -26,9 +26,6 @@ struct Cli {
     /// This agent's name in the run, such as `planner` or `w1`.
     #[arg(long, env = "AGENTS_AGENT")]
     agent: String,
-    /// The agent's Felix token, issued for the broker.
-    #[arg(long, env = "AGENTS_FELIX_TOKEN", hide_env_values = true)]
-    token: String,
     #[arg(long, env = "AGENTS_TENANT", default_value = "agents")]
     tenant: String,
     #[arg(long, env = "AGENTS_NAMESPACE", default_value = "default")]
@@ -51,6 +48,9 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    // Environment only: a flag would show the token in `ps`.
+    let token = std::env::var("AGENTS_FELIX_TOKEN")
+        .context("set AGENTS_FELIX_TOKEN to the agent's Felix token for the broker")?;
     let run = RunId::new(cli.run).context("--run")?;
     let agent = AgentName::new(cli.agent).context("--agent")?;
     let felix = felix::connect(Target {
@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
         broker: cli.broker,
         broker_ca: cli.broker_ca,
         broker_name: cli.broker_name,
-        token: cli.token,
+        token,
     })
     .await?;
     eprintln!(

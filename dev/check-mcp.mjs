@@ -31,6 +31,16 @@ const child = spawn(BINARY, [], {
   env: { ...process.env, AGENTS_RUN: "check", AGENTS_AGENT: "w1", AGENTS_FELIX_TOKEN: token },
   stdio: ["pipe", "pipe", "inherit"],
 });
+child.on("error", (error) => {
+  console.error(`could not start ${BINARY}: ${error.message}`);
+  process.exit(1);
+});
+child.stdin.on("error", () => {}); // the exit handler reports why it closed
+setTimeout(() => {
+  console.error("felix-mcp did not finish the check in 30 seconds");
+  child.kill();
+  process.exit(1);
+}, 30_000).unref();
 const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
 const exited = new Promise((resolve) => child.on("exit", (code) => resolve(`felix-mcp exited with ${code}`)));
 
@@ -63,6 +73,7 @@ try {
   console.log(`ok   tools/list: ${names.join(", ")}`);
 
   const result = await call("tools/call", { name: "run_info", arguments: {} });
+  if (result.isError) throw new Error(`run_info failed: ${result.content[0]?.text}`);
   const info = JSON.parse(result.content[0].text);
   if (info.run !== "check" || info.agent !== "w1" || info.tenant !== TENANT) {
     throw new Error(`run_info said ${JSON.stringify(info)}`);

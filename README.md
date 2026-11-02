@@ -207,8 +207,18 @@ To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mc
 }
 ```
 
-The other settings are the same variables as [`agents-tool`](#creating-a-run) (`AGENTS_TENANT`, `AGENTS_NAMESPACE`,
-`AGENTS_FELIX_BROKER`, `AGENTS_FELIX_BROKER_NAME`), with the same defaults. The agent's token is for the broker.
+Three variables are required:
+
+| Variable | What |
+|---|---|
+| `AGENTS_RUN` | The run the agent works in |
+| `AGENTS_AGENT` | The agent's name in that run, such as `w1` |
+| `AGENTS_FELIX_TOKEN` | The agent's Felix token for the broker. It is read from the environment only, never from a flag, so it stays out of the process list |
+
+The rest are the variables [`agents-tool`](#creating-a-run) uses, with the same defaults: `AGENTS_TENANT`,
+`AGENTS_NAMESPACE`, `AGENTS_FELIX_BROKER`, `AGENTS_FELIX_BROKER_NAME` and `AGENTS_FELIX_CA_FILE`. The default for the
+certificate file is relative to the host's working directory, so give an absolute path when a host starts the server.
+
 Issuing a token per agent is not built yet, so for now `dev/check-mcp.mjs` asks the stand-in identity provider for the
 administrator's.
 

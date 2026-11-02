@@ -43,8 +43,6 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         ClientConfig::optimized_defaults(quic_client_config(Some(Arc::new(roots)), false)?);
     config.auth_tenant_id = Some(target.tenant.clone());
     config.auth_token = Some(target.token);
-    // The ack carries the record's offset only once it is committed.
-    config.ack_on_commit = true;
     let seeds: Vec<_> = target
         .broker
         .to_socket_addrs()
