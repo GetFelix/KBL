@@ -125,9 +125,18 @@ each frame, because a full-size gradient and the dot grid cost more than the
 packets. The check drops the copies and compares, after a theme toggle and a
 resize, so a stale one fails it.
 
-The script prints the cost of a frame of the 50-worker burst at 16x: the 95th
-percentile over 240 frames, best of three runs, on a 1440x900 canvas at 1x and 2x
-pixels. On a laptop it was about 7 ms and 14 ms in headless Chrome, which
-rasterises in software and reads the whole frame back, so a GPU canvas does
-less. CI fails above 20 ms at 1x. That catches a gross regression, not a few
-milliseconds.
+The script times a frame of the 50-worker burst at 16x: the 95th percentile over
+240 frames, on a 1440x900 canvas at 1x and 2x pixels. Headless Chrome rasterises
+in software and reads the whole frame back, so a GPU canvas does less. On a
+laptop the p95 was about 8 ms at 1x and 16 ms at 2x.
+
+A shared CI runner can be several times slower than a laptop, and a fixed
+millisecond budget failed on load alone (20.4 and 20.8 ms against 20). So the
+check compares each burst frame with a fixed reference frame (400 circles, some
+text and a gradient on a plain canvas, none of the page's code) timed right
+after it, and fails when the burst frame costs more than 6x the reference at
+p95, best of three runs. Load slows both about alike, so the ratio mostly
+moves when the page's frame gets dearer. It is about 2.4 on a laptop and 3.0 on
+a CI runner, so the check catches a frame that costs twice as much, not a few
+milliseconds. The 2x line is printed
+and not judged.

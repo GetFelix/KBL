@@ -70,11 +70,36 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
+  stack:
+    name: dev stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: dev/up.sh
+      - run: node dev/check.mjs
+      - name: Create a run, then refuse the same id again
+        run: |
+          cargo build -p agents-tool
+          tool=target/debug/agents-tool
+          "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2
+          if "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2; then
+            echo "a second create of the same run succeeded" >&2
+            exit 1
+          fi
+      - if: failure()
+        run: docker compose -f dev/compose.yml logs
+      - if: always()
+        run: dev/down.sh
+
   # The one check branch protection requires.
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, frame, motion, steps, rust]
+    needs: [lint, frame, motion, steps, rust, stack]
     runs-on: ubuntu-latest
     steps:
       - run: |
@@ -83,3 +108,4 @@ jobs:
           test "${{ needs.motion.result }}" = success
           test "${{ needs.steps.result }}" = success
           test "${{ needs.rust.result }}" = success
+          test "${{ needs.stack.result }}" = success

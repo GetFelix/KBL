@@ -21,7 +21,7 @@ else {
   syntax(file, 'prototype/style-frame.html');
 }
 
-for (const dir of ['scripts', 'scripts/lib']) {
+for (const dir of ['scripts', 'scripts/lib', 'dev']) {
   for (const f of readdirSync(join(root, dir)).filter((f) => f.endsWith('.mjs'))) syntax(join(root, dir, f), `${dir}/${f}`);
 }
 

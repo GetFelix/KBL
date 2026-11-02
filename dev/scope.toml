@@ -1,0 +1,18 @@
+# What the gateway lets a browser session reach in one run: the run log and
+# the artifacts behind its steps, read only. `agents-tool` creates these
+# resources and grants the viewer access when it creates a run.
+
+[scope]
+field = "run"
+
+[[scope.streams]]
+alias = "log"
+name = "agents.log.{scope}"
+actions = ["subscribe"]
+
+[[scope.caches]]
+alias = "blobs"
+name = "agents.blobs.{scope}"
+actions = ["read"]
+# A run with nothing to open yet still joins.
+optional = true
