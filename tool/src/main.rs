@@ -14,7 +14,7 @@ use agents_core::names::{RunId, WORKERS_GROUP};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
-use felix::{Session, Target};
+use felix::{Outcome, Session, Target};
 use run::NewRun;
 
 #[derive(Parser)]
@@ -55,6 +55,9 @@ struct TargetArgs {
         default_value = "dev/state/broker-cert.pem"
     )]
     broker_ca: String,
+    /// The name in the broker's certificate.
+    #[arg(long, env = "AGENTS_FELIX_BROKER_NAME", default_value = "localhost")]
+    broker_name: String,
 }
 
 #[derive(Subcommand)]
@@ -77,8 +80,8 @@ struct CreateArgs {
     #[arg(long)]
     goal: String,
     /// The most the run may spend, in dollars, such as 5 or 0.25.
-    #[arg(long, value_parser = run::parse_budget, value_name = "DOLLARS")]
-    budget_usd: u64,
+    #[arg(long = "budget-usd", value_parser = run::parse_budget, value_name = "DOLLARS")]
+    budget_micros: u64,
     /// How many workers the run lists, named w1, w2 and so on.
     #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u32).range(1..=run::MAX_WORKERS as i64))]
     workers: u32,
@@ -95,6 +98,7 @@ async fn main() -> Result<()> {
         id_token: cli.target.id_token,
         broker: cli.target.broker,
         broker_ca: cli.target.broker_ca,
+        broker_name: cli.target.broker_name,
     };
     match cli.command {
         Command::Run(RunCommand::Create(args)) => create(target, args).await,
@@ -105,27 +109,34 @@ async fn create(target: Target, args: CreateArgs) -> Result<()> {
     let run = NewRun {
         run: RunId::new(&args.run).map_err(|e| anyhow::anyhow!("{e}"))?,
         goal: args.goal,
-        budget_micros: args.budget_usd,
+        budget_micros: args.budget_micros,
         workers: args.workers,
     };
     let resources = run.resources();
     let started = run.started(now_ms()).map_err(|e| anyhow::anyhow!("{e}"))?;
 
     let session = Session::sign_in(target).await?;
-    if !session.create_resources(&run::batch(&resources)).await? {
-        bail!(
+    // Connect first: creating the resources spends the run id, so every
+    // failure we can see coming has to happen before it.
+    let broker = session.broker().await?;
+    match session.create_resources(&run::batch(&resources)).await? {
+        Outcome::AllNew => {}
+        Outcome::NoneNew => bail!(
             "run {} already exists. Pick another id; a run is never created twice.",
             args.run
-        );
+        ),
+        Outcome::Mixed => bail!(
+            "some of run {}'s resources already existed, so it is now incomplete. Pick another id.",
+            args.run
+        ),
     }
-    let broker = session.broker().await?;
     broker
         .create_group(&resources.tasks(), WORKERS_GROUP)
         .await?;
     let offset = broker
         .publish(&resources.log(), started.encode())
         .await
-        .context("the run's resources exist but run_started was not written")?;
+        .context("the run's resources exist, but run_started may not have been written")?;
 
     println!(
         "created run {} ({} resources)",
@@ -145,3 +156,6 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
 }
+
+#[cfg(test)]
+mod tests;

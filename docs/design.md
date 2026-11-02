@@ -116,7 +116,7 @@ So the design draws the line there:
 
 ### Resources per run
 
-`agents-tool run create` makes all nine in one request, so a run never half exists, then creates the `workers` group and writes `run_started`.
+`agents-tool run create` makes all nine in one request, so they are created together or not at all. It then creates the `workers` group and writes `run_started`; if it stops between the two, the run is left unusable and its id is spent.
 
 | Resource | Felix kind | Name | Notes |
 |---|---|---|---|

@@ -100,10 +100,11 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 
 ## Creating a run
 
-`agents-tool run create` sets up Felix for one run: the run log, the tasks stream with its `workers` consumer group,
-the messages stream, and the board, leases, presence, results, artifacts and spend caches (the nine resources in
-[docs/design.md](docs/design.md#resources-per-run)). It then writes `run_started` to the log with the goal, the
-budget and the agents. The run's id must be new, and creating one that exists is refused.
+A run is one job: a goal, a budget and a team of agents, with its own set of Felix resources. `agents-tool run create`
+makes those resources: the run log, the tasks stream with its `workers` consumer group, the messages stream, and the
+board, leases, presence, results, artifacts and spend caches (the nine in [docs/design.md](docs/design.md#resources-per-run);
+spend is a cache used as counters). It then writes `run_started` to the log with the goal, the budget and the agents.
+The run's id must be new, and creating one that exists is refused.
 
 With the [dev stack](#running-felix-locally) running:
 
@@ -128,12 +129,14 @@ The defaults match the dev stack. Point the tool at another Felix with these, as
 | `AGENTS_TENANT`, `AGENTS_NAMESPACE` | `agents`, `default` | Where the run lives |
 | `AGENTS_FELIX_CONTROL_PLANE` | `http://127.0.0.1:8443` | Creates the resources |
 | `AGENTS_FELIX_BROKER` | `127.0.0.1:5000` | Writes `run_started` and creates the group |
-| `AGENTS_FELIX_CA_FILE` | `dev/state/broker-cert.pem` | The certificate the broker is trusted by |
+| `AGENTS_FELIX_CA_FILE` | `dev/state/broker-cert.pem` | The certificate the broker is trusted by, relative to where you run the tool |
+| `AGENTS_FELIX_BROKER_NAME` | `localhost` | The name in the broker's certificate |
 | `AGENTS_IDP` | `http://127.0.0.1:9400` | The stand-in identity provider that signs in `agents-admin` |
 | `AGENTS_ID_TOKEN` | none | An ID token for the tenant, used instead of the stand-in provider |
 
-If the tool stops after the resources exist (the broker went away, say), the run is left without `run_started`.
-Use a new id for the next try.
+The tool connects to the broker before it creates anything, so a wrong certificate path or a broker that is down fails
+without using up the id. If it stops after that (the broker went away, say), the run is left without `run_started` and
+the id cannot be used again, so use a new one.
 
 ## Developing
 

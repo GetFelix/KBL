@@ -23,14 +23,52 @@ pub(crate) struct Target {
     pub(crate) id_token: Option<String>,
     pub(crate) broker: String,
     pub(crate) broker_ca: String,
+    /// The name the broker's certificate is checked against.
+    pub(crate) broker_name: String,
 }
 
 /// The audience every ID token from the development IdP is issued for.
 const ID_TOKEN_AUDIENCE: &str = "felix-agents";
+/// How long one request to Felix may take.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
 const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
 /// The development stack's administrator, who may create runs.
 const ADMIN_SUBJECT: &str = "agents-admin";
+
+/// How much of a create request was new.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// Every item was created: the run is new.
+    AllNew,
+    /// Every item was already there: the run exists.
+    NoneNew,
+    /// Some items existed with the same settings and the rest were created.
+    Mixed,
+}
+
+/// Reads the control plane's reply to a batch create.
+fn outcome(body: &Value) -> Result<Outcome> {
+    let mut new = 0;
+    let mut old = 0;
+    for kind in ["streams", "caches"] {
+        let items = body[kind]
+            .as_array()
+            .with_context(|| format!("the reply has no `{kind}` list"))?;
+        for item in items {
+            match item["status"].as_str() {
+                Some("created") => new += 1,
+                Some("unchanged") => old += 1,
+                other => bail!("the reply gives an item the status {other:?}"),
+            }
+        }
+    }
+    Ok(match (new, old) {
+        (_, 0) => Outcome::AllNew,
+        (0, _) => Outcome::NoneNew,
+        _ => Outcome::Mixed,
+    })
+}
 
 pub(crate) struct Session {
     target: Target,
@@ -40,7 +78,9 @@ pub(crate) struct Session {
 
 impl Session {
     pub(crate) async fn sign_in(target: Target) -> Result<Self> {
-        let http = reqwest::Client::new();
+        let http = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .build()?;
         let id_token = match &target.id_token {
             Some(token) => token.clone(),
             None => {
@@ -80,9 +120,9 @@ impl Session {
         string(&body, "felix_token")
     }
 
-    /// Creates the batch and reports whether every item was new. A batch that
-    /// finds some of it already there changes nothing, so a repeat is `false`.
-    pub(crate) async fn create_resources(&self, batch: &Value) -> Result<bool> {
+    /// Creates the batch and says how much of it was new. The control plane
+    /// leaves what already exists alone and creates the rest.
+    pub(crate) async fn create_resources(&self, batch: &Value) -> Result<Outcome> {
         let token = self.exchange("felix-controlplane").await?;
         let url = format!(
             "{}/v1/tenants/{}/namespaces/{}/resources",
@@ -93,12 +133,7 @@ impl Session {
             .await?
             .json()
             .await?;
-        let all_new = ["streams", "caches"].iter().all(|kind| {
-            body[kind]
-                .as_array()
-                .is_some_and(|items| items.iter().all(|item| item["status"] == "created"))
-        });
-        Ok(all_new)
+        outcome(&body)
     }
 
     pub(crate) async fn broker(&self) -> Result<Broker> {
@@ -117,9 +152,13 @@ impl Session {
             .to_socket_addrs()
             .with_context(|| format!("resolve {}", self.target.broker))?
             .collect();
-        let client = Client::connect_any(&seeds, "localhost", config)
-            .await
-            .with_context(|| format!("connect to the broker at {}", self.target.broker))?;
+        let client = tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            Client::connect_any(&seeds, &self.target.broker_name, config),
+        )
+        .await
+        .context("the broker did not answer in time")?
+        .with_context(|| format!("connect to the broker at {}", self.target.broker))?;
         Ok(Broker {
             client: Arc::new(client),
             tenant: self.target.tenant.clone(),
@@ -217,3 +256,6 @@ fn string(body: &Value, field: &str) -> Result<String> {
         .map(str::to_owned)
         .with_context(|| format!("the reply has no `{field}`"))
 }
+
+#[cfg(test)]
+mod tests;
