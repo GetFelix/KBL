@@ -93,8 +93,8 @@ export async function launch({ width = 1280, height = 800 } = {}) {
       }
       throw new Error(`timed out waiting for ${expression}`);
     },
-    async setViewport(width, height) {
-      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    async setViewport(width, height, deviceScaleFactor = 1) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor, mobile: false });
     },
     async click(x, y) {
       for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
