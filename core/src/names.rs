@@ -79,10 +79,6 @@ name_type! {
     RunId
 }
 name_type! {
-    /// An agent's name: `planner`, `w1` to `w8`, `critic`.
-    AgentName
-}
-name_type! {
     /// A task id.
     TaskId
 }
@@ -90,6 +86,48 @@ name_type! {
     /// A key in the board or the leases cache. The board's grants go by
     /// prefix (`plan-*`, `w3-*`, `shared-*`), so the prefix is part of the name.
     Key
+}
+
+/// An agent's name: `planner`, `w1` to `w8`, `critic`. No `-`, so a grant on
+/// the prefix `w1-` never covers another agent's keys, and not `plan` or
+/// `shared`, which are board prefixes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(transparent)]
+pub struct AgentName(String);
+
+impl AgentName {
+    pub fn new(s: impl Into<String>) -> Result<Self, InvalidName> {
+        let s = s.into();
+        if is_valid_key(&s) && !s.contains('-') && !matches!(s.as_str(), "plan" | "shared") {
+            Ok(Self(s))
+        } else {
+            Err(InvalidName(s))
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for AgentName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::str::FromStr for AgentName {
+    type Err = InvalidName;
+    fn from_str(s: &str) -> Result<Self, InvalidName> {
+        Self::new(s)
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentName {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        Self::new(s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Key {
@@ -241,6 +279,16 @@ mod tests {
         assert!(serde_json::from_str::<RunId>("\"r-1\"").is_ok());
         assert!(serde_json::from_str::<RunId>("\"r.1\"").is_err());
         assert!(serde_json::from_str::<Key>("\"\"").is_err());
+    }
+
+    #[test]
+    fn agent_names_cannot_borrow_a_prefix() {
+        for ok in ["planner", "w1", "w8", "critic"] {
+            assert!(AgentName::new(ok).is_ok(), "{ok}");
+        }
+        for bad in ["w1-b", "plan", "shared", "", "a.b"] {
+            assert!(AgentName::new(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

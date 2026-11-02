@@ -20,6 +20,21 @@ pub struct AgentSpec {
     pub role: String,
 }
 
+/// What `felix-mcp` and `agents-run` write to the run log: a record, when the
+/// writer wrote it and who it says wrote it. Until felix-gateway passes the
+/// broker's append time and recorded publisher on (gaps 9 and 7), these two
+/// fields are all a viewer has, and it marks them unverified; the fold prefers
+/// the broker's values when it has them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Logged {
+    /// Milliseconds since the Unix epoch on the writer's clock.
+    pub at_ms: u64,
+    /// An agent's name, or `agents-tool` or `agents-run` for the two programs that write for the run.
+    pub by: Key,
+    #[serde(flatten)]
+    pub record: Record,
+}
+
 /// What a record says happened. The `kind` field is the variant name in snake case.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -47,7 +62,9 @@ pub enum Record {
         agent: AgentName,
         presence: u64,
     },
-    /// `offset` is where the task landed on the tasks stream.
+    /// `offset` is where the task landed on the tasks stream. Every later task
+    /// record carries the offset of the copy it is about, so a post that was
+    /// retried and landed twice is two tasks to the fold, not one.
     TaskPosted {
         task: TaskId,
         parent: TaskId,
@@ -56,16 +73,19 @@ pub enum Record {
     },
     TaskClaimed {
         task: TaskId,
+        offset: u64,
         attempt: u32,
         deadline_ms: u64,
     },
     TaskExtended {
         task: TaskId,
+        offset: u64,
         attempt: u32,
         deadline_ms: u64,
     },
     TaskReleased {
         task: TaskId,
+        offset: u64,
         attempt: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
@@ -73,25 +93,32 @@ pub enum Record {
     /// The result won the results key.
     TaskDone {
         task: TaskId,
+        offset: u64,
         attempt: u32,
         result: ArtifactId,
     },
     /// The result lost: another copy of the task finished first. The result is kept as an artifact.
     TaskDuplicate {
         task: TaskId,
+        offset: u64,
         attempt: u32,
         result: ArtifactId,
     },
     /// Attempts used up, or given up.
     TaskDead {
         task: TaskId,
+        offset: u64,
         attempt: u32,
         reason: String,
     },
-    /// `version` is the cache version the put wrote.
+    /// `version` is the cache version the put wrote and `prev` the version it
+    /// was conditioned on (none for a new key). A write that never got logged
+    /// shows as a `prev` the log never produced.
     BoardPut {
         key: Key,
         version: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        prev: Option<u64>,
         value: Content,
     },
     /// A conditional put was refused; `found` is the version, and `value` the content, now there.
@@ -105,9 +132,11 @@ pub enum Record {
         version: u64,
         ttl_ms: u64,
     },
+    /// `prev` is the version renewed from; `version` is the new fencing token.
     LeaseRenewed {
         key: Key,
         version: u64,
+        prev: u64,
         ttl_ms: u64,
     },
     LeaseReleased {
@@ -120,11 +149,13 @@ pub enum Record {
         version: u64,
         holder: AgentName,
     },
-    /// `offset` is where the message landed on the messages stream.
+    /// `offset` is where the message landed on the messages stream. The text
+    /// is repeated here so a run replays from the log alone.
     Message {
         to: AgentName,
         corr: String,
         offset: u64,
+        text: Content,
     },
     /// Written by `agents-run` before a model call; `reserve_micros` is the worst case taken from the budget.
     ModelStarted {
@@ -140,6 +171,19 @@ pub enum Record {
         tokens: u64,
         cost_micros: u64,
     },
+    /// The reservation put the run or the agent over its limit, was added back
+    /// and the agent stopped. Ends the `model_started` it follows.
+    BudgetExhausted {
+        agent: AgentName,
+        task: TaskId,
+        reserve_micros: u64,
+    },
+    /// A refund `agents-run` could not confirm and did not retry, since a
+    /// retried add can count twice.
+    RefundUnconfirmed {
+        agent: AgentName,
+        micros: u64,
+    },
     /// An operation Felix refused, with Felix's error.
     Refused {
         op: String,
@@ -148,6 +192,9 @@ pub enum Record {
         key: Option<String>,
         error: String,
     },
+    /// A kind this version does not know. A fold skips it.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Record {
@@ -174,7 +221,10 @@ impl Record {
             Record::Message { .. } => "message",
             Record::ModelStarted { .. } => "model_started",
             Record::ModelCall { .. } => "model_call",
+            Record::BudgetExhausted { .. } => "budget_exhausted",
+            Record::RefundUnconfirmed { .. } => "refund_unconfirmed",
             Record::Refused { .. } => "refused",
+            Record::Unknown => "unknown",
         }
     }
 }

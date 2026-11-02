@@ -44,12 +44,9 @@ impl ArtifactId {
 
     pub fn parse(s: &str) -> Result<Self, InvalidArtifactId> {
         let ok = s.len() == ID_LEN
+            // The engine rejects padding and stray trailing bits, so only the canonical form decodes.
             && s.strip_prefix(PREFIX).is_some_and(|hash| {
-                URL_SAFE_NO_PAD
-                    .decode(hash)
-                    .is_ok_and(|bytes| bytes.len() == 32)
-                    // Decoding accepts a last character with stray bits; only the canonical form is an id.
-                    && URL_SAFE_NO_PAD.encode(URL_SAFE_NO_PAD.decode(hash).unwrap_or_default()) == hash
+                URL_SAFE_NO_PAD.decode(hash).is_ok_and(|bytes| bytes.len() == 32)
             });
         if ok {
             Ok(Self(s.to_string()))
@@ -62,7 +59,7 @@ impl ArtifactId {
         &self.0
     }
 
-    /// Whether `content` hashes to this id.
+    /// Whether `content` hashes to this id. A split artifact's id is its manifest's, so this holds for the manifest, not the joined parts.
     pub fn matches(&self, content: &[u8]) -> bool {
         *self == Self::of(content)
     }

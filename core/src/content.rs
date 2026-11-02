@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::artifact::{ArtifactId, INLINE_LIMIT};
 
-/// A value a record or a task carries. Up to [`INLINE_LIMIT`] bytes of text go
-/// inline; anything bigger is an artifact the reader fetches on demand.
+/// A value a record or a task carries. Writers keep text up to [`INLINE_LIMIT`]
+/// bytes inline and store anything bigger as an artifact the reader fetches on
+/// demand; [`Content::from_text`] does that. Decoding does not enforce the limit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Content {
