@@ -116,6 +116,8 @@ So the design draws the line there:
 
 ### Resources per run
 
+`agents-tool run create` makes all nine in one request, so a run never half exists, then creates the `workers` group and writes `run_started`.
+
 | Resource | Felix kind | Name | Notes |
 |---|---|---|---|
 | Run log | Durable stream, one shard, publishers recorded | `agents.log.<run>` | Every coordination step, in one order. The record of the run |

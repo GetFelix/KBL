@@ -90,13 +90,50 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | M | Milestone | What it proves | State |
 |---|---|---|---|
 | 0 | The viewer, locked | The swarm reads well, at 8 workers and at 50, before Felix is involved | In progress: [style frame](docs/art.md) |
-| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names |
+| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names, and `agents-tool` [creates a run](#creating-a-run) |
 | 2 | Shared state | The board and locks never silently overwrite | Planned |
 | 3 | Real models and budgets | A run never spends past its limit | Planned |
 | 4 | Replay a run | Scrub to any moment, then follow live with no gap | Planned, needs range reads in the gateway client |
 | 5 | Grants and the injection demo | An injected agent can only write where its token allows | Planned |
 | 6 | Any host, at scale | Claude Code as an agent, 50 agents, broker loss | Planned |
 | 7 | Self-hosting | Anyone can run it | Planned |
+
+## Creating a run
+
+`agents-tool run create` sets up Felix for one run: the run log, the tasks stream with its `workers` consumer group,
+the messages stream, and the board, leases, presence, results, artifacts and spend caches (the nine resources in
+[docs/design.md](docs/design.md#resources-per-run)). It then writes `run_started` to the log with the goal, the
+budget and the agents. The run's id must be new, and creating one that exists is refused.
+
+With the [dev stack](#running-felix-locally) running:
+
+```bash
+cargo run -p agents-tool -- run create demo --goal "Review PR 12" --budget-usd 5 --workers 4
+```
+
+```text
+created run demo (9 resources)
+  log      agents.log.demo (run_started at offset 1)
+  tasks    agents.tasks.demo (group workers)
+```
+
+The run lists a `planner` and the workers `w1` to `w4`. `--budget-usd` is in dollars (`5` or `0.25`), and a run can
+list 1 to 64 workers.
+
+The defaults match the dev stack. Point the tool at another Felix with these, as flags or environment variables
+(`agents-tool --help` has the flag names):
+
+| Variable | Default | What |
+|---|---|---|
+| `AGENTS_TENANT`, `AGENTS_NAMESPACE` | `agents`, `default` | Where the run lives |
+| `AGENTS_FELIX_CONTROL_PLANE` | `http://127.0.0.1:8443` | Creates the resources |
+| `AGENTS_FELIX_BROKER` | `127.0.0.1:5000` | Writes `run_started` and creates the group |
+| `AGENTS_FELIX_CA_FILE` | `dev/state/broker-cert.pem` | The certificate the broker is trusted by |
+| `AGENTS_IDP` | `http://127.0.0.1:9400` | The stand-in identity provider that signs in `agents-admin` |
+| `AGENTS_ID_TOKEN` | none | An ID token for the tenant, used instead of the stand-in provider |
+
+If the tool stops after the resources exist (the broker went away, say), the run is left without `run_started`.
+Use a new id for the next try.
 
 ## Developing
 
