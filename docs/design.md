@@ -161,15 +161,23 @@ only speak for the agent that wrote it.
 | `agent_up` | `agents-run` | Role, model, presence version |
 | `agent_gone` | `felix-mcp` (planner) | Which agent, the presence version that expired |
 | `task_posted` | `felix-mcp` (planner) | Task id, parent, title, tasks stream offset |
-| `task_claimed`, `task_extended`, `task_released` | `felix-mcp` | Task id, attempt, deadline |
-| `task_done`, `task_duplicate` | `felix-mcp` | Task id, result artifact, whether this result won |
-| `task_dead` | `felix-mcp` | Task id, reason (attempts used up, or given up) |
-| `board_put`, `board_conflict` | `felix-mcp` | Key, version written or version found, value artifact |
+| `task_claimed`, `task_extended`, `task_released` | `felix-mcp` | Task id, tasks stream offset, attempt, deadline |
+| `task_done`, `task_duplicate` | `felix-mcp` | Task id, offset, attempt, result artifact; `task_done` is the result that won |
+| `task_dead` | `felix-mcp` | Task id, offset, reason (attempts used up, or given up) |
+| `board_put`, `board_conflict` | `felix-mcp` | Key, version written (and the version it was conditioned on) or version found, value (short text or artifact) |
 | `lease_taken`, `lease_renewed`, `lease_released`, `lease_lost` | `felix-mcp` | Key, version, TTL |
-| `message` | `felix-mcp` | To, correlation id, offset in the messages stream |
+| `message` | `felix-mcp` | To, correlation id, offset in the messages stream, text |
 | `model_started` | `agents-run` | Task id, the reservation taken |
 | `model_call` | `agents-run` | Prompt and response artifacts, tokens, cost |
+| `budget_exhausted`, `refund_unconfirmed` | `agents-run` | The reservation that went over its limit and was added back; a refund that could not be confirmed |
 | `refused` | `felix-mcp` | The operation, the resource, Felix's error |
+
+`core` (`core/src/record.rs`) holds the exact fields. Each line on the log is a JSON object with the writer's time (`at_ms`) and name (`by`) beside the record, whose `kind` is one of the names
+above. A kind this version does not know decodes as `unknown` and a fold skips it. Money is in millionths of a dollar, times are milliseconds since the Unix epoch on the writer's clock, and
+every id and key follows the key rule, which decoding checks (a refusal's `key` is Felix's text and is not checked). A reader skips fields it does not know, so a record can
+gain one without breaking an older viewer. A value that may be big, such as a board entry, is either short text
+inline or an artifact id (`Content` in `core`). The viewer's fixtures predate this format and use display fields such
+as `text` and seconds; the viewer moves to the real format when it reads from Felix.
 
 ## The Felix mapping
 
@@ -435,7 +443,9 @@ the same frames.
 | A red bounce off whatever was targeted | `refused` | The broker refusing a write outside the agent's grants |
 
 A board card's subject and a lease key share a name (a file path, in the pull
-request review), which is how a lock lands on the right card. A lease on a
+request review, written with `-` for the characters keys do not allow), which
+is how a lock lands on the right card. The board key adds its writer's prefix
+(`w3-`) in front of the subject; the lease key does not. A lease on a
 subject with no card yet gets a placeholder card.
 
 Who did something comes from the publisher Felix recorded, not from the
