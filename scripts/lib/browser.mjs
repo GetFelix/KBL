@@ -41,26 +41,58 @@ export async function serve(root) {
   return { origin: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((ok) => server.close(ok)) };
 }
 
+// A saturated CI runner can take well over 10 s to bring Chrome up.
+const STARTUP_MS = Number(process.env.CHROME_STARTUP_MS) || 60000;
+const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+
 export async function launch({ width = 1280, height = 800 } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'fa-chrome-'));
+  const binary = findChrome();
   const child = spawn(
-    findChrome(),
+    binary,
     ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--remote-debugging-port=0', `--user-data-dir=${dir}`, `--window-size=${width},${height}`, 'about:blank'],
-    { stdio: 'ignore' },
+    { stdio: ['ignore', 'ignore', 'pipe'] },
   );
+  // Keep the tail of stderr so a failed start can say why.
+  let stderr = '';
+  child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
+  let spawnError = null;
+  child.on('error', (e) => { spawnError = e; });
+  const stopped = () => spawnError !== null || child.exitCode !== null || child.signalCode !== null;
+  const closed = new Promise((ok) => child.once('close', ok));
+  const abort = async (reason) => {
+    const how = spawnError ? `spawn error: ${spawnError.message}` : stopped() ? `exit code ${child.exitCode}, signal ${child.signalCode}` : 'still running when killed';
+    child.kill();
+    // 'close' fires once stderr is drained, so the message below has Chrome's last words.
+    await Promise.race([closed, sleep(2000)]);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`${reason} (${binary}; ${how})${stderr.trim() ? `\nChrome stderr:\n${stderr.trim()}` : ''}`);
+  };
+
   const portFile = join(dir, 'DevToolsActivePort');
-  for (let i = 0; i < 100 && !existsSync(portFile); i++) await new Promise((ok) => setTimeout(ok, 100));
-  if (!existsSync(portFile)) { child.kill(); throw new Error('Chrome did not start'); }
-  const port = (await readFile(portFile, 'utf8')).split('\n')[0];
+  const deadline = Date.now() + STARTUP_MS;
+  while (!existsSync(portFile)) {
+    if (stopped()) await abort('Chrome exited before it was ready');
+    if (Date.now() > deadline) await abort(`Chrome did not start within ${STARTUP_MS / 1000} s`);
+    await sleep(100);
+  }
+  // The file can be seen before its contents are written; read until the port is there.
+  let port;
+  while (!(port = (await readFile(portFile, 'utf8')).split('\n')[0])) {
+    if (Date.now() > deadline) await abort('Chrome wrote an empty DevToolsActivePort');
+    await sleep(50);
+  }
   let ws;
   try {
-    const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-    ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
+    let target;
+    while (!(target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page'))) {
+      if (stopped() || Date.now() > deadline) throw new Error('Chrome has no page to drive');
+      await sleep(100);
+    }
+    ws = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = () => no(new Error('could not connect to Chrome')); });
   } catch (e) {
-    child.kill();
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw e;
+    await abort(e.message);
   }
 
   let id = 0;
