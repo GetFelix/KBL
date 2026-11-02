@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { extname, join, normalize, resolve } from 'node:path';
+import { extname, join, normalize, resolve, sep } from 'node:path';
 
 const TYPES = { '.html': 'text/html', '.json': 'application/json', '.png': 'image/png', '.js': 'text/javascript', '.mjs': 'text/javascript' };
 
@@ -28,7 +28,7 @@ export async function serve(root) {
   const server = createServer(async (req, res) => {
     const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname));
     const file = join(base, path);
-    if (!file.startsWith(base)) { res.writeHead(403).end(); return; }
+    if (file !== base && !file.startsWith(base + sep)) { res.writeHead(403).end(); return; }
     if (path === '/favicon.ico') { res.writeHead(204).end(); return; }
     try {
       const body = await readFile(file);
@@ -52,9 +52,16 @@ export async function launch({ width = 1280, height = 800 } = {}) {
   for (let i = 0; i < 100 && !existsSync(portFile); i++) await new Promise((ok) => setTimeout(ok, 100));
   if (!existsSync(portFile)) { child.kill(); throw new Error('Chrome did not start'); }
   const port = (await readFile(portFile, 'utf8')).split('\n')[0];
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-  const ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
-  await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = no; });
+  let ws;
+  try {
+    const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+    ws = new WebSocket(targets.find((t) => t.type === 'page').webSocketDebuggerUrl);
+    await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = () => no(new Error('could not connect to Chrome')); });
+  } catch (e) {
+    child.kill();
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
 
   let id = 0;
   const waiting = new Map();
@@ -67,7 +74,13 @@ export async function launch({ width = 1280, height = 800 } = {}) {
       msg.error ? no(new Error(msg.error.message)) : ok(msg.result);
     } else if (msg.method) listeners.forEach((l) => l(msg));
   };
-  const send = (method, params = {}) => new Promise((ok, no) => { const n = ++id; waiting.set(n, { ok, no }); ws.send(JSON.stringify({ id: n, method, params })); });
+  const send = (method, params = {}, ms = 30000) => new Promise((ok, no) => {
+    const n = ++id;
+    const timer = setTimeout(() => { waiting.delete(n); no(new Error(`${method} timed out after ${ms} ms`)); }, ms);
+    waiting.set(n, { ok: (v) => { clearTimeout(timer); ok(v); }, no: (e) => { clearTimeout(timer); no(e); } });
+    ws.send(JSON.stringify({ id: n, method, params }));
+  });
+  ws.onclose = () => { for (const { no } of waiting.values()) no(new Error('Chrome closed the connection')); waiting.clear(); };
 
   await send('Runtime.enable');
   await send('Page.enable');
@@ -76,9 +89,12 @@ export async function launch({ width = 1280, height = 800 } = {}) {
   const page = {
     send,
     problems: [],
+    // Resolves once the new document has loaded, so a poll cannot read the previous page.
     async goto(url) {
       this.problems.length = 0;
+      const loaded = new Promise((ok) => { const l = (m) => { if (m.method === 'Page.loadEventFired') { listeners.splice(listeners.indexOf(l), 1); ok(); } }; listeners.push(l); });
       await send('Page.navigate', { url });
+      await loaded;
     },
     async eval(expression) {
       const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
@@ -100,12 +116,15 @@ export async function launch({ width = 1280, height = 800 } = {}) {
       for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x, y, button: 'left', clickCount: 1 });
     },
     async close() {
+      ws.onclose = null;
       ws.close();
       child.kill();
+      await new Promise((ok) => (child.exitCode !== null ? ok() : child.once('exit', ok)));
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     },
   };
   listeners.push((msg) => {
+    if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') page.problems.push(msg.params.args.map((a) => a.value ?? a.description ?? '').join(' '));
     if (msg.method === 'Runtime.exceptionThrown') page.problems.push(msg.params.exceptionDetails.exception?.description || msg.params.exceptionDetails.text);
     // A blocked web font is not a defect of the page; any other error is.
     if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error' && !/fonts\.(googleapis|gstatic)\.com|ERR_(INTERNET|NAME|CONNECTION)/.test(`${msg.params.entry.url || ''} ${msg.params.entry.text}`)) page.problems.push(msg.params.entry.text);
