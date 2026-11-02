@@ -46,8 +46,8 @@ const STARTUP_MS = Number(process.env.CHROME_STARTUP_MS) || 60000;
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
 export async function launch({ width = 1280, height = 800 } = {}) {
-  const dir = await mkdtemp(join(tmpdir(), 'fa-chrome-'));
   const binary = findChrome();
+  const dir = await mkdtemp(join(tmpdir(), 'fa-chrome-'));
   const child = spawn(
     binary,
     ['--headless=new', '--disable-gpu', '--no-sandbox', '--hide-scrollbars', '--remote-debugging-port=0', `--user-data-dir=${dir}`, `--window-size=${width},${height}`, 'about:blank'],
@@ -55,68 +55,81 @@ export async function launch({ width = 1280, height = 800 } = {}) {
   );
   // Keep the tail of stderr so a failed start can say why.
   let stderr = '';
-  child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
+  const keepStderr = (d) => { stderr = (stderr + d).slice(-4000); };
+  child.stderr.on('data', keepStderr);
   let spawnError = null;
   child.on('error', (e) => { spawnError = e; });
   const stopped = () => spawnError !== null || child.exitCode !== null || child.signalCode !== null;
   const closed = new Promise((ok) => child.once('close', ok));
-  const abort = async (reason) => {
+  // Kills Chrome, removes its profile and returns an error that says what Chrome did.
+  const fail = async (reason) => {
     const how = spawnError ? `spawn error: ${spawnError.message}` : stopped() ? `exit code ${child.exitCode}, signal ${child.signalCode}` : 'still running when killed';
     child.kill();
-    // 'close' fires once stderr is drained, so the message below has Chrome's last words.
+    // 'close' fires once stderr is drained, so the message has Chrome's last words.
     await Promise.race([closed, sleep(2000)]);
     await rm(dir, { recursive: true, force: true }).catch(() => {});
-    throw new Error(`${reason} (${binary}; ${how})${stderr.trim() ? `\nChrome stderr:\n${stderr.trim()}` : ''}`);
+    return new Error(`${reason} (${binary}; ${how})${stderr.trim() ? `\nChrome stderr:\n${stderr.trim()}` : ''}`);
   };
 
-  const portFile = join(dir, 'DevToolsActivePort');
   const deadline = Date.now() + STARTUP_MS;
-  while (!existsSync(portFile)) {
-    if (stopped()) await abort('Chrome exited before it was ready');
-    if (Date.now() > deadline) await abort(`Chrome did not start within ${STARTUP_MS / 1000} s`);
-    await sleep(100);
-  }
-  // The file can be seen before its contents are written; read until the port is there.
-  let port;
-  while (!(port = (await readFile(portFile, 'utf8')).split('\n')[0])) {
-    if (Date.now() > deadline) await abort('Chrome wrote an empty DevToolsActivePort');
-    await sleep(50);
-  }
+  const left = () => Math.max(1, deadline - Date.now());
+  const portFile = join(dir, 'DevToolsActivePort');
   let ws;
+  let id = 0;
+  const waiting = new Map();
+  const listeners = [];
+  let send;
   try {
+    while (!existsSync(portFile)) {
+      if (stopped()) throw new Error('Chrome exited before it was ready');
+      if (Date.now() > deadline) throw new Error(`Chrome did not start within ${STARTUP_MS / 1000} s`);
+      await sleep(100);
+    }
+    // The file can be seen before its contents are written; read until the port is there.
+    let port;
+    while (!(port = (await readFile(portFile, 'utf8')).split('\n')[0])) {
+      if (stopped()) throw new Error('Chrome exited before it was ready');
+      if (Date.now() > deadline) throw new Error('Chrome wrote an empty DevToolsActivePort');
+      await sleep(50);
+    }
     let target;
-    while (!(target = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === 'page'))) {
+    while (!(target = (await (await fetch(`http://127.0.0.1:${port}/json`, { signal: AbortSignal.timeout(left()) })).json()).find((t) => t.type === 'page'))) {
       if (stopped() || Date.now() > deadline) throw new Error('Chrome has no page to drive');
       await sleep(100);
     }
     ws = new WebSocket(target.webSocketDebuggerUrl);
-    await new Promise((ok, no) => { ws.onopen = ok; ws.onerror = () => no(new Error('could not connect to Chrome')); });
+    await new Promise((ok, no) => {
+      const timer = setTimeout(() => no(new Error('timed out connecting to Chrome')), left());
+      ws.onopen = () => { clearTimeout(timer); ok(); };
+      ws.onerror = () => { clearTimeout(timer); no(new Error('could not connect to Chrome')); };
+    });
+
+    ws.onmessage = (m) => {
+      const msg = JSON.parse(m.data);
+      if (msg.id && waiting.has(msg.id)) {
+        const { ok, no } = waiting.get(msg.id);
+        waiting.delete(msg.id);
+        msg.error ? no(new Error(msg.error.message)) : ok(msg.result);
+      } else if (msg.method) listeners.forEach((l) => l(msg));
+    };
+    send = (method, params = {}, ms = 30000) => new Promise((ok, no) => {
+      const n = ++id;
+      const timer = setTimeout(() => { waiting.delete(n); no(new Error(`${method} timed out after ${ms} ms`)); }, ms);
+      waiting.set(n, { ok: (v) => { clearTimeout(timer); ok(v); }, no: (e) => { clearTimeout(timer); no(e); } });
+      ws.send(JSON.stringify({ id: n, method, params }));
+    });
+    ws.onclose = () => { for (const { no } of waiting.values()) no(new Error('Chrome closed the connection')); waiting.clear(); };
+
+    await send('Runtime.enable');
+    await send('Page.enable');
+    await send('Log.enable');
   } catch (e) {
-    await abort(e.message);
+    if (ws) { ws.onclose = null; ws.close(); }
+    throw await fail(e.message);
   }
-
-  let id = 0;
-  const waiting = new Map();
-  const listeners = [];
-  ws.onmessage = (m) => {
-    const msg = JSON.parse(m.data);
-    if (msg.id && waiting.has(msg.id)) {
-      const { ok, no } = waiting.get(msg.id);
-      waiting.delete(msg.id);
-      msg.error ? no(new Error(msg.error.message)) : ok(msg.result);
-    } else if (msg.method) listeners.forEach((l) => l(msg));
-  };
-  const send = (method, params = {}, ms = 30000) => new Promise((ok, no) => {
-    const n = ++id;
-    const timer = setTimeout(() => { waiting.delete(n); no(new Error(`${method} timed out after ${ms} ms`)); }, ms);
-    waiting.set(n, { ok: (v) => { clearTimeout(timer); ok(v); }, no: (e) => { clearTimeout(timer); no(e); } });
-    ws.send(JSON.stringify({ id: n, method, params }));
-  });
-  ws.onclose = () => { for (const { no } of waiting.values()) no(new Error('Chrome closed the connection')); waiting.clear(); };
-
-  await send('Runtime.enable');
-  await send('Page.enable');
-  await send('Log.enable');
+  // Nothing reads stderr after startup; don't let its pipe hold the process open.
+  child.stderr.off('data', keepStderr);
+  child.stderr.destroy();
 
   const page = {
     send,
