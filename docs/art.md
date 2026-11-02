@@ -76,8 +76,8 @@ planner in the hub once the run is done.
 - **Death is slow on purpose.** The node dims, cracks and its claim timer
   turns amber and keeps draining until the deadline, because that is when
   Felix gives the task to someone else.
-- **Quiet stretches play at 10x**, and the timeline marks them with a dotted bar under the lanes, and `prefers-reduced-motion` (or
-  `?motion=reduced`) turns flights into a single flash along the edge.
+- **Quiet stretches play at 10x**, and the timeline marks them with a dotted bar under the lanes.
+- **Reduced motion.** `prefers-reduced-motion` (or `?motion=reduced`) turns flights into a single flash along the edge.
 
 ## Using the style frame
 
@@ -106,7 +106,7 @@ headless Chrome:
 
 - A frame playback just drew is the frame seeking to that moment draws, and a
   moment reached by stepping, by jumping from the end or from another speed is
-  the same pixels. Nothing carries over between frames.
+  the same pixels. A frame depends only on the moment, the speed, the layout and the theme.
 - Posts, claims and results merge by edge and window at every speed, merged
   counts add up, and a refusal, conflict, dead letter or duplicate is never
   merged.
@@ -120,10 +120,14 @@ headless Chrome:
 The burst reaches 134 packets in flight at 16x, short of the design's 150, so
 the flow-line rule is exercised with the lower threshold.
 
-The backdrop and the vignette are painted once per layout and copied each
-frame, because a full-size gradient and the dot grid cost more than the
-packets. Drawing one frame of the 50-worker burst at 16x takes about 7 ms at
-the 95th percentile on a 1440x900 canvas and about 14 ms on a 2x canvas, in
-headless Chrome with software rasterising and the whole frame read back. A
-laptop with a GPU canvas does less. The CI bound is 20 ms at 1x pixels: it catches a gross regression, not a
-few milliseconds.
+The backdrop and the vignette are painted once per layout and theme and copied
+each frame, because a full-size gradient and the dot grid cost more than the
+packets. The check drops the copies and compares, after a theme toggle and a
+resize, so a stale one fails it.
+
+The script prints the cost of a frame of the 50-worker burst at 16x: the 95th
+percentile over 240 frames, best of three runs, on a 1440x900 canvas at 1x and 2x
+pixels. On a laptop it was about 7 ms and 14 ms in headless Chrome, which
+rasterises in software and reads the whole frame back, so a GPU canvas does
+less. CI fails above 20 ms at 1x. That catches a gross regression, not a few
+milliseconds.

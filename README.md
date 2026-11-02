@@ -130,14 +130,14 @@ fixtures exercise the page, not pixel by pixel that each element is drawn; the s
 the visual record.
 
 `check-motion.mjs` checks the rules in [docs/design.md](docs/design.md) under "Motion and aggregation". It seeks to
-a moment and compares the frame with the one playback drew, checks which events merge and which never do, and
-times a frame on the burst fixture against a budget.
+a moment and compares the frame with the one playback drew, checks that bursts of events merge into one packet but refusals and
+conflicts never do, and times a frame on the burst fixture against a budget.
 
 `check-steps.mjs` clicks every kind of element the page draws (agents, cards, packets, flow lines, the queue
 tray, the budget ring, log rows, captions and timeline markers) and checks that each opens the step panel for the
 record behind it.
 
-CI runs `lint.mjs` with the fixture regeneration, `check-frame.mjs`, `check-motion.mjs` and `check-steps.mjs` as four jobs, and requires the `CI ok` check.
+CI runs four jobs, lint (with the fixture regeneration), style frame, motion rules and step panel, and requires the `CI ok` check.
 
 ## Documentation
 

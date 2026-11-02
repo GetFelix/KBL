@@ -450,6 +450,7 @@ function alpha(col, a) {
 // and copied each frame; a full-size gradient and a dot grid cost more than the packets.
 const layers = new Map();
 function blit(ctx, name, paint) {
+  if (L.swarmW < 1 || L.swarmH < 1) return;
   const key = [L.swarmW, L.swarmH, L.cx, L.cy, L.R, DPR, C.dark].join('|');
   let l = layers.get(name);
   if (!l || l.key !== key) {
@@ -622,6 +623,9 @@ function drawHub(ctx, s, T, w) {
     ctx.textBaseline = 'alphabetic';
     const rows = Math.max(1, Math.ceil(shown.length / cols));
     ctx.fillText(`queue ${s.queue.length}`, cx, y0 + rows * (cell + gap) + 12);
+    // Neither is drawn once the cat mark replaces them.
+    hits.push({ kind: 'planner', x: P.x, y: P.y, r: pr + 6 });
+    hits.push({ kind: 'tray', x: L.tray.x, y: L.tray.y, r: Math.max(hub * 0.3, tw / 2 + 6) });
   }
   // budget label below the ring
   ctx.textAlign = 'center';
@@ -633,8 +637,6 @@ function drawHub(ctx, s, T, w) {
   ctx.fillStyle = C.muted;
   ctx.fillText(`left of ${money(s.budget)}` + (s.reservedSum > 0 ? ` · ${money(s.reservedSum)} reserved` : ''), cx, cy + r + 38);
   hits.push({ kind: 'budget', x: cx, y: cy, r: r + 8, rin: r - 14 });
-  hits.push({ kind: 'planner', x: P.x, y: P.y, r: pr + 6 });
-  hits.push({ kind: 'tray', x: L.tray.x, y: L.tray.y, r: hub * 0.3 });
 }
 
 function pulse(ctx, x, y, r, T, weight) {
@@ -1217,7 +1219,7 @@ function drawNotes(ctx, s, T, w) {
     ctx.globalAlpha = (age > 0.8 ? (1 - age) * 5 : 1) * intro;
     const col = C[n.tone] || C.cyan;
     ctx.fillStyle = C.dark ? 'rgba(12, 19, 27, 0.92)' : 'rgba(255,255,255,0.94)';
-    hits.push({ kind: 'event', src: 'caption', e: n.e, x: 16, y: top, w: maxW, h });
+    if (ctx.globalAlpha > 0.25) hits.push({ kind: 'event', src: 'caption', e: n.e, x: 16, y: top, w: maxW, h });
     roundRect(ctx, 16, top, maxW, h, 9); ctx.fill();
     ctx.strokeStyle = alpha(col, 0.45); ctx.lineWidth = 1;
     roundRect(ctx, 16, top, maxW, h, 9); ctx.stroke();
@@ -1525,7 +1527,10 @@ window.motionProbe = {
   panelOpen: () => panel.classList.contains('open') ? panel.querySelector('h3 span').textContent : null,
   markers: () => { const b = tl.getBoundingClientRect(); return marks.filter((m) => !m.small && lanes.indexOf(m.who) >= 0).map((m) => ({ x: b.left + TL.gx + (m.e.t / END) * TL.gw, y: b.top + TL.top + 4 + lanes.indexOf(m.who) * TL.laneH + TL.laneH / 2 })); },
   firstPost: () => firstPost,
+  topAt: (px, py) => { const b = scene.getBoundingClientRect(); const h = hitAt(px - b.left, py - b.top); return h ? h.src || h.kind : null; },
+  lateMarks: () => marks.filter((m) => m.e.t > END).length,
   closePanel: () => panel.classList.remove('open'),
+  dropLayers: () => layers.clear(),
 };
 if (params.has('t')) { root.dataset.ready = '1'; }
 else requestAnimationFrame(tick);
