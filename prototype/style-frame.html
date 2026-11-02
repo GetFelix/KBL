@@ -450,6 +450,7 @@ function alpha(col, a) {
 // and copied each frame; a full-size gradient and a dot grid cost more than the packets.
 const layers = new Map();
 function blit(ctx, name, paint) {
+  if (L.swarmW < 1 || L.swarmH < 1) return;
   const key = [L.swarmW, L.swarmH, L.cx, L.cy, L.R, DPR, C.dark].join('|');
   let l = layers.get(name);
   if (!l || l.key !== key) {
@@ -1502,6 +1503,7 @@ window.motionProbe = {
   quiet, quietSpans, flowAt: () => FLOW_AT, flowEdges: () => flowEdges, shapes: () => shapes, reduced: () => reduced,
   state: () => ({ T: play.T, speed: play.speed, wall: wallNow, playing: play.playing }),
   canvas: () => scene.toDataURL(),
+  dropLayers: () => layers.clear(),
 };
 if (params.has('t')) { root.dataset.ready = '1'; }
 else requestAnimationFrame(tick);
