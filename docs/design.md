@@ -511,9 +511,11 @@ otherwise be 300 overlapping squares. The rules:
   for refusals.
 - **The cat mark** sits in the header next to the run's name, and in the hub
   when the queue is empty and the run is done.
-- **Clicking** a node, packet, card or timeline marker opens the step panel:
-  the prompt, the response or the tool output, the record's offset and its
-  publisher.
+- **Clicking** anything drawn from a record opens the step panel: a node,
+  packet, flow line, card, the queue tray, the budget ring, a log row, a
+  caption or a timeline marker. The panel shows the prompt, the response or
+  the tool output, the record's offset and its publisher. A flow line, the
+  tray and the ring stand for many records and open the latest relevant one.
 
 ### Validating the look in M0
 

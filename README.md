@@ -112,6 +112,12 @@ python3 prototype/make-fixture.py
 # Play both fixtures in headless Chrome
 node scripts/check-frame.mjs
 
+# Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
+node scripts/check-motion.mjs
+
+# Click every kind of element and check it opens the step behind it
+node scripts/check-steps.mjs
+
 # Build and test the Rust crates
 cargo test --workspace
 
@@ -120,13 +126,24 @@ python3 -m http.server 8000
 ```
 
 `check-frame.mjs` looks for Chrome, Chromium or Edge in the usual install paths; set `CHROME` to a binary
-otherwise. It checks that the page loads without errors at laptop and phone size, that frames later in the run
+otherwise. Chrome gets 60 s to start (`CHROME_STARTUP_MS` changes that); if it exits or never comes up, the error
+includes its exit code and stderr. The launcher is `scripts/lib/browser.mjs`; new checks should use it.
+
+The check confirms that the page loads without errors at laptop and phone size, that frames later in the run
 differ from the empty start, and that each fixture contains the records, and for moving elements the packets,
 behind every row of [the design's element table](docs/design.md#what-each-element-is-drawn-from). That proves the
 fixtures exercise the page, not pixel by pixel that each element is drawn; the stills in `docs/screenshots/` are
 the visual record.
 
-CI runs three jobs, lint (with the fixture regeneration), style frame and the Rust checks (format, clippy, tests), and requires the `CI ok` check.
+`check-motion.mjs` checks the rules in [docs/design.md](docs/design.md) under "Motion and aggregation". It seeks to
+a moment and compares the frame with the one playback drew, checks that bursts of events merge into one packet but refusals and
+conflicts never do, and times a frame on the burst fixture against a budget.
+
+`check-steps.mjs` clicks every kind of element the page draws (agents, cards, packets, flow lines, the queue
+tray, the budget ring, log rows, captions and timeline markers) and checks that each opens the step panel for the
+record behind it.
+
+CI runs five jobs, lint (with the fixture regeneration), style frame, motion rules, step panel and the Rust checks (format, clippy, tests), and requires the `CI ok` check.
 
 ## Documentation
 
