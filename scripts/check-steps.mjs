@@ -58,6 +58,17 @@ try {
         }
       }
     }
+    // A caption that has faded out must not still take clicks.
+    for (const fixture of ['fixture-run.json', 'fixture-burst.json']) {
+      await page.goto(`${server.origin}/prototype/style-frame.html?fixture=${fixture}&t=1`);
+      await page.waitFor(`typeof window.motionProbe === 'object'`);
+      const end = await page.eval('window.runEnd');
+      for (let i = 1; i < 400; i++) {
+        await page.eval(`renderAt(${(i / 400) * end}, 8, 0)`);
+        const live = (await page.eval('motionProbe.hits()')).filter((h) => h.src === 'caption' && h.a !== undefined && h.a <= 0.25);
+        if (live.length) { fail(`${size} ${fixture}: a caption at alpha ${live[0].a.toFixed(2)} still takes clicks`); break; }
+      }
+    }
     for (const src of required) if (!seen.get(src)) fail(`${size}: no ${src} was ever on screen to click`);
     console.log(`ok   ${size}: opened a step from ${[...seen].map(([k, n]) => `${k} x${n}`).join(', ')}`);
   }

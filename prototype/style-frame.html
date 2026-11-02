@@ -1219,7 +1219,7 @@ function drawNotes(ctx, s, T, w) {
     ctx.globalAlpha = (age > 0.8 ? (1 - age) * 5 : 1) * intro;
     const col = C[n.tone] || C.cyan;
     ctx.fillStyle = C.dark ? 'rgba(12, 19, 27, 0.92)' : 'rgba(255,255,255,0.94)';
-    if (ctx.globalAlpha > 0.25) hits.push({ kind: 'event', src: 'caption', e: n.e, x: 16, y: top, w: maxW, h });
+    if (ctx.globalAlpha > 0.25) hits.push({ kind: 'event', src: 'caption', e: n.e, x: 16, y: top, w: maxW, h, a: ctx.globalAlpha });
     roundRect(ctx, 16, top, maxW, h, 9); ctx.fill();
     ctx.strokeStyle = alpha(col, 0.45); ctx.lineWidth = 1;
     roundRect(ctx, 16, top, maxW, h, 9); ctx.stroke();
@@ -1523,7 +1523,7 @@ window.motionProbe = {
   quiet, quietSpans, flowAt: () => FLOW_AT, flowEdges: () => flowEdges, shapes: () => shapes, reduced: () => reduced,
   state: () => ({ T: play.T, speed: play.speed, wall: wallNow, playing: play.playing }),
   canvas: () => scene.toDataURL(),
-  hits: () => { const b = scene.getBoundingClientRect(); return hits.map((h) => ({ kind: h.kind, src: h.src || '', x: b.left + (h.rin ? h.x + (h.r + h.rin) / 2 : h.r ? h.x : h.x + h.w / 2), y: b.top + (h.r ? h.y : h.y + h.h / 2) })); },
+  hits: () => { const b = scene.getBoundingClientRect(); return hits.map((h) => ({ kind: h.kind, src: h.src || '', x: b.left + (h.rin ? h.x + (h.r + h.rin) / 2 : h.r ? h.x : h.x + h.w / 2), y: b.top + (h.r ? h.y : h.y + h.h / 2), a: h.a })); },
   panelOpen: () => panel.classList.contains('open') ? panel.querySelector('h3 span').textContent : null,
   markers: () => { const b = tl.getBoundingClientRect(); return marks.filter((m) => !m.small && lanes.indexOf(m.who) >= 0).map((m) => ({ x: b.left + TL.gx + (m.e.t / END) * TL.gw, y: b.top + TL.top + 4 + lanes.indexOf(m.who) * TL.laneH + TL.laneH / 2 })); },
   firstPost: () => firstPost,
