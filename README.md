@@ -126,7 +126,7 @@ behind every row of [the design's element table](docs/design.md#what-each-elemen
 fixtures exercise the page, not pixel by pixel that each element is drawn; the stills in `docs/screenshots/` are
 the visual record.
 
-CI runs `lint.mjs`, the fixture regeneration and `check-frame.mjs` as two jobs, and requires the `CI ok` check.
+CI runs three jobs, lint (with the fixture regeneration), style frame and the Rust checks (format, clippy, tests), and requires the `CI ok` check.
 
 ## Documentation
 
