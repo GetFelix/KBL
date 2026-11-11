@@ -23,3 +23,4 @@
 - CI must pass before merge. Merges are squash only.
 - No AI attribution in commits or pull request descriptions.
 - List design calls under "Review notes", and Felix gaps you hit under "Felix gaps found", with the issue each one is filed as.
+- A new route, MCP tool or record kind gets a row in [docs/threat-model.md](docs/threat-model.md): who can call or write it, which fields an agent controls, and the check that stops misuse. CI fails without the row, and a row with no check needs an issue.
