@@ -46,12 +46,15 @@ http://localhost:5173/?gateway=ws://127.0.0.1:8787/ws&room=kibble&token=<ID toke
 `stream=<alias>` names a different alias than `events`.
 
 The token is read once and then removed from the address with `history.replaceState`. It stays in memory only,
-so reloading the page needs the link again. Two cautions: use `wss://` for any gateway but your own machine,
+so reloading the page needs the link again. The first GET still carries it in the URL, so it reaches the dev
+server's access log. Two cautions: use `wss://` for any gateway but your own machine,
 since `ws://` sends the token in the clear; and treat a `?gateway=` link from someone else as untrusted, because
 the page sends the token to whatever address it names.
 
-An expired or rejected token (`signed_out`, `forbidden`) stops the page with a message. Other failures retry
-from the last applied offset with a growing delay, up to 30 s.
+An expired or rejected token (`signed_out`, `forbidden`) or an error a retry cannot fix (`trimmed`, `bad_request`,
+`past_end`) stops the page with a message. `subscription_ended` (a broker failover) subscribes again at once from
+the cursor. Any other failure reconnects from the cursor, which is past records the fold refused, with a growing
+delay up to 30 s.
 
 ## How it follows the log
 

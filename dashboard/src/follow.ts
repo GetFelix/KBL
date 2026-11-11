@@ -49,6 +49,9 @@ export interface FollowOptions {
 
 export class FollowError extends Error {}
 
+/** Codes a retry cannot fix: the log no longer holds the offset, or the request or sign-in is refused. */
+const FATAL_CODES = new Set(['trimmed', 'bad_request', 'past_end', 'forbidden', 'signed_out', 'bad_frame']);
+
 export function decodeBase64(text: string): Uint8Array {
   const bin = atob(text);
   const out = new Uint8Array(bin.length);
@@ -58,8 +61,8 @@ export function decodeBase64(text: string): Uint8Array {
 
 /**
  * Follows the stream until the connection ends. Resolves with the cursor, the
- * offset to pass as `from` on a reconnect; rejects if the gateway refuses a
- * request.
+ * offset to pass as `from` on a reconnect, also when a transient gateway error
+ * ended it; rejects on an error a retry cannot fix (`trimmed`, `bad_request`, ...).
  */
 export function follow(transport: Transport, sink: Sink, opts: FollowOptions): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -110,8 +113,19 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
     transport.onMessage = (m) => {
       if (done) return;
       if (m.type === 'error') {
-        // A read or subscribe that fails ends the follow; the caller decides whether to retry.
-        fail(`${m.code ?? 'error'}: ${m.message ?? ''}`);
+        const code = m.code ?? 'error';
+        if (code === 'subscription_ended' && phase === 'live') {
+          // A broker failover or close: the protocol says to subscribe again from the last offset + 1.
+          subscribe();
+        } else if (FATAL_CODES.has(code)) {
+          fail(`${code}: ${m.message ?? ''}`);
+        } else if (!done) {
+          // read_failed, subscribe_failed and the rest may pass: hand the cursor back so the caller
+          // reconnects with a backoff.
+          done = true;
+          transport.close();
+          resolve(cursor);
+        }
       } else if (m.type === 'records' && phase === 'reading' && m.id === outstanding) {
         const records = m.records ?? [];
         for (const r of records) apply(r.offset, r.payload);

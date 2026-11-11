@@ -56,6 +56,7 @@ async function main() {
       render(sink);
     });
   };
+  let cursor = 0;
   let refused = 0;
   let refusedBefore = 0; // refusals from earlier connections; follow counts per connection
   const live = () =>
@@ -63,12 +64,12 @@ async function main() {
   let delay = 1000; // grows on failures, resets once a connection goes live
   for (;;) {
     try {
-      status.textContent = fold.at() < 0 ? 'Reading history' : 'Reconnecting';
+      status.textContent = cursor === 0 ? 'Reading history' : 'Reconnecting';
       const transport = await connect(url, room, token);
       refusedBefore = refused;
-      await follow(transport, sink, {
+      cursor = await follow(transport, sink, {
         stream: q.get('stream') ?? 'events',
-        from: fold.at() + 1, // the fold knows what it has applied
+        from: cursor, // past refused records too, which the fold does not count
         onApplied: redraw,
         onRefused: (n) => {
           refused = refusedBefore + n;

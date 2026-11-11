@@ -190,3 +190,55 @@ test('a payload that is not base64 ends the follow', async () => {
   const { sink } = recorder();
   await assert.rejects(follow(gw, sink, { stream: 'events' }), /not base64/);
 });
+
+test('subscription_ended resubscribes from the cursor and the log carries on', async () => {
+  const gw = gatewayWith(3);
+  const { seen, sink } = recorder();
+  const done = follow(gw, sink, { stream: 'events' });
+  await settle();
+  gw.onMessage({ type: 'error', code: 'subscription_ended', message: 'broker failover' });
+  gw.publish(record(3)); // lands while the page is resubscribing; the new subscription delivers it
+  await settle();
+  gw.publish(record(4));
+  await settle();
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1, 2, 3, 4]);
+  assert.deepEqual(gw.subscribedFrom, [3, 3], 'subscribed again from the cursor');
+  assert.ok(!gw.closed);
+  gw.close();
+  await done;
+});
+
+test('a transient gateway error hands the cursor back instead of stopping', async () => {
+  const gw = gatewayWith(4);
+  gw.readError = (from) => (from >= 2 ? { type: 'error', code: 'read_failed', message: 'broker busy' } : undefined);
+  const { seen, sink } = recorder();
+  assert.equal(await follow(gw, sink, { stream: 'events' }), 2);
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1]);
+});
+
+test('a stale event does not move the live position back (spurious resubscribe)', async () => {
+  const gw = gatewayWith(2);
+  const { seen, sink } = recorder();
+  const done = follow(gw, sink, { stream: 'events' });
+  await settle();
+  gw.publish(record(2));
+  gw.publish(record(3));
+  gw.onMessage({ type: 'event', offset: 1, payload: record(1) }); // already applied
+  gw.publish(record(4));
+  await settle();
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1, 2, 3, 4]);
+  assert.deepEqual(gw.subscribedFrom, [2], 'no resubscribe');
+  gw.close();
+  await done;
+});
+
+test('a read page that repeats records already applied does not apply them twice', async () => {
+  const gw = gatewayWith(6);
+  gw.overlap = 1;
+  const { seen, sink } = recorder();
+  const done = follow(gw, sink, { stream: 'events' });
+  await settle();
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1, 2, 3, 4, 5]);
+  gw.close();
+  await done;
+});

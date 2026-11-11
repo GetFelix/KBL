@@ -26,6 +26,8 @@ export class FakeGateway implements Transport {
   emptyPageAhead = 0;
   /** Answers a read with this instead of records, when it returns a message. */
   readError: (from: number) => GatewayMessage | undefined = () => undefined;
+  /** A read page starts this many offsets before `from`, as a repeating gateway might. */
+  overlap = 0;
   closed = false;
   private live = false;
   private skipped = 0;
@@ -54,9 +56,10 @@ export class FakeGateway implements Transport {
       this.onMessage({ ...err, id });
       return;
     }
-    const records = this.log.slice(from, from + this.pageSize).map((payload, i) => ({ offset: from + i, payload }));
+    const start = from >= this.log.length ? from : Math.max(0, from - this.overlap);
+    const records = this.log.slice(start, from + this.pageSize).map((payload, i) => ({ offset: start + i, payload }));
     if (records.length === 0) this.afterEmptyRead();
-    this.onMessage({ type: 'records', id, records, next_offset: from + records.length + (records.length === 0 ? this.emptyPageAhead : 0) });
+    this.onMessage({ type: 'records', id, records, next_offset: Math.max(from, start + records.length) + (records.length === 0 ? this.emptyPageAhead : 0) });
   }
 
   private subscribe(from: number): void {
