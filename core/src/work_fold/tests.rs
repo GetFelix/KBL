@@ -1250,3 +1250,34 @@ fn upstream_closure_counts_as_done_or_dropped_by_its_reason() {
         assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
     }
 }
+
+#[test]
+fn try_apply_leaves_no_trace_when_it_refuses() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.person(WorkRecord::BudgetSet {
+        root: id("r1"),
+        items_left: 5,
+        max_depth: 3,
+        cost_left_micros: 0,
+        redos_per_item: 3,
+    });
+    let mut s = fold(&l.0);
+    let before = s.clone();
+    // No cost left: the claim is refused, and the root must not be flagged over budget.
+    let claim = WorkLogged {
+        at_ms: 0,
+        by: key("w1"),
+        actor: Actor::Agent,
+        record: claimed("r1", 1),
+    };
+    assert_eq!(s.try_apply(3, &claim), Err(Reject::OverBudget));
+    assert_eq!(s, before);
+    // The same record through apply flags the root, as a replay of a logged one would.
+    s.apply(3, &claim);
+    assert!(s.items[&id("r1")].over_budget);
+}

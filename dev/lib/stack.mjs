@@ -108,7 +108,7 @@ export function killAll() {
 export async function startTracker(tokens, extraEnv = {}) {
   const dir = mkdtempSync(join(tmpdir(), "tracker-"));
   const tokensFile = join(dir, "tokens.json");
-  writeFileSync(tokensFile, JSON.stringify(tokens));
+  writeFileSync(tokensFile, JSON.stringify(tokens), { mode: 0o600 });
   const child = spawn(TRACKER, [], {
     env: {
       ...process.env,

@@ -23,14 +23,20 @@ async fn app() -> Router {
         ) -> anyhow::Result<Option<felix_client::GroupRecord>> {
             Ok(None)
         }
-        async fn ack(&self, _: &str, _: u64) -> anyhow::Result<()> {
+        async fn ack(&self, _: &str, _: &str, _: u64) -> anyhow::Result<()> {
             Ok(())
         }
-        async fn nack(&self, _: &str, _: &felix_client::GroupRecord) -> anyhow::Result<()> {
+        async fn nack(
+            &self,
+            _: &str,
+            _: &str,
+            _: &felix_client::GroupRecord,
+        ) -> anyhow::Result<()> {
             Ok(())
         }
         async fn extend(
             &self,
+            _: &str,
             _: &str,
             _: &felix_client::GroupRecord,
             by: Duration,

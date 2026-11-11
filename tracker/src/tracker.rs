@@ -115,8 +115,20 @@ impl<B: Broker> Tracker<B> {
         }));
         {
             let mut core = tracker.0.core.lock().await;
-            tracker.load(&mut core).await?;
+            tracker.load(&mut core, false).await?;
             tracker.sync_ready(&mut core).await;
+            // Take back the deliveries Felix still holds for agents the log shows holding.
+            let holders: Vec<AgentName> = core
+                .state
+                .items
+                .values()
+                .filter(|i| i.closed.is_none())
+                .filter_map(|i| i.hold.as_ref())
+                .filter_map(|h| AgentName::new(h.by.as_str()).ok())
+                .collect();
+            for agent in holders {
+                tracker.recover(&mut core, &agent).await;
+            }
         }
         Ok(tracker)
     }
@@ -127,10 +139,29 @@ impl<B: Broker> Tracker<B> {
         loop {
             {
                 let mut core = self.0.core.lock().await;
+                self.catch_up(&mut core).await?;
+                self.reconcile(&mut core, agent).await;
+                if !core.held.contains_key(agent)
+                    && let Some(attempt) = core.state.held_by(agent.as_str())
+                {
+                    // The log says this agent holds an item after a restart. It never
+                    // gets a second one; try again to take the delivery back.
+                    if !self.recover(&mut core, agent).await {
+                        let item = attempt.0;
+                        core.held.insert(
+                            agent.clone(),
+                            Held {
+                                item,
+                                attempt: attempt.1,
+                                tier: DEFAULT_TIER,
+                                record: None,
+                            },
+                        );
+                    }
+                }
                 if let Some(h) = core.held.get(agent) {
                     return Ok(claimed(&core.state, h, true));
                 }
-                self.catch_up(&mut core).await?;
                 self.sync_ready(&mut core).await;
                 if let Some(h) = self.try_claim(&mut core, agent).await? {
                     let reply = claimed(&core.state, &h, false);
@@ -149,7 +180,11 @@ impl<B: Broker> Tracker<B> {
     /// Keeps the agent's delivery standing for another visibility period.
     pub(crate) async fn extend(&self, agent: &AgentName, item: &ItemId) -> Result<Value, Error> {
         let (stream, record) = {
-            let core = self.0.core.lock().await;
+            let mut core = self.0.core.lock().await;
+            self.catch_up(&mut core).await?;
+            if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
+                return Err(lapsed(item));
+            }
             match core.held.get(agent) {
                 Some(h) if &h.item == item => match &h.record {
                     Some(r) => (ready_stream(h.tier), r.clone()),
@@ -164,7 +199,7 @@ impl<B: Broker> Tracker<B> {
         match self
             .0
             .broker
-            .extend(&stream, &record, self.0.visibility)
+            .extend(&stream, agent.as_str(), &record, self.0.visibility)
             .await
         {
             Ok(visible) => Ok(json!({
@@ -191,6 +226,9 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         let mut core = self.0.core.lock().await;
         self.catch_up(&mut core).await?;
+        if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
+            return Err(lapsed(item));
+        }
         let attempt = holding(&core, agent, item)?;
         self.append(
             &mut core,
@@ -221,6 +259,9 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         let mut core = self.0.core.lock().await;
         self.catch_up(&mut core).await?;
+        if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
+            return Err(lapsed(item));
+        }
         let attempt = holding(&core, agent, item)?;
         self.append(
             &mut core,
@@ -252,6 +293,9 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         let mut core = self.0.core.lock().await;
         self.catch_up(&mut core).await?;
+        if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
+            return Err(lapsed(item));
+        }
         let attempt = holding(&core, agent, item)?;
         self.append(
             &mut core,
@@ -324,7 +368,7 @@ impl<B: Broker> Tracker<B> {
                 "agents-tracker: {stream} offset {} is not a ready record; acked",
                 record.offset
             );
-            self.ack_quiet(&stream, record.offset).await;
+            self.ack_quiet(&stream, agent, record.offset).await;
             return Ok(None);
         };
         let item = ready.item.clone();
@@ -332,7 +376,7 @@ impl<B: Broker> Tracker<B> {
         // No entry means this is the only record the tracker knows of, so it is adopted.
         match core.live.get(&item) {
             Some(&(t, s)) if (t, s) != (ready.tier, ready.stamp) => {
-                self.ack_quiet(&stream, record.offset).await;
+                self.ack_quiet(&stream, agent, record.offset).await;
                 return Ok(None);
             }
             Some(_) => {}
@@ -341,7 +385,7 @@ impl<B: Broker> Tracker<B> {
             }
         }
         if ready.tier != tier {
-            self.ack_quiet(&stream, record.offset).await;
+            self.ack_quiet(&stream, agent, record.offset).await;
             return Ok(None);
         }
         match core.state.stage(&item) {
@@ -374,14 +418,14 @@ impl<B: Broker> Tracker<B> {
                     )
                     .await
                 {
-                    self.nack_quiet(&stream, &record).await;
+                    self.nack_quiet(&stream, agent, &record).await;
                     return Err(e);
                 }
                 core.held.retain(|_, h| h.item != item);
             }
             _ => {
                 core.live.remove(&item);
-                self.ack_quiet(&stream, record.offset).await;
+                self.ack_quiet(&stream, agent, record.offset).await;
                 return Ok(None);
             }
         }
@@ -409,11 +453,11 @@ impl<B: Broker> Tracker<B> {
                 eprintln!("agents-tracker: {item} not claimable ({why}); skipped");
                 core.live.remove(&item);
                 core.refused.insert(item, core.state.at);
-                self.ack_quiet(&stream, record.offset).await;
+                self.ack_quiet(&stream, agent, record.offset).await;
                 Ok(None)
             }
             Err(e) => {
-                self.nack_quiet(&stream, &record).await;
+                self.nack_quiet(&stream, agent, &record).await;
                 Err(e)
             }
         }
@@ -437,13 +481,100 @@ impl<B: Broker> Tracker<B> {
         };
         let stream = ready_stream(tier);
         let settled = if ready {
-            self.0.broker.nack(&stream, &record).await
+            self.0.broker.nack(&stream, agent.as_str(), &record).await
         } else {
-            self.0.broker.ack(&stream, record.offset).await
+            self.0
+                .broker
+                .ack(&stream, agent.as_str(), record.offset)
+                .await
         };
         settled
             .err()
             .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"))
+    }
+
+    /// The fold is the truth for holds. If it no longer shows `agent` holding what
+    /// the tracker has in `held` (a person closed it, an attempt was closed, another
+    /// agent took it), the hold is dropped and the delivery settled. Returns the item.
+    async fn reconcile(&self, core: &mut Core, agent: &AgentName) -> Option<ItemId> {
+        let h = core.held.get(agent)?;
+        let shown = core
+            .state
+            .items
+            .get(&h.item)
+            .and_then(|i| i.hold.as_ref())
+            .is_some_and(|x| x.by.as_str() == agent.as_str() && x.attempt == h.attempt);
+        if shown {
+            return None;
+        }
+        let h = core.held.remove(agent)?;
+        let ready = core.state.stage(&h.item) == Some(Stage::Ready);
+        if !ready {
+            core.live.remove(&h.item);
+        }
+        if let Some(record) = h.record {
+            let stream = ready_stream(h.tier);
+            if ready {
+                self.nack_quiet(&stream, agent, &record).await;
+            } else {
+                self.ack_quiet(&stream, agent, record.offset).await;
+            }
+        }
+        Some(h.item)
+    }
+
+    /// Takes back the delivery Felix still holds for `agent`, whose first poll on
+    /// its connection reclaims it. True when the held item's delivery was found.
+    /// Any other delivery the agent had is handed back.
+    async fn recover(&self, core: &mut Core, agent: &AgentName) -> bool {
+        let Some((item, attempt)) = core.state.held_by(agent.as_str()) else {
+            return false;
+        };
+        let mut found = false;
+        let mut others = Vec::new();
+        // The broker reclaims in a connection's first poll, so that poll goes to
+        // the tier the item was published on.
+        let first = core
+            .state
+            .items
+            .get(&item)
+            .and_then(|i| i.tier)
+            .unwrap_or(DEFAULT_TIER)
+            .min(TIERS - 1);
+        for tier in std::iter::once(first).chain((0..TIERS).filter(|t| *t != first)) {
+            let stream = ready_stream(tier);
+            // Bounded, in case the broker keeps handing records back.
+            for _ in 0..64 {
+                let Ok(Some(record)) = self
+                    .0
+                    .broker
+                    .poll(&stream, agent.as_str(), self.0.visibility)
+                    .await
+                else {
+                    break;
+                };
+                match ReadyRecord::decode(&record.payload) {
+                    Ok(ready) if ready.item == item && !found => {
+                        core.live.insert(item.clone(), (ready.tier, ready.stamp));
+                        core.held.insert(
+                            agent.clone(),
+                            Held {
+                                item: item.clone(),
+                                attempt,
+                                tier,
+                                record: Some(record),
+                            },
+                        );
+                        found = true;
+                    }
+                    _ => others.push((stream.clone(), record)),
+                }
+            }
+        }
+        for (stream, record) in others {
+            self.nack_quiet(&stream, agent, &record).await;
+        }
+        found
     }
 
     /// Publishes a ready record for every Ready item that has none for its tier.
@@ -493,13 +624,13 @@ impl<B: Broker> Tracker<B> {
             actor,
             record,
         };
-        // Offsets can skip, so this is a guess; the broker's answer is what is applied.
+        // The tracker is the only writer, so the next offset is the one after the
+        // last applied. It can skip (generation starts), which the check below catches.
         let guess = core.state.at.map_or(0, |a| a + 1);
-        // A trial on a copy, because a rejected record can still touch state.
-        let mut trial = core.state.clone();
-        trial.apply(guess, &logged);
-        if let Some(rejection) = trial.rejections.get(core.state.rejections.len()) {
-            let why = serde_json::to_value(rejection.why)
+        // Applied before the write: a refusal changes nothing, and a failed write
+        // marks the state stale so the next call rebuilds it from the log.
+        if let Err(why) = core.state.try_apply(guess, &logged) {
+            let why = serde_json::to_value(why)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))
                 .unwrap_or_else(|| "invalid".into());
@@ -507,7 +638,9 @@ impl<B: Broker> Tracker<B> {
         }
         match self.0.broker.publish(WORK_EVENTS, logged.encode()).await {
             Ok(offset) => {
-                core.state.apply(offset, &logged);
+                if offset != guess {
+                    self.load(core, true).await.map_err(Error::Felix)?;
+                }
                 Ok(offset)
             }
             Err(e) => {
@@ -520,14 +653,17 @@ impl<B: Broker> Tracker<B> {
     /// Reads the log again if a write failed and may have landed.
     async fn catch_up(&self, core: &mut Core) -> Result<(), Error> {
         if core.stale {
-            self.load(core).await.map_err(Error::Felix)?;
+            self.load(core, true).await.map_err(Error::Felix)?;
         }
         Ok(())
     }
 
-    /// Folds the records after the last one applied. The first load uses seek
+    /// Folds the records after the last one applied, or all of them when `fresh`. The first load uses seek
     /// snapshots, which also bounds the replay of a long log.
-    async fn load(&self, core: &mut Core) -> anyhow::Result<()> {
+    async fn load(&self, core: &mut Core, fresh: bool) -> anyhow::Result<()> {
+        if fresh {
+            core.state = State::default();
+        }
         let from = core.state.at.map_or(0, |a| a + 1);
         let mut entries = Vec::new();
         for (offset, payload) in self.0.broker.read_from(WORK_EVENTS, from).await? {
@@ -550,14 +686,14 @@ impl<B: Broker> Tracker<B> {
         Ok(())
     }
 
-    async fn ack_quiet(&self, stream: &str, offset: u64) {
-        if let Err(e) = self.0.broker.ack(stream, offset).await {
+    async fn ack_quiet(&self, stream: &str, member: &AgentName, offset: u64) {
+        if let Err(e) = self.0.broker.ack(stream, member.as_str(), offset).await {
             eprintln!("agents-tracker: ack of {stream} offset {offset} failed: {e:#}");
         }
     }
 
-    async fn nack_quiet(&self, stream: &str, record: &GroupRecord) {
-        if let Err(e) = self.0.broker.nack(stream, record).await {
+    async fn nack_quiet(&self, stream: &str, member: &AgentName, record: &GroupRecord) {
+        if let Err(e) = self.0.broker.nack(stream, member.as_str(), record).await {
             eprintln!(
                 "agents-tracker: nack of {stream} offset {} failed: {e:#}",
                 record.offset
@@ -582,13 +718,12 @@ fn holding(core: &Core, agent: &AgentName, item: &ItemId) -> Result<u32, Error> 
             Err(Error::NotHeld(format!("you hold {}, not {item}", h.item)))
         };
     }
-    core.state
-        .items
-        .get(item)
-        .and_then(|i| i.hold.as_ref())
-        .filter(|h| h.by.as_str() == agent.as_str())
-        .map(|h| h.attempt)
-        .ok_or_else(|| Error::NotHeld(format!("you do not hold {item}")))
+    match core.state.items.get(item) {
+        Some(i) if holds(i, agent) => Ok(i.hold.as_ref().map_or(1, |h| h.attempt)),
+        // Someone else holds it or it is closed: the claim was lost.
+        Some(i) if i.hold.is_some() || i.closed.is_some() => Err(lapsed(item)),
+        _ => Err(Error::NotHeld(format!("you do not hold {item}"))),
+    }
 }
 
 fn lapsed(item: &ItemId) -> Error {

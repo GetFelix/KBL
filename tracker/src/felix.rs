@@ -1,6 +1,7 @@
 //! The tracker's connection to Felix: sign in, create its streams, and the
 //! few broker calls the claim path needs.
 
+use std::collections::HashMap;
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,7 +56,9 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         from: u64,
     ) -> impl Future<Output = Result<Vec<(u64, Vec<u8>)>>> + Send;
 
-    /// Takes at most one record for `member` without waiting.
+    /// Takes at most one record for `member` without waiting. The first poll
+    /// of a member reclaims what Felix still holds for that name, so each
+    /// member has a connection of its own.
     fn poll(
         &self,
         stream: &str,
@@ -63,13 +66,25 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         visibility: Duration,
     ) -> impl Future<Output = Result<Option<GroupRecord>>> + Send;
 
-    fn ack(&self, stream: &str, offset: u64) -> impl Future<Output = Result<()>> + Send;
+    /// `member` is the agent the delivery was made to.
+    fn ack(
+        &self,
+        stream: &str,
+        member: &str,
+        offset: u64,
+    ) -> impl Future<Output = Result<()>> + Send;
 
-    fn nack(&self, stream: &str, record: &GroupRecord) -> impl Future<Output = Result<()>> + Send;
+    fn nack(
+        &self,
+        stream: &str,
+        member: &str,
+        record: &GroupRecord,
+    ) -> impl Future<Output = Result<()>> + Send;
 
     fn extend(
         &self,
         stream: &str,
+        member: &str,
         record: &GroupRecord,
         by: Duration,
     ) -> impl Future<Output = Result<Duration, ExtendError>> + Send;
@@ -80,6 +95,12 @@ pub(crate) struct Felix {
     client: Arc<Client>,
     tenant: String,
     namespace: String,
+    /// Where to open a connection for each agent: the broker acts on `reclaim`
+    /// in a connection's first poll only, so a member needs its own.
+    seeds: Arc<Vec<std::net::SocketAddr>>,
+    broker_name: String,
+    config: ClientConfig,
+    members: Arc<tokio::sync::Mutex<HashMap<String, Arc<Client>>>>,
 }
 
 /// Signs in, creates the tracker's streams and consumer groups if they are not
@@ -150,7 +171,7 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         .collect();
     let client = tokio::time::timeout(
         REQUEST_TIMEOUT,
-        Client::connect_any(&seeds, &target.broker_name, config),
+        Client::connect_any(&seeds, &target.broker_name, config.clone()),
     )
     .await
     .context("the broker did not answer in time")?
@@ -159,6 +180,10 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         client: Arc::new(client),
         tenant: target.tenant,
         namespace: target.namespace,
+        seeds: Arc::new(seeds),
+        broker_name: target.broker_name,
+        config,
+        members: Arc::default(),
     };
     for tier in 0..TIERS {
         felix.ensure_group(&ready_stream(tier)).await?;
@@ -187,6 +212,24 @@ fn streams_batch() -> Value {
 }
 
 impl Felix {
+    /// The connection for `member`, opened on first use.
+    async fn member(&self, member: &str) -> Result<Arc<Client>> {
+        let mut members = self.members.lock().await;
+        if let Some(c) = members.get(member) {
+            return Ok(c.clone());
+        }
+        let client = tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            Client::connect_any(&self.seeds, &self.broker_name, self.config.clone()),
+        )
+        .await
+        .context("the broker did not answer in time")?
+        .with_context(|| format!("open a connection for {member}"))?;
+        let client = Arc::new(client);
+        members.insert(member.to_owned(), client.clone());
+        Ok(client)
+    }
+
     /// Creates the group from the first record, unless it already exists.
     async fn ensure_group(&self, stream: &str) -> Result<()> {
         let created = placed(|| {
@@ -271,8 +314,8 @@ impl Broker for Felix {
             wait: Duration::ZERO,
             visibility: Some(visibility),
         };
-        let records = self
-            .client
+        let client = self.member(member).await?;
+        let records = client
             .group_poll_with(
                 &self.tenant,
                 &self.namespace,
@@ -286,8 +329,9 @@ impl Broker for Felix {
         Ok(records.into_iter().next())
     }
 
-    async fn ack(&self, stream: &str, offset: u64) -> Result<()> {
-        self.client
+    async fn ack(&self, stream: &str, member: &str, offset: u64) -> Result<()> {
+        self.member(member)
+            .await?
             .group_ack(
                 &self.tenant,
                 &self.namespace,
@@ -299,8 +343,9 @@ impl Broker for Felix {
             .await
     }
 
-    async fn nack(&self, stream: &str, record: &GroupRecord) -> Result<()> {
-        self.client
+    async fn nack(&self, stream: &str, member: &str, record: &GroupRecord) -> Result<()> {
+        self.member(member)
+            .await?
             .group_nack(
                 &self.tenant,
                 &self.namespace,
@@ -315,10 +360,13 @@ impl Broker for Felix {
     async fn extend(
         &self,
         stream: &str,
+        member: &str,
         record: &GroupRecord,
         by: Duration,
     ) -> Result<Duration, ExtendError> {
-        self.client
+        self.member(member)
+            .await
+            .map_err(ExtendError::Failed)?
             .group_extend(
                 &self.tenant,
                 &self.namespace,

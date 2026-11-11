@@ -1,17 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex as StdMutex;
 
-use agents_core::work::READY_GROUP;
 use bytes::Bytes;
 
 use super::*;
 
 const VIS: Duration = Duration::from_secs(90);
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 enum Slot {
     Pending,
-    Leased(u32),
+    Leased(String),
     Acked,
 }
 
@@ -19,19 +18,33 @@ enum Slot {
 struct Net {
     streams: HashMap<String, Vec<(u64, Vec<u8>)>>,
     slots: HashMap<(String, u64), Slot>,
+    /// How many times each record has been handed out.
+    tries: HashMap<(String, u64), u32>,
     /// Every broker call that changes something, in order.
     calls: Vec<String>,
     fail_publish_on: Option<String>,
     extend_stale: bool,
 }
 
-/// An in-memory Felix: streams, and a consumer group per ready stream.
+/// An in-memory Felix: streams, and a consumer group per ready stream. A `Fake`
+/// is one tracker's connection; `reconnect` is a restarted tracker. Only a
+/// member's first poll on a connection reclaims what Felix still holds for it.
 #[derive(Clone, Default)]
-struct Fake(Arc<StdMutex<Net>>);
+struct Fake {
+    net: Arc<StdMutex<Net>>,
+    polled: Arc<StdMutex<HashSet<String>>>,
+}
 
 impl Fake {
+    fn reconnect(&self) -> Fake {
+        Fake {
+            net: self.net.clone(),
+            polled: Arc::default(),
+        }
+    }
+
     fn log(&self) -> Vec<WorkLogged> {
-        let net = self.0.lock().unwrap();
+        let net = self.net.lock().unwrap();
         net.streams
             .get(WORK_EVENTS)
             .map(|v| {
@@ -50,12 +63,12 @@ impl Fake {
     }
 
     fn calls(&self) -> Vec<String> {
-        self.0.lock().unwrap().calls.clone()
+        self.net.lock().unwrap().calls.clone()
     }
 
     /// The visibility timeout passes for everything leased.
     fn lapse_all(&self) {
-        for slot in self.0.lock().unwrap().slots.values_mut() {
+        for slot in self.net.lock().unwrap().slots.values_mut() {
             if matches!(slot, Slot::Leased(_)) {
                 *slot = Slot::Pending;
             }
@@ -64,7 +77,7 @@ impl Fake {
 
     /// One delivery's visibility timeout passes.
     fn lapse(&self, stream: &str, offset: u64) {
-        self.0
+        self.net
             .lock()
             .unwrap()
             .slots
@@ -72,72 +85,89 @@ impl Fake {
     }
 
     fn fail_publishes_to(&self, stream: Option<&str>) {
-        self.0.lock().unwrap().fail_publish_on = stream.map(str::to_owned);
+        self.net.lock().unwrap().fail_publish_on = stream.map(str::to_owned);
     }
 
     fn extends_are_stale(&self, stale: bool) {
-        self.0.lock().unwrap().extend_stale = stale;
+        self.net.lock().unwrap().extend_stale = stale;
     }
 
     /// A poll by a tracker that then died before it wrote anything.
     fn poll_and_vanish(&self, stream: &str, member: &str) -> Option<GroupRecord> {
-        let mut net = self.0.lock().unwrap();
-        poll_in(&mut net, stream, member)
+        self.poll_sync(stream, member)
     }
 
     fn ready_count(&self, stream: &str) -> usize {
-        self.0
+        self.net
             .lock()
             .unwrap()
             .streams
             .get(stream)
             .map_or(0, Vec::len)
     }
-}
 
-fn poll_in(net: &mut Net, stream: &str, _member: &str) -> Option<GroupRecord> {
-    let offsets: Vec<u64> = net
-        .streams
-        .get(stream)
-        .map(|v| v.iter().map(|(o, _)| *o).collect())
-        .unwrap_or_default();
-    for offset in offsets {
-        let key = (stream.to_owned(), offset);
-        let slot = net.slots.get(&key).copied().unwrap_or(Slot::Pending);
-        let attempts = match slot {
-            Slot::Pending => 1,
-            Slot::Leased(_) | Slot::Acked => continue,
-        };
-        // Attempts count every handout, so a nacked record comes back as 2.
-        let prior = net.slots.get(&(format!("{stream}#tries"), offset)).copied();
-        let n = match prior {
-            Some(Slot::Leased(n)) => n + attempts,
-            _ => attempts,
-        };
+    fn slot(&self, stream: &str, offset: u64) -> Slot {
+        let net = self.net.lock().unwrap();
         net.slots
-            .insert((format!("{stream}#tries"), offset), Slot::Leased(n));
-        net.slots.insert(key, Slot::Leased(n));
+            .get(&(stream.to_owned(), offset))
+            .cloned()
+            .unwrap_or(Slot::Pending)
+    }
+
+    fn poll_sync(&self, stream: &str, member: &str) -> Option<GroupRecord> {
+        let reclaim = self.polled.lock().unwrap().insert(member.to_owned());
+        let mut net = self.net.lock().unwrap();
+        let offsets: Vec<u64> = net
+            .streams
+            .get(stream)
+            .map(|v| v.iter().map(|(o, _)| *o).collect())
+            .unwrap_or_default();
+        let mut pick = None;
+        for offset in offsets {
+            let key = (stream.to_owned(), offset);
+            match net.slots.get(&key).cloned().unwrap_or(Slot::Pending) {
+                Slot::Leased(m) if reclaim && m == member => {
+                    pick = Some((offset, false));
+                    break;
+                }
+                Slot::Pending if pick.is_none() => {
+                    pick = Some((offset, true));
+                    // A reclaim looks at the whole stream before it takes new work.
+                    if !reclaim {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let (offset, fresh) = pick?;
+        let key = (stream.to_owned(), offset);
+        let tries = net.tries.entry(key.clone()).or_insert(0);
+        if fresh {
+            *tries += 1;
+        }
+        let n = *tries;
+        net.slots.insert(key, Slot::Leased(member.to_owned()));
         let payload = net.streams[stream]
             .iter()
             .find(|(o, _)| *o == offset)
             .unwrap()
             .1
             .clone();
-        return Some(GroupRecord {
+        Some(GroupRecord {
             offset,
             payload: Bytes::from(payload),
             attempts: n,
             skipped_before: 0,
             publisher: None,
             timestamp_micros: None,
-        });
+        })
     }
-    None
 }
 
 impl Broker for Fake {
     async fn publish(&self, stream: &str, payload: Vec<u8>) -> anyhow::Result<u64> {
-        let mut net = self.0.lock().unwrap();
+        let mut net = self.net.lock().unwrap();
         if net.fail_publish_on.as_deref() == Some(stream) {
             anyhow::bail!("the broker is down");
         }
@@ -149,7 +179,7 @@ impl Broker for Fake {
     }
 
     async fn read_from(&self, stream: &str, from: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
-        let net = self.0.lock().unwrap();
+        let net = self.net.lock().unwrap();
         Ok(net
             .streams
             .get(stream)
@@ -163,23 +193,26 @@ impl Broker for Fake {
         member: &str,
         _visibility: Duration,
     ) -> anyhow::Result<Option<GroupRecord>> {
-        let mut net = self.0.lock().unwrap();
-        let polled = poll_in(&mut net, stream, member);
+        let polled = self.poll_sync(stream, member);
         if polled.is_some() {
-            net.calls.push(format!("poll {stream} {member}"));
+            self.net
+                .lock()
+                .unwrap()
+                .calls
+                .push(format!("poll {stream} {member}"));
         }
         Ok(polled)
     }
 
-    async fn ack(&self, stream: &str, offset: u64) -> anyhow::Result<()> {
-        let mut net = self.0.lock().unwrap();
+    async fn ack(&self, stream: &str, _member: &str, offset: u64) -> anyhow::Result<()> {
+        let mut net = self.net.lock().unwrap();
         net.slots.insert((stream.to_owned(), offset), Slot::Acked);
         net.calls.push(format!("ack {stream}"));
         Ok(())
     }
 
-    async fn nack(&self, stream: &str, record: &GroupRecord) -> anyhow::Result<()> {
-        let mut net = self.0.lock().unwrap();
+    async fn nack(&self, stream: &str, _member: &str, record: &GroupRecord) -> anyhow::Result<()> {
+        let mut net = self.net.lock().unwrap();
         net.slots
             .insert((stream.to_owned(), record.offset), Slot::Pending);
         net.calls.push(format!("nack {stream}"));
@@ -189,13 +222,14 @@ impl Broker for Fake {
     async fn extend(
         &self,
         stream: &str,
+        member: &str,
         record: &GroupRecord,
         by: Duration,
     ) -> Result<Duration, ExtendError> {
-        let net = self.0.lock().unwrap();
-        let live = net.slots.get(&(stream.to_owned(), record.offset))
-            == Some(&Slot::Leased(record.attempts));
-        if net.extend_stale || !live {
+        let net = self.net.lock().unwrap();
+        let mine = net.slots.get(&(stream.to_owned(), record.offset))
+            == Some(&Slot::Leased(member.to_owned()));
+        if net.extend_stale || !mine {
             return Err(ExtendError::Stale);
         }
         Ok(by)
@@ -239,7 +273,7 @@ async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
 }
 
 async fn start(fake: &Fake) -> Tracker<Fake> {
-    Tracker::start(fake.clone(), VIS, false).await.unwrap()
+    Tracker::start(fake.reconnect(), VIS, false).await.unwrap()
 }
 
 async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
@@ -372,9 +406,10 @@ async fn a_dead_agents_item_goes_to_another_after_visibility() {
         t.extend(&agent("w1"), &item("a1")).await,
         Err(Error::Lost(_))
     ));
+    // Finishing after a takeover is a lost claim too, same as extending.
     assert!(matches!(
         t.complete(&agent("w1"), &item("a1"), 0).await,
-        Err(Error::NotHeld(_))
+        Err(Error::Lost(_))
     ));
 }
 
@@ -471,22 +506,132 @@ async fn an_agent_that_holds_a_claim_gets_it_back_from_work_next() {
 }
 
 #[tokio::test]
-async fn a_restarted_tracker_still_takes_done_from_the_holder() {
+async fn a_restart_takes_back_the_deliveries_felix_still_holds_for_each_agent() {
     let fake = Fake::default();
     let first = start(&fake).await;
     seed(&first, "a1", 2).await;
+    seed(&first, "a2", 2).await;
+    seed(&first, "a3", 2).await;
+    claim(&first, "w1").await;
+    claim(&first, "w2").await;
+    drop(first);
+
+    let second = start(&fake).await;
+    // Each agent's delivery is back, so its claim can be extended and finished.
+    let r = second.extend(&agent("w1"), &item("a1")).await;
+    assert!(r.is_ok(), "{r:?}");
+    assert!(second.extend(&agent("w2"), &item("a2")).await.is_ok());
+    // An agent asking for work gets its own item, never a second one.
+    let again = claim(&second, "w2").await;
+    assert_eq!(
+        (again["resumed"].as_bool(), claimed_id(&again).as_deref()),
+        (Some(true), Some("a2"))
+    );
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "claimed").count(), 2);
+    second.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
+    // The third item is still there for whoever asks.
+    assert_eq!(
+        claimed_id(&claim(&second, "w3").await).as_deref(),
+        Some("a3")
+    );
+}
+
+#[tokio::test]
+async fn a_holder_whose_delivery_is_gone_after_a_restart_keeps_its_item_and_gets_no_second() {
+    let fake = Fake::default();
+    let first = start(&fake).await;
+    seed(&first, "a1", 2).await;
+    seed(&first, "a2", 2).await;
     claim(&first, "w1").await;
     drop(first);
+    // Felix gave up on the delivery while the tracker was down, and a tracker of
+    // a later generation has handed it to another member.
+    fake.lapse("work.ready.p2", 0);
+    assert!(fake.poll_and_vanish("work.ready.p2", "w9").is_some());
+
     let second = start(&fake).await;
+    let again = claim(&second, "w1").await;
+    assert_eq!(
+        (again["resumed"].as_bool(), claimed_id(&again).as_deref()),
+        (Some(true), Some("a1"))
+    );
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "claimed").count(), 1);
     assert!(matches!(
         second.extend(&agent("w1"), &item("a1")).await,
         Err(Error::Lost(_))
     ));
+    // The holder can still finish what the log says it holds.
     second.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
     assert_eq!(fake.kinds().last().map(String::as_str), Some("done"));
-    // The stranded delivery lapses and is dropped as stale.
-    fake.lapse_all();
-    assert_eq!(claimed_id(&claim(&second, "w2").await), None);
+}
+
+#[tokio::test]
+async fn a_person_closing_a_held_item_ends_the_agents_claim_and_settles_the_delivery() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::Closed {
+            item: item("a1"),
+            why: agents_core::work::CloseWhy::Dismissed,
+        },
+    )
+    .await
+    .unwrap();
+    // The claim must not be extended for a hold the log no longer shows.
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
+    assert!(matches!(
+        t.complete(&agent("w1"), &item("a1"), 0).await,
+        Err(Error::Lost(_))
+    ));
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 0);
+    // And w1 is free to take other work.
+    seed(&t, "a2", 2).await;
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a2"));
+}
+
+#[tokio::test]
+async fn a_closed_attempt_ends_the_claim_too() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::AttemptClosed {
+            item: item("a1"),
+            attempt: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
+}
+
+#[tokio::test]
+async fn a_failed_write_is_rebuilt_from_the_log_not_trusted() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    fake.fail_publishes_to(Some(WORK_EVENTS));
+    // The fold accepted `done` in memory, but the write failed.
+    assert!(t.complete(&agent("w1"), &item("a1"), 0).await.is_err());
+    fake.fail_publishes_to(None);
+    // The next call reloads, so the item is still held and can be finished.
+    assert!(t.complete(&agent("w1"), &item("a1"), 0).await.is_ok());
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 1);
 }
 
 #[tokio::test]
@@ -515,5 +660,4 @@ async fn a_record_the_fold_refuses_is_not_appended() {
         "{err}"
     );
     assert_eq!(fake.log().len(), before);
-    let _ = READY_GROUP;
 }

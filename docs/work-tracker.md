@@ -132,7 +132,8 @@ leaves no trace in the log.
 
 Felix cannot yet tell the tracker which principal a token belongs to, so the
 tracker reads a token map from a JSON file (`--tokens-file`, or
-`AGENTS_TRACKER_TOKENS_FILE`):
+`AGENTS_TRACKER_TOKENS_FILE`). The file must be mode 600, a token may be listed
+once only, and tokens are compared in constant time:
 
 ```json
 { "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" } }
@@ -157,9 +158,14 @@ changed, the tracker restarted, the item was closed or blocked meanwhile) is
 acked and skipped when it is delivered. When Felix hands an item to a second
 agent while the log still shows the first as holding it, the claim lapsed: the
 tracker writes `released` with the reason `lapsed`, then the new `claimed`.
-After a tracker restart the claims held across it cannot be extended; they
-lapse, and `work_complete` from the holder still works until another agent
-takes the item.
+The log is the truth for holds. Before each call the tracker checks that the log
+still shows the agent holding the item; if a person closed the item or the
+attempt, or another agent took it, the agent's next `extend`, `complete` or
+`release` answers `lost` and the delivery is settled. After a restart the
+tracker opens a connection per agent and takes back the delivery Felix still
+holds for each agent the log shows holding, so their claims carry on. Until an
+agent's delivery is back, `work_next` returns the item it already holds and
+never a second one.
 
 ### Grants
 
