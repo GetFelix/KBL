@@ -776,7 +776,9 @@ GitHub and Jira. `?` shows the map in the page.
 On a Mac, `Ctrl` is `Cmd`.
 
 What only Kibble has is not on a letter. Each card shows its own choices as
-numbers, so they need no memorising, and `Ctrl+Enter` always takes the first:
+numbers, so they need no memorising. `Ctrl+Enter` takes the card's main choice: the
+first, except on a question, where it sends the default (below). It works from
+the note box, not from search or other text fields:
 
 | Card | `1` | `2` | `3` | `4` |
 |---|---|---|---|---|
@@ -787,7 +789,7 @@ numbers, so they need no memorising, and `Ctrl+Enter` always takes the first:
 | Blocked | Mark the dependency resolved: `unblocked` | | | |
 | Held by an agent | Send the note: `steered` | Stop it: `released` | | |
 | Held by you | Release: `released` | | | |
-| PR with no reviewer | Request a reviewer: `review_requested` | Approve: `approved` | Send back with changes: `changes_requested` | Reject: `rejected` |
+| PR with no reviewer | Ask a person to review it, picked from a list: `review_requested` | Approve: `approved` | Send back with changes: `changes_requested` | Reject: `rejected` |
 | PR waiting on you | Approve: `approved` | Send back with changes: `changes_requested` | Reject: `rejected` | |
 | PR approved, not merged | Record a merge done upstream: `done` | Reject: `rejected` | | |
 

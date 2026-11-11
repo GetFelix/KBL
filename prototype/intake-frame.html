@@ -17,7 +17,7 @@
     --line-strong: rgba(160, 200, 220, 0.22);
     --text: #e6eef4;
     --muted: #8496a5;
-    --faint: #4a5a68;
+    --faint: #7a8d9c;
     --cyan: hsl(192, 90%, 46%);
     --cyan-soft: hsla(192, 90%, 46%, 0.16);
     --result: hsl(190, 85%, 74%);
@@ -37,7 +37,7 @@
     --line-strong: rgba(20, 50, 70, 0.2);
     --text: #0e1a24;
     --muted: #566877;
-    --faint: #a7b4be;
+    --faint: #5f7080;
     --cyan: hsl(192, 90%, 40%);
     --cyan-soft: hsla(192, 90%, 40%, 0.12);
     --result: hsl(192, 75%, 56%);
@@ -55,6 +55,8 @@
   button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line-strong); border-radius: 8px; height: 30px; padding: 0 10px; cursor: pointer; }
   button:hover:not(:disabled) { border-color: var(--cyan); }
   button:disabled { opacity: 0.45; cursor: default; }
+  .cb:focus-visible, .quick:focus-visible, #qlist:focus-visible, #list:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+  .cb:focus-visible { opacity: 1; }
   button:focus-visible, .row:focus-visible, .qrow:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
   kbd { font: 600 10.5px/1 "JetBrains Mono", monospace; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px; color: var(--text); background: var(--card); }
 
@@ -148,7 +150,7 @@
   .row.snoozed, .qrow.snoozed { opacity: 0.6; }
 
   /* Selecting an item dims what is not in its chain. */
-  .picked .row { opacity: 0.34; }
+  .picked .row { opacity: 0.6; }
   .picked .row.chain, .picked .row.sel { opacity: 1; }
   .row.chain { border-color: color-mix(in srgb, var(--cyan) 60%, var(--line)); }
   .row.sel, .qrow.sel { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan); }
@@ -732,13 +734,14 @@
     #collapse, #qbox, .tb .lbl, .tb kbd { display: none; }
     header { padding: 0 8px; gap: 6px; }
     #work { flex-direction: column; }
-    #panel, body[data-view="board"] #panel { width: auto; max-height: 50dvh; border-left: 0; border-top: 1px solid var(--line-strong); }
+    #panel, body[data-view="board"] #panel { width: auto; max-height: 58dvh; border-left: 0; border-top: 1px solid var(--line-strong); }
     #panel > .hint { display: none; }
     #v-board, #v-metrics, #v-replay { padding: 10px 12px 14px; }
     .lrow .asg, .lrow .tag, .lrow .marks, .qrow .kind { display: none; }
     .lrow .ref { width: 62px; }
     .lrow, .qrow { padding-left: 10px; padding-right: 10px; gap: 8px; }
     footer .low { display: block; }
+    #events, footer .rates, #headline { display: none; }   /* the footer must not cover the card's options */
     #float { bottom: 76px; }
     .keys { grid-template-columns: minmax(0, 1fr); }
     #pal { padding-top: 8px; }
@@ -1132,7 +1135,19 @@ function constraintOf(byStage, busy, agents, roots) {
 
 // ---------- rendering ----------
 
+// Rows are options in a listbox that keeps focus; the selected one is its active descendant.
+function syncListbox() {
+  for (const id of ['qlist', 'list']) {
+    const box = $(id), rows = box.querySelectorAll('[role="option"][data-k]');
+    box.setAttribute('role', 'listbox'); box.tabIndex = 0;
+    if (id === 'list') box.setAttribute('aria-label', 'All work');
+    let on = null;
+    rows.forEach((r, i) => { r.id = `${id}-o${i}`; if (r.dataset.k === selected) on = r.id; });
+    if (on) box.setAttribute('aria-activedescendant', on); else box.removeAttribute('aria-activedescendant');
+  }
+}
 function renderNow() {
+  const a = document.activeElement, again = a?.closest?.('#main') && (a.dataset.check ? `[data-check="${CSS.escape(a.dataset.check)}"]` : a.dataset.quick ? `[data-quick="${a.dataset.quick}"][data-k="${CSS.escape(a.dataset.k)}"]` : null);
   state = fold(cut);
   by = summarize(state);
   stats = stageStats(state);
@@ -1174,6 +1189,8 @@ function renderNow() {
   $('scrub').max = NOW;
   $('scrub').value = cut;
   lastInfo = { colInfo: colInfoOf(), open: [...state.items.values()].filter((it) => it.stage !== 'done' && it.stage !== 'closed').length, busy };
+  syncListbox();
+  if (again) $('main').querySelector(again)?.focus({ preventScroll: true });
   syncUrl();
   root.dataset.ready = '1';
 }
@@ -1213,7 +1230,7 @@ function renderStatus(busy, agents) {
   $('status').innerHTML = `<div id="fchips">${filterChips()}</div>` +
     `<button class="chip" id="srcbtn" aria-expanded="false" aria-controls="srcpop"><small>sources</small>+${arrivals}/24h</button>${capChip}` +
     `<span class="chip"><small>agents busy</small>${busy}/${agents}</span><span class="chip open"><small>open</small>${open}</span>` +
-    `<div id="srcpop" role="dialog" aria-label="Arrivals by source">${srcRows.map((r) => r.html).join('')}</div>`;
+    `<div id="srcpop" role="dialog" tabindex="-1" aria-label="Arrivals by source">${srcRows.map((r) => r.html).join('')}</div>`;
 }
 
 function renderHeadline() {
@@ -1247,12 +1264,12 @@ const prBadge = (it) => `<span class="prs ${PR_CLASS[waitingOf(it)]}">${esc(revi
 function quickHtml(it) {
   if (it.stage !== 'review' || cut < NOW) return '';
   const w = waitingOf(it);
-  if (w === 'unassigned') return `<span class="quick" role="button" data-quick="request_review" data-k="${esc(it.key)}">Request review</span>`;
-  if (w === 'merge') return `<span class="quick" role="button" data-quick="open" data-k="${esc(it.key)}">Open to merge</span>`;
+  if (w === 'unassigned') return `<span class="quick" role="button" tabindex="0" data-quick="request_review" data-k="${esc(it.key)}">Request review</span>`;
+  if (w === 'merge') return `<span class="quick" role="button" tabindex="0" data-quick="open" data-k="${esc(it.key)}">Open to merge</span>`;
   return '';
 }
 const stIcon = (stage) => `<i class="sti s-${stage}" aria-hidden="true"></i>`;
-const cbHtml = (k) => `<span class="cb${checked.has(k) ? ' on' : ''}" data-check="${esc(k)}" role="checkbox" aria-checked="${checked.has(k)}" aria-label="Select"></span>`;
+const cbHtml = (k) => `<span class="cb${checked.has(k) ? ' on' : ''}" data-check="${esc(k)}" tabindex="${k === selected ? 0 : -1}" role="checkbox" aria-checked="${checked.has(k)}" aria-label="Select"></span>`;
 const reviewSize = (it) => `+${it.pr.add} −${it.pr.del} · ${it.pr.files} ${it.pr.files === 1 ? 'file' : 'files'} · CI ${it.pr.ci}${it.rounds ? ` · round ${it.rounds + 1}` : ''}`;
 
 function noteFor(it, stage) {
@@ -1471,7 +1488,7 @@ function detailHtml(it, chain) {
     }
   } else if (stage === 'needs') {
     body = it.asked
-      ? `<div class="qcard"><div class="qhead"><span class="kind">Question</span>${it.unclear ? `<span class="mk q">unclear: ${esc(it.unclear)}</span>` : ''}<span class="meta">${it.unclear ? 'triage could not tell' : 'asked before any work started'} · waiting ${span(cut - it.since)}</span></div>` +
+      ? `<div class="qcard"><div class="qhead"><span class="kind">Question</span>${it.unclear ? `<span class="mk q">unclear: ${esc(it.unclear)}</span>` : ''}<span class="meta">${it.unclear ? 'triage could not tell · ' : ''}waiting ${span(cut - it.since)}</span></div>` +
         `<p class="qtext">${esc(it.asked)}</p><div class="qopts">` +
         (it.options ?? []).map((o, i) => `<button class="${o === it.def ? 'def' : ''}" data-act="opt${i + 1}"${cut >= NOW ? '' : ' disabled'}><kbd>${i + 1}</kbd><span>${esc(o)}</span>${o === it.def ? `<i>default <kbd class="mod">${MOD}↵</kbd></i>` : ''}</button>`).join('') +
         `<label class="other"><kbd>${(it.options?.length ?? 0) + 1}</kbd><input type="text" id="note" placeholder="${it.options?.length ? 'Other: type an answer, then Enter' : 'Type an answer, then Enter'}" aria-label="Another answer" autocomplete="off"></label></div>` +
@@ -1606,7 +1623,7 @@ function actionsFor(it) {
     assign();
   } else if (s === 'review') {
     const w = waitingOf(it);
-    if (w === 'unassigned') choice('request_review', 'Request review', () => emit('review_requested', it.key, { reviewer: fx.people.find((p) => p !== viewer) ?? viewer }), 'Ask a reviewer');
+    if (w === 'unassigned') choice('request_review', 'Request review', (who) => emit('review_requested', it.key, { reviewer: who }), 'Ask a person to review it', { menu: 'reviewer' });
     if (w === 'reviewer' || w === 'unassigned') {
       choice('approve', 'Approve', () => emit('approved', it.key, {}));
       choice('changes', 'Request changes', () => {
@@ -2306,7 +2323,8 @@ function openHandoff(key, n) {
 }
 function drawModal() {
   const m = $('modal');
-  if (!dialog) { m.className = ''; m.innerHTML = ''; return; }
+  if (!dialog) { m.className = ''; m.innerHTML = ''; overlayOff(); return; }
+  overlayOn();
   m.className = 'open';
   m.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${dialog.type === 'redo' ? 'Redo from here' : 'Handoff'}">${dialog.type === 'redo' ? redoBody() : handoffBody(dialog.h, dialog.b)}</div>`;
   (dialog.type === 'redo' ? $('instr') : m.querySelector('[data-close]'))?.focus();
@@ -2428,7 +2446,7 @@ function renderSidebar() {
 
 function renderTop() {
   const v = allViews().find((x) => x.id === activeView);
-  const n = view === 'queue' ? queue.rows.length : STAGES.flatMap(([st]) => by[st]).filter(matches).length;
+  const n = view === 'queue' ? queue.rows.length : STAGES.flatMap(([st]) => by[st]).filter((it) => matches(it) && (OPEN_STAGES.includes(it.stage) || filters.stage.includes(it.stage))).length;   // open work, as in the sidebar
   const name = { queue: 'My queue', metrics: 'Metrics', replay: 'Story' }[view] ?? v?.name ?? 'All work';
   $('vtitle').innerHTML = `${esc(name)}${view === 'metrics' || view === 'replay' ? '' : `<span>${n}</span>`}`;
   for (const b of $('layout').children) b.setAttribute('aria-selected', b.dataset.layout === view);
@@ -2478,13 +2496,14 @@ function syncUrl() {
 
 let pal = null;
 const TIER_HELP = ['Drop everything', 'Next up', 'Normal', 'When there is time'];
-const PAL_HINT = { all: 'Type a command, or search items', tier: 'Set tier to', assign: 'Assign to', status: 'Move to', filter: 'Filter by', display: 'Display', create: 'Title of the new item', saveview: 'Name this view' };
+const PAL_HINT = { all: 'Type a command, or search items', tier: 'Set tier to', assign: 'Assign to', reviewer: 'Ask to review', status: 'Move to', filter: 'Filter by', display: 'Display', create: 'Title of the new item', saveview: 'Name this view' };
 function palItems() {
   const out = [], m = pal.mode, q = pal.q.trim();
   const add = (sec, label, run, x = {}) => out.push({ sec, label, run, ...x });
   const its = targets();
   const keysOf = (a) => (a.n ? [String(a.n)] : a.key ? [a.key === 'Enter' ? '↵' : a.key] : a.primary ? [MOD.trim(), '↵'] : []);
   if (m === 'tier') [0, 1, 2, 3].forEach((t) => add('', `P${t}`, () => act('tier', t), { sub: TIER_HELP[t], on: its.length > 0 && its.every((it) => tierOf(it) === t) }));
+  else if (m === 'reviewer') for (const p of fx.people) add('', p === viewer ? 'Me' : p, () => act('request_review', p), { sub: p === viewer ? 'Review it yourself' : 'Person' });
   else if (m === 'assign') {
     const busy = new Set([...state.items.values()].filter((x) => x.holder && !x.human).map((x) => x.holder));
     add('', 'Me', () => act('assign', viewer), { sub: 'Take it yourself, so no agent claims it' });
@@ -2544,8 +2563,31 @@ function palItems() {
   const words = q.toLowerCase().split(/\s+/);
   return out.filter((i) => i.raw || words.every((w) => `${i.sec} ${i.label} ${i.sub ?? ''}`.toLowerCase().includes(w)));
 }
+// While the palette or a dialog is open the page behind it is inert, Tab stays inside it,
+// and closing puts focus back where it was.
+let opener = null;
+function overlayOn() {
+  opener ??= document.activeElement;
+  $('page').inert = true;
+}
+function overlayOff() {
+  if (pal || dialog) return;
+  $('page').inert = false;
+  const o = opener; opener = null;
+  const back = o?.isConnected ? o : (o?.id && document.getElementById(o.id)) || $(view === 'queue' ? 'qlist' : view === 'list' ? 'list' : 'main');
+  back?.focus({ preventScroll: true });
+}
+function trapTab(e, within) {
+  if (e.key !== 'Tab') return false;
+  const f = [...within.querySelectorAll('button, input, textarea, [href], [tabindex]:not([tabindex="-1"])')].filter((x) => !x.disabled && x.offsetParent !== null);
+  if (!f.length) { e.preventDefault(); return true; }
+  const i = f.indexOf(document.activeElement), to = e.shiftKey ? (i <= 0 ? f.length - 1 : i - 1) : (i === f.length - 1 ? 0 : i + 1);
+  f[to].focus(); e.preventDefault();
+  return true;
+}
 function openPal(mode) {
   if (dialog) return;
+  overlayOn();
   pal = { mode, q: '', idx: 0, items: [] };
   const el = $('pal');
   el.className = 'open';
@@ -2556,7 +2598,7 @@ function openPal(mode) {
     return;
   }
   const its = targets();
-  const ctx = ['tier', 'assign', 'status'].includes(mode) || (mode === 'all' && its.length) ? `<div class="ctx"><span>${its.length === 1 ? `${esc(its[0].ref)} ${esc(its[0].title.slice(0, 64))}` : `${its.length} selected items`}</span></div>` : '';
+  const ctx = ['tier', 'assign', 'reviewer', 'status'].includes(mode) || (mode === 'all' && its.length) ? `<div class="ctx"><span>${its.length === 1 ? `${esc(its[0].ref)} ${esc(its[0].title.slice(0, 64))}` : `${its.length} selected items`}</span></div>` : '';
   el.innerHTML = `<div class="pal" role="dialog" aria-modal="true" aria-label="${PAL_HINT[mode]}">${ctx}<input id="palq" type="text" placeholder="${PAL_HINT[mode]}" aria-label="${PAL_HINT[mode]}" autocomplete="off" spellcheck="false"><ul id="pallist" role="listbox"></ul>` +
     `<div class="pfoot"><span><kbd>↑</kbd><kbd>↓</kbd>move</span><span><kbd>↵</kbd>${mode === 'filter' || mode === 'display' ? 'toggle' : 'choose'}</span><span><kbd>Esc</kbd>close</span></div></div>`;
   $('palq').focus();
@@ -2574,7 +2616,7 @@ function drawPal() {
   }).join('') || `<li class="none">Nothing matches. Try fewer letters.</li>`;
   $('pallist').querySelector('.on')?.scrollIntoView({ block: 'nearest' });
 }
-function closePal() { pal = null; $('pal').className = ''; $('pal').innerHTML = ''; }
+function closePal() { pal = null; $('pal').className = ''; $('pal').innerHTML = ''; overlayOff(); }
 function runPal(i) {
   const it = pal?.items[i], text = pal?.q ?? '';
   if (!it) return;
@@ -2617,8 +2659,13 @@ $('main').addEventListener('click', (e) => {
   selected = view === 'board' && row.dataset.k === selected ? null : row.dataset.k;
   render();
 });
+// The row checkbox and the one-click badges are buttons in all but name.
+$('main').addEventListener('keydown', (e) => {
+  const t = e.target;
+  if ((e.key === 'Enter' || e.key === ' ') && !e.metaKey && !e.ctrlKey && t.matches?.('[data-check], [data-quick]')) { e.preventDefault(); e.stopPropagation(); t.click(); }
+});
 $('panel').addEventListener('click', (e) => {
-  if (e.target.closest('[data-closep]')) { selected = null; render(); return; }
+  if (e.target.closest('[data-closep]')) { selected = null; render(); $(view === 'queue' ? 'qlist' : view === 'list' ? 'list' : 'main')?.focus({ preventScroll: true }); return; }
   if (e.target.closest('[data-copy]')) { copyLink(); return; }
   if (e.target.closest('[data-story]')) { openReplay(selected); return; }
   const m = e.target.closest('[data-menu]');
@@ -2661,6 +2708,7 @@ $('pal').addEventListener('input', (e) => { if (pal && e.target.id === 'palq') {
 $('pal').addEventListener('keydown', (e) => {
   e.stopPropagation();
   if (!pal) return;
+  if (trapTab(e, $('pal'))) return;
   if (e.key === 'Escape' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) { closePal(); e.preventDefault(); return; }
   if (pal.mode === 'keys') return;
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -2683,6 +2731,11 @@ $('status').addEventListener('click', (e) => {
   if (!b) return;
   const open = $('srcpop').classList.toggle('open');
   b.setAttribute('aria-expanded', open);
+  if (open) $('srcpop').focus();
+});
+$('status').addEventListener('focusout', (e) => {
+  const pop = $('srcpop');
+  if (pop?.classList.contains('open') && e.relatedTarget && !e.relatedTarget.closest('#srcpop, #srcbtn')) { pop.classList.remove('open'); $('srcbtn')?.setAttribute('aria-expanded', 'false'); }
 });
 $('bind').addEventListener('click', (e) => {
   const b = e.target.closest('[data-bind]');
@@ -2777,13 +2830,17 @@ function step(dir, extend = false) {
 let goKey = 0;   // when g was pressed, for the two-key "go to" shortcuts
 document.addEventListener('keydown', (e) => {
   const k = e.key;
+  if (dialog && trapTab(e, $('modal'))) return;
   if (pal) { if (k === 'Escape') { closePal(); e.preventDefault(); } return; }
   if (e.altKey) return;
   if (e.metaKey || e.ctrlKey) {
-    if (k === 'k') { openPal('all'); e.preventDefault(); return; }
+    const inField = e.target.matches?.('input, textarea, [contenteditable="true"]');
+    // Ctrl+K is delete-to-end-of-line in a Mac text field; Cmd+K is free.
+    if (k === 'k' && !(inField && e.ctrlKey && !e.metaKey && MOD === '⌘')) { openPal('all'); e.preventDefault(); return; }
     if (dialog) return;
-    if (k === 'Enter') { if (act('primary')) e.preventDefault(); return; }
-    if (e.target.matches?.('input, textarea, [contenteditable="true"]')) return;
+    // Only the note box sends; Ctrl+Enter in search or the Other field must not act on the selection.
+    if (k === 'Enter') { if ((!inField || e.target.id === 'note') && act('primary')) e.preventDefault(); return; }
+    if (inField) return;
     if (k === 'z') { undo(); e.preventDefault(); return; }
     if (k === 'a' && view !== 'metrics' && view !== 'replay') { for (const key of visibleKeys()) checked.add(key); render(); e.preventDefault(); return; }
     if (k === 'b' && (view === 'list' || view === 'board')) { go(view === 'list' ? 'board' : 'list'); e.preventDefault(); }
@@ -2796,6 +2853,7 @@ document.addEventListener('keydown', (e) => {
   if (typing) {
     if (k === 'Enter') {
       const it = state.items.get(selected);
+      if (e.target.id === 'note' && !noteText()) return;   // an empty Other field must not send the default
       act(it?.asked ? 'answer' : it?.stage === 'held' ? 'steer' : 'retry');
     } else if (k === 'Escape') e.target.blur();
     return;
@@ -2811,7 +2869,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (k === 'Escape') {
-    $('srcpop')?.classList.remove('open');
+    if ($('srcpop')?.classList.contains('open')) { $('srcpop').classList.remove('open'); $('srcbtn')?.setAttribute('aria-expanded', 'false'); $('srcbtn')?.focus(); return; }
     if (checked.size) { checked.clear(); render(); } else if (selected) { selected = null; render(); }
     return;
   }

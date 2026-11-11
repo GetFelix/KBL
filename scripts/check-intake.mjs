@@ -373,6 +373,59 @@ try {
   await page.eval(`(window.select('ado-4377'), document.getElementById('note').value = 'Neither: it is the Python client')`);
   await key('Enter', {}, `document.getElementById('note')`);
   check(await page.eval(`document.querySelector('#evlist li').textContent.includes('text=Neither: it is the Python client')`), `${label}: free text was not recorded as typed`);
+  // Typing in a field never runs the selected item's action, and an empty Other field sends nothing.
+  await open('fixture-work.json', 'view=list&select=gh-808');
+  const before = (await ux()).records;
+  await key('Enter', { ctrlKey: true }, `document.getElementById('q')`);
+  check((await ux()).records === before, `${label}: Ctrl+Enter in the search box acted on the selected item`);
+  await key('Enter', { metaKey: true }, `document.getElementById('q')`);
+  check((await ux()).records === before, `${label}: Cmd+Enter in the search box acted on the selected item`);
+  await open('fixture-work.json', 'view=queue&select=ado-4377');
+  const q0 = (await ux()).records;
+  await key('Enter', {}, `document.getElementById('note')`);
+  check((await ux()).records === q0, `${label}: Enter in an empty Other field recorded the default answer`);
+  check(!(await page.eval(`document.getElementById('panel').textContent`)).includes('asked before any work started'), `${label}: the question card guesses when it was asked`);
+  // The palette traps focus, makes the page inert, and gives focus back.
+  await open('fixture-work.json', 'view=list');
+  await page.eval(`document.getElementById('newbtn').focus()`);
+  await key('c');
+  check(await page.eval(`document.getElementById('page').inert && document.getElementById('pal').contains(document.activeElement)`), `${label}: the palette did not take focus and make the page inert`);
+  const n = await page.eval(`document.getElementById('pal').querySelectorAll('input, button').length`);
+  await key('Tab', { shiftKey: true }, `document.getElementById('palq')`);
+  check(await page.eval(`document.getElementById('pal').contains(document.activeElement)`), `${label}: Shift+Tab left the palette (${n} controls)`);
+  await key('Escape', {}, `document.getElementById('palq')`);
+  check(await page.eval(`!document.getElementById('page').inert && document.activeElement.id`) === 'newbtn', `${label}: closing the palette did not return focus to its opener`);
+  await page.eval(`document.getElementById('help').focus()`);
+  await page.eval(`window.ux.openPal('keys')`);
+  await key('Tab', {}, `document.querySelector('#pal button')`);
+  check(await page.eval(`document.getElementById('pal').contains(document.activeElement)`), `${label}: Tab left the shortcuts dialog`);
+  await key('Escape', {}, `document.getElementById('pal')`);
+  check(await page.eval(`document.activeElement.id`) === 'help', `${label}: closing the shortcuts did not return focus to ?`);
+  // Row checkboxes and badges take focus and work from the keyboard; the list is one listbox.
+  await open('fixture-work.json', 'view=list&select=gh-774');
+  check(await page.eval(`(() => { const l = document.getElementById('list'); return l.getAttribute('role') === 'listbox' && document.getElementById(l.getAttribute('aria-activedescendant'))?.dataset.k === 'gh-774'; })()`), `${label}: the list does not point at its selected row`);
+  check(await page.eval(`document.querySelector('#list [data-check]').matches('[tabindex]')`), `${label}: a row checkbox cannot take focus`);
+  await page.eval(`document.querySelector('#list .lrow[data-k="gh-774"] [data-check]').focus()`);
+  await key('Enter', {}, `document.activeElement`);
+  check((await ux()).checked.includes('gh-774') && await page.eval(`document.activeElement.dataset.check`) === 'gh-774', `${label}: Enter on a checkbox did not select the row and keep focus`);
+  // Requesting a review asks who, and the count is one number.
+  await open('fixture-work-capped.json', 'view=queue');
+  const quick = await page.eval(`document.querySelector('[data-quick="request_review"]')?.getAttribute('tabindex')`);
+  check(quick === '0', `${label}: the Request review badge cannot take focus`);
+  const keyOf = await page.eval(`document.querySelector('[data-quick="request_review"]').dataset.k`);
+  const rr = (await ux()).records;
+  await page.eval(`document.querySelector('[data-quick="request_review"]').click()`);
+  u = await ux();
+  check(u.pal?.mode === 'reviewer' && u.records === rr, `${label}: Request review did not ask who (${u.pal?.mode}, ${keyOf})`);
+  await page.eval(`window.ux.closePal()`);
+  await open('fixture-work.json', 'view=list');
+  check(await page.eval(`document.querySelector('#vtitle span').textContent === document.querySelector('[data-go="work"] b').textContent`), `${label}: the title and the sidebar count different work`);
+  // Text that carries meaning is readable in both themes.
+  for (const theme of ['dark', 'light']) {
+    await open('fixture-work.json', `view=list&theme=${theme}`);
+    const ratio = await page.eval(`(() => { const lum = (c) => { const m = c.match(/[\\d.]+/g).map(Number); const v = m.slice(0, 3).map((x) => { x /= 255; return x <= .03928 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4; }); return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; }; const cs = getComputedStyle(document.documentElement); const t = document.createElement('i'); t.style.color = 'var(--faint)'; document.body.append(t); const f = lum(getComputedStyle(t).color); t.remove(); const b = lum(getComputedStyle(document.body).backgroundColor); const [a, z] = f > b ? [f, b] : [b, f]; return (a + .05) / (z + .05); })()`);
+    check(ratio >= 4.5, `${label}: faint text is ${ratio.toFixed(2)}:1 in the ${theme} theme, needs 4.5`);
+  }
   // A refused write is put back and says so next to the item.
   await open('fixture-work.json', 'view=queue&select=gh-808&fail=1');
   await key('1');
