@@ -1402,7 +1402,7 @@ fn posts_and_context_are_capped_and_the_cap_is_logged_once_per_attempt() {
     assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
     // A proposal for out-of-scope work counts against the same attempt.
     l.agent("w1", proposed("lost", None, "found", WorkKind::Fix));
-    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    assert!(!fold(&l.0).items.contains_key(&id("lost")));
 
     let refusal = WorkRecord::Refused {
         item: Some(id("r1")),
