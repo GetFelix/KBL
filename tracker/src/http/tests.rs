@@ -150,3 +150,135 @@ async fn a_lost_claim_is_a_conflict_with_a_reason() {
         (StatusCode::CONFLICT, Some("lost"))
     );
 }
+
+#[tokio::test]
+async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
+    let app = app().await;
+    let agent_routes = [
+        (
+            "/v1/work/post",
+            json!({ "item": "a1", "key": "k", "work": "split", "title": "t" }),
+        ),
+        ("/v1/work/link", json!({ "item": "a1", "to": "a2" })),
+        ("/v1/work/context", json!({ "item": "a1" })),
+        (
+            "/v1/work/context/add",
+            json!({ "item": "a1", "entry": "e", "text": { "text": "x" } }),
+        ),
+        (
+            "/v1/work/progress",
+            json!({ "item": "a1", "note": { "text": "x" } }),
+        ),
+        (
+            "/v1/work/step",
+            json!({ "item": "a1", "command": "c", "exit_code": 0, "output": { "text": "x" } }),
+        ),
+        (
+            "/v1/work/edit",
+            json!({ "item": "a1", "file": "f", "hunk": { "text": "x" }, "decision": 1 }),
+        ),
+        (
+            "/v1/work/ask",
+            json!({ "item": "a1", "text": { "text": "x" } }),
+        ),
+    ];
+    for (path, body) in agent_routes {
+        assert_eq!(
+            call(&app, path, Some("tok-gab"), body.clone()).await.0,
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+        assert_eq!(
+            call(&app, path, None, body).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+    }
+    let person_routes = [
+        ("/v1/work/proposals/accept", json!({ "item": "a1" })),
+        (
+            "/v1/work/proposals/edit",
+            json!({ "item": "a1", "tier": 1 }),
+        ),
+        ("/v1/work/proposals/reject", json!({ "item": "a1" })),
+        (
+            "/v1/work/questions/answer",
+            json!({ "item": "a1", "text": { "text": "x" } }),
+        ),
+        ("/v1/work/tier", json!({ "item": "a1", "tier": 1 })),
+        ("/v1/work/close", json!({ "item": "a1" })),
+        ("/v1/work/unlink", json!({ "item": "a1", "to": "a2" })),
+        (
+            "/v1/work/budget",
+            json!({ "root": "a1", "items_left": 1, "max_depth": 1, "cost_left_micros": 1, "redos_per_item": 1 }),
+        ),
+    ];
+    for (path, body) in person_routes {
+        assert_eq!(
+            call(&app, path, Some("tok-w1"), body.clone()).await.0,
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+        assert_eq!(
+            call(&app, path, None, body).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_decision_without_a_phase_or_a_commit_never_reaches_the_tracker() {
+    let app = app().await;
+    let full = json!({
+        "item": "a1", "phase": "cause", "so_far": "s", "why": "w", "commit": "c",
+        "evidence": [{ "stream": "work.events", "offset": 0 }]
+    });
+    // No phase: the body does not parse.
+    let mut no_phase = full.clone();
+    no_phase.as_object_mut().unwrap().remove("phase");
+    assert_eq!(
+        call(&app, "/v1/work/decide", Some("tok-w1"), no_phase)
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut no_commit = full.clone();
+    no_commit.as_object_mut().unwrap().remove("commit");
+    assert_eq!(
+        call(&app, "/v1/work/decide", Some("tok-w1"), no_commit)
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let mut bad_phase = full.clone();
+    bad_phase["phase"] = json!("guess");
+    assert_eq!(
+        call(&app, "/v1/work/decide", Some("tok-w1"), bad_phase)
+            .await
+            .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // With every field it parses, and then the tracker says the agent holds nothing.
+    let (status, reply) = call(&app, "/v1/work/decide", Some("tok-w1"), full).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_held"))
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_kind_of_work_is_a_bad_request() {
+    let app = app().await;
+    let (status, reply) = call(
+        &app,
+        "/v1/work/post",
+        Some("tok-w1"),
+        json!({ "item": "a1", "key": "k", "work": "triage", "title": "t" }),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("invalid"))
+    );
+}

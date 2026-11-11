@@ -1109,6 +1109,12 @@ fn agents_keys_do_not_collide_on_roots() {
         tier: None,
     });
     l.agent("w1", claimed("r1", 1));
+    l.tracker(imported("r2"));
+    l.person(WorkRecord::Accepted {
+        item: id("r2"),
+        tier: None,
+    });
+    l.agent("w2", claimed("r2", 1));
     l.agent("w1", proposed("a", None, "found", WorkKind::Fix));
     l.agent("w2", proposed("b", None, "found", WorkKind::Fix));
     l.agent("w1", proposed("a2", None, "found", WorkKind::Fix));
@@ -1280,4 +1286,374 @@ fn try_apply_leaves_no_trace_when_it_refuses() {
     // The same record through apply flags the root, as a replay of a logged one would.
     s.apply(3, &claim);
     assert!(s.items[&id("r1")].over_budget);
+}
+
+/// A root accepted and held by w1 on attempt 1, with a budget big enough that the caps bite first.
+fn held_root() -> Log {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.person(WorkRecord::BudgetSet {
+        root: id("r1"),
+        items_left: 500,
+        max_depth: 3,
+        cost_left_micros: 1_000_000,
+        redos_per_item: 3,
+    });
+    l
+}
+
+fn step_rec(item: &str) -> WorkRecord {
+    WorkRecord::Step {
+        item: id(item),
+        attempt: 1,
+        command: "cargo test".into(),
+        exit_code: 0,
+        output: text("ok"),
+    }
+}
+
+fn last_rejection(l: &Log) -> Option<Reject> {
+    fold(&l.0).rejections.last().map(|r| r.why)
+}
+
+#[test]
+fn an_attempt_is_capped_per_kind_of_record() {
+    let mut l = held_root();
+    for _ in 0..MAX_STEPS {
+        l.agent("w1", step_rec("r1"));
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", step_rec("r1"));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+
+    let mut l = held_root();
+    for _ in 0..MAX_DECISIONS {
+        l.agent("w1", decision("r1", 1, vec![]));
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", decision("r1", 1, vec![]));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+
+    let mut l = held_root();
+    let d = l.agent("w1", decision("r1", 1, vec![]));
+    let edit = |d| WorkRecord::Edit {
+        item: id("r1"),
+        attempt: 1,
+        file: "a.rs".into(),
+        hunk: text("@@"),
+        decision: d,
+    };
+    for _ in 0..MAX_EDITS {
+        l.agent("w1", edit(d));
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", edit(d));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+
+    let mut l = held_root();
+    let progress = || WorkRecord::Progress {
+        item: id("r1"),
+        attempt: 1,
+        note: text("working"),
+        branch: None,
+        pr: None,
+    };
+    for _ in 0..MAX_PROGRESS {
+        l.agent("w1", progress());
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", progress());
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+}
+
+#[test]
+fn a_refused_record_over_the_cap_leaves_the_state_alone() {
+    let mut l = held_root();
+    for _ in 0..MAX_STEPS {
+        l.agent("w1", step_rec("r1"));
+    }
+    let before = fold(&l.0);
+    l.agent("w1", step_rec("r1"));
+    let after = fold(&l.0);
+    assert_eq!(after.items, before.items);
+}
+
+#[test]
+fn posts_and_context_are_capped_and_the_cap_is_logged_once_per_attempt() {
+    let mut l = held_root();
+    for i in 0..MAX_POSTS {
+        l.agent(
+            "w1",
+            proposed(
+                &format!("c{i}"),
+                Some("r1"),
+                &format!("k{i}"),
+                WorkKind::Test,
+            ),
+        );
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", proposed("over", Some("r1"), "over", WorkKind::Test));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    // A proposal for out-of-scope work counts against the same attempt.
+    l.agent("w1", proposed("lost", None, "found", WorkKind::Fix));
+    assert!(!fold(&l.0).items.contains_key(&id("lost")));
+
+    let refusal = WorkRecord::Refused {
+        item: Some(id("r1")),
+        op: "post".into(),
+        reason: RefusalReason::Limit,
+    };
+    assert!(!fold(&l.0).items[&id("r1")].paths[0].capped);
+    l.tracker(refusal);
+    assert!(fold(&l.0).items[&id("r1")].paths[0].capped);
+
+    let mut l = held_root();
+    let ctx = |n: u32| WorkRecord::Context {
+        item: id("r1"),
+        entry: key(&format!("e{n}")),
+        text: text("a note"),
+    };
+    for n in 0..MAX_CONTEXT {
+        l.agent("w1", ctx(n));
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", ctx(MAX_CONTEXT));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+}
+
+#[test]
+fn an_agent_proposes_out_of_scope_work_only_while_it_holds_something() {
+    let mut l = Log::default();
+    l.agent("w9", proposed("x", None, "found", WorkKind::Fix));
+    assert_eq!(last_rejection(&l), Some(Reject::NoHeldParent));
+}
+
+#[test]
+fn an_agent_writes_context_only_on_work_it_holds_or_a_child_it_holds() {
+    let mut l = held_root();
+    let ctx = |item: &str, e: &str| WorkRecord::Context {
+        item: id(item),
+        entry: key(e),
+        text: text("repro: run it twice"),
+    };
+    l.agent("w1", ctx("r1", "own"));
+    assert_eq!(last_rejection(&l), None);
+    // Another agent holds nothing here.
+    l.agent("w2", ctx("r1", "stranger"));
+    assert_eq!(last_rejection(&l), Some(Reject::NotHolder));
+    // An augment child held by w2 lets it add context to its target.
+    l.agent("w1", proposed("aug", Some("r1"), "aug", WorkKind::Augment));
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    l.agent("w2", claimed("aug", 1));
+    l.agent("w2", ctx("r1", "from-augment"));
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.len(), 1);
+    assert!(
+        s.items[&id("r1")]
+            .context
+            .contains_key(&key("from-augment"))
+    );
+    assert_eq!(s.items[&id("aug")].paths[0].context_writes, 1);
+}
+
+#[test]
+fn an_agent_links_only_inside_its_own_tree_and_under_an_item_it_holds() {
+    let mut l = held_root();
+    l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
+    l.agent("w1", proposed("c2", Some("r1"), "b", WorkKind::Split));
+    let link = |a: &str, b: &str| WorkRecord::Linked {
+        item: id(a),
+        to: id(b),
+    };
+    l.agent("w1", link("c2", "c1"));
+    assert_eq!(last_rejection(&l), None);
+    // A cycle is still a cycle.
+    l.agent("w1", link("c1", "c2"));
+    assert_eq!(last_rejection(&l), Some(Reject::Cycle));
+    // Someone who holds nothing cannot order another agent's items.
+    l.agent("w2", link("c1", "r1"));
+    assert_eq!(last_rejection(&l), Some(Reject::NotHolder));
+    // Another tree is out of reach even for the holder.
+    l.tracker(imported("r2"));
+    l.agent("w1", link("c1", "r2"));
+    assert_eq!(last_rejection(&l), Some(Reject::CrossRoot));
+    assert_eq!(fold(&l.0).edges.len(), 1);
+}
+
+#[test]
+fn tiers_are_zero_to_three_and_a_person_can_move_an_item() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(4),
+    });
+    assert_eq!(last_rejection(&l), Some(Reject::BadTier));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(1),
+    });
+    l.person(WorkRecord::TierChanged {
+        item: id("r1"),
+        tier: 0,
+    });
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(0));
+    l.person(WorkRecord::TierChanged {
+        item: id("r1"),
+        tier: 9,
+    });
+    assert_eq!(last_rejection(&l), Some(Reject::BadTier));
+    l.agent(
+        "w1",
+        WorkRecord::TierChanged {
+            item: id("r1"),
+            tier: 3,
+        },
+    );
+    assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(0));
+}
+
+#[test]
+fn a_person_edits_a_proposal_before_accepting_it() {
+    let mut l = held_root();
+    l.agent("w1", proposed("p", None, "found", WorkKind::Fix));
+    l.person(WorkRecord::Edited {
+        item: id("p"),
+        title: Some("the real title".into()),
+        tier: Some(0),
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("p")].title, "the real title");
+    l.person(WorkRecord::Accepted {
+        item: id("p"),
+        tier: None,
+    });
+    assert_eq!(fold(&l.0).items[&id("p")].tier, Some(0));
+    // Accepted: the queue owns it, and tier_changed is the way to move it.
+    l.person(WorkRecord::Edited {
+        item: id("p"),
+        title: None,
+        tier: Some(3),
+    });
+    assert_eq!(last_rejection(&l), Some(Reject::NotAProposal));
+    l.agent(
+        "w1",
+        WorkRecord::Edited {
+            item: id("p"),
+            title: None,
+            tier: Some(3),
+        },
+    );
+    assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
+}
+
+#[test]
+fn a_decision_needs_its_commit_and_an_empty_why_still_folds() {
+    let mut l = held_root();
+    let with = |why: &str, commit: &str| WorkRecord::Decision {
+        item: id("r1"),
+        attempt: 1,
+        phase: Phase::Fix,
+        so_far: "found the race".into(),
+        question: "q".into(),
+        options: vec![],
+        chosen: "c".into(),
+        why: why.into(),
+        commit: commit.into(),
+        evidence: vec![],
+    };
+    l.agent("w1", with("the lock is held", ""));
+    assert_eq!(last_rejection(&l), Some(Reject::MissingField));
+    // Logs written before the tool layer asked for a why must fold as they did.
+    l.agent("w1", with("", "abc"));
+    assert_eq!(fold(&l.0).rejections.len(), 1);
+    assert_eq!(fold(&l.0).items[&id("r1")].paths[0].decisions.len(), 1);
+}
+
+fn question_rec(item: &str) -> WorkRecord {
+    WorkRecord::Question {
+        item: id(item),
+        attempt: 1,
+        text: text("which?"),
+    }
+}
+
+fn answer_rec(question: u64) -> WorkRecord {
+    WorkRecord::Answer {
+        item: id("r1"),
+        question,
+        text: text("this"),
+        evidence: vec![],
+    }
+}
+
+#[test]
+fn questions_answers_and_links_are_capped_per_attempt() {
+    let mut l = held_root();
+    for _ in 0..MAX_QUESTIONS {
+        l.agent("w1", question_rec("r1"));
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", question_rec("r1"));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+
+    // Each answer closes the question it answers, so ask and answer in turn.
+    let mut l = held_root();
+    l.agent("w1", proposed("q1", Some("r1"), "q", WorkKind::Question));
+    l.agent("w2", claimed("q1", 1));
+    for _ in 0..MAX_ANSWERS {
+        let q = l.agent("w1", question_rec("r1"));
+        l.agent("w2", answer_rec(q));
+    }
+    assert_eq!(last_rejection(&l), None);
+    let q = l.agent("w1", question_rec("r1"));
+    l.agent("w2", answer_rec(q));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    assert_eq!(fold(&l.0).items[&id("r1")].open_question, Some(q));
+
+    // A replayed edge counts, so the fold stops a loop even if the tool layer misses it.
+    let mut l = held_root();
+    l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
+    l.agent("w1", proposed("c2", Some("r1"), "b", WorkKind::Split));
+    let link = || WorkRecord::Linked {
+        item: id("c2"),
+        to: id("c1"),
+    };
+    for _ in 0..MAX_LINKS {
+        l.agent("w1", link());
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", link());
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+}
+
+#[test]
+fn an_answer_is_taken_only_for_the_open_question() {
+    let mut l = held_root();
+    let old = l.agent("w1", question_rec("r1"));
+    let open = l.agent("w1", question_rec("r1"));
+    l.person(answer_rec(old));
+    assert_eq!(last_rejection(&l), Some(Reject::NotOpenQuestion));
+    assert_eq!(fold(&l.0).items[&id("r1")].open_question, Some(open));
+    l.person(answer_rec(open));
+    assert_eq!(fold(&l.0).rejections.len(), 1);
+    assert_eq!(fold(&l.0).items[&id("r1")].open_question, None);
+    // Nothing is open now, so the same answer again is refused.
+    l.person(answer_rec(open));
+    assert_eq!(last_rejection(&l), Some(Reject::NotOpenQuestion));
 }

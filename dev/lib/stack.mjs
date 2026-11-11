@@ -151,6 +151,19 @@ export async function personRecord(token, record) {
   return body;
 }
 
+// A person's call to one of the tracker's dashboard routes. Throws on a refusal,
+// with the tracker's reason.
+export async function personCall(token, path, body) {
+  const response = await fetch(`${TRACKER_URL}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const reply = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`${path}: ${reply.why ?? reply.error ?? response.status}`);
+  return reply;
+}
+
 // work.events as the records it holds, oldest first.
 export function workLog() {
   const read = spawnSync(TOOL, ["work", "log"], { encoding: "utf8" });

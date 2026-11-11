@@ -22,7 +22,7 @@ per-attempt detail such as model calls. Three record kinds are added to
 
 | Kind | Written by | Details |
 |---|---|---|
-| `decision` | `felix-mcp` (`decide` tool) | `phase` (understand, reproduce, cause, fix or verify), `so_far` (a short running narrative of the work up to here), the question, the options considered, the one chosen, why, the commit, and the offsets of the steps it rests on. `decide` refuses a call without `phase`, `so_far` or the commit |
+| `decision` | `felix-mcp` (`decide` tool) | `phase` (understand, reproduce, cause, fix or verify), `so_far` (a short running narrative of the work up to here), the question, the options considered, the one chosen, why, the commit, and the offsets of the steps it rests on. `decide` refuses a call without `phase`, `so_far`, why or the commit |
 | `step` | `felix-mcp` (`record_step` tool) | Command, exit code, and the output as an artifact |
 | `edit` | `felix-mcp` (`edit` tool) | File, hunk, and the offset of the decision it carries out |
 | `human_input` | the tracker | An answer, a review comment or a change of priority, with who gave it |

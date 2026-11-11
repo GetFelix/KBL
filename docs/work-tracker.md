@@ -42,6 +42,7 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_link` | Adds a dependency between items |
 | `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal |
 | `work_progress` | Records a plan, a branch or a PR |
+| `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you. Answers one while holding a `question` item under it |
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)) |
 
@@ -152,6 +153,44 @@ the consumer-group member name. `felix-mcp` reads `AGENTS_TRACKER_URL` and
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 
+The other work tools are one route each, all with an agent's token. Every one
+writes a single record attributed to that agent and answers with the record's
+`offset`, which `decide` and `record_step` hand back so a later `edit` or
+citation can name them. A refusal is a `409` with a `why` (`not_held`,
+`over_budget`, `limit_reached`, `cycle`, `missing_field` and so on); a body that
+does not parse, an unknown kind of work or text over the inline limit is a
+`400` or `422` and tries nothing.
+
+| Call | Does |
+|---|---|
+| `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing |
+| `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree |
+| `POST /v1/work/context` `{item}` | Reads an item's context entries and the notes people left for the attempt |
+| `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds |
+| `POST /v1/work/progress` `{item, note, branch, pr}` | Records progress on the held item |
+| `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` |
+| `POST /v1/work/step` `{item, command, exit_code, output}` | A command the agent ran |
+| `POST /v1/work/edit` `{item, file, hunk, decision}` | A code change and the offset of the decision it carries out |
+| `POST /v1/work/ask` `{item, text}` / `POST /v1/work/answer` `{item, question, text, evidence}` | Asks a person, or answers as the holder of a `question` item |
+
+Text in a record stays inline up to 4 KiB. Longer text is an artifact the
+caller stored first and names by its hash; `felix-mcp` does that for the
+agent, and the tracker refuses long inline text.
+
+The dashboard's actions are routes with a person's token. Each appends one
+record if the fold accepts it:
+
+| Call | Records |
+|---|---|
+| `POST /v1/work/proposals/accept` `{item, tier?}` | `accepted`. A proposal's tier comes from the edit, then this call, then triage |
+| `POST /v1/work/proposals/edit` `{item, title?, tier?}` | `edited`, for an item nobody has accepted yet |
+| `POST /v1/work/proposals/reject` `{item}` | `rejected`, for an item nobody has accepted |
+| `POST /v1/work/questions/answer` `{item, text, question?, evidence?}` | `answer`. The question defaults to the open one |
+| `POST /v1/work/tier` `{item, tier}` | `tier_changed`. A ready item is published again on its new tier |
+| `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
+| `POST /v1/work/unlink` `{item, to}` | `unlinked` |
+| `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
+
 Ready records carry a stamp. When the tracker sees an item become Ready it
 publishes a record, and a record that is not the newest for its item (a tier
 changed, the tracker restarted, the item was closed or blocked meanwhile) is
@@ -204,9 +243,12 @@ call.
 
 ### Limits per attempt
 
-The tracker caps each attempt's records and bytes for `decide`, progress,
-context, messages, board writes and artifacts. A call over the cap is refused
-and logged as refused, so a looping agent cannot fill the stream.
+The fold caps what one attempt may write: 200 decisions, 500 steps, 500
+edits, 100 progress records, 100 context entries, 20 questions, 10
+answers, 100 links, and 24 children and proposals together. A call over a cap is refused, and the first refusal in an
+attempt is logged as refused, so a looping agent cannot fill the stream with
+records or with refusals. Each field is also limited in size: text over 4 KiB
+must be an artifact, and a title, command or reason is at most 4 KiB.
 
 ### Kinds of work
 
@@ -344,7 +386,8 @@ slipping by.
 - **Creation is idempotent.** The child's key is the parent plus an
   agent-supplied key, written with `cache_put_if` absent, so a retry never
   duplicates.
-- **Proposals are rate-limited** per agent and per run.
+- **Proposals are capped per attempt.** They share the 24-post limit with
+  children.
 - **Attempts.** A claim that ends in a release, a lapse or a give-up may be
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most
