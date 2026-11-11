@@ -9,13 +9,15 @@ const out = process.argv[2];
 if (!out) { console.error('usage: shoot-intake.mjs <out-dir>'); process.exit(2); }
 mkdirSync(out, { recursive: true });
 const SHOTS = [
-  ['intake-chain', 'fixture-work.json', 'select=gh-803', 1280, 820, 'dark'],
-  ['intake-morning', 'fixture-work.json', '', 1280, 820, 'dark'],
-  ['intake-light', 'fixture-work.json', 'select=gh-801', 1280, 820, 'light'],
-  ['intake-burst', 'fixture-work-burst.json', '', 1280, 820, 'dark'],
-  ['intake-phone', 'fixture-work.json', '', 390, 844, 'dark'],
-  ['intake-phone-chain', 'fixture-work.json', 'select=gh-801', 390, 844, 'light'],
-  ['intake-phone-burst', 'fixture-work-burst.json', '', 390, 844, 'dark'],
+  ['dashboard-queue', 'fixture-work.json', 'view=queue&select=gh-789', 1280, 820, 'dark'],
+  ['dashboard-board', 'fixture-work.json', 'view=board&select=gh-803', 1280, 820, 'dark'],
+  ['dashboard-capped', 'fixture-work-capped.json', 'view=board', 1280, 820, 'dark'],
+  ['dashboard-metrics', 'fixture-work.json', 'view=metrics', 1280, 1100, 'dark'],
+  ['dashboard-light', 'fixture-work.json', 'view=queue&select=jira-214', 1280, 820, 'light'],
+  ['dashboard-burst', 'fixture-work-burst.json', 'view=board', 1280, 820, 'dark'],
+  ['dashboard-phone', 'fixture-work.json', 'view=queue&select=gh-790', 390, 844, 'dark'],
+  ['dashboard-phone-board', 'fixture-work-capped.json', 'view=board', 390, 844, 'light'],
+  ['dashboard-phone-metrics', 'fixture-work.json', 'view=metrics', 390, 844, 'dark'],
 ];
 const server = await serve(fileURLToPath(new URL('..', import.meta.url)));
 const page = await launch();
