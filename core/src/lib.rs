@@ -11,6 +11,8 @@
 //! - [`content`]: a short text kept inline, or a pointer to an artifact.
 //! - [`task`]: the task that goes on the tasks stream.
 //! - [`record`]: one record per step on the run log.
+//! - [`work`]: the records on `work.events`, and the key shapes of items, edges, context and budgets.
+//! - [`work_fold`]: the pure fold from a prefix of `work.events` to item state, with snapshots.
 //! - [`stored`]: the values kept in the results, leases and presence caches.
 
 pub mod artifact;
@@ -20,3 +22,5 @@ pub mod names;
 pub mod record;
 pub mod stored;
 pub mod task;
+pub mod work;
+pub mod work_fold;

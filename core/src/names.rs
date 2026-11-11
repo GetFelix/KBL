@@ -83,6 +83,10 @@ name_type! {
     TaskId
 }
 name_type! {
+    /// A work item's id on `work.events`.
+    ItemId
+}
+name_type! {
     /// A key in the board or the leases cache. The board's grants go by
     /// prefix (`plan-*`, `w3-*`, `shared-*`), so the prefix is part of the name.
     Key

@@ -1,0 +1,24 @@
+{"kind":"imported","item":"r1","source":"github","upstream_id":"felix#2204","title":"reads miss a fresh write"}
+{"kind":"proposed","item":"c1","parent":"r1","key":"split-a","work":"split","title":"reader side"}
+{"kind":"proposed","item":"p1","key":"found-1","work":"fix","title":"a second bug"}
+{"kind":"triaged","item":"r1","tier":1,"why":"data loss on restart","duplicate_of":"r0"}
+{"kind":"accepted","item":"r1","tier":1}
+{"kind":"accepted","item":"c1"}
+{"kind":"linked","item":"c2","to":"c1"}
+{"kind":"context","item":"r1","entry":"repro","text":{"text":"run it twice"}}
+{"kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"kind":"progress","item":"r1","attempt":1,"note":{"text":"plan: fix the reader"},"branch":"fix/r1","pr":"GetFelix/felix#2210"}
+{"kind":"done","item":"r1","attempt":2,"cost_micros":1250000}
+{"kind":"released","item":"r1","attempt":1,"reason":"claim lapsed"}
+{"kind":"gave_up","item":"r1","attempt":1,"reason":"cannot reproduce","cost_micros":400000}
+{"kind":"question","item":"r1","attempt":1,"text":{"text":"which client?"}}
+{"kind":"answer","item":"r1","question":40,"text":{"text":"the rust one"},"evidence":[{"stream":"work.events","offset":38}]}
+{"kind":"decision","item":"r1","attempt":1,"phase":"cause","so_far":"the read races the fill","question":"where does it go wrong","options":["reader","writer"],"chosen":"reader","why":"the writer holds the lock","commit":"9f3c2ab","evidence":[{"stream":"work.events","offset":12}]}
+{"kind":"step","item":"r1","attempt":1,"command":"cargo test -p felix-cache","exit_code":101,"output":{"text":"1 failed"}}
+{"kind":"edit","item":"r1","attempt":1,"file":"src/cache.rs","hunk":{"text":"@@ -10,2 +10,3 @@"},"decision":14}
+{"kind":"human_input","item":"r1","attempt":1,"input":"review_comment","text":{"text":"not in the reader"}}
+{"kind":"human_input","item":"r1","input":"priority_change","text":{"text":"p0"}}
+{"kind":"forked_from","item":"r1","from_attempt":1,"at":14,"note":22}
+{"kind":"budget_set","root":"r1","items_left":20,"max_depth":3,"cost_left_micros":30000000,"redos_left":3}
+{"kind":"refused","item":"r1","op":"work_post","reason":"budget"}
+{"kind":"refused","op":"work_post","reason":"limit"}
