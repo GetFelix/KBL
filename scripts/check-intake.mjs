@@ -133,6 +133,29 @@ try {
     await page.eval(`window.select('ado-4383')`);
     check(await page.eval(`!!document.querySelector('#dock [data-act="m"]')`), `${label}: no merge action on an approved PR`);
 
+    // One verdict and one set of counts: footer, Metrics headline, Board and header agree.
+    label = `${size} consistency`;
+    for (const f of ['fixture-work.json', 'fixture-work-capped.json']) {
+      await open(f, 'view=board');
+      const foot = await page.eval(`document.getElementById('bind').textContent`);
+      const hot = await page.eval(`document.querySelector('.col.binding')?.dataset.stage`);
+      info = await page.eval('window.intakeInfo()');
+      const reviewN = info.colInfo.review.count;
+      const chipN = +(await page.eval(`document.getElementById('capchip').textContent`)).match(/(\d+)\/\d+/)[1];
+      check(reviewN === chipN && reviewN === info.review.count, `${label} ${f}: review counts differ: column ${reviewN}, chip ${chipN}, info ${info.review.count}`);
+      check(foot.startsWith('Binding stage,') && foot.includes(`, ${info.binding}:`), `${label} ${f}: footer "${foot}" does not lead with the binding stage ${info.binding}`);
+      check(foot.indexOf('Binding stage') < foot.search(/Growing|Draining/), `${label} ${f}: growth comes before the binding stage`);
+      check(await page.eval(`window.stageOf && true`) && hot === info.bindingStage, `${label} ${f}: the Board highlights ${hot}, the binding stage is ${info.bindingStage}`);
+      await page.eval(`window.setView('metrics')`);
+      const head = await page.eval(`document.getElementById('headline').textContent`);
+      check(head.includes(`Binding stage, ${info.binding}:`), `${label} ${f}: the Metrics headline names a different stage: ${head}`);
+      check(head.includes(`${reviewN} ${reviewN === 1 ? 'PR' : 'PRs'} in review`), `${label} ${f}: the Metrics headline count is not ${reviewN}: ${head}`);
+    }
+    await open('fixture-work.json', 'view=board');
+    await page.eval(`window.select('gh-803')`);
+    const unb = await page.eval(`document.querySelector('#dock [data-act="u"]').textContent + '|' + document.querySelector('#dock .blk').textContent`);
+    check(/Unblock #799/.test(unb) && unb.includes('which waits on #798') && unb.includes('marks #799 resolved'), `${label}: Unblock does not say which dependency it resolves: ${unb}`);
+
     // Metrics: every chart is present, and nothing is per person.
     label = `${size} metrics`;
     await open('fixture-work.json', 'view=metrics');

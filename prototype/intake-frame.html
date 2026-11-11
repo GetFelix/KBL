@@ -559,7 +559,7 @@ function constraintOf(byStage, busy, agents, roots) {
   const oldest = (arr) => (arr.length ? cut - arr[0].since : 0);
   const cands = [];
   const add = (stage, label, arr, text, boost = 1) => { if (arr.length) cands.push({ stage, label, text, score: boost * oldest(arr) / stats[stage].p85 }); };
-  add('review', 'review', humanReview, `${plural(humanReview.length, 'PR')} waiting, oldest ${span(oldest(humanReview))}`);
+  add('review', 'review', humanReview, `${plural(byStage.review.length, 'PR')} in review, ${humanReview.length} waiting on a person, oldest ${span(oldest(humanReview))}`);
   const tri = byStage.triage.filter((it) => it.proposal);
   add('triage', 'triage', tri, `${plural(tri.length, 'proposal')} waiting for your accept, oldest ${span(oldest(tri))}`);
   add('needs', 'needs you', byStage.needs, `${plural(byStage.needs.length, 'item')} waiting on an answer or a decision, oldest ${span(oldest(byStage.needs))}`);
@@ -784,9 +784,9 @@ function renderFooter() {
   const inDay = [...state.items.values()].filter((it) => cut - it.at <= DAY).length;
   const outDay = [...state.items.values()].filter((it) => it.done && cut - it.doneAt <= DAY).length;
   const net = inDay - outDay;
-  const lead = net <= 0 ? `<b>Draining.</b>` : `<b class="grow">Growing by ${net} a day.</b>`;
-  const why = binding ? ` Binding stage, <b>${esc(binding.label)}</b>: ${binding.text}. <button class="lk" data-bind="${binding.stage}">Show it</button>` : ' Nothing is waiting long.';
-  $('bind').innerHTML = `${lead}${why}`;
+  const growth = net <= 0 ? ` <b>Draining.</b>` : ` <b class="grow">Growing by ${net} a day.</b>`;
+  const why = binding ? `Binding stage, <b>${esc(binding.label)}</b>: ${binding.text}. <button class="lk" data-bind="${binding.stage}">Show it</button>` : 'Nothing is waiting long.';
+  $('bind').innerHTML = `${why}${growth}`;
   const oldReady = by.ready[0];
   $('rates').innerHTML = `<span class="m"><small>in</small>${inDay}/day</span><span class="m"><small>out</small>${outDay}/day</span>` +
     `<span class="m"><small>oldest ready</small>${oldReady ? `${span(cut - oldReady.since)} (${esc(oldReady.ref)})` : 'none'}</span>`;
@@ -821,7 +821,9 @@ function detailHtml(it, chain) {
       : `<div class="blk"><h4>${esc(it.cause)}${it.lastAgent ? ` · last agent ${esc(it.lastAgent)}` : ''}</h4>${it.msg ? `"${esc(it.msg)}"` : esc(it.gaveUp)}<br><span class="meta">${esc(it.gaveUp)}${it.fails ? `, ${plural(it.fails, 'failed attempt')}` : ''}. Two attempts, then a person.</span></div>`;
   } else if (stage === 'blocked') {
     const open = it.deps.filter((d) => !it.resolved.has(d) && !state.items.get(d)?.done).map((d) => state.items.get(d).ref);
-    body = `<div class="blk">Waits on <b>${esc(open.join(', '))}</b>. Unblock marks the first as resolved.</div>`;
+    const first = it.deps.find((x) => !it.resolved.has(x) && !state.items.get(x)?.done);
+    const behind = [...rootsOf(state, state.items.get(first))].map((k) => state.items.get(k).ref);
+    body = `<div class="blk">Waits on <b>${esc(open.join(' and '))}</b>${behind.length ? `, which waits on <b>${esc(behind.join(' and '))}</b>` : ''}. <kbd>u</kbd> marks <b>${esc(open[0])}</b> resolved${open.length > 1 ? `; press again for ${esc(open.slice(1).join(' and '))}` : ''}.</div>`;
   } else if (stage === 'held') {
     body = `<div class="blk">Held by ${it.human ? '<span class="pill you">you</span>' : `<span class="agent">${esc(it.holder)}</span>`} for ${span(cut - it.claimedAt)}${it.steers ? `. ${plural(it.steers, 'note')} sent to the agent.` : ''}${it.human ? ' No agent will claim it.' : ''}</div>`;
   } else if (stage === 'review' || (stage === 'done' && it.pr)) {
@@ -905,7 +907,7 @@ function actionsFor(it) {
     tierStep(); snooze();
   } else if (s === 'blocked') {
     const d = it.deps.find((x) => !it.resolved.has(x) && !state.items.get(x)?.done);
-    if (d) add('u', 'Unblock', () => emit('unblocked', it.key, { on: d }), `Mark ${state.items.get(d).ref} resolved for this item`);
+    if (d) add('u', `Unblock ${state.items.get(d).ref}`, () => emit('unblocked', it.key, { on: d }), `Mark ${state.items.get(d).ref} resolved for this item`);
     tierStep(); snooze();
   } else if (s === 'ready') {
     tierStep();
@@ -1051,9 +1053,9 @@ function renderMetrics() {
   const stageRows = OPEN_STAGES.map((s) => ({ label: STAGE_NAME[s], hum: ['triage', 'needs', 'review'].includes(s), p50: stats[s].n ? stats[s].p50 : null, p85: stats[s].n ? stats[s].p85 : null }));
   const worst = stageRows.filter((r) => r.hum && r.p85 != null).sort((a, b) => b.p85 - a.p85)[0];
   const waiting = by.review.filter((it) => waitingOf(it) !== 'agent').length;
-  metricsHeadline = worst
-    ? `${worst.label} is where work waits longest: p85 ${span(worst.p85)}. <span>${plural(waiting, 'PR')} waiting in review now. Team and flow numbers, last 14 days.</span>`
-    : `Not enough finished work yet. <span>Team and flow numbers, last 14 days.</span>`;
+  const reviewLine = `${plural(by.review.length, 'PR')} in review, ${waiting} waiting on a person.`;
+  metricsHeadline = (binding ? `Binding stage, ${esc(binding.label)}: ${binding.text}. ` : 'Nothing is waiting long. ') +
+    `<span>${worst ? `Of the stages that wait on a person, ${worst.label.toLowerCase()} is longest: p85 ${span(worst.p85)}. ` : ''}${reviewLine} Team and flow numbers, last 14 days.</span>`;
   // Per day, newest last.
   const arr = Array(14).fill(0), mer = Array(14).fill(0);
   for (const it of all) {
@@ -1272,6 +1274,7 @@ window.intakeInfo = () => ({
   queue: { count: queue.rows.length, kinds: queue.kinds, rows: document.querySelectorAll('#qlist .qrow').length },
   review: { count: by.review.length, cap: settings.reviewCap, full: settings.reviewCap != null && by.review.length >= settings.reviewCap },
   binding: binding ? binding.label : null,
+  bindingStage: binding ? binding.stage : null,
   localEvents: localEvents.map((r) => r.kind),
   links: $('links').querySelectorAll('path').length,
   // Chain segments crossing a card that is not in the chain.
