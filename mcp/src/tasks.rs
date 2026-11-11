@@ -468,12 +468,21 @@ impl<B: Backend> Tasks<B> {
     }
 
     /// Short text stays inline; longer text becomes an artifact.
-    async fn content(&self, text: String) -> Result<Content, String> {
+    pub(crate) async fn content(&self, text: String) -> Result<Content, String> {
         let (content, stored) = Content::from_text(text);
         if let Some((_, bytes)) = stored {
             self.store(bytes).await?;
         }
         Ok(content)
+    }
+
+    /// The text of an artifact, or a line saying it could not be read.
+    pub(crate) async fn artifact_text(&self, id: &str) -> String {
+        let blobs = self.0.resources.blobs();
+        match self.0.backend.cache_get(&blobs, id).await {
+            Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+            _ => format!("(artifact {id} could not be read)"),
+        }
     }
 
     /// Stores `bytes` in the artifacts cache under their hash.

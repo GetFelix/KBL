@@ -322,6 +322,16 @@ pub enum WorkRecord {
     Reopened { item: ItemId },
     /// A person closes or abandons one attempt, which frees one of the two open slots.
     AttemptClosed { item: ItemId, attempt: u32 },
+    /// A person moves an item to another tier.
+    TierChanged { item: ItemId, tier: u8 },
+    /// A person edits a proposal before accepting it.
+    Edited {
+        item: ItemId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tier: Option<u8>,
+    },
     /// Sets a root's budget outright. Only a person may; this is how it is raised.
     BudgetSet {
         root: ItemId,
@@ -371,6 +381,8 @@ impl WorkRecord {
             WorkRecord::LeftScope { .. } => "left_scope",
             WorkRecord::Reopened { .. } => "reopened",
             WorkRecord::AttemptClosed { .. } => "attempt_closed",
+            WorkRecord::TierChanged { .. } => "tier_changed",
+            WorkRecord::Edited { .. } => "edited",
             WorkRecord::BudgetSet { .. } => "budget_set",
             WorkRecord::Refused { .. } => "refused",
             WorkRecord::Unknown => "unknown",

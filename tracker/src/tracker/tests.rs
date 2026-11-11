@@ -43,7 +43,7 @@ struct Net {
 /// is one tracker's connection; `reconnect` is a restarted tracker. Only a
 /// member's first poll on a connection reclaims what Felix still holds for it.
 #[derive(Clone, Default)]
-struct Fake {
+pub(super) struct Fake {
     net: Arc<StdMutex<Net>>,
     gate: Arc<tokio::sync::Notify>,
     polled: Arc<StdMutex<HashSet<String>>>,
@@ -58,7 +58,7 @@ impl Fake {
         }
     }
 
-    fn log(&self) -> Vec<WorkLogged> {
+    pub(super) fn log(&self) -> Vec<WorkLogged> {
         let net = self.net.lock().unwrap();
         net.streams
             .get(WORK_EVENTS)
@@ -70,7 +70,7 @@ impl Fake {
             .unwrap_or_default()
     }
 
-    fn kinds(&self) -> Vec<String> {
+    pub(super) fn kinds(&self) -> Vec<String> {
         self.log()
             .iter()
             .map(|l| l.record.kind().to_owned())
@@ -82,7 +82,7 @@ impl Fake {
     }
 
     /// The visibility timeout passes for everything leased.
-    fn lapse_all(&self) {
+    pub(super) fn lapse_all(&self) {
         for slot in self.net.lock().unwrap().slots.values_mut() {
             if matches!(slot, Slot::Leased(_)) {
                 *slot = Slot::Pending;
@@ -147,7 +147,7 @@ impl Fake {
         self.poll_sync(stream, member)
     }
 
-    fn ready_count(&self, stream: &str) -> usize {
+    pub(super) fn ready_count(&self, stream: &str) -> usize {
         self.net
             .lock()
             .unwrap()
@@ -366,20 +366,20 @@ impl Broker for Fake {
     async fn close_idle(&self, _idle: Duration) {}
 }
 
-fn agent(name: &str) -> AgentName {
+pub(super) fn agent(name: &str) -> AgentName {
     AgentName::new(name).unwrap()
 }
 
-fn item(id: &str) -> ItemId {
+pub(super) fn item(id: &str) -> ItemId {
     ItemId::new(id).unwrap()
 }
 
-fn key(k: &str) -> Key {
+pub(super) fn key(k: &str) -> Key {
     Key::new(k).unwrap()
 }
 
 /// A person imports an item and accepts it at `tier`.
-async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
+pub(super) async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
     t.person_record(
         key("gab"),
         WorkRecord::Imported {
@@ -402,7 +402,7 @@ async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
     .unwrap();
 }
 
-fn settings() -> Settings {
+pub(super) fn settings() -> Settings {
     Settings {
         visibility: VIS,
         lease_ttl: Duration::from_secs(15),
@@ -423,16 +423,16 @@ async fn pass(t: &Tracker<Fake>, total: Duration) {
 }
 
 /// A tracker on a new connection. Any earlier tracker's lease has run out by now.
-async fn start(fake: &Fake) -> Tracker<Fake> {
+pub(super) async fn start(fake: &Fake) -> Tracker<Fake> {
     fake.expire_lease();
     Tracker::start(fake.reconnect(), settings()).await.unwrap()
 }
 
-async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
+pub(super) async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
     t.next(&agent(who), Duration::ZERO).await.unwrap()
 }
 
-fn claimed_id(v: &Value) -> Option<String> {
+pub(super) fn claimed_id(v: &Value) -> Option<String> {
     v["claimed"]
         .as_bool()
         .unwrap()
