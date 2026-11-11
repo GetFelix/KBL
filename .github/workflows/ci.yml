@@ -24,21 +24,8 @@ jobs:
       - run: node scripts/lint.mjs
       - run: node --test dev/lib/script.test.mjs
       # The fixtures are generated; the committed files must match the script.
-      - run: python3 prototype/make-fixture.py
       - run: python3 prototype/make-intake-fixture.py
       - run: git diff --exit-code -- prototype
-
-  frame:
-    name: style frame
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      # Headless Chrome is preinstalled on the runner.
-      - run: node scripts/check-frame.mjs
 
   intake:
     name: intake frame
@@ -50,28 +37,6 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/check-intake.mjs
-
-  motion:
-    name: motion rules
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: node scripts/check-motion.mjs
-
-  steps:
-    name: step panel
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: node scripts/check-steps.mjs
 
   rust:
     name: rust
@@ -124,13 +89,11 @@ jobs:
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, frame, motion, steps, rust, stack]
+    needs: [lint, intake, rust, stack]
     runs-on: ubuntu-latest
     steps:
       - run: |
           test "${{ needs.lint.result }}" = success
-          test "${{ needs.frame.result }}" = success
-          test "${{ needs.motion.result }}" = success
-          test "${{ needs.steps.result }}" = success
+          test "${{ needs.intake.result }}" = success
           test "${{ needs.rust.result }}" = success
           test "${{ needs.stack.result }}" = success

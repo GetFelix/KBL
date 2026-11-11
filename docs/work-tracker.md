@@ -1,6 +1,6 @@
 # A work tracker for coding agents
 
-It applies the swarm in
+It applies the Felix pieces in
 [design.md](design.md) to a job that never ends: bugs arrive from an upstream
 tracker, agents pick up the triage, and coding agents ask for the next piece
 of work, fix it and hand it back.
@@ -157,7 +157,7 @@ the tracker to think, because the tracker does not.
 
 ## The Felix mapping
 
-It reuses the pieces the swarm already has. No database.
+It reuses the pieces the run resources already use. No database.
 
 - **`work.events` is the record.** Every change is a record: imported,
   triaged, linked, context added, claimed, progress, done. The board view and
@@ -225,8 +225,8 @@ reported or measured.
 
 ## The dashboard
 
-The swarm view shows one run. The dashboard shows everything before and around
-runs: what waits on you, where work is piling up, and what the team delivered.
+The dashboard shows everything before and around
+an attempt: what waits on you, where work is piling up, and what the team delivered.
 It is the page someone opens first in the morning. It has three tabs.
 
 ### My queue
@@ -346,12 +346,19 @@ These come from `work.events` alone. Cost and minutes arrive as `cost` and
 [dashboard-research.md](dashboard-research.md) says why each part is there and
 how much evidence stands behind it.
 
-The look is fixed the same way as the swarm view's: `prototype/intake-frame.html`
+The look is fixed in a style frame before anything talks to Felix: `prototype/intake-frame.html`
 folds a hand-written `work.events` fixture (three trackers, a blocked chain, items
 waiting on a person, held items, PRs in review, two weeks of finished work), a
 copy with the review limit reached, and a generated burst of 320 items.
 `node scripts/check-intake.mjs` checks them, including that My queue matches
 what waits on the viewer and that actions append records.
+
+**Look.** Felix cyan-teal (`hsl(192, 90%, 46%)` dark, `hsl(192, 90%, 40%)` light) is work in
+motion and the current selection. Amber is for trouble the system handled, and red
+only for a refusal, so red always means Felix said no. Shapes carry meaning before
+colour does, so the page reads in greyscale. Inter is for names and labels and
+JetBrains Mono for ids, offsets, versions, counts and money. It is dark by default
+with a light theme, and `prefers-reduced-motion` turns movement into a single flash.
 
 ![My queue](screenshots/dashboard-queue.png)
 

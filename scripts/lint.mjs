@@ -1,4 +1,4 @@
-// Syntax checks that need no dependencies: the style frame's inline module, the
+// Syntax checks that need no dependencies: the dashboard frame's inline module, the
 // scripts, and the rule that prose uses no em dashes.
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
@@ -12,7 +12,7 @@ const syntax = (file, label) => {
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); } catch (e) { failures.push(`${label}: ${e.stderr.toString().trim()}`); }
 };
 
-for (const page of ['style-frame', 'intake-frame']) {
+for (const page of ['intake-frame']) {
   const html = readFileSync(join(root, `prototype/${page}.html`), 'utf8');
   const inline = html.match(/<script type="module">([\s\S]*?)<\/script>/);
   if (!inline) failures.push(`prototype/${page}.html: no inline module script`);
