@@ -41,6 +41,7 @@ fn every_record() -> Vec<WorkRecord> {
             tier: 1,
             why: "data loss on restart".into(),
             duplicate_of: Some(item("r0")),
+            unclear: None,
         },
         WorkRecord::Accepted {
             item: item("r1"),
@@ -96,6 +97,9 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("r1"),
             attempt: 1,
             text: text("which client?"),
+            options: vec![],
+            default: None,
+            cost_micros: 0,
         },
         WorkRecord::Answer {
             item: item("r1"),
@@ -105,6 +109,8 @@ fn every_record() -> Vec<WorkRecord> {
                 stream: WORK_EVENTS.into(),
                 offset: 38,
             }],
+            chosen: None,
+            then: None,
         },
         WorkRecord::Decision {
             item: item("r1"),
@@ -261,6 +267,43 @@ fn every_record() -> Vec<WorkRecord> {
         WorkRecord::Shipped {
             item: item("g1"),
             release: "0.4.0".into(),
+        },
+        WorkRecord::Triaged {
+            item: item("r1"),
+            tier: 2,
+            why: "which repo does this belong in".into(),
+            duplicate_of: None,
+            unclear: Some(Unclear::Repo),
+        },
+        WorkRecord::Question {
+            item: item("r1"),
+            attempt: 1,
+            text: text("which client?"),
+            options: vec!["rust".into(), "python".into()],
+            default: Some("rust".into()),
+            cost_micros: 25_000,
+        },
+        WorkRecord::Answer {
+            item: item("r1"),
+            question: 41,
+            text: text(""),
+            evidence: vec![],
+            chosen: Some("rust".into()),
+            then: Some(Then::Resume),
+        },
+        WorkRecord::Answer {
+            item: item("r1"),
+            question: 42,
+            text: text("this is a gateway bug"),
+            evidence: vec![],
+            chosen: None,
+            then: Some(Then::Prerequisite {
+                target: Target {
+                    source: "github".into(),
+                    repo: "GetFelix/felix-gateway".into(),
+                },
+                title: "gateway needs a CAS call".into(),
+            }),
         },
     ]
 }

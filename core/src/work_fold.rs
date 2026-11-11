@@ -10,11 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, MAX_CHECK_BYTES, MAX_PR_REF, MAX_RULE_CHECKS,
-    MAX_RULE_SCOPES, MAX_RULES_TEXT, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot,
-    RefusalReason, TIERS, Target, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    Actor, CloseWhy, DoneWhen, Evidence, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
+    MAX_PR_REF, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_TITLE, NewPrerequisite,
+    PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, TIERS, Target, Then, Unclear,
+    WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
 };
 
 #[cfg(test)]
@@ -140,6 +142,20 @@ pub enum NeedsYou {
     LeftScope,
     /// A check on the pull request failed, which `Item::pr_status` names.
     CheckFailed,
+    /// Triage could not settle what the item is, which `Item::ask` says.
+    Unclear,
+}
+
+/// What the open question offers, kept so an answer can be checked and the
+/// work that follows it can be built from the log alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ask {
+    pub options: Vec<String>,
+    pub default: Option<String>,
+    /// The attempt that asked. Triage asks as attempt 0.
+    pub attempt: u32,
+    /// Set when the question is triage's: it could not settle the item.
+    pub unclear: Option<Unclear>,
 }
 
 /// What an open pull request waits for, where the board words it specially.
@@ -184,6 +200,8 @@ pub struct Proposal {
     pub tier: u8,
     pub why: String,
     pub duplicate_of: Option<ItemId>,
+    #[serde(default)]
+    pub unclear: Option<Unclear>,
     pub at: u64,
 }
 
@@ -254,6 +272,9 @@ pub struct Item {
     pub redos: u8,
     pub over_budget: bool,
     pub open_question: Option<u64>,
+    /// What the open question offers; set and cleared with `open_question`.
+    #[serde(default)]
+    pub ask: Option<Ask>,
     pub branch: Option<String>,
     pub pr: Option<String>,
     /// Upstream's view of `pr`, as the last `pr_status` said.
@@ -322,6 +343,8 @@ pub enum Reject {
     CrossRoot,
     /// An answer names a question that is not the open one.
     NotOpenQuestion,
+    /// Options, a default or a chosen option are not what the question offers, or are over the bounds.
+    BadOption,
     /// A pull request status names a request the item does not report.
     WrongPr,
     /// A text field is longer than a record keeps.
@@ -467,7 +490,8 @@ impl State {
             None if self
                 .edges
                 .iter()
-                .any(|(a, b)| a == id && self.waits_on(a, b)) =>
+                .any(|(a, b)| a == id && self.waits_on(a, b))
+                || self.resuming(id) =>
             {
                 Stage::Blocked
             }
@@ -482,6 +506,9 @@ impl State {
             return None;
         }
         if it.open_question.is_some() {
+            if it.ask.as_ref().is_some_and(|a| a.unclear.is_some()) {
+                return Some(NeedsYou::Unclear);
+            }
             return Some(NeedsYou::Question);
         }
         if it.over_budget {
@@ -609,6 +636,19 @@ impl State {
         self.items.get(id).is_some_and(|i| i.closed.is_some())
     }
 
+    /// Whether work that carries on from an answered question is still open
+    /// under `id`. The asking item stays out of Ready meanwhile, so nobody
+    /// claims it alongside the agent that took the resume.
+    fn resuming(&self, id: &ItemId) -> bool {
+        self.items.get(id).is_some_and(|it| {
+            it.children.iter().any(|c| {
+                self.items
+                    .get(c)
+                    .is_some_and(|c| c.work == WorkKind::Resume && c.closed.is_none())
+            })
+        })
+    }
+
     /// Marks the root over budget so the stage does not depend on a later `refused`.
     fn flag_over_budget(&mut self, root: &ItemId) {
         if let Some(r) = self.items.get_mut(root) {
@@ -691,6 +731,7 @@ impl State {
             redos: 0,
             over_budget: false,
             open_question: None,
+            ask: None,
             branch: None,
             pr: None,
             pr_status: None,
@@ -749,6 +790,7 @@ impl State {
                 tier,
                 why,
                 duplicate_of,
+                unclear,
             } => {
                 if *tier >= TIERS {
                     return Err(Reject::BadTier);
@@ -758,9 +800,21 @@ impl State {
                     tier: *tier,
                     why: why.clone(),
                     duplicate_of: duplicate_of.clone(),
+                    unclear: *unclear,
                     at: offset,
                 });
-                self.item_mut(item)?.changed_upstream = false;
+                let it = self.item_mut(item)?;
+                it.changed_upstream = false;
+                // An unclear item reaches a person as a question, not as Ready work.
+                if unclear.is_some() && it.open_question.is_none() {
+                    it.open_question = Some(offset);
+                    it.ask = Some(Ask {
+                        options: Vec::new(),
+                        default: None,
+                        attempt: 0,
+                        unclear: *unclear,
+                    });
+                }
             }
             WorkRecord::Accepted { item, tier } => {
                 if rec.actor == Actor::Agent {
@@ -781,6 +835,17 @@ impl State {
                     self.budgets
                         .entry(item.clone())
                         .or_insert_with(Budget::for_new_root);
+                }
+                // Resume work an unaccepted item's answer made waits for this.
+                let tier = self.item(item)?.tier;
+                let waiting: Vec<ItemId> = self.item(item)?.children.clone();
+                for c in waiting {
+                    if let Some(c) = self.items.get_mut(&c)
+                        && c.work == WorkKind::Resume
+                    {
+                        c.accepted = true;
+                        c.tier = tier;
+                    }
                 }
             }
             WorkRecord::Prerequisite {
@@ -1025,19 +1090,39 @@ impl State {
                 it.cost_micros += cost_micros;
                 self.draw_cost(&root, *cost_micros);
             }
-            WorkRecord::Question { item, attempt, .. } => {
+            WorkRecord::Question {
+                item,
+                attempt,
+                options,
+                default,
+                cost_micros,
+                ..
+            } => {
                 self.agent_holder(item, *attempt, rec)?;
+                Self::check_options(options, default.as_deref())?;
                 let p = self.path_mut(item, *attempt)?;
                 if p.questions >= MAX_QUESTIONS {
                     return Err(Reject::LimitReached);
                 }
                 p.questions += 1;
-                self.item_mut(item)?.open_question = Some(offset);
+                let root = self.item(item)?.root.clone();
+                self.draw_cost(&root, *cost_micros);
+                let it = self.item_mut(item)?;
+                it.cost_micros += cost_micros;
+                it.open_question = Some(offset);
+                it.ask = Some(Ask {
+                    options: options.clone(),
+                    default: default.clone(),
+                    attempt: *attempt,
+                    unclear: None,
+                });
             }
             WorkRecord::Answer {
                 item,
                 question,
                 evidence,
+                chosen,
+                then,
                 ..
             } => {
                 Self::check_evidence(offset, evidence)?;
@@ -1045,6 +1130,17 @@ impl State {
                 if self.item(item)?.open_question != Some(*question) {
                     return Err(Reject::NotOpenQuestion);
                 }
+                if let Some(c) = chosen {
+                    let offered = self
+                        .item(item)?
+                        .ask
+                        .as_ref()
+                        .is_some_and(|a| a.options.contains(c));
+                    if !offered {
+                        return Err(Reject::BadOption);
+                    }
+                }
+                self.check_then(item, then.as_ref(), rec)?;
                 if let Some((worker, attempt)) = scope {
                     let p = self.path_mut(&worker, attempt)?;
                     if p.answers >= MAX_ANSWERS {
@@ -1052,7 +1148,10 @@ impl State {
                     }
                     p.answers += 1;
                 }
-                self.item_mut(item)?.open_question = None;
+                let it = self.item_mut(item)?;
+                it.open_question = None;
+                let ask = it.ask.take();
+                self.follow_answer(offset, item, *question, ask, then.as_ref());
             }
             WorkRecord::Decision {
                 item,
@@ -1567,14 +1666,8 @@ impl State {
             return Err(Reject::Cycle);
         }
         if let Some(n) = new {
-            let mut p = Self::blank(prerequisite, WorkKind::Fix, &n.title);
-            p.proposed_by_agent = true;
-            p.target = Some(n.target.clone());
-            if let Ok(entry) = Key::new("prerequisite") {
-                p.context.insert(entry, offset);
-            }
+            self.new_prerequisite_item(offset, prerequisite, &n.target, &n.title);
             self.child_keys.insert(scope);
-            self.new_item(p);
         }
         self.edges.insert((item.clone(), prerequisite.clone()));
         let edge = (item.clone(), prerequisite.clone());
@@ -1594,6 +1687,143 @@ impl State {
             p.posts += 1;
         }
         Ok(())
+    }
+
+    /// The proposal a prerequisite creates in another repo's Triage. Its
+    /// `prerequisite` context entry points at the record that made it.
+    fn new_prerequisite_item(&mut self, offset: u64, id: &ItemId, target: &Target, title: &str) {
+        let mut p = Self::blank(id, WorkKind::Fix, title);
+        p.proposed_by_agent = true;
+        p.target = Some(target.clone());
+        if let Ok(entry) = Key::new("prerequisite") {
+            p.context.insert(entry, offset);
+        }
+        self.new_item(p);
+    }
+
+    fn check_options(options: &[String], default: Option<&str>) -> Result<(), Reject> {
+        if options.len() > MAX_ASK_OPTIONS {
+            return Err(Reject::BadOption);
+        }
+        for (i, o) in options.iter().enumerate() {
+            if o.is_empty() || options[..i].contains(o) {
+                return Err(Reject::BadOption);
+            }
+            if o.len() > MAX_ASK_OPTION_LEN {
+                return Err(Reject::TooLong);
+            }
+        }
+        match default {
+            Some(d) if !options.iter().any(|o| o == d) => Err(Reject::BadOption),
+            _ => Ok(()),
+        }
+    }
+
+    /// What an answer may lead to, checked before the answer changes anything.
+    fn check_then(
+        &self,
+        item: &ItemId,
+        then: Option<&Then>,
+        rec: &WorkLogged,
+    ) -> Result<(), Reject> {
+        let Some(then) = then else {
+            return Ok(());
+        };
+        let par = self.item(item)?;
+        if par.closed.is_some() {
+            return Err(Reject::Closed);
+        }
+        if matches!(then, Then::Resume) {
+            let max = self
+                .budgets
+                .get(&par.root)
+                .map_or(DEFAULT_MAX_DEPTH, |b| b.max_depth);
+            if par.depth.saturating_add(1) > max {
+                return Err(Reject::TooDeep);
+            }
+        }
+        let Then::Prerequisite { target, title } = then else {
+            return Ok(());
+        };
+        // A person decides where work goes. An agent that answers could steer
+        // another repo's Triage, so it never may.
+        if rec.actor != Actor::Person {
+            return Err(Reject::ActorNotAllowed);
+        }
+        if title.is_empty() || target.source.is_empty() || target.repo.is_empty() {
+            return Err(Reject::MissingField);
+        }
+        if title.len() > MAX_TITLE
+            || target.source.len() > MAX_PR_REF
+            || target.repo.len() > MAX_PR_REF
+        {
+            return Err(Reject::TooLong);
+        }
+        Ok(())
+    }
+
+    /// The work an answer starts: resume work under the asking item, or a
+    /// prerequisite in another repo that the item waits on. The asker's
+    /// hold ends either way, at no cost to its tries.
+    fn follow_answer(
+        &mut self,
+        offset: u64,
+        item: &ItemId,
+        question: u64,
+        ask: Option<Ask>,
+        then: Option<&Then>,
+    ) {
+        let Some(then) = then else {
+            return;
+        };
+        let attempt = ask.as_ref().map_or(0, |a| a.attempt);
+        let Some(par) = self.items.get(item) else {
+            return;
+        };
+        let id = |tag: &str| {
+            let hash = ArtifactId::of(format!("{tag}\n{item}\n{question}").as_bytes());
+            ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
+        };
+        match then {
+            Then::Resume => {
+                let so_far = par
+                    .paths
+                    .iter()
+                    .find(|p| p.attempt == attempt)
+                    .and_then(|p| p.decisions.last().copied());
+                let title: String = format!("Resume: {}", par.title).chars().take(200).collect();
+                let mut r = Self::blank(&id("resume"), WorkKind::Resume, &title);
+                r.parent = Some(item.clone());
+                r.root = par.root.clone();
+                r.depth = par.depth.saturating_add(1);
+                // Work nobody accepted stays unclaimable until a person accepts the item.
+                r.accepted = par.accepted;
+                r.tier = par.tier;
+                for (name, at) in [
+                    ("question", Some(question)),
+                    ("answer", Some(offset)),
+                    ("so_far", so_far),
+                ] {
+                    if let (Ok(entry), Some(at)) = (Key::new(name), at) {
+                        r.context.insert(entry, at);
+                    }
+                }
+                self.new_item(r);
+            }
+            Then::Prerequisite { target, title } => {
+                let prerequisite = id("move");
+                self.new_prerequisite_item(offset, &prerequisite, target, title);
+                self.edges.insert((item.clone(), prerequisite));
+            }
+        }
+        if let Some(it) = self.items.get_mut(item)
+            && it.hold.as_ref().is_some_and(|h| h.attempt == attempt)
+        {
+            it.hold = None;
+            if let Some(p) = it.paths.iter_mut().find(|p| p.attempt == attempt) {
+                p.tries = p.tries.saturating_sub(1);
+            }
+        }
     }
 
     /// Triage answers come from the agent holding the triage item for that target.

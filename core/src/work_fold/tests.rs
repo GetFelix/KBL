@@ -1,7 +1,7 @@
 use super::*;
 use crate::codec::Codec;
 use crate::content::Content;
-use crate::work::{CloseWhy, DoneWhen, HumanKind, NewPrerequisite, Phase, Target};
+use crate::work::{CloseWhy, DoneWhen, HumanKind, NewPrerequisite, Phase, Target, Then, Unclear};
 
 fn id(s: &str) -> ItemId {
     ItemId::new(s).unwrap()
@@ -842,6 +842,7 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
         tier,
         why: "w".into(),
         duplicate_of: None,
+        unclear: None,
     };
     l.agent("w2", triaged(3)); // 3: holds nothing
     l.agent("w1", claimed("t1", 1));
@@ -854,6 +855,9 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
             item: id("r1"),
             attempt: 1,
             text: text("which?"),
+            options: vec![],
+            default: None,
+            cost_micros: 0,
         },
     );
     l.agent("w3", proposed("q1", Some("r1"), "q", WorkKind::Question));
@@ -862,6 +866,8 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
         question: q,
         text: text("this"),
         evidence: vec![],
+        chosen: None,
+        then: None,
     };
     l.agent("w4", ans()); // 10: not the holder
     l.tracker(ans()); // 11
@@ -1318,6 +1324,7 @@ fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
         tier: 1,
         why: "again".into(),
         duplicate_of: None,
+        unclear: None,
     });
     assert!(!fold(&l.0).items[&id("r1")].changed_upstream);
 
@@ -1710,6 +1717,9 @@ fn question_rec(item: &str) -> WorkRecord {
         item: id(item),
         attempt: 1,
         text: text("which?"),
+        options: vec![],
+        default: None,
+        cost_micros: 0,
     }
 }
 
@@ -1719,6 +1729,8 @@ fn answer_rec(question: u64) -> WorkRecord {
         question,
         text: text("this"),
         evidence: vec![],
+        chosen: None,
+        then: None,
     }
 }
 
@@ -2297,6 +2309,243 @@ fn a_state_with_a_release_edge_encodes() {
     assert_eq!(serde_json::from_str::<State>(&json).unwrap(), s);
 }
 
+/// A root held by w1 that decided something and then asked `which?` with two options.
+fn asked_with_options() -> (Log, u64, u64) {
+    let mut l = held_root();
+    let d = l.agent("w1", decision("r1", 1, vec![]));
+    let q = l.agent(
+        "w1",
+        WorkRecord::Question {
+            item: id("r1"),
+            attempt: 1,
+            text: text("which?"),
+            options: vec!["read".into(), "write".into()],
+            default: Some("read".into()),
+            cost_micros: 0,
+        },
+    );
+    (l, d, q)
+}
+
+fn answer_with(question: u64, chosen: Option<&str>, then: Option<Then>) -> WorkRecord {
+    WorkRecord::Answer {
+        item: id("r1"),
+        question,
+        text: text(if chosen.is_some() { "" } else { "neither" }),
+        evidence: vec![],
+        chosen: chosen.map(Into::into),
+        then,
+    }
+}
+
+fn resumes(s: &State) -> Vec<&Item> {
+    s.items
+        .values()
+        .filter(|i| i.work == WorkKind::Resume)
+        .collect()
+}
+
+#[test]
+fn an_answer_makes_one_claimable_resume_item_and_a_second_makes_none() {
+    let (mut l, d, q) = asked_with_options();
+    let a = l.person(answer_with(q, Some("write"), Some(Then::Resume)));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    let r = resumes(&s);
+    assert_eq!(r.len(), 1);
+    // It carries the question, the answer and the asker's last so_far, by offset.
+    let at = |name: &str| r[0].context[&key(name)];
+    assert_eq!((at("question"), at("answer"), at("so_far")), (q, a, d));
+    assert_eq!(s.stage(&r[0].id), Some(Stage::Ready));
+    // The asker is out of Ready and no longer holds the item.
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Blocked));
+    assert!(s.items[&id("r1")].hold.is_none());
+
+    l.person(answer_with(q, Some("read"), Some(Then::Resume)));
+    let s = fold(&l.0);
+    assert_eq!(resumes(&s).len(), 1);
+    assert_eq!(
+        s.rejections.last().map(|r| r.why),
+        Some(Reject::NotOpenQuestion)
+    );
+}
+
+#[test]
+fn the_asking_item_stays_out_of_ready_until_the_resume_work_is_done() {
+    let (mut l, _, q) = asked_with_options();
+    l.person(answer_with(q, None, Some(Then::Resume)));
+    let rid = resumes(&fold(&l.0))[0].id.clone();
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Blocked));
+    // Any agent may claim it, not only the asker.
+    l.agent("w2", claimed(rid.as_str(), 1));
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&rid), Some(Stage::Held));
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Blocked));
+    l.agent("w2", done(rid.as_str(), 1, 0));
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Ready));
+}
+
+#[test]
+fn an_answer_that_names_no_followup_makes_no_work() {
+    // How every answer logged before resume work existed folds.
+    let (mut l, _, q) = asked_with_options();
+    l.person(answer_with(q, None, None));
+    let s = fold(&l.0);
+    assert!(resumes(&s).is_empty());
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Held));
+}
+
+#[test]
+fn a_chosen_option_must_be_one_the_question_offered() {
+    let (mut l, _, q) = asked_with_options();
+    l.person(answer_with(q, Some("both"), Some(Then::Resume)));
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().map(|r| r.why), Some(Reject::BadOption));
+    assert!(resumes(&s).is_empty());
+    assert!(s.items[&id("r1")].open_question.is_some());
+}
+
+#[test]
+fn options_and_default_are_bounded() {
+    let ask = |options: Vec<String>, default: Option<String>| WorkRecord::Question {
+        item: id("r1"),
+        attempt: 1,
+        text: text("which?"),
+        options,
+        default,
+        cost_micros: 0,
+    };
+    let opts = |n: usize| (0..n).map(|i| format!("o{i}")).collect::<Vec<_>>();
+    for (rec, why) in [
+        (ask(opts(MAX_ASK_OPTIONS + 1), None), Reject::BadOption),
+        (ask(vec!["a".into(), "a".into()], None), Reject::BadOption),
+        (ask(vec![String::new()], None), Reject::BadOption),
+        (ask(opts(2), Some("zzz".into())), Reject::BadOption),
+        (ask(vec![], Some("a".into())), Reject::BadOption),
+        (
+            ask(vec!["x".repeat(MAX_ASK_OPTION_LEN + 1)], None),
+            Reject::TooLong,
+        ),
+    ] {
+        let mut l = held_root();
+        l.agent("w1", rec);
+        assert_eq!(last_rejection(&l), Some(why));
+        assert!(fold(&l.0).items[&id("r1")].open_question.is_none());
+    }
+    let mut l = held_root();
+    l.agent("w1", ask(opts(MAX_ASK_OPTIONS), Some("o3".into())));
+    assert!(fold(&l.0).rejections.is_empty());
+}
+
+fn triaged_unclear(item: &str) -> WorkRecord {
+    WorkRecord::Triaged {
+        item: id(item),
+        tier: 2,
+        why: "the issue names two repos".into(),
+        duplicate_of: None,
+        unclear: Some(Unclear::Repo),
+    }
+}
+
+#[test]
+fn an_unclear_triage_goes_to_a_person_as_a_question_not_to_ready() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    let t = l.person(triaged_unclear("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::Unclear));
+    assert_eq!(s.items[&id("r1")].open_question, Some(t));
+    // The answer is resume work, and the item is Ready again only after it is done.
+    l.person(answer_with(t, None, Some(Then::Resume)));
+    let s = fold(&l.0);
+    assert_eq!(resumes(&s).len(), 1);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Blocked));
+}
+
+fn moved(source: &str, repo: &str) -> Then {
+    Then::Prerequisite {
+        target: Target {
+            source: source.into(),
+            repo: repo.into(),
+        },
+        title: "needs a CAS call".into(),
+    }
+}
+
+#[test]
+fn an_answer_that_names_another_repo_creates_a_prerequisite_there() {
+    let (mut l, _, q) = asked_with_options();
+    let a = l.person(answer_with(
+        q,
+        None,
+        Some(moved("github", "GetFelix/felix-gateway")),
+    ));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert!(resumes(&s).is_empty());
+    let (_, p) = s.edges.iter().next().unwrap();
+    let p = &s.items[p];
+    assert_eq!(p.target.as_ref().unwrap().repo, "GetFelix/felix-gateway");
+    assert_eq!(p.context[&key("prerequisite")], a);
+    assert_eq!(s.stage(&p.id), Some(Stage::Proposed));
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Blocked));
+    assert!(s.items[&id("r1")].hold.is_none());
+}
+
+#[test]
+fn only_a_person_can_move_work_to_another_repo() {
+    let mut l = held_root();
+    let q = l.agent(
+        "w1",
+        WorkRecord::Question {
+            item: id("r1"),
+            attempt: 1,
+            text: text("where?"),
+            options: vec![],
+            default: None,
+            cost_micros: 0,
+        },
+    );
+    l.agent("w1", proposed("q1", Some("r1"), "q", WorkKind::Question));
+    l.agent("w2", claimed("q1", 1));
+    l.agent(
+        "w2",
+        answer_with(q, None, Some(moved("github", "GetFelix/other"))),
+    );
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.last().map(|r| r.why),
+        Some(Reject::ActorNotAllowed)
+    );
+    assert!(s.edges.is_empty());
+    assert!(s.items[&id("r1")].open_question.is_some());
+    // Its answer without a move is accepted, and starts resume work like a person's.
+    l.agent("w2", answer_with(q, None, Some(Then::Resume)));
+    assert_eq!(resumes(&fold(&l.0)).len(), 1);
+}
+
+#[test]
+fn a_move_needs_a_target_and_a_title_within_bounds() {
+    for (then, why) in [
+        (moved("", "a/b"), Reject::MissingField),
+        (moved("github", ""), Reject::MissingField),
+        (
+            moved("github", &"r".repeat(MAX_PR_REF + 1)),
+            Reject::TooLong,
+        ),
+    ] {
+        let (mut l, _, q) = asked_with_options();
+        l.person(answer_with(q, None, Some(then)));
+        assert_eq!(last_rejection(&l), Some(why));
+        assert!(fold(&l.0).edges.is_empty());
+    }
+}
+
 fn felix() -> Target {
     Target {
         source: "github".into(),
@@ -2471,4 +2720,97 @@ fn a_root_with_empty_checks_clears_the_repos_checks_but_keeps_its_text() {
     assert_eq!(r.text.as_deref(), Some("repo text"));
     assert!(r.checks.is_empty());
     assert_eq!(s.rules.len(), 2);
+}
+
+fn ask_on(item: &str, cost_micros: u64) -> WorkRecord {
+    WorkRecord::Question {
+        item: id(item),
+        attempt: 1,
+        text: text("which?"),
+        options: vec![],
+        default: None,
+        cost_micros,
+    }
+}
+
+fn answer_on(item: &str, question: u64) -> WorkRecord {
+    WorkRecord::Answer {
+        item: id(item),
+        question,
+        text: text("this"),
+        evidence: vec![],
+        chosen: None,
+        then: Some(Then::Resume),
+    }
+}
+
+#[test]
+fn asking_charges_the_cost_so_far_because_the_answer_ends_the_hold() {
+    let mut l = held_root();
+    let q = l.agent("w1", ask_on("r1", 400_000));
+    let s = fold(&l.0);
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, 600_000);
+    assert_eq!(s.items[&id("r1")].cost_micros, 400_000);
+    l.person(answer_on("r1", q));
+    // The hold is gone, so a release could not report it: it was charged once, at the ask.
+    let s = fold(&l.0);
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, 600_000);
+    assert!(s.items[&id("r1")].hold.is_none());
+}
+
+#[test]
+fn a_chain_of_asks_runs_the_root_out_of_budget() {
+    let mut l = held_root();
+    l.agent("w1", ask_on("r1", 600_000));
+    let q = l.agent("w1", ask_on("r1", 400_000));
+    assert_eq!(fold(&l.0).budgets[&id("r1")].cost_left_micros, 0);
+    l.person(answer_on("r1", q));
+    let rid = resumes(&fold(&l.0))[0].id.clone();
+    l.agent("w2", claimed(rid.as_str(), 1));
+    assert_eq!(last_rejection(&l), Some(Reject::OverBudget));
+}
+
+#[test]
+fn resume_work_for_an_unaccepted_item_waits_for_its_acceptance() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    let t = l.person(triaged_unclear("r1"));
+    l.person(answer_on("r1", t));
+    let s = fold(&l.0);
+    let rid = resumes(&s)[0].id.clone();
+    assert!(s.rejections.is_empty());
+    assert!(s.items.keys().all(|i| s.stage(i) != Some(Stage::Ready)));
+    l.agent("w2", claimed(rid.as_str(), 1));
+    assert_eq!(last_rejection(&l), Some(Reject::NotReady));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(1),
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&rid), Some(Stage::Ready));
+    assert_eq!(s.items[&rid].tier, Some(1));
+}
+
+#[test]
+fn chained_answers_stop_at_the_depth_cap() {
+    let mut l = held_root();
+    let mut at = "r1".to_string();
+    let mut q = l.agent("w1", ask_on("r1", 0));
+    // held_root allows three levels below the root.
+    for n in 1..=3 {
+        l.person(answer_on(&at, q));
+        assert!(fold(&l.0).rejections.is_empty(), "level {n}");
+        let r = resumes(&fold(&l.0))
+            .into_iter()
+            .find(|i| i.depth == n)
+            .unwrap()
+            .id
+            .clone();
+        l.agent("w2", claimed(r.as_str(), 1));
+        at = r.to_string();
+        q = l.agent("w2", ask_on(&at, 0));
+    }
+    l.person(answer_on(&at, q));
+    assert_eq!(last_rejection(&l), Some(Reject::TooDeep));
+    assert!(fold(&l.0).items[&id(&at)].open_question.is_some());
 }

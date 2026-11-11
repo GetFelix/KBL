@@ -4,7 +4,9 @@
 //      them, records a decision, a step and an edit, and posts a proposal;
 //      w2 finishes the children in order; w1 completes the item;
 //   2. a person accepts the proposal at a new tier and an agent finishes it;
-//   3. an agent asks a question and a person answers it;
+//   3. an agent asks a question (free text, then a choice) and a person answers it;
+//      the answer starts resume work another agent claims, and the asker's item
+//      is claimable again once that is done;
 //   4. refused calls (an item the agent does not hold, a decision without its
 //      commit) leave nothing on the log.
 //
@@ -157,17 +159,60 @@ try {
   const wrong = await refusal(() => personCall("tok-gab", "/v1/work/proposals/reject", { item: proposal.item }));
   check(wrong?.includes("not_a_proposal"), "an accepted item cannot be rejected");
 
-  // 3. A question and its answer.
+  // 3. A question, its answer, and the resume work the answer starts.
+  const entry = (read, name) => read.context.find((e) => e.entry === name);
+  async function resumeAfter(asker, root) {
+    const stage = await takeNext(w2, 20);
+    check(stage.claimed && stage.item.id !== root, `an agent was handed resume work for ${root}, not ${root} itself`);
+    const read = await w2.tool("work_context", {});
+    check(entry(read, "question") && entry(read, "answer"), "the resume item carries the question and the answer");
+    return { id: stage.item.id, read };
+  }
+
   await seed("root2", 1);
   const second = await takeNext(w3, 20);
   check(second.claimed && second.item.id === "root2", "w3 claimed root2");
+  await w3.tool("decide", { phase: "cause", so_far: "the read happens before the fill", why: "the writer holds the lock", commit: "abc123" });
   const asked = await w3.tool("work_ask", { question: "which cache is meant?" });
-  await personCall("tok-gab", "/v1/work/questions/answer", { item: "root2", text: { text: "the read cache" } });
+  const typed = "  the read cache\n<b>not an option</b>  ";
+  await personCall("tok-gab", "/v1/work/questions/answer", { item: "root2", text: { text: typed } });
   const answer = recordsOf("root2").find((r) => r.kind === "answer");
   check(answer?.question === asked.offset && answer.actor === "person" && answer.by === "gab", "the person's answer names the question and who answered");
+  check(answer.text.text === typed && answer.chosen === undefined, "free text is stored as typed");
   const again = await refusal(() => personCall("tok-gab", "/v1/work/questions/answer", { item: "root2", text: { text: "again" } }));
   check(again?.includes("no_open_question"), "a question is answered once");
+  check(recordsOf("root2").filter((r) => r.kind === "answer").length === 1, "a second answer appended nothing");
+  const lapsed = await refusal(() => w3.tool("work_complete", { item: "root2" }));
+  check(lapsed !== null, "the answer ended the asker's hold");
+  const r2 = await resumeAfter(w2, "root2");
+  const read2 = r2.read;
+  check(entry(read2, "answer").text.text === typed, "the resume item reads the answer as typed");
+  check(entry(read2, "so_far").text.text === "the read happens before the fill", "the resume item reads the asker's so_far");
+  await w2.tool("work_complete", { item: r2.id });
+  const back = await takeNext(w3, 20);
+  check(back.claimed && back.item.id === "root2", "root2 is claimable again once the resume work is done");
   await w3.tool("work_complete", { item: "root2" });
+  check(recordsOf("root2").some((r) => r.kind === "done" && r.by === "w3"), "root2 was completed");
+
+  // A question with choices: one key answers, and a second answer appends nothing.
+  await seed("root3", 1);
+  const third = await takeNext(w3, 20);
+  check(third.claimed && third.item.id === "root3", "w3 claimed root3");
+  await w3.tool("work_ask", { question: "which cache?", options: ["read", "write"], default: "read" });
+  const wrongKey = await refusal(() => personCall("tok-gab", "/v1/work/questions/answer", { item: "root3", chosen: "both" }));
+  check(wrongKey?.includes("bad_option"), "an option the question did not offer is refused");
+  await personCall("tok-gab", "/v1/work/questions/answer", { item: "root3", chosen: "write" });
+  const second3 = await refusal(() => personCall("tok-gab", "/v1/work/questions/answer", { item: "root3", chosen: "read" }));
+  check(second3 !== null, "a second answer to the same question is refused");
+  check(recordsOf("root3").filter((r) => r.kind === "answer").length === 1, "the choice appended one answer");
+  // The answer ended w3's hold; its own call finds that out and drops its local claim.
+  check((await refusal(() => w3.tool("work_complete", { item: "root3" }))) !== null, "the answer ended w3's hold on root3");
+  const r3 = await resumeAfter(w2, "root3");
+  check(entry(r3.read, "answer").text.text === "write", "the resume item reads the chosen option");
+  await w2.tool("work_complete", { item: r3.id });
+  const back3 = await takeNext(w3, 20);
+  check(back3.claimed && back3.item.id === "root3", "root3 is claimable again once the resume work is done");
+  await w3.tool("work_complete", { item: "root3" });
 
   // Agents cannot use the dashboard routes, and people cannot use the tools.
   const asAgent = await fetch(`${TRACKER_URL}/v1/work/close`, {

@@ -37,6 +37,33 @@ fn an_old_log_folds_to_the_states_it_always_did() {
     assert!(end.release_edges.is_empty());
 }
 
+/// A log written before questions carried options, and before an answer could start work.
+#[test]
+fn an_old_question_and_answer_fold_as_they_always_did() {
+    let log: Vec<_> = include_str!("work_pre_questions.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let asked = agents_core::work_fold::fold(&log[..6]);
+    assert_eq!(stage(&asked, "r1"), Stage::NeedsYou);
+    assert_eq!(
+        asked.items[&ItemId::new("r1").unwrap()].open_question,
+        Some(5)
+    );
+
+    let end = agents_core::work_fold::fold(&log);
+    let r1 = &end.items[&ItemId::new("r1").unwrap()];
+    // The answer closed the question and made no work: the item is the root and its one attempt only.
+    assert_eq!(r1.open_question, None);
+    assert!(r1.children.is_empty());
+    assert_eq!(end.items.len(), 1);
+    assert_eq!(stage(&end, "r1"), Stage::InReview);
+    // Only the second answer is refused: the question was already answered.
+    assert_eq!(end.rejections.len(), 1);
+    assert_eq!(end.rejections[0].offset, 7);
+}
+
 #[test]
 fn an_old_log_has_no_rules_and_serializes_as_before() {
     let end = agents_core::work_fold::fold(&log());

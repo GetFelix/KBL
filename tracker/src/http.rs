@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::config::{Caller, Tokens};
 use crate::felix::Broker;
-use crate::tracker::{Decide, Error, Post, Prereq, Tracker};
+use crate::tracker::{Decide, Error, Post, Prereq, Reply, Tracker};
 
 mod ingest;
 
@@ -185,9 +185,26 @@ struct AnswerBody {
     item: ItemId,
     /// The offset of the question. A person's answer defaults to the open one.
     question: Option<u64>,
+    /// Free text, kept as written. Empty when `chosen` names an option.
+    #[serde(default = "no_text")]
     text: Content,
+    /// One of the question's options.
+    chosen: Option<String>,
+    /// The work belongs in another repo. Only a person may say so.
+    moves_to: Option<MovesTo>,
     #[serde(default)]
     evidence: Vec<Evidence>,
+}
+
+#[derive(Deserialize)]
+struct MovesTo {
+    source: String,
+    repo: String,
+    title: String,
+}
+
+fn no_text() -> Content {
+    Content::Text(String::new())
 }
 
 #[derive(Deserialize)]
@@ -457,6 +474,12 @@ async fn edit<B: Broker>(
 struct AskBody {
     item: ItemId,
     text: Content,
+    #[serde(default)]
+    options: Vec<String>,
+    default: Option<String>,
+    /// What the attempt cost so far. Asking ends the hold, so this is the last chance to report it.
+    #[serde(default)]
+    cost_micros: u64,
 }
 
 async fn ask<B: Broker>(
@@ -465,7 +488,11 @@ async fn ask<B: Broker>(
     Json(b): Json<AskBody>,
 ) -> Response {
     match agent(&app, &headers) {
-        Ok(a) => reply(app.tracker.ask(&a, &b.item, b.text).await),
+        Ok(a) => reply(
+            app.tracker
+                .ask(&a, &b.item, b.text, b.options, b.default, b.cost_micros)
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }
@@ -479,6 +506,12 @@ async fn answer<B: Broker>(
         Ok(a) => a,
         Err(d) => return denied(d),
     };
+    if b.moves_to.is_some() {
+        return denied((
+            StatusCode::FORBIDDEN,
+            "only a person can move work to another repo",
+        ));
+    }
     let Some(question) = b.question else {
         return denied((
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -487,7 +520,7 @@ async fn answer<B: Broker>(
     };
     reply(
         app.tracker
-            .answer(&a, &b.item, question, b.text, b.evidence)
+            .answer(&a, &b.item, question, b.text, b.evidence, b.chosen)
             .await,
     )
 }
@@ -538,10 +571,22 @@ async fn person_answer<B: Broker>(
     headers: HeaderMap,
     Json(b): Json<AnswerBody>,
 ) -> Response {
+    let how = Reply {
+        chosen: b.chosen,
+        moves_to: b.moves_to.map(|m| {
+            (
+                Target {
+                    source: m.source,
+                    repo: m.repo,
+                },
+                m.title,
+            )
+        }),
+    };
     match person(&app, &headers) {
         Ok(p) => reply(
             app.tracker
-                .person_answer(p, &b.item, b.question, b.text, b.evidence)
+                .person_answer(p, &b.item, b.question, b.text, b.evidence, how)
                 .await,
         ),
         Err(d) => denied(d),

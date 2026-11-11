@@ -1,16 +1,17 @@
 use agents_core::content::Content;
 use agents_core::names::ItemId;
 use agents_core::work::{
-    CloseWhy, DoneWhen, Evidence, Phase, RefusalReason, Target, WORK_EVENTS, WorkKind, WorkRecord,
+    Actor, CloseWhy, DoneWhen, Evidence, Phase, RefusalReason, Target, Then, Unclear, WORK_EVENTS,
+    WorkKind, WorkRecord,
 };
-use agents_core::work_fold::Stage;
+use agents_core::work_fold::{NeedsYou, Stage};
 use serde_json::{Value, json};
 
 use super::super::tests::{
     Fake, agent, claim, claimed_id, item, key, seed, settings, start, start_with,
 };
 use super::{Decide, Post, Prereq};
-use crate::tracker::Error;
+use crate::tracker::{Error, Reply};
 
 fn text(s: &str) -> Content {
     Content::Text(s.into())
@@ -581,7 +582,10 @@ async fn progress_sets_the_branch_and_pr_and_a_lapsed_holder_is_refused() {
 async fn asking_and_answering_a_question() {
     let (_fake, t) = held().await;
     let a = agent("w1");
-    let asked = t.ask(&a, &item("a1"), text("which cache?")).await.unwrap();
+    let asked = t
+        .ask(&a, &item("a1"), text("which cache?"), vec![], None, 0)
+        .await
+        .unwrap();
     let q = asked["offset"].as_u64().unwrap();
     {
         let core = t.0.core.lock().await;
@@ -594,6 +598,7 @@ async fn asking_and_answering_a_question() {
         None,
         text("the read cache"),
         vec![],
+        Reply::default(),
     )
     .await
     .unwrap();
@@ -603,7 +608,14 @@ async fn asking_and_answering_a_question() {
     }
     // Nothing is open now.
     let again = t
-        .person_answer(key("gab"), &item("a1"), None, text("again"), vec![])
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            None,
+            text("again"),
+            vec![],
+            Reply::default(),
+        )
         .await;
     assert_eq!(why(again), "no_open_question");
 }
@@ -613,7 +625,10 @@ async fn a_worker_on_a_question_item_answers_for_its_parent() {
     let (_fake, t) = held().await;
     let a = agent("w1");
     let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
-    let asked = t.ask(&a, &item("a1"), text("which cache?")).await.unwrap();
+    let asked = t
+        .ask(&a, &item("a1"), text("which cache?"), vec![], None, 0)
+        .await
+        .unwrap();
     let q = asked["offset"].as_u64().unwrap();
     claim_item(&t, "w2", &q_id).await;
     // w3 holds no question item, so it cannot answer.
@@ -624,12 +639,20 @@ async fn a_worker_on_a_question_item_answers_for_its_parent() {
             q,
             text("the write cache"),
             vec![],
+            None,
         )
         .await;
     assert_eq!(why(r), "not_holder");
-    t.answer(&agent("w2"), &item("a1"), q, text("the read cache"), vec![])
-        .await
-        .unwrap();
+    t.answer(
+        &agent("w2"),
+        &item("a1"),
+        q,
+        text("the read cache"),
+        vec![],
+        None,
+    )
+    .await
+    .unwrap();
     let core = t.0.core.lock().await;
     assert_eq!(core.state.items[&item("a1")].open_question, None);
 }
@@ -769,7 +792,14 @@ async fn a_child_is_read_by_the_holder_of_its_parent_and_not_by_a_stranger() {
 async fn the_question_text_is_read_back_with_the_context() {
     let (_fake, t) = held().await;
     let asked = t
-        .ask(&agent("w1"), &item("a1"), text("which cache?"))
+        .ask(
+            &agent("w1"),
+            &item("a1"),
+            text("which cache?"),
+            vec![],
+            None,
+            0,
+        )
         .await
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
@@ -782,24 +812,37 @@ async fn an_answer_to_a_stale_question_is_refused() {
     let (fake, t) = held().await;
     let a = agent("w1");
     let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
-    let old = t.ask(&a, &item("a1"), text("one?")).await.unwrap()["offset"]
+    let old = t
+        .ask(&a, &item("a1"), text("one?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
         .as_u64()
         .unwrap();
-    let open = t.ask(&a, &item("a1"), text("two?")).await.unwrap()["offset"]
+    let open = t
+        .ask(&a, &item("a1"), text("two?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
         .as_u64()
         .unwrap();
     claim_item(&t, "w2", &q_id).await;
     let before = fake.log().len();
     let r = t
-        .answer(&agent("w2"), &item("a1"), old, text("late"), vec![])
+        .answer(&agent("w2"), &item("a1"), old, text("late"), vec![], None)
         .await;
     assert_eq!(why(r), "not_open_question");
     assert_eq!(fake.log().len(), before);
     let r = t
-        .person_answer(key("gab"), &item("a1"), Some(old), text("late"), vec![])
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            Some(old),
+            text("late"),
+            vec![],
+            Reply::default(),
+        )
         .await;
     assert_eq!(why(r), "not_open_question");
-    t.answer(&agent("w2"), &item("a1"), open, text("now"), vec![])
+    t.answer(&agent("w2"), &item("a1"), open, text("now"), vec![], None)
         .await
         .unwrap();
 }
@@ -823,19 +866,33 @@ async fn evidence_is_bounded_in_size_and_count() {
     d.why = String::new();
     assert_eq!(why(t.decide(&agent("w1"), &item("a1"), d).await), "invalid");
     let q = t
-        .ask(&agent("w1"), &item("a1"), text("which?"))
+        .ask(&agent("w1"), &item("a1"), text("which?"), vec![], None, 0)
         .await
         .unwrap()["offset"]
         .as_u64()
         .unwrap();
     let before = before + 1;
     let r = t
-        .person_answer(key("gab"), &item("a1"), Some(q), text("x"), vec![ev(&big)])
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            Some(q),
+            text("x"),
+            vec![ev(&big)],
+            Reply::default(),
+        )
         .await;
     assert_eq!(why(r), "invalid");
     let many = (0..=super::MAX_EVIDENCE).map(|_| ev("logs")).collect();
     let r = t
-        .person_answer(key("gab"), &item("a1"), Some(q), text("x"), many)
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            Some(q),
+            text("x"),
+            many,
+            Reply::default(),
+        )
         .await;
     assert_eq!(why(r), "invalid");
     assert_eq!(fake.log().len(), before);
@@ -1136,4 +1193,362 @@ async fn a_release_name_is_not_empty_and_is_bounded() {
             .await;
         assert_eq!(why(r), "invalid");
     }
+}
+
+/// w1 holds a1, decides, then asks which cache with two options.
+async fn asked_with_options() -> (Fake, crate::tracker::Tracker<Fake>, u64) {
+    let (fake, t) = held().await;
+    t.decide(&agent("w1"), &item("a1"), decide_args())
+        .await
+        .unwrap();
+    let q = t
+        .ask(
+            &agent("w1"),
+            &item("a1"),
+            text("which cache?"),
+            vec!["read".into(), "write".into()],
+            Some("read".into()),
+            0,
+        )
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    (fake, t, q)
+}
+
+async fn resume_ids(t: &crate::tracker::Tracker<Fake>) -> Vec<ItemId> {
+    let core = t.0.core.lock().await;
+    core.state
+        .items
+        .values()
+        .filter(|i| i.work == WorkKind::Resume)
+        .map(|i| i.id.clone())
+        .collect()
+}
+
+fn chosen(c: &str) -> Reply {
+    Reply {
+        chosen: Some(c.into()),
+        ..Reply::default()
+    }
+}
+
+#[tokio::test]
+async fn one_key_answers_with_a_choice_and_appends_one_resume_item() {
+    let (fake, t, q) = asked_with_options().await;
+    let before = fake.log().len();
+    t.person_answer(
+        key("gab"),
+        &item("a1"),
+        None,
+        text(""),
+        vec![],
+        chosen("write"),
+    )
+    .await
+    .unwrap();
+    // One record: the answer. The resume item is what the fold makes of it.
+    assert_eq!(fake.log().len(), before + 1);
+    let ids = resume_ids(&t).await;
+    assert_eq!(ids.len(), 1);
+    let core = t.0.core.lock().await;
+    assert_eq!(core.state.stage(&ids[0]), Some(Stage::Ready));
+    // The asker is parked until the resume work is done.
+    assert_eq!(core.state.stage(&item("a1")), Some(Stage::Blocked));
+    let answer = core.state.items[&ids[0]].context[&key("answer")];
+    assert_eq!(core.texts[&answer], text("write"));
+    assert!(q < answer);
+}
+
+#[tokio::test]
+async fn answering_without_choosing_takes_the_default() {
+    let (_fake, t, _q) = asked_with_options().await;
+    t.person_answer(
+        key("gab"),
+        &item("a1"),
+        None,
+        text(""),
+        vec![],
+        Reply::default(),
+    )
+    .await
+    .unwrap();
+    let ids = resume_ids(&t).await;
+    let core = t.0.core.lock().await;
+    let answer = core.state.items[&ids[0]].context[&key("answer")];
+    assert_eq!(core.texts[&answer], text("read"));
+}
+
+#[tokio::test]
+async fn free_text_is_stored_as_typed() {
+    let (fake, t, _q) = asked_with_options().await;
+    // Looks like an option, a command and markup. None of it is read.
+    let typed = "  write\n; rm -rf / <b>{\"chosen\":\"read\"}</b> \u{1F43E}  ";
+    t.person_answer(
+        key("gab"),
+        &item("a1"),
+        None,
+        text(typed),
+        vec![],
+        Reply::default(),
+    )
+    .await
+    .unwrap();
+    let logged = fake.log().pop().unwrap();
+    match logged.record {
+        WorkRecord::Answer {
+            text: got, chosen, ..
+        } => {
+            assert_eq!(got, text(typed));
+            assert_eq!(chosen, None);
+        }
+        other => panic!("expected an answer, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn another_agent_claims_the_resume_item_and_reads_so_far() {
+    let (_fake, t, q) = asked_with_options().await;
+    t.person_answer(
+        key("gab"),
+        &item("a1"),
+        None,
+        text(""),
+        vec![],
+        chosen("write"),
+    )
+    .await
+    .unwrap();
+    let rid = resume_ids(&t).await.remove(0);
+    // w1 asked, but w2 gets the work.
+    claim_item(&t, "w2", &rid).await;
+    let read = t.context_read(&agent("w2"), &rid).await.unwrap();
+    let entry = |name: &str| {
+        read["context"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["entry"] == name)
+            .unwrap_or_else(|| panic!("no {name} entry in {read}"))
+            .clone()
+    };
+    assert_eq!(entry("so_far")["text"], json!(text(&decide_args().so_far)));
+    assert_eq!(entry("question")["text"], json!(text("which cache?")));
+    assert_eq!(entry("question")["offset"], json!(q));
+    assert_eq!(entry("answer")["text"], json!(text("write")));
+}
+
+#[tokio::test]
+async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::Imported {
+            item: item("u1"),
+            source: "gh".into(),
+            upstream_id: "u1".into(),
+            title: "fix u1".into(),
+        },
+    )
+    .await
+    .unwrap();
+    t.person_record(
+        key("gab"),
+        WorkRecord::Triaged {
+            item: item("u1"),
+            tier: 1,
+            why: "which repo?".into(),
+            duplicate_of: None,
+            unclear: Some(Unclear::Repo),
+        },
+    )
+    .await
+    .unwrap();
+    // Even accepted, it is a question, not work.
+    t.person_record(
+        key("gab"),
+        WorkRecord::Accepted {
+            item: item("u1"),
+            tier: Some(1),
+        },
+    )
+    .await
+    .unwrap();
+    {
+        let core = t.0.core.lock().await;
+        assert_eq!(core.state.stage(&item("u1")), Some(Stage::NeedsYou));
+        assert_eq!(core.state.needs_you(&item("u1")), Some(NeedsYou::Unclear));
+    }
+    assert_eq!(fake.ready_count("work.ready.p1"), 0);
+    assert!(claimed_id(&claim(&t, "w1").await).is_none());
+    // The person's answer reaches an agent as resume work.
+    t.person_answer(
+        key("gab"),
+        &item("u1"),
+        None,
+        text("the gateway"),
+        vec![],
+        Reply::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resume_ids(&t).await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_answer_that_names_another_repo_creates_a_prerequisite_there() {
+    let (_fake, t, _q) = asked_with_options().await;
+    let moves = Reply {
+        moves_to: Some((
+            Target {
+                source: "github".into(),
+                repo: "GetFelix/felix-gateway".into(),
+            },
+            "gateway needs a CAS call".into(),
+        )),
+        ..Reply::default()
+    };
+    t.person_answer(
+        key("gab"),
+        &item("a1"),
+        None,
+        text("belongs in felix-gateway"),
+        vec![],
+        moves,
+    )
+    .await
+    .unwrap();
+    assert!(resume_ids(&t).await.is_empty());
+    let core = t.0.core.lock().await;
+    let (_, p) = core.state.edges.iter().next().expect("a1 waits on it");
+    let p = &core.state.items[p];
+    assert_eq!(p.target.as_ref().unwrap().repo, "GetFelix/felix-gateway");
+    assert_eq!(core.state.stage(&p.id), Some(Stage::Proposed));
+    assert_eq!(core.state.stage(&item("a1")), Some(Stage::Blocked));
+}
+
+#[tokio::test]
+async fn a_second_answer_to_the_same_question_appends_nothing() {
+    let (fake, t, q) = asked_with_options().await;
+    t.person_answer(
+        key("gab"),
+        &item("a1"),
+        None,
+        text(""),
+        vec![],
+        chosen("read"),
+    )
+    .await
+    .unwrap();
+    let before = fake.log().len();
+    let again = t
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            None,
+            text(""),
+            vec![],
+            chosen("write"),
+        )
+        .await;
+    assert_eq!(why(again), "no_open_question");
+    // Naming the answered question gets the same refusal from the fold.
+    let named = t
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            Some(q),
+            text(""),
+            vec![],
+            chosen("write"),
+        )
+        .await;
+    assert_eq!(why(named), "not_open_question");
+    assert_eq!(fake.log().len(), before);
+    assert_eq!(resume_ids(&t).await.len(), 1);
+}
+
+#[tokio::test]
+async fn an_option_the_question_did_not_offer_is_refused() {
+    let (fake, t, _q) = asked_with_options().await;
+    let before = fake.log().len();
+    let r = t
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            None,
+            text(""),
+            vec![],
+            chosen("both"),
+        )
+        .await;
+    assert_eq!(why(r), "bad_option");
+    // An option and free text together are not an answer either.
+    let r = t
+        .person_answer(
+            key("gab"),
+            &item("a1"),
+            None,
+            text("both"),
+            vec![],
+            chosen("read"),
+        )
+        .await;
+    assert_eq!(why(r), "invalid");
+    assert_eq!(fake.log().len(), before);
+    assert!(resume_ids(&t).await.is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_cannot_move_work_to_another_repo_through_an_answer() {
+    let (fake, t, q) = asked_with_options().await;
+    let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
+    claim_item(&t, "w2", &q_id).await;
+    let before = fake.log().len();
+    // The agent route has no way to ask for it; the fold refuses it if a record says so.
+    let mut core = t.0.core.lock().await;
+    let forged = WorkRecord::Answer {
+        item: item("a1"),
+        question: q,
+        text: text("to the gateway"),
+        evidence: vec![],
+        chosen: None,
+        then: Some(Then::Prerequisite {
+            target: Target {
+                source: "github".into(),
+                repo: "GetFelix/felix-gateway".into(),
+            },
+            title: "steer".into(),
+        }),
+    };
+    let r = t.append(&mut core, Actor::Agent, key("w2"), forged).await;
+    assert_eq!(why(r.map(|_| json!(null))), "actor_not_allowed");
+    assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn options_are_bounded_when_asking() {
+    let (fake, t) = held().await;
+    let before = fake.log().len();
+    let (w1, a1) = (agent("w1"), item("a1"));
+    let ask = |options: Vec<String>, default: Option<String>| {
+        t.ask(&w1, &a1, text("which?"), options, default, 0)
+    };
+    let many = (0..=agents_core::work::MAX_ASK_OPTIONS)
+        .map(|i| format!("o{i}"))
+        .collect();
+    assert_eq!(why(ask(many, None).await), "invalid");
+    let long = "x".repeat(agents_core::work::MAX_ASK_OPTION_LEN + 1);
+    assert_eq!(why(ask(vec![long], None).await), "invalid");
+    assert_eq!(
+        why(ask(vec!["a".into(), "a".into()], None).await),
+        "invalid"
+    );
+    assert_eq!(
+        why(ask(vec!["a".into()], Some("b".into())).await),
+        "invalid"
+    );
+    assert_eq!(fake.log().len(), before);
 }

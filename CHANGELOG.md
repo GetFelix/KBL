@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Questions can offer options. `work_ask` takes `options` (at most 8) and a
+  `default`, and a person picks one or types free text, which is stored as
+  written. An answer appends a claimable `resume` item under the asking item
+  that carries the question, the answer and the asker's `so_far`; the asking
+  item stays out of Ready meanwhile. A person's answer can name another repo
+  (`moves_to`) to create a prerequisite there instead. Triage can mark an item
+  `unclear` (scope, repo or acceptance), which sends it to a person as a
+  question. `work_ask` also takes `cost_micros`, charged when asking. Logs from before fold as they did; older trackers ignore the new
+  fields and start no resume work.
+
 - Standing rules per repo and per root: a person sets text and checks-before-push
   with `POST /v1/work/rules` (`rules_set`), and every claim reply and `work_next`
   returns the rules in effect with their version. The root's parts override the
