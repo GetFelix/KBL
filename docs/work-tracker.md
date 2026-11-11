@@ -2,8 +2,17 @@
 
 It applies the swarm in
 [design.md](design.md) to a job that never ends: bugs arrive from an upstream
-tracker, an agent triages them, and coding agents ask for the next piece of
-work, fix it and hand it back.
+tracker, agents pick up the triage, and coding agents ask for the next piece
+of work, fix it and hand it back.
+
+**The tracker is not agentic.** It is a Felix-backed work tracker. It stores,
+orders, hands out and displays work, and it makes no model calls and writes no
+text. Every kind of judgement it shows (triage, augmentation, splits, answers,
+fixes, redos) is a work item that an agent or a person completes. Agents from
+any vendor take that work through `felix-mcp`, and people guide it from the
+dashboard. Anything a person adds (a redo, a note, a split, a question, a
+priority change) becomes regular work or a record the tracker already keeps.
+`felix-mcp` and the dashboard make no model calls either.
 
 ## The problem
 
@@ -31,13 +40,27 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_extend` | Keeps the claim while the agent works (done by `felix-mcp`, as for tasks) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency, or splits an item into child items |
+| `work_post` | Adds an item of any kind below, for example a question on an item |
 | `work_progress` | Records a step: a plan, a branch, a PR |
 | `work_complete` / `work_release` | Finishes the item or hands it back |
 
-An ingest worker pulls new and changed items from GitHub or ADO. A triage
-agent then dedupes them, sets priority, links dependencies, splits large items
-and writes its reading of each bug as context. People edit any of that through
-REST or the viewer.
+An ingest worker pulls new and changed items from GitHub or ADO. For each one
+it posts a triage item and an augment item. People edit any record through REST
+or the viewer.
+
+### Kinds of work
+
+| Kind | Claimed by | The answer comes back as |
+|---|---|---|
+| `fix` | A coding agent | Progress records, a branch, a PR |
+| `triage` | Any agent | A proposal: tier with one line of why, dependencies, possible duplicates, a split, context. A person accepts, edits or rejects it |
+| `augment` | Any agent | Context records on the item: repro steps, related code, logs, linked issues, affected areas |
+| `split` | Any agent | Proposed child items, linked for a person to accept |
+| `question` | Any agent | An answer record that cites offsets |
+
+Triage and augmentation are claimed, extended, completed and given up like
+any other work. A dead agent's triage goes back to the queue. Nothing waits on
+the tracker to think, because the tracker does not.
 
 ## The Felix mapping
 
@@ -70,6 +93,35 @@ It reuses the pieces the swarm already has. No database.
 A fixing agent's work is a run, so the existing replay shows why it did what
 it did. The tracker links each item to its runs.
 
+## Where work comes from, and its bounds
+
+- **One log.** `work.events` is the only record. Upstream sync, people's
+  dashboard actions and agents' records all append through the tracker's
+  validation, and an item's state is a fold.
+- **Roots come from upstream sources and people only.** Agents create
+  children, and only under an item they currently hold. Every agent-created
+  item carries its parent and root ids.
+- **A work budget per root.** Settings, with defaults of at most 12 items in
+  the tree, depth at most 3, and a cost cap. Every child, attempt and redo
+  draws from it, and budgets only decrease. A create that would exceed the
+  budget is refused and logged as refused, and the root goes to Needs you:
+  raise the budget, split by hand, or close.
+- **What an agent may create under a held item:** `split`, `augment`,
+  `question` and test follow-ups. Out-of-scope work, such as a new bug it
+  found, is a proposal shown in Triage as "proposed by <agent>". It becomes a
+  root only when a person accepts it.
+- **Creation is idempotent.** The child's key is the parent plus an
+  agent-supplied key, written with `cache_put_if` absent, so a retry never
+  duplicates.
+- **Proposals are rate-limited** per agent and per run.
+- **Closure.** A parent cannot complete while its children are open. A root
+  closed upstream cancels its open descendants.
+- **Termination.** Total work is at most (upstream roots + accepted roots) x
+  the per-root budget; agents spend budget and never create it.
+
+Budgets are enforced by a compare-and-set on the budget key (`cache_put_if`),
+not by counters, because Felix has no bounded add (gap 42).
+
 ## The dashboard
 
 The swarm view shows one run. The dashboard shows everything before and around
@@ -80,7 +132,7 @@ It is the page someone opens first in the morning. It has three tabs.
 
 The landing view. It lists everything that waits on the person looking:
 
-- a question triage asked,
+- a question an agent asked,
 - a failure that needs a decision,
 - a triage proposal to accept,
 - a PR to review, or an approved one to merge.
@@ -119,10 +171,11 @@ same actions go through the tracker's REST API and MCP tools.
 The stages, left to right. An item sits in exactly one and moves right as
 `work.events` records it.
 
-- **Triage** holds items nobody has accepted yet. The triage agent attaches a
-  proposal: a tier with one line of why, dependencies, and a possible
-  duplicate, including one from another tracker. You accept, edit or reject
-  it. An item the agent has not read yet says so.
+- **Triage** holds items nobody has accepted yet. An agent that completed the
+  item's triage work has attached a proposal: a tier with one line of why,
+  dependencies, and a possible duplicate, including one from another tracker.
+  You accept, edit or reject it. An item whose triage work nobody has claimed
+  yet says so.
 - **Needs you** groups failures by cause (tests red, timeout, claim lost, gave
   up) under the agent's last message, next to questions.
 - **Blocked** leads with the root blockers: the unfinished items that hold the
@@ -230,7 +283,7 @@ what waits on the viewer and that actions append records.
 ## Order
 
 M2 and M3 in the [build order](design.md#build-order): GitHub ingest,
-`work_next` and the ready tiers, then triage and dependencies, then Claude Code
+`work_next` and the ready tiers, then triage and augmentation as work kinds and dependencies, then Claude Code
 working `agent-ok` issues. The dashboard goes live in M4. ADO ingest comes
 after GitHub.
 

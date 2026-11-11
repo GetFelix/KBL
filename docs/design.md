@@ -27,7 +27,7 @@ after something went wrong.
 **In scope**
 
 - An MCP server, `felix-mcp`, that gives any MCP host (Claude Code, the Claude Agent SDK, other vendors' hosts) Felix-backed tools: tasks, a shared board, leases, messages, artifacts and the run's budget
-- A small runtime, `agents-run`, that drives a planner and workers against a model API, records spend and heartbeats, and has a scripted stand-in for every role so the demo runs without a model
+- An optional reference worker, `agents-run`, outside the system boundary: it drives a planner and workers against a model API, records spend and heartbeats, and has a scripted stand-in for every role so the demo runs without a model. The tracker, `felix-mcp` and the viewer make no model calls and generate no text; models run only in workers that come from outside (any vendor) or in `agents-run`
 - A tool, `agents-tool`, that creates a run's resources, the agents' identities and their grants, and exports a finished run
 - A viewer in the browser that draws the swarm live and replays it, through felix-gateway
 - One headline demo job: a planner splits a pull request review into tasks for four to eight workers
@@ -549,7 +549,7 @@ scripted demo.
 |---|---|---|
 | 0 | The viewer, locked: style frames of the swarm view, the timeline and the dashboard, drawn from hand-written fixtures | They read well before Felix is involved |
 | 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
-| 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage | Real issues become claimable work, once each |
+| 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each |
 | 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
 | 4 | The dashboard, live (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
 | 5 | Shared state: the board, leases, presence and messages | Demonstration 3 |
