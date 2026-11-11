@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# Built by `npm run wasm` from ../wasm.
+src/wasm/
+.wasm-node/

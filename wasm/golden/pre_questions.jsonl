@@ -1,0 +1,9 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"first bug"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"triaged","item":"r1","tier":1,"why":"looks like data loss"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":91030}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"decision","item":"r1","attempt":1,"phase":"cause","so_far":"the read races the fill","question":"","chosen":"","why":"the writer holds the lock","commit":"9f3c2ab"}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"question","item":"r1","attempt":1,"text":{"text":"which client?"}}
+{"at_ms":1060,"by":"gabriel","actor":"person","kind":"answer","item":"r1","question":5,"text":{"text":"the rust one"}}
+{"at_ms":1070,"by":"gabriel","actor":"person","kind":"answer","item":"r1","question":5,"text":{"text":"again"}}
+{"at_ms":1080,"by":"w1","actor":"agent","kind":"done","item":"r1","attempt":1,"cost_micros":5}

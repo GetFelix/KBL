@@ -49,6 +49,33 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
+  dashboard:
+    name: dashboard
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: rustup target add wasm32-unknown-unknown
+      - name: Install the wasm-bindgen CLI at the locked version
+        run: |
+          v=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          cargo install wasm-bindgen-cli --version "$v" --locked
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run wasm
+        working-directory: dashboard
+      - run: npm run typecheck
+        working-directory: dashboard
+      - run: npm test
+        working-directory: dashboard
+      - run: npm run build
+        working-directory: dashboard
+
   stack:
     name: dev stack
     runs-on: ubuntu-latest
@@ -96,11 +123,12 @@ jobs:
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, intake, rust, stack]
+    needs: [lint, intake, rust, dashboard, stack]
     runs-on: ubuntu-latest
     steps:
       - run: |
           test "${{ needs.lint.result }}" = success
           test "${{ needs.intake.result }}" = success
           test "${{ needs.rust.result }}" = success
+          test "${{ needs.dashboard.result }}" = success
           test "${{ needs.stack.result }}" = success
