@@ -675,9 +675,10 @@ impl<B: Broker> Tracker<B> {
     async fn try_claim(&self, agent: &AgentName, review: &[u8]) -> Result<Option<Delivery>, Error> {
         for tier in (0..TIERS).chain(review.iter().copied()) {
             let stream = ready_stream(tier);
-            // Reviews of the agent's own work wait for another reviewer. They stay
-            // leased to it while it looks further down the lane, then go back.
-            let mut own = Vec::new();
+            // Reviews of the agent's own work wait for another reviewer. Each goes
+            // straight back to the lane, so a call that is cut short holds none. A
+            // record seen twice means the lane has nothing else for this agent.
+            let mut seen: Vec<u64> = Vec::new();
             loop {
                 let polled = self
                     .io(
@@ -690,11 +691,13 @@ impl<B: Broker> Tracker<B> {
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else { break };
                 if tier >= TIERS && self.is_own_work(agent, &record).await {
-                    own.push(record);
-                    if own.len() < MAX_OWN_SKIPS {
-                        continue;
+                    let again = seen.contains(&record.offset);
+                    seen.push(record.offset);
+                    self.give_back(agent, &stream, vec![record]).await;
+                    if again || seen.len() >= MAX_OWN_SKIPS {
+                        break;
                     }
-                    break;
+                    continue;
                 }
                 let mut ops = Vec::new();
                 let taken = {
@@ -704,11 +707,9 @@ impl<B: Broker> Tracker<B> {
                 };
                 self.run(ops).await.ok();
                 if let Some(d) = taken? {
-                    self.give_back(agent, &stream, own).await;
                     return Ok(Some(d));
                 }
             }
-            self.give_back(agent, &stream, own).await;
         }
         Ok(None)
     }
