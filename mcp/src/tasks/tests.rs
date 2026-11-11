@@ -29,6 +29,7 @@ enum Extend {
     Works,
     Stale,
     Down,
+    Hangs,
 }
 
 impl Fake {
@@ -185,10 +186,12 @@ impl Backend for Fake {
     ) -> Result<Duration, ExtendError> {
         self.step("extend", record.offset.to_string())
             .map_err(ExtendError::Failed)?;
-        match self.0.lock().unwrap().extend {
+        let how = self.0.lock().unwrap().extend;
+        match how {
             Extend::Works => Ok(by),
             Extend::Stale => Err(ExtendError::Stale(anyhow::anyhow!("the claim lapsed"))),
             Extend::Down => Err(ExtendError::Failed(anyhow::anyhow!("connection reset"))),
+            Extend::Hangs => std::future::pending().await,
         }
     }
 }
@@ -200,6 +203,8 @@ fn tasks(fake: &Fake) -> Tasks<Fake> {
         fake.clone(),
         Resources::new(RunId::new(RUN).unwrap()),
         AgentName::new("w1").unwrap(),
+        None,
+        None,
     )
 }
 
@@ -354,11 +359,59 @@ async fn a_stale_claim_is_logged_and_the_next_call_says_it_was_lost() {
     let kinds = fake.kinds(RUN);
     assert_eq!(&kinds[kinds.len() - 2..], ["refused", "task_claim_lost"]);
 
-    let err = t.complete("t1", "late".into()).await.unwrap_err();
-    assert!(err.contains("lapsed"), "{err}");
-    assert!(fake.cache("agents.results.r1", "t1").is_none());
-    // The loss is reported once; the agent can claim again.
+    // Any other task call reports the loss once and lets go of the task.
+    assert!(t.release("t1", None).await.unwrap_err().contains("lapsed"));
+    assert!(fake.calls("nack").is_empty());
     assert_eq!(json(t.claim(None).await)["claimed"], false);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_result_after_a_lost_claim_still_lands_if_first_and_is_never_acked() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 5, 1);
+    let t = tasks(&fake);
+    t.claim(None).await.unwrap();
+    fake.extends(Extend::Stale);
+    tokio::time::sleep(Duration::from_secs(35)).await;
+
+    let reply = json(t.complete("t1", "late".into()).await);
+    assert_eq!(reply["status"], "done");
+    assert!(reply["warning"].as_str().unwrap().contains("landed first"));
+    assert!(fake.cache("agents.results.r1", "t1").is_some());
+    assert!(fake.calls("ack").is_empty() && fake.calls("nack").is_empty());
+    assert!(fake.kinds(RUN).ends_with(&["task_claim_lost", "task_done"]));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_result_after_a_lost_claim_loses_to_the_first_and_is_a_duplicate() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 5, 1);
+    let t = tasks(&fake);
+    t.claim(None).await.unwrap();
+    fake.extends(Extend::Stale);
+    tokio::time::sleep(Duration::from_secs(35)).await;
+    fake.put_result("t1", b"theirs");
+
+    let reply = json(t.complete("t1", "late".into()).await);
+    assert_eq!(reply["status"], "duplicate");
+    assert!(fake.calls("ack").is_empty());
+    assert!(
+        fake.kinds(RUN)
+            .ends_with(&["task_claim_lost", "task_duplicate"])
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_hung_extend_counts_as_a_failure_and_loses_the_claim() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 5, 1);
+    let t = tasks(&fake);
+    t.claim(None).await.unwrap();
+    fake.extends(Extend::Hangs);
+    // Each try takes 30 s to wait and 30 s to time out: lost on the second.
+    tokio::time::sleep(Duration::from_secs(125)).await;
+    assert!(fake.kinds(RUN).contains(&"task_claim_lost"));
+    assert_eq!(fake.calls("extend").len(), 2);
 }
 
 #[tokio::test(start_paused = true)]
@@ -388,12 +441,8 @@ async fn failing_extensions_warn_the_model_and_a_lapsed_visibility_loses_the_cla
     t.claim(None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(95)).await;
     assert!(fake.kinds(RUN).contains(&"task_claim_lost"));
-    assert!(
-        t.complete("t2", "x".into())
-            .await
-            .unwrap_err()
-            .contains("lapsed")
-    );
+    let late = json(t.complete("t2", "x".into()).await);
+    assert!(late["warning"].as_str().unwrap().contains("lapsed"));
 }
 
 #[tokio::test(start_paused = true)]

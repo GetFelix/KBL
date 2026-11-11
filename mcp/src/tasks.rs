@@ -83,11 +83,23 @@ impl<B> Clone for Tasks<B> {
 }
 
 impl<B: Backend> Tasks<B> {
-    pub(crate) fn new(backend: B, resources: Resources, agent: AgentName) -> Self {
-        Self::with_timing(backend, resources, agent, VISIBILITY, EXTEND_EVERY)
+    pub(crate) fn new(
+        backend: B,
+        resources: Resources,
+        agent: AgentName,
+        visibility: Option<Duration>,
+        extend_every: Option<Duration>,
+    ) -> Self {
+        Self::with_timing(
+            backend,
+            resources,
+            agent,
+            visibility.unwrap_or(VISIBILITY),
+            extend_every.unwrap_or(EXTEND_EVERY),
+        )
     }
 
-    pub(crate) fn with_timing(
+    fn with_timing(
         backend: B,
         resources: Resources,
         agent: AgentName,
@@ -293,11 +305,11 @@ impl<B: Backend> Tasks<B> {
 
     pub(crate) async fn complete(&self, task: &str, result: String) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
-        if let Some(lost) = lost(&mut held) {
-            return Err(lost);
-        }
         let h = holding(&held, task)?;
         let risk = at_risk(h);
+        // A lost claim still gets its result written, which is safe because
+        // only the first write lands. The delivery is no longer ours to ack.
+        let claim_lost = h.health.lock().expect("health lock").lost;
         let (id, offset, attempt) = (h.task.id.clone(), h.record.offset, h.attempt);
         let artifact = self.store(result.into_bytes()).await?;
         let value = TaskResult {
@@ -320,14 +332,17 @@ impl<B: Backend> Tasks<B> {
         h.extender.abort();
         // Acked either way: a redelivered copy that lost has nothing left to do.
         let stream = self.0.resources.tasks();
-        let acked = self
-            .checked(
+        let acked = if claim_lost {
+            Ok(())
+        } else {
+            self.checked(
                 "group_ack",
                 &stream,
                 None,
                 self.0.backend.ack(&stream, WORKERS_GROUP, offset),
             )
-            .await;
+            .await
+        };
         self.log(if won {
             Record::TaskDone {
                 task: id.clone(),
@@ -356,7 +371,14 @@ impl<B: Backend> Tasks<B> {
                 "another copy of this task finished first; yours is kept but is not the result"
                     .into();
         }
-        if let Err(e) = acked {
+        if claim_lost {
+            reply["warning"] = if won {
+                "your claim had lapsed, but your result landed first and is the task's result"
+            } else {
+                "your claim had lapsed and another copy finished first"
+            }
+            .into();
+        } else if let Err(e) = acked {
             reply["warning"] =
                 format!("the result is recorded but the task was not acknowledged: {e}").into();
         } else if let Some(risk) = risk {
@@ -443,11 +465,15 @@ impl<B: Backend> Tasks<B> {
         let stream = self.0.resources.tasks();
         loop {
             tokio::time::sleep(self.0.extend_every).await;
-            let extended = self
-                .0
-                .backend
-                .extend(&stream, WORKERS_GROUP, &record, self.0.visibility)
-                .await;
+            // A hung extend counts as a failed one, or the lost threshold never comes.
+            let extended = tokio::time::timeout(
+                self.0.extend_every,
+                self.0
+                    .backend
+                    .extend(&stream, WORKERS_GROUP, &record, self.0.visibility),
+            )
+            .await
+            .unwrap_or_else(|_| Err(ExtendError::Failed(anyhow::anyhow!("the extend timed out"))));
             let gone = match extended {
                 Ok(visible) => {
                     {

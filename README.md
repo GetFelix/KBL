@@ -205,7 +205,7 @@ and to another if that worker goes quiet, so a task can be tried more than once 
 While a worker holds a task, `felix-mcp` extends the claim every 30 seconds (it stands for 90), so a model call that
 takes minutes keeps its task and a worker that dies loses it within 90 seconds. If Felix answers `stale_claim`, or
 extensions fail for a full 90 seconds, `felix-mcp` logs `task_claim_lost` and the agent's next task tool call says the
-claim lapsed and drops the task. After two failed extensions in a row the next call warns that the claim is at risk.
+claim lapsed and drops the task, except `task_complete`, which still writes the result (only the first write to a task's key lands, so it is safe), never acknowledges the task, and warns that the claim had lapsed. After two failed extensions in a row the next call warns that the claim is at risk.
 
 A worker restarted under the same name gets back the tasks its predecessor held, one per `task_claim` and ahead of new
 work. Each counts as another attempt, and one whose claim lapses before it is claimed goes back to the whole group. A

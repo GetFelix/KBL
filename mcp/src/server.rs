@@ -20,9 +20,21 @@ pub(crate) struct Server {
     tasks: Tasks<Felix>,
 }
 
+/// Claim timing, when the defaults (90 s claim, extended every 30 s) are overridden.
+pub(crate) struct Timing {
+    pub(crate) visibility: Option<Duration>,
+    pub(crate) extend_every: Option<Duration>,
+}
+
 impl Server {
-    pub(crate) fn new(run: RunId, agent: AgentName, felix: Felix) -> Self {
-        let tasks = Tasks::new(felix.clone(), Resources::new(run.clone()), agent.clone());
+    pub(crate) fn new(run: RunId, agent: AgentName, felix: Felix, timing: Timing) -> Self {
+        let tasks = Tasks::new(
+            felix.clone(),
+            Resources::new(run.clone()),
+            agent.clone(),
+            timing.visibility,
+            timing.extend_every,
+        );
         Self {
             run,
             agent,

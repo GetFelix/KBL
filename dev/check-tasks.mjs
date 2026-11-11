@@ -40,9 +40,9 @@ if (created.status !== 0) throw new Error("could not create the run");
 const running = new Set();
 
 // One felix-mcp process, spoken to over stdio like an MCP host would.
-async function agent(name) {
+async function agent(name, extraEnv = {}) {
   const child = spawn(MCP, [], {
-    env: { ...process.env, AGENTS_RUN: RUN, AGENTS_AGENT: name, AGENTS_FELIX_TOKEN: token },
+    env: { ...process.env, AGENTS_RUN: RUN, AGENTS_AGENT: name, AGENTS_FELIX_TOKEN: token, ...extraEnv },
     stdio: ["pipe", "pipe", "inherit"],
   });
   running.add(child);
@@ -155,6 +155,26 @@ try {
   check(Date.now() - started < 30_000, "without waiting for the claim to lapse");
   await second.tool("task_complete", { task: "slow", result: "finished" });
   second.kill();
+
+  // A claim that lapses while its worker still holds the task. Felix answers the
+  // worker's extension with stale_claim, which felix-mcp must read as a lost claim.
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const slowpoke = await agent("w7", { AGENTS_CLAIM_VISIBILITY_MS: "2000", AGENTS_EXTEND_EVERY_MS: "6000" });
+  await planner.tool("task_post", { title: "lapse", body: "lapses", id: "lapse" });
+  const lapsing = await slowpoke.tool("task_claim", { wait_seconds: 5 });
+  check(lapsing.claimed && lapsing.attempt === 1, "w7 claimed a task with a 2 second visibility");
+  await sleep(3000);
+  const taker = await agent("w8");
+  const taken = await taker.tool("task_claim", { wait_seconds: 5 });
+  check(taken.claimed && taken.task.id === "lapse" && taken.attempt === 2, "w8 was handed the lapsed task");
+  await sleep(7000);
+  const late = await slowpoke.tool("task_complete", { task: "lapse", result: "late but first" });
+  check(
+    late.status === "done" && /lapsed/.test(late.warning ?? ""),
+    "w7 was told its claim lapsed, and its result still landed first",
+  );
+  const lateCopy = await taker.tool("task_complete", { task: "lapse", result: "second" });
+  check(lateCopy.status === "duplicate", "w8's later result was a duplicate");
   planner.kill();
 } finally {
   for (const child of running) child.kill();
