@@ -63,3 +63,16 @@ fn an_old_question_and_answer_fold_as_they_always_did() {
     assert_eq!(end.rejections.len(), 1);
     assert_eq!(end.rejections[0].offset, 7);
 }
+
+
+#[test]
+fn an_old_log_has_no_rules_and_serializes_as_before() {
+    let end = agents_core::work_fold::fold(&log());
+    assert!(end.rules.is_empty());
+    for id in end.items.keys() {
+        assert!(end.rules_for(id).is_none());
+    }
+    // A state with no rules writes the same JSON a pre-rules build wrote.
+    let json = serde_json::to_value(&end).unwrap();
+    assert!(json.get("rules").is_none());
+}

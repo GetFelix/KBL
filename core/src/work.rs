@@ -47,6 +47,18 @@ pub fn item_key(item: &ItemId) -> Result<Key, InvalidName> {
     Key::new(format!("i-{item}"))
 }
 
+/// Longest rules text, in bytes. Rules are always inline.
+pub const MAX_RULES_TEXT: usize = 8 * 1024;
+
+/// Most checks one rules record may list.
+pub const MAX_RULE_CHECKS: usize = 20;
+
+/// Longest single check, in bytes.
+pub const MAX_CHECK_BYTES: usize = 500;
+
+/// Most distinct scopes (a repo, or a root in a repo) that may have rules.
+pub const MAX_RULE_SCOPES: usize = 500;
+
 /// The cache key of the edge "`from` waits on `to`".
 pub fn edge_key(from: &ItemId, to: &ItemId) -> Result<Key, InvalidName> {
     Key::new(format!("e-{from}-{to}"))
@@ -535,6 +547,21 @@ pub enum WorkRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<u16>,
     },
+    /// Sets the standing rules for a repo, or for one root in it. The latest
+    /// record for a scope replaces the earlier one; `text` and `checks` are
+    /// separate keys, and a root's key overrides the repo's. Only a person may.
+    RulesSet {
+        target: Target,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        root: Option<ItemId>,
+        /// What the agent must follow, inline and at most [`MAX_RULES_TEXT`] bytes.
+        /// Empty text with no checks clears the scope.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        /// Commands to run before pushing. The agent runs them; the tracker never does.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checks: Option<Vec<String>>,
+    },
     /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -583,6 +610,7 @@ impl WorkRecord {
             WorkRecord::BudgetSet { .. } => "budget_set",
             WorkRecord::PrStatus { .. } => "pr_status",
             WorkRecord::SourceStalled { .. } => "source_stalled",
+            WorkRecord::RulesSet { .. } => "rules_set",
             WorkRecord::Refused { .. } => "refused",
             WorkRecord::Unknown => "unknown",
         }

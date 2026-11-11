@@ -1315,3 +1315,129 @@ async fn ingest_cannot_close_as_merged_without_a_merged_status() {
     );
     assert_eq!(fake.log().len(), 1);
 }
+
+async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
+    t.person_record(
+        key("gab"),
+        WorkRecord::Imported {
+            item: item(id),
+            source: "github".into(),
+            upstream_id: format!("GetFelix/felix#{id}"),
+            title: format!("fix {id}"),
+        },
+    )
+    .await
+    .unwrap();
+    t.person_record(
+        key("gab"),
+        WorkRecord::Accepted {
+            item: item(id),
+            tier: Some(2),
+        },
+    )
+    .await
+    .unwrap();
+}
+
+fn felix_rules(root: Option<&str>, text: Option<&str>, checks: Option<&[&str]>) -> WorkRecord {
+    WorkRecord::RulesSet {
+        target: agents_core::work::Target {
+            source: "github".into(),
+            repo: "GetFelix/felix".into(),
+        },
+        root: root.map(item),
+        text: text.map(str::to_owned),
+        checks: checks.map(|c| c.iter().map(|s| s.to_string()).collect()),
+    }
+}
+
+#[tokio::test]
+async fn a_claim_carries_the_latest_rules_and_the_root_overrides_the_repo() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed_in_felix(&t, "a1").await;
+    let first = t
+        .person_record(key("gab"), felix_rules(None, Some("old"), None))
+        .await
+        .unwrap();
+    let v = t
+        .person_record(
+            key("gab"),
+            felix_rules(None, Some("one worktree"), Some(&["task lint"])),
+        )
+        .await
+        .unwrap();
+    assert_ne!(first["offset"], v["offset"]);
+
+    let reply = claim(&t, "w1").await;
+    assert_eq!(reply["rules"]["text"], "one worktree");
+    assert_eq!(reply["rules"]["checks"], json!(["task lint"]));
+    assert_eq!(reply["rules"]["version"], v["offset"]);
+
+    // The root keeps the repo's text and replaces its checks; a resumed claim shows it.
+    let r = t
+        .person_record(
+            key("gab"),
+            felix_rules(Some("a1"), None, Some(&["cargo test"])),
+        )
+        .await
+        .unwrap();
+    let again = claim(&t, "w1").await;
+    assert_eq!(again["resumed"], true);
+    assert_eq!(again["rules"]["text"], "one worktree");
+    assert_eq!(again["rules"]["checks"], json!(["cargo test"]));
+    assert_eq!(again["rules"]["version"], r["offset"]);
+    assert_eq!(again["rules"]["repo_version"], v["offset"]);
+}
+
+#[tokio::test]
+async fn an_agent_and_ingest_cannot_write_rules() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed_in_felix(&t, "a1").await;
+    let err = t
+        .ingest_record(key("ingest-gh"), felix_rules(None, Some("x"), None))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Refused { why } if why == "not_allowed"));
+    assert!(claim(&t, "w1").await["rules"].is_null());
+    assert!(!fake.kinds().contains(&"rules_set".to_owned()));
+}
+
+#[tokio::test]
+async fn rules_over_the_size_bounds_are_refused() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed_in_felix(&t, "a1").await;
+    let big = "x".repeat(agents_core::work::MAX_RULES_TEXT + 1);
+    let err = t
+        .person_record(key("gab"), felix_rules(None, Some(&big), None))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)));
+    let many = vec!["c"; agents_core::work::MAX_RULE_CHECKS + 1];
+    let err = t
+        .person_record(key("gab"), felix_rules(None, None, Some(&many)))
+        .await
+        .unwrap_err();
+    assert!(!matches!(err, Error::Felix(_)));
+    assert!(!fake.kinds().contains(&"rules_set".to_owned()));
+}
+
+#[tokio::test]
+async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed_in_felix(&t, "a1").await;
+    t.person_record(
+        key("gab"),
+        felix_rules(None, Some("one worktree"), Some(&["task lint"])),
+    )
+    .await
+    .unwrap();
+    let err = t.rules_read(&agent("w2"), &item("a1")).await.unwrap_err();
+    assert!(matches!(err, Error::NotHeld(_)));
+    let claimed = claim(&t, "w1").await;
+    let read = t.rules_read(&agent("w1"), &item("a1")).await.unwrap();
+    assert_eq!(read["rules"], claimed["rules"]);
+}

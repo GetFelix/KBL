@@ -25,7 +25,8 @@ fn lists_the_run_info_tool_with_a_description() {
             "work_next",
             "work_post",
             "work_progress",
-            "work_release"
+            "work_release",
+            "work_rules"
         ]
     );
     assert!(tools.iter().all(|tool| tool.description.is_some()));

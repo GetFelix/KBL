@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_PR_REF,
-    MAX_TITLE, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, TIERS,
-    Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    Actor, CloseWhy, DoneWhen, Evidence, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
+    MAX_PR_REF, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_TITLE, NewPrerequisite,
+    PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, TIERS, Target, Then, Unclear,
+    WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
 };
 
 #[cfg(test)]
@@ -67,6 +68,28 @@ impl Budget {
             redos_per_item: DEFAULT_REDOS,
         }
     }
+}
+
+/// The latest `rules_set` for one scope: a repo, or a root in it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RulesSet {
+    pub target: Target,
+    pub root: Option<ItemId>,
+    pub text: Option<String>,
+    pub checks: Option<Vec<String>>,
+    /// The offset of the record, which is the version.
+    pub version: u64,
+}
+
+/// The rules an item works under: the root's keys over the repo's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RulesInEffect {
+    pub text: Option<String>,
+    pub checks: Vec<String>,
+    /// The newest of the records that contribute.
+    pub version: u64,
+    pub repo_version: Option<u64>,
+    pub root_version: Option<u64>,
 }
 
 /// The board column an item sits in.
@@ -349,6 +372,9 @@ pub struct State {
     #[serde(default)]
     pub release_edges: BTreeSet<(ItemId, ItemId)>,
     pub budgets: BTreeMap<ItemId, Budget>,
+    /// The latest rules record per scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<RulesSet>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
     /// `(source, repo)` to the HTTP status that stopped it being read.
@@ -412,6 +438,35 @@ impl State {
         self.upstream.iter().filter_map(|(up, item)| {
             let (source, id) = up.split_once('\n')?;
             Some((source, id, item))
+        })
+    }
+
+    /// The rules in effect for `id`: its repo's, with the root's own keys on top.
+    pub fn rules_for(&self, id: &ItemId) -> Option<RulesInEffect> {
+        let root = self.items.get(&self.items.get(id)?.root)?;
+        let repo = root.target.as_ref().and_then(|t| {
+            self.rules
+                .iter()
+                .find(|r| r.root.is_none() && &r.target == t)
+        });
+        let own = self
+            .rules
+            .iter()
+            .find(|r| r.root.as_ref() == Some(&root.id));
+        let layers = [own, repo];
+        let text = layers.iter().flatten().find_map(|r| r.text.clone());
+        let checks = layers
+            .iter()
+            .flatten()
+            .find_map(|r| r.checks.clone())
+            .unwrap_or_default();
+        let version = layers.iter().flatten().map(|r| r.version).max()?;
+        Some(RulesInEffect {
+            text,
+            checks,
+            version,
+            repo_version: repo.map(|r| r.version),
+            root_version: own.map(|r| r.version),
         })
     }
 
@@ -1277,6 +1332,64 @@ impl State {
                     redos_per_item: *redos_per_item,
                 };
                 self.item_mut(root)?.over_budget = false;
+            }
+            WorkRecord::RulesSet {
+                target,
+                root,
+                text,
+                checks,
+            } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if (text.is_none() && checks.is_none())
+                    || target.source.is_empty()
+                    || target.repo.is_empty()
+                {
+                    return Err(Reject::MissingField);
+                }
+                if text.as_ref().is_some_and(|t| t.len() > MAX_RULES_TEXT) {
+                    return Err(Reject::LimitReached);
+                }
+                if let Some(c) = checks
+                    && (c.len() > MAX_RULE_CHECKS
+                        || c.iter().any(|x| x.is_empty() || x.len() > MAX_CHECK_BYTES))
+                {
+                    return Err(Reject::LimitReached);
+                }
+                if let Some(r) = root {
+                    let it = self.item(r)?;
+                    if it.parent.is_some() {
+                        return Err(Reject::NotARoot);
+                    }
+                    if it.target.as_ref().is_some_and(|t| t != target) {
+                        return Err(Reject::MissingField);
+                    }
+                }
+                let set = RulesSet {
+                    target: target.clone(),
+                    root: root.clone(),
+                    text: text.clone(),
+                    checks: checks.clone(),
+                    version: offset,
+                };
+                let same = |r: &RulesSet| {
+                    r.root == set.root && (set.root.is_some() || r.target == set.target)
+                };
+                // Empty text and no checks clears the scope and frees its slot.
+                let clears = set.text.as_deref() == Some("")
+                    && set.checks.as_ref().is_none_or(Vec::is_empty);
+                match self.rules.iter().position(same) {
+                    Some(i) if clears => {
+                        self.rules.remove(i);
+                    }
+                    Some(i) => self.rules[i] = set,
+                    None if clears => {}
+                    None if self.rules.len() >= MAX_RULE_SCOPES => {
+                        return Err(Reject::LimitReached);
+                    }
+                    None => self.rules.push(set),
+                }
             }
             WorkRecord::TierChanged { item, tier } => {
                 if rec.actor != Actor::Person {

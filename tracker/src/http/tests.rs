@@ -371,3 +371,23 @@ async fn an_agent_token_cannot_move_work_to_another_repo() {
     let (status, _) = call(&app, "/v1/work/answer", Some("tok-w1"), body).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+
+#[tokio::test]
+async fn only_a_person_token_sets_rules() {
+    let app = app().await;
+    let body = json!({ "source": "github", "repo": "GetFelix/felix", "text": "one worktree", "checks": ["task lint"] });
+    for token in ["tok-w1", "tok-ing"] {
+        assert_eq!(
+            call(&app, "/v1/work/rules", Some(token), body.clone())
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let (status, reply) = call(&app, "/v1/work/rules", Some("tok-gab"), body).await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("rules_set"))
+    );
+}

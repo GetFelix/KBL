@@ -188,6 +188,24 @@ fn every_record() -> Vec<WorkRecord> {
             cost_left_micros: 30_000_000,
             redos_per_item: 3,
         },
+        WorkRecord::RulesSet {
+            target: Target {
+                source: "github".into(),
+                repo: "GetFelix/felix".into(),
+            },
+            root: None,
+            text: Some("one worktree per lane".into()),
+            checks: Some(vec!["task lint".into()]),
+        },
+        WorkRecord::RulesSet {
+            target: Target {
+                source: "github".into(),
+                repo: "GetFelix/felix".into(),
+            },
+            root: Some(item("r1")),
+            text: None,
+            checks: Some(vec![]),
+        },
         WorkRecord::PrStatus {
             item: item("r1"),
             status: PrSnapshot {
@@ -314,7 +332,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 31);
+    assert_eq!(kinds.len(), 32);
 }
 
 #[test]
