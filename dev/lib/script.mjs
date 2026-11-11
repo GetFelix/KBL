@@ -45,7 +45,10 @@ export function action(fate, attempt) {
 }
 
 // How each task ends, given the worker's attempt limit.
-export function expected(tasks, attemptsAllowed = 2) {
+// Deliveries of a task a worker takes on; felix-mcp's MAX_ATTEMPTS.
+export const ATTEMPTS_ALLOWED = 2;
+
+export function expected(tasks, attemptsAllowed = ATTEMPTS_ALLOWED) {
   const ends = {};
   for (const { id, fate } of tasks) {
     if (fate === "hopeless") ends[id] = { status: "dead", attempt: 1, reason: "given up" };
@@ -59,7 +62,10 @@ export function expected(tasks, attemptsAllowed = 2) {
 export function outcomes(records) {
   const ends = {};
   for (const r of records) {
-    if (r.kind === "task_done") ends[r.task] = { status: "done", attempt: r.attempt };
+    if (r.kind === "task_done") {
+      if (ends[r.task]?.status === "done") throw new Error(`task ${r.task} has more than one task_done`);
+      ends[r.task] = { status: "done", attempt: r.attempt };
+    }
     else if (r.kind === "task_dead") {
       ends[r.task] = { status: "dead", attempt: r.attempt, reason: r.reason };
     }

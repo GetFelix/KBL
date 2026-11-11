@@ -10,12 +10,18 @@ export async function scriptedPlanner(planner, tasks) {
   for (const { id, title, body } of tasks) await planner.tool("task_post", { id, title, body });
 }
 
-// Takes tasks until the group has none to give, doing with each what its fate says.
-export async function scriptedWorker(worker, tasks, seed) {
+// Takes tasks, doing with each what its fate says, until the log shows every
+// task settled. An empty claim is not the end: a handed-back or lapsed task
+// can take longer than one wait to come round again.
+export async function scriptedWorker(worker, tasks, seed, run) {
   const fates = new Map(tasks.map((t) => [t.id, t.fate]));
   for (;;) {
     const claim = await worker.tool("task_claim", { wait_seconds: 3 });
-    if (!claim.claimed) return;
+    if (!claim.claimed) {
+      const ends = outcomes(runLog(run));
+      if (tasks.every((t) => ends[t.id])) return;
+      continue;
+    }
     const id = claim.task.id;
     switch (action(fates.get(id), claim.attempt)) {
       case "complete":
@@ -37,7 +43,7 @@ export async function scriptedRun({ seed, workers, run = newRunId(`scripted-${se
   const planner = await agent(token, run, "planner");
   const crew = await Promise.all(Array.from({ length: workers }, (_, n) => agent(token, run, `w${n + 1}`)));
   await scriptedPlanner(planner, tasks);
-  await Promise.all(crew.map((w) => scriptedWorker(w, tasks, seed)));
+  await Promise.all(crew.map((w) => scriptedWorker(w, tasks, seed, run)));
   return { tasks, run, ends: outcomes(runLog(run)) };
 }
 

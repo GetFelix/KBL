@@ -206,6 +206,10 @@ impl Broker {
                 return Ok(payloads);
             }
             payloads.extend(page.records.into_iter().map(|r| r.payload.to_vec()));
+            anyhow::ensure!(
+                page.next_offset > from,
+                "reading {stream} did not advance past offset {from}"
+            );
             from = page.next_offset;
         }
     }

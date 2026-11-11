@@ -45,3 +45,11 @@ test("the promised ends match what the log would show", () => {
   log[3].attempt = 2;
   assert.ok(!sameEnds(outcomes(log), expected(tasks)));
 });
+
+test("two task_done records for one task are an error", () => {
+  const twice = [
+    { kind: "task_done", task: "a", attempt: 1 },
+    { kind: "task_done", task: "a", attempt: 2 },
+  ];
+  assert.throws(() => outcomes(twice), /more than one task_done/);
+});
