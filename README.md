@@ -224,6 +224,25 @@ cargo build -p felix-mcp -p agents-tool
 node dev/check-tasks.mjs
 ```
 
+### Scripted agents
+
+A scripted planner and workers make the same tool calls a model would, so a run needs no model key. A seed decides the
+tasks and what happens to each: most are finished, some are handed back once and then finished, some are handed back
+every time and dead-lettered, and some are given up at once. Which worker takes a task does not change its fate, so a seed
+always ends every task the same way.
+
+```bash
+cargo build -p felix-mcp -p agents-tool
+node dev/scripted.mjs --seed 2 --workers 3   # runs a job and checks each task ended as the seed says
+node dev/check-scripted.mjs                  # runs one seed twice with different crews and compares
+node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
+node dev/check-death.mjs                     # kills workers holding tasks, restarts one, and finishes a task twice
+node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
+agents-tool run log <run>                    # prints a run's log, one JSON record per line
+```
+
+The death check kills a worker and lets a stalled claim lapse with a 2 second claim visibility so it finishes quickly, and restarts a worker under the default 90 seconds to show it does not wait for the claim to lapse.
+
 To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mcp add`):
 
 ```json
@@ -272,7 +291,7 @@ python3 prototype/make-intake-fixture.py
 # Play both fixtures in headless Chrome
 node scripts/check-frame.mjs
 
-# Fold the intake fixtures into columns, draw a dependency chain, check the burst stays capped
+# Fold the dashboard fixtures: My queue, the board, the review limit, metrics, actions, the burst
 node scripts/check-intake.mjs
 
 # Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
@@ -285,7 +304,7 @@ node scripts/check-steps.mjs
 cargo test --workspace
 
 # Serve the repository, then open http://localhost:8000/prototype/style-frame.html
-# or http://localhost:8000/prototype/intake-frame.html (?fixture=fixture-work-burst.json, ?select=gh-801, ?theme=light)
+# or http://localhost:8000/prototype/intake-frame.html (?view=queue|board|metrics, ?fixture=fixture-work-capped.json or fixture-work-burst.json, ?select=gh-801, ?theme=light)
 python3 -m http.server 8000
 ```
 

@@ -70,48 +70,140 @@ It reuses the pieces the swarm already has. No database.
 A fixing agent's work is a run, so the existing replay shows why it did what
 it did. The tracker links each item to its runs.
 
-## The intake view
+## The dashboard
 
-The swarm view shows one run. The intake view shows everything before and
-around runs: what arrived, what is waiting and why, who holds what, and where
-work is piling up. It is the page someone opens first in the morning.
+The swarm view shows one run. The dashboard shows everything before and around
+runs: what waits on you, where work is piling up, and what the team delivered.
+It is the page someone opens first in the morning. It has three tabs.
 
-```text
-+---------+-----------+-----------+-------------+-----------+--------+------+
-| Sources | Arrived   | Needs you | Blocked     | Ready     | Held   | Done |
-|         | (12)      | (3)       | (7)         | p0 2      | (5)    | (41) |
-| GH  +9  | #812 2m   | #790 asks | #801 <- 798 | p1 6      | #798 w2| 24h  |
-| ADO +3  | #811 5m   |   repro?  | #799 <- 798 | p2 11     | #805 w5|      |
-|         | AB#4410   | #774 2x   |             | p3 4      | ...    |      |
-|         |           |   failed  |             |           |        |      |
-+---------+-----------+-----------+-------------+-----------+--------+------+
-| in 14/day   out 11/day   oldest ready 3d (#702)   timeline ...  live    |
-+--------------------------------------------------------------------------+
-```
+### My queue
 
-- **Columns are stages.** Arrived (not yet triaged), Needs you, Blocked, Ready
-  by tier, Held by an agent, Done. An item sits in exactly one, and moves
-  right as `work.events` records it. Each column shows its count and the age
-  of its oldest item, since a stall shows as age long before it shows as a
-  count.
-- **Needs you is its own column.** Items where triage asked a question, an
-  agent gave up, or attempts ran out. This is the human queue, and the
-  reason to open the page.
-- **Blocked shows what it waits on.** Selecting an item draws its dependency
-  chain across the columns, so a whole branch stuck behind one held item is
-  visible at once.
-- **Sources show arrival.** Per upstream tracker, items in the last hour and
-  day. The footer compares arrival and completion rates: a queue that grows
-  every day needs more agents or fewer bugs, and the view should say which.
-- **Held links to the run.** A held item names its agent, and opening it
-  opens that run in the swarm view at the moment it claimed the item.
-- **It scrubs like a run.** The view is a fold of `work.events`, so the same
-  timeline shows the queue as it was on any day.
+The landing view. It lists everything that waits on the person looking:
+
+- a question triage asked,
+- a failure that needs a decision,
+- a triage proposal to accept,
+- a PR to review, or an approved one to merge.
+
+Items are ordered by how long they have waited, oldest first, with tier as the
+tie-break. The count is in the tab title, so it shows without opening the page.
+Snoozed and parked items drop out of the count.
+
+Every card is keyboard first. `j` and `k` move, `enter` opens, and one letter
+acts. A legend shows the keys.
+
+| Key | On a card | Records |
+|---|---|---|
+| `a` | Accept a proposal, approve a PR, answer a question | `triaged` and `linked`, `approved`, `answered` |
+| `p` | Change the tier (on a proposal: edit it before accepting) | `tier_changed` |
+| `d` | Reject or close | `rejected` |
+| `g` | Merge a duplicate into the item it duplicates | `rejected` with the original |
+| `r` | Retry a failure (with the note, if one is typed), or stop a held item | `retried`, `released` |
+| `x` | Reassign to another agent | `reassigned` |
+| `t` | Take it yourself, so no agent claims it | `taken` |
+| `n` | Write a note: for the next attempt, or steering a running agent | `steered` |
+| `s` / `z` | Snooze for four hours / park | `snoozed`, `parked` |
+| `u` | Unblock: mark a dependency resolved | `unblocked` |
+| `v` / `c` | Request a reviewer / send a PR back with changes | `review_requested`, `changes_requested` |
+| `m` | Record a merge done upstream | `done` |
+| `o` | Open the diff or PR | nothing |
+| `+` / `-` | Mark the agent's summary accurate or inaccurate | `summary_rated` |
+
+In the style frame these actions are local. Each one appends a `work.events`
+record to a list on the page and the view folds again, so the board is still
+a fold of the log and the list shows exactly what would be written. Live, the
+same actions go through the tracker's REST API and MCP tools.
+
+### Board
+
+The stages, left to right. An item sits in exactly one and moves right as
+`work.events` records it.
+
+- **Triage** holds items nobody has accepted yet. The triage agent attaches a
+  proposal: a tier with one line of why, dependencies, and a possible
+  duplicate, including one from another tracker. You accept, edit or reject
+  it. An item the agent has not read yet says so.
+- **Needs you** groups failures by cause (tests red, timeout, claim lost, gave
+  up) under the agent's last message, next to questions.
+- **Blocked** leads with the root blockers: the unfinished items that hold the
+  rest, each with "holds up N". Selecting any item draws its dependency chain
+  across the columns.
+- **Ready** is grouped by tier.
+- **Held** names the agent and links to its run. You can stop it, send it a
+  note, reassign it or take the item.
+- **In review** is an agent PR waiting on a person. A card shows the PR, its
+  size (lines and files), CI state, review rounds, who it waits on and for how
+  long. Two states have their own wording and action: "CI green, no reviewer"
+  (request a review) and "approved, not merged" (open it to merge). The tracker
+  never merges. It records the merge it sees. A PR also carries the agent's
+  handoff: what it changed, what it checked, what it is unsure of. The
+  reviewer can mark the summary accurate or not.
+- **Done** is the last day's merges.
+
+Each column shows its count, its oldest item, and the team's own p50 and p85
+for that stage. An age turns amber past the p50 and red past the p85 of
+finished visits to that stage. Until a stage has five of them, a fixed
+fallback is used and the column says it has no history.
+
+Where the items come from is a chip in the header: arrivals in the last day,
+and per source on click.
+
+### The review limit
+
+Agents open PRs faster than people review them, and a claim that only adds to
+the review pile makes every PR wait longer. So the tracker has a limit on
+agent PRs in In review. At the limit agents stop claiming, and the header says
+so: "review full: agents paused, 6/6". Triage, answers and reviews carry on, and
+the Ready column explains why nothing is moving.
+
+The limit is a setting. There is no evidence behind any default: the
+research found nothing that says how many open PRs a reviewer can handle. Pick
+a number, watch the review column, and change it.
+
+### The footer names the constraint
+
+One sentence names the stage that is slowest to move and why, for example
+"review: 6 PRs waiting, oldest 31h". It picks the stage whose oldest item is
+furthest past its own p85, and it never blames agents in general. Idle agents
+with work ready is reported as a claim path problem, since that is a defect
+and not a lack of capacity. The in and out rates sit beside it.
+
+### Metrics
+
+The third tab is for the team and the flow. It has no per-person number, and
+none will be added: ranked individuals turn a measure into a target. Bot
+approvals are never counted as review.
+
+- Time in each stage, p50 and p85.
+- Time waiting on a human, per merged fix.
+- Time to the first human action on My queue and on In review.
+- Throughput against arrivals, and a cumulative flow chart. A band that widens
+  is the constraint.
+- Blocked time and the items that hold the most up.
+- Rework: fixes that needed a second attempt or a second review round,
+  reverts within 14 days, and merges after human edits.
+- Merged against rejected, by task class.
+- Cost per merged fix, with failed attempts counted against it, and human
+  minutes per merged fix. Minutes are an estimate.
+
+These come from `work.events` alone. Cost and minutes arrive as `cost` and
+`human` records. The numbers are published as they are, not picked.
+
+[dashboard-research.md](dashboard-research.md) says why each part is there and
+how much evidence stands behind it.
 
 The look is fixed the same way as the swarm view's: `prototype/intake-frame.html`
-folds a hand-written `work.events` fixture (three trackers, a blocked chain,
-items waiting on a person, held items, all four tiers) and a generated burst of
-320 items into these columns. `node scripts/check-intake.mjs` checks both.
+folds a hand-written `work.events` fixture (three trackers, a blocked chain, items
+waiting on a person, held items, PRs in review, two weeks of finished work), a
+copy with the review limit reached, and a generated burst of 320 items.
+`node scripts/check-intake.mjs` checks them, including that My queue matches
+what waits on the viewer and that actions append records.
+
+![My queue](screenshots/dashboard-queue.png)
+
+![Board](screenshots/dashboard-board.png)
+
+![Metrics](screenshots/dashboard-metrics.png)
 
 ## Where Felix stops
 
@@ -139,7 +231,7 @@ items waiting on a person, held items, all four tiers) and a generated burst of
 
 M2 and M3 in the [build order](design.md#build-order): GitHub ingest,
 `work_next` and the ready tiers, then triage and dependencies, then Claude Code
-working `agent-ok` issues. The intake view goes live in M4. ADO ingest comes
+working `agent-ok` issues. The dashboard goes live in M4. ADO ingest comes
 after GitHub.
 
 The first source is GetFelix/felix. Only issues labelled `agent-ok` are

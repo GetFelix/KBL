@@ -547,11 +547,11 @@ scripted demo.
 
 | M | Milestone | Proves |
 |---|---|---|
-| 0 | The viewer, locked: style frames of the swarm view, the timeline and the intake view, drawn from hand-written fixtures | They read well before Felix is involved |
+| 0 | The viewer, locked: style frames of the swarm view, the timeline and the dashboard, drawn from hand-written fixtures | They read well before Felix is involved |
 | 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
 | 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage | Real issues become claimable work, once each |
 | 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
-| 4 | The intake view, live, and a results page: arrival and completion, time to a pull request, cost per fix | Anyone can see the queue and what it delivered |
+| 4 | The dashboard, live (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
 | 5 | Shared state: the board, leases, presence and messages | Demonstration 3 |
 | 6 | Real models and budgets: `agents-run` with a model API, artifacts, spend and rate limits | Demonstration 5 |
 | 7 | Replay a run: the fold, the viewer on felix-gateway, scrub and follow | Demonstrations 4 and 8 |
