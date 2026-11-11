@@ -205,6 +205,8 @@ try {
   const second3 = await refusal(() => personCall("tok-gab", "/v1/work/questions/answer", { item: "root3", chosen: "read" }));
   check(second3 !== null, "a second answer to the same question is refused");
   check(recordsOf("root3").filter((r) => r.kind === "answer").length === 1, "the choice appended one answer");
+  // The answer ended w3's hold; its own call finds that out and drops its local claim.
+  check((await refusal(() => w3.tool("work_complete", { item: "root3" }))) !== null, "the answer ended w3's hold on root3");
   const r3 = await resumeAfter(w2, "root3");
   check(entry(r3.read, "answer").text.text === "write", "the resume item reads the chosen option");
   await w2.tool("work_complete", { item: r3.id });
