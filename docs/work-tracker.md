@@ -166,7 +166,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing |
 | `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree |
 | `POST /v1/work/context` `{item}` | Reads an item's context entries and the notes people left for the attempt |
-| `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or whose augment, triage or question child it holds |
+| `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds |
 | `POST /v1/work/progress` `{item, note, branch, pr}` | Records progress on the held item |
 | `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` |
 | `POST /v1/work/step` `{item, command, exit_code, output}` | A command the agent ran |
@@ -244,8 +244,8 @@ call.
 ### Limits per attempt
 
 The fold caps what one attempt may write: 200 decisions, 500 steps, 500
-edits, 100 progress records, 100 context entries, and 24 children and
-proposals together. A call over a cap is refused, and the first refusal in an
+edits, 100 progress records, 100 context entries, 20 questions, 10
+answers, 100 links, and 24 children and proposals together. A call over a cap is refused, and the first refusal in an
 attempt is logged as refused, so a looping agent cannot fill the stream with
 records or with refusals. Each field is also limited in size: text over 4 KiB
 must be an artifact, and a title, command or reason is at most 4 KiB.
@@ -386,7 +386,8 @@ slipping by.
 - **Creation is idempotent.** The child's key is the parent plus an
   agent-supplied key, written with `cache_put_if` absent, so a retry never
   duplicates.
-- **Proposals are rate-limited** per agent and per run.
+- **Proposals are capped per attempt.** They share the 24-post limit with
+  children.
 - **Attempts.** A claim that ends in a release, a lapse or a give-up may be
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most
