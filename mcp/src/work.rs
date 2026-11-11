@@ -212,6 +212,11 @@ impl<T: TrackerApi> Work<T> {
         .await
     }
 
+    /// A post that ends the claim, such as a prerequisite.
+    pub(crate) async fn finish_post(&self, item: &str, body: Value) -> Result<String, String> {
+        self.finish("/v1/work/post", body, item).await
+    }
+
     /// Calls the tracker, then stops extending the claim if the item is settled
     /// or gone. A refusal or an outage leaves the claim held, so the agent can try again.
     async fn finish(&self, path: &str, body: Value, item: &str) -> Result<String, String> {

@@ -144,6 +144,36 @@ pub enum CloseWhy {
     Upstream,
 }
 
+/// Where an item's work lands: a source and a repository in it, such as
+/// `github` and `GetFelix/felix-gateway`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Target {
+    pub source: String,
+    pub repo: String,
+}
+
+/// What a dependent waits for before an edge stops holding it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DoneWhen {
+    /// The prerequisite is merged (or closed as completed).
+    #[default]
+    Merged,
+    /// It is merged and a `shipped` record says which release carries it.
+    Released,
+}
+
+/// The proposal a prerequisite creates in another repo's Triage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewPrerequisite {
+    pub target: Target,
+    pub title: String,
+    /// Why the held item cannot go on without it.
+    pub why: Content,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<Evidence>,
+}
+
 /// Why the tracker refused an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -184,6 +214,27 @@ pub enum WorkRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duplicate_of: Option<ItemId>,
     },
+    /// The holder cannot go on until `prerequisite` is done. With `new`, the
+    /// record also creates that prerequisite as a proposal in the target
+    /// repo's Triage; without it, `prerequisite` is an existing item. Either
+    /// way `item` then waits on it and the claim ends without costing a try.
+    Prerequisite {
+        item: ItemId,
+        attempt: u32,
+        prerequisite: ItemId,
+        /// Makes a retry a no-op, like a proposal's key.
+        key: Key,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new: Option<NewPrerequisite>,
+        #[serde(default)]
+        done_when: DoneWhen,
+        /// What the attempt cost so far, charged like a release.
+        #[serde(default)]
+        cost_micros: u64,
+    },
+    /// A person or upstream sync says a release carries a finished item, which
+    /// frees dependents whose edge waits for a release.
+    Shipped { item: ItemId, release: String },
     /// A person (or the tracker for them) accepts the item into the queue.
     Accepted {
         item: ItemId,
@@ -360,6 +411,8 @@ impl WorkRecord {
             WorkRecord::Proposed { .. } => "proposed",
             WorkRecord::Triaged { .. } => "triaged",
             WorkRecord::Accepted { .. } => "accepted",
+            WorkRecord::Prerequisite { .. } => "prerequisite",
+            WorkRecord::Shipped { .. } => "shipped",
             WorkRecord::Linked { .. } => "linked",
             WorkRecord::Unlinked { .. } => "unlinked",
             WorkRecord::Context { .. } => "context",

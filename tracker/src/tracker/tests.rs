@@ -404,6 +404,7 @@ pub(super) async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
 
 pub(super) fn settings() -> Settings {
     Settings {
+        grants: Default::default(),
         visibility: VIS,
         lease_ttl: Duration::from_secs(15),
         lease_wait: Duration::ZERO,
@@ -424,8 +425,12 @@ async fn pass(t: &Tracker<Fake>, total: Duration) {
 
 /// A tracker on a new connection. Any earlier tracker's lease has run out by now.
 pub(super) async fn start(fake: &Fake) -> Tracker<Fake> {
+    start_with(fake, settings()).await
+}
+
+pub(super) async fn start_with(fake: &Fake, settings: Settings) -> Tracker<Fake> {
     fake.expire_lease();
-    Tracker::start(fake.reconnect(), settings()).await.unwrap()
+    Tracker::start(fake.reconnect(), settings).await.unwrap()
 }
 
 pub(super) async fn claim(t: &Tracker<Fake>, who: &str) -> Value {

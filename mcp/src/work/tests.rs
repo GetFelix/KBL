@@ -139,3 +139,20 @@ async fn tools_default_to_the_held_item_and_pass_the_tracker_reason_through() {
     assert_eq!(fake.calls("/v1/work/extend"), 1);
     assert_eq!(w.held_item().await.as_deref(), Some("a1"));
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_prerequisite_ends_the_claim_and_a_refused_one_keeps_it() {
+    let fake = Fake::default();
+    let w = work(&fake);
+    w.next(None).await.unwrap();
+    fake.0.lock().unwrap().complete = Some("refused");
+    assert!(w.finish_post("a1", json!({})).await.is_err());
+    assert_eq!(w.held_item().await.as_deref(), Some("a1"));
+    fake.0.lock().unwrap().complete = None;
+    w.finish_post("a1", json!({})).await.unwrap();
+    assert_eq!(w.held_item().await, None);
+    // The extender stopped with the claim.
+    let seen = fake.calls("/v1/work/extend");
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(fake.calls("/v1/work/extend"), seen);
+}

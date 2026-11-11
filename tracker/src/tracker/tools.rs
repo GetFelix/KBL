@@ -11,8 +11,11 @@
 use agents_core::artifact::{ArtifactId, INLINE_LIMIT};
 use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
-use agents_core::work::{Actor, Evidence, Phase, RefusalReason, WorkKind, WorkRecord};
+use agents_core::work::{
+    Actor, DoneWhen, Evidence, NewPrerequisite, Phase, RefusalReason, Target, WorkKind, WorkRecord,
+};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 
 use super::{Core, Error, Tracker, agent_key, holds};
 use crate::felix::Broker;
@@ -46,6 +49,19 @@ impl Post {
             }
         })
     }
+}
+
+/// The work another item has to wait for.
+pub(crate) enum Prereq {
+    /// A proposal to create in the target repo's Triage.
+    New {
+        target: Target,
+        title: String,
+        why: Content,
+        evidence: Vec<Evidence>,
+    },
+    /// An item that exists already, if the agent's grants can see it.
+    Existing(ItemId),
 }
 
 /// What a decision carries, as the agent wrote it.
@@ -107,6 +123,149 @@ impl<B: Broker> Tracker<B> {
         };
         self.sync_ready().await;
         Ok(reply)
+    }
+
+    /// The held item cannot go on until work in another tree is done. The
+    /// claim ends as blocked, which costs no try, and the item waits on the
+    /// prerequisite. This is the one cross-tree link an agent may make, and
+    /// only into a repo its grants name or the repo of its own tree.
+    pub(crate) async fn prerequisite(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        key: Key,
+        which: Prereq,
+        done_when: DoneWhen,
+        cost_micros: u64,
+    ) -> Result<Value, Error> {
+        let (prerequisite, new) = match which {
+            Prereq::New {
+                target,
+                title,
+                why,
+                evidence,
+            } => {
+                field("title", &title)?;
+                field("repo", &target.repo)?;
+                field("source", &target.source)?;
+                check_content("why", &why)?;
+                check_evidence(&evidence)?;
+                if title.is_empty() || target.repo.is_empty() || target.source.is_empty() {
+                    return Err(Error::Invalid(
+                        "a source, a repo and a title are needed".into(),
+                    ));
+                }
+                let id = item_for(None, Post::Proposal, agent, &key);
+                let new = NewPrerequisite {
+                    target,
+                    title,
+                    why,
+                    evidence,
+                };
+                (id, Some(new))
+            }
+            Prereq::Existing(id) => (id, None),
+        };
+        self.begin().await?;
+        {
+            let core = self.0.core.lock().await;
+            if let Some(n) = &new {
+                // A retry after the claim ended answers with what the first call made.
+                if let Some(old) = core.state.items.get(&prerequisite) {
+                    let same = old.proposed_by_agent
+                        && old.target.as_ref() == Some(&n.target)
+                        && core
+                            .state
+                            .edges
+                            .contains(&(item.clone(), prerequisite.clone()));
+                    if !same {
+                        return Err(Error::Refused {
+                            why: "key_reused".into(),
+                        });
+                    }
+                    return Ok(json!({
+                        "item": item, "status": "blocked",
+                        "prerequisite": prerequisite, "created": false
+                    }));
+                }
+            }
+            held(&core, agent, item)?;
+            let allowed = self.visible_repos(&core, agent, item);
+            let seen = match &new {
+                Some(n) => allowed.contains(n.target.repo.as_str()),
+                None => core.state.items.get(&prerequisite).is_some_and(|p| {
+                    let own = core.state.items.get(item).map(|i| &i.root) == Some(&p.root);
+                    let repo = core
+                        .state
+                        .items
+                        .get(&p.root)
+                        .and_then(|r| r.target.as_ref());
+                    own || repo.is_some_and(|t| allowed.contains(t.repo.as_str()))
+                }),
+            };
+            if !seen {
+                // The same answer for an item that is missing and one the agent may not see.
+                return Err(Error::Refused {
+                    why: if new.is_some() {
+                        "no_grant"
+                    } else {
+                        "unknown_item"
+                    }
+                    .into(),
+                });
+            }
+        }
+        let created = new.is_some();
+        let record = {
+            let prerequisite = prerequisite.clone();
+            let item = item.clone();
+            move |attempt| WorkRecord::Prerequisite {
+                item,
+                attempt,
+                prerequisite,
+                key,
+                new,
+                done_when,
+                cost_micros,
+            }
+        };
+        let reply = json!({
+            "item": item, "status": "blocked",
+            "prerequisite": prerequisite, "created": created
+        });
+        let result = self.finish(agent, item, record, reply).await;
+        if let Err(Error::Refused { why }) = &result {
+            let mut core = self.0.core.lock().await;
+            self.note_refusal(&mut core, agent, item, "prerequisite", why)
+                .await;
+        }
+        result
+    }
+
+    /// The repos `agent` may reach from `item`: its grants and its own tree's repo.
+    fn visible_repos<'a>(
+        &'a self,
+        core: &'a Core,
+        agent: &AgentName,
+        item: &ItemId,
+    ) -> BTreeSet<&'a str> {
+        let mut repos: BTreeSet<&str> = self
+            .0
+            .settings
+            .grants
+            .get(agent.as_str())
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+            .collect();
+        let own = core
+            .state
+            .items
+            .get(item)
+            .and_then(|i| core.state.items.get(&i.root))
+            .and_then(|r| r.target.as_ref());
+        repos.extend(own.map(|t| t.repo.as_str()));
+        repos
     }
 
     /// Adds the edge "`item` waits on `to`". Refused when it would close a cycle.
@@ -198,6 +357,24 @@ impl<B: Broker> Tracker<B> {
             .iter()
             .map(|o| json!({ "offset": o, "text": text(o) }))
             .collect();
+        // What the item waited on, so a resumed claim knows what landed and where.
+        let waited: Vec<Value> = core
+            .state
+            .edges
+            .iter()
+            .filter(|(a, _)| a == item)
+            .filter_map(|(_, b)| core.state.items.get(b))
+            .map(|p| {
+                json!({
+                    "item": p.id,
+                    "title": p.title,
+                    "repo": p.target.as_ref().map(|t| &t.repo),
+                    "stage": core.state.stage(&p.id),
+                    "pr": p.pr,
+                    "release": p.release,
+                })
+            })
+            .collect();
         Ok(json!({
             "item": item,
             "title": it.title,
@@ -206,6 +383,7 @@ impl<B: Broker> Tracker<B> {
             "context": entries,
             "notes": notes,
             "open_question": it.open_question,
+            "prerequisites": waited,
         }))
     }
 
@@ -423,10 +601,23 @@ impl<B: Broker> Tracker<B> {
         let result = self
             .append(core, Actor::Agent, agent_key(agent), record)
             .await;
-        let Err(Error::Refused { why }) = &result else {
-            return result;
-        };
-        match why.as_str() {
+        if let Err(Error::Refused { why }) = &result {
+            self.note_refusal(core, agent, item, op, why).await;
+        }
+        result
+    }
+
+    /// Logs the refusals the stream should show: a root out of budget, and the
+    /// first cap an attempt hits.
+    async fn note_refusal(
+        &self,
+        core: &mut Core,
+        agent: &AgentName,
+        item: &ItemId,
+        op: &str,
+        why: &str,
+    ) {
+        match why {
             "over_budget" | "too_deep" => self.log_over_budget(core, item).await,
             "limit_reached" => {
                 let held = core.state.held_by(agent.as_str());
@@ -450,7 +641,6 @@ impl<B: Broker> Tracker<B> {
             }
             _ => {}
         }
-        result
     }
 }
 
@@ -527,6 +717,13 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             field("title", title)?;
             if title.is_empty() {
                 return Err(Error::Invalid("a title is needed".into()));
+            }
+            Ok(())
+        }
+        WorkRecord::Shipped { release, .. } => {
+            field("release", release)?;
+            if release.is_empty() {
+                return Err(Error::Invalid("a release is needed".into()));
             }
             Ok(())
         }
