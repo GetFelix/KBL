@@ -35,6 +35,13 @@ pub struct ReadyRecord {
     pub stamp: u64,
 }
 
+/// The head branch an agent opens an item's pull request from. Upstream sync
+/// links a request to an item by this name (or a closing reference), so the
+/// claim reply hands it to the agent.
+pub fn pr_branch(item: &ItemId) -> String {
+    format!("kibble/{item}")
+}
+
 /// The cache key of an item's fields.
 pub fn item_key(item: &ItemId) -> Result<Key, InvalidName> {
     Key::new(format!("i-{item}"))

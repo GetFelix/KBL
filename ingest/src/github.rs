@@ -149,6 +149,34 @@ impl<T: Transport> Github<T> {
 }
 
 impl<T: Transport> Github<T> {
+    /// Every commit status on `sha`, paged. `incomplete` is set when fewer
+    /// came back than GitHub counts. `None` when the call failed.
+    async fn commit_statuses(&self, repo: &str, sha: &str) -> Result<Option<Value>, SourceError> {
+        let mut all: Vec<Value> = Vec::new();
+        let mut total = 0;
+        for page in 1..=MAX_PAGES {
+            let url = format!(
+                "{}/repos/{repo}/commits/{sha}/status?per_page=100&page={page}",
+                self.api
+            );
+            let res = self.call(Req::get(url)).await?;
+            if res.status != 200 {
+                return Ok(None);
+            }
+            total = res.body["total_count"].as_u64().unwrap_or(0);
+            let got = res.body["statuses"].as_array().cloned().unwrap_or_default();
+            let empty = got.is_empty();
+            all.extend(got);
+            if empty || all.len() as u64 >= total {
+                break;
+            }
+        }
+        Ok(Some(json!({
+            "statuses": all,
+            "incomplete": (all.len() as u64) < total,
+        })))
+    }
+
     /// The checks the base branch requires, when the credential may read its
     /// protection. `None` means unknown, and then every check counts.
     async fn required_checks(
@@ -313,8 +341,16 @@ impl<T: Transport> Source for Github<T> {
                 status: None,
             }));
         }
+        // A merge counts only into the repo's default branch and by someone
+        // other than us: agents never merge their own work.
+        let into_default = pull["base"]["repo"]["default_branch"]
+            .as_str()
+            .is_some_and(|d| pull["base"]["ref"].as_str() == Some(d));
+        let by_us = pull["merged_by"]["login"]
+            .as_str()
+            .is_some_and(|m| self.own.iter().any(|o| o.eq_ignore_ascii_case(m)));
         let phase = match (pull["state"].as_str(), pull["merged"].as_bool()) {
-            (_, Some(true)) => PrPhase::Merged,
+            (_, Some(true)) if into_default && !by_us => PrPhase::Merged,
             (Some("open"), _) => PrPhase::Open,
             _ => PrPhase::Closed,
         };
@@ -360,17 +396,13 @@ impl<T: Transport> Source for Github<T> {
                     self.api, id.repo
                 )))
                 .await?;
-            let combined = self
-                .call(Req::get(format!(
-                    "{}/repos/{}/commits/{sha}/status?per_page=100",
-                    self.api, id.repo
-                )))
-                .await?;
-            if runs.status == 200 {
-                let statuses = (combined.status == 200).then_some(&combined.body);
-                (status.checks, status.failing) =
-                    check_state(&runs.body, statuses, required.as_ref());
-            }
+            let statuses = self.commit_statuses(&id.repo, sha).await?;
+            // A call that failed is unknown, never "no checks".
+            let runs = (runs.status == 200).then_some(&runs.body);
+            (status.checks, status.failing) =
+                check_state(runs, statuses.as_ref(), &self.own, required.as_ref());
+        } else {
+            status.checks = PrChecks::Pending;
         }
         Ok(Some(PullRequest {
             author,
@@ -525,13 +557,17 @@ enum Outcome {
 /// no result yet keeps the request pending. A listing longer than what was
 /// read is pending too, since green cannot be shown.
 fn check_state(
-    runs: &Value,
+    runs: Option<&Value>,
     statuses: Option<&Value>,
+    own: &[String],
     required: Option<&Vec<String>>,
 ) -> (PrChecks, Option<FailedCheck>) {
     // An empty list means the protection could not tell us, not "nothing needed".
     let required = required.filter(|r| !r.is_empty());
-    let list = runs["check_runs"].as_array().cloned().unwrap_or_default();
+    let list = runs
+        .and_then(|r| r["check_runs"].as_array())
+        .cloned()
+        .unwrap_or_default();
     let mut results: Vec<(String, Outcome, String)> = Vec::new();
     for r in &list {
         let outcome = match r["conclusion"].as_str() {
@@ -551,6 +587,12 @@ fn check_state(
         .into_iter()
         .flatten()
     {
+        // A status our own credential wrote says nothing about the code: an
+        // agent that can reach it could forge a green one.
+        let by = st["creator"]["login"].as_str().unwrap_or_default();
+        if own.iter().any(|o| o.eq_ignore_ascii_case(by)) {
+            continue;
+        }
         let outcome = match st["state"].as_str() {
             Some("success") => Outcome::Pass,
             Some("failure" | "error") => Outcome::Fail,
@@ -566,7 +608,10 @@ fn check_state(
         .iter()
         .filter(|(name, _, _)| required.is_none_or(|req| req.iter().any(|n| n == name)))
         .collect();
-    let mut pending = runs["total_count"].as_u64().unwrap_or(0) > list.len() as u64;
+    // A listing that failed, or is longer than what was read, cannot show green.
+    let mut pending = runs
+        .is_none_or(|r| r["total_count"].as_u64().unwrap_or(0) > list.len() as u64)
+        || statuses.is_none_or(|s| s["incomplete"].as_bool().unwrap_or(false));
     if let Some(req) = required {
         pending |= req
             .iter()

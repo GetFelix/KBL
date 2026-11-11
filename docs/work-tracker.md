@@ -306,15 +306,26 @@ What it does with GitHub:
   It is the only write to GitHub.
 - **Pull request state.** Each poll reads the pull request in an open root's
   `pr`, and writes a `pr_status` record when its phase, reviews or checks
-  changed. It reads only a request that a rule's repo names, in the repo of
-  the issue, opened by one of `own_logins`; any other is skipped (this is the
-  same check as the draft write-back). Reviews count only from the repo's
-  owners, members and collaborators, the latest per reviewer; a dismissed
-  review no longer counts. Checks are the check runs on the head commit. When
+  changed. The agent names the request, so it is read only if all of these
+  hold: it is in the issue's repo and a rule names that repo; one of
+  `own_logins` opened it; it was created after the item's first claim; and it
+  is tied to the item, either by a closing reference to the issue in its body
+  (`Fixes #812`) or by its head branch, which is `kibble/<item id>`. The claim
+  reply gives the agent that name as `item.pr_branch`. The branch the agent
+  reported in `work_progress` is not a link, and the fold refuses a `pr` that
+  another open item already reports.
+  Reviews count only from the repo's owners, members and collaborators, the
+  latest per reviewer; a dismissed review no longer counts. Checks are the
+  check runs and the commit statuses on the head commit, with statuses paged
+  so none are lost; a status written by one of `own_logins` is ignored. When
   the credential may read the base branch's protection, only the required
-  checks count; otherwise every check does. A listing too long to read in one
-  page counts as pending, never green. A merged request also closes the root
-  as merged (`closed` with reason merged, which the ingest token may now write).
+  checks count, and a required one with no result yet is pending; an empty
+  list means unknown and every check counts. A listing that failed or was cut
+  short is pending, never green and never "no checks"; a red result is kept.
+  A merge counts only into the repo's default branch and by someone other
+  than `own_logins` (agents never merge their own work, a person does), and
+  then closes the root as merged (`closed` with reason merged, which the
+  ingest token may write only for a merged status of the item's own request).
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 

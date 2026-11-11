@@ -19,9 +19,6 @@ pub(crate) struct Root {
     pub(crate) closed: bool,
     /// The agent's pull request, `owner/repo#number`.
     pub(crate) pr: Option<String>,
-    /// The branch the agent reported.
-    #[serde(default)]
-    pub(crate) branch: Option<String>,
     /// When the item was first claimed, in milliseconds since the epoch.
     #[serde(default)]
     pub(crate) claimed_at_ms: Option<u64>,

@@ -270,7 +270,6 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 pr: None,
-                branch: None,
                 claimed_at_ms: None,
                 pr_status: None,
             },
@@ -478,9 +477,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 continue;
             };
             // The agent names the request, so it must be tied to this item by
-            // more than the agent's word: its reported branch, or a closing
-            // reference to the issue in its body.
-            let branch = p.roots.get(&key).and_then(|r| r.branch.as_deref());
+            // more than the agent's word: the branch name the tracker derives
+            // from the item id, or a closing reference to the issue.
+            let item = p.roots.get(&key).map(|r| r.item.clone());
             let claimed = p.roots.get(&key).and_then(|r| r.claimed_at_ms);
             let closes = closes_issue(&pull.body, &key);
             // A request made before the first claim cannot be this item's
@@ -489,7 +488,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             let linked = match claimed {
                 Some(at) => {
                     pull.created_ms.is_some_and(|c| c >= at)
-                        && (branch.is_some_and(|b| !b.is_empty() && b == pull.head_ref) || closes)
+                        && (closes
+                            || item
+                                .is_some_and(|i| pull.head_ref == agents_core::work::pr_branch(&i)))
                 }
                 None => closes,
             };

@@ -387,6 +387,10 @@ fn runs(list: &[(&str, &str)]) -> Value {
     json!({ "total_count": list.len(), "check_runs": list })
 }
 
+fn nostatus() -> Value {
+    json!({ "statuses": [] })
+}
+
 fn req(names: &[&str]) -> Vec<String> {
     names.iter().map(|n| (*n).to_owned()).collect()
 }
@@ -394,11 +398,17 @@ fn req(names: &[&str]) -> Vec<String> {
 #[test]
 fn a_required_check_with_no_result_yet_is_pending_not_green() {
     let r = req(&["unit", "lint"]);
-    let (checks, failing) = check_state(&runs(&[("unit", "success")]), None, Some(&r));
+    let (checks, failing) = check_state(
+        Some(&runs(&[("unit", "success")])),
+        Some(&nostatus()),
+        &[],
+        Some(&r),
+    );
     assert_eq!((checks, failing), (PrChecks::Pending, None));
     let (checks, _) = check_state(
-        &runs(&[("unit", "success"), ("lint", "success")]),
-        None,
+        Some(&runs(&[("unit", "success"), ("lint", "success")])),
+        Some(&nostatus()),
+        &[],
         Some(&r),
     );
     assert_eq!(checks, PrChecks::Green);
@@ -407,10 +417,20 @@ fn a_required_check_with_no_result_yet_is_pending_not_green() {
 #[test]
 fn an_empty_required_list_means_unknown_and_every_check_counts() {
     let none: Vec<String> = vec![];
-    let (checks, failing) = check_state(&runs(&[("nightly", "failure")]), None, Some(&none));
+    let (checks, failing) = check_state(
+        Some(&runs(&[("nightly", "failure")])),
+        Some(&nostatus()),
+        &[],
+        Some(&none),
+    );
     assert_eq!(checks, PrChecks::Red);
     assert_eq!(failing.unwrap().name, "nightly");
-    let (checks, _) = check_state(&runs(&[("unit", "success")]), None, Some(&none));
+    let (checks, _) = check_state(
+        Some(&runs(&[("unit", "success")])),
+        Some(&nostatus()),
+        &[],
+        Some(&none),
+    );
     assert_eq!(checks, PrChecks::Green);
 }
 
@@ -419,15 +439,15 @@ fn a_required_context_can_be_a_commit_status() {
     let r = req(&["unit", "ci/legacy"]);
     let statuses = |state: &str| json!({ "statuses": [{ "context": "ci/legacy", "state": state, "target_url": "u/legacy" }] });
     let ok = runs(&[("unit", "success")]);
-    let (checks, _) = check_state(&ok, Some(&statuses("success")), Some(&r));
+    let (checks, _) = check_state(Some(&ok), Some(&statuses("success")), &[], Some(&r));
     assert_eq!(checks, PrChecks::Green);
-    let (checks, failing) = check_state(&ok, Some(&statuses("failure")), Some(&r));
+    let (checks, failing) = check_state(Some(&ok), Some(&statuses("failure")), &[], Some(&r));
     assert_eq!(checks, PrChecks::Red);
     assert_eq!(failing.unwrap().url, "u/legacy");
-    let (checks, _) = check_state(&ok, Some(&statuses("pending")), Some(&r));
+    let (checks, _) = check_state(Some(&ok), Some(&statuses("pending")), &[], Some(&r));
     assert_eq!(checks, PrChecks::Pending);
     // Without a status for it, the required context is still outstanding.
-    let (checks, _) = check_state(&ok, None, Some(&r));
+    let (checks, _) = check_state(Some(&ok), Some(&nostatus()), &[], Some(&r));
     assert_eq!(checks, PrChecks::Pending);
 }
 
@@ -444,4 +464,85 @@ fn github_times_parse_to_epoch_milliseconds() {
     );
     assert_eq!(parse_utc_ms("2027-13-15T08:00:00Z"), None);
     assert_eq!(parse_utc_ms("yesterday"), None);
+}
+
+#[test]
+fn a_status_written_by_our_own_credential_is_ignored() {
+    let ok = runs(&[("unit", "success")]);
+    let forged = json!({ "statuses": [
+        { "context": "ci/legacy", "state": "success", "target_url": "u", "creator": { "login": "Kibble[bot]" } },
+    ] });
+    let own = ["kibble[bot]".to_owned()];
+    // Required, and only satisfied by our own forged status: still outstanding.
+    let r = req(&["unit", "ci/legacy"]);
+    let (checks, _) = check_state(Some(&ok), Some(&forged), &own, Some(&r));
+    assert_eq!(checks, PrChecks::Pending);
+    // A forged green cannot hide nothing, and a real one by another login counts.
+    let real = json!({ "statuses": [
+        { "context": "ci/legacy", "state": "success", "target_url": "u", "creator": { "login": "ci-bot" } },
+    ] });
+    let (checks, _) = check_state(Some(&ok), Some(&real), &own, Some(&r));
+    assert_eq!(checks, PrChecks::Green);
+}
+
+#[test]
+fn a_failed_listing_is_unknown_and_never_green_or_no_checks() {
+    let red = json!({ "statuses": [
+        { "context": "ci/x", "state": "failure", "target_url": "u/x", "creator": { "login": "ci" } },
+    ] });
+    // Check runs unavailable: no statuses means pending, not "no checks".
+    let (checks, _) = check_state(None, Some(&nostatus()), &[], None);
+    assert_eq!(checks, PrChecks::Pending);
+    // A red status is kept.
+    let (checks, failing) = check_state(None, Some(&red), &[], None);
+    assert_eq!(
+        (checks, failing.map(|f| f.name)),
+        (PrChecks::Red, Some("ci/x".into()))
+    );
+    // Statuses unavailable beside green runs is unknown too.
+    let (checks, _) = check_state(Some(&runs(&[("unit", "success")])), None, &[], None);
+    assert_eq!(checks, PrChecks::Pending);
+    // Fewer statuses than GitHub counts.
+    let short = json!({ "statuses": [], "incomplete": true });
+    let (checks, _) = check_state(Some(&runs(&[("unit", "success")])), Some(&short), &[], None);
+    assert_eq!(checks, PrChecks::Pending);
+}
+
+#[tokio::test]
+async fn commit_statuses_are_paged_so_none_are_lost_past_a_hundred() {
+    let gh = Script::default();
+    let page = |from: usize, n: usize| -> Value {
+        let list: Vec<Value> = (from..from + n)
+            .map(|i| json!({ "context": format!("c{i}"), "state": "success", "creator": { "login": "ci" } }))
+            .collect();
+        json!({ "total_count": 130, "statuses": list })
+    };
+    gh.on("GET", "page=1", ok(page(0, 100)));
+    gh.on("GET", "page=2", ok(page(100, 30)));
+    let got = github(&gh)
+        .commit_statuses("GetFelix/felix", "abc")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got["statuses"].as_array().unwrap().len(), 130);
+    assert_eq!(got["incomplete"], false);
+    // A page that comes back short leaves it marked incomplete.
+    gh.on(
+        "GET",
+        "page=2",
+        ok(json!({ "total_count": 130, "statuses": [] })),
+    );
+    let got = github(&gh)
+        .commit_statuses("GetFelix/felix", "abc")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got["incomplete"], true);
+    gh.on("GET", "page=1", status(500, &[]));
+    assert!(
+        github(&gh)
+            .commit_statuses("GetFelix/felix", "abc")
+            .await
+            .is_err()
+    );
 }

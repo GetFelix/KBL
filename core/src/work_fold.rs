@@ -298,6 +298,8 @@ pub enum Reject {
     TooLong,
     /// Upstream sync closed an item as merged without a merged status for its request.
     NotMerged,
+    /// Another open item already reports this pull request.
+    PrInUse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -809,6 +811,15 @@ impl State {
                 ..
             } => {
                 self.acting_on(item, *attempt, rec)?;
+                // One request, one item: another's request cannot be borrowed to close this one.
+                if let Some(pr) = pr
+                    && self
+                        .items
+                        .values()
+                        .any(|o| o.id != *item && o.closed.is_none() && o.pr.as_ref() == Some(pr))
+                {
+                    return Err(Reject::PrInUse);
+                }
                 if rec.actor == Actor::Agent {
                     let p = self.path_mut(item, *attempt)?;
                     if p.progress >= MAX_PROGRESS {

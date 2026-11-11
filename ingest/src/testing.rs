@@ -239,7 +239,6 @@ impl Tracker for Fake {
                         .to_owned(),
                     closed: it.closed.is_some(),
                     pr: it.pr.clone(),
-                    branch: it.branch.clone(),
                     claimed_at_ms: it.first_claim_ms,
                     pr_status: it.pr_status.clone(),
                 }

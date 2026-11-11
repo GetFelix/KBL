@@ -1196,6 +1196,8 @@ fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
             "parent": item.and_then(|i| i.parent.as_ref()),
             "root": item.map(|i| &i.root),
             "branch": item.and_then(|i| i.branch.as_ref()),
+            // The head branch to open the pull request from; it links the request to this item.
+            "pr_branch": agents_core::work::pr_branch(&delivery.item),
             "pr": item.and_then(|i| i.pr.as_ref()),
             "context": item.map(|i| i.context.keys().collect::<Vec<_>>()),
         },

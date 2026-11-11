@@ -1,4 +1,4 @@
-use agents_core::work::{PrChecks, PrReview, WorkRecord};
+use agents_core::work::{PrChecks, PrReview, WorkRecord, pr_branch};
 use agents_core::work_fold::{Closure, NeedsYou, PrWaits, Stage};
 use serde_json::{Value, json};
 
@@ -795,8 +795,9 @@ const PR: &str = "GetFelix/felix#2210";
 
 fn pull(edit: impl FnOnce(&mut Value)) -> Value {
     let mut v = fixture("pull");
-    v["head"] = json!({ "sha": "abc123", "ref": "fix/stale-read" });
-    v["base"] = json!({ "ref": "main" });
+    v["head"] = json!({ "sha": "abc123", "ref": pr_branch(&item_id(UP)) });
+    v["base"] = json!({ "ref": "main", "repo": { "default_branch": "main" } });
+    v["merged_by"] = json!({ "login": "gabriel" });
     // Created after the Fake tracker's clock starts, so after the first claim.
     v["created_at"] = json!("2027-01-15T09:00:00Z");
     v["requested_reviewers"] = json!([]);
@@ -850,6 +851,11 @@ impl Rig {
         self.gh.on("GET", "/pulls/2210", ok(pull));
         self.gh
             .on("GET", "/pulls/2210/reviews", ok(Value::Array(reviews)));
+        self.gh.on(
+            "GET",
+            "/status?",
+            ok(json!({ "total_count": 0, "statuses": [] })),
+        );
         self.gh.on(
             "GET",
             "/check-runs",
@@ -1150,6 +1156,76 @@ async fn an_old_merged_request_with_the_matching_branch_created_before_the_claim
         pull(|p| {
             p["created_at"] = json!("2026-11-01T00:00:00Z");
             p["body"] = json!("Fixes #812");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 0);
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+}
+
+#[tokio::test]
+async fn a_merge_into_another_branch_or_by_our_own_login_does_not_close_the_root() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+            p["base"]["ref"] = json!("release-1");
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&item].closed, None);
+    assert_eq!(
+        s.items[&item].pr_status.as_ref().unwrap().phase,
+        agents_core::work::PrPhase::Closed
+    );
+
+    // Merged into the default branch, but by the credential's own login.
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+            p["merged_by"] = json!({ "login": "kibble[bot]" });
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+
+    // A person merging it into the default branch is the real thing.
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Merged)
+    );
+}
+
+#[tokio::test]
+async fn the_branch_the_agent_reported_is_not_a_link() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    // The head branch is the one the agent reported in its progress, not the
+    // one the tracker derives, and the body does not name the issue.
+    rig.pr(
+        pull(|p| {
+            p["head"]["ref"] = json!("fix/stale-read");
             p["state"] = json!("closed");
             p["merged"] = json!(true);
         }),

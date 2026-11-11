@@ -2025,3 +2025,33 @@ fn a_state_with_a_stalled_source_encodes_and_the_stalls_are_capped() {
     l.tracker(stall("GetFelix/gone", None));
     assert_eq!(fold(&l.0).stalled_sources().count(), MAX_STALLS - 1);
 }
+
+#[test]
+fn a_request_another_open_item_reports_cannot_be_reported_again() {
+    let mut l = with_pr();
+    l.0.pop(); // r1 still holds its item
+    l.tracker(imported("r2"));
+    l.person(WorkRecord::Accepted {
+        item: id("r2"),
+        tier: Some(1),
+    });
+    l.agent("w2", claimed("r2", 1));
+    let progress = |item: &str, pr: &str| WorkRecord::Progress {
+        item: id(item),
+        attempt: 1,
+        note: text("pr"),
+        branch: None,
+        pr: Some(pr.into()),
+    };
+    l.agent("w2", progress("r2", "GetFelix/felix#9"));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        [Reject::PrInUse]
+    );
+    assert_eq!(s.items[&id("r2")].pr, None);
+    // Its own request is fine, and r1 may repeat its own.
+    l.agent("w2", progress("r2", "GetFelix/felix#11"));
+    l.agent("w1", progress("r1", "GetFelix/felix#9"));
+    assert_eq!(fold(&l.0).rejections.len(), 1);
+}

@@ -123,7 +123,6 @@ impl<B: Broker> Tracker<B> {
                     "closed": it.closed.is_some(),
                     "held": it.hold.is_some(),
                     "pr": it.pr,
-                    "branch": it.branch,
                     "claimed_at_ms": it.first_claim_ms,
                     "pr_status": it.pr_status,
                 }))
