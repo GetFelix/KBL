@@ -60,6 +60,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "agents-wasm"
+version = "0.0.0"
+dependencies = [
+ "agents-core",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
