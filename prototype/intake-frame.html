@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Felix Agents intake frame</title>
+<title>Felix Agents dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,6 +22,8 @@
     --cyan-soft: hsla(192, 90%, 46%, 0.16);
     --result: hsl(190, 85%, 74%);
     --amber: #ffb547;
+    --red: #ff7a7a;
+    --on-amber: #1a1200;
     --amber-soft: hsla(38, 100%, 64%, 0.14);
     --on-cyan: #04141a;
     color-scheme: dark;
@@ -40,6 +42,8 @@
     --cyan-soft: hsla(192, 90%, 40%, 0.12);
     --result: hsl(192, 75%, 56%);
     --amber: #b36f00;
+    --red: #c8302f;
+    --on-amber: #ffffff;
     --amber-soft: hsla(38, 100%, 45%, 0.14);
     --on-cyan: #ffffff;
     color-scheme: light;
@@ -49,26 +53,41 @@
   body { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
   .mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
   button { font: inherit; color: inherit; background: transparent; border: 1px solid var(--line-strong); border-radius: 8px; height: 30px; padding: 0 10px; cursor: pointer; }
-  button:hover { border-color: var(--cyan); }
-  button:focus-visible, .row:focus-visible, input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+  button:hover:not(:disabled) { border-color: var(--cyan); }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button:focus-visible, .row:focus-visible, .qrow:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+  kbd { font: 600 10.5px/1 "JetBrains Mono", monospace; border: 1px solid var(--line-strong); border-bottom-width: 2px; border-radius: 4px; padding: 2px 5px; color: var(--text); background: var(--card); }
 
-  header { flex: none; height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header { flex: none; height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 15px; white-space: nowrap; }
-  .brand img { width: 36px; height: 36px; object-fit: contain; }
+  .brand img { width: 34px; height: 34px; object-fit: contain; }
   .sep { width: 1px; height: 26px; background: var(--line-strong); }
-  .view { min-width: 0; display: flex; flex-direction: column; }
-  .view b { font-weight: 600; font-size: 14px; white-space: nowrap; }
-  .view span { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .stats { margin-left: auto; display: flex; gap: 22px; align-items: center; }
-  .stat { display: flex; flex-direction: column; align-items: flex-end; }
-  .stat small { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; white-space: nowrap; }
-  .stat b { font: 600 15px "JetBrains Mono", monospace; }
-  .stat b i { font-style: normal; color: var(--muted); font-weight: 500; }
-  #theme { width: 34px; padding: 0; font-size: 15px; }
+  .tabs { display: flex; gap: 4px; align-self: stretch; align-items: stretch; }
+  .tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; height: auto; padding: 0 12px; color: var(--muted); font-weight: 600; font-size: 13.5px; display: flex; align-items: center; gap: 7px; }
+  .tabs button b { font: 600 12px "JetBrains Mono", monospace; background: var(--cyan-soft); color: var(--cyan); border-radius: 999px; padding: 2px 7px; }
+  .tabs button b:empty { display: none; }
+  .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--cyan); }
+  .tabs button:hover { color: var(--text); border-color: transparent; border-bottom-color: var(--line-strong); }
+  .tabs button[aria-selected="true"]:hover { border-bottom-color: var(--cyan); }
+  #theme { margin-left: auto; width: 34px; padding: 0; font-size: 15px; }
+
+  #status { flex: none; position: relative; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 18px; border-bottom: 1px solid var(--line); background: var(--bg); font-size: 12px; }
+  #status .scope { color: var(--muted); margin-right: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chip { height: 26px; padding: 0 9px; border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; font: 600 11.5px "JetBrains Mono", monospace; border: 1px solid var(--line-strong); color: var(--text); background: transparent; white-space: nowrap; }
+  .chip small { font: 500 10.5px Inter, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .chip.warn { border-color: var(--amber); color: var(--amber); }
+  .chip.full { background: var(--amber); border-color: var(--amber); color: var(--on-amber); }
+  .chip.full small { color: inherit; }
+  #srcpop { position: absolute; z-index: 20; top: 38px; right: 18px; width: 260px; display: none; flex-direction: column; gap: 6px; padding: 8px; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+  #srcpop.open { display: flex; }
+
+  #headline { flex: none; padding: 10px 18px 0; font-size: 14px; font-weight: 600; display: none; }
+  #headline.on { display: block; }
+  #headline span { color: var(--muted); font-weight: 500; }
 
   nav { display: none; }
   main { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 18px; }
-  .board { position: relative; padding-bottom: 24px; display: grid; grid-template-columns: 170px repeat(6, minmax(168px, 1fr)); gap: 10px; align-items: start; min-width: min-content; }
+  .board { position: relative; padding-bottom: 24px; display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 10px; align-items: start; min-width: min-content; }
   #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 3; }
   #links path { fill: none; stroke: var(--cyan); stroke-width: 1.75; opacity: 0.9; }
   #links path.far { stroke-dasharray: 3 4; opacity: 0.7; }
@@ -76,91 +95,174 @@
 
   .col { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: clip; }
   .col.you { border-color: color-mix(in srgb, var(--cyan) 45%, var(--line)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--cyan) 18%, transparent); }
+  .col.binding { border-color: var(--amber); box-shadow: 0 0 0 1px color-mix(in srgb, var(--amber) 30%, transparent); }
   .col > h2 { margin: 0; padding: 10px 12px 9px; display: flex; align-items: baseline; gap: 8px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 2; }
   .col.you > h2 { color: var(--cyan); }
   .col > h2 .n { margin-left: auto; font: 600 20px/1 "JetBrains Mono", monospace; color: var(--text); letter-spacing: 0; }
-  .oldest { display: flex; justify-content: space-between; padding: 6px 12px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .oldest { padding: 6px 12px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  .oldest .l { display: flex; justify-content: space-between; }
   .oldest b { font: 600 11.5px "JetBrains Mono", monospace; color: var(--text); }
-  .oldest.stale b { color: var(--amber); }
+  .oldest .pc { display: block; margin-top: 1px; font: 500 10.5px "JetBrains Mono", monospace; color: var(--faint); }
+  .oldest.warn b { color: var(--amber); }
+  .oldest.hot b { color: var(--red); }
   .body { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .empty { color: var(--faint); padding: 14px 6px; text-align: center; font-size: 12px; }
+  .banner { font-size: 11.5px; color: var(--amber); background: var(--amber-soft); border-radius: 8px; padding: 6px 8px; line-height: 1.35; }
   .tierhead { display: flex; align-items: baseline; gap: 8px; padding: 6px 4px 0; font-size: 11px; color: var(--muted); }
   .tierhead:first-child { padding-top: 0; }
   .tierhead .mono { color: var(--text); font-weight: 600; }
   .tierhead .tc { margin-left: auto; font: 500 11px "JetBrains Mono", monospace; }
-  .tierhead.stale .tc { color: var(--amber); }
+  .tierhead.warn .tc { color: var(--amber); }
+  .tierhead.hot .tc { color: var(--red); }
+  .roots { display: flex; flex-direction: column; gap: 4px; padding-bottom: 6px; border-bottom: 1px dashed var(--line-strong); }
+  .root { display: block; width: 100%; height: auto; text-align: left; padding: 5px 8px; font-size: 11.5px; line-height: 1.35; border-style: dashed; }
+  .root b { font: 600 11.5px "JetBrains Mono", monospace; }
+  .root em { font-style: normal; color: var(--cyan); font-weight: 600; }
 
-  .row { position: relative; display: block; width: 100%; height: auto; text-align: left; padding: 7px 9px 8px; background: var(--card); border: 1px solid var(--line); border-radius: 9px; }
-  .row:hover { background: var(--card-hover); border-color: var(--line-strong); }
-  .row .l1 { display: flex; align-items: center; gap: 5px; }
+  .row, .qrow { position: relative; display: block; width: 100%; height: auto; text-align: left; padding: 7px 9px 8px; background: var(--card); border: 1px solid var(--line); border-radius: 9px; }
+  .row:hover, .qrow:hover { background: var(--card-hover); border-color: var(--line-strong); }
+  .row .l1, .qrow .l1 { display: flex; align-items: center; gap: 5px; }
   .tag { white-space: nowrap; font: 600 9px/1 "JetBrains Mono", monospace; padding: 3px 4px; border-radius: 4px; border: 1px solid var(--line-strong); color: var(--muted); letter-spacing: 0.03em; }
   .ref { white-space: nowrap; font: 600 11.5px "JetBrains Mono", monospace; }
   .age { margin-left: auto; padding-left: 4px; font: 500 11px "JetBrains Mono", monospace; color: var(--muted); }
-  .age.stale { color: var(--amber); }
+  .age.warn { color: var(--amber); }
+  .age.hot { color: var(--red); }
   .title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; margin-top: 4px; color: var(--text); font-size: 12.5px; line-height: 1.3; overflow: hidden; }
   .l3 { display: flex; align-items: center; gap: 6px; margin-top: 5px; min-width: 0; }
   .l3 .note { margin-top: 0; min-width: 0; flex: 1; }
   .note { display: block; margin-top: 3px; font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .note b { font: 600 11px "JetBrains Mono", monospace; color: var(--text); }
-  .row.ask { border-left: 3px solid var(--cyan); }
-  .row.fail { border-left: 3px solid var(--amber); }
-  .row.fail .note, .note.warn { color: var(--amber); }
-  .pill { font: 600 10px/1 "JetBrains Mono", monospace; padding: 3px 5px; border-radius: 999px; }
+  .note.warn, .row.fail .note { color: var(--amber); }
+  .note.dup { color: var(--amber); }
+  .row.ask, .qrow.ask { border-left: 3px solid var(--cyan); }
+  .row.fail, .qrow.fail { border-left: 3px solid var(--amber); }
+  .pill { font: 600 10px/1 "JetBrains Mono", monospace; padding: 3px 5px; border-radius: 999px; white-space: nowrap; }
   .pill.p0 { background: var(--cyan); color: var(--on-cyan); }
   .pill.p1 { border: 1px solid var(--cyan); color: var(--cyan); }
   .pill.p2 { border: 1px solid var(--line-strong); color: var(--muted); }
   .pill.p3 { border: 1px dashed var(--line-strong); color: var(--faint); }
+  .pill.cause { border: 1px solid var(--amber); color: var(--amber); }
+  .pill.you { background: var(--cyan-soft); color: var(--cyan); }
   .agent { color: var(--cyan); background: var(--cyan-soft); border-radius: 5px; padding: 1px 6px; font: 600 11px "JetBrains Mono", monospace; }
   .more { height: 28px; font-size: 12px; color: var(--muted); border-style: dashed; }
+  .row.snoozed, .qrow.snoozed { opacity: 0.6; }
 
   /* Selecting an item dims what is not in its chain. */
   .picked .row { opacity: 0.34; }
   .picked .row.chain, .picked .row.sel { opacity: 1; }
   .row.chain { border-color: color-mix(in srgb, var(--cyan) 60%, var(--line)); }
-  .row.sel { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan); }
+  .row.sel, .qrow.sel { border-color: var(--cyan); background: var(--cyan-soft); box-shadow: 0 0 0 1px var(--cyan); }
+
+  .queue { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 14px; align-items: start; }
+  #qlist { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .qrow .kind { font: 600 10px/1 Inter, sans-serif; text-transform: uppercase; letter-spacing: 0.07em; color: var(--cyan); }
+  .qrow.fail .kind { color: var(--amber); }
+  .qrow .title { -webkit-line-clamp: 1; line-clamp: 1; font-size: 13px; }
+  .qrow .l1 .age { font-size: 11.5px; }
+  .qfoot { color: var(--muted); font-size: 12px; padding: 6px 2px; }
+  #side { position: sticky; top: 0; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; outline: none; }
+  #side .hint { color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+
+  .detail .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .detail .head b.t { font-weight: 600; font-size: 14px; min-width: 0; flex-basis: 100%; }
+  .detail .head .x { margin-left: auto; width: 26px; height: 26px; padding: 0; }
+  .detail .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  .detail .blk { margin-top: 10px; font-size: 12.5px; line-height: 1.45; }
+  .detail .blk h4 { margin: 0 0 3px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+  .detail .blk .kv { display: grid; grid-template-columns: 62px 1fr; gap: 2px 8px; }
+  .detail .blk .kv span:nth-child(odd) { color: var(--muted); }
+  .detail .blk .unsure { color: var(--amber); }
+  .detail .warn { color: var(--amber); }
+  .detail .rated { color: var(--cyan); font-weight: 600; }
+  .detail .chain { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 6px; align-items: center; font-size: 12px; color: var(--muted); }
+  .detail .chain button { height: 24px; padding: 0 8px; font: 600 11.5px "JetBrains Mono", monospace; }
+  .detail .chain .gap { width: 8px; }
+  .detail .chain .st { font: 500 11px Inter, sans-serif; color: var(--muted); }
+  .detail a { color: var(--cyan); text-decoration: none; font-weight: 600; }
+  .detail a:hover { text-decoration: underline; }
+  .detail input[type="text"] { width: 100%; height: 32px; margin-top: 10px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: 500 12.5px Inter, sans-serif; }
+  .acts { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .acts button { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; }
+  .acts button.primary { border-color: var(--cyan); background: var(--cyan-soft); }
+
+  #dock { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 10px 18px; display: none; max-height: 38dvh; overflow: auto; }
+  #dock.open { display: block; }
+
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; align-items: start; }
+  .metrics .wide { grid-column: span 2; }
+  .mc { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px; min-width: 0; }
+  .mc h3 { margin: 0 0 8px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+  .mc p { margin: 8px 0 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .mc p b { color: var(--text); }
+  .tiles { display: flex; gap: 18px; flex-wrap: wrap; }
+  .tile small { display: block; color: var(--muted); font-size: 11px; }
+  .tile b { font: 600 22px/1.2 "JetBrains Mono", monospace; }
+  .tile b i { font-style: normal; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .mc svg { display: block; width: 100%; height: auto; }
+  .mc svg text { font: 500 10.5px "JetBrains Mono", monospace; fill: var(--muted); }
+  .mc svg text.lbl { font: 500 11px Inter, sans-serif; fill: var(--text); }
+  .mc svg .ax { stroke: var(--line-strong); }
+  .mc svg .b85 { fill: var(--cyan); opacity: 0.3; }
+  .mc svg .b50 { fill: var(--cyan); }
+  .mc svg .hum.b85 { fill: var(--amber); }
+  .mc svg .hum.b50 { fill: var(--amber); opacity: 1; }
+  .mc svg .arr { fill: var(--line-strong); }
+  .mc svg .mrg { fill: var(--cyan); }
+  .mc svg .mer { fill: var(--cyan); }
+  .mc svg .rej { fill: var(--amber); }
+  .foot-note { margin-top: 12px; color: var(--muted); font-size: 12px; }
 
   .src { background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 8px 9px 9px; }
   .src .top { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12.5px; }
-  .src .top .open { margin-left: auto; font: 500 11px "JetBrains Mono", monospace; color: var(--muted); }
-  .src .rates { display: flex; gap: 12px; margin-top: 6px; font: 600 12px "JetBrains Mono", monospace; }
-  .src .rates small { display: block; font: 500 10px Inter, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .src .srates { display: flex; gap: 12px; margin-top: 6px; font: 600 12px "JetBrains Mono", monospace; }
+  .src .srates small { display: block; font: 500 10px Inter, sans-serif; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
   .src svg { display: block; width: 100%; height: 22px; margin-top: 6px; }
   .src svg rect { fill: var(--cyan); opacity: 0.75; }
   .src svg line { stroke: var(--line-strong); }
 
-  #dock { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 10px 18px; display: none; }
-  #dock.open { display: block; }
-  #dock .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  #dock .head b.t { font-weight: 600; font-size: 14px; min-width: 0; }
-  #dock .head .x { margin-left: auto; width: 26px; height: 26px; padding: 0; }
-  #dock .meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
-  #dock .chain { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px 6px; align-items: center; font-size: 12px; color: var(--muted); }
-  #dock .chain button { height: 24px; padding: 0 8px; font: 600 11.5px "JetBrains Mono", monospace; }
-  #dock .chain button.me { border-color: var(--cyan); color: var(--cyan); }
-  #dock .chain .gap { width: 8px; }
-  #dock .chain .st { font: 500 11px Inter, sans-serif; color: var(--muted); }
-  #dock a { color: var(--cyan); text-decoration: none; font-weight: 600; }
-  #dock a:hover { text-decoration: underline; }
+  #events { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 0 18px; font-size: 12px; }
+  #events summary { cursor: pointer; padding: 6px 0; color: var(--muted); display: flex; gap: 8px; align-items: baseline; list-style: none; white-space: nowrap; overflow: hidden; }
+  #events summary::-webkit-details-marker { display: none; }
+  #events summary b { color: var(--text); font: 600 12px "JetBrains Mono", monospace; }
+  #events summary .last { overflow: hidden; text-overflow: ellipsis; font: 500 11.5px "JetBrains Mono", monospace; color: var(--faint); }
+  #events ol { margin: 0; padding: 0 0 8px; list-style: none; max-height: 22dvh; overflow: auto; font: 500 11.5px/1.7 "JetBrains Mono", monospace; color: var(--muted); }
+  #events li b { color: var(--text); font-weight: 600; }
+  #events li .o { color: var(--faint); margin-right: 8px; }
 
-  footer { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 10px 18px 12px; display: flex; flex-direction: column; gap: 8px; }
+  footer { flex: none; border-top: 1px solid var(--line); background: var(--panel); padding: 9px 18px 11px; display: flex; flex-direction: column; gap: 7px; }
+  footer .top { display: flex; gap: 6px 24px; justify-content: space-between; align-items: baseline; flex-wrap: wrap; }
+  .bind { font-size: 12.5px; color: var(--muted); }
+  .bind b { color: var(--text); font-weight: 600; }
+  .bind .grow { color: var(--amber); }
+  .bind button.lk { all: unset; cursor: pointer; color: var(--cyan); font-weight: 600; }
   .rates { display: flex; align-items: baseline; gap: 20px; flex-wrap: wrap; }
-  .rates .m { font: 600 13px "JetBrains Mono", monospace; }
+  .rates .m { font: 600 12.5px "JetBrains Mono", monospace; }
   .rates .m small { font: 500 11px Inter, sans-serif; color: var(--muted); margin-right: 5px; }
-  .verdict { color: var(--muted); font-size: 12.5px; }
-  .verdict b { color: var(--text); font-weight: 600; }
-  .verdict.grow b { color: var(--amber); }
+  .legend { display: flex; gap: 4px 10px; flex-wrap: wrap; color: var(--muted); font-size: 11px; align-items: center; }
+  .legend span { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
   .scrub { display: flex; align-items: center; gap: 10px; }
   .scrub input { flex: 1; min-width: 0; accent-color: var(--cyan); }
   .scrub .at { font: 500 12px "JetBrains Mono", monospace; color: var(--muted); min-width: 0; text-align: right; }
   #live { font: 600 12px Inter, sans-serif; }
   #live.on { background: var(--cyan); border-color: var(--cyan); color: var(--on-cyan); }
 
+  @media (max-width: 1100px) {
+    .queue { grid-template-columns: minmax(0, 1fr); }
+    #side { position: static; }
+    .queue.has-sel #side { order: -1; }
+    .queue:not(.has-sel) #side { display: none; }
+    .metrics .wide { grid-column: auto; }
+  }
   @media (max-width: 760px) {
-    header { height: 52px; padding: 0 12px; gap: 10px; }
-    .brand span, .sep, .view span, .stat.hide-sm { display: none; }
-    .brand img { width: 30px; height: 30px; }
-    .stats { gap: 14px; }
-    nav { display: flex; flex: none; gap: 6px; overflow-x: auto; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+    header { height: 48px; padding: 0 10px; gap: 8px; }
+    .brand span, .sep { display: none; }
+    .brand img { width: 28px; height: 28px; }
+    .tabs button { padding: 0 8px; font-size: 13px; gap: 5px; }
+    #status { padding: 6px 12px; gap: 6px; }
+    #status .scope, #status .chip.open { display: none; }
+    #headline { padding: 8px 12px 0; font-size: 13px; }
+    nav { display: none; flex: none; gap: 6px; overflow-x: auto; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+    nav.on { display: flex; }
     nav::-webkit-scrollbar { display: none; }
     nav a { flex: none; display: flex; align-items: baseline; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); font-size: 12px; font-weight: 600; text-decoration: none; }
     nav a b { font: 600 13px "JetBrains Mono", monospace; color: var(--text); }
@@ -170,12 +272,13 @@
     .board { display: flex; flex-direction: column; align-items: stretch; gap: 10px; min-width: 0; }
     #links { display: none; }
     .col > h2 { position: static; }
-    .col.srcs .body { flex-direction: row; overflow-x: auto; }
-    .col.srcs .src { flex: 0 0 200px; }
-    #dock { padding: 10px 12px; max-height: 42dvh; overflow: auto; }
+    .metrics .mc.wide { grid-column: auto; }
+    #srcpop { right: 12px; left: 12px; width: auto; }
+    #dock { padding: 10px 12px; max-height: 42dvh; }
+    #events { padding: 0 12px; }
     footer { padding: 8px 12px 10px; gap: 6px; }
+    .legend { display: none; }
     .rates { gap: 4px 14px; }
-    
   }
 </style>
 </head>
@@ -183,18 +286,26 @@
 <header>
   <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt=""><span>Felix Agents</span></div>
   <div class="sep"></div>
-  <div class="view"><b>Intake</b><span id="scope"></span></div>
-  <div class="stats">
-    <div class="stat"><small>Open</small><b id="sOpen">0</b></div>
-    <div class="stat"><small>Agents busy</small><b id="sAgents">0</b></div>
-    <button id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  <div class="tabs" role="tablist" id="tabs">
+    <button role="tab" data-view="queue" id="t-queue">My queue <b id="qn"></b></button>
+    <button role="tab" data-view="board" id="t-board">Board</button>
+    <button role="tab" data-view="metrics" id="t-metrics">Metrics</button>
   </div>
+  <button id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
 </header>
+<div id="status"></div>
+<div id="headline"></div>
 <nav id="nav" aria-label="Stages"></nav>
-<main id="main"><div class="board" id="board"><svg id="links" aria-hidden="true"></svg></div></main>
+<main id="main">
+  <div class="queue" id="v-queue"><div id="qlist"></div><aside id="side" tabindex="-1" aria-label="Selected item"></aside></div>
+  <div id="v-board"><div class="board" id="board"><svg id="links" aria-hidden="true"></svg></div></div>
+  <div id="v-metrics"></div>
+</main>
 <section id="dock" aria-label="Selected item"></section>
+<details id="events"><summary>Recorded by your actions <b id="evn">0</b><span class="last" id="evlast"></span></summary><ol id="evlist"></ol></details>
 <footer>
-  <div class="rates" id="rates"></div>
+  <div class="top"><div class="bind" id="bind"></div><div class="rates" id="rates"></div></div>
+  <div class="legend" id="legend"></div>
   <div class="scrub">
     <input id="scrub" type="range" aria-label="Show the queue as it was">
     <span class="at" id="at"></span>
@@ -202,16 +313,22 @@
   </div>
 </footer>
 <script type="module">
-const HOUR = 3600, DAY = 86400;
-// Per stage, how old the oldest item may get before its age turns amber.
-const STALE = { arrived: 12 * HOUR, needs: DAY, blocked: 4 * DAY, ready: 2 * DAY, held: DAY };
+const HOUR = 3600, DAY = 86400, MIN = 60;
+// Fallback p85 per stage until the team has enough finished visits of its own.
+const STALE = { triage: 12 * HOUR, needs: DAY, blocked: 4 * DAY, ready: 2 * DAY, held: DAY, review: DAY };
+const MIN_SAMPLES = 5;
 const STAGES = [
-  ['arrived', 'Arrived'], ['needs', 'Needs you'], ['blocked', 'Blocked'],
-  ['ready', 'Ready'], ['held', 'Held'], ['done', 'Done'],
+  ['triage', 'Triage'], ['needs', 'Needs you'], ['blocked', 'Blocked'],
+  ['ready', 'Ready'], ['held', 'Held'], ['review', 'In review'], ['done', 'Done'],
 ];
+const STAGE_NAME = Object.fromEntries(STAGES);
+const OPEN_STAGES = ['triage', 'needs', 'blocked', 'ready', 'held', 'review'];
 const CAP = 8;       // rows a stage shows before "show more"
 const TIER_CAP = 5;  // rows a ready tier shows before "show more"
+const QUEUE_CAP = 40;
 const DONE_SHOWN = HOUR * 24;
+const WINDOW = 14 * DAY;
+const VIEWS = ['queue', 'board', 'metrics'];
 
 const params = new URLSearchParams(location.search);
 const root = document.documentElement;
@@ -226,6 +343,7 @@ function localGet(k) { try { return localStorage.getItem(k); } catch { return nu
 function localSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const $ = (id) => document.getElementById(id);
+const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
 
 function span(s) {
   s = Math.max(0, s);
@@ -234,49 +352,113 @@ function span(s) {
   if (s < 48 * HOUR) return `${Math.floor(s / HOUR)}h`;
   return `${Math.floor(s / DAY)}d`;
 }
+function pct(arr, p) {
+  if (!arr.length) return null;
+  const a = [...arr].sort((x, y) => x - y);
+  const i = (a.length - 1) * p, lo = Math.floor(i), hi = Math.ceil(i);
+  return a[lo] + (a[hi] - a[lo]) * (i - lo);
+}
+const sum = (a) => a.reduce((x, y) => x + y, 0);
+const usd = (n) => (n == null ? '-' : `$${n.toFixed(2)}`);
+const dur = (s) => (s == null ? '-' : span(s));
 
 // ---------- the fold: work.events up to a cut -> every item's stage ----------
 
 const recs = fx.records;
-const NOW = fx.now;
+let NOW = fx.now;
 const FIRST = recs[0].t;
+const viewer = fx.viewer;
+const settings = fx.settings ?? {};
+const localEvents = [];
+
+// Who a PR in review waits on.
+function waitingOf(it) {
+  if (!it.pr) return null;
+  if (it.approved) return 'merge';
+  if (it.changesReq || it.pr.ci === 'fail') return 'agent';
+  if (!it.reviewer) return 'unassigned';
+  return 'reviewer';
+}
+const hwOf = (it, stage) => stage === 'needs' || (stage === 'triage' && !!it.proposal) || (stage === 'review' && waitingOf(it) !== 'agent');
 
 function fold(cut) {
   const items = new Map();
   const dependents = new Map();
+  const visits = [];
+  const reactions = [];
   const stageOf = (it) => {
+    if (it.closed) return 'closed';
     if (it.done) return 'done';
     if (it.asked || it.gaveUp) return 'needs';
+    if (it.pr) return 'review';
     if (it.holder) return 'held';
-    if (it.tier == null) return 'arrived';
-    for (const d of it.deps) if (!items.get(d)?.done) return 'blocked';
+    if (it.tier == null) return 'triage';
+    for (const d of it.deps) if (!it.resolved.has(d) && !items.get(d)?.done) return 'blocked';
     return 'ready';
   };
   const settle = (it, t) => {
     const s = stageOf(it);
-    if (s !== it.stage) { it.stage = s; it.since = t; }
+    if (s !== it.stage) {
+      if (it.stage) visits.push({ key: it.key, stage: it.stage, from: it.since, to: t });
+      it.stage = s; it.since = t;
+    }
+    const hw = hwOf(it, s);
+    if (hw && it.waitSince == null) { it.waitSince = t; it.hwKind = s === 'review' ? 'review' : 'queue'; it.reacted = false; }
+    if (!hw && it.waitSince != null) { it.hwTotal += t - it.waitSince; it.waitSince = null; }
   };
   for (const r of recs) {
     if (r.t > cut) break;
     if (r.kind === 'imported') {
       const meta = fx.items[r.item];
-      items.set(r.item, { key: r.item, ...meta, at: r.t, tier: null, deps: [], stage: null, since: r.t, attempts: 0 });
+      items.set(r.item, {
+        key: r.item, ...meta, at: r.t, tier: null, deps: [], resolved: new Set(), stage: null, since: r.t,
+        attempts: 0, fails: 0, rounds: 0, cost: 0, failCost: 0, humanMin: 0, hwTotal: 0, waitSince: null, steers: 0,
+      });
     }
     const it = items.get(r.item);
     if (!it) continue;
-    if (r.kind === 'triaged') it.tier = r.tier;
-    else if (r.kind === 'linked') { it.deps.push(r.on); (dependents.get(r.on) ?? dependents.set(r.on, []).get(r.on)).push(r.item); }
-    else if (r.kind === 'asked') it.asked = r.text;
-    else if (r.kind === 'answered') it.asked = null;
-    else if (r.kind === 'claimed') { it.holder = r.agent; it.run = r.run; it.claimedAt = r.t; it.gaveUp = null; }
-    else if (r.kind === 'failed') { it.holder = null; it.attempts = r.attempts; }
-    else if (r.kind === 'gave_up') { it.holder = null; it.gaveUp = r.reason; }
-    else if (r.kind === 'released') it.holder = null;
-    else if (r.kind === 'done') { it.done = true; it.doneAt = r.t; it.holder = null; it.by = r.agent; it.pr = r.pr; }
+    // The first person-made record while an item waits on a person is the reaction time.
+    if (r.by && r.kind !== 'snoozed' && it.waitSince != null && !it.reacted) { reactions.push({ kind: it.hwKind, dt: r.t - it.waitSince, key: it.key }); it.reacted = true; }
+    switch (r.kind) {
+      case 'proposed': it.proposal = { tier: r.tier, on: r.on ?? [], why: r.why ?? '', dup: r.dup ?? null }; break;
+      case 'triaged': it.tier = r.tier; break;
+      case 'tier_changed': it.tier = r.tier; break;
+      case 'linked': it.deps.push(r.on); (dependents.get(r.on) ?? dependents.set(r.on, []).get(r.on)).push(r.item); break;
+      case 'asked': it.asked = r.text; break;
+      case 'answered': it.asked = null; it.answer = r.text; break;
+      case 'claimed': it.holder = r.agent; it.lastAgent = r.agent; it.human = false; it.run = r.run; it.claimedAt = r.t; it.gaveUp = null; break;
+      case 'failed': it.holder = null; it.attempts = r.attempts; it.fails++; break;
+      case 'gave_up': it.holder = null; it.gaveUp = r.reason; it.cause = r.cause ?? 'gave up'; it.msg = r.msg ?? ''; it.lastAgent = r.agent; break;
+      case 'released': it.holder = null; break;
+      case 'retried': it.gaveUp = null; it.cause = null; it.msg = ''; it.holder = null; it.attempts = 0; it.note = r.note ?? null; break;
+      case 'reassigned': it.holder = r.agent; it.lastAgent = r.agent; it.human = false; it.claimedAt = r.t; it.gaveUp = null; break;
+      case 'taken': it.holder = r.by; it.human = true; it.claimedAt = r.t; it.gaveUp = null; break;
+      case 'steered': it.steers++; break;
+      case 'snoozed': it.snoozeUntil = r.until; break;
+      case 'parked': it.parked = true; break;
+      case 'unblocked': it.resolved.add(r.on); break;
+      case 'pr_opened':
+        it.pr = { n: r.pr, add: r.add, del: r.del, files: r.files, ci: r.ci, agent: r.agent, handoff: r.handoff ?? null, rated: null };
+        it.reviewer = r.reviewer ?? null; it.holder = null; it.changesReq = false; it.approved = false; it.hadPr = true; break;
+      case 'review_requested': it.reviewer = r.reviewer; break;
+      case 'pr_updated': if (it.pr) { it.pr.ci = r.ci ?? 'running'; } it.changesReq = false; break;
+      case 'ci': if (it.pr) it.pr.ci = r.state; break;
+      case 'changes_requested': it.rounds++; it.changesReq = true; it.approved = false; break;
+      case 'approved': it.approved = true; break;
+      case 'bot_review': it.bot = true; break;
+      case 'summary_rated': if (it.pr) it.pr.rated = r.rating; break;
+      case 'rejected': it.closed = true; it.closedAt = r.t; it.reason = r.reason; it.closedAfterPr = !!it.pr; if (r.dup) it.dupOf = r.dup; break;
+      case 'done': it.done = true; it.doneAt = r.t; it.holder = null; it.by = r.agent ?? r.by; it.prNum = r.pr ?? it.pr?.n; if (r.edited) it.edited = true; break;
+      case 'reverted': it.reverted = true; break;
+      case 'cost': it.cost += r.usd; if (r.failed) it.failCost += r.usd; break;
+      case 'human': it.humanMin += r.min; break;
+      default: break;
+    }
     settle(it, r.t);
-    if (r.kind === 'done') for (const k of dependents.get(r.item) ?? []) settle(items.get(k), r.t);
+    if (r.kind === 'done' || r.kind === 'unblocked') for (const k of dependents.get(r.item) ?? []) settle(items.get(k), r.t);
+    if (r.kind === 'unblocked') for (const k of dependents.get(r.on) ?? []) settle(items.get(k), r.t);
   }
-  return { items, dependents, cut };
+  return { items, dependents, visits, reactions, cut };
 }
 
 // Everything an item waits on, and everything that waits on it.
@@ -292,157 +474,626 @@ function chainOf(state, key) {
 
 let cut = NOW;
 let selected = params.get('select');
+let view = VIEWS.includes(params.get('view')) ? params.get('view') : 'queue';
 const expanded = new Set();   // stage or stage:tier keys opened with "show more"
-let state, lastInfo;
+const pending = new Map();    // proposed tier edited in the view, not yet accepted
+let state, by, stats, queue, lastInfo, binding;
 
 function summarize(st) {
-  const by = Object.fromEntries(STAGES.map(([k]) => [k, []]));
-  for (const it of st.items.values()) by[it.stage].push(it);
-  for (const k of Object.keys(by)) {
-    by[k].sort(k === 'done' ? (a, b) => b.since - a.since : (a, b) => a.since - b.since || a.key.localeCompare(b.key));
+  const out = Object.fromEntries(STAGES.map(([k]) => [k, []]));
+  for (const it of st.items.values()) if (out[it.stage]) out[it.stage].push(it);
+  for (const k of Object.keys(out)) {
+    out[k].sort(k === 'done' ? (a, b) => b.since - a.since : (a, b) => a.since - b.since || a.key.localeCompare(b.key));
   }
-  by.done = by.done.filter((it) => st.cut - it.since <= DONE_SHOWN);
-  return by;
+  out.done = out.done.filter((it) => st.cut - it.since <= DONE_SHOWN);
+  return out;
 }
+
+// Per stage, how long finished visits took: the team's own p50 and p85.
+function stageStats(st) {
+  const out = {};
+  for (const s of OPEN_STAGES) {
+    const d = st.visits.filter((v) => v.stage === s && v.to > v.from).map((v) => v.to - v.from);
+    const own = d.length >= MIN_SAMPLES;
+    out[s] = own ? { n: d.length, p50: pct(d, 0.5), p85: pct(d, 0.85), own } : { n: d.length, p50: STALE[s] / 2, p85: STALE[s], own };
+  }
+  return out;
+}
+const ageClass = (stage, age) => { const s = stats?.[stage]; return !s ? '' : age > s.p85 ? 'hot' : age > s.p50 ? 'warn' : ''; };
+
+// What waits on the viewer: questions, failures, triage proposals and reviews.
+function waitKind(it) {
+  if (it.parked || (it.snoozeUntil && it.snoozeUntil > cut)) return null;
+  if (it.stage === 'needs') return it.asked ? 'question' : 'failure';
+  if (it.stage === 'triage') return it.proposal ? 'triage' : null;
+  if (it.stage === 'review') {
+    const w = waitingOf(it);
+    if (w === 'unassigned') return 'review';
+    if (w === 'reviewer' && it.reviewer === viewer) return 'review';
+    if (w === 'merge' && it.reviewer === viewer) return 'merge';
+  }
+  return null;
+}
+const KIND_LABEL = { question: 'Question', failure: 'Failed', triage: 'Triage', review: 'Review', merge: 'Merge' };
+
+function buildQueue(st) {
+  const rows = [];
+  let snoozed = 0;
+  for (const it of st.items.values()) {
+    const k = waitKind(it);
+    if (k) rows.push({ it, kind: k });
+    else if (it.stage !== 'done' && it.stage !== 'closed' && ((it.snoozeUntil && it.snoozeUntil > cut) || it.parked) && ['needs', 'triage', 'review'].includes(it.stage)) snoozed++;
+  }
+  const bucket = (r) => Math.floor((cut - r.it.waitSince) / HOUR);
+  rows.sort((a, b) => bucket(b) - bucket(a) || (a.it.tier ?? a.it.proposal?.tier ?? 9) - (b.it.tier ?? b.it.proposal?.tier ?? 9) || a.it.key.localeCompare(b.it.key));
+  const kinds = {};
+  for (const r of rows) kinds[r.kind] = (kinds[r.kind] ?? 0) + 1;
+  return { rows, snoozed, kinds };
+}
+
+// Roots of what blocks an item: unfinished dependencies that are not blocked themselves.
+function rootsOf(st, it, seen = new Set()) {
+  const out = new Set();
+  for (const d of it.deps) {
+    const o = st.items.get(d);
+    if (!o || o.done || it.resolved.has(d) || seen.has(d)) continue;
+    seen.add(d);
+    if (o.stage === 'blocked') for (const x of rootsOf(st, o, seen)) out.add(x); else out.add(d);
+  }
+  return out;
+}
+function blockRoots(st, blockedItems) {
+  const m = new Map();
+  for (const it of blockedItems) for (const r of rootsOf(st, it)) m.set(r, true);
+  return [...m.keys()].map((k) => {
+    const o = st.items.get(k);
+    const holds = [...chainOf(st, k).down].filter((d) => !st.items.get(d).done && !st.items.get(d).closed).length;
+    return { it: o, holds };
+  }).sort((a, b) => b.holds - a.holds);
+}
+
+// The stage that is slowest to move, with a cause that names it.
+function constraintOf(byStage, busy, agents, roots) {
+  const cap = settings.reviewCap;
+  const humanReview = byStage.review.filter((it) => waitingOf(it) !== 'agent');
+  const oldest = (arr) => (arr.length ? cut - arr[0].since : 0);
+  const cands = [];
+  const add = (stage, label, arr, text, boost = 1) => { if (arr.length) cands.push({ stage, label, text, score: boost * oldest(arr) / stats[stage].p85 }); };
+  add('review', 'review', humanReview, `${plural(humanReview.length, 'PR')} waiting, oldest ${span(oldest(humanReview))}`);
+  const tri = byStage.triage.filter((it) => it.proposal);
+  add('triage', 'triage', tri, `${plural(tri.length, 'proposal')} waiting for your accept, oldest ${span(oldest(tri))}`);
+  add('needs', 'needs you', byStage.needs, `${plural(byStage.needs.length, 'item')} waiting on an answer or a decision, oldest ${span(oldest(byStage.needs))}`);
+  add('blocked', 'blocked', byStage.blocked, roots.length ? `${plural(byStage.blocked.length, 'item')} behind ${roots[0].it.ref}, which holds up ${roots[0].holds}` : `${plural(byStage.blocked.length, 'item')} blocked`);
+  const full = cap != null && byStage.review.length >= cap;
+  if (byStage.ready.length && busy < agents && !full) add('ready', 'claim path', byStage.ready, `${agents - busy} of ${agents} agents idle while ${byStage.ready.length} are ready`, 2);
+  if (full) { const c = cands.find((x) => x.stage === 'review'); if (c) c.score = 1e9; }
+  cands.sort((a, b) => b.score - a.score);
+  return cands[0] ?? null;
+}
+
+// ---------- rendering ----------
 
 function render() {
   state = fold(cut);
-  const by = summarize(state);
+  by = summarize(state);
+  stats = stageStats(state);
+  queue = buildQueue(state);
   if (selected && !state.items.has(selected)) selected = null;
   const chain = selected ? chainOf(state, selected) : null;
-  const forced = chain ? chain.all : new Set();
-  const tag = (it) => `<span class="tag">${esc(fx.sources[it.source].tag)}</span>`;
-  const age = (it, stage) => `<span class="age${stage && st(it, stage) ? ' stale' : ''}">${span(cut - it.since)}</span>`;
-  const st = (it, stage) => cut - it.since > STALE[stage];
+  const busy = by.held.filter((it) => !it.human).length, agents = fx.agents.length;
+  const blockedRoots = blockRoots(state, by.blocked);
+  binding = constraintOf(by, busy, agents, blockedRoots);
 
-  const row = (it, stage) => {
-    let cls = 'row', note = '';
-    if (it.key === selected) cls += ' sel'; else if (chain?.all.has(it.key)) cls += ' chain';
-    if (stage === 'needs') {
-      if (it.gaveUp) { cls += ' fail'; note = `<span class="note">${it.attempts ? `failed ${it.attempts}x, ` : ''}${esc(it.gaveUp)}${it.holder ? '' : ''}</span>`; }
-      else { cls += ' ask'; note = `<span class="note">asks: ${esc(it.asked)}</span>`; }
-    } else if (stage === 'blocked') {
-      const open = it.deps.filter((d) => !state.items.get(d)?.done).map((d) => state.items.get(d).ref);
-      note = `<span class="note">waits on <b>${esc(open.join(', '))}</b></span>`;
-    } else if (stage === 'held') {
-      note = `<span class="note"><span class="agent">${esc(it.holder)}</span> since ${span(cut - it.claimedAt)}</span>`;
-    } else if (stage === 'done') {
-      note = `<span class="note">${esc(it.by)} <b>PR ${esc(it.pr)}</b></span>`;
-    }
-    const pill = stage === 'ready' || it.tier == null ? '' : `<span class="pill p${it.tier}">P${it.tier}</span>`;
-    return `<button class="${cls}" data-k="${esc(it.key)}" aria-pressed="${it.key === selected}" title="${esc(it.title)}">` +
-      `<span class="l1">${tag(it)}<span class="ref">${esc(it.ref)}</span>${age(it, stage === 'done' ? null : stage)}</span>` +
-      `<span class="title">${esc(it.title)}</span>${note ? `<span class="l3">${pill}${note}</span>` : ''}</button>`;
-  };
+  for (const v of VIEWS) { $('v-' + v).style.display = v === view ? '' : 'none'; $('t-' + v).setAttribute('aria-selected', v === view); }
+  $('nav').classList.toggle('on', view === 'board');
+  $('qn').textContent = queue.rows.length || '';
+  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Felix Agents: ${{ queue: 'My queue', board: 'Board', metrics: 'Metrics' }[view]}`;
 
-  const list = (arr, stage, key, cap) => {
-    const shown = [];
-    let hidden = 0;
-    for (const it of arr) (shown.length < cap || forced.has(it.key) || expanded.has(key)) ? shown.push(it) : hidden++;
-    return shown.map((it) => row(it, stage)).join('') +
-      (hidden ? `<button class="more" data-more="${key}">${hidden} more</button>` : '') +
-      (expanded.has(key) && arr.length > cap ? `<button class="more" data-less="${key}">show fewer</button>` : '');
-  };
+  renderStatus(busy, agents);
+  if (view === 'queue') renderQueue();
+  else if (view === 'board') renderBoard(chain, blockedRoots, busy, agents);
+  else renderMetrics();
+  renderHeadline();
+  renderDock(chain);
+  renderEvents();
+  renderFooter(busy, agents);
+  $('legend').innerHTML = [['j k', 'move'], ['enter', 'open'], ['a', 'accept'], ['p', 'tier'], ['r', 'retry'], ['x', 'reassign'], ['t', 'take'], ['n', 'note'], ['s', 'snooze'], ['z', 'park'], ['u', 'unblock'], ['v', 'review'], ['c', 'changes'], ['d', 'decline'], ['o', 'diff'], ['1 2 3', 'views']]
+    .map(([k, t]) => `<span><kbd>${k}</kbd>${t}</span>`).join('');
+  const live = cut >= NOW;
+  $('at').textContent = live ? '' : `${span(NOW - cut)} ago`;
+  $('live').classList.toggle('on', live);
+  $('scrub').max = NOW;
+  $('scrub').value = cut;
+  lastInfo = { colInfo: colInfoOf(), open: [...state.items.values()].filter((it) => it.stage !== 'done' && it.stage !== 'closed').length, busy };
+  root.dataset.ready = '1';
+}
 
-  const cols = [];
-  // Sources: arrivals in the last hour and day, and 24 hourly bars.
+function colInfoOf() {
+  const oldestOf = (arr) => (arr.length ? arr.reduce((a, b) => (a.since <= b.since ? a : b)) : null);
+  const out = {};
+  for (const [stage] of STAGES) {
+    const arr = by[stage];
+    const old = stage === 'done' ? null : oldestOf(arr);
+    out[stage] = { count: arr.length, oldest: old ? cut - old.since : 0, oldestRef: old?.ref ?? null };
+  }
+  return out;
+}
+
+function renderStatus(busy, agents) {
   const srcRows = Object.entries(fx.sources).map(([id, s]) => {
     const mine = [...state.items.values()].filter((it) => it.source === id);
     const h1 = mine.filter((it) => cut - it.at <= HOUR).length;
     const d1 = mine.filter((it) => cut - it.at <= DAY).length;
-    const open = mine.filter((it) => !it.done).length;
+    const open = mine.filter((it) => it.stage !== 'done' && it.stage !== 'closed').length;
     const bins = Array(24).fill(0);
     for (const it of mine) { const b = Math.floor((cut - it.at) / HOUR); if (b >= 0 && b < 24) bins[23 - b]++; }
     const peak = Math.max(1, ...bins);
     const bars = bins.map((n, i) => n ? `<rect x="${i * 10 + 1}" width="8" y="${22 - Math.max(2, n / peak * 22)}" height="${Math.max(2, n / peak * 22)}" rx="1.5"></rect>` : '').join('');
-    return `<div class="src"><div class="top"><span class="tag">${esc(s.tag)}</span>${esc(s.label)}</div>` +
-      `<div class="rates"><span><small>1h</small>+${h1}</span><span><small>24h</small>+${d1}</span><span><small>open</small>${open}</span></div>` +
-      `<svg viewBox="0 0 240 22" preserveAspectRatio="none" role="img" aria-label="Arrivals per hour, last 24 hours"><line x1="0" x2="240" y1="21.5" y2="21.5"></line>${bars}</svg></div>`;
-  }).join('');
-  cols.push(`<section class="col srcs" id="c-sources"><h2>Sources</h2><div class="body">${srcRows}</div></section>`);
+    return { d1, html: `<div class="src"><div class="top"><span class="tag">${esc(s.tag)}</span>${esc(s.label)}</div>` +
+      `<div class="srates"><span><small>1h</small>+${h1}</span><span><small>24h</small>+${d1}</span><span><small>open</small>${open}</span></div>` +
+      `<svg viewBox="0 0 240 22" preserveAspectRatio="none" role="img" aria-label="Arrivals per hour, last 24 hours"><line x1="0" x2="240" y1="21.5" y2="21.5"></line>${bars}</svg></div>` };
+  });
+  const arrivals = sum(srcRows.map((r) => r.d1));
+  const cap = settings.reviewCap, inRev = by.review.length;
+  const full = cap != null && inRev >= cap, near = cap != null && inRev >= Math.ceil(cap * 0.8);
+  const capChip = cap == null ? '' : full
+    ? `<span class="chip full" id="capchip" title="Soft limit: agents stop claiming new work until a PR leaves review. Triage, answers and reviews carry on.">review full: agents paused, ${inRev}/${cap}</span>`
+    : `<span class="chip${near ? ' warn' : ''}" id="capchip" title="Soft limit on agent PRs in review. At the limit agents stop claiming. It is a setting with no evidence behind its default."><small>review</small>${inRev}/${cap}</span>`;
+  const open = [...state.items.values()].filter((it) => it.stage !== 'done' && it.stage !== 'closed').length;
+  $('status').innerHTML = `<span class="scope">${esc(fx.scope)}</span>` +
+    `<button class="chip" id="srcbtn" aria-expanded="false" aria-controls="srcpop"><small>sources</small>+${arrivals}/24h</button>${capChip}` +
+    `<span class="chip"><small>agents busy</small>${busy}/${agents}</span><span class="chip open"><small>open</small>${open}</span>` +
+    `<div id="srcpop" role="dialog" aria-label="Arrivals by source">${srcRows.map((r) => r.html).join('')}</div>`;
+}
 
-  const oldestOf = (arr) => arr.length ? arr.reduce((a, b) => (a.since <= b.since ? a : b)) : null;
-  const colInfo = {};
+function renderHeadline() {
+  const h = $('headline');
+  h.classList.toggle('on', view !== 'board');
+  if (view === 'queue') {
+    const q = queue.rows;
+    if (!q.length) { h.innerHTML = `Nothing is waiting on you.`; return; }
+    const o = q[0], k = KIND_LABEL[o.kind].toLowerCase();
+    h.innerHTML = `${q.length} waiting on you. <span>Oldest is ${/^[aeiou]/.test(k) ? 'an' : 'a'} ${k}, ${span(cut - o.it.waitSince)}. Ordered by age, then tier.</span>`;
+  } else if (view === 'metrics') h.innerHTML = metricsHeadline;
+}
+
+function ageHtml(it, stage) {
+  const a = cut - it.since;
+  return `<span class="age ${stage && stage !== 'done' ? ageClass(stage, a) : ''}">${span(a)}</span>`;
+}
+const tagHtml = (it) => `<span class="tag">${esc(fx.sources[it.source].tag)}</span>`;
+const tierOf = (it) => pending.get(it.key) ?? it.tier ?? it.proposal?.tier;
+const pillHtml = (it, tier = it.tier) => (tier == null ? '' : `<span class="pill p${tier}">P${tier}</span>`);
+const reviewState = (it) => {
+  const w = waitingOf(it);
+  if (w === 'agent') return it.pr.ci === 'fail' ? `CI red, ${it.pr.agent} fixing` : `changes asked, ${it.pr.agent} on it`;
+  if (w === 'unassigned') return 'CI green, no reviewer';
+  if (w === 'merge') return `approved, not merged (${it.reviewer === viewer ? 'you' : it.reviewer})`;
+  return `waits on ${it.reviewer === viewer ? 'you' : esc(it.reviewer)}`;
+};
+const reviewSize = (it) => `+${it.pr.add} −${it.pr.del} · ${it.pr.files} ${it.pr.files === 1 ? 'file' : 'files'} · CI ${it.pr.ci}${it.rounds ? ` · round ${it.rounds + 1}` : ''}`;
+
+function noteFor(it, stage) {
+  if (stage === 'needs') {
+    if (it.gaveUp) return { cls: 'fail', pill: `<span class="pill cause">${esc(it.cause)}</span>`, notes: [`${it.fails ? `failed ${it.fails}x: ` : ''}${esc(it.msg || it.gaveUp)}`] };
+    return { cls: 'ask', pill: '', notes: [`asks: ${esc(it.asked)}`] };
+  }
+  if (stage === 'triage') {
+    const p = it.proposal;
+    if (!p) return { cls: '', pill: '', notes: ['not read by triage yet'] };
+    const dup = p.dup ? `<span class="note dup">maybe a duplicate of <b>${esc(state.items.get(p.dup)?.ref ?? p.dup)}</b></span>` : '';
+    return { cls: '', pill: pillHtml(it, tierOf(it)), notes: [`why P${tierOf(it)}: ${esc(p.why)}`], extra: dup };
+  }
+  if (stage === 'blocked') {
+    const open = it.deps.filter((d) => !it.resolved.has(d) && !state.items.get(d)?.done).map((d) => state.items.get(d).ref);
+    return { cls: '', pill: pillHtml(it), notes: [`waits on <b>${esc(open.join(', '))}</b>`] };
+  }
+  if (stage === 'held') return { cls: '', pill: pillHtml(it), notes: [`<span class="agent">${esc(it.holder)}</span> since ${span(cut - it.claimedAt)}${it.steers ? ` · ${it.steers} ${it.steers === 1 ? 'note' : 'notes'} sent` : ''}`] };
+  if (stage === 'review') return { cls: '', pill: pillHtml(it), notes: [`<b>${esc(reviewState(it))}</b>`, esc(reviewSize(it))] };
+  if (stage === 'done') return { cls: '', pill: '', notes: [`${esc(it.by)} <b>PR ${esc(it.prNum)}</b>`] };
+  return { cls: '', pill: '', notes: [] };
+}
+
+function rowHtml(it, stage, chain) {
+  const n = noteFor(it, stage);
+  let cls = 'row ' + n.cls;
+  if (it.key === selected) cls += ' sel'; else if (chain?.all.has(it.key)) cls += ' chain';
+  if (it.parked || (it.snoozeUntil && it.snoozeUntil > cut)) cls += ' snoozed';
+  const l3 = (n.pill || n.notes.length) ? `<span class="l3">${n.pill}<span class="note">${n.notes[0] ?? ''}</span></span>` : '';
+  const more = (n.notes.slice(1).map((x) => `<span class="note">${x}</span>`).join('')) + (n.extra ?? '');
+  const you = it.human ? '<span class="pill you">you</span>' : '';
+  return `<button class="${cls}" data-k="${esc(it.key)}" data-stage="${stage}" aria-pressed="${it.key === selected}" title="${esc(it.title)}">` +
+    `<span class="l1">${tagHtml(it)}<span class="ref">${esc(it.ref)}</span>${you}${ageHtml(it, stage)}</span>` +
+    `<span class="title">${esc(it.title)}</span>${l3}${more}</button>`;
+}
+
+function renderQueue() {
+  const rows = queue.rows;
+  const show = expanded.has('queue') ? rows : rows.slice(0, QUEUE_CAP);
+  let html = show.map(({ it, kind }) => {
+    const stage = it.stage;
+    let note;
+    if (kind === 'question') note = `asks: ${esc(it.asked)}`;
+    else if (kind === 'failure') note = `<span class="pill cause">${esc(it.cause)}</span> ${esc(it.msg || it.gaveUp)}`;
+    else if (kind === 'triage') note = `${pillHtml(it, tierOf(it))} ${esc(it.proposal.why)}${it.proposal.dup ? ` · <b>possible duplicate of ${esc(state.items.get(it.proposal.dup)?.ref ?? it.proposal.dup)}</b>` : ''}`;
+    else note = `<b>${esc(reviewState(it))}</b> · ${esc(reviewSize(it))}`;
+    const cls = `qrow ${kind === 'question' ? 'ask' : kind === 'failure' ? 'fail' : ''}${it.key === selected ? ' sel' : ''}`;
+    const age = cut - it.waitSince;
+    return `<button class="${cls}" data-k="${esc(it.key)}" data-kind="${kind}" aria-pressed="${it.key === selected}">` +
+      `<span class="l1"><span class="kind">${KIND_LABEL[kind]}</span>${tagHtml(it)}<span class="ref">${esc(it.ref)}</span>${it.tier != null ? pillHtml(it) : ''}` +
+      `<span class="age ${ageClass(stage, age)}">${span(age)}</span></span><span class="title">${esc(it.title)}</span><span class="note">${note}</span></button>`;
+  }).join('');
+  if (rows.length > QUEUE_CAP) html += expanded.has('queue') ? `<button class="more" data-less="queue">show fewer</button>` : `<button class="more" data-more="queue">${rows.length - QUEUE_CAP} more</button>`;
+  if (!rows.length) html = `<div class="empty">Nothing is waiting on you.</div>`;
+  if (queue.snoozed) html += `<div class="qfoot">${plural(queue.snoozed, 'item')} snoozed or parked, not counted.</div>`;
+  $('qlist').innerHTML = html;
+  const it = selected && state.items.get(selected);
+  $('v-queue').classList.toggle('has-sel', !!it);
+  $('side').innerHTML = it ? `<div class="detail">${detailHtml(it, null)}</div>` :
+    `<div class="hint"><b>Pick something from the queue.</b><br>Each card has its actions on single keys. Use <kbd>j</kbd> and <kbd>k</kbd> to move, <kbd>enter</kbd> to open, and <kbd>a</kbd> for the main action. Everything you do is written to the event list below as a work.events record.</div>`;
+}
+
+function renderBoard(chain, blockedRoots, busy, agents) {
+  const list = (arr, stage, key, cap) => {
+    const shown = [];
+    let hidden = 0;
+    for (const it of arr) (shown.length < cap || chain?.all.has(it.key) || expanded.has(key)) ? shown.push(it) : hidden++;
+    return shown.map((it) => rowHtml(it, stage, chain)).join('') +
+      (hidden ? `<button class="more" data-more="${key}">${hidden} more</button>` : '') +
+      (expanded.has(key) && arr.length > cap ? `<button class="more" data-less="${key}">show fewer</button>` : '');
+  };
+  const cols = [];
+  const cap = settings.reviewCap, full = cap != null && by.review.length >= cap;
   for (const [stage, name] of STAGES) {
     const arr = by[stage];
-    const old = stage === 'done' ? null : oldestOf(arr);
-    colInfo[stage] = { count: arr.length, oldest: old ? cut - old.since : 0, oldestRef: old?.ref ?? null };
-    const stale = old && cut - old.since > STALE[stage];
+    const old = stage === 'done' ? null : arr[0];
+    const age = old ? cut - old.since : 0;
+    const cls = old ? ageClass(stage, age) : '';
+    const s = stats[stage];
     const oldLine = stage === 'done'
-      ? `<div class="oldest"><span>last 24 hours</span><b>${arr.length}</b></div>`
-      : `<div class="oldest${stale ? ' stale' : ''}"><span>oldest${old ? ` ${esc(old.ref)}` : ''}</span><b>${old ? span(cut - old.since) : 'none'}</b></div>`;
+      ? `<div class="oldest"><div class="l"><span>last 24 hours</span><b>${arr.length}</b></div></div>`
+      : `<div class="oldest ${cls}"><div class="l"><span>oldest${old ? ` ${esc(old.ref)}` : ''}</span><b>${old ? span(age) : 'none'}</b></div><span class="pc">${s.own ? `p50 ${span(s.p50)} · p85 ${span(s.p85)}` : `no history yet`}</span></div>`;
     let body;
     if (!arr.length) body = `<div class="empty">Nothing here</div>`;
     else if (stage === 'ready') {
       body = [0, 1, 2, 3].map((t) => {
         const tier = arr.filter((it) => it.tier === t);
         if (!tier.length) return '';
-        const o = oldestOf(tier);
-        return `<div class="tierhead${cut - o.since > STALE.ready ? ' stale' : ''}"><span class="pill p${t}">P${t}</span><span>${tier.length}</span><span class="tc">oldest ${span(cut - o.since)}</span></div>` +
-          list(tier, 'ready', `ready:${t}`, TIER_CAP);
+        const o = tier[0], a = cut - o.since;
+        return `<div class="tierhead ${ageClass('ready', a)}"><span class="pill p${t}">P${t}</span><span>${tier.length}</span><span class="tc">oldest ${span(a)}</span></div>` + list(tier, 'ready', `ready:${t}`, TIER_CAP);
       }).join('');
+    } else if (stage === 'needs') {
+      const groups = [['question', arr.filter((it) => it.asked)], ...['tests red', 'timeout', 'claim lost', 'gave up'].map((c) => [c, arr.filter((it) => !it.asked && it.cause === c)])];
+      body = groups.filter(([, g]) => g.length).map(([c, g]) => `<div class="tierhead"><span class="mono">${c === 'question' ? 'questions' : esc(c)}</span><span>${g.length}</span></div>` + list(g, 'needs', `needs:${c}`, CAP)).join('');
+    } else if (stage === 'blocked') {
+      const roots = blockedRoots.slice(0, 3).map(({ it, holds }) =>
+        `<button class="root" data-k="${esc(it.key)}"><b>${esc(it.ref)}</b> ${esc(STAGE_NAME[it.stage].toLowerCase())}${it.holder ? ` · ${esc(it.holder)}` : ''} · <em>holds up ${holds}</em></button>`).join('');
+      body = (roots ? `<div class="roots">${roots}</div>` : '') + list(arr, stage, stage, CAP);
     } else body = list(arr, stage, stage, CAP);
-    cols.push(`<section class="col${stage === 'needs' ? ' you' : ''}" id="c-${stage}" data-stage="${stage}"><h2>${name}<span class="n">${arr.length}</span></h2>${oldLine}<div class="body">${body}</div></section>`);
+    if (stage === 'ready' && full) body = `<div class="banner">Agents paused: review is full (${by.review.length}/${cap}). Ready work waits for a PR to leave review.</div>` + body;
+    cols.push(`<section class="col${stage === 'needs' ? ' you' : ''}${binding?.stage === stage ? ' binding' : ''}" id="c-${stage}" data-stage="${stage}"><h2>${name}<span class="n">${arr.length}</span></h2>${oldLine}<div class="body">${body}</div></section>`);
   }
   const board = $('board');
   board.className = 'board' + (chain ? ' picked' : '');
   board.innerHTML = `<svg id="links" aria-hidden="true"></svg>` + cols.join('');
+  $('nav').innerHTML = STAGES.map(([k, n]) => `<a href="#c-${k}" data-nav="${k}"${k === 'needs' ? ' class="you"' : ''}>${n} <b>${by[k].length}</b></a>`).join('');
+  requestAnimationFrame(() => drawLinks(chain));
+}
 
-  // Phone navigation.
-  $('nav').innerHTML = [['sources', 'Sources', ''], ...STAGES.map(([k, n]) => [k, n, colInfo[k].count])]
-    .map(([k, n, c]) => `<a href="#c-${k}" data-nav="${k}"${k === 'needs' ? ' class="you"' : ''}>${n}${c === '' ? '' : ` <b>${c}</b>`}</a>`).join('');
-
-  // Header and footer.
-  const open = [...state.items.values()].filter((it) => !it.done).length;
-  const busy = by.held.length, agents = fx.agents.length;
-  $('scope').textContent = fx.scope;
-  $('sOpen').textContent = open;
-  $('sAgents').innerHTML = `${busy}<i>/${agents}</i>`;
-
+function renderFooter() {
   const inDay = [...state.items.values()].filter((it) => cut - it.at <= DAY).length;
   const outDay = [...state.items.values()].filter((it) => it.done && cut - it.doneAt <= DAY).length;
   const net = inDay - outDay;
-  const oldReady = oldestOf(by.ready);
-  let verdict;
-  if (net <= 0) verdict = `<span class="verdict"><b>Draining.</b> Finishing at least as fast as work arrives.</span>`;
-  else if (by.needs.length > by.ready.length) verdict = `<span class="verdict grow"><b>Growing by ${net} a day.</b> ${by.needs.length} items wait on a person, so more agents would not help.</span>`;
-  else if (busy < agents) verdict = `<span class="verdict grow"><b>Growing by ${net} a day.</b> ${agents - busy} of ${agents} agents are idle while work is ready: check the claim path.</span>`;
-  else verdict = `<span class="verdict grow"><b>Growing by ${net} a day.</b> Every agent is busy: it needs more agents or fewer bugs.</span>`;
-  $('rates').innerHTML =
-    `<span class="m"><small>in</small>${inDay}/day</span><span class="m"><small>out</small>${outDay}/day</span>` +
-    `<span class="m"><small>oldest ready</small>${oldReady ? `${span(cut - oldReady.since)} (${esc(oldReady.ref)})` : 'none'}</span>${verdict}`;
-  const live = cut >= NOW;
-  $('at').textContent = live ? '' : `${span(NOW - cut)} ago`;
-  $('live').classList.toggle('on', live);
-  $('scrub').value = cut;
+  const lead = net <= 0 ? `<b>Draining.</b>` : `<b class="grow">Growing by ${net} a day.</b>`;
+  const why = binding ? ` Binding stage, <b>${esc(binding.label)}</b>: ${binding.text}. <button class="lk" data-bind="${binding.stage}">Show it</button>` : ' Nothing is waiting long.';
+  $('bind').innerHTML = `${lead}${why}`;
+  const oldReady = by.ready[0];
+  $('rates').innerHTML = `<span class="m"><small>in</small>${inDay}/day</span><span class="m"><small>out</small>${outDay}/day</span>` +
+    `<span class="m"><small>oldest ready</small>${oldReady ? `${span(cut - oldReady.since)} (${esc(oldReady.ref)})` : 'none'}</span>`;
+}
 
-  renderDock(chain);
-  requestAnimationFrame(() => drawLinks(chain));
-  lastInfo = { colInfo, open, busy, inDay, outDay };
-  root.dataset.ready = '1';
+function renderEvents() {
+  $('evn').textContent = localEvents.length;
+  const fmt = (r) => { const { o, t, kind, item, ...rest } = r; return `<span class="o">#${o}</span><b>${esc(kind)}</b> ${esc(item)} ${esc(Object.entries(rest).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' '))}`; };
+  $('evlast').textContent = localEvents.length ? (() => { const r = localEvents[localEvents.length - 1]; return `${r.kind} ${r.item}`; })() : 'none yet';
+  $('evlist').innerHTML = [...localEvents].reverse().map((r) => `<li>${fmt(r)}</li>`).join('') || `<li>Actions you take are appended here as work.events records.</li>`;
+}
+
+// ---------- the selected item: facts and actions ----------
+
+function detailHtml(it, chain) {
+  const stage = it.stage;
+  const kv = (rows) => `<div class="kv">${rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
+  let body = '';
+  if (stage === 'triage') {
+    const p = it.proposal;
+    if (!p) body = `<div class="blk">The triage agent has not read this yet.</div>`;
+    else {
+      const t = tierOf(it);
+      const deps = p.on.map((k) => state.items.get(k)?.ref ?? k);
+      const d = p.dup && state.items.get(p.dup);
+      body = `<div class="blk"><h4>Triage agent proposes</h4>${kv([['tier', `${pillHtml(it, t)}${pending.has(it.key) ? ' (edited)' : ''}`], ['why', esc(p.why)], ['after', deps.length ? esc(deps.join(', ')) : 'nothing']])}</div>` +
+        (d ? `<div class="blk warn">Possible duplicate of <b>${esc(d.ref)}</b> (${esc(fx.sources[d.source].label)}): ${esc(d.title)}. <kbd>g</kbd> merges this into it.</div>` : '');
+    }
+  } else if (stage === 'needs') {
+    body = it.asked
+      ? `<div class="blk"><h4>Triage asks</h4>${esc(it.asked)}</div>`
+      : `<div class="blk"><h4>${esc(it.cause)}${it.lastAgent ? ` · last agent ${esc(it.lastAgent)}` : ''}</h4>${it.msg ? `"${esc(it.msg)}"` : esc(it.gaveUp)}<br><span class="meta">${esc(it.gaveUp)}${it.fails ? `, ${plural(it.fails, 'failed attempt')}` : ''}. Two attempts, then a person.</span></div>`;
+  } else if (stage === 'blocked') {
+    const open = it.deps.filter((d) => !it.resolved.has(d) && !state.items.get(d)?.done).map((d) => state.items.get(d).ref);
+    body = `<div class="blk">Waits on <b>${esc(open.join(', '))}</b>. Unblock marks the first as resolved.</div>`;
+  } else if (stage === 'held') {
+    body = `<div class="blk">Held by ${it.human ? '<span class="pill you">you</span>' : `<span class="agent">${esc(it.holder)}</span>`} for ${span(cut - it.claimedAt)}${it.steers ? `. ${plural(it.steers, 'note')} sent to the agent.` : ''}${it.human ? ' No agent will claim it.' : ''}</div>`;
+  } else if (stage === 'review' || (stage === 'done' && it.pr)) {
+    const h = it.pr.handoff;
+    body = `<div class="blk">${kv([['PR', `<a href="#diff/${it.pr.n}" data-open>${it.pr.n}</a> by <span class="agent">${esc(it.pr.agent)}</span>`], ['size', esc(reviewSize(it))], ['state', stage === 'review' ? esc(reviewState(it)) : 'merged'], ['rounds', `${it.rounds + 1}${it.bot ? ' · bot approved (not counted as review)' : ''}`]])}</div>` +
+      (h ? `<div class="blk"><h4>Agent's handoff</h4>${kv([['changed', esc(h.changed)], ['verified', esc(h.verified)], ['unsure', h.unsure ? `<span class="unsure">${esc(h.unsure)}</span>` : 'nothing flagged']])}` +
+        `${it.pr.rated ? `<div class="rated">Marked ${esc(it.pr.rated)}</div>` : ''}</div>` : '');
+  } else if (stage === 'done') body = `<div class="blk">Merged by ${esc(it.by)} as <a href="#pr/${it.prNum}" data-open>PR ${esc(it.prNum)}</a>.</div>`;
+  const run = it.holder && it.run ? ` · <a href="#run/${esc(it.run)}" title="Opens the run in the swarm view at the claim">open run ${esc(it.run)}</a>` : '';
+  let chainHtml = '';
+  if (chain) {
+    const chip = (k) => { const o = state.items.get(k); return `<button data-k="${esc(k)}" title="${esc(o.title)}">${esc(o.ref)}</button><span class="st">${esc(STAGE_NAME[o.stage] ?? o.stage)}${o.holder ? `, ${esc(o.holder)}` : ''}</span><span class="gap"></span>`; };
+    const depth = (k) => { let d = 0; for (const x of state.items.get(k).deps) d = Math.max(d, 1 + depth(x)); return d; };
+    const order = (set) => [...set].sort((a, b) => depth(a) - depth(b));
+    if (chain.up.size) chainHtml += `<div class="chain">waits on ${order(chain.up).map(chip).join('')}</div>`;
+    if (chain.down.size) chainHtml += `<div class="chain">blocks ${order(chain.down).map(chip).join('')}</div>`;
+    if (!chain.up.size && !chain.down.size) chainHtml = `<div class="chain">No dependencies.</div>`;
+  }
+  const needsInput = (it.asked && stage === 'needs') ? 'Answer for the triage agent, then enter'
+    : (stage === 'needs' && it.gaveUp) ? 'Note for the next attempt (optional)' : (stage === 'held' && !it.human) ? 'Note to the running agent' : null;
+  const input = needsInput ? `<input type="text" id="note" placeholder="${needsInput}" aria-label="${needsInput}" autocomplete="off">` : '';
+  const live = cut >= NOW;
+  const acts = actionsFor(it).map((a, i) => `<button class="${i === 0 && a.k !== 'o' ? 'primary' : ''}" data-act="${a.k}"${live ? '' : ' disabled'} title="${esc(a.title ?? a.label)}"><kbd>${a.k}</kbd>${esc(a.label)}</button>`).join('');
+  return `<div class="head">${tagHtml(it)}<span class="ref mono">${esc(it.ref)}</span>${it.tier == null ? (tierOf(it) != null ? pillHtml(it, tierOf(it)) : '') : pillHtml(it)}` +
+    `<b class="t">${esc(it.title)}</b></div>` +
+    `<div class="meta">${esc(STAGE_NAME[stage] ?? stage)} for ${span(cut - it.since)} · arrived ${span(cut - it.at)} ago · ${esc(it.class)}${run}${it.snoozeUntil > cut ? ` · snoozed ${span(it.snoozeUntil - cut)}` : ''}${it.parked ? ' · parked' : ''}</div>` +
+    `${body}${chainHtml}${input}<div class="acts">${acts}${live ? '' : '<span class="meta">Scrub back to live to act.</span>'}</div>`;
 }
 
 function renderDock(chain) {
   const dock = $('dock');
-  if (!selected) { dock.className = ''; dock.innerHTML = ''; return; }
+  if (view !== 'board' || !selected) { dock.className = ''; dock.innerHTML = ''; return; }
   const it = state.items.get(selected);
-  const stageName = Object.fromEntries(STAGES)[it.stage];
-  const chip = (k) => {
-    const o = state.items.get(k);
-    return `<button data-k="${esc(k)}" title="${esc(o.title)}">${esc(o.ref)}</button><span class="st">${esc(Object.fromEntries(STAGES)[o.stage])}${o.holder ? `, ${esc(o.holder)}` : ''}</span><span class="gap"></span>`;
-  };
-  const order = (set) => [...set].sort((a, b) => chainDepth(a) - chainDepth(b));
-  const chainDepth = (k) => { let d = 0; for (const x of state.items.get(k).deps) d = Math.max(d, 1 + chainDepth(x)); return d; };
-  let chainHtml = '';
-  if (chain.up.size) chainHtml += `<div class="chain">waits on ${order(chain.up).map(chip).join('')}</div>`;
-  if (chain.down.size) chainHtml += `<div class="chain">blocks ${order(chain.down).map(chip).join('')}</div>`;
-  if (!chain.up.size && !chain.down.size) chainHtml = `<div class="chain">No dependencies.</div>`;
-  const run = it.holder ? ` · <a href="#run/${esc(it.run)}" title="Opens the run in the swarm view at the claim">open run ${esc(it.run)}</a>` : '';
   dock.className = 'open';
-  dock.innerHTML = `<div class="head"><span class="tag">${esc(fx.sources[it.source].tag)}</span><span class="ref mono">${esc(it.ref)}</span>` +
-    `${it.tier == null ? '' : `<span class="pill p${it.tier}">P${it.tier}</span>`}<b class="t">${esc(it.title)}</b><button class="x" id="close" aria-label="Clear selection">×</button></div>` +
-    `<div class="meta">${esc(stageName)} for ${span(cut - it.since)} · arrived ${span(cut - it.at)} ago${it.holder ? ` · held by <span class="agent">${esc(it.holder)}</span>` : ''}${run}</div>${chainHtml}`;
+  dock.innerHTML = `<div class="detail">${detailHtml(it, chain)}</div>`;
 }
+
+// ---------- actions: each one appends a work.events record, and the view re-folds ----------
+
+function nextAgent(it) {
+  const a = fx.agents, i = a.indexOf(it.holder ?? it.lastAgent);
+  const busyNow = new Set([...state.items.values()].filter((x) => x.holder).map((x) => x.holder));
+  for (let n = 1; n <= a.length; n++) { const c = a[(i + n) % a.length]; if (c !== it.lastAgent && !busyNow.has(c)) return c; }
+  return a[(i + 1) % a.length];
+}
+const noteText = () => ($('note')?.value ?? '').trim();
+
+function actionsFor(it) {
+  const s = it.stage, A = [];
+  const add = (k, label, run, title) => A.push({ k, label, run, title });
+  const tierStep = () => add('p', 'Tier', () => {
+    const t = ((tierOf(it) ?? 2) + 1) % 4;
+    if (s === 'triage') pending.set(it.key, t); else emit('tier_changed', it.key, { tier: t });
+  }, 'Change the tier');
+  const snooze = () => add('s', 'Snooze', () => emit('snoozed', it.key, { until: NOW + 4 * HOUR }), 'Hide for 4 hours');
+  if (s === 'triage') {
+    if (it.proposal) {
+      add('a', 'Accept', () => {
+        const p = it.proposal, tier = tierOf(it);
+        emit('triaged', it.key, { tier, ...(pending.has(it.key) ? { edited: true } : {}) });
+        for (const d of p.on) if (state.items.has(d)) emit('linked', it.key, { on: d });
+        pending.delete(it.key);
+      }, 'Accept the proposed tier and dependencies');
+      tierStep();
+      if (it.proposal.dup && state.items.has(it.proposal.dup)) add('g', 'Merge duplicate', () => emit('rejected', it.key, { reason: 'duplicate', dup: it.proposal.dup }), 'Close this and keep the original');
+    }
+    add('d', 'Reject', () => emit('rejected', it.key, { reason: 'declined at triage' }));
+    snooze();
+  } else if (s === 'needs') {
+    if (it.asked) {
+      add('a', 'Answer', () => { const t = noteText(); if (!t) { $('note')?.focus(); return; } emit('answered', it.key, { text: t }); }, 'Send the answer; the item becomes ready');
+      add('d', 'Close', () => emit('rejected', it.key, { reason: 'closed from needs you' }));
+    } else {
+      add('r', 'Retry', () => { const t = noteText(); emit('retried', it.key, t ? { note: t } : {}); }, 'Requeue, with the note if you wrote one');
+      add('x', 'Reassign', () => emit('reassigned', it.key, { agent: nextAgent(it) }), 'Give it to another agent');
+      add('t', 'Take it', () => emit('taken', it.key, { holder: viewer }), 'Mark it yours so no agent claims it');
+      add('n', 'Note', () => $('note')?.focus(), 'Write a note for the next attempt');
+      add('z', 'Park', () => emit('parked', it.key, {}), 'Take it off the queue without closing it');
+      add('d', 'Close', () => emit('rejected', it.key, { reason: 'closed from needs you' }));
+    }
+    tierStep(); snooze();
+  } else if (s === 'blocked') {
+    const d = it.deps.find((x) => !it.resolved.has(x) && !state.items.get(x)?.done);
+    if (d) add('u', 'Unblock', () => emit('unblocked', it.key, { on: d }), `Mark ${state.items.get(d).ref} resolved for this item`);
+    tierStep(); snooze();
+  } else if (s === 'ready') {
+    tierStep();
+    add('t', 'Take it', () => emit('taken', it.key, { holder: viewer }));
+    snooze();
+  } else if (s === 'held') {
+    if (!it.human) {
+      add('n', 'Steer', () => { const t = noteText(); if (!t) { $('note')?.focus(); return; } emit('steered', it.key, { note: t }); }, 'Send a note to the running agent');
+      add('r', 'Stop', () => emit('released', it.key, { agent: it.holder }), 'Stop the agent and requeue the item');
+      add('x', 'Reassign', () => emit('reassigned', it.key, { agent: nextAgent(it) }));
+    } else add('r', 'Release', () => emit('released', it.key, { agent: it.holder }), 'Give it back to the queue');
+    add('t', 'Take it', () => emit('taken', it.key, { holder: viewer }));
+  } else if (s === 'review') {
+    const w = waitingOf(it);
+    add('o', 'Open diff', () => $('side')?.querySelector('a[data-open]')?.click() ?? $('dock')?.querySelector('a[data-open]')?.click());
+    if (w === 'unassigned') add('v', 'Request review', () => emit('review_requested', it.key, { reviewer: fx.people.find((p) => p !== viewer) ?? viewer }), 'Ask a reviewer');
+    if (w === 'reviewer' || w === 'unassigned') {
+      add('a', 'Approve', () => emit('approved', it.key, {}));
+      add('c', 'Changes', () => emit('changes_requested', it.key, {}), 'Send the PR back to the agent with your comments');
+    }
+    if (w === 'merge') add('m', 'Mark merged', () => emit('done', it.key, { agent: it.pr.agent, pr: it.pr.n }), 'Record the merge you did upstream; the tracker never merges');
+    add('d', 'Reject', () => emit('rejected', it.key, { reason: 'wrong approach' }));
+    if (it.pr.handoff && !it.pr.rated) { add('+', 'Summary accurate', () => emit('summary_rated', it.key, { rating: 'accurate' })); add('-', 'Summary inaccurate', () => emit('summary_rated', it.key, { rating: 'inaccurate' })); }
+    snooze();
+  } else if (s === 'done' && it.prNum) add('o', 'Open PR', () => $('dock')?.querySelector('a[data-open]')?.click());
+  return A;
+}
+
+function emit(kind, item, d = {}) {
+  NOW += 1;
+  const r = { o: recs.length, t: NOW, kind, item, by: viewer, ...d };
+  recs.push(r);
+  localEvents.push(r);
+  cut = NOW;
+}
+
+function act(key) {
+  if (cut < NOW || !selected) return false;
+  const it = state.items.get(selected);
+  const a = it && actionsFor(it).find((x) => x.k === key);
+  if (!a) return false;
+  const queueKeys = view === 'queue' ? queue.rows.map((r) => r.it.key) : [];
+  const idx = queueKeys.indexOf(selected);
+  const before = localEvents.length;
+  a.run();
+  if (localEvents.length === before) { render(); return true; }
+  if (view === 'queue') {
+    // Like an inbox: after a decision, the next card takes its place.
+    const left = queueKeys.filter((k) => k !== selected);
+    state = fold(cut);
+    const q = buildQueue(state).rows.map((r) => r.it.key);
+    selected = q.includes(selected) ? selected : (q.find((k) => queueKeys.indexOf(k) >= idx) ?? q[q.length - 1] ?? null);
+    void left;
+  } else if (!state.items.has(selected)) selected = null;
+  render();
+  return true;
+}
+
+// ---------- the metrics tab: team and flow numbers only ----------
+
+let metricsHeadline = '';
+const svgText = (x, y, t, cls = '', anchor = 'start') => `<text x="${x}" y="${y}" class="${cls}" text-anchor="${anchor}">${t}</text>`;
+
+function hbars(rows, hum = false) {
+  const max = Math.max(1, ...rows.map((r) => r.p85 ?? 0));
+  const h = rows.length * 24 + 4;
+  return `<svg viewBox="0 0 360 ${h}" role="img" aria-label="Time in each stage">` + rows.map((r, i) => {
+    const y = i * 24 + 4, w85 = (r.p85 ?? 0) / max * 170, w50 = (r.p50 ?? 0) / max * 170;
+    const cls = hum && r.hum ? ' hum' : '';
+    return svgText(0, y + 12, esc(r.label), 'lbl') + `<rect class="b85${cls}" x="76" y="${y + 2}" width="${w85}" height="12" rx="2"></rect><rect class="b50${cls}" x="76" y="${y + 2}" width="${w50}" height="12" rx="2"></rect>` +
+      svgText(254, y + 12, r.p85 == null ? 'no data' : `${span(r.p50)} / ${span(r.p85)}`);
+  }).join('') + `</svg>`;
+}
+
+function dailyBars(arr, mer) {
+  const W = 360, H = 120, n = arr.length, gw = (W - 10) / n, max = Math.max(1, ...arr, ...mer);
+  const bars = arr.map((a, i) => {
+    const x = 6 + i * gw, ha = a / max * 84, hm = mer[i] / max * 84;
+    return `<rect class="arr" x="${x}" y="${100 - ha}" width="${gw * 0.4}" height="${ha}"></rect><rect class="mrg" x="${x + gw * 0.42}" y="${100 - hm}" width="${gw * 0.4}" height="${hm}"></rect>`;
+  }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Arrivals and merged per day"><line class="ax" x1="0" x2="${W}" y1="100.5" y2="100.5"></line>${bars}` +
+    svgText(6, 114, `${n}d ago`) + svgText(W - 4, 114, 'today', '', 'end') + svgText(6, 10, `arrivals (grey) and merged (cyan) per day, peak ${max}`) + `</svg>`;
+}
+
+function cfd(points) {
+  const W = 480, H = 160, L = 4, R = 74, T = 6, B = 18;
+  const order = ['done', 'review', 'held', 'ready', 'blocked', 'needs', 'triage'];
+  const fill = { done: 'var(--line-strong)', review: 'var(--amber)', held: 'var(--cyan)', ready: 'color-mix(in srgb, var(--cyan) 45%, transparent)', blocked: 'var(--faint)', needs: 'color-mix(in srgb, var(--amber) 60%, transparent)', triage: 'color-mix(in srgb, var(--amber) 30%, transparent)' };
+  const max = Math.max(1, ...points.map((p) => sum(order.map((s) => p[s]))));
+  const x = (i) => L + i / (points.length - 1) * (W - L - R), y = (v) => H - B - v / max * (H - B - T);
+  let out = '', base = points.map(() => 0);
+  for (const s of order) {
+    const top = points.map((p, i) => base[i] + p[s]);
+    const pts = [...top.map((v, i) => `${x(i)},${y(v)}`), ...base.map((v, i) => `${x(i)},${y(v)}`).reverse()].join(' ');
+    out += `<polygon points="${pts}" fill="${fill[s]}" stroke="var(--bg)" stroke-width="0.6"></polygon>`;
+    const last = points.length - 1, mid = (y(top[last]) + y(base[last])) / 2;
+    if (top[last] - base[last] >= 0 && (y(base[last]) - y(top[last])) > 6) out += svgText(W - R + 6, mid + 3.5, STAGE_NAME[s].toLowerCase(), 'lbl');
+    base = top;
+  }
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative flow">${out}<line class="ax" x1="${L}" x2="${W - R}" y1="${H - B + 0.5}" y2="${H - B + 0.5}"></line>` +
+    svgText(L, H - 4, `${Math.round((points.length - 1) / 2)}d ago`) + svgText(W - R, H - 4, 'now', '', 'end') + svgText(L + 2, 12, `${max} items`) + `</svg>`;
+}
+
+function classBars(rows) {
+  const h = rows.length * 24 + 4;
+  return `<svg viewBox="0 0 360 ${h}" role="img" aria-label="Merged and rejected by task class">` + rows.map((r, i) => {
+    const y = i * 24 + 4, t = r.m + r.r, wm = t ? r.m / t * 200 : 0;
+    return svgText(0, y + 12, esc(r.c), 'lbl') + (t ? `<rect class="mer" x="60" y="${y + 2}" width="${wm}" height="12" rx="2"></rect><rect class="rej" x="${60 + wm}" y="${y + 2}" width="${200 - wm}" height="12" rx="2"></rect>` : `<rect class="arr" x="60" y="${y + 2}" width="200" height="12" rx="2"></rect>`) +
+      svgText(268, y + 12, t ? `${Math.round(r.m / t * 100)}% of ${t}` : 'none');
+  }).join('') + `</svg>`;
+}
+
+const cfdCache = new Map();
+function cfdPoints() {
+  const key = `${cut}:${recs.length}`;
+  if (cfdCache.has(key)) return cfdCache.get(key);
+  const pts = [];
+  for (let i = 28; i >= 0; i--) {
+    const st = fold(Math.max(FIRST, cut - i * 12 * HOUR));
+    const c = { triage: 0, needs: 0, blocked: 0, ready: 0, held: 0, review: 0, done: 0 };
+    for (const it of st.items.values()) if (c[it.stage] != null) c[it.stage]++;
+    pts.push(c);
+  }
+  cfdCache.clear(); cfdCache.set(key, pts);
+  return pts;
+}
+
+function renderMetrics() {
+  const st = state, since = cut - WINDOW;
+  const all = [...st.items.values()];
+  const merged = all.filter((it) => it.done && it.doneAt >= since);
+  const rejectedPr = all.filter((it) => it.closed && it.closedAfterPr && it.closedAt >= since);
+  const wait = merged.map((it) => it.hwTotal);
+  const p = (a, q) => pct(a, q);
+  const react = (kind) => st.reactions.filter((r) => r.kind === kind).map((r) => r.dt);
+  const rq = react('queue'), rr = react('review');
+  const cycle = merged.map((it) => it.doneAt - it.at);
+  const mCount = merged.length;
+  const hasCost = merged.some((it) => it.cost > 0);
+  const costAll = sum(merged.map((it) => it.cost)), costFail = sum(merged.map((it) => it.failCost));
+  const costRej = sum(rejectedPr.map((it) => it.cost));
+  const hm = merged.length && merged.some((it) => it.humanMin > 0) ? sum(merged.map((it) => it.humanMin)) / mCount : null;
+  const stageRows = OPEN_STAGES.map((s) => ({ label: STAGE_NAME[s], hum: ['triage', 'needs', 'review'].includes(s), p50: stats[s].n ? stats[s].p50 : null, p85: stats[s].n ? stats[s].p85 : null }));
+  const worst = stageRows.filter((r) => r.hum && r.p85 != null).sort((a, b) => b.p85 - a.p85)[0];
+  const waiting = by.review.filter((it) => waitingOf(it) !== 'agent').length;
+  metricsHeadline = worst
+    ? `${worst.label} is where work waits longest: p85 ${span(worst.p85)}. <span>${plural(waiting, 'PR')} waiting in review now. Team and flow numbers, last 14 days.</span>`
+    : `Not enough finished work yet. <span>Team and flow numbers, last 14 days.</span>`;
+  // Per day, newest last.
+  const arr = Array(14).fill(0), mer = Array(14).fill(0);
+  for (const it of all) {
+    const a = Math.floor((cut - it.at) / DAY); if (a >= 0 && a < 14) arr[13 - a]++;
+    if (it.done) { const d = Math.floor((cut - it.doneAt) / DAY); if (d >= 0 && d < 14) mer[13 - d]++; }
+  }
+  const totArr = sum(arr), totMer = sum(mer);
+  // Blocked time: item time spent blocked against all item time, finished visits plus open ones.
+  const vis = st.visits.filter((v) => v.to >= since);
+  const open = all.filter((it) => OPEN_STAGES.includes(it.stage)).map((it) => ({ stage: it.stage, d: cut - it.since }));
+  const blockedT = sum(vis.filter((v) => v.stage === 'blocked').map((v) => v.to - v.from)) + sum(open.filter((o) => o.stage === 'blocked').map((o) => o.d));
+  const totalT = sum(vis.map((v) => v.to - v.from)) + sum(open.map((o) => o.d));
+  const roots = blockRoots(st, by.blocked).slice(0, 3);
+  // Rework.
+  const share = (n) => (mCount ? `${Math.round(n / mCount * 100)}%` : '-');
+  const retried = merged.filter((it) => it.fails >= 1).length, roundsMany = merged.filter((it) => it.rounds >= 2).length;
+  const reverted = all.filter((it) => it.reverted && it.done && it.doneAt >= since).length;
+  const edited = merged.filter((it) => it.edited).length, bot = merged.filter((it) => it.bot).length;
+  const classes = [...new Set(all.map((it) => it.class))].sort().map((c) => ({ c, m: merged.filter((it) => it.class === c).length, r: rejectedPr.filter((it) => it.class === c).length })).filter((r) => r.m + r.r > 0).sort((a, b) => (b.m + b.r) - (a.m + a.r));
+  const tile = (label, v, sub = '') => `<div class="tile"><small>${label}</small><b>${v}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const pair = (a, f = dur) => `${f(p(a, 0.5))} <i>/ ${f(p(a, 0.85))}</i>`;
+  $('v-metrics').innerHTML = `<div class="metrics">` +
+    `<div class="mc"><h3>Waiting on a human</h3><div class="tiles">${tile('per merged fix, p50 / p85', wait.length ? pair(wait) : '-', wait.length ? `${Math.round(sum(wait) / Math.max(1, sum(cycle)) * 100)}% of cycle time` : '')}${tile('cycle, p50 / p85', cycle.length ? pair(cycle) : '-', 'arrived to merged')}</div>` +
+    `<p>Time in triage, needs you and review while a person was the next step. This is the number to shrink.</p></div>` +
+    `<div class="mc"><h3>First human action</h3><div class="tiles">${tile('my queue, p50 / p85', rq.length ? pair(rq) : '-', plural(rq.length, 'item'))}${tile('in review, p50 / p85', rr.length ? pair(rr) : '-', plural(rr.length, 'PR'))}</div>` +
+    `<p>From the moment an item waits on a person to their first action on it. Snoozing does not count as an action.</p></div>` +
+    `<div class="mc"><h3>Cost and effort per merged fix</h3><div class="tiles">${tile('cost', hasCost ? usd(costAll / mCount) : '-', hasCost ? `${usd(costFail / mCount)} of it failed attempts` : '')}${tile('human minutes', hm == null ? '-' : `${Math.round(hm)}<i> min</i>`, 'an estimate: review, answers, edits')}</div>` +
+    `<p>${hasCost ? `Rejected PRs cost another <b>${usd(costRej)}</b> that bought nothing.` : 'No cost records in this data.'} Failed attempts count against the fixes that merged.</p></div>` +
+    `<div class="mc"><h3>Time in each stage <span style="text-transform:none;letter-spacing:0">p50 / p85</span></h3>${hbars(stageRows, true)}<p>Amber stages wait on a person. Card ages on the board colour against these.</p></div>` +
+    `<div class="mc"><h3>Throughput against arrivals</h3>${dailyBars(arr, mer)}<p><b>${totMer}</b> merged, <b>${totArr}</b> arrived in 14 days. ${totArr > totMer ? `The queue grew by ${totArr - totMer}.` : 'Finishing at least as fast as work arrives.'}</p></div>` +
+    `<div class="mc wide"><h3>Cumulative flow, last 14 days</h3>${cfd(cfdPoints())}<p>A band that widens over time is the constraint. Amber bands wait on a person.</p></div>` +
+    `<div class="mc"><h3>Blocked time</h3><div class="tiles">${tile('of item time blocked', totalT ? `${Math.round(blockedT / totalT * 100)}%` : '-')}</div>` +
+    `<p>${roots.length ? roots.map((r) => `<b>${esc(r.it.ref)}</b> holds up ${r.holds}`).join(', ') + '.' : 'Nothing is blocked.'}</p></div>` +
+    `<div class="mc"><h3>Rework</h3><div class="tiles">${tile('2+ attempts', share(retried))}${tile('2+ review rounds', share(roundsMany))}${tile('reverted in 14d', reverted)}${tile('merged after human edits', share(edited))}</div>` +
+    `<p>Of ${plural(mCount, 'merged fix', 'merged fixes')}. Bot approvals (${bot} here) are never counted as review: the wait runs until a person acts.</p></div>` +
+    `<div class="mc"><h3>Merged and rejected, by task class</h3>${classBars(classes)}<p>PRs that reached review. Merge rate by class, because a raw rate rewards easy picks.</p></div>` +
+    `</div><div class="foot-note">Team and flow level only. There are no per-person numbers here, and none will be added.</div>`;
+}
+
+// ---------- chain lines (board) ----------
 
 // Lines from each dependency to the item that waits on it. They run in the
 // gutters between columns and, to pass a column, under its last card, so they
@@ -452,17 +1103,17 @@ function drawLinks(chain) {
   const svg = $('links');
   svg.innerHTML = '';
   segments = [];
-  if (!chain || getComputedStyle(svg).display === 'none') return;
+  if (!chain || view !== 'board' || getComputedStyle(svg).display === 'none') return;
   const board = $('board');
   const b = board.getBoundingClientRect();
-  const cols = [...board.querySelectorAll('.col')].map((c) => { const r = c.getBoundingClientRect(); return { l: r.left - b.left, r: r.right - b.left, b: r.bottom - b.top }; });
+  const colEls = [...board.querySelectorAll('.col')];
+  const cols = colEls.map((c) => { const r = c.getBoundingClientRect(); return { l: r.left - b.left, r: r.right - b.left, b: r.bottom - b.top }; });
   const pos = (k) => {
     const el = board.querySelector(`.row[data-k="${CSS.escape(k)}"]`);
     if (!el) return null;
     const r = el.getBoundingClientRect();
-    return { l: r.left - b.left, r: r.right - b.left, y: r.top - b.top + r.height / 2, col: [...board.querySelectorAll('.col')].indexOf(el.closest('.col')) };
+    return { l: r.left - b.left, r: r.right - b.left, y: r.top - b.top + r.height / 2, col: colEls.indexOf(el.closest('.col')) };
   };
-  // The gutter between column i and i + 1 (or beside the first and last).
   const gutter = (i, side) => {
     const j = side < 0 ? i - 1 : i;
     if (j < 0) return cols[0].l - 5;
@@ -509,40 +1160,106 @@ function drawLinks(chain) {
 
 // ---------- input ----------
 
-$('board').addEventListener('click', (e) => {
+function setView(v) { view = v; localSet('fa-view', v); render(); }
+$('tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setView(b.dataset.view); });
+
+function pick(e) {
   const more = e.target.closest('[data-more]');
-  if (more) { expanded.add(more.dataset.more); render(); return; }
+  if (more) { expanded.add(more.dataset.more); render(); return true; }
   const less = e.target.closest('[data-less]');
-  if (less) { expanded.delete(less.dataset.less); render(); return; }
-  const row = e.target.closest('.row');
-  selected = row && row.dataset.k !== selected ? row.dataset.k : null;
+  if (less) { expanded.delete(less.dataset.less); render(); return true; }
+  return false;
+}
+$('board').addEventListener('click', (e) => {
+  if (pick(e)) return;
+  const row = e.target.closest('.row, .root');
+  if (!row) { selected = null; render(); return; }
+  selected = row.dataset.k !== selected ? row.dataset.k : null;
   render();
 });
-$('dock').addEventListener('click', (e) => {
+$('qlist').addEventListener('click', (e) => {
+  if (pick(e)) return;
+  const row = e.target.closest('.qrow');
+  if (row) { selected = row.dataset.k; render(); }
+});
+for (const id of ['dock', 'side']) $(id).addEventListener('click', (e) => {
+  const a = e.target.closest('[data-act]');
+  if (a) { act(a.dataset.act); return; }
   const b = e.target.closest('button');
-  if (!b) return;
-  selected = b.id === 'close' ? null : b.dataset.k;
-  render();
+  if (b?.dataset.k) { selected = b.dataset.k; render(); }
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && selected) { selected = null; render(); } });
+$('status').addEventListener('click', (e) => {
+  const b = e.target.closest('#srcbtn');
+  if (!b) return;
+  const open = $('srcpop').classList.toggle('open');
+  b.setAttribute('aria-expanded', open);
+});
+$('bind').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-bind]');
+  if (!b) return;
+  view = 'board'; render();
+  $('c-' + b.dataset.bind)?.scrollIntoView({ block: 'nearest', inline: 'center' });
+});
 $('nav').addEventListener('click', (e) => {
   const a = e.target.closest('a');
   if (!a) return;
   e.preventDefault();
   $('c-' + a.dataset.nav).scrollIntoView({ block: 'start' });
 });
-$('scrub').min = FIRST; $('scrub').max = NOW; $('scrub').step = 60;
+
+function visibleKeys() {
+  if (view === 'queue') return queue.rows.map((r) => r.it.key);
+  return [...document.querySelectorAll('#board .row')].map((e) => e.dataset.k);
+}
+function step(dir) {
+  const ks = visibleKeys();
+  if (!ks.length) return;
+  const i = ks.indexOf(selected);
+  selected = ks[Math.max(0, Math.min(ks.length - 1, i < 0 ? 0 : i + dir))];
+  render();
+  document.querySelector(`[data-k="${CSS.escape(selected)}"].qrow, #board [data-k="${CSS.escape(selected)}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const typing = e.target.matches?.('input[type="text"]');
+  if (typing) {
+    if (e.key === 'Enter') {
+      const it = state.items.get(selected);
+      const k = it?.asked ? 'a' : it?.stage === 'held' ? 'n' : 'r';
+      act(k);
+    } else if (e.key === 'Escape') e.target.blur();
+    return;
+  }
+  if (e.target.matches?.('input')) return;
+  const k = e.key;
+  if (k === 'Escape') { $('srcpop')?.classList.remove('open'); if (selected) { selected = null; render(); } return; }
+  if (k === '1' || k === '2' || k === '3') { setView(VIEWS[+k - 1]); return; }
+  if (view === 'metrics') return;
+  if (k === 'j') { step(1); e.preventDefault(); return; }
+  if (k === 'k') { step(-1); e.preventDefault(); return; }
+  if (k === 'Enter') {
+    if (!selected) step(0);
+    ($('note') ?? $('side'))?.focus();
+    return;
+  }
+  if (act(k)) e.preventDefault();
+});
+$('scrub').min = FIRST; $('scrub').step = 60;
 $('scrub').oninput = (e) => { cut = +e.target.value; render(); };
 $('live').onclick = () => { cut = NOW; render(); };
 $('theme').onclick = () => {
   root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
   localSet('fa-theme', root.dataset.theme);
 };
-addEventListener('resize', () => { if (selected) drawLinks(chainOf(state, selected)); });
+addEventListener('resize', () => { if (selected && view === 'board') drawLinks(chainOf(state, selected)); });
 if (params.has('ago')) cut = Math.max(FIRST, NOW - +params.get('ago'));
 
 window.select = (k) => { selected = k; render(); };
 window.scrubTo = (c) => { cut = c; render(); };
+window.setView = setView;
+window.act = (k) => act(k);
+window.stageOf = (k) => state.items.get(k)?.stage;
 window.intakeInfo = () => ({
   kinds: [...new Set(recs.map((r) => r.kind))],
   sources: Object.keys(fx.sources).filter((s) => Object.values(fx.items).some((i) => i.source === s)),
@@ -550,11 +1267,17 @@ window.intakeInfo = () => ({
   tiers: [...new Set(recs.filter((r) => r.kind === 'triaged').map((r) => r.tier))],
   items: Object.keys(fx.items).length,
   ...lastInfo,
+  view,
+  title: document.title,
+  queue: { count: queue.rows.length, kinds: queue.kinds, rows: document.querySelectorAll('#qlist .qrow').length },
+  review: { count: by.review.length, cap: settings.reviewCap, full: settings.reviewCap != null && by.review.length >= settings.reviewCap },
+  binding: binding ? binding.label : null,
+  localEvents: localEvents.map((r) => r.kind),
   links: $('links').querySelectorAll('path').length,
   // Chain segments crossing a card that is not in the chain.
   crossings: (() => {
     const b = $('board').getBoundingClientRect();
-    const rows = [...document.querySelectorAll('.row:not(.chain):not(.sel)')].map((e) => { const r = e.getBoundingClientRect(); return [r.left - b.left, r.top - b.top, r.right - b.left, r.bottom - b.top]; });
+    const rows = [...document.querySelectorAll('#board .row:not(.chain):not(.sel)')].map((e) => { const r = e.getBoundingClientRect(); return [r.left - b.left, r.top - b.top, r.right - b.left, r.bottom - b.top]; });
     return segments.filter(([x1, y1, x2, y2]) => rows.some(([l, t, r, bt]) => Math.max(x1, x2) > l && Math.min(x1, x2) < r && Math.max(y1, y2) > t && Math.min(y1, y2) < bt)).length;
   })(),
   chain: selected ? [...chainOf(state, selected).all] : [],
