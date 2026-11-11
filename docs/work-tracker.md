@@ -37,7 +37,7 @@ operations as MCP tools in `felix-mcp` for agents:
 | Tool | Does |
 |---|---|
 | `work_next` | Claims the highest-priority ready item the agent can take |
-| `work_extend` | Keeps the claim while the agent works (done by `felix-mcp`, as for tasks) |
+| `work_extend` | Keeps the claim while the agent works (sent by `felix-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency between items |
 | `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal |
@@ -45,9 +45,19 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)) |
 
-The `felix-mcp` work tools call the tracker over REST with the agent's own
-token. The tracker validates each call and does the Felix writes itself, so an
-agent never writes the work streams or keys directly.
+Every `felix-mcp` work tool, claiming included, calls the tracker over REST
+with the agent's own token. The tracker checks the token, does the Felix work
+itself and logs it in the same step, so an agent never touches the work
+streams or keys. `work_next` polls the ready streams' consumer group as a
+member named after the agent; `work_extend`, `work_complete` and
+`work_release` extend, ack or nack that delivery. A claim is never held
+without a `claimed` record, and an item is never acked before its `done`
+record is written. An agent that dies stops extending, its claim lapses, and
+the group hands the item to another agent.
+
+The agent named on each record is the one the tracker authenticated. Felix
+records the tracker as the publisher of every `work.events` record, so the
+agent's identity is the tracker's attestation, written into the record.
 
 An ingest worker pulls new and changed items from GitHub, ADO or Jira. For each
 root it posts one triage item and one augment item, once. Triaging again is a
@@ -58,7 +68,7 @@ person's action. People edit any record through REST or the viewer.
 | Principal | May do |
 |---|---|
 | The tracker | The only publisher of `work.events` and `work.ready.*`, and the only writer of item and budget keys |
-| An agent | Call the tracker with its own token. Claim from `work.ready.*` through its consumer group. Read items and the stream |
+| An agent | Call the tracker with its own token, for claims and everything else. Read items and the stream. No access to `work.ready.*` |
 | A person | Use the dashboard and REST. Their actions reach `work.events` through the tracker |
 | The viewer | Read only |
 
@@ -100,8 +110,9 @@ It reuses the pieces the swarm already has. No database.
   is the board pattern.
 - **Only ready items are claimable.** The tracker folds `work.events`, and when
   an item's last dependency is done it publishes the item to a ready stream.
-  Agents claim from that stream through a consumer group, with the 90 second
-  visibility and 30 second extension that tasks use. A dead agent's item goes
+  The tracker claims from that stream for agents through one consumer group,
+  as a member named after each agent, with the 90 second visibility and 30
+  second extension that tasks use. A dead agent's item goes
   back to the queue.
 - **Priority is a stream per tier.** A group hands records out in offset order,
   so `work_next` polls `work.ready.p0` first, then `p1`, and so on.
