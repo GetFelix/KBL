@@ -1,6 +1,6 @@
 # A work tracker for coding agents
 
-A proposal, not yet on the build order. It applies the swarm in
+It applies the swarm in
 [design.md](design.md) to a job that never ends: bugs arrive from an upstream
 tracker, an agent triages them, and coding agents ask for the next piece of
 work, fix it and hand it back.
@@ -132,6 +132,12 @@ work is piling up. It is the page someone opens first in the morning.
 
 ## Order
 
-After M4, when replay works: ingest from GitHub, `work_next` and the ready
-streams, then triage, dependencies, and the intake view. ADO ingest after
-GitHub.
+M2 and M3 in the [build order](design.md#build-order): GitHub ingest,
+`work_next` and the ready tiers, then triage and dependencies, then Claude Code
+working `agent-ok` issues. The intake view goes live in M4. ADO ingest comes
+after GitHub.
+
+The first source is GetFelix/felix. Only issues labelled `agent-ok` are
+imported as claimable, and replication and storage safety work stays out. An
+agent works in its own worktree and opens a pull request, which goes through
+the same review and CI as any other. The tracker never merges.

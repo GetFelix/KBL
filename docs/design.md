@@ -538,23 +538,29 @@ once, and `docs/art.md` describes what the frame draws.
 
 ## Build order
 
+The work tracker in [work-tracker.md](work-tracker.md) comes first: it is the
+part that does real work. Its first source is GetFelix/felix itself, issues
+labelled `agent-ok`, and an agent's result is a pull request that people review
+and merge. The pull request review swarm stays as a job type and as the
+scripted demo.
+
 | M | Milestone | Proves |
 |---|---|---|
-| 0 | The viewer, locked: style frame of the swarm view and timeline, drawn from a hand-written run and a generated burst | It reads well, at 8 workers and at 50, before Felix is involved |
+| 0 | The viewer, locked: style frames of the swarm view, the timeline and the intake view, drawn from hand-written fixtures | They read well before Felix is involved |
 | 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
-| 2 | Shared state: the board, leases, presence and messages | Demonstration 3 |
-| 3 | Real models and budgets: `agents-run` with a model API, artifacts, spend and rate limits | Demonstration 5 |
-| 4 | Replay a run: the fold, the viewer on felix-gateway, scrub and follow | Demonstrations 4 and 8, the headline |
-| 5 | Grants and the injection demo | Demonstration 6, the other headline |
-| 6 | Any host, at scale: Claude Code and the Agent SDK as hosts, 50 agents, broker restart and failover | Demonstration 7, and it holds under loss |
-| 7 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
+| 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage | Real issues become claimable work, once each |
+| 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
+| 4 | The intake view, live, and a results page: arrival and completion, time to a pull request, cost per fix | Anyone can see the queue and what it delivered |
+| 5 | Shared state: the board, leases, presence and messages | Demonstration 3 |
+| 6 | Real models and budgets: `agents-run` with a model API, artifacts, spend and rate limits | Demonstration 5 |
+| 7 | Replay a run: the fold, the viewer on felix-gateway, scrub and follow | Demonstrations 4 and 8 |
+| 8 | Grants and the injection demo | Demonstration 6 |
+| 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Demonstration 7, and it holds under loss |
+| 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
 
 **M0 comes first on purpose**, for the reason the other showcases give: a
-replay nobody can read proves nothing, so the look is fixed before anything is
+view nobody can read proves nothing, so the look is fixed before anything is
 built behind it.
-
-**Beyond the demo.** [work-tracker.md](work-tracker.md) proposes a work tracker
-for coding agents built on the same pieces, to follow M4.
 
 ## Risks, and what this surfaces in Felix
 
