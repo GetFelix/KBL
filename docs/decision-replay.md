@@ -106,6 +106,14 @@ branches from that point.
   are what the agent starts from, and both are recorded, so the replay shows
   exactly what the second agent was told and how it differed from what the
   first one believed.
+- **The handoff travels with the work.** The edited narrative and the
+  instruction are stored together as an artifact attached to the item, and
+  the redo goes back on the ready queue as a new attempt that points to it,
+  with the commit to start from. Any agent picks it up through the normal
+  claim, so a redo gets the same once-only handout, extension and give-up
+  rules as any other work. Nothing about the first attempt is deleted: its
+  branch, its pull request (now a draft) and its run stay in place for the
+  comparison.
 - **Redos are limited.** An item can be redone at most three times (a
   setting). Each redo is a sign the item was misunderstood or too big, so
   after the limit it goes to Needs you with its branches attached and two
