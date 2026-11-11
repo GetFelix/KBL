@@ -1153,7 +1153,7 @@ fn a_dropped_dependency_sends_the_dependent_to_needs_you() {
     assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
     // A merged dependency frees its dependents instead.
     let mut m = Log(l.0[..l.0.len() - 1].to_vec());
-    m.tracker(WorkRecord::Closed {
+    m.person(WorkRecord::Closed {
         item: id("b"),
         why: CloseWhy::Merged,
     });
@@ -1776,6 +1776,284 @@ fn an_answer_is_taken_only_for_the_open_question() {
     // Nothing is open now, so the same answer again is refused.
     l.person(answer_rec(open));
     assert_eq!(last_rejection(&l), Some(Reject::NotOpenQuestion));
+}
+
+// ---- pull request status and stalled sources ----
+
+use crate::work::{FailedCheck, PrChecks, PrPhase, PrReview, PrSnapshot};
+
+fn snapshot(pr: &str, checks: PrChecks, review: PrReview) -> PrSnapshot {
+    let failing = (checks == PrChecks::Red).then(|| FailedCheck {
+        name: "lint".into(),
+        url: "https://example.test/lint".into(),
+    });
+    PrSnapshot {
+        pr: pr.into(),
+        phase: PrPhase::Open,
+        review,
+        checks,
+        failing,
+    }
+}
+
+fn pr_status(item: &str, status: PrSnapshot) -> WorkRecord {
+    WorkRecord::PrStatus {
+        item: id(item),
+        status,
+    }
+}
+
+/// A root whose agent reported a pull request and finished.
+fn with_pr() -> Log {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(1),
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: id("r1"),
+            attempt: 1,
+            note: text("opened"),
+            branch: None,
+            pr: Some("GetFelix/felix#9".into()),
+        },
+    );
+    l.agent("w1", done("r1", 1, 0));
+    l
+}
+
+#[test]
+fn a_red_check_puts_the_item_in_needs_you_and_green_takes_it_out() {
+    let mut l = with_pr();
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::InReview));
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed),
+    ));
+    let s = fold(&l.0);
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::CheckFailed));
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
+    assert_eq!(s.pr_waits(&id("r1")), None);
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Unreviewed),
+    ));
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::InReview));
+    assert_eq!(s.pr_waits(&id("r1")), Some(PrWaits::CiGreenNoReviewer));
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Approved),
+    ));
+    assert_eq!(
+        fold(&l.0).pr_waits(&id("r1")),
+        Some(PrWaits::ApprovedNotMerged)
+    );
+    assert!(fold(&l.0).rejections.is_empty());
+}
+
+#[test]
+fn a_status_is_refused_when_it_is_not_for_the_reported_request_or_not_from_sync() {
+    let mut l = with_pr();
+    let good = snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Unreviewed);
+    // Another request than the one the item reports.
+    l.tracker(pr_status(
+        "r1",
+        snapshot("Evil/repo#1", PrChecks::Green, PrReview::Unreviewed),
+    ));
+    // An agent cannot write it, even for its own request.
+    l.agent("w1", pr_status("r1", good.clone()));
+    // Red without a failing check, and a failing check on green.
+    let mut bare = snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed);
+    bare.failing = None;
+    l.tracker(pr_status("r1", bare));
+    let mut stray = good.clone();
+    stray.failing = Some(FailedCheck {
+        name: "x".into(),
+        url: "u".into(),
+    });
+    l.tracker(pr_status("r1", stray));
+    // Text over the record limits.
+    let mut long = snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed);
+    long.failing.as_mut().unwrap().name = "n".repeat(201);
+    l.tracker(pr_status("r1", long));
+    let s = fold(&l.0);
+    let why: Vec<Reject> = s.rejections.iter().map(|r| r.why).collect();
+    assert_eq!(
+        why,
+        [
+            Reject::WrongPr,
+            Reject::ActorNotAllowed,
+            Reject::MissingField,
+            Reject::MissingField,
+            Reject::TooLong
+        ]
+    );
+    assert!(s.items[&id("r1")].pr_status.is_none());
+}
+
+#[test]
+fn a_held_item_is_not_moved_by_a_red_check_and_a_new_request_clears_the_status() {
+    let mut l = with_pr();
+    l.0.pop(); // the agent has not finished: it still holds the item
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed),
+    ));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.needs_you(&id("r1")), None);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Held));
+    // A different request resets what was known about the old one.
+    l.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: id("r1"),
+            attempt: 1,
+            note: text("new pr"),
+            branch: None,
+            pr: Some("GetFelix/felix#10".into()),
+        },
+    );
+    assert!(fold(&l.0).items[&id("r1")].pr_status.is_none());
+}
+
+#[test]
+fn only_the_tracker_reports_a_stalled_source() {
+    let mut l = Log::default();
+    let stall = |status| WorkRecord::SourceStalled {
+        source: "github".into(),
+        repo: "GetFelix/gone".into(),
+        status,
+    };
+    l.agent("w1", stall(Some(404)));
+    l.person(stall(Some(404)));
+    assert_eq!(fold(&l.0).stalled_sources().count(), 0);
+    l.tracker(stall(Some(404)));
+    assert_eq!(
+        fold(&l.0).stalled_sources().collect::<Vec<_>>(),
+        [("github", "GetFelix/gone", 404)]
+    );
+    l.tracker(stall(None));
+    assert_eq!(fold(&l.0).stalled_sources().count(), 0);
+}
+
+#[test]
+fn a_log_from_before_pull_request_status_folds_the_same_and_old_snapshots_still_load() {
+    // The fixed story has no new record kinds, so nothing about it may change.
+    let s = fold(&story().0);
+    assert!(s.items.values().all(|i| i.pr_status.is_none()));
+    assert_eq!(s.stalled_sources().count(), 0);
+    // A snapshot written before the fields existed reads back as the same state.
+    let mut v = serde_json::to_value(&s).unwrap();
+    v.as_object_mut().unwrap().remove("source_stalls");
+    for item in v["items"].as_object_mut().unwrap().values_mut() {
+        item.as_object_mut().unwrap().remove("pr_status");
+    }
+    assert_eq!(serde_json::from_value::<State>(v).unwrap(), s);
+    // A pre-change record line decodes to the record it always did.
+    let line = br#"{"kind":"progress","item":"r1","attempt":1,"note":{"text":"x"},"pr":"GetFelix/felix#9"}"#;
+    assert!(matches!(
+        WorkRecord::decode(line).unwrap(),
+        WorkRecord::Progress { .. }
+    ));
+}
+
+#[test]
+fn a_merged_close_needs_a_merged_status_for_the_reported_request() {
+    let mut l = with_pr();
+    l.0.pop(); // still held, so the agent can swap its request
+    let merge = || WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Merged,
+    };
+    // No status at all, then a merged status of some other request.
+    l.tracker(merge());
+    let mut other = snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Approved);
+    other.phase = PrPhase::Merged;
+    l.tracker(pr_status("r1", other.clone()));
+    l.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: id("r1"),
+            attempt: 1,
+            note: text("swap"),
+            branch: None,
+            pr: Some("GetFelix/felix#10".into()),
+        },
+    );
+    l.tracker(merge());
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        [Reject::NotMerged, Reject::NotMerged]
+    );
+    assert_eq!(s.items[&id("r1")].closed, None);
+    // The merged status of the reported request does close it.
+    other.pr = "GetFelix/felix#10".into();
+    l.tracker(pr_status("r1", other));
+    l.tracker(merge());
+    assert_eq!(fold(&l.0).items[&id("r1")].closed, Some(Closure::Merged));
+}
+
+#[test]
+fn a_state_with_a_stalled_source_encodes_and_the_stalls_are_capped() {
+    let mut l = Log::default();
+    let stall = |repo: &str, status| WorkRecord::SourceStalled {
+        source: "github".into(),
+        repo: repo.into(),
+        status,
+    };
+    l.tracker(stall("GetFelix/gone", Some(404)));
+    let s = fold(&l.0);
+    let back: State = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+    assert_eq!(back, s);
+    assert_eq!(back.stalled_sources().count(), 1);
+
+    for n in 0..MAX_STALLS + 3 {
+        l.tracker(stall(&format!("o/r{n}"), Some(403)));
+    }
+    let s = fold(&l.0);
+    assert_eq!(s.stalled_sources().count(), MAX_STALLS);
+    assert_eq!(s.rejections.len(), 4);
+    // A known repo can still be updated or cleared at the cap.
+    l.tracker(stall("GetFelix/gone", Some(403)));
+    l.tracker(stall("GetFelix/gone", None));
+    assert_eq!(fold(&l.0).stalled_sources().count(), MAX_STALLS - 1);
+}
+
+#[test]
+fn a_request_another_open_item_reports_cannot_be_reported_again() {
+    let mut l = with_pr();
+    l.0.pop(); // r1 still holds its item
+    l.tracker(imported("r2"));
+    l.person(WorkRecord::Accepted {
+        item: id("r2"),
+        tier: Some(1),
+    });
+    l.agent("w2", claimed("r2", 1));
+    let progress = |item: &str, pr: &str| WorkRecord::Progress {
+        item: id(item),
+        attempt: 1,
+        note: text("pr"),
+        branch: None,
+        pr: Some(pr.into()),
+    };
+    l.agent("w2", progress("r2", "GetFelix/felix#9"));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        [Reject::PrInUse]
+    );
+    assert_eq!(s.items[&id("r2")].pr, None);
+    // Its own request is fine, and r1 may repeat its own.
+    l.agent("w2", progress("r2", "GetFelix/felix#11"));
+    l.agent("w1", progress("r1", "GetFelix/felix#9"));
+    assert_eq!(fold(&l.0).rejections.len(), 1);
 }
 
 fn needs(prereq: &str, new: bool, done_when: DoneWhen) -> WorkRecord {

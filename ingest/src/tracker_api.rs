@@ -19,6 +19,13 @@ pub(crate) struct Root {
     pub(crate) closed: bool,
     /// The agent's pull request, `owner/repo#number`.
     pub(crate) pr: Option<String>,
+    /// When the item was first claimed, in milliseconds since the epoch.
+    #[serde(default)]
+    pub(crate) claimed_at_ms: Option<u64>,
+    /// What the fold holds for `pr`, which differs from what ingest last
+    /// wrote when the agent changed `pr` in between.
+    #[serde(default)]
+    pub(crate) pr_status: Option<agents_core::work::PrSnapshot>,
 }
 
 /// What the tracker did with a record.

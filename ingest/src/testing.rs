@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 use crate::github::{Req, Res, Transport};
 use crate::tracker_api::{Appended, Root, Saved, Tracker};
 
+/// The Fake tracker's clock at offset zero: 2027-01-15T08:00:00Z.
+pub(crate) const CLOCK_START_MS: u64 = 1_800_000_000_000;
+
 pub(crate) fn fixture(name: &str) -> Value {
     let path = format!("{}/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(&path).expect(&path)).expect(&path)
@@ -137,7 +140,7 @@ impl Fake {
         let mut i = self.0.lock().unwrap();
         let offset = i.log.len() as u64;
         let logged = WorkLogged {
-            at_ms: offset,
+            at_ms: CLOCK_START_MS + offset,
             by: Key::new(by).unwrap(),
             actor,
             record,
@@ -156,6 +159,12 @@ impl Fake {
     /// An agent's record, which must be accepted.
     pub(crate) fn agent(&self, by: &str, record: WorkRecord) {
         self.push(by, Actor::Agent, record).expect("accepted");
+    }
+
+    /// A person's record, which must be accepted.
+    pub(crate) fn person(&self, record: WorkRecord) {
+        self.push("gabriel", Actor::Person, record)
+            .expect("accepted");
     }
 
     pub(crate) fn kinds(&self) -> Vec<&'static str> {
@@ -191,6 +200,16 @@ impl Fake {
         serde_json::from_value(i.saved.clone().expect("saved").0).unwrap()
     }
 
+    /// Saved state written by an older version, in its own form.
+    pub(crate) fn seed_saved(&self, state: Value) {
+        self.0.lock().unwrap().saved = Some((state, 1));
+    }
+
+    /// The saved state as JSON, exactly as written.
+    pub(crate) fn saved_raw(&self) -> Value {
+        self.0.lock().unwrap().saved.clone().expect("saved").0
+    }
+
     /// Every later save is refused.
     pub(crate) fn fail_saves(&self) {
         self.0.lock().unwrap().save_fails = true;
@@ -220,6 +239,8 @@ impl Tracker for Fake {
                         .to_owned(),
                     closed: it.closed.is_some(),
                     pr: it.pr.clone(),
+                    claimed_at_ms: it.first_claim_ms,
+                    pr_status: it.pr_status.clone(),
                 }
             })
             .collect())

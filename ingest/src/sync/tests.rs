@@ -1,5 +1,5 @@
-use agents_core::work::WorkRecord;
-use agents_core::work_fold::{Closure, NeedsYou, Stage};
+use agents_core::work::{PrChecks, PrReview, WorkRecord, pr_branch};
+use agents_core::work_fold::{Closure, NeedsYou, PrWaits, Stage};
 use serde_json::{Value, json};
 
 use super::*;
@@ -658,7 +658,7 @@ async fn a_refused_write_back_does_not_hold_the_cursor_and_is_given_up_on() {
     ingest.poll(false).await.unwrap();
     let saved = rig.tracker.saved_state();
     assert_eq!(
-        saved.cursor.issues_since.as_deref(),
+        saved.cursors["GetFelix/felix"].issues_since.as_deref(),
         Some("2026-11-10T12:00:00Z")
     );
     assert_eq!(saved.items[UP].write_back_tries, 1);
@@ -686,4 +686,553 @@ async fn when_the_poll_and_the_save_both_fail_the_poll_error_is_returned() {
     rig.tracker.fail_saves();
     let err = ingest.poll(false).await.unwrap_err();
     assert!(err.to_string().contains("500"), "{err}");
+}
+
+// ---- one cursor per repo ----
+
+fn two_repo_rules() -> Value {
+    json!([admit_rule(), {
+        "name": "other", "repo": "GetFelix/other", "labels_all": ["agent-ok"], "mode": "admit"
+    }])
+}
+
+#[tokio::test]
+async fn a_repo_answering_404_stalls_only_itself_and_is_reported_then_cleared() {
+    let rig = rig();
+    let ingest = rig.ingest(two_repo_rules());
+    rig.gh
+        .on("GET", "/repos/GetFelix/other/issues?", status(404, &[]));
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T08:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+
+    let saved = rig.tracker.saved_state();
+    // The readable repo advanced; the broken one has no cursor to pin anything.
+    assert_eq!(
+        saved.cursors["GetFelix/felix"].issues_since.as_deref(),
+        Some("2026-11-10T08:00:00Z")
+    );
+    assert!(!saved.cursors.contains_key("GetFelix/other"));
+    assert_eq!(rig.tracker.count("source_stalled"), 1);
+    let s = rig.tracker.state();
+    assert_eq!(
+        s.stalled_sources().collect::<Vec<_>>(),
+        [("github", "GetFelix/other", 404)]
+    );
+
+    // Still broken: not reported again, and the other repo keeps moving.
+    rig.list(vec![at(issue(813, |_| {}), "2026-11-10T09:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("source_stalled"), 1);
+    assert_eq!(
+        rig.tracker.saved_state().cursors["GetFelix/felix"]
+            .issues_since
+            .as_deref(),
+        Some("2026-11-10T09:00:00Z")
+    );
+    assert_eq!(rig.tracker.state().imported().count(), 2);
+
+    // Access returns: its issues arrive and the stall clears.
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/other/issues?",
+        ok(json!([at(issue(7, |_| {}), "2026-11-10T10:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("source_stalled"), 2);
+    assert_eq!(rig.tracker.state().stalled_sources().count(), 0);
+    assert!(
+        rig.tracker
+            .state()
+            .imported()
+            .any(|(_, up, _)| up == "GetFelix/other#7")
+    );
+}
+
+#[tokio::test]
+async fn the_old_shared_cursor_seeds_every_repo_once() {
+    let rig = rig();
+    let ingest = rig.ingest(two_repo_rules());
+    let old = json!({
+        "cursor": {
+            "issues_since": "2026-11-01T00:00:00Z",
+            "comments_since": "2026-11-01T00:00:00Z",
+            "etags": { "stale": "\"x\"" }
+        },
+        "items": {},
+        "waiting": [],
+        "polls": 3
+    });
+    // The saved state is in the single-cursor form older versions wrote.
+    rig.tracker.seed_saved(old);
+    rig.gh
+        .on("GET", "/repos/GetFelix/other/issues?", ok(json!([])));
+    rig.list(vec![]);
+    ingest.poll(false).await.unwrap();
+
+    for repo in ["GetFelix/felix", "GetFelix/other"] {
+        let url = rig
+            .gh
+            .sent()
+            .into_iter()
+            .find(|r| r.url.contains(&format!("/repos/{repo}/issues?")))
+            .unwrap()
+            .url;
+        assert!(url.contains("since=2026-11-01T00:00:00Z"), "{repo}: {url}");
+        assert!(url.contains("state=all"), "{repo}: {url}");
+    }
+    let saved = rig.tracker.saved_state();
+    assert!(saved.cursor.is_none());
+    assert_eq!(saved.cursors.len(), 2);
+    assert_eq!(saved.polls, 4);
+    // The form written now has no legacy field to migrate again.
+    let raw = rig.tracker.saved_raw();
+    assert!(raw.get("cursor").is_none(), "{raw}");
+}
+
+// ---- pull requests and checks ----
+
+const PR: &str = "GetFelix/felix#2210";
+
+fn pull(edit: impl FnOnce(&mut Value)) -> Value {
+    let mut v = fixture("pull");
+    v["head"] = json!({ "sha": "abc123", "ref": pr_branch(&item_id(UP)) });
+    v["base"] = json!({ "ref": "main", "repo": { "default_branch": "main" } });
+    v["merged_by"] = json!({ "login": "gabriel" });
+    // Created after the Fake tracker's clock starts, so after the first claim.
+    v["created_at"] = json!("2027-01-15T09:00:00Z");
+    v["requested_reviewers"] = json!([]);
+    v["requested_teams"] = json!([]);
+    edit(&mut v);
+    v
+}
+
+fn run(name: &str, conclusion: Option<&str>) -> Value {
+    json!({
+        "name": name,
+        "status": if conclusion.is_some() { "completed" } else { "in_progress" },
+        "conclusion": conclusion,
+        "html_url": format!("https://github.com/GetFelix/felix/actions/runs/{name}"),
+    })
+}
+
+fn review(user: &str, state: &str, assoc: &str) -> Value {
+    json!({ "user": { "login": user }, "state": state, "author_association": assoc })
+}
+
+impl Rig {
+    /// An imported root whose agent reported the pull request.
+    async fn with_pr(&self) -> (Ingest<Github<Script>, Fake>, agents_core::names::ItemId) {
+        let ingest = self.ingest(json!([admit_rule()]));
+        self.list(vec![issue(812, |_| {})]);
+        ingest.poll(false).await.unwrap();
+        let item = self.hold(UP, Some(PR));
+        (ingest, item)
+    }
+
+    /// The agent finishes its attempt, with the root's own items closed first.
+    fn finish(&self, item: &agents_core::names::ItemId) {
+        for child in self.tracker.state().items[item].children.clone() {
+            self.tracker.person(WorkRecord::Closed {
+                item: child,
+                why: agents_core::work::CloseWhy::Dismissed,
+            });
+        }
+        self.tracker.agent(
+            "w1",
+            WorkRecord::Done {
+                item: item.clone(),
+                attempt: 1,
+                cost_micros: 0,
+            },
+        );
+    }
+
+    fn pr(&self, pull: Value, reviews: Vec<Value>, runs: Vec<Value>) {
+        self.gh.on("GET", "/pulls/2210", ok(pull));
+        self.gh
+            .on("GET", "/pulls/2210/reviews", ok(Value::Array(reviews)));
+        self.gh.on(
+            "GET",
+            "/status?",
+            ok(json!({ "total_count": 0, "statuses": [] })),
+        );
+        self.gh.on(
+            "GET",
+            "/check-runs",
+            ok(json!({ "total_count": runs.len(), "check_runs": runs })),
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_red_check_sends_the_item_to_needs_you_with_its_name_and_url() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    rig.pr(
+        pull(|_| {}),
+        vec![],
+        vec![run("unit", Some("success")), run("lint", Some("failure"))],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.stage(&item), Some(Stage::NeedsYou));
+    assert_eq!(s.needs_you(&item), Some(NeedsYou::CheckFailed));
+    let failing = s.items[&item]
+        .pr_status
+        .as_ref()
+        .unwrap()
+        .failing
+        .clone()
+        .unwrap();
+    assert_eq!(failing.name, "lint");
+    assert!(failing.url.ends_with("/lint"));
+    assert_eq!(rig.tracker.count("pr_status"), 1);
+
+    // The same answer again writes nothing.
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 1);
+
+    // The check is fixed: the item is back in review, with the CI wording.
+    rig.pr(
+        pull(|_| {}),
+        vec![],
+        vec![run("unit", Some("success")), run("lint", Some("success"))],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.stage(&item), Some(Stage::InReview));
+    assert_eq!(s.pr_waits(&item), Some(PrWaits::CiGreenNoReviewer));
+}
+
+#[tokio::test]
+async fn only_required_checks_count_when_the_branch_protection_is_readable() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.gh.on(
+        "GET",
+        "/protection/required_status_checks",
+        ok(json!({ "contexts": ["unit"], "checks": [] })),
+    );
+    rig.pr(
+        pull(|_| {}),
+        vec![],
+        vec![
+            run("unit", Some("success")),
+            run("nightly", Some("failure")),
+        ],
+    );
+    ingest.poll(false).await.unwrap();
+    let st = rig.tracker.state().items[&item].pr_status.clone().unwrap();
+    assert_eq!(st.checks, PrChecks::Green);
+}
+
+#[tokio::test]
+async fn green_and_approved_is_approved_not_merged_and_a_merge_is_done() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    // A pending check, a reviewer asked: no special wording yet.
+    rig.pr(
+        pull(|p| p["requested_reviewers"] = json!([{ "login": "bob" }])),
+        vec![],
+        vec![run("unit", None)],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    let st = s.items[&item].pr_status.clone().unwrap();
+    assert_eq!(
+        (st.checks, st.review),
+        (PrChecks::Pending, PrReview::Requested)
+    );
+    assert_eq!(s.pr_waits(&item), None);
+
+    // Approved by a maintainer; a stranger's changes-requested does not count.
+    rig.pr(
+        pull(|_| {}),
+        vec![
+            review("bob", "APPROVED", "MEMBER"),
+            review("eve", "CHANGES_REQUESTED", "NONE"),
+        ],
+        vec![run("unit", Some("success"))],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.pr_waits(&item), Some(PrWaits::ApprovedNotMerged));
+    assert_eq!(s.stage(&item), Some(Stage::InReview));
+
+    // Merged: the item is done.
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&item].closed, Some(Closure::Merged));
+    assert_eq!(s.stage(&item), Some(Stage::Done));
+    // It stays done and is not polled for a state again.
+    let before = rig.tracker.kinds().len();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.kinds().len(), before);
+}
+
+#[tokio::test]
+async fn changes_requested_beats_an_approval_and_a_dismissed_review_stops_counting() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.pr(
+        pull(|_| {}),
+        vec![
+            review("bob", "APPROVED", "MEMBER"),
+            review("carol", "CHANGES_REQUESTED", "COLLABORATOR"),
+        ],
+        vec![run("unit", Some("success"))],
+    );
+    ingest.poll(false).await.unwrap();
+    let st = rig.tracker.state().items[&item].pr_status.clone().unwrap();
+    assert_eq!(st.review, PrReview::ChangesRequested);
+    rig.pr(
+        pull(|_| {}),
+        vec![
+            review("bob", "APPROVED", "MEMBER"),
+            review("carol", "CHANGES_REQUESTED", "COLLABORATOR"),
+            review("carol", "DISMISSED", "COLLABORATOR"),
+        ],
+        vec![run("unit", Some("success"))],
+    );
+    ingest.poll(false).await.unwrap();
+    let st = rig.tracker.state().items[&item].pr_status.clone().unwrap();
+    assert_eq!(st.review, PrReview::Approved);
+}
+
+#[tokio::test]
+async fn a_pull_request_by_someone_else_is_not_read_and_writes_nothing() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.pr(
+        pull(|p| p["user"]["login"] = json!("mallory")),
+        vec![review("bob", "APPROVED", "MEMBER")],
+        vec![run("lint", Some("failure"))],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 0);
+    assert!(rig.tracker.state().items[&item].pr_status.is_none());
+    // Nothing past the pull itself was requested for it.
+    assert!(
+        !rig.gh
+            .sent()
+            .iter()
+            .any(|r| r.url.contains("/reviews") || r.url.contains("/check-runs"))
+    );
+
+    // Merged by a stranger does not close the item either.
+    rig.pr(
+        pull(|p| {
+            p["user"]["login"] = json!("mallory");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+}
+
+#[tokio::test]
+async fn a_pull_request_in_another_repo_is_not_read() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.hold(UP, Some("Evil/repo#1"));
+    ingest.poll(false).await.unwrap();
+    assert!(!rig.gh.sent().iter().any(|r| r.url.contains("/pulls/")));
+}
+
+#[tokio::test]
+async fn a_pull_request_that_fails_to_read_does_not_stop_the_poll() {
+    let rig = rig();
+    let (ingest, _) = rig.with_pr().await;
+    rig.gh.on("GET", "/pulls/2210", status(500, &[]));
+    rig.list(vec![at(issue(813, |_| {}), "2026-11-10T12:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert!(
+        rig.tracker
+            .state()
+            .imported()
+            .any(|(_, u, _)| u == "GetFelix/felix#813")
+    );
+}
+
+#[tokio::test]
+async fn an_old_merged_request_swapped_in_by_an_agent_does_not_close_the_root() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    // The reported request is merged, ours, in the same repo, but is about
+    // another branch and another issue.
+    rig.pr(
+        pull(|p| {
+            p["head"]["ref"] = json!("fix/something-else");
+            p["body"] = json!("Fixes #3");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 0);
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+
+    // Named by a closing reference to the issue, the same request is accepted.
+    rig.pr(
+        pull(|p| {
+            p["head"]["ref"] = json!("fix/something-else");
+            p["body"] = json!("Fixes #812.");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Merged)
+    );
+}
+
+#[test]
+fn only_a_closing_keyword_before_the_issue_links_a_request() {
+    assert!(closes_issue("Closes #812", UP));
+    assert!(closes_issue("fixes: GetFelix/felix#812.", UP));
+    assert!(!closes_issue("see #812", UP));
+    assert!(!closes_issue("Fixes #8123", UP));
+    assert!(!closes_issue("Fixes #81", UP));
+}
+
+#[tokio::test]
+async fn flipping_the_reported_request_away_and_back_restores_a_red_status() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    rig.pr(pull(|_| {}), vec![], vec![run("lint", Some("failure"))]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::CheckFailed)
+    );
+    // The agent points `pr` elsewhere and back; the fold forgot the status
+    // when it changed, and ingest has not polled in between.
+    for pr in ["GetFelix/felix#2211", PR] {
+        rig.tracker.person(WorkRecord::Progress {
+            item: item.clone(),
+            attempt: 1,
+            note: agents_core::content::Content::Text("pr".into()),
+            branch: None,
+            pr: Some(pr.into()),
+        });
+    }
+    assert!(rig.tracker.state().items[&item].pr_status.is_none());
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::CheckFailed)
+    );
+}
+
+#[tokio::test]
+async fn an_old_merged_request_with_the_matching_branch_created_before_the_claim_is_refused() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    // The branch matches what the agent reported, and the body even names the
+    // issue, but the request is older than the first claim.
+    rig.pr(
+        pull(|p| {
+            p["created_at"] = json!("2026-11-01T00:00:00Z");
+            p["body"] = json!("Fixes #812");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 0);
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+}
+
+#[tokio::test]
+async fn a_merge_into_another_branch_or_by_our_own_login_does_not_close_the_root() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+            p["base"]["ref"] = json!("release-1");
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&item].closed, None);
+    assert_eq!(
+        s.items[&item].pr_status.as_ref().unwrap().phase,
+        agents_core::work::PrPhase::Closed
+    );
+
+    // Merged into the default branch, but by the credential's own login.
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+            p["merged_by"] = json!({ "login": "kibble[bot]" });
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+
+    // A person merging it into the default branch is the real thing.
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Merged)
+    );
+}
+
+#[tokio::test]
+async fn the_branch_the_agent_reported_is_not_a_link() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    // The head branch is the one the agent reported in its progress, not the
+    // one the tracker derives, and the body does not name the issue.
+    rig.pr(
+        pull(|p| {
+            p["head"]["ref"] = json!("fix/stale-read");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 0);
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
 }

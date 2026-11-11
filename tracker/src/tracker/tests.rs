@@ -546,6 +546,8 @@ async fn a_dead_agents_item_goes_to_another_after_visibility() {
     let reply = claim(&t, "w2").await;
     assert_eq!(claimed_id(&reply).as_deref(), Some("a1"));
     assert_eq!(reply["attempt"], 1);
+    // The reply says which branch links a pull request to the item.
+    assert_eq!(reply["item"]["pr_branch"], "kibble/a1");
     let log = fake.log();
     let tail: Vec<_> = log[log.len() - 2..]
         .iter()
@@ -1197,6 +1199,16 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
         WorkRecord::Reopened {
             item: item("theirs"),
         },
+        WorkRecord::PrStatus {
+            item: item("theirs"),
+            status: agents_core::work::PrSnapshot {
+                pr: "o/r#2".into(),
+                phase: agents_core::work::PrPhase::Merged,
+                review: agents_core::work::PrReview::Approved,
+                checks: agents_core::work::PrChecks::Green,
+                failing: None,
+            },
+        },
         WorkRecord::Linked {
             item: item("mine"),
             to: item("theirs"),
@@ -1270,4 +1282,36 @@ async fn ingest_state_is_kept_with_a_version_and_a_stale_save_is_refused() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Refused { why } if why == "stale_state"));
+}
+
+#[tokio::test]
+async fn ingest_cannot_close_as_merged_without_a_merged_status() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::Imported {
+            item: item("mine"),
+            source: "github".into(),
+            upstream_id: "o/r#1".into(),
+            title: "a bug".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let err = t
+        .ingest_record(
+            key("ingest-gh"),
+            WorkRecord::Closed {
+                item: item("mine"),
+                why: agents_core::work::CloseWhy::Merged,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Refused { ref why } if why == "not_merged"),
+        "{err}"
+    );
+    assert_eq!(fake.log().len(), 1);
 }

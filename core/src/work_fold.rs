@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, NewPrerequisite, RefusalReason, TIERS, Target,
-    WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    Actor, CloseWhy, DoneWhen, Evidence, MAX_PR_REF, NewPrerequisite, PrChecks, PrPhase, PrReview,
+    PrSnapshot, RefusalReason, TIERS, Target, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
 };
 
 #[cfg(test)]
@@ -39,6 +39,8 @@ const MAX_CONTEXT: u32 = 100;
 const MAX_QUESTIONS: u32 = 20;
 const MAX_ANSWERS: u32 = 10;
 const MAX_LINKS: u32 = 100;
+/// Distinct repos that may be reported unreadable at once.
+const MAX_STALLS: usize = 64;
 /// Children and proposals together.
 const MAX_POSTS: u32 = 24;
 
@@ -113,6 +115,18 @@ pub enum NeedsYou {
     NoOpenAttempt,
     /// The upstream issue left its intake rule and nobody holds the item.
     LeftScope,
+    /// A check on the pull request failed, which `Item::pr_status` names.
+    CheckFailed,
+}
+
+/// What an open pull request waits for, where the board words it specially.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrWaits {
+    /// Checks pass and nobody has been asked to review.
+    CiGreenNoReviewer,
+    /// Approved and not merged: a person merges it.
+    ApprovedNotMerged,
 }
 
 impl Item {
@@ -219,6 +233,12 @@ pub struct Item {
     pub open_question: Option<u64>,
     pub branch: Option<String>,
     pub pr: Option<String>,
+    /// Upstream's view of `pr`, as the last `pr_status` said.
+    #[serde(default)]
+    pub pr_status: Option<PrSnapshot>,
+    /// When the first claim on the item was logged, in the tracker's clock.
+    #[serde(default)]
+    pub first_claim_ms: Option<u64>,
     pub cost_micros: u64,
     pub context: BTreeMap<Key, u64>,
     pub paths: Vec<Path>,
@@ -279,6 +299,14 @@ pub enum Reject {
     CrossRoot,
     /// An answer names a question that is not the open one.
     NotOpenQuestion,
+    /// A pull request status names a request the item does not report.
+    WrongPr,
+    /// A text field is longer than a record keeps.
+    TooLong,
+    /// Upstream sync closed an item as merged without a merged status for its request.
+    NotMerged,
+    /// Another open item already reports this pull request.
+    PrInUse,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -300,6 +328,10 @@ pub struct State {
     pub budgets: BTreeMap<ItemId, Budget>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
+    /// `(source, repo)` to the HTTP status that stopped it being read.
+    #[serde(default)]
+    /// Keyed `source\0repo`: JSON object keys must be strings.
+    source_stalls: BTreeMap<String, u16>,
     child_keys: BTreeSet<(Option<ItemId>, Option<Key>, Key)>,
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
     #[serde(skip)]
@@ -404,6 +436,14 @@ impl State {
         if it.left_scope && it.hold.is_none() {
             return Some(NeedsYou::LeftScope);
         }
+        if it.hold.is_none()
+            && it
+                .pr_status
+                .as_ref()
+                .is_some_and(|s| s.phase == PrPhase::Open && s.checks == PrChecks::Red)
+        {
+            return Some(NeedsYou::CheckFailed);
+        }
         let dropped = self.edges.iter().any(|(a, b)| {
             a == id
                 && self.items.get(b).is_some_and(|d| {
@@ -432,6 +472,27 @@ impl State {
             }
         }
         None
+    }
+
+    /// The wording an open pull request gets on the board, if it has one.
+    /// A red check outranks both: that item is in Needs you.
+    pub fn pr_waits(&self, id: &ItemId) -> Option<PrWaits> {
+        let it = self.items.get(id)?;
+        let s = it.pr_status.as_ref().filter(|s| s.phase == PrPhase::Open)?;
+        match (s.checks, s.review) {
+            (PrChecks::Red, _) => None,
+            (_, PrReview::Approved) => Some(PrWaits::ApprovedNotMerged),
+            (PrChecks::Green, PrReview::Unreviewed) => Some(PrWaits::CiGreenNoReviewer),
+            _ => None,
+        }
+    }
+
+    /// Repositories a source cannot read, with the HTTP status it got.
+    pub fn stalled_sources(&self) -> impl Iterator<Item = (&str, &str, u16)> {
+        self.source_stalls.iter().filter_map(|(k, status)| {
+            let (source, repo) = k.split_once('\0')?;
+            Some((source, repo, *status))
+        })
     }
 
     /// Children of `id` that are not done.
@@ -577,6 +638,8 @@ impl State {
             open_question: None,
             branch: None,
             pr: None,
+            pr_status: None,
+            first_claim_ms: None,
             cost_micros: 0,
             context: BTreeMap::new(),
             paths: Vec::new(),
@@ -772,6 +835,7 @@ impl State {
                     return Err(Reject::NotReady);
                 }
                 let it = self.item_mut(item)?;
+                it.first_claim_ms.get_or_insert(rec.at_ms);
                 let want = it.next_attempt();
                 if *attempt != want {
                     return Err(Reject::WrongAttempt);
@@ -814,6 +878,15 @@ impl State {
                 ..
             } => {
                 self.acting_on(item, *attempt, rec)?;
+                // One request, one item: another's request cannot be borrowed to close this one.
+                if let Some(pr) = pr
+                    && self
+                        .items
+                        .values()
+                        .any(|o| o.id != *item && o.closed.is_none() && o.pr.as_ref() == Some(pr))
+                {
+                    return Err(Reject::PrInUse);
+                }
                 if rec.actor == Actor::Agent {
                     let p = self.path_mut(item, *attempt)?;
                     if p.progress >= MAX_PROGRESS {
@@ -826,6 +899,10 @@ impl State {
                     it.branch = branch.clone();
                 }
                 if pr.is_some() {
+                    // A status describes one request; a new one starts blank.
+                    if it.pr != *pr {
+                        it.pr_status = None;
+                    }
                     it.pr = pr.clone();
                 }
             }
@@ -1029,6 +1106,17 @@ impl State {
                     return Err(Reject::ActorNotAllowed);
                 }
                 self.item(item)?;
+                // Upstream sync closes as merged only the request the item reports, once merged.
+                if *why == CloseWhy::Merged && rec.actor == Actor::Tracker {
+                    let it = self.item(item)?;
+                    let imported = self.upstream.values().any(|i| i == item);
+                    let merged = it.pr_status.as_ref().is_some_and(|s| {
+                        s.phase == PrPhase::Merged && it.pr.as_deref() == Some(s.pr.as_str())
+                    });
+                    if !imported || !merged {
+                        return Err(Reject::NotMerged);
+                    }
+                }
                 let how = match why {
                     CloseWhy::Merged => Closure::Merged,
                     CloseWhy::Completed => Closure::Completed,
@@ -1161,6 +1249,45 @@ impl State {
                     && let Some(root) = self.items.get(id).map(|i| i.root.clone())
                 {
                     self.item_mut(&root)?.over_budget = true;
+                }
+            }
+            WorkRecord::PrStatus { item, status } => {
+                let it = self.upstream_sync(item, rec)?;
+                if it.pr.as_deref() != Some(status.pr.as_str()) {
+                    return Err(Reject::WrongPr);
+                }
+                if !status.fits() {
+                    return Err(Reject::TooLong);
+                }
+                if !status.consistent() {
+                    return Err(Reject::MissingField);
+                }
+                it.pr_status = Some(status.clone());
+            }
+            WorkRecord::SourceStalled {
+                source,
+                repo,
+                status,
+            } => {
+                if rec.actor != Actor::Tracker {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if source.len() > MAX_PR_REF || repo.len() > MAX_PR_REF {
+                    return Err(Reject::TooLong);
+                }
+                let key = format!("{source}\0{repo}");
+                match status {
+                    Some(code) => {
+                        if !self.source_stalls.contains_key(&key)
+                            && self.source_stalls.len() >= MAX_STALLS
+                        {
+                            return Err(Reject::LimitReached);
+                        }
+                        self.source_stalls.insert(key, *code);
+                    }
+                    None => {
+                        self.source_stalls.remove(&key);
+                    }
                 }
             }
             WorkRecord::Unknown => {}

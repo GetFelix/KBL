@@ -13,9 +13,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, anyhow};
 use serde_json::{Value, json};
 
+use agents_core::work::{
+    FailedCheck, MAX_CHECK_NAME, MAX_CHECK_URL, PrChecks, PrPhase, PrReview, PrSnapshot,
+};
+
 use crate::source::{
-    Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, Source, SourceError,
-    WriteBack,
+    Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, PullRequest, Source,
+    SourceError, WriteBack,
 };
 
 pub(crate) mod transport;
@@ -136,19 +140,79 @@ impl<T: Transport> Github<T> {
                 }
             }
         }
+        // The page limit stopped it; the cursor resumes where the pages ended.
         Ok(Listing {
             items: out,
-            truncated: true,
             ..Listing::default()
         })
+    }
+}
+
+impl<T: Transport> Github<T> {
+    /// Every commit status on `sha`, paged. `incomplete` is set when fewer
+    /// came back than GitHub counts. `None` when the call failed.
+    async fn commit_statuses(&self, repo: &str, sha: &str) -> Result<Option<Value>, SourceError> {
+        let mut all: Vec<Value> = Vec::new();
+        let mut total = 0;
+        for page in 1..=MAX_PAGES {
+            let url = format!(
+                "{}/repos/{repo}/commits/{sha}/status?per_page=100&page={page}",
+                self.api
+            );
+            let res = self.call(Req::get(url)).await?;
+            if res.status != 200 {
+                return Ok(None);
+            }
+            total = res.body["total_count"].as_u64().unwrap_or(0);
+            let got = res.body["statuses"].as_array().cloned().unwrap_or_default();
+            let empty = got.is_empty();
+            all.extend(got);
+            if empty || all.len() as u64 >= total {
+                break;
+            }
+        }
+        Ok(Some(json!({
+            "statuses": all,
+            "incomplete": (all.len() as u64) < total,
+        })))
+    }
+
+    /// The checks the base branch requires, when the credential may read its
+    /// protection. `None` means unknown, and then every check counts.
+    async fn required_checks(
+        &self,
+        repo: &str,
+        base: Option<&str>,
+    ) -> Result<Option<Vec<String>>, SourceError> {
+        let Some(base) = base else { return Ok(None) };
+        let url = format!(
+            "{}/repos/{repo}/branches/{base}/protection/required_status_checks",
+            self.api
+        );
+        let res = self.call(Req::get(url)).await?;
+        if res.status != 200 {
+            return Ok(None);
+        }
+        let mut names: Vec<String> = res.body["contexts"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|c| c.as_str().map(str::to_owned))
+            .collect();
+        names.extend(
+            res.body["checks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|c| c["context"].as_str().map(str::to_owned)),
+        );
+        Ok(Some(names))
     }
 }
 
 #[derive(Default)]
 struct Listing {
     items: Vec<Value>,
-    /// The page limit stopped it before the end.
-    truncated: bool,
     /// The status that said this repo cannot be listed.
     denied: Option<u16>,
 }
@@ -162,19 +226,17 @@ impl<T: Transport> Source for Github<T> {
         self.own.clone()
     }
 
-    async fn changed(&self, repos: &[String], cursor: &Cursor) -> Result<Changes, SourceError> {
-        // Only this poll's validators are kept, so old `since` values do not pile up.
-        let mut etags = BTreeMap::new();
-        let mut issues = Vec::new();
-        let mut comments = Vec::new();
-        // Where each repo's listing got to, to resume the shared cursor.
-        let mut reached: Vec<(String, bool)> = Vec::new();
-        let mut comment_reached: Vec<(String, bool)> = Vec::new();
-        // The cursor is shared, so it cannot move past what a skipped repo
-        // has not been read up to.
-        let mut skipped = false;
+    async fn changed(
+        &self,
+        repos: &[String],
+        cursors: &BTreeMap<String, Cursor>,
+    ) -> Result<Changes, SourceError> {
+        let mut out = Changes::default();
         for repo in repos {
-            let state = if cursor.issues_since.is_some() {
+            let old = cursors.get(repo).cloned().unwrap_or_default();
+            // Only this poll's validators are kept, so old `since` values do not pile up.
+            let mut etags = BTreeMap::new();
+            let state = if old.issues_since.is_some() {
                 "all"
             } else {
                 "open"
@@ -183,13 +245,13 @@ impl<T: Transport> Source for Github<T> {
                 "{}/repos/{repo}/issues?state={state}&sort=updated&direction=asc&per_page=100",
                 self.api
             );
-            if let Some(since) = &cursor.issues_since {
+            if let Some(since) = &old.issues_since {
                 url.push_str(&format!("&since={since}"));
             }
-            let listing = self.pages(url, &cursor.etags, &mut etags).await?;
+            let listing = self.pages(url, &old.etags, &mut etags).await?;
             if let Some(code) = listing.denied {
                 eprintln!("agents-ingest: {repo} answered {code}; skipping it this poll");
-                skipped = true;
+                out.denied.insert(repo.clone(), code);
                 continue;
             }
             let mut last = None;
@@ -204,63 +266,151 @@ impl<T: Transport> Source for Github<T> {
                     continue;
                 }
                 match parse_issue(repo, raw) {
-                    Ok(issue) => issues.push(issue),
+                    Ok(issue) => out.issues.push(issue),
                     Err(e) => eprintln!("agents-ingest: skipped an item of {repo}: {e:#}"),
                 }
             }
-            if let Some(l) = last {
-                reached.push((l, listing.truncated));
-            }
+            let issues_since = last.or_else(|| old.issues_since.clone());
 
-            if let Some(since) = &cursor.comments_since {
+            let mut comments_last = None;
+            if let Some(since) = &old.comments_since {
                 let url = format!(
                     "{}/repos/{repo}/issues/comments?sort=updated&direction=asc&per_page=100&since={since}",
                     self.api
                 );
-                let listing = self.pages(url, &cursor.etags, &mut etags).await?;
+                let listing = self.pages(url, &old.etags, &mut etags).await?;
                 if let Some(code) = listing.denied {
                     eprintln!("agents-ingest: comments of {repo} answered {code}; skipping them");
-                    skipped = true;
+                    out.denied.insert(repo.clone(), code);
                     continue;
                 }
-                let mut last = None;
                 for raw in &listing.items {
                     if let Some(at) = raw["updated_at"].as_str() {
-                        last = Some(at.to_owned());
+                        comments_last = Some(at.to_owned());
                     }
                     match parse_comment(repo, raw) {
-                        Ok(c) => comments.push(c),
+                        Ok(c) => out.comments.push(c),
                         Err(e) => eprintln!("agents-ingest: skipped a comment of {repo}: {e:#}"),
                     }
                 }
-                if let Some(l) = last {
-                    comment_reached.push((l, listing.truncated));
-                }
             }
-        }
-        issues.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
-        comments.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
-        let (issues_since, comments_since) = if skipped {
-            (cursor.issues_since.clone(), cursor.comments_since.clone())
-        } else {
-            let issues_since = resume(&reached).or_else(|| cursor.issues_since.clone());
             // The first poll sees no comments; later ones start where the issues
             // were, since a comment bumps its issue's update time.
-            let comments_since = match &cursor.comments_since {
-                Some(old) => resume(&comment_reached).or_else(|| Some(old.clone())),
+            let comments_since = match &old.comments_since {
+                Some(prev) => comments_last.or_else(|| Some(prev.clone())),
                 None => issues_since.clone(),
             };
-            (issues_since, comments_since)
+            out.cursors.insert(
+                repo.clone(),
+                Cursor {
+                    issues_since,
+                    comments_since,
+                    etags,
+                },
+            );
+        }
+        out.issues.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+        out.comments.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+        Ok(out)
+    }
+
+    async fn pull_request(&self, id: &IssueRef) -> Result<Option<PullRequest>, SourceError> {
+        let base = format!("{}/repos/{}/pulls/{}", self.api, id.repo, id.number);
+        let res = self.call(Req::get(base.clone())).await?;
+        match res.status {
+            200 => {}
+            404 | 410 => return Ok(None),
+            s => return Err(anyhow!("GitHub answered {s} for {id}").into()),
+        }
+        let pull = &res.body;
+        let author = pull["user"]["login"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let head_ref = pull["head"]["ref"].as_str().unwrap_or_default().to_owned();
+        let body = pull["body"].as_str().unwrap_or_default().to_owned();
+        let created_ms = pull["created_at"].as_str().and_then(parse_utc_ms);
+        // Only a request our credential opened is read further: the name
+        // comes from an agent, and its checks and reviews steer a person.
+        if !self.own.iter().any(|o| o.eq_ignore_ascii_case(&author)) {
+            return Ok(Some(PullRequest {
+                author,
+                head_ref,
+                body,
+                created_ms,
+                status: None,
+            }));
+        }
+        // A merge counts only into the repo's default branch and by someone
+        // other than us: agents never merge their own work.
+        let into_default = pull["base"]["repo"]["default_branch"]
+            .as_str()
+            .is_some_and(|d| pull["base"]["ref"].as_str() == Some(d));
+        let by_us = pull["merged_by"]["login"]
+            .as_str()
+            .is_some_and(|m| self.own.iter().any(|o| o.eq_ignore_ascii_case(m)));
+        let phase = match (pull["state"].as_str(), pull["merged"].as_bool()) {
+            (_, Some(true)) if into_default && !by_us => PrPhase::Merged,
+            (Some("open"), _) => PrPhase::Open,
+            _ => PrPhase::Closed,
         };
-        Ok(Changes {
-            issues,
-            comments,
-            cursor: Cursor {
-                issues_since,
-                comments_since,
-                etags,
-            },
-        })
+        let mut status = PrSnapshot {
+            pr: id.to_string(),
+            phase,
+            review: PrReview::Unreviewed,
+            checks: PrChecks::NoChecks,
+            failing: None,
+        };
+        if phase != PrPhase::Open {
+            return Ok(Some(PullRequest {
+                author,
+                head_ref,
+                body,
+                created_ms,
+                status: Some(status),
+            }));
+        }
+        let asked = pull["requested_reviewers"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty())
+            || pull["requested_teams"]
+                .as_array()
+                .is_some_and(|a| !a.is_empty());
+        let reviews = self
+            .call(Req::get(format!("{base}/reviews?per_page=100")))
+            .await?;
+        status.review = if reviews.status == 200 {
+            review_state(&reviews.body, &author, asked)
+        } else if asked {
+            PrReview::Requested
+        } else {
+            PrReview::Unreviewed
+        };
+        if let Some(sha) = pull["head"]["sha"].as_str() {
+            let required = self
+                .required_checks(&id.repo, pull["base"]["ref"].as_str())
+                .await?;
+            let runs = self
+                .call(Req::get(format!(
+                    "{}/repos/{}/commits/{sha}/check-runs?per_page=100",
+                    self.api, id.repo
+                )))
+                .await?;
+            let statuses = self.commit_statuses(&id.repo, sha).await?;
+            // A call that failed is unknown, never "no checks".
+            let runs = (runs.status == 200).then_some(&runs.body);
+            (status.checks, status.failing) =
+                check_state(runs, statuses.as_ref(), &self.own, required.as_ref());
+        } else {
+            status.checks = PrChecks::Pending;
+        }
+        Ok(Some(PullRequest {
+            author,
+            head_ref,
+            body,
+            created_ms,
+            status: Some(status),
+        }))
     }
 
     async fn fetch(&self, id: &IssueRef) -> Result<Fetched, SourceError> {
@@ -361,12 +511,170 @@ impl<T: Transport> Source for Github<T> {
     }
 }
 
-/// Where to resume after listings that reached these points: the latest point
-/// reached, unless a listing was cut short, which sets the earliest of those.
-fn resume(reached: &[(String, bool)]) -> Option<String> {
-    let cut = reached.iter().filter(|(_, t)| *t).map(|(s, _)| s).min();
-    cut.or_else(|| reached.iter().map(|(s, _)| s).max())
+/// The review state from a pull request's reviews: each reviewer's latest
+/// verdict counts, and only from people with write access to the repo.
+fn review_state(reviews: &Value, author: &str, asked: bool) -> PrReview {
+    let mut latest: BTreeMap<String, &str> = BTreeMap::new();
+    for r in reviews.as_array().into_iter().flatten() {
+        let who = r["user"]["login"].as_str().unwrap_or_default();
+        let may = matches!(
+            r["author_association"].as_str(),
+            Some("OWNER" | "MEMBER" | "COLLABORATOR")
+        );
+        if !may || who.eq_ignore_ascii_case(author) {
+            continue;
+        }
+        match r["state"].as_str() {
+            Some(v @ ("APPROVED" | "CHANGES_REQUESTED")) => {
+                latest.insert(who.to_ascii_lowercase(), v);
+            }
+            // A dismissed review no longer counts; a comment changes nothing.
+            Some("DISMISSED") => {
+                latest.remove(&who.to_ascii_lowercase());
+            }
+            _ => {}
+        }
+    }
+    if latest.values().any(|v| *v == "CHANGES_REQUESTED") {
+        PrReview::ChangesRequested
+    } else if latest.values().any(|v| *v == "APPROVED") {
+        PrReview::Approved
+    } else if asked {
+        PrReview::Requested
+    } else {
+        PrReview::Unreviewed
+    }
+}
+
+enum Outcome {
+    Pass,
+    Fail,
+    Pending,
+}
+
+/// Green, pending or red from the check runs and commit statuses on the head
+/// commit. Only the `required` names count when they are known, and one with
+/// no result yet keeps the request pending. A listing longer than what was
+/// read is pending too, since green cannot be shown.
+fn check_state(
+    runs: Option<&Value>,
+    statuses: Option<&Value>,
+    own: &[String],
+    required: Option<&Vec<String>>,
+) -> (PrChecks, Option<FailedCheck>) {
+    // An empty list means the protection could not tell us, not "nothing needed".
+    let required = required.filter(|r| !r.is_empty());
+    let list = runs
+        .and_then(|r| r["check_runs"].as_array())
         .cloned()
+        .unwrap_or_default();
+    let mut results: Vec<(String, Outcome, String)> = Vec::new();
+    for r in &list {
+        let outcome = match r["conclusion"].as_str() {
+            Some("failure" | "timed_out" | "action_required" | "startup_failure") => Outcome::Fail,
+            Some("success" | "neutral" | "skipped") => Outcome::Pass,
+            // Queued, running or cancelled: not green yet.
+            _ => Outcome::Pending,
+        };
+        results.push((
+            r["name"].as_str().unwrap_or_default().to_owned(),
+            outcome,
+            r["html_url"].as_str().unwrap_or_default().to_owned(),
+        ));
+    }
+    for st in statuses
+        .and_then(|s| s["statuses"].as_array())
+        .into_iter()
+        .flatten()
+    {
+        // A status our own credential wrote says nothing about the code: an
+        // agent that can reach it could forge a green one.
+        let by = st["creator"]["login"].as_str().unwrap_or_default();
+        if own.iter().any(|o| o.eq_ignore_ascii_case(by)) {
+            continue;
+        }
+        let outcome = match st["state"].as_str() {
+            Some("success") => Outcome::Pass,
+            Some("failure" | "error") => Outcome::Fail,
+            _ => Outcome::Pending,
+        };
+        results.push((
+            st["context"].as_str().unwrap_or_default().to_owned(),
+            outcome,
+            st["target_url"].as_str().unwrap_or_default().to_owned(),
+        ));
+    }
+    let counted: Vec<&(String, Outcome, String)> = results
+        .iter()
+        .filter(|(name, _, _)| required.is_none_or(|req| req.iter().any(|n| n == name)))
+        .collect();
+    // A listing that failed, or is longer than what was read, cannot show green.
+    let mut pending = runs
+        .is_none_or(|r| r["total_count"].as_u64().unwrap_or(0) > list.len() as u64)
+        || statuses.is_none_or(|s| s["incomplete"].as_bool().unwrap_or(false));
+    if let Some(req) = required {
+        pending |= req
+            .iter()
+            .any(|n| !counted.iter().any(|(name, _, _)| name == n));
+    }
+    let mut failing: Option<FailedCheck> = None;
+    for (name, outcome, url) in &counted {
+        match outcome {
+            Outcome::Fail => {
+                let name = cut_bytes(name, MAX_CHECK_NAME);
+                // The first by name, so the same failure reads the same each poll.
+                if failing.as_ref().is_none_or(|f| name < f.name) {
+                    failing = Some(FailedCheck {
+                        name,
+                        url: cut_bytes(url, MAX_CHECK_URL),
+                    });
+                }
+            }
+            Outcome::Pending => pending = true,
+            Outcome::Pass => {}
+        }
+    }
+    if failing.is_some() {
+        (PrChecks::Red, failing)
+    } else if counted.is_empty() && !pending {
+        (PrChecks::NoChecks, None)
+    } else if pending {
+        (PrChecks::Pending, None)
+    } else {
+        (PrChecks::Green, None)
+    }
+}
+
+/// Milliseconds since the epoch from `YYYY-MM-DDTHH:MM:SSZ`, as GitHub writes times.
+fn parse_utc_ms(t: &str) -> Option<u64> {
+    let b = t.as_bytes();
+    if b.len() != 20 || b[19] != b'Z' || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| t.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let (h, mi, s) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    // Days from the civil date (proleptic Gregorian).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(((days * 24 + h) * 60 + mi) * 60 + s)
+        .ok()
+        .map(|x| x * 1000)
+}
+
+fn cut_bytes(s: &str, max: usize) -> String {
+    let mut end = max.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_owned()
 }
 
 fn rate_limit_wait(res: &Res) -> Option<Duration> {

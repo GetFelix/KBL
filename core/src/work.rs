@@ -35,6 +35,13 @@ pub struct ReadyRecord {
     pub stamp: u64,
 }
 
+/// The head branch an agent opens an item's pull request from. Upstream sync
+/// links a request to an item by this name (or a closing reference), so the
+/// claim reply hands it to the agent.
+pub fn pr_branch(item: &ItemId) -> String {
+    format!("kibble/{item}")
+}
+
 /// The cache key of an item's fields.
 pub fn item_key(item: &ItemId) -> Result<Key, InvalidName> {
     Key::new(format!("i-{item}"))
@@ -183,6 +190,80 @@ pub enum RefusalReason {
     /// Over a per-attempt or per-agent cap.
     Limit,
     Invalid,
+}
+
+/// Where an agent's pull request stands upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrPhase {
+    Open,
+    Merged,
+    /// Closed without a merge.
+    Closed,
+}
+
+/// The reviews on a pull request, from people who may review it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrReview {
+    Unreviewed,
+    /// A reviewer was asked and has not answered.
+    Requested,
+    Approved,
+    ChangesRequested,
+}
+
+/// The check results on a pull request's head commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrChecks {
+    NoChecks,
+    /// Some check has not finished, or there are more than were read.
+    Pending,
+    Green,
+    Red,
+}
+
+/// A check that failed, as upstream names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FailedCheck {
+    pub name: String,
+    pub url: String,
+}
+
+/// Longest pull request reference, check name, check URL, source name and
+/// repository name kept in a record, in bytes.
+pub const MAX_PR_REF: usize = 200;
+pub const MAX_CHECK_NAME: usize = 200;
+pub const MAX_CHECK_URL: usize = 400;
+
+/// What upstream says about the pull request an item reports in `pr`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrSnapshot {
+    /// `owner/repo#number`, the `pr` it describes.
+    pub pr: String,
+    pub phase: PrPhase,
+    pub review: PrReview,
+    pub checks: PrChecks,
+    /// Set exactly when `checks` is red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failing: Option<FailedCheck>,
+}
+
+impl PrSnapshot {
+    /// Whether the text fields fit a record.
+    pub fn fits(&self) -> bool {
+        self.pr.len() <= MAX_PR_REF
+            && self
+                .failing
+                .as_ref()
+                .is_none_or(|f| f.name.len() <= MAX_CHECK_NAME && f.url.len() <= MAX_CHECK_URL)
+    }
+
+    /// Whether `failing` agrees with `checks`.
+    pub fn consistent(&self) -> bool {
+        self.failing.is_some() == (self.checks == PrChecks::Red)
+    }
 }
 
 /// What a record says happened. `kind` is the variant name in snake case.
@@ -391,6 +472,18 @@ pub enum WorkRecord {
         cost_left_micros: u64,
         redos_per_item: u8,
     },
+    /// Upstream's view of the pull request in the item's `pr`: its phase,
+    /// reviews and checks. Only upstream sync writes it, on roots.
+    PrStatus { item: ItemId, status: PrSnapshot },
+    /// A source cannot read a repository (`status` is the HTTP code) or can
+    /// again (`None`). The rest of the source keeps going; a person sees the
+    /// stall in Needs you. Only the tracker writes it.
+    SourceStalled {
+        source: String,
+        repo: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<u16>,
+    },
     /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -437,6 +530,8 @@ impl WorkRecord {
             WorkRecord::TierChanged { .. } => "tier_changed",
             WorkRecord::Edited { .. } => "edited",
             WorkRecord::BudgetSet { .. } => "budget_set",
+            WorkRecord::PrStatus { .. } => "pr_status",
+            WorkRecord::SourceStalled { .. } => "source_stalled",
             WorkRecord::Refused { .. } => "refused",
             WorkRecord::Unknown => "unknown",
         }
