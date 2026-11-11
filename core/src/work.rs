@@ -169,6 +169,8 @@ pub enum WorkRecord {
     },
     /// `item` waits on `to`.
     Linked { item: ItemId, to: ItemId },
+    /// A person removes the edge, for example after a dependency was dropped.
+    Unlinked { item: ItemId, to: ItemId },
     /// A context entry; the same `entry` again replaces it.
     Context {
         item: ItemId,
@@ -308,6 +310,7 @@ impl WorkRecord {
             WorkRecord::Triaged { .. } => "triaged",
             WorkRecord::Accepted { .. } => "accepted",
             WorkRecord::Linked { .. } => "linked",
+            WorkRecord::Unlinked { .. } => "unlinked",
             WorkRecord::Context { .. } => "context",
             WorkRecord::Claimed { .. } => "claimed",
             WorkRecord::Progress { .. } => "progress",

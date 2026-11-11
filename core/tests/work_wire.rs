@@ -54,6 +54,10 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("c2"),
             to: item("c1"),
         },
+        WorkRecord::Unlinked {
+            item: item("c2"),
+            to: item("c1"),
+        },
         WorkRecord::Context {
             item: item("r1"),
             entry: key("repro"),
@@ -204,7 +208,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 23);
+    assert_eq!(kinds.len(), 24);
 }
 
 #[test]

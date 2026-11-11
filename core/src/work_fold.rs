@@ -86,6 +86,27 @@ pub enum Closure {
     Rejected,
 }
 
+/// Why an item is in Needs you.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NeedsYou {
+    Question,
+    OverBudget,
+    /// A dependency was dismissed, rejected or cancelled. A person relinks or closes.
+    DependencyDropped,
+    /// The open attempt used its claims.
+    TriesUsed,
+    /// Every attempt was closed and none was redone.
+    NoOpenAttempt,
+}
+
+impl Item {
+    /// The newest attempt that is not closed.
+    pub fn open_path(&self) -> Option<&Path> {
+        self.paths.iter().rev().find(|p| !p.closed)
+    }
+}
+
 /// Who holds an item.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hold {
@@ -207,7 +228,7 @@ pub struct State {
     pub budgets: BTreeMap<ItemId, Budget>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
-    child_keys: BTreeSet<(Option<ItemId>, Key)>,
+    child_keys: BTreeSet<(Option<ItemId>, Option<Key>, Key)>,
 }
 
 /// Folds every record. Offsets must ascend.
@@ -230,14 +251,10 @@ impl State {
 
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
-        let last = it.paths.last();
-        let exhausted = it.pending_fork.is_none()
-            && it.hold.is_none()
-            && last.is_some_and(|p| p.tries >= ATTEMPTS_ALLOWED && !p.done && !p.closed);
         Some(match it.closed {
             Some(Closure::Merged | Closure::Completed) => Stage::Done,
             Some(_) => Stage::Closed,
-            None if it.open_question.is_some() || exhausted || it.over_budget => Stage::NeedsYou,
+            None if self.needs_you(id).is_some() => Stage::NeedsYou,
             None if it.hold.is_some() => Stage::Held,
             None if !it.accepted => {
                 if it.proposed_by_agent {
@@ -246,7 +263,7 @@ impl State {
                     Stage::Triage
                 }
             }
-            None if it.pending_fork.is_none() && last.is_some_and(|p| p.done && !p.closed) => {
+            None if it.pending_fork.is_none() && it.open_path().is_some_and(|p| p.done) => {
                 Stage::InReview
             }
             None if self
@@ -258,6 +275,48 @@ impl State {
             }
             None => Stage::Ready,
         })
+    }
+
+    /// Why an open item waits on a person, if it does.
+    pub fn needs_you(&self, id: &ItemId) -> Option<NeedsYou> {
+        let it = self.items.get(id)?;
+        if it.closed.is_some() {
+            return None;
+        }
+        if it.open_question.is_some() {
+            return Some(NeedsYou::Question);
+        }
+        if it.over_budget {
+            return Some(NeedsYou::OverBudget);
+        }
+        let dropped = self.edges.iter().any(|(a, b)| {
+            a == id
+                && self.items.get(b).is_some_and(|d| {
+                    matches!(
+                        d.closed,
+                        Some(
+                            Closure::Dismissed
+                                | Closure::Upstream
+                                | Closure::Cancelled
+                                | Closure::Rejected
+                        )
+                    )
+                })
+        });
+        if dropped {
+            return Some(NeedsYou::DependencyDropped);
+        }
+        // A closed attempt is never claimable: only a redo reopens the item.
+        if it.pending_fork.is_none() && it.hold.is_none() && !it.paths.is_empty() {
+            match it.open_path() {
+                None => return Some(NeedsYou::NoOpenAttempt),
+                Some(p) if !p.done && p.tries >= ATTEMPTS_ALLOWED => {
+                    return Some(NeedsYou::TriesUsed);
+                }
+                Some(_) => {}
+            }
+        }
+        None
     }
 
     /// Children of `id` that are not done.
@@ -327,6 +386,9 @@ impl State {
                 Some(h) if h.by == rec.by && h.attempt == attempt => {}
                 _ => return Err(Reject::NotHolder),
             }
+        } else if it.hold.as_ref().is_some_and(|h| h.attempt != attempt) {
+            // A person or the tracker must name the attempt that is running.
+            return Err(Reject::WrongAttempt);
         }
         Ok(it)
     }
@@ -456,6 +518,13 @@ impl State {
                 }
                 self.edges.insert((item.clone(), to.clone()));
             }
+            WorkRecord::Unlinked { item, to } => {
+                if rec.actor == Actor::Agent {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                self.item(item)?;
+                self.edges.remove(&(item.clone(), to.clone()));
+            }
             WorkRecord::Context { item, entry, .. } => {
                 self.item_mut(item)?.context.insert(entry.clone(), offset);
             }
@@ -470,7 +539,11 @@ impl State {
                 let it = self.item(item)?;
                 // A path that used its claims goes to Needs you; only a redo reopens the item.
                 let retry = it.pending_fork.is_none() && !it.paths.is_empty();
-                if retry && it.paths.last().is_some_and(|p| p.tries >= ATTEMPTS_ALLOWED) {
+                if retry
+                    && it
+                        .open_path()
+                        .is_some_and(|p| !p.done && p.tries >= ATTEMPTS_ALLOWED)
+                {
                     return Err(Reject::TooManyTries);
                 }
                 let root = it.root.clone();
@@ -489,7 +562,7 @@ impl State {
                 }
                 let it = self.item_mut(item)?;
                 let want = if retry {
-                    it.paths.last().map_or(1, |p| p.attempt)
+                    it.open_path().map_or(1, |p| p.attempt)
                 } else {
                     it.paths.last().map_or(1, |p| p.attempt + 1)
                 };
@@ -497,7 +570,7 @@ impl State {
                     return Err(Reject::WrongAttempt);
                 }
                 if retry {
-                    if let Some(p) = it.paths.last_mut() {
+                    if let Some(p) = it.paths.iter_mut().rev().find(|p| p.attempt == want) {
                         p.tries += 1;
                     }
                 } else {
@@ -546,6 +619,12 @@ impl State {
                 }
                 if !self.open_children(item).is_empty() {
                     return Err(Reject::OpenChildren);
+                }
+                // Check the attempt before changing anything, so a refusal leaves no trace.
+                match it.paths.iter().find(|p| p.attempt == *attempt) {
+                    None => return Err(Reject::WrongAttempt),
+                    Some(p) if p.closed => return Err(Reject::Closed),
+                    Some(_) => {}
                 }
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
@@ -785,7 +864,10 @@ impl State {
             return Err(Reject::Duplicate);
         }
         // Proposals and roots are keyed like children, so a retry never duplicates.
-        let scope = (parent.cloned(), key.clone());
+        // Roots and agent proposals are scoped to the proposer, so two agents' keys never collide.
+        let by = (parent.is_none() || (rec.actor == Actor::Agent && work == WorkKind::Fix))
+            .then(|| rec.by.clone());
+        let scope = (parent.cloned(), by, key.clone());
         if self.child_keys.contains(&scope) {
             return Err(Reject::Duplicate);
         }

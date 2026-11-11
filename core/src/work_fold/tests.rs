@@ -1012,3 +1012,179 @@ fn people_nest_no_deeper_than_agents() {
     l.person(proposed("p4", Some("p3"), "k", WorkKind::Split));
     assert_eq!(fold(&l.0).items[&id("p4")].depth, 4);
 }
+
+#[test]
+fn a_closed_attempt_is_never_claimable() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    let d = l.agent("w1", decision("r1", 1, vec![]));
+    l.agent("w1", done("r1", 1, 0));
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 1,
+        at: d,
+        note: None,
+    });
+    l.agent("w2", claimed("r1", 2));
+    l.agent(
+        "w2",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 2,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    l.person(WorkRecord::AttemptClosed {
+        item: id("r1"),
+        attempt: 2,
+    });
+    // Attempt 1 is still open and finished, so the item is back in review.
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::InReview));
+    l.agent("w3", claimed("r1", 2));
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotReady);
+    // With every attempt closed, nothing is claimable and a person must act.
+    l.person(WorkRecord::AttemptClosed {
+        item: id("r1"),
+        attempt: 1,
+    });
+    l.agent("w3", claimed("r1", 1));
+    l.agent("w3", claimed("r1", 3));
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::NoOpenAttempt));
+    assert_eq!(s.items[&id("r1")].paths.len(), 2);
+    assert!(s.items[&id("r1")].hold.is_none());
+}
+
+#[test]
+fn a_refused_done_changes_nothing() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    let before = fold(&l.0);
+    // A person's done for an attempt that does not exist.
+    l.person(done("r1", 7, 5_000));
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().unwrap().why, Reject::WrongAttempt);
+    assert_eq!(s.items, before.items);
+    assert_eq!(s.budgets, before.budgets);
+    // A closed attempt cannot be finished either, and costs nothing.
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    l.person(WorkRecord::AttemptClosed {
+        item: id("r1"),
+        attempt: 1,
+    });
+    let before = fold(&l.0);
+    l.person(done("r1", 1, 5_000));
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().unwrap().why, Reject::Closed);
+    assert_eq!(s.items, before.items);
+    assert_eq!(s.budgets, before.budgets);
+}
+
+#[test]
+fn agents_keys_do_not_collide_on_roots() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent("w1", proposed("a", None, "found", WorkKind::Fix));
+    l.agent("w2", proposed("b", None, "found", WorkKind::Fix));
+    l.agent("w1", proposed("a2", None, "found", WorkKind::Fix));
+    let s = fold(&l.0);
+    assert!(s.items.contains_key(&id("a")) && s.items.contains_key(&id("b")));
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        vec![Reject::Duplicate]
+    );
+}
+
+#[test]
+fn a_dropped_dependency_sends_the_dependent_to_needs_you() {
+    let mut l = Log::default();
+    for r in ["a", "b", "c"] {
+        l.tracker(imported(r));
+        l.person(WorkRecord::Accepted {
+            item: id(r),
+            tier: None,
+        });
+    }
+    l.tracker(WorkRecord::Linked {
+        item: id("a"),
+        to: id("b"),
+    });
+    l.tracker(WorkRecord::Linked {
+        item: id("c"),
+        to: id("b"),
+    });
+    l.tracker(WorkRecord::Closed {
+        item: id("b"),
+        why: CloseWhy::Dismissed,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("a")), Some(Stage::NeedsYou));
+    assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
+    // A merged dependency frees its dependents instead.
+    let mut m = Log(l.0[..l.0.len() - 1].to_vec());
+    m.tracker(WorkRecord::Closed {
+        item: id("b"),
+        why: CloseWhy::Merged,
+    });
+    assert_eq!(fold(&m.0).stage(&id("a")), Some(Stage::Ready));
+    // A person relinks, and the dependent is free.
+    l.person(WorkRecord::Unlinked {
+        item: id("a"),
+        to: id("b"),
+    });
+    assert_eq!(fold(&l.0).stage(&id("a")), Some(Stage::Ready));
+    assert_eq!(fold(&l.0).stage(&id("c")), Some(Stage::NeedsYou));
+}
+
+#[test]
+fn a_release_must_name_the_running_attempt() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.tracker(WorkRecord::Released {
+        item: id("r1"),
+        attempt: 3,
+        reason: None,
+        cost_micros: 900,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().unwrap().why, Reject::WrongAttempt);
+    assert!(s.items[&id("r1")].hold.is_some());
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, DEFAULT_COST_MICROS);
+    l.tracker(WorkRecord::Released {
+        item: id("r1"),
+        attempt: 1,
+        reason: None,
+        cost_micros: 900,
+    });
+    assert!(fold(&l.0).items[&id("r1")].hold.is_none());
+}

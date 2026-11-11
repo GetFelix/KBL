@@ -5,6 +5,7 @@
 {"kind":"accepted","item":"r1","tier":1}
 {"kind":"accepted","item":"c1"}
 {"kind":"linked","item":"c2","to":"c1"}
+{"kind":"unlinked","item":"c2","to":"c1"}
 {"kind":"context","item":"r1","entry":"repro","text":{"text":"run it twice"}}
 {"kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
 {"kind":"progress","item":"r1","attempt":1,"note":{"text":"plan: fix the reader"},"branch":"fix/r1","pr":"GetFelix/felix#2210"}
