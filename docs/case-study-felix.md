@@ -90,6 +90,14 @@ Felix milestone. With Kibble, one root can link items in several repos, and
 the companion's item is Blocked on the Felix item until it closes. The board
 for one person covers every repo they own.
 
+Often the agent finds the dependency itself, mid-task: the felix-blocks change
+needs a felix-gateway feature first. The agent posts a prerequisite in the other
+repo. Its held item becomes Blocked on that prerequisite without using an
+attempt, and the person who owns that repo sees it in Triage. "Done" can mean
+merged or released, since a companion usually needs the Felix release, not just
+the merge. When the prerequisite is done, the original item is Ready again, and
+the next claim resumes from the recorded decisions (#140).
+
 ## What Kibble needs for this
 
 Already planned: dependencies (#67), budgets and lineage (#96), decision
