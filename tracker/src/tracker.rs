@@ -583,7 +583,8 @@ impl<B: Broker> Tracker<B> {
                 let mut ops = Vec::new();
                 let taken = {
                     let mut core = self.0.core.lock().await;
-                    self.claim_from(&mut core, agent, tier, record, &mut ops).await
+                    self.claim_from(&mut core, agent, tier, record, &mut ops)
+                        .await
                 };
                 self.run(ops).await.ok();
                 if let Some(d) = taken? {

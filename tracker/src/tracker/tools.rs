@@ -99,7 +99,9 @@ impl<B: Broker> Tracker<B> {
                 work,
                 title,
             };
-            let offset = self.agent_append(&mut core, agent, parent, "post", record).await?;
+            let offset = self
+                .agent_append(&mut core, agent, parent, "post", record)
+                .await?;
             json!({ "item": id, "created": true, "work": work, "offset": offset })
         };
         self.sync_ready().await;
@@ -154,18 +156,16 @@ impl<B: Broker> Tracker<B> {
     pub(crate) async fn context_read(&self, item: &ItemId) -> Result<Value, Error> {
         self.begin().await?;
         let core = self.0.core.lock().await;
-        let it = core
-            .state
-            .items
-            .get(item)
-            .ok_or_else(|| Error::Refused {
-                why: "unknown_item".into(),
-            })?;
+        let it = core.state.items.get(item).ok_or_else(|| Error::Refused {
+            why: "unknown_item".into(),
+        })?;
         let text = |offset: &u64| core.texts.get(offset).map_or(Value::Null, |c| json!(c));
         let entries: Vec<Value> = it
             .context
             .iter()
-            .map(|(entry, offset)| json!({ "entry": entry, "offset": offset, "text": text(offset) }))
+            .map(
+                |(entry, offset)| json!({ "entry": entry, "offset": offset, "text": text(offset) }),
+            )
             .collect();
         let attempt = it.hold.as_ref().map(|h| h.attempt);
         let offsets = match attempt {
@@ -185,6 +185,22 @@ impl<B: Broker> Tracker<B> {
             "notes": notes,
             "open_question": it.open_question,
         }))
+    }
+
+    /// Asks a person a question; the item waits in Needs you until one answers.
+    pub(crate) async fn ask(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        text: Content,
+    ) -> Result<Value, Error> {
+        check_content("text", &text)?;
+        self.held_write(agent, item, "ask", |attempt| WorkRecord::Question {
+            item: item.clone(),
+            attempt,
+            text,
+        })
+        .await
     }
 
     /// Records a plan, a branch or a PR on the item the agent holds.

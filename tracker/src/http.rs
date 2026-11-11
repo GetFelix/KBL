@@ -45,6 +45,7 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
         .route("/v1/work/decide", post(decide::<B>))
         .route("/v1/work/step", post(step::<B>))
         .route("/v1/work/edit", post(edit::<B>))
+        .route("/v1/work/ask", post(ask::<B>))
         .route("/v1/work/answer", post(answer::<B>))
         .route("/v1/work/proposals/accept", post(accept::<B>))
         .route("/v1/work/proposals/edit", post(edit_proposal::<B>))
@@ -401,6 +402,23 @@ async fn edit<B: Broker>(
     }
 }
 
+#[derive(Deserialize)]
+struct AskBody {
+    item: ItemId,
+    text: Content,
+}
+
+async fn ask<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    headers: HeaderMap,
+    Json(b): Json<AskBody>,
+) -> Response {
+    match agent(&app, &headers) {
+        Ok(a) => reply(app.tracker.ask(&a, &b.item, b.text).await),
+        Err(d) => denied(d),
+    }
+}
+
 async fn answer<B: Broker>(
     State(app): State<Arc<App<B>>>,
     headers: HeaderMap,
@@ -411,7 +429,10 @@ async fn answer<B: Broker>(
         Err(d) => return denied(d),
     };
     let Some(question) = b.question else {
-        return denied((StatusCode::UNPROCESSABLE_ENTITY, "name the question's offset"));
+        return denied((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "name the question's offset",
+        ));
     };
     reply(
         app.tracker
@@ -421,11 +442,7 @@ async fn answer<B: Broker>(
 }
 
 /// A person's action that is one record.
-async fn as_person<B: Broker>(
-    app: &App<B>,
-    headers: &HeaderMap,
-    record: WorkRecord,
-) -> Response {
+async fn as_person<B: Broker>(app: &App<B>, headers: &HeaderMap, record: WorkRecord) -> Response {
     match person(app, headers) {
         Ok(p) => reply(app.tracker.person_record(p, record).await),
         Err(d) => denied(d),

@@ -1389,7 +1389,12 @@ fn posts_and_context_are_capped_and_the_cap_is_logged_once_per_attempt() {
     for i in 0..MAX_POSTS {
         l.agent(
             "w1",
-            proposed(&format!("c{i}"), Some("r1"), &format!("k{i}"), WorkKind::Test),
+            proposed(
+                &format!("c{i}"),
+                Some("r1"),
+                &format!("k{i}"),
+                WorkKind::Test,
+            ),
         );
     }
     assert_eq!(last_rejection(&l), None);
@@ -1444,17 +1449,24 @@ fn an_agent_writes_context_only_on_work_it_holds_or_a_child_it_holds() {
     assert_eq!(last_rejection(&l), Some(Reject::NotHolder));
     // An augment child held by w2 lets it add context to its target.
     l.agent("w1", proposed("aug", Some("r1"), "aug", WorkKind::Augment));
-    l.agent("w1", WorkRecord::Released {
-        item: id("r1"),
-        attempt: 1,
-        reason: None,
-        cost_micros: 0,
-    });
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
     l.agent("w2", claimed("aug", 1));
     l.agent("w2", ctx("r1", "from-augment"));
     let s = fold(&l.0);
     assert_eq!(s.rejections.len(), 1);
-    assert!(s.items[&id("r1")].context.contains_key(&key("from-augment")));
+    assert!(
+        s.items[&id("r1")]
+            .context
+            .contains_key(&key("from-augment"))
+    );
     assert_eq!(s.items[&id("aug")].paths[0].context_writes, 1);
 }
 
@@ -1505,10 +1517,13 @@ fn tiers_are_zero_to_three_and_a_person_can_move_an_item() {
         tier: 9,
     });
     assert_eq!(last_rejection(&l), Some(Reject::BadTier));
-    l.agent("w1", WorkRecord::TierChanged {
-        item: id("r1"),
-        tier: 3,
-    });
+    l.agent(
+        "w1",
+        WorkRecord::TierChanged {
+            item: id("r1"),
+            tier: 3,
+        },
+    );
     assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
     assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(0));
 }
@@ -1536,11 +1551,14 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         tier: Some(3),
     });
     assert_eq!(last_rejection(&l), Some(Reject::NotAProposal));
-    l.agent("w1", WorkRecord::Edited {
-        item: id("p"),
-        title: None,
-        tier: Some(3),
-    });
+    l.agent(
+        "w1",
+        WorkRecord::Edited {
+            item: id("p"),
+            title: None,
+            tier: Some(3),
+        },
+    );
     assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
 }
 

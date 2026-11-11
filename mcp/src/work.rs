@@ -169,6 +169,17 @@ impl<T: TrackerApi> Work<T> {
         Ok(reply.to_string())
     }
 
+    /// The item this agent holds, which the tools that act on "the item" default to.
+    pub(crate) async fn held_item(&self) -> Option<String> {
+        self.0.held.lock().await.as_ref().map(|h| h.item.clone())
+    }
+
+    /// A tool that writes or reads a record through the tracker. A refusal
+    /// comes back as the reason and leaves the claim as it was.
+    pub(crate) async fn tool(&self, path: &str, body: Value) -> Result<Value, String> {
+        self.0.api.call(path, body).await.map_err(message)
+    }
+
     pub(crate) async fn extend(&self, item: &str) -> Result<String, String> {
         self.0
             .api

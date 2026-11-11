@@ -987,7 +987,11 @@ impl State {
                 }
                 if let (Some(id), RefusalReason::Limit) = (item, reason) {
                     // Logged once per attempt, so a looping agent cannot fill the stream with refusals.
-                    if let Some(attempt) = self.items.get(id).and_then(|i| i.hold.as_ref()).map(|h| h.attempt)
+                    if let Some(attempt) = self
+                        .items
+                        .get(id)
+                        .and_then(|i| i.hold.as_ref())
+                        .map(|h| h.attempt)
                         && let Ok(p) = self.path_mut(id, attempt)
                     {
                         p.capped = true;
@@ -1037,9 +1041,7 @@ impl State {
             // An agent's fix is out of scope for its task: a root once a person accepts it.
             (Actor::Agent, _) if work == WorkKind::Fix => {
                 // The proposal counts against the attempt that found it.
-                let (held, attempt) = self
-                    .held_by(rec.by.as_str())
-                    .ok_or(Reject::NoHeldParent)?;
+                let (held, attempt) = self.held_by(rec.by.as_str()).ok_or(Reject::NoHeldParent)?;
                 let p = self.path_mut(&held, attempt)?;
                 if p.posts >= MAX_POSTS {
                     return Err(Reject::LimitReached);

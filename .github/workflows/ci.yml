@@ -79,6 +79,8 @@ jobs:
         run: |
           cargo build -p agents-tool -p felix-mcp -p agents-tracker
           node dev/check-tracker-claims.mjs
+      - name: Run the work tools against Felix
+        run: node dev/check-tracker-work.mjs
       - name: Run a scripted job twice from one seed
         run: node dev/check-scripted.mjs
       - name: Kill workers holding tasks

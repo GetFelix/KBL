@@ -116,3 +116,26 @@ async fn extensions_that_keep_failing_warn_the_agent() {
     let err = w.next(None).await.unwrap_err();
     assert!(err.contains("claim at risk"), "{err}");
 }
+
+#[tokio::test(start_paused = true)]
+async fn tools_default_to_the_held_item_and_pass_the_tracker_reason_through() {
+    let fake = Fake::default();
+    let w = work(&fake);
+    assert_eq!(w.held_item().await, None);
+    w.next(None).await.unwrap();
+    assert_eq!(w.held_item().await.as_deref(), Some("a1"));
+    // A tool call is forwarded to its route with the body as given.
+    let reply = w
+        .tool("/v1/work/post", json!({ "item": "a1", "key": "k" }))
+        .await
+        .unwrap();
+    assert_eq!(reply["item"], "a1");
+    assert_eq!(fake.calls("/v1/work/post"), 1);
+    // A tool refusal does not release the claim: it is still extended.
+    fake.0.lock().unwrap().complete = Some("refused");
+    let err = w.tool("/v1/work/decide", json!({})).await.unwrap_err();
+    assert_eq!(err, "open_children");
+    tokio::time::sleep(Duration::from_secs(35)).await;
+    assert_eq!(fake.calls("/v1/work/extend"), 1);
+    assert_eq!(w.held_item().await.as_deref(), Some("a1"));
+}
