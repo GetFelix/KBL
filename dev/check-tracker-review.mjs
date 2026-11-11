@@ -115,6 +115,7 @@ try {
   check(unknown?.includes("reviewer tier"), "a tier that is not configured is refused");
 
   const first = await takeNext(w2, 20, { review_tiers: ["fast"] });
+  console.log("first-pass reply:", JSON.stringify(first));
   check(first.claimed && first.item.work === "review" && first.item.review.pass === "first", "w2 was handed the first-pass review");
   check(first.item.pr === PR && first.item.pr_branch === "kibble/rvroot", "the review names the request and the author's branch");
 
