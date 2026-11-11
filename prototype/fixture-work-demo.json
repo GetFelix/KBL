@@ -58,12 +58,6 @@
    "title": "Quickstart lists a removed flag",
    "class": "docs"
   },
-  "gh-796": {
-   "source": "github",
-   "ref": "#796",
-   "title": "Idle publisher is dropped after 30 s",
-   "class": "bug"
-  },
   "gh-798": {
    "source": "github",
    "ref": "#798",
@@ -233,27 +227,13 @@
   },
   {
    "o": 16,
-   "t": 1191600,
-   "kind": "imported",
-   "item": "gh-796"
-  },
-  {
-   "o": 17,
    "t": 1195200,
    "kind": "approved",
    "item": "gh-780",
    "by": "kim"
   },
   {
-   "o": 18,
-   "t": 1195200,
-   "kind": "triaged",
-   "item": "gh-796",
-   "tier": 2,
-   "by": "dana"
-  },
-  {
-   "o": 19,
+   "o": 17,
    "t": 1198800,
    "kind": "done",
    "item": "gh-780",
@@ -261,19 +241,19 @@
    "pr": 3098
   },
   {
-   "o": 20,
+   "o": 18,
    "t": 1198800,
    "kind": "imported",
    "item": "ado-4402"
   },
   {
-   "o": 21,
+   "o": 19,
    "t": 1200000,
    "kind": "imported",
    "item": "gh-798"
   },
   {
-   "o": 22,
+   "o": 20,
    "t": 1200600,
    "kind": "triaged",
    "item": "ado-4402",
@@ -281,7 +261,7 @@
    "by": "dana"
   },
   {
-   "o": 23,
+   "o": 21,
    "t": 1201800,
    "kind": "claimed",
    "item": "ado-4402",
@@ -289,7 +269,7 @@
    "run": "r-ado-4402"
   },
   {
-   "o": 24,
+   "o": 22,
    "t": 1203600,
    "kind": "triaged",
    "item": "gh-798",
@@ -297,7 +277,7 @@
    "by": "dana"
   },
   {
-   "o": 25,
+   "o": 23,
    "t": 1206000,
    "kind": "pr_opened",
    "item": "ado-4402",
@@ -315,7 +295,7 @@
    }
   },
   {
-   "o": 26,
+   "o": 24,
    "t": 1207200,
    "kind": "claimed",
    "item": "gh-798",

@@ -447,13 +447,15 @@
 
 
   /* autoplay demo overlays */
-  #demo-cap, #demo-key { position: fixed; z-index: 60; bottom: 138px; display: none; align-items: center; gap: 10px; border-radius: 12px; border: 1px solid var(--line-strong); background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(8px); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); pointer-events: none; opacity: 0; }
+  #demo-cap, #demo-key { position: fixed; z-index: 60; bottom: 150px; display: none; align-items: center; gap: 10px; border-radius: 12px; border: 1px solid var(--line-strong); background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(8px); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); pointer-events: none; opacity: 0; }
   #demo-cap { left: 50%; transform: translateX(-50%); padding: 10px 20px; font: 600 17px Inter, sans-serif; white-space: nowrap; }
-  #demo-key { right: 28px; padding: 8px 14px; font: 500 14px Inter, sans-serif; color: var(--muted); }
+  #demo-key { right: 28px; bottom: 58px; padding: 5px 12px; font: 500 14px Inter, sans-serif; color: var(--muted); }
   #demo-key kbd { font-size: 14px; }
   body.demo #demo-cap, body.demo #demo-key { display: flex; }
   body.demo { cursor: none; }
-  body.demo #events, body.demo .legend { display: none; }
+  body.demo #events { display: none; }
+  body.demo .legend { visibility: hidden; }
+  .bsep { color: var(--faint); }
   #go.pressed { transform: scale(0.96); }
 
   /* dialogs */
@@ -816,7 +818,7 @@ function constraintOf(byStage, busy, agents, roots) {
   add('needs', 'needs you', byStage.needs, `${plural(byStage.needs.length, 'item')} waiting on an answer or a decision, oldest ${span(oldest(byStage.needs))}`);
   add('blocked', 'blocked', byStage.blocked, roots.length ? `${plural(byStage.blocked.length, 'item')} behind ${roots[0].it.ref}, which holds up ${roots[0].holds}` : `${plural(byStage.blocked.length, 'item')} blocked`);
   const full = cap != null && byStage.review.length >= cap;
-  if (byStage.ready.length && busy < agents && !full) add('ready', 'claim path', byStage.ready, `${agents - busy} of ${agents} agents idle while ${byStage.ready.length} are ready`, 2);
+  if (byStage.ready.length && busy < agents && !full) add('ready', 'claim path', byStage.ready, `${agents - busy} of ${agents} agents idle while ${byStage.ready.length} ${byStage.ready.length === 1 ? 'is' : 'are'} ready`, 2);
   if (full) { const c = cands.find((x) => x.stage === 'review'); if (c) c.score = 1e9; }
   cands.sort((a, b) => b.score - a.score);
   return cands[0] ?? null;
@@ -1055,7 +1057,7 @@ function renderFooter() {
   const net = inDay - outDay;
   const growth = net <= 0 ? ` <b>Draining.</b>` : ` <b class="grow">Growing by ${net} a day.</b>`;
   const why = binding ? `Binding stage, <b>${esc(binding.label)}</b>: ${binding.text}. <button class="lk" data-bind="${binding.stage}">Show it</button>` : 'Nothing is waiting long.';
-  $('bind').innerHTML = `${why}${growth}`;
+  $('bind').innerHTML = binding ? `${why} <span class="bsep">·</span>${growth}` : `${why}${growth}`;
   const oldReady = by.ready[0];
   $('rates').innerHTML = `<span class="m"><small>in</small>${inDay}/day</span><span class="m"><small>out</small>${outDay}/day</span>` +
     `<span class="m"><small>oldest ready</small>${oldReady ? `${span(cut - oldReady.since)} (${esc(oldReady.ref)})` : 'none'}</span>`;
@@ -2227,7 +2229,7 @@ async function press(k, label, o = {}) {
   anim(el, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, fill: 'both' });
   await sleep(180);
   document.body.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey: !!o.shift, bubbles: true }));
-  sleep(1100).then(() => { if (mine === keyTimer) anim(el, [{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }); });
+  sleep(750).then(() => { if (mine === keyTimer) anim(el, [{ opacity: 1 }, { opacity: 0 }], { duration: 250, fill: 'forwards' }); });
 }
 
 const BASE_LEN = recs.length;

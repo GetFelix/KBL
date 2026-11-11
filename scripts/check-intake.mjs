@@ -293,6 +293,12 @@ try {
     if (size === 'laptop') check(info.crossings === 0, `${label}: ${info.crossings} chain segments cross a card that is not in the chain`);
   }
 
+  // The footer's verdict agrees in number and keeps "Show it" apart from the next sentence.
+  for (const f of ['fixture-work.json', 'fixture-work-capped.json', 'fixture-work-burst.json', 'fixture-work-replay.json']) {
+    await open(f, 'view=board');
+    const bind = await page.eval(`document.getElementById('bind').textContent`);
+    check(!/\b1 are\b|\b(?:[02-9]|\d\d+) is\b/.test(bind) && !/Show it(?!\s*·)/.test(bind), `${f}: footer wording: ${bind}`);
+  }
   // The autoplay demo plays its whole story from the fixture, with no page errors, and loops back to where it began.
   await page.setViewport(1280, 720);
   await open('fixture-work-demo.json', 'demo=1&rec=1&loops=2');
@@ -300,8 +306,10 @@ try {
   await page.eval('window.demo.start()');
   let guard = 0;
   while (await page.eval('window.demo.running')) {
-    await page.eval('window.demo.advance(250)');
-    if (++guard > 1000) { fail('demo: did not finish within 250 s of its own time'); break; }
+    await page.eval('window.demo.advance(100)');
+    const bind = await page.eval(`document.getElementById('bind').textContent`);
+    if (/\b1 are\b|\b(?:[02-9]|\d\d+) is\b/.test(bind) || /Show it(?!\s*·)/.test(bind)) { fail(`demo: footer wording: ${bind}`); break; }
+    if (++guard > 2600) { fail('demo: did not finish within 260 s of its own time'); break; }
   }
   const demo = await page.eval('({ errors: window.demo.errors, loops: window.demo.loops, runs: window.demo.runs })');
   check(demo.errors.length === 0 && page.problems.length === 0, `demo: errors: ${[...demo.errors, ...page.problems].join('; ')}`);
