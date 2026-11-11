@@ -11,7 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::names::{ItemId, Key};
-use crate::work::{Actor, Evidence, RefusalReason, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord};
+use crate::work::{
+    Actor, CloseWhy, Evidence, RefusalReason, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+};
 
 #[cfg(test)]
 mod tests;
@@ -20,6 +22,11 @@ const DEFAULT_MAX_ITEMS: u32 = 12;
 const DEFAULT_MAX_DEPTH: u8 = 3;
 const DEFAULT_COST_MICROS: u64 = 10_000_000;
 const DEFAULT_REDOS: u8 = 3;
+/// Claims one attempt may take, counting the first: a retry after a release,
+/// a lapse or a give-up is the second.
+const ATTEMPTS_ALLOWED: u32 = 2;
+/// Attempts that may be open on one item at once: the current one and the one compared with it.
+const OPEN_ATTEMPTS: usize = 2;
 const DEFAULT_TIER: u8 = 2;
 
 /// A root's work budget. Agent records only ever lower it; a person's
@@ -29,7 +36,8 @@ pub struct Budget {
     pub items_left: u32,
     pub max_depth: u8,
     pub cost_left_micros: u64,
-    pub redos_left: u8,
+    /// Redos one item may take. A limit, not a pool, so it never counts down.
+    pub redos_per_item: u8,
 }
 
 impl Budget {
@@ -39,7 +47,7 @@ impl Budget {
             items_left: DEFAULT_MAX_ITEMS - 1,
             max_depth: DEFAULT_MAX_DEPTH,
             cost_left_micros: DEFAULT_COST_MICROS,
-            redos_left: DEFAULT_REDOS,
+            redos_per_item: DEFAULT_REDOS,
         }
     }
 }
@@ -56,7 +64,26 @@ pub enum Stage {
     Blocked,
     Ready,
     Held,
+    /// An attempt finished and nobody has closed the item.
+    InReview,
+    /// Merged, or finished work that needs no merge.
     Done,
+    /// Dismissed, closed upstream, cancelled with its root, or a rejected proposal.
+    Closed,
+}
+
+/// How an item ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Closure {
+    Merged,
+    /// A non-fix item whose attempt finished.
+    Completed,
+    Dismissed,
+    Upstream,
+    /// An ancestor was closed.
+    Cancelled,
+    Rejected,
 }
 
 /// Who holds an item.
@@ -88,6 +115,11 @@ pub struct Fork {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Path {
     pub attempt: u32,
+    /// Claims taken on this path, retries included.
+    pub tries: u32,
+    pub done: bool,
+    /// Closed or abandoned by a person.
+    pub closed: bool,
     pub forked_from: Option<Fork>,
     pub decisions: Vec<u64>,
     pub steps: Vec<u64>,
@@ -110,9 +142,8 @@ pub struct Item {
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
     pub hold: Option<Hold>,
-    pub attempts: u32,
-    pub done: bool,
-    pub gave_up: bool,
+    pub closed: Option<Closure>,
+    pub redos: u8,
     pub over_budget: bool,
     pub open_question: Option<u64>,
     pub branch: Option<String>,
@@ -150,6 +181,14 @@ pub enum Reject {
     NoRedosLeft,
     NotHeld,
     UnknownInput,
+    /// A path has used its claims.
+    TooManyTries,
+    /// Two attempts are open already.
+    TooManyOpen,
+    /// The item is closed.
+    Closed,
+    /// Only a proposal that was never accepted can be rejected.
+    NotAProposal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,7 +207,7 @@ pub struct State {
     pub budgets: BTreeMap<ItemId, Budget>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
-    child_keys: BTreeSet<(ItemId, Key)>,
+    child_keys: BTreeSet<(Option<ItemId>, Key)>,
 }
 
 /// Folds every record. Offsets must ascend.
@@ -191,29 +230,40 @@ impl State {
 
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
-        Some(if it.done {
-            Stage::Done
-        } else if it.open_question.is_some() || it.gave_up || it.over_budget {
-            Stage::NeedsYou
-        } else if it.hold.is_some() {
-            Stage::Held
-        } else if !it.accepted {
-            if it.proposed_by_agent {
-                Stage::Proposed
-            } else {
-                Stage::Triage
+        let last = it.paths.last();
+        let exhausted = it.pending_fork.is_none()
+            && it.hold.is_none()
+            && last.is_some_and(|p| p.tries >= ATTEMPTS_ALLOWED && !p.done && !p.closed);
+        Some(match it.closed {
+            Some(Closure::Merged | Closure::Completed) => Stage::Done,
+            Some(_) => Stage::Closed,
+            None if it.open_question.is_some() || exhausted || it.over_budget => Stage::NeedsYou,
+            None if it.hold.is_some() => Stage::Held,
+            None if !it.accepted => {
+                if it.proposed_by_agent {
+                    Stage::Proposed
+                } else {
+                    Stage::Triage
+                }
             }
-        } else if self.edges.iter().any(|(a, b)| a == id && !self.is_done(b)) {
-            Stage::Blocked
-        } else {
-            Stage::Ready
+            None if it.pending_fork.is_none() && last.is_some_and(|p| p.done && !p.closed) => {
+                Stage::InReview
+            }
+            None if self
+                .edges
+                .iter()
+                .any(|(a, b)| a == id && !self.is_closed(b)) =>
+            {
+                Stage::Blocked
+            }
+            None => Stage::Ready,
         })
     }
 
     /// Children of `id` that are not done.
     pub fn open_children(&self, id: &ItemId) -> Vec<&ItemId> {
         self.items.get(id).map_or_else(Vec::new, |it| {
-            it.children.iter().filter(|c| !self.is_done(c)).collect()
+            it.children.iter().filter(|c| !self.is_closed(c)).collect()
         })
     }
 
@@ -243,12 +293,22 @@ impl State {
             };
             out.extend(p.human_inputs.iter().copied().filter(|o| *o <= limit));
         }
+        // The steering note may have been written after the fork decision.
+        out.extend(chain.iter().filter_map(|p| p.forked_from.as_ref()?.note));
         out.sort_unstable();
+        out.dedup();
         out
     }
 
-    fn is_done(&self, id: &ItemId) -> bool {
-        self.items.get(id).is_some_and(|i| i.done)
+    fn is_closed(&self, id: &ItemId) -> bool {
+        self.items.get(id).is_some_and(|i| i.closed.is_some())
+    }
+
+    /// Marks the root over budget so the stage does not depend on a later `refused`.
+    fn flag_over_budget(&mut self, root: &ItemId) {
+        if let Some(r) = self.items.get_mut(root) {
+            r.over_budget = true;
+        }
     }
 
     fn item(&self, id: &ItemId) -> Result<&Item, Reject> {
@@ -312,9 +372,8 @@ impl State {
             tier: None,
             proposal: None,
             hold: None,
-            attempts: 0,
-            done: false,
-            gave_up: false,
+            closed: None,
+            redos: 0,
             over_budget: false,
             open_question: None,
             branch: None,
@@ -365,6 +424,7 @@ impl State {
                 why,
                 duplicate_of,
             } => {
+                self.may_triage(item, rec)?;
                 self.item_mut(item)?.proposal = Some(Proposal {
                     tier: *tier,
                     why: why.clone(),
@@ -381,6 +441,12 @@ impl State {
                     .or(it.proposal.as_ref().map(|p| p.tier))
                     .or(Some(DEFAULT_TIER));
                 it.accepted = true;
+                // A proposal gets its root budget when a person accepts it, not before.
+                if it.parent.is_none() {
+                    self.budgets
+                        .entry(item.clone())
+                        .or_insert_with(Budget::for_new_root);
+                }
             }
             WorkRecord::Linked { item, to } => {
                 self.item(item)?;
@@ -401,26 +467,56 @@ impl State {
                 if rec.actor != Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
                 }
-                if self.stage(item).ok_or(Reject::UnknownItem)? != Stage::Ready {
+                let it = self.item(item)?;
+                // A path that used its claims goes to Needs you; only a redo reopens the item.
+                let retry = it.pending_fork.is_none() && !it.paths.is_empty();
+                if retry && it.paths.last().is_some_and(|p| p.tries >= ATTEMPTS_ALLOWED) {
+                    return Err(Reject::TooManyTries);
+                }
+                let root = it.root.clone();
+                if self
+                    .budgets
+                    .get(&root)
+                    .is_some_and(|b| b.cost_left_micros == 0)
+                {
+                    self.flag_over_budget(&root);
+                    return Err(Reject::OverBudget);
+                }
+                let stage = self.stage(item).ok_or(Reject::UnknownItem)?;
+                // A retry follows a release, lapse or give-up, which leave the item Ready.
+                if stage != Stage::Ready {
                     return Err(Reject::NotReady);
                 }
                 let it = self.item_mut(item)?;
-                if *attempt != it.attempts + 1 {
+                let want = if retry {
+                    it.paths.last().map_or(1, |p| p.attempt)
+                } else {
+                    it.paths.last().map_or(1, |p| p.attempt + 1)
+                };
+                if *attempt != want {
                     return Err(Reject::WrongAttempt);
                 }
-                it.attempts = *attempt;
+                if retry {
+                    if let Some(p) = it.paths.last_mut() {
+                        p.tries += 1;
+                    }
+                } else {
+                    it.paths.push(Path {
+                        attempt: *attempt,
+                        tries: 1,
+                        done: false,
+                        closed: false,
+                        forked_from: it.pending_fork.take(),
+                        decisions: Vec::new(),
+                        steps: Vec::new(),
+                        edits: Vec::new(),
+                        human_inputs: Vec::new(),
+                    });
+                }
                 it.hold = Some(Hold {
                     by: rec.by.clone(),
                     attempt: *attempt,
                     deadline_ms: *deadline_ms,
-                });
-                it.paths.push(Path {
-                    attempt: *attempt,
-                    forked_from: it.pending_fork.take(),
-                    decisions: Vec::new(),
-                    steps: Vec::new(),
-                    edits: Vec::new(),
-                    human_inputs: Vec::new(),
                 });
             }
             WorkRecord::Progress {
@@ -445,21 +541,38 @@ impl State {
                 cost_micros,
             } => {
                 let it = self.acting_on(item, *attempt, rec)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
                 if !self.open_children(item).is_empty() {
                     return Err(Reject::OpenChildren);
                 }
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
-                it.done = true;
+                it.hold = None;
+                it.cost_micros += cost_micros;
+                // A fix waits for its merge; other work is finished when its attempt is.
+                if it.work != WorkKind::Fix {
+                    it.closed = Some(Closure::Completed);
+                }
+                self.path_mut(item, *attempt)?.done = true;
+                self.draw_cost(&root, *cost_micros);
+            }
+            WorkRecord::Released {
+                item,
+                attempt,
+                cost_micros,
+                ..
+            } => {
+                let it = self.acting_on(item, *attempt, rec)?;
+                if it.hold.is_none() {
+                    return Err(Reject::NotHeld);
+                }
+                let root = it.root.clone();
+                let it = self.item_mut(item)?;
                 it.hold = None;
                 it.cost_micros += cost_micros;
                 self.draw_cost(&root, *cost_micros);
-            }
-            WorkRecord::Released { item, attempt, .. } => {
-                if self.acting_on(item, *attempt, rec)?.hold.is_none() {
-                    return Err(Reject::NotHeld);
-                }
-                self.item_mut(item)?.hold = None;
             }
             WorkRecord::GaveUp {
                 item,
@@ -474,7 +587,6 @@ impl State {
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
                 it.hold = None;
-                it.gave_up = true;
                 it.cost_micros += cost_micros;
                 self.draw_cost(&root, *cost_micros);
             }
@@ -489,6 +601,7 @@ impl State {
                 ..
             } => {
                 Self::check_evidence(offset, evidence)?;
+                self.may_answer(item, rec)?;
                 let it = self.item_mut(item)?;
                 if it.open_question == Some(*question) {
                     it.open_question = None;
@@ -545,7 +658,11 @@ impl State {
                     return Err(Reject::ActorNotAllowed);
                 }
                 let it = self.item(item)?;
-                if it.hold.is_some() || it.done || it.pending_fork.is_some() {
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // A finished attempt can be redone while its item is unmerged; a running one cannot.
+                if it.hold.is_some() || it.pending_fork.is_some() {
                     return Err(Reject::NotReady);
                 }
                 let p = it
@@ -563,26 +680,62 @@ impl State {
                         return Err(Reject::UnknownInput);
                     }
                 }
-                let root = it.root.clone();
-                let b = self.budgets.get_mut(&root).ok_or(Reject::UnknownItem)?;
-                if b.redos_left == 0 {
+                if it.paths.iter().filter(|p| !p.closed).count() >= OPEN_ATTEMPTS {
+                    return Err(Reject::TooManyOpen);
+                }
+                let limit = self
+                    .budgets
+                    .get(&it.root)
+                    .map_or(DEFAULT_REDOS, |b| b.redos_per_item);
+                if it.redos >= limit {
                     return Err(Reject::NoRedosLeft);
                 }
-                b.redos_left -= 1;
                 let it = self.item_mut(item)?;
+                it.redos += 1;
                 it.pending_fork = Some(Fork {
                     from_attempt: *from_attempt,
                     at: *at,
                     note: *note,
                 });
-                it.gave_up = false;
+            }
+            WorkRecord::Closed { item, why } => {
+                if rec.actor == Actor::Agent {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                self.item(item)?;
+                let how = match why {
+                    CloseWhy::Merged => Closure::Merged,
+                    CloseWhy::Dismissed => Closure::Dismissed,
+                    CloseWhy::Upstream => Closure::Upstream,
+                };
+                self.close(item, how);
+            }
+            WorkRecord::Rejected { item } => {
+                if rec.actor == Actor::Agent {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if self.item(item)?.accepted {
+                    return Err(Reject::NotAProposal);
+                }
+                self.close(item, Closure::Rejected);
+            }
+            WorkRecord::AttemptClosed { item, attempt } => {
+                if rec.actor == Actor::Agent {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item_mut(item)?;
+                let held = it.hold.as_ref().is_some_and(|h| h.attempt == *attempt);
+                if held {
+                    it.hold = None;
+                }
+                self.path_mut(item, *attempt)?.closed = true;
             }
             WorkRecord::BudgetSet {
                 root,
                 items_left,
                 max_depth,
                 cost_left_micros,
-                redos_left,
+                redos_per_item,
             } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);
@@ -592,11 +745,14 @@ impl State {
                     items_left: *items_left,
                     max_depth: *max_depth,
                     cost_left_micros: *cost_left_micros,
-                    redos_left: *redos_left,
+                    redos_per_item: *redos_per_item,
                 };
                 self.item_mut(root)?.over_budget = false;
             }
             WorkRecord::Refused { item, reason, .. } => {
+                if rec.actor != Actor::Tracker {
+                    return Err(Reject::ActorNotAllowed);
+                }
                 if let (Some(id), RefusalReason::Budget) = (item, reason)
                     && let Some(root) = self.items.get(id).map(|i| i.root.clone())
                 {
@@ -628,12 +784,16 @@ impl State {
         if self.items.contains_key(id) {
             return Err(Reject::Duplicate);
         }
+        // Proposals and roots are keyed like children, so a retry never duplicates.
+        let scope = (parent.cloned(), key.clone());
+        if self.child_keys.contains(&scope) {
+            return Err(Reject::Duplicate);
+        }
         let mut item = Self::blank(id, work, title);
         match (rec.actor, parent) {
             // An agent's fix is out of scope for its task: a root once a person accepts it.
             (Actor::Agent, _) if work == WorkKind::Fix => {
                 item.proposed_by_agent = true;
-                self.budgets.insert(id.clone(), Budget::for_new_root());
             }
             (Actor::Agent, Some(p)) if work.is_live_child() => {
                 let par = self.item(p)?;
@@ -641,45 +801,115 @@ impl State {
                     Some(h) if h.by == rec.by => {}
                     _ => return Err(Reject::NoHeldParent),
                 }
-                if self.child_keys.contains(&(p.clone(), key.clone())) {
-                    return Err(Reject::Duplicate);
-                }
-                let (root, depth) = (par.root.clone(), par.depth);
+                let (root, depth) = (par.root.clone(), par.depth.saturating_add(1));
                 let b = self.budgets.get_mut(&root).ok_or(Reject::UnknownItem)?;
-                if depth + 1 > b.max_depth {
-                    return Err(Reject::TooDeep);
+                let refused = if depth > b.max_depth {
+                    Some(Reject::TooDeep)
+                } else if b.items_left == 0 || b.cost_left_micros == 0 {
+                    Some(Reject::OverBudget)
+                } else {
+                    b.items_left -= 1;
+                    None
+                };
+                if let Some(why) = refused {
+                    self.flag_over_budget(&root);
+                    return Err(why);
                 }
-                if b.items_left == 0 || b.cost_left_micros == 0 {
-                    return Err(Reject::OverBudget);
-                }
-                b.items_left -= 1;
-                item.depth = depth + 1;
+                item.depth = depth;
                 item.parent = Some(p.clone());
                 item.root = root;
                 item.accepted = true;
             }
             (Actor::Agent, _) => return Err(Reject::NoHeldParent),
             (_, Some(p)) => {
-                // Items people and the tracker add draw nothing from the root budget.
+                // Items people and the tracker add draw nothing from the root budget,
+                // but they nest no deeper than an agent could.
                 let par = self.item(p)?;
-                if self.child_keys.contains(&(p.clone(), key.clone())) {
-                    return Err(Reject::Duplicate);
+                if par.closed.is_some() {
+                    return Err(Reject::Closed);
                 }
-                item.depth = par.depth.saturating_add(1);
+                let depth = par.depth.saturating_add(1);
+                let max = self
+                    .budgets
+                    .get(&par.root)
+                    .map_or(DEFAULT_MAX_DEPTH, |b| b.max_depth);
+                if depth > max {
+                    return Err(Reject::TooDeep);
+                }
+                item.depth = depth;
                 item.root = par.root.clone();
                 item.parent = Some(p.clone());
                 item.accepted = true;
             }
             (actor, None) => {
-                self.budgets.insert(id.clone(), Budget::for_new_root());
                 item.accepted = actor == Actor::Person;
+                if item.accepted {
+                    self.budgets.insert(id.clone(), Budget::for_new_root());
+                }
             }
         }
-        if let Some(p) = &item.parent {
-            self.child_keys.insert((p.clone(), key.clone()));
-        }
+        self.child_keys.insert(scope);
         self.new_item(item);
         Ok(())
+    }
+
+    /// Triage answers come from the agent holding the triage item for that target.
+    fn may_triage(&self, target: &ItemId, rec: &WorkLogged) -> Result<(), Reject> {
+        self.item(target)?;
+        if rec.actor != Actor::Agent {
+            return Ok(());
+        }
+        let holds = self.items.values().any(|t| {
+            t.work == WorkKind::Triage
+                && t.parent.as_ref() == Some(target)
+                && t.hold.as_ref().is_some_and(|h| h.by == rec.by)
+        });
+        if holds {
+            Ok(())
+        } else {
+            Err(Reject::NotHolder)
+        }
+    }
+
+    /// Answers come from a person or the agent holding a question item under `item`.
+    fn may_answer(&self, item: &ItemId, rec: &WorkLogged) -> Result<(), Reject> {
+        let it = self.item(item)?;
+        match rec.actor {
+            Actor::Person => Ok(()),
+            Actor::Tracker => Err(Reject::ActorNotAllowed),
+            Actor::Agent => {
+                let holds = it
+                    .children
+                    .iter()
+                    .filter_map(|c| self.items.get(c))
+                    .any(|q| {
+                        q.work == WorkKind::Question
+                            && q.hold.as_ref().is_some_and(|h| h.by == rec.by)
+                    });
+                if holds {
+                    Ok(())
+                } else {
+                    Err(Reject::NotHolder)
+                }
+            }
+        }
+    }
+
+    /// Closes `item` as `how` and cancels everything open beneath it.
+    fn close(&mut self, item: &ItemId, how: Closure) {
+        let mut stack = vec![(item.clone(), how)];
+        while let Some((id, how)) = stack.pop() {
+            let Some(it) = self.items.get_mut(&id) else {
+                continue;
+            };
+            if it.closed.is_some() {
+                continue;
+            }
+            it.closed = Some(how);
+            it.hold = None;
+            it.pending_fork = None;
+            stack.extend(it.children.iter().map(|c| (c.clone(), Closure::Cancelled)));
+        }
     }
 
     /// Whether `to` can be reached from `from` along edges.

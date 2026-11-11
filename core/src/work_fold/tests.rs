@@ -1,7 +1,7 @@
 use super::*;
 use crate::codec::Codec;
 use crate::content::Content;
-use crate::work::{HumanKind, Phase};
+use crate::work::{CloseWhy, HumanKind, Phase};
 
 fn id(s: &str) -> ItemId {
     ItemId::new(s).unwrap()
@@ -170,7 +170,7 @@ fn the_story_folds_to_the_expected_items() {
     assert_eq!(s.stage(&id("c2")), Some(Stage::Ready));
     assert_eq!(s.stage(&id("t1")), Some(Stage::Ready));
     let r1 = &s.items[&id("r1")];
-    assert_eq!(r1.attempts, 2);
+    assert_eq!(r1.paths.iter().map(|p| p.tries).sum::<u32>(), 2);
     assert_eq!(r1.paths.len(), 2);
     assert_eq!(
         r1.paths[1].forked_from,
@@ -189,8 +189,8 @@ fn the_story_folds_to_the_expected_items() {
         vec![(14, Reject::NotHolder), (17, Reject::OpenChildren)]
     );
     let b = &s.budgets[&id("r1")];
-    // Two children drawn from the root, one fork, 2.5 dollars of cost.
-    assert_eq!((b.items_left, b.redos_left), (9, 2));
+    // Two children drawn from the root, one fork on the item, 2.5 dollars of cost.
+    assert_eq!((b.items_left, r1.redos), (9, 1));
     assert_eq!(b.cost_left_micros, DEFAULT_COST_MICROS - 2_500_000);
 }
 
@@ -209,22 +209,54 @@ fn a_seek_equals_the_live_state_at_every_offset() {
 #[test]
 fn the_fold_at_n_uses_no_record_after_n() {
     let log = story().0;
-    let seek = Seek::build(&log, 4);
-    for n in 0..log.len() as u64 {
-        // Everything after n is replaced by records that would change the state.
+    for n in 0..log.len() as u64 - 1 {
+        // Everything after n becomes a fork at a decision that does not exist.
         let mut poisoned = log.clone();
-        for (o, rec) in poisoned.iter_mut().filter(|(o, _)| *o > n) {
-            rec.record = WorkRecord::Done {
+        for (_, rec) in poisoned.iter_mut().filter(|(o, _)| *o > n) {
+            rec.record = WorkRecord::ForkedFrom {
                 item: id("r1"),
-                attempt: *o as u32,
-                cost_micros: 99,
+                from_attempt: 1,
+                at: 999,
+                note: None,
             };
             rec.actor = Actor::Person;
         }
         let want = fold(&log[..=n as usize]);
-        assert_eq!(fold(poisoned.iter().take_while(|(o, _)| *o <= n)), want);
-        assert_eq!(seek.state_at(&log, n), want);
+        // The poison is live: folded in full it leaves a rejection after n.
+        assert!(fold(&poisoned).rejections.iter().any(|r| r.offset > n));
+        let seek = Seek::build(&poisoned, 4);
+        assert_eq!(seek.state_at(&poisoned, n), fold(&poisoned[..=n as usize]));
+        assert_eq!(seek.state_at(&poisoned, n), want);
     }
+    // Once the item has a path, a poisoned fork is refused for the missing decision.
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 1,
+        at: 999,
+        note: None,
+    });
+    let seek = Seek::build(&l.0, 2);
+    assert_eq!(
+        seek.state_at(&l.0, 4).rejections.last().unwrap().why,
+        Reject::UnknownDecision
+    );
+    assert!(seek.state_at(&l.0, 3).rejections.is_empty());
 }
 
 #[test]
@@ -271,7 +303,7 @@ fn agent_records_never_raise_a_budget() {
         items_left: 1000 + n,
         max_depth: 9,
         cost_left_micros: u64::MAX,
-        redos_left: 9,
+        redos_per_item: 9,
     };
     l.agent("w1", raise(0));
     l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
@@ -305,7 +337,7 @@ fn agent_records_never_raise_a_budget() {
             assert!(
                 b.items_left <= p.items_left
                     && b.cost_left_micros <= p.cost_left_micros
-                    && b.redos_left <= p.redos_left
+                    && b.redos_per_item <= p.redos_per_item
                     && b.max_depth <= p.max_depth,
                 "budget rose at offset {o}"
             );
@@ -407,6 +439,8 @@ fn budgets_cap_items_and_depth() {
     assert_eq!(s.items.len(), 12);
     assert_eq!(s.rejections.len(), 2);
     assert!(s.rejections.iter().all(|r| r.why == Reject::OverBudget));
+    // The fold alone sends the root to Needs you; no `refused` record is needed.
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
 
     // Depth: a held child's own child is depth 2, and so on to the cap.
     let mut l = Log::default();
@@ -427,6 +461,7 @@ fn budgets_cap_items_and_depth() {
     assert!(s.items.contains_key(&id("d3")));
     assert!(!s.items.contains_key(&id("d4")));
     assert_eq!(s.rejections.last().unwrap().why, Reject::TooDeep);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
 }
 
 #[test]
@@ -444,7 +479,7 @@ fn people_children_are_free_and_agent_fixes_are_proposals() {
     assert_eq!(s.budgets[&id("r1")].items_left, DEFAULT_MAX_ITEMS - 1);
     assert_eq!(s.stage(&id("p1")), Some(Stage::Ready));
     assert_eq!(s.stage(&id("bug2")), Some(Stage::Proposed));
-    assert!(s.budgets.contains_key(&id("bug2")));
+    assert!(!s.budgets.contains_key(&id("bug2")));
 }
 
 #[test]
@@ -526,7 +561,7 @@ fn a_decision_cannot_cite_the_future_or_skip_its_fields() {
 }
 
 #[test]
-fn human_inputs_follow_the_path_up_to_the_fork() {
+fn human_inputs_follow_the_path_up_to_the_fork_plus_its_note() {
     let mut l = Log::default();
     l.tracker(imported("r1"));
     l.person(WorkRecord::Accepted {
@@ -534,102 +569,94 @@ fn human_inputs_follow_the_path_up_to_the_fork() {
         tier: None,
     });
     l.agent("w1", claimed("r1", 1)); // 2
-    let before = l.person(WorkRecord::HumanInput {
-        item: id("r1"),
-        attempt: Some(1),
-        input: HumanKind::Note,
-        text: text("early"),
-    }); // 3
+    let note_in = |l: &mut Log, attempt, t: &str| {
+        l.person(WorkRecord::HumanInput {
+            item: id("r1"),
+            attempt,
+            input: HumanKind::Note,
+            text: text(t),
+        })
+    };
+    let before = note_in(&mut l, Some(1), "early"); // 3
     let d = l.agent("w1", decision("r1", 1, vec![])); // 4
     l.agent("w1", decision("r1", 1, vec![])); // 5
-    let after = l.person(WorkRecord::HumanInput {
-        item: id("r1"),
-        attempt: Some(1),
-        input: HumanKind::Note,
-        text: text("late, after the fork point"),
-    }); // 6
-    let whole = l.person(WorkRecord::HumanInput {
-        item: id("r1"),
-        attempt: None,
-        input: HumanKind::PriorityChange,
-        text: text("p0"),
-    }); // 7
+    let after = note_in(
+        &mut l,
+        Some(1),
+        "late, not the reviewer's note for the fork",
+    ); // 6
+    let whole = note_in(&mut l, None, "p0"); // 7
+    // The reviewer's note is written after the decision it forks from.
+    let steer = note_in(&mut l, Some(1), "take the writer"); // 8
     l.agent(
         "w1",
         WorkRecord::Released {
             item: id("r1"),
             attempt: 1,
             reason: None,
+            cost_micros: 0,
         },
     );
     l.person(WorkRecord::ForkedFrom {
         item: id("r1"),
         from_attempt: 1,
         at: d,
-        note: Some(before),
+        note: Some(steer),
     });
     l.agent("w2", claimed("r1", 2));
-    let steer = l.person(WorkRecord::HumanInput {
-        item: id("r1"),
-        attempt: Some(2),
-        input: HumanKind::Note,
-        text: text("take the writer"),
-    });
+    let own = note_in(&mut l, Some(2), "also this");
     let s = fold(&l.0);
     assert!(s.rejections.is_empty(), "{:?}", s.rejections);
     assert_eq!(
         s.human_inputs_on_path(&id("r1"), 1),
-        vec![before, after, whole]
+        vec![before, after, whole, steer]
     );
-    // The second attempt does not inherit what was said after the fork point.
+    // Inputs up to the fork decision, the note, and the path's own; not `after`.
     assert_eq!(
         s.human_inputs_on_path(&id("r1"), 2),
-        vec![before, whole, steer]
+        vec![before, whole, steer, own]
     );
 }
 
 #[test]
-fn redos_are_limited_and_a_fork_needs_a_real_decision() {
+fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
     let mut l = Log::default();
     l.tracker(imported("r1"));
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
     });
-    let mut ds = Vec::new();
-    for a in 1..=5u32 {
+    for a in 1..=4u32 {
         l.agent("w1", claimed("r1", a));
-        ds.push(l.agent("w1", decision("r1", a, vec![])));
+        let d = l.agent("w1", decision("r1", a, vec![]));
         l.agent(
             "w1",
             WorkRecord::Released {
                 item: id("r1"),
                 attempt: a,
                 reason: None,
+                cost_micros: 0,
             },
         );
+        if a >= 2 {
+            l.person(WorkRecord::AttemptClosed {
+                item: id("r1"),
+                attempt: a - 1,
+            });
+        }
         l.person(WorkRecord::ForkedFrom {
             item: id("r1"),
             from_attempt: a,
-            at: ds[a as usize - 1],
+            at: d,
             note: None,
         });
     }
-    l.person(WorkRecord::ForkedFrom {
-        item: id("r1"),
-        from_attempt: 1,
-        at: 999,
-        note: None,
-    });
     let s = fold(&l.0);
+    // Three redos, then the fourth fork is refused.
     let why: Vec<_> = s.rejections.iter().map(|r| r.why).collect();
-    // Three redos, then the fourth fork and the fifth claim's fork are refused.
-    assert_eq!(why.iter().filter(|w| **w == Reject::NoRedosLeft).count(), 2);
-    assert_eq!(s.budgets[&id("r1")].redos_left, 0);
-}
-
-#[test]
-fn a_question_sends_the_item_to_needs_you_until_it_is_answered() {
+    assert_eq!(why, vec![Reject::NoRedosLeft]);
+    assert_eq!(s.items[&id("r1")].redos, 3);
+    // The limit belongs to the item: its child still has all three.
     let mut l = Log::default();
     l.tracker(imported("r1"));
     l.person(WorkRecord::Accepted {
@@ -637,26 +664,351 @@ fn a_question_sends_the_item_to_needs_you_until_it_is_answered() {
         tier: None,
     });
     l.agent("w1", claimed("r1", 1));
-    let q = l.agent(
+    l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
+    l.agent("w1", proposed("c2", Some("r1"), "b", WorkKind::Split));
+    for c in ["c1", "c2"] {
+        l.agent("w2", claimed(c, 1));
+        let d = l.agent("w2", decision(c, 1, vec![]));
+        l.agent(
+            "w2",
+            WorkRecord::Released {
+                item: id(c),
+                attempt: 1,
+                reason: None,
+                cost_micros: 0,
+            },
+        );
+        l.person(WorkRecord::ForkedFrom {
+            item: id(c),
+            from_attempt: 1,
+            at: d,
+            note: None,
+        });
+    }
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!((s.items[&id("c1")].redos, s.items[&id("c2")].redos), (1, 1));
+
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent(
         "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 1,
+        at: 999,
+        note: None,
+    });
+    assert_eq!(fold(&l.0).rejections[0].why, Reject::UnknownDecision);
+}
+
+#[test]
+fn a_path_gets_two_claims_then_needs_you() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    let release = |l: &mut Log, w: &str, cost| {
+        l.agent(
+            w,
+            WorkRecord::Released {
+                item: id("r1"),
+                attempt: 1,
+                reason: Some("lapsed".into()),
+                cost_micros: cost,
+            },
+        );
+    };
+    l.agent("w1", claimed("r1", 1));
+    release(&mut l, "w1", 1_000);
+    // A retry stays on the same path.
+    l.agent("w2", claimed("r1", 1));
+    release(&mut l, "w2", 2_000);
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::NeedsYou));
+    l.agent("w3", claimed("r1", 1));
+    l.agent("w3", claimed("r1", 2));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        vec![Reject::TooManyTries, Reject::TooManyTries]
+    );
+    let it = &s.items[&id("r1")];
+    assert_eq!(
+        (it.paths.len(), it.paths[0].tries, it.hold.is_none()),
+        (1, 2, true)
+    );
+    // Every attempt draws its reported cost.
+    assert_eq!(
+        s.budgets[&id("r1")].cost_left_micros,
+        DEFAULT_COST_MICROS - 3_000
+    );
+}
+
+#[test]
+fn a_finished_attempt_can_be_redone_until_the_item_is_closed() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    let d = l.agent("w1", decision("r1", 1, vec![]));
+    l.agent("w1", done("r1", 1, 100));
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::InReview));
+    // Request changes: redo from the decision while the PR is open.
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 1,
+        at: d,
+        note: None,
+    });
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Ready));
+    l.agent("w2", claimed("r1", 2));
+    let d2 = l.agent("w2", decision("r1", 2, vec![]));
+    l.agent(
+        "w2",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 2,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    // Two attempts are open, so a third is refused until one is closed.
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 2,
+        at: d2,
+        note: None,
+    });
+    l.person(WorkRecord::AttemptClosed {
+        item: id("r1"),
+        attempt: 1,
+    });
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 2,
+        at: d2,
+        note: None,
+    });
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        vec![Reject::TooManyOpen]
+    );
+    assert_eq!(s.items[&id("r1")].redos, 2);
+    // Merged closes the item for good.
+    l.person(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Merged,
+    });
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 2,
+        at: d2,
+        note: None,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Done));
+    assert_eq!(s.rejections.last().unwrap().why, Reject::Closed);
+}
+
+#[test]
+fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    let triaged = |tier| WorkRecord::Triaged {
+        item: id("r1"),
+        tier,
+        why: "w".into(),
+        duplicate_of: None,
+    };
+    l.agent("w2", triaged(3)); // 3: holds nothing
+    l.agent("w1", claimed("t1", 1));
+    l.agent("w2", triaged(3)); // 5: w1 holds it
+    l.agent("w1", triaged(0)); // 6
+    l.agent("w3", claimed("r1", 1));
+    let q = l.agent(
+        "w3",
         WorkRecord::Question {
             item: id("r1"),
             attempt: 1,
-            text: text("which client?"),
+            text: text("which?"),
         },
     );
-    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::NeedsYou));
-    l.person(WorkRecord::Answer {
+    l.agent("w3", proposed("q1", Some("r1"), "q", WorkKind::Question));
+    let ans = || WorkRecord::Answer {
         item: id("r1"),
         question: q,
-        text: text("the rust one"),
+        text: text("this"),
         evidence: vec![],
-    });
-    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Held));
-    l.tracker(WorkRecord::Refused {
+    };
+    l.agent("w4", ans()); // 10: not the holder
+    l.tracker(ans()); // 11
+    l.agent("w4", claimed("q1", 1));
+    l.agent("w5", ans()); // 13
+    let refused = || WorkRecord::Refused {
         item: Some(id("r1")),
         op: "work_post".into(),
         reason: RefusalReason::Budget,
+    };
+    l.agent("w3", refused()); // 14
+    l.person(refused()); // 15
+    let s = fold(&l.0);
+    let rej: Vec<_> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(
+        rej,
+        vec![
+            (3, Reject::NotHolder),
+            (5, Reject::NotHolder),
+            (10, Reject::NotHolder),
+            (11, Reject::ActorNotAllowed),
+            (13, Reject::NotHolder),
+            (14, Reject::ActorNotAllowed),
+            (15, Reject::ActorNotAllowed),
+        ]
+    );
+    assert_eq!(s.items[&id("r1")].proposal.as_ref().unwrap().tier, 0);
+    assert!(!s.items[&id("r1")].over_budget);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
+    // The agent holding the question item answers.
+    let mut l2 = Log(l.0.clone());
+    l2.agent("w4", ans());
+    assert!(fold(&l2.0).items[&id("r1")].open_question.is_none());
+    // A person always can.
+    let mut l3 = Log(l.0.clone());
+    l3.person(ans());
+    assert!(fold(&l3.0).items[&id("r1")].open_question.is_none());
+}
+
+#[test]
+fn proposals_are_keyed_and_draw_no_budget_until_accepted() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
     });
-    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::NeedsYou));
+    l.agent("w1", claimed("r1", 1));
+    l.agent("w1", proposed("bug2", None, "found", WorkKind::Fix));
+    l.agent("w1", proposed("bug2b", None, "found", WorkKind::Fix)); // retry, new id
+    l.person(proposed("mine", None, "m", WorkKind::Fix));
+    l.person(proposed("mine2", None, "m", WorkKind::Fix));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        vec![Reject::Duplicate, Reject::Duplicate]
+    );
+    assert!(!s.budgets.contains_key(&id("bug2")));
+    assert!(s.budgets.contains_key(&id("mine")));
+    assert_eq!(s.stage(&id("bug2")), Some(Stage::Proposed));
+    let mut l2 = Log(l.0.clone());
+    l2.person(WorkRecord::Accepted {
+        item: id("bug2"),
+        tier: None,
+    });
+    let s = fold(&l2.0);
+    assert!(s.budgets.contains_key(&id("bug2")));
+    assert_eq!(s.stage(&id("bug2")), Some(Stage::Ready));
+    // A proposal a person turns down is closed and rejected only if never accepted.
+    let mut l3 = Log(l.0.clone());
+    l3.person(WorkRecord::Rejected { item: id("bug2") });
+    l3.person(WorkRecord::Rejected { item: id("mine") });
+    let s = fold(&l3.0);
+    assert_eq!(s.stage(&id("bug2")), Some(Stage::Closed));
+    assert_eq!(s.rejections.last().unwrap().why, Reject::NotAProposal);
+}
+
+#[test]
+fn closing_a_root_cancels_its_open_descendants() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
+    l.agent("w1", proposed("c2", Some("r1"), "b", WorkKind::Test));
+    l.agent("w2", claimed("c2", 1));
+    l.agent("w2", done("c2", 1, 0));
+    l.agent("w3", claimed("c1", 1));
+    l.agent("w3", proposed("g1", Some("c1"), "g", WorkKind::Augment));
+    assert_eq!(fold(&l.0).stage(&id("g1")), Some(Stage::Ready));
+    l.tracker(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Upstream,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Closed));
+    // c2 finished before the close and keeps its own ending.
+    assert_eq!(s.stage(&id("c2")), Some(Stage::Done));
+    for c in ["c1", "g1"] {
+        assert_eq!(s.stage(&id(c)), Some(Stage::Closed));
+        assert_eq!(s.items[&id(c)].closed, Some(Closure::Cancelled));
+    }
+    assert!(s.items[&id("c1")].hold.is_none());
+    assert!(s.items.keys().all(|k| s.stage(k) != Some(Stage::Ready)));
+    // An agent cannot close anything.
+    l.agent(
+        "w1",
+        WorkRecord::Closed {
+            item: id("c1"),
+            why: CloseWhy::Dismissed,
+        },
+    );
+    assert_eq!(
+        fold(&l.0).rejections.last().unwrap().why,
+        Reject::ActorNotAllowed
+    );
+}
+
+#[test]
+fn people_nest_no_deeper_than_agents() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    let mut parent = "r1".to_string();
+    for d in 1..=5 {
+        let child = format!("p{d}");
+        l.person(proposed(&child, Some(&parent), "k", WorkKind::Split));
+        parent = child;
+    }
+    let s = fold(&l.0);
+    assert!(s.items.contains_key(&id("p3")));
+    assert!(!s.items.contains_key(&id("p4")));
+    assert_eq!(s.rejections[0].why, Reject::TooDeep);
+    // Raising the cap to the largest depth lets p4 in and cannot overflow the counter.
+    l.person(WorkRecord::BudgetSet {
+        root: id("r1"),
+        items_left: 5,
+        max_depth: u8::MAX,
+        cost_left_micros: 1,
+        redos_per_item: 3,
+    });
+    l.person(proposed("p4", Some("p3"), "k", WorkKind::Split));
+    assert_eq!(fold(&l.0).items[&id("p4")].depth, 4);
 }

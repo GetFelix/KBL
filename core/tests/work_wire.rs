@@ -80,6 +80,7 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("r1"),
             attempt: 1,
             reason: Some("claim lapsed".into()),
+            cost_micros: 30_000,
         },
         WorkRecord::GaveUp {
             item: item("r1"),
@@ -148,12 +149,21 @@ fn every_record() -> Vec<WorkRecord> {
             at: 14,
             note: Some(22),
         },
+        WorkRecord::Closed {
+            item: item("r1"),
+            why: CloseWhy::Merged,
+        },
+        WorkRecord::Rejected { item: item("p1") },
+        WorkRecord::AttemptClosed {
+            item: item("r1"),
+            attempt: 1,
+        },
         WorkRecord::BudgetSet {
             root: item("r1"),
             items_left: 20,
             max_depth: 3,
             cost_left_micros: 30_000_000,
-            redos_left: 3,
+            redos_per_item: 3,
         },
         WorkRecord::Refused {
             item: Some(item("r1")),
@@ -194,7 +204,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 21 - 1);
+    assert_eq!(kinds.len(), 23);
 }
 
 #[test]

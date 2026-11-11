@@ -139,8 +139,16 @@ it did. The tracker links each item to its runs.
   agent-supplied key, written with `cache_put_if` absent, so a retry never
   duplicates.
 - **Proposals are rate-limited** per agent and per run.
-- **Closure.** A parent cannot complete while its children are open. A root
-  closed upstream cancels its open descendants.
+- **Attempts.** A claim that ends in a release, a lapse or a give-up may be
+  retried once on the same attempt, so an attempt takes at most two claims.
+  After that the item goes to Needs you. A redo starts a new attempt, at most
+  three per item, with at most two attempts open at once; a person closes
+  one to open another. Every attempt draws its reported cost from the root.
+  Finishing an attempt of a fix leaves it in review, so it can still be
+  redone. It closes when a person or upstream sync records the merge or closes it.
+- **Closure.** A parent cannot complete while its children are open. Closing
+  an item, from upstream or by a person, cancels its open descendants and
+  takes them out of Ready. A proposal nobody accepted can be rejected.
 - **Termination.** Agent-created work is at most (upstream roots + accepted
   roots) x the per-root budget, plus whatever people create. Agents spend
   budget and never create it.

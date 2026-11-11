@@ -110,6 +110,17 @@ pub enum HumanKind {
     PriorityChange,
 }
 
+/// Why an item was closed by upstream sync or a person.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseWhy {
+    /// The fix landed upstream.
+    Merged,
+    Dismissed,
+    /// The upstream issue was closed.
+    Upstream,
+}
+
 /// Why the tracker refused an operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -190,6 +201,8 @@ pub enum WorkRecord {
         attempt: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        #[serde(default)]
+        cost_micros: u64,
     },
     GaveUp {
         item: ItemId,
@@ -204,8 +217,8 @@ pub enum WorkRecord {
         attempt: u32,
         text: Content,
     },
-    /// `question` is the offset of the question it answers, which may be a
-    /// `question` record or the offset a `question` work item was created at.
+    /// `question` is the offset of the `question` record it answers. An agent
+    /// may answer only while it holds a `question` work item under `item`.
     Answer {
         item: ItemId,
         question: u64,
@@ -250,8 +263,9 @@ pub enum WorkRecord {
         input: HumanKind,
         text: Content,
     },
-    /// The next attempt starts from the decision at `at` on `from_attempt`.
-    /// `note` is the offset of the `human_input` that steers it.
+    /// A redo: a new attempt starts from the decision at `at` on `from_attempt`.
+    /// `note` is the offset of the `human_input` that steers it; it may have
+    /// been written after the decision.
     ForkedFrom {
         item: ItemId,
         from_attempt: u32,
@@ -259,15 +273,21 @@ pub enum WorkRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<u64>,
     },
+    /// A person or upstream sync closes the item and cancels its open descendants.
+    Closed { item: ItemId, why: CloseWhy },
+    /// A person rejects a proposal that was never accepted.
+    Rejected { item: ItemId },
+    /// A person closes or abandons one attempt, which frees one of the two open slots.
+    AttemptClosed { item: ItemId, attempt: u32 },
     /// Sets a root's budget outright. Only a person may; this is how it is raised.
     BudgetSet {
         root: ItemId,
         items_left: u32,
         max_depth: u8,
         cost_left_micros: u64,
-        redos_left: u8,
+        redos_per_item: u8,
     },
-    /// An operation the tracker refused and logged.
+    /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<ItemId>,
@@ -301,6 +321,9 @@ impl WorkRecord {
             WorkRecord::Edit { .. } => "edit",
             WorkRecord::HumanInput { .. } => "human_input",
             WorkRecord::ForkedFrom { .. } => "forked_from",
+            WorkRecord::Closed { .. } => "closed",
+            WorkRecord::Rejected { .. } => "rejected",
+            WorkRecord::AttemptClosed { .. } => "attempt_closed",
             WorkRecord::BudgetSet { .. } => "budget_set",
             WorkRecord::Refused { .. } => "refused",
             WorkRecord::Unknown => "unknown",
