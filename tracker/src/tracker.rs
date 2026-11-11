@@ -690,13 +690,16 @@ impl<B: Broker> Tracker<B> {
                     .await
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else { break };
-                if tier >= TIERS {
-                    eprintln!("DIAG {agent} polled {stream} offset {} attempts {:?}", record.offset, record.attempts);
-                }
                 if tier >= TIERS && self.is_own_work(agent, &record).await {
                     let again = seen.contains(&record.offset);
                     seen.push(record.offset);
-                    self.give_back(agent, &stream, vec![record]).await;
+                    // On its own task: a caller that gives up waiting (work_next's time
+                    // is up) must not leave the record leased to this agent.
+                    let me = self.clone();
+                    let (agent, stream) = (agent.clone(), stream.clone());
+                    tokio::spawn(async move { me.give_back(&agent, &stream, vec![record]).await })
+                        .await
+                        .ok();
                     if again || seen.len() >= MAX_OWN_SKIPS {
                         break;
                     }
