@@ -192,6 +192,24 @@ impl Broker {
         Ok(())
     }
 
+    /// Every committed record of a one-shard stream, oldest first.
+    pub(crate) async fn read_all(&self, stream: &str) -> Result<Vec<Vec<u8>>> {
+        let mut payloads = Vec::new();
+        let mut from = 0;
+        loop {
+            let page = self
+                .client
+                .read(&self.tenant, &self.namespace, stream, 0, from, None, 0)
+                .await
+                .with_context(|| format!("read {stream} from offset {from}"))?;
+            if page.records.is_empty() {
+                return Ok(payloads);
+            }
+            payloads.extend(page.records.into_iter().map(|r| r.payload.to_vec()));
+            from = page.next_offset;
+        }
+    }
+
     /// Publishes `payload` and returns the offset the broker gave it.
     pub(crate) async fn publish(&self, stream: &str, payload: Vec<u8>) -> Result<u64> {
         let publisher = self.client.publisher().await?;
