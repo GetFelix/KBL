@@ -39,6 +39,9 @@ struct Net {
     cursors: HashMap<String, (Vec<u8>, u64)>,
 }
 
+/// How many times Felix hands a record out before it is dead-lettered.
+const ATTEMPT_BOUND: u32 = 5;
+
 /// An in-memory Felix: streams, and a consumer group per ready stream. A `Fake`
 /// is one tracker's connection; `reconnect` is a restarted tracker. Only a
 /// member's first poll on a connection reclaims what Felix still holds for it.
@@ -172,6 +175,15 @@ impl Fake {
             .get(stream)
             .map(|v| v.iter().map(|(o, _)| *o).collect())
             .unwrap_or_default();
+        // Felix dead-letters a record at its attempt bound.
+        for offset in &offsets {
+            let key = (stream.to_owned(), *offset);
+            if net.tries.get(&key).copied().unwrap_or(0) >= ATTEMPT_BOUND
+                && matches!(net.slots.get(&key), None | Some(Slot::Pending))
+            {
+                net.slots.insert(key, Slot::Acked);
+            }
+        }
         let mut pick = None;
         for offset in offsets {
             let key = (stream.to_owned(), offset);

@@ -139,19 +139,30 @@ async fn reviews_are_claimed_only_by_naming_their_tier() {
 
 #[tokio::test]
 async fn an_agent_is_never_given_a_review_of_its_own_pull_request() {
-    let (fake, t) = opened().await;
+    let (_fake, t) = opened().await;
     let own = t
         .next_for(&agent("w1"), Duration::ZERO, &fast())
         .await
         .unwrap();
     assert!(not_claimed(&own));
-    // The review went back to the lane instead of being acked away.
-    assert!(
-        !fake
-            .calls()
-            .iter()
-            .any(|c| c.starts_with("ack work.review"))
-    );
+    let other = t
+        .next_for(&agent("w2"), Duration::ZERO, &fast())
+        .await
+        .unwrap();
+    assert_eq!(other["item"]["work"], "review");
+}
+
+#[tokio::test]
+async fn an_author_polling_for_reviews_does_not_use_up_the_review() {
+    let (_fake, t) = opened().await;
+    // More polls than Felix's attempt bound.
+    for _ in 0..8 {
+        let own = t
+            .next_for(&agent("w1"), Duration::ZERO, &fast())
+            .await
+            .unwrap();
+        assert!(not_claimed(&own));
+    }
     let other = t
         .next_for(&agent("w2"), Duration::ZERO, &fast())
         .await

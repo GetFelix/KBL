@@ -49,8 +49,6 @@ const FENCE_GRACE: Duration = Duration::from_secs(10);
 /// Allowance for clock skew between the tracker and the lease's holder of record.
 const LEASE_SKEW: Duration = Duration::from_secs(1);
 const MEMBER_IDLE: Duration = Duration::from_secs(600);
-/// Reviews of its own work one claim looks past in a lane.
-const MAX_OWN_SKIPS: usize = 16;
 
 pub(crate) struct Settings {
     /// The repos each agent may reach beyond its own tree.
@@ -675,10 +673,9 @@ impl<B: Broker> Tracker<B> {
     async fn try_claim(&self, agent: &AgentName, review: &[u8]) -> Result<Option<Delivery>, Error> {
         for tier in (0..TIERS).chain(review.iter().copied()) {
             let stream = ready_stream(tier);
-            // Reviews of the agent's own work wait for another reviewer. Each goes
-            // straight back to the lane, so a call that is cut short holds none. A
-            // record seen twice means the lane has nothing else for this agent.
-            let mut seen: Vec<u64> = Vec::new();
+            // A review of the agent's own work is for another reviewer. It is acked and
+            // published again, not nacked: Felix counts every handout as an attempt and
+            // dead-letters a record at its bound, so a nacking author would eat the review.
             loop {
                 let polled = self
                     .io(
@@ -691,18 +688,13 @@ impl<B: Broker> Tracker<B> {
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else { break };
                 if tier >= TIERS && self.is_own_work(agent, &record).await {
-                    let again = seen.contains(&record.offset);
-                    seen.push(record.offset);
                     // On its own task: a caller that gives up waiting (work_next's time
                     // is up) must not leave the record leased to this agent.
                     let me = self.clone();
                     let (agent, stream) = (agent.clone(), stream.clone());
-                    tokio::spawn(async move { me.give_back(&agent, &stream, vec![record]).await })
+                    tokio::spawn(async move { me.pass_over(&agent, &stream, record).await })
                         .await
                         .ok();
-                    if again || seen.len() >= MAX_OWN_SKIPS {
-                        break;
-                    }
                     continue;
                 }
                 let mut ops = Vec::new();
@@ -733,11 +725,13 @@ impl<B: Broker> Tracker<B> {
             .is_some_and(|it| core.state.worked_on(&it.root, &key))
     }
 
-    async fn give_back(&self, agent: &AgentName, stream: &str, records: Vec<GroupRecord>) {
-        let ops = records
-            .into_iter()
-            .map(|r| Op::Nack(stream.to_owned(), agent.clone(), r))
-            .collect();
+    /// Acks a ready record this agent may not take and forgets that it was
+    /// published, so the next sync publishes it again with a fresh stamp.
+    async fn pass_over(&self, agent: &AgentName, stream: &str, record: GroupRecord) {
+        if let Ok(ready) = ReadyRecord::decode(&record.payload) {
+            self.0.core.lock().await.live.remove(&ready.item);
+        }
+        let ops = vec![Op::Ack(stream.to_owned(), agent.clone(), record.offset)];
         self.run(ops).await.ok();
     }
 
