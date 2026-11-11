@@ -70,6 +70,44 @@ It reuses the pieces the swarm already has. No database.
 A fixing agent's work is a run, so the existing replay shows why it did what
 it did. The tracker links each item to its runs.
 
+## The intake view
+
+The swarm view shows one run. The intake view shows everything before and
+around runs: what arrived, what is waiting and why, who holds what, and where
+work is piling up. It is the page someone opens first in the morning.
+
+```text
++---------+-----------+-----------+-------------+-----------+--------+------+
+| Sources | Arrived   | Needs you | Blocked     | Ready     | Held   | Done |
+|         | (12)      | (3)       | (7)         | p0 2      | (5)    | (41) |
+| GH  +9  | #812 2m   | #790 asks | #801 <- 798 | p1 6      | #798 w2| 24h  |
+| ADO +3  | #811 5m   |   repro?  | #799 <- 798 | p2 11     | #805 w5|      |
+|         | AB#4410   | #774 2x   |             | p3 4      | ...    |      |
+|         |           |   failed  |             |           |        |      |
++---------+-----------+-----------+-------------+-----------+--------+------+
+| in 14/day   out 11/day   oldest ready 3d (#702)   timeline ...  live    |
++--------------------------------------------------------------------------+
+```
+
+- **Columns are stages.** Arrived (not yet triaged), Needs you, Blocked, Ready
+  by tier, Held by an agent, Done. An item sits in exactly one, and moves
+  right as `work.events` records it. Each column shows its count and the age
+  of its oldest item, since a stall shows as age long before it shows as a
+  count.
+- **Needs you is its own column.** Items where triage asked a question, an
+  agent gave up, or attempts ran out. This is the human queue, and the
+  reason to open the page.
+- **Blocked shows what it waits on.** Selecting an item draws its dependency
+  chain across the columns, so a whole branch stuck behind one held item is
+  visible at once.
+- **Sources show arrival.** Per upstream tracker, items in the last hour and
+  day. The footer compares arrival and completion rates: a queue that grows
+  every day needs more agents or fewer bugs, and the view should say which.
+- **Held links to the run.** A held item names its agent, and opening it
+  opens that run in the swarm view at the moment it claimed the item.
+- **It scrubs like a run.** The view is a fold of `work.events`, so the same
+  timeline shows the queue as it was on any day.
+
 ## Where Felix stops
 
 - **Queries over the graph live in the tracker's fold.** "What does this
@@ -95,5 +133,5 @@ it did. The tracker links each item to its runs.
 ## Order
 
 After M4, when replay works: ingest from GitHub, `work_next` and the ready
-streams, then triage, dependencies, and the board view. ADO ingest after
+streams, then triage, dependencies, and the intake view. ADO ingest after
 GitHub.
