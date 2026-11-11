@@ -48,6 +48,26 @@ the same log:
 - **Replay.** The run's timeline, filtered to this item, scrubbed step by step
   as the swarm view does.
 
+**Explained where you stop.** When the reviewer lets go of the scrubber, or
+steps to a point with the arrow keys, a short panel says three things about
+that moment:
+
+- **So far:** what had happened up to here, in two or three sentences.
+- **Right now:** the decision being made at this point, or the step under way.
+- **Why:** the reason the agent recorded, and the evidence it rested on.
+
+It explains only what was known at that point. The explanation for a moment
+is built from the log up to that offset and nothing after it, so it never
+spoils the outcome or credits the agent with something it found out later.
+Every sentence cites an offset; a claim with no offset is not shown.
+
+Nothing appears while dragging, only on release, so scrubbing stays fast and
+the panel does not flicker. It must appear in under a second, so the "so far"
+summary is built as the run goes, one per decision, and kept as an artifact
+next to the run. Letting go between two decisions shows the nearest one at
+once and refines it for the exact step. A summary for a given offset never
+changes, so it is cached and the next reviewer gets it instantly.
+
 **Ask.** A reviewer can also ask a question ("why not fix it in the client?").
 The answer comes from a model that sees only this item's log and must cite an
 offset for every claim. An answer it cannot cite says so.
