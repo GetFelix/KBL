@@ -224,6 +224,21 @@ cargo build -p felix-mcp -p agents-tool
 node dev/check-tasks.mjs
 ```
 
+### Scripted agents
+
+A scripted planner and workers make the same tool calls a model would, so a run needs no model key. A seed decides the
+tasks and what happens to each: most are finished, some are handed back once and then finished, some are handed back
+every time and dead-lettered, and some are given up at once. Which worker takes a task does not change its fate, so a seed
+always ends every task the same way.
+
+```bash
+cargo build -p felix-mcp -p agents-tool
+node dev/scripted.mjs --seed 2 --workers 3   # runs a job and checks each task ended as the seed says
+node dev/check-scripted.mjs                  # runs one seed twice with different crews and compares
+node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
+agents-tool run log <run>                    # prints a run's log, one JSON record per line
+```
+
 To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mcp add`):
 
 ```json

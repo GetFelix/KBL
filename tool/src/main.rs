@@ -10,7 +10,7 @@ mod run;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use agents_core::codec::Codec;
-use agents_core::names::{RunId, WORKERS_GROUP};
+use agents_core::names::{Resources, RunId, WORKERS_GROUP};
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
@@ -71,6 +71,11 @@ enum Command {
 enum RunCommand {
     /// Create a run's streams, caches and `workers` group, and log `run_started`.
     Create(CreateArgs),
+    /// Print a run's log, one JSON record per line.
+    Log {
+        /// The run's id.
+        run: String,
+    },
 }
 
 #[derive(Args)]
@@ -102,6 +107,7 @@ async fn main() -> Result<()> {
     };
     match cli.command {
         Command::Run(RunCommand::Create(args)) => create(target, args).await,
+        Command::Run(RunCommand::Log { run }) => log(target, &run).await,
     }
 }
 
@@ -148,6 +154,15 @@ async fn create(target: Target, args: CreateArgs) -> Result<()> {
         resources.log()
     );
     println!("  tasks    {} (group {WORKERS_GROUP})", resources.tasks());
+    Ok(())
+}
+
+async fn log(target: Target, run: &str) -> Result<()> {
+    let run = RunId::new(run).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let broker = Session::sign_in(target).await?.broker().await?;
+    for payload in broker.read_all(&Resources::new(run).log()).await? {
+        println!("{}", String::from_utf8_lossy(&payload));
+    }
     Ok(())
 }
 

@@ -22,6 +22,7 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/lint.mjs
+      - run: node --test dev/lib/script.test.mjs
       # The fixtures are generated; the committed files must match the script.
       - run: python3 prototype/make-fixture.py
       - run: python3 prototype/make-intake-fixture.py
@@ -108,6 +109,8 @@ jobs:
           node dev/check-mcp.mjs
       - name: Run the task tools against Felix
         run: node dev/check-tasks.mjs
+      - name: Run a scripted job twice from one seed
+        run: node dev/check-scripted.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml logs
       - if: always()
