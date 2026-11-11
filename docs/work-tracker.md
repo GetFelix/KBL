@@ -187,6 +187,71 @@ It reuses the pieces the run resources already use. No database.
 A fixing agent's work is a run, so the existing replay shows why it did what
 it did. The tracker links each item to its runs.
 
+## Sources
+
+GitHub, Azure DevOps and Jira are each an adapter behind one interface, so the
+tracker, the tools and the dashboard never see which system an item came
+from. An adapter lists what changed since a cursor it keeps, fetches one item,
+maps its fields and links, and writes back. Polling is the record; webhooks
+(GitHub webhooks, ADO service hooks, Jira webhooks) only wake the poll early,
+so a missed webhook costs latency, not an item.
+
+| | GitHub | Azure DevOps | Jira |
+|---|---|---|---|
+| Upstream id | `github:GetFelix/felix#812` | `ado:org/project#4410` | `jira:site/FEL-123` |
+| Scope by | repo, labels (all or any), excluded labels, milestone, assignee, type | project, area path, iteration, tags, or a saved query | a JQL filter |
+| Priority from | a label mapping | the Priority field (1 to 4) | the priority field |
+| Links from | blocked by, sub-issues | predecessor, parent | blocks, sub-tasks |
+| Closed as | `completed` / `not_planned`, duplicate | Done, Closed, Removed | the resolution |
+| Credentials | GitHub App or token | personal access token or Entra app | API token or OAuth app |
+
+The ingest worker holds the source credentials. Agents never see them and
+write back only through the tracker, which checks the claim first.
+
+### Intake rules
+
+Each source has one or more intake rules. A rule is the source's own filter
+(the "Scope by" row above, combined with AND) plus:
+
+- **Mode.** `admit` makes a matching issue a root at once, with one triage
+  item and one augment item; it suits a label a person applies on purpose,
+  such as `agent-ok`. `propose` puts it in Triage as a proposal that becomes a
+  root only when a person accepts it; it suits broad filters such as "the 0.8
+  milestone".
+- **A cap** on the open roots the rule may have at a time, so a broad filter
+  cannot flood the queue. Matches over the cap wait upstream and are picked up
+  as roots close.
+- **A default tier** and the mapping from the upstream priority.
+- **The repository** agents work in. ADO and Jira items do not name one, so
+  the rule maps a project, area path or component to it. An item with no
+  repository goes to Needs you.
+
+Each upstream id is imported once (`cache_put_if` absent on the id), so
+re-polls and redelivered webhooks never duplicate an item. An issue that
+matches two rules belongs to the first one listed.
+
+### When the upstream issue changes
+
+| Upstream | Kibble |
+|---|---|
+| Title, body or labels edited | An `updated` record. The item shows "changed upstream since triage". Triaging again is a person's action, so edits never create work |
+| A new comment | A `context` record credited to the upstream author. Agents see it on their next read |
+| No longer matches its rule (label removed, milestone moved) | `left_scope`. Withdrawn from Ready if nobody holds it. If an agent holds it, the attempt finishes or is released and the item then stops. Shown in Needs you |
+| Closed as completed or fixed | `closed` with reason completed: the item is done and its dependents unblock |
+| Closed as not planned, duplicate or won't fix | `closed` with reason dropped: open children and attempts are cancelled, dependents go to Needs you ("dependency dropped"), and an agent's open pull request becomes a draft with a comment |
+| Reopened | Back to Triage as the same root, with its history and its remaining budget |
+| Moved or transferred | The same item under its new upstream id, with a link record |
+
+Ingest skips upstream events written by Kibble's own credential, so its
+comments, pull request links and state changes do not come back as edits.
+
+**Issue text is untrusted.** Anyone who can file or edit an issue can write
+instructions for the agent that reads it. Kibble runs no model, so it cannot
+be steered, but agents can. Intake rules decide whose issues get in; budgets,
+grants and review bound what a misled agent can do; and "changed upstream
+since triage" keeps an edit made after a person looked at the item from
+slipping by.
+
 ## Where work comes from, and its bounds
 
 - **One log.** `work.events` is the only record. Upstream sync, people's
