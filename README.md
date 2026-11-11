@@ -90,21 +90,21 @@ have the details.
 
 | M | Milestone | Proves |
 |---|---|---|
-| 0 | The viewer, locked: style frames of the swarm view, the timeline and the dashboard, drawn from hand-written fixtures | They read well before Felix is involved |
+| 0 | The dashboard and the decision replay, locked: style frames drawn from hand-written fixtures | They read well before Felix is involved |
 | 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
-| 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each |
+| 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each, and people and agents never overwrite each other (demonstration 3) |
 | 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
 | 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
-| 5 | Shared state: the board, leases, presence and messages | Demonstration 3 |
-| 6 | Real models and budgets: `agents-run` with a model API, artifacts, spend and rate limits | Demonstration 5 |
-| 7 | Replay a run: the fold, the viewer on felix-gateway, scrub and follow | Demonstrations 4 and 8 |
-| 8 | Grants and the injection demo | Demonstration 6 |
-| 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Demonstration 7, and it holds under loss |
+| 5 | Shared state (closed, superseded by Kibble: the swarm demo was removed) | Nothing |
+| 6 | The reference worker (`agents-run`): a model API, artifacts, spend and rate limits | Agent-created work stays inside its budget (demonstration 4) |
+| 7 | Decision replay, live: the fold, the dashboard on felix-gateway, scrub and follow | The log is a complete record that replays, and a fix's decisions read back with no hindsight (demonstrations 5 and 6) |
+| 8 | A hostile agent stays bounded: grants and an injected agent held to its budget | A prompt-injected agent cannot escape its budget or grants (demonstration 8) |
+| 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Any MCP host can take work (demonstration 7), and it holds under loss |
 | 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
 
 M0 and M1 are done. [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run),
-and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The style frames
-are described in [docs/art.md](docs/art.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
+and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The dashboard
+is described in [docs/work-tracker.md](docs/work-tracker.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
 progress. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
 [milestones](https://github.com/GetFelix/felix-agents/milestones).
 
@@ -285,23 +285,6 @@ certificate file is relative to the host's working directory, so give an absolut
 Issuing a token per agent is not built yet, so for now `dev/check-mcp.mjs` asks the stand-in identity provider for the
 administrator's.
 
-## The scripted swarm demo
-
-The repo also holds a demo job type: a planner splits a pull request review into tasks for four to eight
-workers, and the viewer draws the swarm and scrubs back through it. It uses the same task tools, so a run needs no
-model key.
-
-![Eight agents reviewing a pull request: tasks fan out, a worker dies and its task goes to another, an injected agent's writes are refused, and the run scrubs back](docs/screenshots/swarm.gif)
-
-<sub>The viewer's style frame playing a hand-written run
-([prototype/style-frame.html](prototype/style-frame.html), full size:
-[swarm.mp4](docs/screenshots/swarm.mp4)). Nothing talks to Felix yet.</sub>
-
-![An injected agent's writes refused](docs/screenshots/swarm-injection.png)
-
-Workers join, leave and die mid-task and the run carries on: Felix hands each task to one worker and gives it to
-another when that worker stops answering, and every step lands in one log.
-
 ## Developing
 
 You need Node 22 or later, Python 3, a Chrome or Chromium, and Rust 1.97 or later for the crates. From the repository root:
@@ -311,50 +294,26 @@ You need Node 22 or later, Python 3, a Chrome or Chromium, and Rust 1.97 or late
 node scripts/lint.mjs
 
 # Rewrite the fixtures; `git diff prototype` should stay empty
-python3 prototype/make-fixture.py
 python3 prototype/make-intake-fixture.py
-
-# Play both fixtures in headless Chrome
-node scripts/check-frame.mjs
 
 # Fold the dashboard fixtures: My queue, the board, the review limit, metrics, actions, the burst,
 # and the decision replay (story, explanation at a step, fork, redo limit)
 node scripts/check-intake.mjs
 
-# Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
-node scripts/check-motion.mjs
-
-# Click every kind of element and check it opens the step behind it
-node scripts/check-steps.mjs
-
 # Build and test the Rust crates
 cargo test --workspace
 
-# Serve the repository, then open http://localhost:8000/prototype/style-frame.html
-# or http://localhost:8000/prototype/intake-frame.html (?view=queue|board|metrics, ?fixture=fixture-work-capped.json or fixture-work-burst.json, ?select=gh-801, ?theme=light;
+# Serve the repository, then open http://localhost:8000/prototype/intake-frame.html (?view=queue|board|metrics, ?fixture=fixture-work-capped.json or fixture-work-burst.json, ?select=gh-801, ?theme=light;
 # fixture-work-replay.json with ?story=gh-792 opens the decision replay, ?story=gh-795 the redo limit)
 python3 -m http.server 8000
 ```
 
-`check-frame.mjs` looks for Chrome, Chromium or Edge in the usual install paths; set `CHROME` to a binary
+`check-intake.mjs` looks for Chrome, Chromium or Edge in the usual install paths; set `CHROME` to a binary
 otherwise. Chrome gets 60 s to start (`CHROME_STARTUP_MS` changes that); if it exits or never comes up, the error
 includes its exit code and stderr. The launcher is `scripts/lib/browser.mjs`; new checks should use it.
+`scripts/shoot-intake.mjs` takes the stills in `docs/screenshots/` from the same page.
 
-The check confirms that the page loads without errors at laptop and phone size, that frames later in the run
-differ from the empty start, and that each fixture contains the records, and for moving elements the packets,
-behind every row of [the design's element table](docs/design.md#what-each-element-is-drawn-from). That proves the
-fixtures exercise the page, not pixel by pixel that each element is drawn; the stills in `docs/screenshots/` are
-the visual record.
-
-`check-motion.mjs` checks the rules in [docs/design.md](docs/design.md) under "Motion and aggregation". It seeks to
-a moment and compares the frame with the one playback drew, checks that bursts of events merge into one packet but refusals and
-conflicts never do, and times a frame on the burst fixture against a reference frame timed beside it, so runner load mostly cancels out.
-
-`check-steps.mjs` clicks every kind of element the page draws (agents, cards, packets, flow lines, the queue
-tray, the budget ring, log rows, captions and timeline markers) and checks that each opens the step panel for the
-record behind it.
-
-CI runs seven jobs: lint (with the fixture regeneration), style frame, dashboard frame, motion rules, step panel, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
+CI runs four jobs: lint (with the fixture regeneration), dashboard frame, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
 
 ## Documentation
 
@@ -363,7 +322,6 @@ CI runs seven jobs: lint (with the fixture regeneration), style frame, dashboard
 - [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
 - [docs/brand/story.md](docs/brand/story.md): the story of the product
 - [docs/design.md](docs/design.md): the design, data model and build order
-- [docs/art.md](docs/art.md): how the viewer looks and moves
 - [Felix docs](https://docs.getfelix.dev/)
 
 ## Contributing
