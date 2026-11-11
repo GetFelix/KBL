@@ -47,6 +47,9 @@ pub fn item_key(item: &ItemId) -> Result<Key, InvalidName> {
     Key::new(format!("i-{item}"))
 }
 
+/// Longest rules text, in bytes. Rules are always inline.
+pub const MAX_RULES_TEXT: usize = 8 * 1024;
+
 /// Most checks one rules record may list.
 pub const MAX_RULE_CHECKS: usize = 20;
 
@@ -500,9 +503,10 @@ pub enum WorkRecord {
         target: Target,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         root: Option<ItemId>,
-        /// What the agent must follow. Large text is an artifact.
+        /// What the agent must follow, inline and at most [`MAX_RULES_TEXT`] bytes.
+        /// Empty text with no checks clears the scope.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        text: Option<Content>,
+        text: Option<String>,
         /// Commands to run before pushing. The agent runs them; the tracker never does.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checks: Option<Vec<String>>,

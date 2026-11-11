@@ -59,6 +59,7 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
         .route("/v1/work/unlink", post(unlink::<B>))
         .route("/v1/work/budget", post(budget::<B>))
         .route("/v1/work/rules", post(rules::<B>))
+        .route("/v1/work/rules/read", post(rules_read::<B>))
         .with_state(Arc::new(App { tracker, tokens }))
 }
 
@@ -233,7 +234,7 @@ struct RulesBody {
     source: String,
     repo: String,
     root: Option<ItemId>,
-    text: Option<Content>,
+    text: Option<String>,
     checks: Option<Vec<String>>,
 }
 
@@ -613,6 +614,17 @@ async fn rules<B: Broker>(
         checks: b.checks,
     };
     as_person(&app, &headers, record).await
+}
+
+async fn rules_read<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    headers: HeaderMap,
+    Json(b): Json<ItemBody>,
+) -> Response {
+    match agent(&app, &headers) {
+        Ok(a) => reply(app.tracker.rules_read(&a, &b.item).await),
+        Err(d) => denied(d),
+    }
 }
 
 fn caller<B>(app: &App<B>, headers: &HeaderMap) -> Result<Caller, Denied> {

@@ -1346,7 +1346,7 @@ fn felix_rules(root: Option<&str>, text: Option<&str>, checks: Option<&[&str]>) 
             repo: "GetFelix/felix".into(),
         },
         root: root.map(item),
-        text: text.map(|t| Content::Text(t.into())),
+        text: text.map(str::to_owned),
         checks: checks.map(|c| c.iter().map(|s| s.to_string()).collect()),
     }
 }
@@ -1370,7 +1370,7 @@ async fn a_claim_carries_the_latest_rules_and_the_root_overrides_the_repo() {
     assert_ne!(first["offset"], v["offset"]);
 
     let reply = claim(&t, "w1").await;
-    assert_eq!(reply["rules"]["text"]["text"], "one worktree");
+    assert_eq!(reply["rules"]["text"], "one worktree");
     assert_eq!(reply["rules"]["checks"], json!(["task lint"]));
     assert_eq!(reply["rules"]["version"], v["offset"]);
 
@@ -1384,7 +1384,7 @@ async fn a_claim_carries_the_latest_rules_and_the_root_overrides_the_repo() {
         .unwrap();
     let again = claim(&t, "w1").await;
     assert_eq!(again["resumed"], true);
-    assert_eq!(again["rules"]["text"]["text"], "one worktree");
+    assert_eq!(again["rules"]["text"], "one worktree");
     assert_eq!(again["rules"]["checks"], json!(["cargo test"]));
     assert_eq!(again["rules"]["version"], r["offset"]);
     assert_eq!(again["rules"]["repo_version"], v["offset"]);
@@ -1409,7 +1409,7 @@ async fn rules_over_the_size_bounds_are_refused() {
     let fake = Fake::default();
     let t = start(&fake).await;
     seed_in_felix(&t, "a1").await;
-    let big = "x".repeat(agents_core::artifact::INLINE_LIMIT + 1);
+    let big = "x".repeat(agents_core::work::MAX_RULES_TEXT + 1);
     let err = t
         .person_record(key("gab"), felix_rules(None, Some(&big), None))
         .await
@@ -1422,4 +1422,22 @@ async fn rules_over_the_size_bounds_are_refused() {
         .unwrap_err();
     assert!(!matches!(err, Error::Felix(_)));
     assert!(!fake.kinds().contains(&"rules_set".to_owned()));
+}
+
+#[tokio::test]
+async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed_in_felix(&t, "a1").await;
+    t.person_record(
+        key("gab"),
+        felix_rules(None, Some("one worktree"), Some(&["task lint"])),
+    )
+    .await
+    .unwrap();
+    let err = t.rules_read(&agent("w2"), &item("a1")).await.unwrap_err();
+    assert!(matches!(err, Error::NotHeld(_)));
+    let claimed = claim(&t, "w1").await;
+    let read = t.rules_read(&agent("w1"), &item("a1")).await.unwrap();
+    assert_eq!(read["rules"], claimed["rules"]);
 }

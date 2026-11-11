@@ -10,13 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::artifact::INLINE_LIMIT;
-use crate::content::Content;
 use crate::names::{ItemId, Key};
 use crate::work::{
     Actor, CloseWhy, DoneWhen, Evidence, MAX_CHECK_BYTES, MAX_PR_REF, MAX_RULE_CHECKS,
-    MAX_RULE_SCOPES, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason,
-    TIERS, Target, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    MAX_RULE_SCOPES, MAX_RULES_TEXT, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot,
+    RefusalReason, TIERS, Target, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
 };
 
 #[cfg(test)]
@@ -75,7 +73,7 @@ impl Budget {
 pub struct RulesSet {
     pub target: Target,
     pub root: Option<ItemId>,
-    pub text: Option<Content>,
+    pub text: Option<String>,
     pub checks: Option<Vec<String>>,
     /// The offset of the record, which is the version.
     pub version: u64,
@@ -84,7 +82,7 @@ pub struct RulesSet {
 /// The rules an item works under: the root's keys over the repo's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RulesInEffect {
-    pub text: Option<Content>,
+    pub text: Option<String>,
     pub checks: Vec<String>,
     /// The newest of the records that contribute.
     pub version: u64,
@@ -1266,9 +1264,7 @@ impl State {
                 {
                     return Err(Reject::MissingField);
                 }
-                if let Some(Content::Text(t)) = text
-                    && t.len() > INLINE_LIMIT
-                {
+                if text.as_ref().is_some_and(|t| t.len() > MAX_RULES_TEXT) {
                     return Err(Reject::LimitReached);
                 }
                 if let Some(c) = checks
@@ -1296,8 +1292,15 @@ impl State {
                 let same = |r: &RulesSet| {
                     r.root == set.root && (set.root.is_some() || r.target == set.target)
                 };
+                // Empty text and no checks clears the scope and frees its slot.
+                let clears = set.text.as_deref() == Some("")
+                    && set.checks.as_ref().is_none_or(Vec::is_empty);
                 match self.rules.iter().position(same) {
+                    Some(i) if clears => {
+                        self.rules.remove(i);
+                    }
                     Some(i) => self.rules[i] = set,
+                    None if clears => {}
                     None if self.rules.len() >= MAX_RULE_SCOPES => {
                         return Err(Reject::LimitReached);
                     }

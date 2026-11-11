@@ -2315,7 +2315,7 @@ fn rules(root: Option<&str>, t: Option<&str>, checks: Option<&[&str]>) -> WorkRe
     WorkRecord::RulesSet {
         target: felix(),
         root: root.map(id),
-        text: t.map(text),
+        text: t.map(str::to_owned),
         checks: checks.map(|c| c.iter().map(|s| s.to_string()).collect()),
     }
 }
@@ -2337,7 +2337,7 @@ fn the_latest_rules_win_and_the_root_overrides_the_repo_key_by_key() {
 
     // The repo's second record replaces the first as a whole scope entry.
     let r2 = s.rules_for(&id("r2")).unwrap();
-    assert_eq!(r2.text, Some(text("worktree per lane")));
+    assert_eq!(r2.text, Some("worktree per lane".to_string()));
     assert!(r2.checks.is_empty());
     assert_eq!(
         (r2.version, r2.repo_version, r2.root_version),
@@ -2347,7 +2347,7 @@ fn the_latest_rules_win_and_the_root_overrides_the_repo_key_by_key() {
 
     // r1 keeps the repo's text and brings its own checks.
     let r1 = s.rules_for(&id("r1")).unwrap();
-    assert_eq!(r1.text, Some(text("worktree per lane")));
+    assert_eq!(r1.text, Some("worktree per lane".to_string()));
     assert_eq!(r1.checks, vec!["cargo test -p felix-storage".to_string()]);
     assert_eq!(
         (r1.version, r1.repo_version, r1.root_version),
@@ -2388,7 +2388,7 @@ fn rules_are_bounded_in_size_and_count() {
         .collect();
     let many: Vec<&str> = many.iter().map(String::as_str).collect();
     let long = "x".repeat(crate::work::MAX_CHECK_BYTES + 1);
-    let big = "y".repeat(crate::artifact::INLINE_LIMIT + 1);
+    let big = "y".repeat(crate::work::MAX_RULES_TEXT + 1);
     let a = log.person(rules(None, None, Some(&many)));
     let b = log.person(rules(None, None, Some(&[long.as_str()])));
     let c = log.person(rules(None, Some(&big), None));
@@ -2400,7 +2400,7 @@ fn rules_are_bounded_in_size_and_count() {
                 repo: format!("o/r{i}"),
             },
             root: None,
-            text: Some(text("t")),
+            text: Some("t".into()),
             checks: None,
         });
     }
@@ -2412,4 +2412,63 @@ fn rules_are_bounded_in_size_and_count() {
     assert_eq!(why(d), Some(Reject::MissingField));
     assert_eq!(s.rules.len(), crate::work::MAX_RULE_SCOPES);
     assert_eq!(s.rejections.len(), 5);
+}
+
+#[test]
+fn empty_text_with_no_checks_clears_a_scope_and_frees_its_slot() {
+    let mut log = Log::default();
+    log.person(imported_in_felix("r1"));
+    log.person(rules(None, Some("repo text"), Some(&["task lint"])));
+    log.person(rules(Some("r1"), Some("root text"), Some(&["cargo test"])));
+    // Clearing the root puts the repo's rules back.
+    log.person(rules(Some("r1"), Some(""), None));
+    let s = fold(&log.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.rules.len(), 1);
+    let r = s.rules_for(&id("r1")).unwrap();
+    assert_eq!(r.text.as_deref(), Some("repo text"));
+    assert_eq!(r.checks, vec!["task lint".to_string()]);
+    assert_eq!(r.root_version, None);
+
+    // A cleared scope no longer counts toward the cap.
+    let mut log = Log::default();
+    for i in 0..crate::work::MAX_RULE_SCOPES {
+        log.person(WorkRecord::RulesSet {
+            target: Target {
+                source: "github".into(),
+                repo: format!("o/r{i}"),
+            },
+            root: None,
+            text: Some("t".into()),
+            checks: None,
+        });
+    }
+    let clear = |i: usize, text: &str| WorkRecord::RulesSet {
+        target: Target {
+            source: "github".into(),
+            repo: format!("o/r{i}"),
+        },
+        root: None,
+        text: Some(text.into()),
+        checks: Some(vec![]),
+    };
+    log.person(clear(0, ""));
+    let fresh = log.person(clear(9999, "new"));
+    let s = fold(&log.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert!(s.rules.iter().any(|r| r.version == fresh));
+    assert_eq!(s.rules.len(), crate::work::MAX_RULE_SCOPES);
+}
+
+#[test]
+fn a_root_with_empty_checks_clears_the_repos_checks_but_keeps_its_text() {
+    let mut log = Log::default();
+    log.person(imported_in_felix("r1"));
+    log.person(rules(None, Some("repo text"), Some(&["task lint"])));
+    log.person(rules(Some("r1"), None, Some(&[])));
+    let s = fold(&log.0);
+    let r = s.rules_for(&id("r1")).unwrap();
+    assert_eq!(r.text.as_deref(), Some("repo text"));
+    assert!(r.checks.is_empty());
+    assert_eq!(s.rules.len(), 2);
 }

@@ -387,6 +387,23 @@ impl<B: Broker> Tracker<B> {
         }))
     }
 
+    /// The rules in effect for an item the agent holds. Read-only.
+    pub(crate) async fn rules_read(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+    ) -> Result<Value, Error> {
+        self.begin().await?;
+        let core = self.0.core.lock().await;
+        let it = core.state.items.get(item).ok_or_else(|| Error::Refused {
+            why: "unknown_item".into(),
+        })?;
+        if !holds(it, agent) {
+            return Err(Error::NotHeld(format!("you do not hold {item}")));
+        }
+        Ok(json!({ "item": item, "rules": core.state.rules_for(item) }))
+    }
+
     /// Asks a person a question; the item waits in Needs you until one answers.
     pub(crate) async fn ask(
         &self,
@@ -727,12 +744,15 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             }
             Ok(())
         }
-        WorkRecord::RulesSet { text, checks, .. } => {
-            if let Some(text) = text {
-                check_content("text", text)?;
-            }
-            for c in checks.iter().flatten() {
-                field("check", c)?;
+        WorkRecord::RulesSet { text, .. } => {
+            if let Some(text) = text
+                && text.len() > agents_core::work::MAX_RULES_TEXT
+            {
+                return Err(Error::Invalid(format!(
+                    "rules text is {} bytes; at most {}",
+                    text.len(),
+                    agents_core::work::MAX_RULES_TEXT
+                )));
             }
             Ok(())
         }

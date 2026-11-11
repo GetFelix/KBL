@@ -189,7 +189,7 @@ fn every_record() -> Vec<WorkRecord> {
                 repo: "GetFelix/felix".into(),
             },
             root: None,
-            text: Some(text("one worktree per lane")),
+            text: Some("one worktree per lane".into()),
             checks: Some(vec!["task lint".into()]),
         },
         WorkRecord::RulesSet {
