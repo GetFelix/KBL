@@ -6,20 +6,25 @@ the one the issue named? Why a retry here instead of a lock? Did it run the
 test it says it ran? Today the answer is a long transcript nobody reads, or
 nothing.
 
-Felix Agents already keeps every step of a run in one ordered log, so the
-history is there. This adds the two missing parts: the agent records its
-decisions as it makes them, and the dashboard reads that history back as a
-story a reviewer can follow, check and question.
+An item's `work.events` stream already orders everything that happens to it,
+across attempts, agents and people. This adds the two missing parts: the agent
+records its decisions and steps on that stream as it works, and the dashboard
+reads them back as a story a reviewer can follow, check and question. The story
+view is a fold of `work.events`, built on the tracker (M2), not on a run log.
 
 ## What gets recorded
 
-The run log already has every model call, tool call, claim and message. Three
-record kinds are added.
+`work.events` is the record of an item, so the records below go on it, and an
+item's story is one stream. A run log, when an attempt has one, holds optional
+per-attempt detail such as model calls. Three record kinds are added to
+`work.events`, plus two `felix-mcp` tools for the agent's own steps and the
+`question` work kind described under Ask.
 
 | Kind | Written by | Details |
 |---|---|---|
-| `decision` | `felix-mcp` (`decide` tool) | The question, the options considered, the one chosen, why, and the offsets of the steps it rests on |
-| `edit` | `felix-mcp` | File, hunk, and the offset of the decision it carries out |
+| `decision` | `felix-mcp` (`decide` tool) | `phase` (understand, reproduce, cause, fix or verify), `so_far` (a short running narrative of the work up to here), the question, the options considered, the one chosen, why, the commit, and the offsets of the steps it rests on. `decide` refuses a call without `phase`, `so_far` or the commit |
+| `step` | `felix-mcp` (`record_step` tool) | Command, exit code, and the output as an artifact |
+| `edit` | `felix-mcp` (`edit` tool) | File, hunk, and the offset of the decision it carries out |
 | `human_input` | the tracker | An answer, a review comment or a change of priority, with who gave it |
 
 An agent calls `decide` at the points that shape a fix: what it believes the
@@ -27,8 +32,10 @@ cause is, which approach it takes, an alternative it rejects, and a change of
 scope. The worker prompt asks for it at those points and nowhere else; a
 decision per keystroke is as unreadable as none.
 
-A decision cites evidence by offset: the test it ran, the log it read, the
-file it searched. Offsets are stable, so a citation still resolves a year
+Only recorded steps count as evidence. An agent that ran a test and did not
+call `record_step` has no step to cite. A decision cites evidence by stream
+and offset: the test it ran, the log it read, the file it searched. Offsets
+are stable, so a citation still resolves a year
 later, and Felix records which agent wrote each step, so a decision can only
 cite steps that really happened in the order they happened.
 
@@ -52,25 +59,23 @@ the same log:
 steps to a point with the arrow keys, a short panel says three things about
 that moment:
 
-- **So far:** what had happened up to here, in two or three sentences.
-- **Right now:** the decision being made at this point, or the step under way.
-- **Why:** the reason the agent recorded, and the evidence it rested on.
+- **So far:** the `so_far` the agent recorded with its latest decision.
+- **Right now:** that decision, or the step under way.
+- **Why:** the reason the agent recorded, and the evidence offsets it rests on.
 
-It explains only what was known at that point. The explanation for a moment
-is built from the log up to that offset and nothing after it, so it never
-spoils the outcome or credits the agent with something it found out later.
-Every sentence cites an offset; a claim with no offset is not shown.
+Nothing is generated. The panel shows the fields of the nearest decision at or
+before the playhead, so it is instant and cannot leak hindsight: a decision
+recorded later is not in the log up to that offset. This is a property of the
+design. Every line shows the offsets it rests on.
 
 Nothing appears while dragging, only on release, so scrubbing stays fast and
-the panel does not flicker. It must appear in under a second, so the "so far"
-summary is built as the run goes, one per decision, and kept as an artifact
-next to the run. Letting go between two decisions shows the nearest one at
-once and refines it for the exact step. A summary for a given offset never
-changes, so it is cached and the next reviewer gets it instantly.
+the panel does not flicker.
 
-**Ask.** A reviewer can also ask a question ("why not fix it in the client?").
-The answer comes from a model that sees only this item's log and must cite an
-offset for every claim. An answer it cannot cite says so.
+**Ask.** A reviewer can post a question on the item ("why not fix it in the
+client?"). It is a work item of kind `question`. Any agent claims it, reads
+the item's log and completes it with an answer that cites offsets. The answer
+is a record on the item, like any other, and the tracker and dashboard
+generate nothing.
 
 ## Redo from here
 
@@ -83,9 +88,8 @@ branches from that point.
 - **Where it can start.** At a decision. Agents commit their work at every
   decision, so the code as it stood at any decision can be restored exactly.
   Rewinding between two decisions starts from the one before.
-- **What the new attempt knows.** The no-hindsight summary of everything up
-  to that point, the reviewer's note, and by default a short account of what
-  the first attempt did afterwards and why the reviewer rejected it. The
+- **What the new attempt knows.** The fork decision's recorded `so_far`, the reviewer's note, and by default the first attempt's last
+  recorded `so_far` plus the reviewer's reason for rejecting it. The
   reviewer can untick that last part to get a clean second opinion.
 - **What gets recorded.** The note is a `human_input` with who wrote it, and
   the new attempt starts with a `forked_from` record naming the item, the
@@ -98,9 +102,9 @@ branches from that point.
   against the same budget. The cost of a fix includes every branch it took.
 
 - **The handoff is a narrative the reviewer can edit.** The new agent does
-  not get the raw log. It gets the story up to the fork point as a short
-  narrative: what was found, what was tried, what was decided and why. The
-  reviewer edits it before handing off, striking an assumption that was
+  not get the raw log. It gets the fork decision's recorded `so_far`, plus
+  the reviewer's edits: what was found, what was tried, what was decided and
+  why. The reviewer edits it before handing off, striking an assumption that was
   wrong, correcting a fact, adding what they know, and then writes the
   instruction for the new attempt. The edited narrative and the instruction
   are what the agent starts from, and both are recorded, so the replay shows
@@ -137,18 +141,21 @@ by side.
 
 ## Claims checked against steps
 
-A decision is the agent's account; the steps are what happened. The story
-view puts them side by side and flags where they disagree: a decision that
-says the tests pass with no test run after the last edit, an edit with no
-decision behind it, a cited offset that does not show what the decision says
-it shows. These flags matter more than the story itself, because they tell a
+A decision is what the agent says; the recorded steps are what it recorded
+doing. The story view puts them side by side and flags where they disagree: a
+decision that says the tests pass with "no recorded test run after the last
+recorded edit", an edit with no decision behind it, a cited offset that does
+not show what the decision says it shows. The flags are deterministic rules
+over the recorded steps, not a model's opinion, and they say "recorded" because
+an unrecorded step is invisible to them.
+These flags matter more than the story itself, because they tell a
 reviewer where to look hardest. Reviewers can mark a story accurate or not,
 which feeds the trust numbers on the metrics tab.
 
 ## The Felix mapping
 
-- One run log shard gives every step one order across agents, people and
-  attempts, which a story needs.
+- The `work.events` stream gives every record one order across agents,
+  people and attempts, which a story needs.
 - Offsets are the citations. Range reads and the fold give any point in the
   history in under a second (demonstration 4).
 - The recorded publisher makes authorship verified, not claimed. Through
@@ -172,4 +179,4 @@ which feeds the trust numbers on the metrics tab.
 `decide`, `edit` and `human_input` land with the first real work (M3), since a
 history that was not recorded cannot be replayed later. The story view and
 "why is this line here" come with the dashboard in M4, built on the fold. The
-full scrub and Ask follow replay in M7.
+full scrub and Ask (a `question` work item) follow replay in M7.

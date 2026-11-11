@@ -2,8 +2,23 @@
 
 # Felix Agents
 
-A swarm of workers with [Felix](https://github.com/GetFelix/felix) as its only
-backend.
+Kibble is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix)
+(the repo is still called felix-agents). It pulls bugs in from GitHub, Azure DevOps or Jira, hands each
+piece of work to one agent, keeps dependencies and priorities, and shows the queue in a dashboard. Agents
+from any vendor take work from it through an MCP server, `felix-mcp`. People guide it from the dashboard.
+
+Kibble is not agentic. The tracker, `felix-mcp` and the dashboard make no model calls and generate no text.
+Triage, gathering context, splitting, answering questions and fixing are all work items that an agent or a
+person completes.
+
+- [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
+- [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
+- [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
+- [docs/brand/story.md](docs/brand/story.md): the story of the product
+- [docs/design.md](docs/design.md): the whole design
+
+The repo also holds a scripted demo job type: a planner splits a pull request review into tasks for four to
+eight workers, and the viewer draws the swarm and scrubs back through it.
 
 ![Eight agents reviewing a pull request: tasks fan out, a worker dies and its task goes to another, an injected agent's writes are refused, and the run scrubs back](docs/screenshots/swarm.gif)
 
@@ -13,17 +28,11 @@ backend.
 
 ![An injected agent's writes refused](docs/screenshots/swarm-injection.png)
 
-A planner fans work out as tasks, many workers claim them, and results flow
+In the demo, a planner fans work out as tasks, many workers claim them, and results flow
 back. Workers join, leave and die mid-task, and the run carries on: Felix hands
 each task to one worker and gives it to another when that worker stops
 answering, holds the state they share, enforces who may write what, and keeps
-every step in one durable log. You can watch the swarm in the browser, with
-tasks travelling to workers and results coming back, and scrub back to any
-moment of the run.
-
-In the headline demo the workers are AI agents reviewing a pull request. They
-reach Felix through an MCP server, so any MCP host can take part without Felix
-code of its own.
+every step in one durable log.
 
 > **Status:** design stage. The viewer is a style frame, and the only thing that
 > runs against Felix is the [dev stack](#running-felix-locally). The plan is in
@@ -88,16 +97,22 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 
 ## Status
 
-| M | Milestone | What it proves | State |
-|---|---|---|---|
-| 0 | The viewer, locked | The swarm reads well, at 8 workers and at 50, before Felix is involved | In progress: [style frame](docs/art.md) |
-| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run), and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools) |
-| 2 | Shared state | The board and locks never silently overwrite | Planned |
-| 3 | Real models and budgets | A run never spends past its limit | Planned |
-| 4 | Replay a run | Scrub to any moment, then follow live with no gap | Planned, needs range reads in the gateway client |
-| 5 | Grants and the injection demo | An injected agent can only write where its token allows | Planned |
-| 6 | Any host, at scale | Claude Code as an agent, 50 agents, broker loss | Planned |
-| 7 | Self-hosting | Anyone can run it | Planned |
+| M | Milestone | Proves |
+|---|---|---|
+| 0 | The viewer, locked: style frames of the swarm view, the timeline and the dashboard, drawn from hand-written fixtures | They read well before Felix is involved |
+| 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
+| 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each |
+| 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
+| 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results | Anyone can see the queue and what it delivered |
+| 5 | Shared state: the board, leases, presence and messages | Demonstration 3 |
+| 6 | Real models and budgets: `agents-run` with a model API, artifacts, spend and rate limits | Demonstration 5 |
+| 7 | Replay a run: the fold, the viewer on felix-gateway, scrub and follow | Demonstrations 4 and 8 |
+| 8 | Grants and the injection demo | Demonstration 6 |
+| 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Demonstration 7 |
+| 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
+
+M0 and M1 are in progress: [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run),
+and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The style frame is described in [docs/art.md](docs/art.md).
 
 ## Running Felix locally
 
