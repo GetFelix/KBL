@@ -1,5 +1,17 @@
 import type { GatewayMessage, Transport } from './follow.ts';
 
+/** The gateway refused the join. `signed_out` and `forbidden` will not pass on a retry. */
+export class GatewayError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.code = code;
+  }
+  get fatal(): boolean {
+    return this.code === 'signed_out' || this.code === 'forbidden' || this.code === 'no_read';
+  }
+}
+
 /**
  * Opens a WebSocket to felix-gateway, joins `room` with an ID token and resolves
  * with a transport once the gateway answers `hello`. The `read` feature is what
@@ -18,13 +30,22 @@ export function connect(url: string, room: string, token: string): Promise<Trans
     ws.onopen = () => ws.send(JSON.stringify({ type: 'join', protocol: 1, features: ['read'], room, token }));
     ws.onmessage = (e) => {
       if (typeof e.data !== 'string') return;
-      const m = JSON.parse(e.data) as GatewayMessage & { features?: string[] };
+      let m: GatewayMessage & { features?: string[] };
+      try {
+        m = JSON.parse(e.data) as GatewayMessage & { features?: string[] };
+      } catch {
+        m = { type: 'error', code: 'bad_frame', message: 'the gateway sent text that is not JSON' };
+      }
       if (!joined) {
         if (m.type === 'hello' && m.features?.includes('read')) {
           joined = true;
           resolve(transport);
         } else {
-          reject(new Error(m.type === 'error' ? `${m.code}: ${m.message}` : 'the gateway did not grant the read feature'));
+          reject(
+            m.type === 'error'
+              ? new GatewayError(m.code ?? 'error', m.message ?? '')
+              : new GatewayError('no_read', 'the gateway did not grant the read feature'),
+          );
           ws.close();
         }
         return;

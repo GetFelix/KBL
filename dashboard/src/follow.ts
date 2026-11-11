@@ -43,6 +43,8 @@ export interface FollowOptions {
   onLive?: () => void;
   /** Called after each record reaches the sink. */
   onApplied?: (offset: number) => void;
+  /** Called with the running count of records the sink refused (not a record this build reads). */
+  onRefused?: (total: number) => void;
 }
 
 export class FollowError extends Error {}
@@ -66,15 +68,26 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
     let phase: 'reading' | 'subscribing' | 'live' = 'reading';
     let outstanding = 0;
     let lastEvent: number | null = null; // last event offset seen on this subscription
+    let refused = 0;
+    let done = false;
 
     const fail = (error: string) => {
+      if (done) return;
+      done = true;
       reject(new FollowError(error)); // before close, whose handler would resolve
       transport.close();
     };
     const apply = (offset: number, payload: string) => {
       if (offset < cursor) return; // already applied
-      // An undecodable record is skipped, not fatal: the cursor still moves past it.
-      sink.apply(offset, decodeBase64(payload));
+      let bytes: Uint8Array;
+      try {
+        bytes = decodeBase64(payload);
+      } catch {
+        fail(`record ${offset} is not base64`);
+        return;
+      }
+      // A record the fold does not read is counted and skipped; the cursor moves past it.
+      if (!sink.apply(offset, bytes)) opts.onRefused?.(++refused);
       cursor = offset + 1;
       opts.onApplied?.(offset);
     };
@@ -82,14 +95,20 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
       outstanding = nextId++;
       transport.send({ type: 'read', stream: opts.stream, from: cursor, id: outstanding });
     };
+    // The gateway has no unsubscribe: a second subscribe on the same stream replaces the first.
+    // Events that arrive before the new `subscribed` belong to the replaced one and are ignored
+    // (phase is not 'live'), so they cannot trigger another resubscribe.
     const subscribe = () => {
       phase = 'subscribing';
       lastEvent = null;
       transport.send({ type: 'subscribe', stream: opts.stream, from: cursor });
     };
 
-    transport.onClose = () => resolve(cursor);
+    transport.onClose = () => {
+      if (!done) resolve(cursor);
+    };
     transport.onMessage = (m) => {
+      if (done) return;
       if (m.type === 'error') {
         // A read or subscribe that fails ends the follow; the caller decides whether to retry.
         fail(`${m.code ?? 'error'}: ${m.message ?? ''}`);

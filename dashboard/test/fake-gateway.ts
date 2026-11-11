@@ -3,7 +3,10 @@ import type { GatewayMessage, Transport } from '../src/follow.ts';
 /**
  * Speaks the part of the gateway protocol the page uses: `read` pages of the
  * committed log, and `subscribe` that delivers history from an offset and then
- * live publishes. Tests hook the moments the page's order depends on.
+ * live publishes. Like the real gateway, a second subscribe on the stream replaces the
+ * first: nothing from the old one is delivered after the new `subscribed`, but events
+ * already in flight can still arrive before it (`beforeSubscribed`). Tests hook the
+ * moments the page's order depends on.
  */
 export class FakeGateway implements Transport {
   onMessage: (message: GatewayMessage) => void = () => {};
@@ -15,7 +18,17 @@ export class FakeGateway implements Transport {
   afterEmptyRead: () => void = () => {};
   /** Runs for each event about to be delivered; return false to drop it. */
   filterEvent: (offset: number) => boolean = () => true;
+  /** Runs when a subscribe arrives, before `subscribed` is sent: in-flight events of the replaced subscription. */
+  beforeSubscribed: () => void = () => {};
+  /** Offsets that hold no event (a generation-start record): never delivered, counted by `skipped_before`. */
+  nonEvents = new Set<number>();
+  /** Makes an empty read page report a `next_offset` this far ahead of `from`. */
+  emptyPageAhead = 0;
+  /** Answers a read with this instead of records, when it returns a message. */
+  readError: (from: number) => GatewayMessage | undefined = () => undefined;
+  closed = false;
   private live = false;
+  private skipped = 0;
 
   send(m: Record<string, unknown>): void {
     queueMicrotask(() => {
@@ -25,6 +38,7 @@ export class FakeGateway implements Transport {
   }
 
   close(): void {
+    this.closed = true;
     this.onClose('closed');
   }
 
@@ -35,21 +49,36 @@ export class FakeGateway implements Transport {
   }
 
   private read(from: number, id: number): void {
+    const err = this.readError(from);
+    if (err) {
+      this.onMessage({ ...err, id });
+      return;
+    }
     const records = this.log.slice(from, from + this.pageSize).map((payload, i) => ({ offset: from + i, payload }));
     if (records.length === 0) this.afterEmptyRead();
-    this.onMessage({ type: 'records', id, records, next_offset: from + records.length });
+    this.onMessage({ type: 'records', id, records, next_offset: from + records.length + (records.length === 0 ? this.emptyPageAhead : 0) });
   }
 
   private subscribe(from: number): void {
     this.subscribedFrom.push(from);
     this.live = false;
+    this.skipped = 0;
+    this.beforeSubscribed();
     this.onMessage({ type: 'subscribed', start_offset: from, live_offset: this.log.length });
     for (let o = from; o < this.log.length; o++) this.deliver(o);
     this.live = true;
   }
 
   private deliver(offset: number): void {
-    if (this.filterEvent(offset)) this.onMessage({ type: 'event', offset, payload: this.log[offset] });
+    if (this.nonEvents.has(offset)) {
+      this.skipped++;
+      return;
+    }
+    if (this.filterEvent(offset)) {
+      const skipped_before = this.skipped || undefined;
+      this.skipped = 0;
+      this.onMessage({ type: 'event', offset, payload: this.log[offset], skipped_before });
+    }
   }
 }
 
