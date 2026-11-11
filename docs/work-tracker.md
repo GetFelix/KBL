@@ -108,6 +108,11 @@ work is piling up. It is the page someone opens first in the morning.
 - **It scrubs like a run.** The view is a fold of `work.events`, so the same
   timeline shows the queue as it was on any day.
 
+The look is fixed the same way as the swarm view's: `prototype/intake-frame.html`
+folds a hand-written `work.events` fixture (three trackers, a blocked chain,
+items waiting on a person, held items, all four tiers) and a generated burst of
+320 items into these columns. `node scripts/check-intake.mjs` checks both.
+
 ## Where Felix stops
 
 - **Queries over the graph live in the tracker's fold.** "What does this

@@ -1,0 +1,428 @@
+{
+ "title": "Morning intake",
+ "scope": "GetFelix/felix, platform/Gateway, PLAT",
+ "now": 345600,
+ "sources": {
+  "github": {
+   "label": "GitHub",
+   "tag": "GH",
+   "scope": "GetFelix/felix"
+  },
+  "ado": {
+   "label": "Azure DevOps",
+   "tag": "ADO",
+   "scope": "platform/Gateway"
+  },
+  "jira": {
+   "label": "Jira",
+   "tag": "JIRA",
+   "scope": "PLAT"
+  }
+ },
+ "agents": [
+  "w1",
+  "w2",
+  "w3",
+  "w4",
+  "w5",
+  "w6"
+ ],
+ "items": {
+  "gh-812": {
+   "source": "github",
+   "ref": "#812",
+   "title": "Panic on an empty publish batch through the gateway"
+  },
+  "gh-811": {
+   "source": "github",
+   "ref": "#811",
+   "title": "Subscribe with a zero credit window never delivers"
+  },
+  "ado-4410": {
+   "source": "ado",
+   "ref": "AB#4410",
+   "title": "Gateway rejects tokens after a signing key rotation"
+  },
+  "jira-229": {
+   "source": "jira",
+   "ref": "PLAT-229",
+   "title": "Consumer group refusal message does not name the group"
+  },
+  "gh-809": {
+   "source": "github",
+   "ref": "#809",
+   "title": "Docs: the retention page still shows the old default"
+  },
+  "gh-808": {
+   "source": "github",
+   "ref": "#808",
+   "title": "Cache put_if returns the wrong version on a tied write"
+  },
+  "ado-4408": {
+   "source": "ado",
+   "ref": "AB#4408",
+   "title": "Dashboard shows negative lag after a reset"
+  },
+  "gh-798": {
+   "source": "github",
+   "ref": "#798",
+   "title": "Group state is lost on a leader change"
+  },
+  "gh-801": {
+   "source": "github",
+   "ref": "#801",
+   "title": "Regression test for group state across a leader change"
+  },
+  "gh-799": {
+   "source": "github",
+   "ref": "#799",
+   "title": "Document group recovery in durable-storage"
+  },
+  "gh-803": {
+   "source": "github",
+   "ref": "#803",
+   "title": "Metric for group recovery time"
+  },
+  "jira-218": {
+   "source": "jira",
+   "ref": "PLAT-218",
+   "title": "Customer asks when group recovery is safe to rely on"
+  },
+  "ado-4399": {
+   "source": "ado",
+   "ref": "AB#4399",
+   "title": "Migrate the gateway client to the new group API"
+  },
+  "gh-790": {
+   "source": "github",
+   "ref": "#790",
+   "title": "Retention sweep skips a sealed segment after restart"
+  },
+  "gh-774": {
+   "source": "github",
+   "ref": "#774",
+   "title": "Cache TTL test fails one run in twenty"
+  },
+  "ado-4377": {
+   "source": "ado",
+   "ref": "AB#4377",
+   "title": "Duplicate delivery reported by one tenant"
+  },
+  "jira-214": {
+   "source": "jira",
+   "ref": "PLAT-214",
+   "title": "Intermittent timeout on the first publish after idle"
+  },
+  "gh-805": {
+   "source": "github",
+   "ref": "#805",
+   "title": "Wrong error code on a stale fence"
+  },
+  "ado-4388": {
+   "source": "ado",
+   "ref": "AB#4388",
+   "title": "Retry loop ignores the server's backoff hint"
+  },
+  "jira-224": {
+   "source": "jira",
+   "ref": "PLAT-224",
+   "title": "Typo in the connection error text"
+  },
+  "gh-780": {
+   "source": "github",
+   "ref": "#780",
+   "title": "Reject a publish larger than the stream maximum"
+  },
+  "gh-781": {
+   "source": "github",
+   "ref": "#781",
+   "title": "Leader lease renewal races with shutdown"
+  },
+  "gh-702": {
+   "source": "github",
+   "ref": "#702",
+   "title": "Subscriber queue overflow drops without a counter"
+  },
+  "gh-755": {
+   "source": "github",
+   "ref": "#755",
+   "title": "Offsets repeat after a torn segment repair"
+  },
+  "gh-761": {
+   "source": "github",
+   "ref": "#761",
+   "title": "Sparse index rebuild reads the segment twice"
+  },
+  "ado-4402": {
+   "source": "ado",
+   "ref": "AB#4402",
+   "title": "Client reconnect storm after a broker restart"
+  },
+  "ado-4395": {
+   "source": "ado",
+   "ref": "AB#4395",
+   "title": "Token refresh races with a long poll"
+  },
+  "jira-231": {
+   "source": "jira",
+   "ref": "PLAT-231",
+   "title": "Kafka group refusal needs a doc link"
+  },
+  "gh-740": {
+   "source": "github",
+   "ref": "#740",
+   "title": "List streams is slow with ten thousand streams"
+  },
+  "gh-744": {
+   "source": "github",
+   "ref": "#744",
+   "title": "Console log of a replica catch-up is too chatty"
+  },
+  "gh-748": {
+   "source": "github",
+   "ref": "#748",
+   "title": "Make the fsync mode visible in the stats call"
+  },
+  "gh-752": {
+   "source": "github",
+   "ref": "#752",
+   "title": "TypeScript client: unclear error on a closed stream"
+  },
+  "ado-4391": {
+   "source": "ado",
+   "ref": "AB#4391",
+   "title": "Gateway docs show a removed header"
+  },
+  "ado-4389": {
+   "source": "ado",
+   "ref": "AB#4389",
+   "title": "Add a health check for the token cache"
+  },
+  "jira-226": {
+   "source": "jira",
+   "ref": "PLAT-226",
+   "title": "Rename a metric to match the docs"
+  },
+  "gh-733": {
+   "source": "github",
+   "ref": "#733",
+   "title": "Spelling in the storage format page"
+  },
+  "gh-735": {
+   "source": "github",
+   "ref": "#735",
+   "title": "Example config comments are out of date"
+  },
+  "jira-210": {
+   "source": "jira",
+   "ref": "PLAT-210",
+   "title": "Add the broker version to the startup banner"
+  },
+  "jira-221": {
+   "source": "jira",
+   "ref": "PLAT-221",
+   "title": "Link the failover page from the quick start"
+  },
+  "gh-802": {
+   "source": "github",
+   "ref": "#802",
+   "title": "Stale docs link in the queue page"
+  },
+  "gh-786": {
+   "source": "github",
+   "ref": "#786",
+   "title": "Segment roll-over test uses a fixed sleep"
+  },
+  "gh-784": {
+   "source": "github",
+   "ref": "#784",
+   "title": "Fix typo in the CLI help for retention"
+  },
+  "gh-779": {
+   "source": "github",
+   "ref": "#779",
+   "title": "Clippy: needless clone in the subscribe path"
+  },
+  "gh-777": {
+   "source": "github",
+   "ref": "#777",
+   "title": "Group poll returns early on an empty batch"
+  },
+  "gh-770": {
+   "source": "github",
+   "ref": "#770",
+   "title": "Cap the retry delay in the Rust client"
+  },
+  "ado-4381": {
+   "source": "ado",
+   "ref": "AB#4381",
+   "title": "Gateway returns 500 for an unknown stream"
+  },
+  "ado-4375": {
+   "source": "ado",
+   "ref": "AB#4375",
+   "title": "Missing content type on an error body"
+  },
+  "jira-205": {
+   "source": "jira",
+   "ref": "PLAT-205",
+   "title": "Wrong unit in the latency chart label"
+  },
+  "jira-202": {
+   "source": "jira",
+   "ref": "PLAT-202",
+   "title": "Document the offset type in the client page"
+  },
+  "gh-765": {
+   "source": "github",
+   "ref": "#765",
+   "title": "Consumer lag metric is off by one"
+  },
+  "gh-760": {
+   "source": "github",
+   "ref": "#760",
+   "title": "Heartbeat interval is not validated"
+  }
+ },
+ "records": [
+  {"o":0,"t":9000,"kind":"imported","item":"gh-740"},
+  {"o":1,"t":10800,"kind":"triaged","item":"gh-740","tier":2},
+  {"o":2,"t":82800,"kind":"imported","item":"gh-802"},
+  {"o":3,"t":82800,"kind":"imported","item":"gh-786"},
+  {"o":4,"t":82800,"kind":"imported","item":"gh-784"},
+  {"o":5,"t":82800,"kind":"imported","item":"gh-779"},
+  {"o":6,"t":82800,"kind":"imported","item":"gh-777"},
+  {"o":7,"t":82800,"kind":"imported","item":"gh-770"},
+  {"o":8,"t":82800,"kind":"imported","item":"ado-4381"},
+  {"o":9,"t":82800,"kind":"imported","item":"ado-4375"},
+  {"o":10,"t":82800,"kind":"imported","item":"jira-205"},
+  {"o":11,"t":82800,"kind":"imported","item":"jira-202"},
+  {"o":12,"t":82800,"kind":"imported","item":"gh-765"},
+  {"o":13,"t":82800,"kind":"imported","item":"gh-760"},
+  {"o":14,"t":84600,"kind":"imported","item":"gh-702"},
+  {"o":15,"t":84600,"kind":"imported","item":"gh-733"},
+  {"o":16,"t":86400,"kind":"imported","item":"ado-4399"},
+  {"o":17,"t":86400,"kind":"imported","item":"gh-774"},
+  {"o":18,"t":86400,"kind":"triaged","item":"gh-702","tier":1},
+  {"o":19,"t":86400,"kind":"triaged","item":"gh-733","tier":3},
+  {"o":20,"t":86400,"kind":"triaged","item":"gh-802","tier":3},
+  {"o":21,"t":86400,"kind":"triaged","item":"gh-786","tier":3},
+  {"o":22,"t":86400,"kind":"triaged","item":"gh-784","tier":3},
+  {"o":23,"t":86400,"kind":"triaged","item":"gh-779","tier":2},
+  {"o":24,"t":86400,"kind":"triaged","item":"gh-777","tier":2},
+  {"o":25,"t":86400,"kind":"triaged","item":"gh-770","tier":3},
+  {"o":26,"t":86400,"kind":"triaged","item":"ado-4381","tier":2},
+  {"o":27,"t":86400,"kind":"triaged","item":"ado-4375","tier":2},
+  {"o":28,"t":86400,"kind":"triaged","item":"jira-205","tier":2},
+  {"o":29,"t":86400,"kind":"triaged","item":"jira-202","tier":3},
+  {"o":30,"t":86400,"kind":"triaged","item":"gh-765","tier":2},
+  {"o":31,"t":86400,"kind":"triaged","item":"gh-760","tier":3},
+  {"o":32,"t":87000,"kind":"triaged","item":"gh-774","tier":2},
+  {"o":33,"t":90000,"kind":"triaged","item":"ado-4399","tier":1},
+  {"o":34,"t":90000,"kind":"linked","item":"ado-4399","on":"ado-4402"},
+  {"o":35,"t":153000,"kind":"imported","item":"ado-4402"},
+  {"o":36,"t":154800,"kind":"triaged","item":"ado-4402","tier":1},
+  {"o":37,"t":156600,"kind":"imported","item":"gh-735"},
+  {"o":38,"t":156900,"kind":"claimed","item":"gh-760","agent":"w2","run":"r-gh760"},
+  {"o":39,"t":158400,"kind":"triaged","item":"gh-735","tier":3},
+  {"o":40,"t":158400,"kind":"done","item":"gh-760","agent":"w2","pr":3760},
+  {"o":41,"t":162000,"kind":"imported","item":"gh-798"},
+  {"o":42,"t":165600,"kind":"triaged","item":"gh-798","tier":0},
+  {"o":43,"t":165600,"kind":"imported","item":"gh-799"},
+  {"o":44,"t":169200,"kind":"imported","item":"gh-801"},
+  {"o":45,"t":169200,"kind":"triaged","item":"gh-799","tier":2},
+  {"o":46,"t":169200,"kind":"linked","item":"gh-799","on":"gh-798"},
+  {"o":47,"t":169200,"kind":"imported","item":"ado-4388"},
+  {"o":48,"t":171000,"kind":"imported","item":"gh-744"},
+  {"o":49,"t":171000,"kind":"imported","item":"jira-210"},
+  {"o":50,"t":171300,"kind":"claimed","item":"gh-765","agent":"w4","run":"r-gh765"},
+  {"o":51,"t":172800,"kind":"triaged","item":"gh-801","tier":1},
+  {"o":52,"t":172800,"kind":"linked","item":"gh-801","on":"gh-798"},
+  {"o":53,"t":172800,"kind":"imported","item":"gh-790"},
+  {"o":54,"t":172800,"kind":"triaged","item":"ado-4388","tier":1},
+  {"o":55,"t":172800,"kind":"triaged","item":"gh-744","tier":2},
+  {"o":56,"t":172800,"kind":"triaged","item":"jira-210","tier":3},
+  {"o":57,"t":172800,"kind":"done","item":"gh-765","agent":"w4","pr":3765},
+  {"o":58,"t":174000,"kind":"triaged","item":"gh-790","tier":0},
+  {"o":59,"t":175200,"kind":"asked","item":"gh-790","text":"Does it reproduce on 0.7.0, or only on main?"},
+  {"o":60,"t":199800,"kind":"imported","item":"gh-755"},
+  {"o":61,"t":201600,"kind":"imported","item":"jira-218"},
+  {"o":62,"t":201600,"kind":"triaged","item":"gh-755","tier":1},
+  {"o":63,"t":208800,"kind":"triaged","item":"jira-218","tier":1},
+  {"o":64,"t":208800,"kind":"linked","item":"jira-218","on":"gh-801"},
+  {"o":65,"t":208800,"kind":"claimed","item":"gh-755","agent":"w6","run":"r-gh755"},
+  {"o":66,"t":212400,"kind":"released","item":"gh-755","agent":"w6"},
+  {"o":67,"t":225000,"kind":"imported","item":"gh-761"},
+  {"o":68,"t":226800,"kind":"triaged","item":"gh-761","tier":1},
+  {"o":69,"t":234000,"kind":"imported","item":"gh-803"},
+  {"o":70,"t":234000,"kind":"imported","item":"gh-805"},
+  {"o":71,"t":235800,"kind":"imported","item":"ado-4395"},
+  {"o":72,"t":237600,"kind":"triaged","item":"gh-803","tier":2},
+  {"o":73,"t":237600,"kind":"linked","item":"gh-803","on":"gh-799"},
+  {"o":74,"t":237600,"kind":"triaged","item":"gh-805","tier":1},
+  {"o":75,"t":237600,"kind":"triaged","item":"ado-4395","tier":1},
+  {"o":76,"t":246600,"kind":"imported","item":"jira-221"},
+  {"o":77,"t":248400,"kind":"triaged","item":"jira-221","tier":3},
+  {"o":78,"t":250200,"kind":"imported","item":"gh-748"},
+  {"o":79,"t":252000,"kind":"imported","item":"ado-4377"},
+  {"o":80,"t":252000,"kind":"triaged","item":"gh-748","tier":2},
+  {"o":81,"t":255600,"kind":"triaged","item":"ado-4377","tier":1},
+  {"o":82,"t":264600,"kind":"imported","item":"gh-752"},
+  {"o":83,"t":266400,"kind":"asked","item":"ado-4377","text":"Which tenant, and can we see their consumer logs?"},
+  {"o":84,"t":266400,"kind":"triaged","item":"gh-752","tier":2},
+  {"o":85,"t":270000,"kind":"imported","item":"jira-224"},
+  {"o":86,"t":272100,"kind":"claimed","item":"gh-802","agent":"w2","run":"r-gh802"},
+  {"o":87,"t":273600,"kind":"claimed","item":"gh-774","agent":"w3","run":"r-gh774"},
+  {"o":88,"t":273600,"kind":"triaged","item":"jira-224","tier":3},
+  {"o":89,"t":273600,"kind":"done","item":"gh-802","agent":"w2","pr":3802},
+  {"o":90,"t":275400,"kind":"imported","item":"ado-4391"},
+  {"o":91,"t":277200,"kind":"failed","item":"gh-774","agent":"w3","attempts":1},
+  {"o":92,"t":277200,"kind":"triaged","item":"ado-4391","tier":2},
+  {"o":93,"t":279000,"kind":"imported","item":"jira-231"},
+  {"o":94,"t":280800,"kind":"claimed","item":"gh-774","agent":"w1","run":"r-gh774"},
+  {"o":95,"t":280800,"kind":"triaged","item":"jira-231","tier":2},
+  {"o":96,"t":284400,"kind":"failed","item":"gh-774","agent":"w1","attempts":2},
+  {"o":97,"t":284405,"kind":"gave_up","item":"gh-774","agent":"w1","reason":"attempts used up"},
+  {"o":98,"t":289800,"kind":"imported","item":"ado-4389"},
+  {"o":99,"t":290100,"kind":"claimed","item":"gh-786","agent":"w1","run":"r-gh786"},
+  {"o":100,"t":291600,"kind":"triaged","item":"ado-4389","tier":2},
+  {"o":101,"t":291600,"kind":"done","item":"gh-786","agent":"w1","pr":3786},
+  {"o":102,"t":293700,"kind":"claimed","item":"gh-784","agent":"w3","run":"r-gh784"},
+  {"o":103,"t":295200,"kind":"done","item":"gh-784","agent":"w3","pr":3784},
+  {"o":104,"t":304200,"kind":"imported","item":"gh-781"},
+  {"o":105,"t":304500,"kind":"claimed","item":"gh-779","agent":"w5","run":"r-gh779"},
+  {"o":106,"t":306000,"kind":"triaged","item":"gh-781","tier":0},
+  {"o":107,"t":306000,"kind":"done","item":"gh-779","agent":"w5","pr":3779},
+  {"o":108,"t":311400,"kind":"imported","item":"gh-780"},
+  {"o":109,"t":311400,"kind":"imported","item":"jira-226"},
+  {"o":110,"t":313200,"kind":"imported","item":"ado-4408"},
+  {"o":111,"t":313200,"kind":"triaged","item":"gh-780","tier":0},
+  {"o":112,"t":313200,"kind":"triaged","item":"jira-226","tier":2},
+  {"o":113,"t":315300,"kind":"claimed","item":"gh-777","agent":"w2","run":"r-gh777"},
+  {"o":114,"t":316800,"kind":"done","item":"gh-777","agent":"w2","pr":3777},
+  {"o":115,"t":322500,"kind":"claimed","item":"gh-770","agent":"w4","run":"r-gh770"},
+  {"o":116,"t":324000,"kind":"done","item":"gh-770","agent":"w4","pr":3770},
+  {"o":117,"t":326100,"kind":"claimed","item":"ado-4381","agent":"w6","run":"r-ado438"},
+  {"o":118,"t":327600,"kind":"imported","item":"gh-808"},
+  {"o":119,"t":327600,"kind":"claimed","item":"gh-798","agent":"w2","run":"r-gh798"},
+  {"o":120,"t":327600,"kind":"imported","item":"jira-214"},
+  {"o":121,"t":327600,"kind":"done","item":"ado-4381","agent":"w6","pr":7381},
+  {"o":122,"t":331200,"kind":"triaged","item":"jira-214","tier":2},
+  {"o":123,"t":333300,"kind":"claimed","item":"ado-4375","agent":"w1","run":"r-ado437"},
+  {"o":124,"t":334800,"kind":"claimed","item":"jira-214","agent":"w4","run":"r-jira21"},
+  {"o":125,"t":334800,"kind":"claimed","item":"ado-4388","agent":"w4","run":"r-ado438"},
+  {"o":126,"t":334800,"kind":"done","item":"ado-4375","agent":"w1","pr":7375},
+  {"o":127,"t":337800,"kind":"imported","item":"gh-809"},
+  {"o":128,"t":338100,"kind":"claimed","item":"jira-205","agent":"w3","run":"r-jira20"},
+  {"o":129,"t":338400,"kind":"gave_up","item":"jira-214","agent":"w4","reason":"cannot reproduce"},
+  {"o":130,"t":339600,"kind":"done","item":"jira-205","agent":"w3","pr":3205},
+  {"o":131,"t":340800,"kind":"claimed","item":"jira-202","agent":"w5","run":"r-jira20"},
+  {"o":132,"t":342300,"kind":"done","item":"jira-202","agent":"w5","pr":3202},
+  {"o":133,"t":342720,"kind":"imported","item":"jira-229"},
+  {"o":134,"t":343200,"kind":"claimed","item":"gh-805","agent":"w5","run":"r-gh805"},
+  {"o":135,"t":344340,"kind":"imported","item":"ado-4410"},
+  {"o":136,"t":344880,"kind":"claimed","item":"jira-224","agent":"w6","run":"r-jira22"},
+  {"o":137,"t":345300,"kind":"imported","item":"gh-811"},
+  {"o":138,"t":345480,"kind":"imported","item":"gh-812"}
+ ]
+}

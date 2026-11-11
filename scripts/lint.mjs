@@ -12,13 +12,15 @@ const syntax = (file, label) => {
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); } catch (e) { failures.push(`${label}: ${e.stderr.toString().trim()}`); }
 };
 
-const html = readFileSync(join(root, 'prototype/style-frame.html'), 'utf8');
-const inline = html.match(/<script type="module">([\s\S]*?)<\/script>/);
-if (!inline) failures.push('prototype/style-frame.html: no inline module script');
-else {
-  const file = join(mkdtempSync(join(tmpdir(), 'fa-lint-')), 'style-frame.mjs');
-  writeFileSync(file, inline[1]);
-  syntax(file, 'prototype/style-frame.html');
+for (const page of ['style-frame', 'intake-frame']) {
+  const html = readFileSync(join(root, `prototype/${page}.html`), 'utf8');
+  const inline = html.match(/<script type="module">([\s\S]*?)<\/script>/);
+  if (!inline) failures.push(`prototype/${page}.html: no inline module script`);
+  else {
+    const file = join(mkdtempSync(join(tmpdir(), 'fa-lint-')), `${page}.mjs`);
+    writeFileSync(file, inline[1]);
+    syntax(file, `prototype/${page}.html`);
+  }
 }
 
 for (const dir of ['scripts', 'scripts/lib', 'dev']) {
