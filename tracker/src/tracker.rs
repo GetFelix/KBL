@@ -431,9 +431,9 @@ impl<B: Broker> Tracker<B> {
         } else {
             self.0.broker.ack(&stream, record.offset).await
         };
-        settled.err().map(|e| {
-            format!("the work is recorded but the delivery was not settled: {e:#}")
-        })
+        settled
+            .err()
+            .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"))
     }
 
     /// Publishes a ready record for every Ready item that has none for its tier.
@@ -569,10 +569,7 @@ fn holding(core: &Core, agent: &AgentName, item: &ItemId) -> Result<u32, Error> 
         return if &h.item == item {
             Ok(h.attempt)
         } else {
-            Err(Error::NotHeld(format!(
-                "you hold {}, not {item}",
-                h.item
-            )))
+            Err(Error::NotHeld(format!("you hold {}, not {item}", h.item)))
         };
     }
     core.state

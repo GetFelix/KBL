@@ -19,6 +19,9 @@ use crate::config::{Caller, Tokens};
 use crate::felix::Broker;
 use crate::tracker::{Error, Tracker};
 
+/// A call the token does not allow: status and why.
+type Denied = (StatusCode, &'static str);
+
 struct App<B> {
     tracker: Tracker<B>,
     tokens: Tokens,
@@ -81,9 +84,11 @@ async fn next<B: Broker>(
 ) -> Response {
     let agent = match agent(&app, &headers) {
         Ok(a) => a,
-        Err(r) => return r,
+        Err(d) => return denied(d),
     };
-    let wait = body.wait_seconds.map_or(Duration::from_secs(10), Duration::from_secs);
+    let wait = body
+        .wait_seconds
+        .map_or(Duration::from_secs(10), Duration::from_secs);
     reply(app.tracker.next(&agent, wait).await)
 }
 
@@ -94,7 +99,7 @@ async fn extend<B: Broker>(
 ) -> Response {
     match agent(&app, &headers) {
         Ok(a) => reply(app.tracker.extend(&a, &body.item).await),
-        Err(r) => r,
+        Err(d) => denied(d),
     }
 }
 
@@ -105,7 +110,7 @@ async fn complete<B: Broker>(
 ) -> Response {
     match agent(&app, &headers) {
         Ok(a) => reply(app.tracker.complete(&a, &body.item, body.cost_micros).await),
-        Err(r) => r,
+        Err(d) => denied(d),
     }
 }
 
@@ -120,7 +125,7 @@ async fn release<B: Broker>(
                 .release(&a, &body.item, body.reason, body.cost_micros)
                 .await,
         ),
-        Err(r) => r,
+        Err(d) => denied(d),
     }
 }
 
@@ -135,7 +140,7 @@ async fn give_up<B: Broker>(
                 .give_up(&a, &body.item, body.reason, body.cost_micros)
                 .await,
         ),
-        Err(r) => r,
+        Err(d) => denied(d),
     }
 }
 
@@ -146,37 +151,31 @@ async fn records<B: Broker>(
 ) -> Response {
     match person(&app, &headers) {
         Ok(p) => reply(app.tracker.person_record(p, body.record).await),
-        Err(r) => r,
+        Err(d) => denied(d),
     }
 }
 
-fn caller<B>(app: &App<B>, headers: &HeaderMap) -> Result<Caller, Response> {
+fn caller<B>(app: &App<B>, headers: &HeaderMap) -> Result<Caller, Denied> {
     let token = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
     token
         .and_then(|t| app.tokens.who(t))
-        .ok_or_else(|| failure(StatusCode::UNAUTHORIZED, "unknown or missing token"))
+        .ok_or((StatusCode::UNAUTHORIZED, "unknown or missing token"))
 }
 
-fn agent<B>(app: &App<B>, headers: &HeaderMap) -> Result<AgentName, Response> {
+fn agent<B>(app: &App<B>, headers: &HeaderMap) -> Result<AgentName, Denied> {
     match caller(app, headers)? {
         Caller::Agent(a) => Ok(a),
-        Caller::Person(_) => Err(failure(
-            StatusCode::FORBIDDEN,
-            "this call is for an agent's token",
-        )),
+        Caller::Person(_) => Err((StatusCode::FORBIDDEN, "this call is for an agent's token")),
     }
 }
 
-fn person<B>(app: &App<B>, headers: &HeaderMap) -> Result<Key, Response> {
+fn person<B>(app: &App<B>, headers: &HeaderMap) -> Result<Key, Denied> {
     match caller(app, headers)? {
         Caller::Person(p) => Ok(p),
-        Caller::Agent(_) => Err(failure(
-            StatusCode::FORBIDDEN,
-            "this call is for a person's token",
-        )),
+        Caller::Agent(_) => Err((StatusCode::FORBIDDEN, "this call is for a person's token")),
     }
 }
 
@@ -199,7 +198,7 @@ fn reply(result: Result<Value, Error>) -> Response {
     }
 }
 
-fn failure(status: StatusCode, message: &str) -> Response {
+fn denied((status, message): Denied) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 

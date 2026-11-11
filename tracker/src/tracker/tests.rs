@@ -34,12 +34,19 @@ impl Fake {
         let net = self.0.lock().unwrap();
         net.streams
             .get(WORK_EVENTS)
-            .map(|v| v.iter().map(|(_, p)| WorkLogged::decode(p).unwrap()).collect())
+            .map(|v| {
+                v.iter()
+                    .map(|(_, p)| WorkLogged::decode(p).unwrap())
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     fn kinds(&self) -> Vec<String> {
-        self.log().iter().map(|l| l.record.kind().to_owned()).collect()
+        self.log()
+            .iter()
+            .map(|l| l.record.kind().to_owned())
+            .collect()
     }
 
     fn calls(&self) -> Vec<String> {
@@ -79,7 +86,12 @@ impl Fake {
     }
 
     fn ready_count(&self, stream: &str) -> usize {
-        self.0.lock().unwrap().streams.get(stream).map_or(0, Vec::len)
+        self.0
+            .lock()
+            .unwrap()
+            .streams
+            .get(stream)
+            .map_or(0, Vec::len)
     }
 }
 
@@ -102,7 +114,8 @@ fn poll_in(net: &mut Net, stream: &str, _member: &str) -> Option<GroupRecord> {
             Some(Slot::Leased(n)) => n + attempts,
             _ => attempts,
         };
-        net.slots.insert((format!("{stream}#tries"), offset), Slot::Leased(n));
+        net.slots
+            .insert((format!("{stream}#tries"), offset), Slot::Leased(n));
         net.slots.insert(key, Slot::Leased(n));
         let payload = net.streams[stream]
             .iter()
@@ -180,7 +193,8 @@ impl Broker for Fake {
         by: Duration,
     ) -> Result<Duration, ExtendError> {
         let net = self.0.lock().unwrap();
-        let live = net.slots.get(&(stream.to_owned(), record.offset)) == Some(&Slot::Leased(record.attempts));
+        let live = net.slots.get(&(stream.to_owned(), record.offset))
+            == Some(&Slot::Leased(record.attempts));
         if net.extend_stale || !live {
             return Err(ExtendError::Stale);
         }
@@ -233,7 +247,10 @@ async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
 }
 
 fn claimed_id(v: &Value) -> Option<String> {
-    v["claimed"].as_bool().unwrap().then(|| v["item"]["id"].as_str().unwrap().to_owned())
+    v["claimed"]
+        .as_bool()
+        .unwrap()
+        .then(|| v["item"]["id"].as_str().unwrap().to_owned())
 }
 
 #[tokio::test]
@@ -252,16 +269,10 @@ async fn tiers_are_polled_in_order() {
     seed(&t, "low", 3).await;
     seed(&t, "mid", 2).await;
     seed(&t, "top", 0).await;
-    let order: Vec<_> = [
-        claim(&t, "w1").await,
-        {
-            let v = claim(&t, "w2").await;
-            v
-        },
-    ]
-    .iter()
-    .map(|v| claimed_id(v).unwrap())
-    .collect();
+    let order: Vec<_> = [claim(&t, "w1").await, claim(&t, "w2").await]
+        .iter()
+        .map(|v| claimed_id(v).unwrap())
+        .collect();
     assert_eq!(order, ["top", "mid"]);
 }
 
@@ -319,7 +330,10 @@ async fn done_is_written_before_the_ack() {
     let reply = t.complete(&agent("w1"), &item("a1"), 1234).await.unwrap();
     assert_eq!(reply["status"], "done");
     let calls = fake.calls();
-    let done = calls.iter().rposition(|c| c == "publish work.events").unwrap();
+    let done = calls
+        .iter()
+        .rposition(|c| c == "publish work.events")
+        .unwrap();
     let ack = calls.iter().position(|c| c == "ack work.ready.p2").unwrap();
     assert!(done < ack, "{calls:?}");
     let log = fake.log();
@@ -342,13 +356,22 @@ async fn a_dead_agents_item_goes_to_another_after_visibility() {
     assert_eq!(claimed_id(&reply).as_deref(), Some("a1"));
     assert_eq!(reply["attempt"], 1);
     let log = fake.log();
-    let tail: Vec<_> = log[log.len() - 2..].iter().map(|l| (l.record.kind(), l.actor, l.by.as_str())).collect();
+    let tail: Vec<_> = log[log.len() - 2..]
+        .iter()
+        .map(|l| (l.record.kind(), l.actor, l.by.as_str()))
+        .collect();
     assert_eq!(
         tail,
-        [("released", Actor::Tracker, "tracker"), ("claimed", Actor::Agent, "w2")]
+        [
+            ("released", Actor::Tracker, "tracker"),
+            ("claimed", Actor::Agent, "w2")
+        ]
     );
     // The dead agent, back, finds it lost.
-    assert!(matches!(t.extend(&agent("w1"), &item("a1")).await, Err(Error::Lost(_))));
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
     assert!(matches!(
         t.complete(&agent("w1"), &item("a1"), 0).await,
         Err(Error::NotHeld(_))
@@ -361,7 +384,9 @@ async fn an_item_the_agent_released_is_handed_out_again() {
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), Some("stuck".into()), 5).await.unwrap();
+    t.release(&agent("w1"), &item("a1"), Some("stuck".into()), 5)
+        .await
+        .unwrap();
     assert!(fake.calls().contains(&"nack work.ready.p2".to_owned()));
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
     // The second release uses the item's second try; the item then waits for a person.
@@ -378,7 +403,10 @@ async fn extend_reports_a_lapsed_claim_and_drops_it() {
     claim(&t, "w1").await;
     assert!(t.extend(&agent("w1"), &item("a1")).await.is_ok());
     fake.extends_are_stale(true);
-    assert!(matches!(t.extend(&agent("w1"), &item("a1")).await, Err(Error::Lost(_))));
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
     // The tracker no longer treats w1 as holding a delivery, so w1 may ask for work again.
     fake.extends_are_stale(false);
     assert!(t.next(&agent("w1"), Duration::ZERO).await.is_ok());
@@ -418,7 +446,10 @@ async fn a_restart_between_poll_and_log_does_not_hold_the_item() {
     let second = start(&fake).await;
     // Nothing was logged for the item, so the restarted tracker offers it again.
     assert_eq!(fake.kinds().iter().filter(|k| *k == "claimed").count(), 0);
-    assert_eq!(claimed_id(&claim(&second, "w2").await).as_deref(), Some("a1"));
+    assert_eq!(
+        claimed_id(&claim(&second, "w2").await).as_deref(),
+        Some("a1")
+    );
     fake.lapse("work.ready.p2", 0);
     // w1's stranded delivery comes back as a leftover and is skipped, not claimed again.
     assert_eq!(claimed_id(&claim(&second, "w1").await), None);
@@ -477,7 +508,10 @@ async fn a_record_the_fold_refuses_is_not_appended() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Refused { ref why } if why == "actor_not_allowed"), "{err}");
+    assert!(
+        matches!(err, Error::Refused { ref why } if why == "actor_not_allowed"),
+        "{err}"
+    );
     assert_eq!(fake.log().len(), before);
     let _ = READY_GROUP;
 }

@@ -22,6 +22,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use crate::felix::{Backend, ExtendError};
+use crate::keepalive::{self, Claim, Health, at_risk};
 
 /// How long a claim stands without an extension.
 const VISIBILITY: Duration = Duration::from_secs(90);
@@ -34,8 +35,6 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 /// Deliveries of one task a worker takes on. Felix's own limit is broker-wide
 /// and defaults to 5, too many for a task that costs model calls (gap 1).
 const MAX_ATTEMPTS: u32 = 2;
-/// Extensions in a row that may fail before the model is warned its claim is at risk.
-const RISK_AFTER: u32 = 2;
 
 pub(crate) struct Post {
     pub(crate) id: Option<String>,
@@ -53,15 +52,6 @@ struct Held {
     attempt: u32,
     extender: JoinHandle<()>,
     health: Arc<StdMutex<Health>>,
-}
-
-/// What the extend loop has seen, for the next tool call to report.
-struct Health {
-    /// The claim lapsed or was handed out again.
-    lost: bool,
-    /// Extensions that failed since the last one that worked.
-    failures: u32,
-    last_ok: Instant,
 }
 
 struct Inner<B> {
@@ -176,7 +166,7 @@ impl<B: Backend> Tasks<B> {
                 "you already hold task {}; complete, release or give it up first",
                 h.task.id
             );
-            if let Some(risk) = at_risk(h) {
+            if let Some(risk) = at_risk(&h.health) {
                 msg.push_str(&format!(". {risk}"));
             }
             return Err(msg);
@@ -274,15 +264,16 @@ impl<B: Backend> Tasks<B> {
             .await;
             let shown = self.show(&task).await;
             let offset = record.offset;
-            let health = Arc::new(StdMutex::new(Health {
-                lost: false,
-                failures: 0,
-                last_ok: Instant::now(),
-            }));
-            let extender = tokio::spawn(self.clone().keep_alive(
-                task.id.clone(),
-                record.clone(),
-                attempt,
+            let health = Health::fresh();
+            let extender = tokio::spawn(keepalive::keep_alive(
+                TaskClaim {
+                    tasks: self.clone(),
+                    task: task.id.clone(),
+                    record: record.clone(),
+                    attempt,
+                },
+                self.0.extend_every,
+                self.0.visibility,
                 health.clone(),
             ));
             *held = Some(Held {
@@ -306,7 +297,7 @@ impl<B: Backend> Tasks<B> {
     pub(crate) async fn complete(&self, task: &str, result: String) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
         let h = holding(&held, task)?;
-        let risk = at_risk(h);
+        let risk = at_risk(&h.health);
         // A lost claim still gets its result written, which is safe because
         // only the first write lands. The delivery is no longer ours to ack.
         let claim_lost = h.health.lock().expect("health lock").lost;
@@ -397,7 +388,7 @@ impl<B: Backend> Tasks<B> {
             return Err(lost);
         }
         let h = holding(&held, task)?;
-        let risk = at_risk(h);
+        let risk = at_risk(&h.health);
         let stream = self.0.resources.tasks();
         self.checked(
             "group_nack",
@@ -427,7 +418,7 @@ impl<B: Backend> Tasks<B> {
             return Err(lost);
         }
         let h = holding(&held, task)?;
-        let risk = at_risk(h);
+        let risk = at_risk(&h.health);
         let stream = self.0.resources.tasks();
         self.checked(
             "group_dead_letter",
@@ -451,65 +442,6 @@ impl<B: Backend> Tasks<B> {
             json!({ "task": h.task.id, "status": "dead" }),
             risk,
         ))
-    }
-
-    /// Extends the claim until the task is settled and this loop is aborted,
-    /// or the claim is lost.
-    async fn keep_alive(
-        self,
-        task: TaskId,
-        record: GroupRecord,
-        attempt: u32,
-        health: Arc<StdMutex<Health>>,
-    ) {
-        let stream = self.0.resources.tasks();
-        loop {
-            tokio::time::sleep(self.0.extend_every).await;
-            // A hung extend counts as a failed one, or the lost threshold never comes.
-            let extended = tokio::time::timeout(
-                self.0.extend_every,
-                self.0
-                    .backend
-                    .extend(&stream, WORKERS_GROUP, &record, self.0.visibility),
-            )
-            .await
-            .unwrap_or_else(|_| Err(ExtendError::Failed(anyhow::anyhow!("the extend timed out"))));
-            let gone = match extended {
-                Ok(visible) => {
-                    {
-                        let mut h = health.lock().expect("health lock");
-                        h.failures = 0;
-                        h.last_ok = Instant::now();
-                    }
-                    self.log(Record::TaskExtended {
-                        task: task.clone(),
-                        offset: record.offset,
-                        attempt,
-                        deadline_ms: now_ms() + visible.as_millis() as u64,
-                    })
-                    .await;
-                    false
-                }
-                Err(e) => {
-                    self.refuse("group_extend", &stream, None, e.error()).await;
-                    let mut h = health.lock().expect("health lock");
-                    h.failures += 1;
-                    // Lapsed or handed out again, or too long without a working
-                    // extension for the claim to still stand.
-                    matches!(e, ExtendError::Stale(_)) || h.last_ok.elapsed() >= self.0.visibility
-                }
-            };
-            if gone {
-                health.lock().expect("health lock").lost = true;
-                self.log(Record::TaskClaimLost {
-                    task: task.clone(),
-                    offset: record.offset,
-                    attempt,
-                })
-                .await;
-                return;
-            }
-        }
     }
 
     async fn dead_letter(&self, offset: u64) -> Result<(), String> {
@@ -654,12 +586,6 @@ fn lost(held: &mut Option<Held>) -> Option<String> {
     ))
 }
 
-fn at_risk(h: &Held) -> Option<&'static str> {
-    (h.health.lock().expect("health lock").failures >= RISK_AFTER).then_some(
-        "claim at risk: Felix has not accepted the last extensions, so the task may be handed to another worker soon",
-    )
-}
-
 fn with_warning(mut reply: Value, warning: Option<&str>) -> String {
     if let Some(w) = warning {
         reply["warning"] = w.into();
@@ -676,6 +602,57 @@ fn now_ms() -> u64 {
 fn next_seq() -> u64 {
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A held task's claim, extended on Felix.
+struct TaskClaim<B> {
+    tasks: Tasks<B>,
+    task: TaskId,
+    record: GroupRecord,
+    attempt: u32,
+}
+
+impl<B: Backend> Claim for TaskClaim<B> {
+    async fn extend(&self) -> Result<Duration, ExtendError> {
+        let inner = &self.tasks.0;
+        inner
+            .backend
+            .extend(
+                &inner.resources.tasks(),
+                WORKERS_GROUP,
+                &self.record,
+                inner.visibility,
+            )
+            .await
+    }
+
+    async fn extended(&self, visible: Duration) {
+        self.tasks
+            .log(Record::TaskExtended {
+                task: self.task.clone(),
+                offset: self.record.offset,
+                attempt: self.attempt,
+                deadline_ms: now_ms() + visible.as_millis() as u64,
+            })
+            .await;
+    }
+
+    async fn failed(&self, error: &anyhow::Error) {
+        let stream = self.tasks.0.resources.tasks();
+        self.tasks
+            .refuse("group_extend", &stream, None, error)
+            .await;
+    }
+
+    async fn lost(&self) {
+        self.tasks
+            .log(Record::TaskClaimLost {
+                task: self.task.clone(),
+                offset: self.record.offset,
+                attempt: self.attempt,
+            })
+            .await;
+    }
 }
 
 #[cfg(test)]

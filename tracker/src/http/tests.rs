@@ -39,7 +39,9 @@ async fn app() -> Router {
         }
     }
     let tokens = Tokens::parse(r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"}}"#).unwrap();
-    let tracker = Tracker::start(Quiet, Duration::from_secs(90)).await.unwrap();
+    let tracker = Tracker::start(Quiet, Duration::from_secs(90))
+        .await
+        .unwrap();
     router(tracker, tokens)
 }
 
@@ -54,16 +56,27 @@ async fn call(app: &Router, path: &str, token: Option<&str>, body: Value) -> (St
         .await
         .unwrap();
     let status = res.status();
-    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
 #[tokio::test]
 async fn a_call_without_a_known_token_is_refused() {
     let app = app().await;
     let body = json!({ "wait_seconds": 0 });
-    assert_eq!(call(&app, "/v1/work/next", None, body.clone()).await.0, StatusCode::UNAUTHORIZED);
-    assert_eq!(call(&app, "/v1/work/next", Some("nope"), body).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        call(&app, "/v1/work/next", None, body.clone()).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&app, "/v1/work/next", Some("nope"), body).await.0,
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[tokio::test]
@@ -71,22 +84,45 @@ async fn an_agent_token_claims_and_a_person_token_does_not() {
     let app = app().await;
     let body = json!({ "wait_seconds": 0 });
     let (status, reply) = call(&app, "/v1/work/next", Some("tok-w1"), body.clone()).await;
-    assert_eq!((status, reply["claimed"].as_bool()), (StatusCode::OK, Some(false)));
-    assert_eq!(call(&app, "/v1/work/next", Some("tok-gab"), body).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        (status, reply["claimed"].as_bool()),
+        (StatusCode::OK, Some(false))
+    );
+    assert_eq!(
+        call(&app, "/v1/work/next", Some("tok-gab"), body).await.0,
+        StatusCode::FORBIDDEN
+    );
 }
 
 #[tokio::test]
 async fn only_a_person_token_appends_records() {
     let app = app().await;
     let record = json!({ "record": { "kind": "imported", "item": "a1", "source": "gh", "upstream_id": "1", "title": "t" } });
-    assert_eq!(call(&app, "/v1/work/records", Some("tok-w1"), record.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(
+        call(&app, "/v1/work/records", Some("tok-w1"), record.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
     let (status, reply) = call(&app, "/v1/work/records", Some("tok-gab"), record).await;
-    assert_eq!((status, reply["kind"].as_str()), (StatusCode::OK, Some("imported")));
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("imported"))
+    );
 }
 
 #[tokio::test]
 async fn a_lost_claim_is_a_conflict_with_a_reason() {
     let app = app().await;
-    let (status, reply) = call(&app, "/v1/work/extend", Some("tok-w1"), json!({ "item": "a1" })).await;
-    assert_eq!((status, reply["why"].as_str()), (StatusCode::CONFLICT, Some("lost")));
+    let (status, reply) = call(
+        &app,
+        "/v1/work/extend",
+        Some("tok-w1"),
+        json!({ "item": "a1" }),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("lost"))
+    );
 }

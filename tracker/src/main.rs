@@ -55,7 +55,12 @@ struct Cli {
     #[arg(long, env = "AGENTS_FELIX_BROKER_NAME", default_value = "localhost")]
     broker_name: String,
     /// How long a claim stands without an extension, in milliseconds. For tests.
-    #[arg(long, env = "AGENTS_CLAIM_VISIBILITY_MS", default_value_t = 90_000, hide = true)]
+    #[arg(
+        long,
+        env = "AGENTS_CLAIM_VISIBILITY_MS",
+        default_value_t = 90_000,
+        hide = true
+    )]
     claim_visibility_ms: u64,
 }
 

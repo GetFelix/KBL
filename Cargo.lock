@@ -590,6 +590,7 @@ dependencies = [
  "bytes",
  "clap",
  "felix-client",
+ "reqwest",
  "rmcp",
  "schemars",
  "serde",

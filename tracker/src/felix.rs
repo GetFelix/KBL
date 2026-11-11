@@ -288,13 +288,27 @@ impl Broker for Felix {
 
     async fn ack(&self, stream: &str, offset: u64) -> Result<()> {
         self.client
-            .group_ack(&self.tenant, &self.namespace, stream, 0, READY_GROUP, offset)
+            .group_ack(
+                &self.tenant,
+                &self.namespace,
+                stream,
+                0,
+                READY_GROUP,
+                offset,
+            )
             .await
     }
 
     async fn nack(&self, stream: &str, record: &GroupRecord) -> Result<()> {
         self.client
-            .group_nack(&self.tenant, &self.namespace, stream, 0, READY_GROUP, record)
+            .group_nack(
+                &self.tenant,
+                &self.namespace,
+                stream,
+                0,
+                READY_GROUP,
+                record,
+            )
             .await
     }
 
