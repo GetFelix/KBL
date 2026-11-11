@@ -5,8 +5,10 @@
 //! Stdout belongs to the protocol. Anything meant for a person goes to stderr.
 
 mod felix;
+mod keepalive;
 mod server;
 mod tasks;
+mod work;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -45,6 +47,9 @@ struct Cli {
     /// The name in the broker's certificate.
     #[arg(long, env = "AGENTS_FELIX_BROKER_NAME", default_value = "localhost")]
     broker_name: String,
+    /// Where the tracker's REST API is. Without it the work tools answer that they are not set up.
+    #[arg(long, env = "AGENTS_TRACKER_URL")]
+    tracker: Option<String>,
     /// How long a claim stands without an extension, in milliseconds. For tests.
     #[arg(long, env = "AGENTS_CLAIM_VISIBILITY_MS", hide = true)]
     claim_visibility_ms: Option<u64>,
@@ -76,11 +81,20 @@ async fn main() -> Result<()> {
         run.as_str()
     );
 
+    // Environment only, like the Felix token.
+    let tracker = match (cli.tracker, std::env::var("AGENTS_TRACKER_TOKEN").ok()) {
+        (Some(url), Some(token)) => {
+            Some(work::Http::new(&url, token).context("set up the tracker client")?)
+        }
+        (Some(_), None) => anyhow::bail!("set AGENTS_TRACKER_TOKEN to the agent's tracker token"),
+        _ => None,
+    };
+
     let timing = server::Timing {
         visibility: cli.claim_visibility_ms.map(Duration::from_millis),
         extend_every: cli.extend_every_ms.map(Duration::from_millis),
     };
-    let service = Server::new(run, agent, felix, timing)
+    let service = Server::new(run, agent, felix, tracker, timing)
         .serve(stdio())
         .await
         .context("start the MCP server")?;

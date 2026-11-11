@@ -101,6 +101,17 @@ pub enum NeedsYou {
 }
 
 impl Item {
+    /// The attempt number a claim must name: the open attempt for a retry after a
+    /// release, lapse or give-up, a new one otherwise.
+    pub fn next_attempt(&self) -> u32 {
+        let retry = self.pending_fork.is_none() && !self.paths.is_empty();
+        if retry {
+            self.open_path().map_or(1, |p| p.attempt)
+        } else {
+            self.paths.last().map_or(1, |p| p.attempt + 1)
+        }
+    }
+
     /// The newest attempt that is not closed.
     pub fn open_path(&self) -> Option<&Path> {
         self.paths.iter().rev().find(|p| !p.closed)
@@ -229,6 +240,9 @@ pub struct State {
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
     child_keys: BTreeSet<(Option<ItemId>, Option<Key>, Key)>,
+    /// Roots flagged over budget while a trial is running, to unflag on a refusal.
+    #[serde(skip)]
+    probing: Option<Vec<ItemId>>,
 }
 
 /// Folds every record. Offsets must ascend.
@@ -247,6 +261,34 @@ impl State {
             self.rejections.push(Rejection { offset, why });
         }
         self.at = Some(offset);
+    }
+
+    /// Applies the record only if it is accepted; a refusal leaves the state as it
+    /// was, rejections list included. The tracker uses this to validate without
+    /// copying the state: it appends a record to the log only when this says yes.
+    pub fn try_apply(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
+        self.probing = Some(Vec::new());
+        let result = self.step(offset, rec);
+        let flagged = self.probing.take().unwrap_or_default();
+        match result {
+            Ok(()) => self.at = Some(offset),
+            Err(_) => {
+                for root in flagged {
+                    if let Some(r) = self.items.get_mut(&root) {
+                        r.over_budget = false;
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    /// The open item `agent` holds, with the attempt, if any.
+    pub fn held_by(&self, agent: &str) -> Option<(ItemId, u32)> {
+        self.items.values().find_map(|i| {
+            let h = i.hold.as_ref()?;
+            (i.closed.is_none() && h.by.as_str() == agent).then(|| (i.id.clone(), h.attempt))
+        })
     }
 
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
@@ -366,6 +408,11 @@ impl State {
     /// Marks the root over budget so the stage does not depend on a later `refused`.
     fn flag_over_budget(&mut self, root: &ItemId) {
         if let Some(r) = self.items.get_mut(root) {
+            if !r.over_budget
+                && let Some(flagged) = &mut self.probing
+            {
+                flagged.push(root.clone());
+            }
             r.over_budget = true;
         }
     }
@@ -561,11 +608,7 @@ impl State {
                     return Err(Reject::NotReady);
                 }
                 let it = self.item_mut(item)?;
-                let want = if retry {
-                    it.open_path().map_or(1, |p| p.attempt)
-                } else {
-                    it.paths.last().map_or(1, |p| p.attempt + 1)
-                };
+                let want = it.next_attempt();
                 if *attempt != want {
                     return Err(Reject::WrongAttempt);
                 }

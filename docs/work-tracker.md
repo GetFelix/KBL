@@ -122,6 +122,77 @@ sequenceDiagram
     Note over A,G: An agent that stops extending loses the claim after 90 s and the group hands the item to another agent.
 ```
 
+### Running the tracker
+
+`agents-tracker` signs in to Felix as its own principal, creates `work.events`,
+`work.ready.p0` to `p3` and the consumer group on each tier if they are not
+there, and folds `work.events` from the start (with seek snapshots) before it
+serves. It appends a record only when the fold accepts it, so a refused call
+leaves no trace in the log.
+
+Felix cannot yet tell the tracker which principal a token belongs to, so the
+tracker reads a token map from a JSON file (`--tokens-file`, or
+`AGENTS_TRACKER_TOKENS_FILE`). The file must be mode 600 or 400, a token may be listed
+once only, and tokens are compared in constant time:
+
+```json
+{ "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" } }
+```
+
+An agent's token maps to its name, which goes on every record it causes and is
+the consumer-group member name. `felix-mcp` reads `AGENTS_TRACKER_URL` and
+`AGENTS_TRACKER_TOKEN`; without them the work tools say they are not set up.
+
+| Call | Token | Does |
+|---|---|---|
+| `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item. An agent that already holds one gets it again, marked `resumed` |
+| `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed |
+| `POST /v1/work/complete` `{item, cost_micros}` | agent | Writes `done`, then acks |
+| `POST /v1/work/release` `{item, reason, cost_micros}` | agent | Writes `released`, then hands the delivery back |
+| `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
+| `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
+
+Ready records carry a stamp. When the tracker sees an item become Ready it
+publishes a record, and a record that is not the newest for its item (a tier
+changed, the tracker restarted, the item was closed or blocked meanwhile) is
+acked and skipped when it is delivered. When Felix hands an item to a second
+agent while the log still shows the first as holding it, the claim lapsed: the
+tracker writes `released` with the reason `lapsed`, then the new `claimed`.
+The log is the truth for holds. Before each call the tracker checks that the log
+still shows the agent holding the item. If a person closed the item or the
+attempt, or another agent took it, the agent's next `extend`, `complete` or
+`release` answers `lost`. The tracker settles a delivery in Felix only when it
+still stands behind that exact delivery for that agent, because a group ack
+names an offset, not a delivery: a stale holder's late call cannot ack the next
+holder's.
+
+A sweep (every few seconds) writes `released` with the reason `lapsed` for a
+hold whose delivery the tracker no longer has, or that has not been extended
+for the visibility period, so the item is Ready without another agent having to
+poll. After a restart the tracker takes back, for each agent the log shows
+holding, the delivery Felix still has for that name; if it is not there the
+hold is released at once. Until then `work_next` answers that the agent has no
+current claim.
+
+The tracker is the only writer, and it holds that role with a lease: a key in
+the `work.tracker` cache, written with a time to live and renewed every third
+of it. A tracker that cannot renew answers 503 to everything, exits after ten
+seconds, and checks the lease before each append. This narrows the window in
+which a second tracker could write but does not close it: that needs an append
+conditioned on the lease key's version, which Felix does not offer yet
+(felix#1051).
+
+The tracker keeps no Felix call under its main lock, and every call has a
+10 second limit, so one slow call stalls the agent that made it and nobody
+else. If a write to `work.events` fails, the tracker rebuilds its state from
+the log before it serves again, and refuses with 503 while it cannot.
+
+**Connection cost.** The broker reclaims a member's deliveries only in a
+connection's first poll, so each active agent has a QUIC connection of its own
+to the broker, opened on its first call and closed after ten minutes without
+one. A connection that fails is opened again with a fresh token on the next
+call.
+
 ### Grants
 
 | Principal | May do |

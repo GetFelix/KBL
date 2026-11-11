@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::felix::Felix;
 use crate::tasks::{Post, Tasks};
+use crate::work::{Http, Work};
 
 #[derive(Clone)]
 pub(crate) struct Server {
@@ -18,6 +19,8 @@ pub(crate) struct Server {
     agent: AgentName,
     felix: Felix,
     tasks: Tasks<Felix>,
+    /// None when no tracker is configured.
+    work: Option<Work<Http>>,
 }
 
 /// Claim timing, when the defaults (90 s claim, extended every 30 s) are overridden.
@@ -27,7 +30,13 @@ pub(crate) struct Timing {
 }
 
 impl Server {
-    pub(crate) fn new(run: RunId, agent: AgentName, felix: Felix, timing: Timing) -> Self {
+    pub(crate) fn new(
+        run: RunId,
+        agent: AgentName,
+        felix: Felix,
+        tracker: Option<Http>,
+        timing: Timing,
+    ) -> Self {
         let tasks = Tasks::new(
             felix.clone(),
             Resources::new(run.clone()),
@@ -35,11 +44,13 @@ impl Server {
             timing.visibility,
             timing.extend_every,
         );
+        let work = tracker.map(|api| Work::new(api, timing.visibility, timing.extend_every));
         Self {
             run,
             agent,
             felix,
             tasks,
+            work,
         }
     }
 }
@@ -88,6 +99,36 @@ struct TaskGiveUpArgs {
     task: String,
     /// Why the task cannot be done.
     reason: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct WorkNextArgs {
+    /// Seconds to wait for an item before answering that there is none. Default 10, at most 30.
+    wait_seconds: Option<u64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct WorkExtendArgs {
+    /// The id of the item you hold.
+    item: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct WorkCompleteArgs {
+    /// The id of the item you hold.
+    item: String,
+    /// What this attempt cost, in millionths of a dollar. The tracker cannot verify it.
+    cost_micros: Option<u64>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct WorkReleaseArgs {
+    /// The id of the item you hold.
+    item: String,
+    /// Why you are handing it back.
+    reason: Option<String>,
+    /// What this attempt cost, in millionths of a dollar.
+    cost_micros: Option<u64>,
 }
 
 /// Who the agent is and where it works.
@@ -167,6 +208,58 @@ impl Server {
         Parameters(a): Parameters<TaskGiveUpArgs>,
     ) -> Result<String, String> {
         self.tasks.give_up(&a.task, a.reason).await
+    }
+
+    #[tool(
+        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time."
+    )]
+    async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
+        self.work()?
+            .next(a.wait_seconds.map(Duration::from_secs))
+            .await
+    }
+
+    #[tool(
+        description = "Keep the claim on the item you hold standing. work_next already does this every 30 seconds; call it only to check the claim."
+    )]
+    async fn work_extend(
+        &self,
+        Parameters(a): Parameters<WorkExtendArgs>,
+    ) -> Result<String, String> {
+        self.work()?.extend(&a.item).await
+    }
+
+    #[tool(
+        description = "Finish the item you hold and report what the attempt cost. It is refused while the item has open children."
+    )]
+    async fn work_complete(
+        &self,
+        Parameters(a): Parameters<WorkCompleteArgs>,
+    ) -> Result<String, String> {
+        self.work()?
+            .complete(&a.item, a.cost_micros.unwrap_or(0))
+            .await
+    }
+
+    #[tool(
+        description = "Hand the item you hold back so another agent can take it now. It uses one of the item's two tries."
+    )]
+    async fn work_release(
+        &self,
+        Parameters(a): Parameters<WorkReleaseArgs>,
+    ) -> Result<String, String> {
+        self.work()?
+            .release(&a.item, a.reason, a.cost_micros.unwrap_or(0))
+            .await
+    }
+}
+
+impl Server {
+    fn work(&self) -> Result<&Work<Http>, String> {
+        self.work.as_ref().ok_or_else(|| {
+            "the work tools are not set up: start felix-mcp with AGENTS_TRACKER_URL and AGENTS_TRACKER_TOKEN"
+                .to_owned()
+        })
     }
 }
 

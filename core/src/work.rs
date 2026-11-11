@@ -18,6 +18,23 @@ pub fn ready_stream(tier: u8) -> String {
     format!("work.ready.p{tier}")
 }
 
+/// The consumer group on every ready stream. One group, so a claim on any tier
+/// is a delivery to one agent, named as a member.
+pub const READY_GROUP: &str = "agents";
+
+/// How many ready tiers there are: `work.ready.p0` to `p3`.
+pub const TIERS: u8 = 4;
+
+/// What goes on a ready stream. `stamp` makes each publish distinct, so a
+/// delivery can be told from an older record of the same item that a tier
+/// change or a restart left behind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadyRecord {
+    pub item: ItemId,
+    pub tier: u8,
+    pub stamp: u64,
+}
+
 /// The cache key of an item's fields.
 pub fn item_key(item: &ItemId) -> Result<Key, InvalidName> {
     Key::new(format!("i-{item}"))

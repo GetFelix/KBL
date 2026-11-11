@@ -1,6 +1,9 @@
 // What the dev-stack checks share: a token, a run, and agents that are felix-mcp
 // processes spoken to over stdio, as under an MCP host.
 import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const env = (name, fallback) => process.env[name] || fallback;
@@ -8,6 +11,8 @@ const CONTROL_PLANE = env("AGENTS_FELIX_CONTROL_PLANE", "http://127.0.0.1:8443")
 const IDP = env("AGENTS_IDP", "http://127.0.0.1:9400");
 const MCP = env("FELIX_MCP", "target/debug/felix-mcp");
 const TOOL = env("AGENTS_TOOL", "target/debug/agents-tool");
+const TRACKER = env("AGENTS_TRACKER", "target/debug/agents-tracker");
+const TRACKER_ADDR = env("AGENTS_TRACKER_LISTEN", "127.0.0.1:8790");
 const TENANT = "agents";
 
 const running = new Set();
@@ -96,6 +101,64 @@ export async function agent(token, run, name, extraEnv = {}) {
 
 export function killAll() {
   for (const child of running) child.kill("SIGKILL");
+}
+
+// The work tracker as a process on the host, against the dev stack. `tokens` is
+// {agents: {token: name}, people: {token: name}}. `exited` settles when it ends.
+export async function startTracker(tokens, extraEnv = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "tracker-"));
+  const tokensFile = join(dir, "tokens.json");
+  writeFileSync(tokensFile, JSON.stringify(tokens), { mode: 0o600 });
+  const child = spawn(TRACKER, [], {
+    env: {
+      ...process.env,
+      AGENTS_TRACKER_TOKENS_FILE: tokensFile,
+      AGENTS_TRACKER_LISTEN: TRACKER_ADDR,
+      AGENTS_CLAIM_VISIBILITY_MS: "4000",
+      AGENTS_TRACKER_LEASE_TTL_MS: "3000",
+      ...extraEnv,
+    },
+    stdio: ["ignore", "inherit", "inherit"],
+  });
+  running.add(child);
+  const exited = new Promise((resolve) => child.on("exit", () => resolve()));
+  for (let tries = 0; ; tries++) {
+    const up = await fetch(`${TRACKER_URL}/healthz`).then((r) => r.ok, () => false);
+    if (up) break;
+    if (tries > 60 || child.exitCode !== null) throw new Error("the tracker did not start");
+    await sleep(500);
+  }
+  return {
+    exited,
+    kill() {
+      child.kill("SIGKILL");
+      running.delete(child);
+    },
+  };
+}
+
+export const TRACKER_URL = `http://${TRACKER_ADDR}`;
+
+// A call to the tracker as a person; throws the tracker's error text.
+export async function personRecord(token, record) {
+  const response = await fetch(`${TRACKER_URL}/v1/work/records`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ record }),
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(`record ${record.kind}: ${body.error}`);
+  return body;
+}
+
+// work.events as the records it holds, oldest first.
+export function workLog() {
+  const read = spawnSync(TOOL, ["work", "log"], { encoding: "utf8" });
+  if (read.status !== 0) throw new Error(`could not read work.events: ${read.stderr}`);
+  return read.stdout
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 export function check(ok, what) {

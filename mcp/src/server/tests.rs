@@ -12,7 +12,11 @@ fn lists_the_run_info_tool_with_a_description() {
             "task_complete",
             "task_give_up",
             "task_post",
-            "task_release"
+            "task_release",
+            "work_complete",
+            "work_extend",
+            "work_next",
+            "work_release"
         ]
     );
     assert!(tools.iter().all(|tool| tool.description.is_some()));

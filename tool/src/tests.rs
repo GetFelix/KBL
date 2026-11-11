@@ -35,3 +35,9 @@ fn log_takes_a_run_id() {
     let cli = Cli::try_parse_from(["agents-tool", "run", "log", "demo"]).unwrap();
     assert!(matches!(cli.command, Command::Run(RunCommand::Log { run }) if run == "demo"));
 }
+
+#[test]
+fn work_log_prints_the_trackers_log() {
+    let cli = Cli::try_parse_from(["agents-tool", "work", "log"]).unwrap();
+    assert!(matches!(cli.command, Command::Work(WorkCommand::Log)));
+}
