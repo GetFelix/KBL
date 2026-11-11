@@ -204,7 +204,14 @@ and it makes no model calls. `agents-ingest --config ingest.json` polls every
 `poll_seconds` (default 60); `--once` polls once. `--webhook-listen` adds an
 endpoint whose only effect is to wake the poll: it checks `X-Hub-Signature-256`
 against the secret named by `--webhook-secret-env`, and a `transferred` or
-`deleted` event also forces a reconcile.
+`deleted` event also forces a reconcile. An empty secret is refused, a repeated
+`X-GitHub-Delivery` id is dropped, and wakes are at least
+`--webhook-min-gap-seconds` apart (default 10).
+
+The ingest token can act only on roots ingest imported. A pull request an agent
+reports is written to (made a draft) only when it is in the same repository as
+the upstream issue, and that repository is one a rule names. A root a person
+dismissed stays closed when its issue is reopened.
 
 ```json
 {

@@ -106,6 +106,14 @@ impl<T: Transport> Github<T> {
                     return Ok(Listing::default());
                 }
                 200 => {}
+                // This repo is not ours to read (gone, renamed, no access): the
+                // caller skips it so the other repos keep advancing.
+                s @ (403 | 404) => {
+                    return Ok(Listing {
+                        denied: Some(s),
+                        ..Listing::default()
+                    });
+                }
                 s => return Err(anyhow!("GitHub answered {s} to {url}").into()),
             }
             let next = res.headers.get("link").and_then(|l| next_link(l));
@@ -123,7 +131,7 @@ impl<T: Transport> Github<T> {
                 None => {
                     return Ok(Listing {
                         items: out,
-                        truncated: false,
+                        ..Listing::default()
                     });
                 }
             }
@@ -131,6 +139,7 @@ impl<T: Transport> Github<T> {
         Ok(Listing {
             items: out,
             truncated: true,
+            ..Listing::default()
         })
     }
 }
@@ -140,6 +149,8 @@ struct Listing {
     items: Vec<Value>,
     /// The page limit stopped it before the end.
     truncated: bool,
+    /// The status that said this repo cannot be listed.
+    denied: Option<u16>,
 }
 
 impl<T: Transport> Source for Github<T> {
@@ -173,15 +184,25 @@ impl<T: Transport> Source for Github<T> {
                 url.push_str(&format!("&since={since}"));
             }
             let listing = self.pages(url, &cursor.etags, &mut etags).await?;
+            if let Some(code) = listing.denied {
+                eprintln!("agents-ingest: {repo} answered {code}; skipping it this poll");
+                continue;
+            }
             let mut last = None;
             for raw in &listing.items {
+                // Pull requests count toward the cursor too, or a listing of
+                // nothing else would never move it.
+                if let Some(at) = raw["updated_at"].as_str() {
+                    last = Some(at.to_owned());
+                }
                 // The issues endpoint lists pull requests too.
                 if raw.get("pull_request").is_some() {
                     continue;
                 }
-                let issue = parse_issue(repo, raw)?;
-                last = Some(issue.updated_at.clone());
-                issues.push(issue);
+                match parse_issue(repo, raw) {
+                    Ok(issue) => issues.push(issue),
+                    Err(e) => eprintln!("agents-ingest: skipped an item of {repo}: {e:#}"),
+                }
             }
             if let Some(l) = last {
                 reached.push((l, listing.truncated));
@@ -193,11 +214,19 @@ impl<T: Transport> Source for Github<T> {
                     self.api
                 );
                 let listing = self.pages(url, &cursor.etags, &mut etags).await?;
+                if let Some(code) = listing.denied {
+                    eprintln!("agents-ingest: comments of {repo} answered {code}; skipping them");
+                    continue;
+                }
                 let mut last = None;
                 for raw in &listing.items {
-                    let c = parse_comment(repo, raw)?;
-                    last = Some(c.updated_at.clone());
-                    comments.push(c);
+                    if let Some(at) = raw["updated_at"].as_str() {
+                        last = Some(at.to_owned());
+                    }
+                    match parse_comment(repo, raw) {
+                        Ok(c) => comments.push(c),
+                        Err(e) => eprintln!("agents-ingest: skipped a comment of {repo}: {e:#}"),
+                    }
                 }
                 if let Some(l) = last {
                     comment_reached.push((l, listing.truncated));

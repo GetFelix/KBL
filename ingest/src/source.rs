@@ -24,10 +24,20 @@ impl IssueRef {
         }
     }
 
-    /// `owner/repo#number`.
+    /// `owner/repo#number`, exactly: one slash, names of letters, digits,
+    /// `.`, `_` and `-`, and a number without sign or leading zero.
     pub(crate) fn parse(s: &str) -> Option<Self> {
-        let (repo, number) = s.rsplit_once('#')?;
-        (repo.contains('/')).then_some(())?;
+        let (repo, number) = s.split_once('#')?;
+        let (owner, name) = repo.split_once('/')?;
+        let part = |p: &str| {
+            !p.is_empty()
+                && p != "."
+                && p != ".."
+                && p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        };
+        let plain = !number.starts_with('0') && number.bytes().all(|b| b.is_ascii_digit());
+        (part(owner) && part(name) && plain).then_some(())?;
         Some(Self::new(repo, number.parse().ok()?))
     }
 }

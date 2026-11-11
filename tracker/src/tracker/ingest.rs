@@ -2,8 +2,11 @@
 //! records upstream sync needs, as the tracker's role under its own name, and
 //! keeps its cursor in Felix so a restart does not import again.
 
-use agents_core::names::Key;
+use agents_core::artifact::INLINE_LIMIT;
+use agents_core::content::Content;
+use agents_core::names::{ItemId, Key};
 use agents_core::work::{Actor, CloseWhy, WorkKind, WorkRecord};
+use agents_core::work_fold::State;
 use serde_json::{Value, json};
 
 use super::{Error, Tracker};
@@ -30,6 +33,25 @@ fn allowed(record: &WorkRecord) -> bool {
     }
 }
 
+/// The existing items a record acts on. Ingest may touch only roots it
+/// imported, so these must all be among them.
+fn targets(record: &WorkRecord) -> Vec<&ItemId> {
+    match record {
+        WorkRecord::Accepted { item, .. }
+        | WorkRecord::Context { item, .. }
+        | WorkRecord::Updated { item, .. }
+        | WorkRecord::LeftScope { item }
+        | WorkRecord::Reopened { item }
+        | WorkRecord::Closed { item, .. } => vec![item],
+        WorkRecord::Linked { item, to } => vec![item, to],
+        WorkRecord::Proposed {
+            parent: Some(parent),
+            ..
+        } => vec![parent],
+        _ => Vec::new(),
+    }
+}
+
 fn refused(why: &str) -> Error {
     Error::Refused { why: why.into() }
 }
@@ -40,10 +62,29 @@ impl<B: Broker> Tracker<B> {
         if !allowed(&record) {
             return Err(refused("not_allowed"));
         }
+        if let WorkRecord::Context {
+            text: Content::Text(text),
+            ..
+        } = &record
+            && text.len() > INLINE_LIMIT
+        {
+            return Err(refused("too_big"));
+        }
+        // A record with no existing target (`Proposed` without a parent) is
+        // refused by the fold: only the two admitted-root items are allowed.
+        if matches!(record, WorkRecord::Proposed { parent: None, .. }) {
+            return Err(refused("not_allowed"));
+        }
         self.begin().await?;
         let kind = record.kind();
         let offset = {
             let mut core = self.0.core.lock().await;
+            if !targets(&record)
+                .into_iter()
+                .all(|t| is_imported(&core.state, t))
+            {
+                return Err(refused("not_imported"));
+            }
             self.append(&mut core, Actor::Tracker, by, record).await?
         };
         self.sync_ready().await;
@@ -105,6 +146,10 @@ impl<B: Broker> Tracker<B> {
             Err(e) => Err(Error::Felix(e)),
         }
     }
+}
+
+fn is_imported(state: &State, item: &ItemId) -> bool {
+    state.imported().any(|(_, _, i)| i == item)
 }
 
 fn state_name(source: &str) -> Result<String, Error> {

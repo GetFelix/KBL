@@ -45,6 +45,13 @@ struct Cli {
     /// The environment variable holding the webhook secret.
     #[arg(long, env = "AGENTS_INGEST_WEBHOOK_SECRET_ENV")]
     webhook_secret_env: Option<String>,
+    /// The least seconds between two webhook wakes of the poll.
+    #[arg(
+        long,
+        env = "AGENTS_INGEST_WEBHOOK_MIN_GAP_SECONDS",
+        default_value_t = 10
+    )]
+    webhook_min_gap_seconds: u64,
     /// Poll once and exit.
     #[arg(long)]
     once: bool,
@@ -90,11 +97,16 @@ async fn main() -> Result<()> {
             .webhook_secret_env
             .context("a webhook secret variable")?;
         let secret = std::env::var(&var).with_context(|| format!("{var} is not set"))?;
+        anyhow::ensure!(!secret.is_empty(), "{var} is empty");
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("listen on {addr}"))?;
         eprintln!("agents-ingest: webhook on {}", listener.local_addr()?);
-        let app = webhook::router(secret, wake.clone());
+        let app = webhook::router(
+            secret,
+            wake.clone(),
+            Duration::from_secs(cli.webhook_min_gap_seconds),
+        );
         tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
                 eprintln!("agents-ingest: the webhook server stopped: {e}");
@@ -113,7 +125,12 @@ async fn run<S: Source, T: tracker_api::Tracker>(
 ) -> Result<()> {
     loop {
         let reconcile = wake.reconcile.swap(false, Ordering::SeqCst);
-        let wait = match ingest.poll(reconcile).await {
+        let polled = ingest.poll(reconcile).await;
+        // A failed poll did not reconcile, so the next one still must.
+        if reconcile && polled.is_err() {
+            wake.reconcile.store(true, Ordering::SeqCst);
+        }
+        let wait = match polled {
             Ok(()) => every,
             Err(SourceError::RateLimited { wait }) => {
                 eprintln!("agents-ingest: rate limited; waiting {}s", wait.as_secs());

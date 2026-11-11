@@ -3,8 +3,10 @@
 //! latency at most. The signature is checked so a stranger cannot make the
 //! worker spend GitHub requests.
 
-use std::sync::Arc;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Bytes;
@@ -23,17 +25,49 @@ pub(crate) struct Wake {
     pub(crate) reconcile: AtomicBool,
 }
 
+/// Delivery ids remembered to drop a redelivery.
+const SEEN_LIMIT: usize = 1024;
+
 struct App {
     secret: Vec<u8>,
     wake: Arc<Wake>,
+    /// The least time between two wakes, so a burst of events costs one poll.
+    min_gap: Duration,
+    recent: Mutex<Recent>,
 }
 
-pub(crate) fn router(secret: String, wake: Arc<Wake>) -> Router {
+#[derive(Default)]
+struct Recent {
+    /// Oldest first; the set answers membership.
+    order: VecDeque<String>,
+    seen: HashSet<String>,
+    last_wake: Option<Instant>,
+}
+
+impl Recent {
+    /// Whether `id` is new. The oldest id is forgotten once the list is full.
+    fn first_time(&mut self, id: &str) -> bool {
+        if !self.seen.insert(id.to_owned()) {
+            return false;
+        }
+        self.order.push_back(id.to_owned());
+        if self.order.len() > SEEN_LIMIT
+            && let Some(old) = self.order.pop_front()
+        {
+            self.seen.remove(&old);
+        }
+        true
+    }
+}
+
+pub(crate) fn router(secret: String, wake: Arc<Wake>, min_gap: Duration) -> Router {
     Router::new()
         .route("/webhook", post(hook))
         .with_state(Arc::new(App {
             secret: secret.into_bytes(),
             wake,
+            min_gap,
+            recent: Mutex::default(),
         }))
 }
 
@@ -48,13 +82,28 @@ async fn hook(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> S
     if !same(&hex(&hmac_sha256(&app.secret, &body)), signed) {
         return StatusCode::UNAUTHORIZED;
     }
+    let delivery = headers
+        .get("x-github-delivery")
+        .and_then(|v| v.to_str().ok());
+    let mut recent = app.recent.lock().expect("lock");
+    if delivery.is_some_and(|id| !recent.first_time(id)) {
+        return StatusCode::ACCEPTED;
+    }
     let action = serde_json::from_slice::<Value>(&body)
         .ok()
         .and_then(|v| v["action"].as_str().map(str::to_owned));
     if matches!(action.as_deref(), Some("transferred" | "deleted")) {
         app.wake.reconcile.store(true, Ordering::SeqCst);
     }
-    app.wake.notify.notify_one();
+    // The reconcile flag is kept either way, so the next poll still does it.
+    let now = Instant::now();
+    if recent
+        .last_wake
+        .is_none_or(|t| now.duration_since(t) >= app.min_gap)
+    {
+        recent.last_wake = Some(now);
+        app.wake.notify.notify_one();
+    }
     StatusCode::ACCEPTED
 }
 

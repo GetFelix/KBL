@@ -1151,6 +1151,94 @@ async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
 }
 
 #[tokio::test]
+async fn ingest_cannot_touch_an_item_it_did_not_import() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let ingest = |r| {
+        let t = &t;
+        async move { t.ingest_record(key("ingest-gh"), r).await }
+    };
+    // `mine` is imported by ingest; `theirs` is a person's own item.
+    ingest(WorkRecord::Imported {
+        item: item("mine"),
+        source: "github".into(),
+        upstream_id: "o/r#1".into(),
+        title: "a bug".into(),
+    })
+    .await
+    .unwrap();
+    t.person_record(
+        key("gab"),
+        WorkRecord::Proposed {
+            item: item("theirs"),
+            parent: None,
+            key: key("fix"),
+            work: agents_core::work::WorkKind::Fix,
+            title: "mine to run".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let before = fake.log().len();
+    for record in [
+        WorkRecord::Accepted {
+            item: item("theirs"),
+            tier: Some(0),
+        },
+        WorkRecord::Closed {
+            item: item("theirs"),
+            why: agents_core::work::CloseWhy::Upstream,
+        },
+        WorkRecord::Reopened {
+            item: item("theirs"),
+        },
+        WorkRecord::Linked {
+            item: item("mine"),
+            to: item("theirs"),
+        },
+        WorkRecord::Linked {
+            item: item("theirs"),
+            to: item("mine"),
+        },
+        WorkRecord::Context {
+            item: item("theirs"),
+            entry: key("note"),
+            text: agents_core::content::Content::Text("hi".into()),
+        },
+        WorkRecord::Proposed {
+            item: item("x"),
+            parent: Some(item("theirs")),
+            key: key("triage"),
+            work: agents_core::work::WorkKind::Triage,
+            title: "t".into(),
+        },
+    ] {
+        let err = ingest(record).await.unwrap_err();
+        assert!(
+            matches!(err, Error::Refused { ref why } if why == "not_imported"),
+            "{err}"
+        );
+    }
+    assert_eq!(fake.log().len(), before);
+    // Its own root still works, and a too-long inline text does not.
+    ingest(WorkRecord::Context {
+        item: item("mine"),
+        entry: key("note"),
+        text: agents_core::content::Content::Text("ok".into()),
+    })
+    .await
+    .unwrap();
+    let err = ingest(WorkRecord::Context {
+        item: item("mine"),
+        entry: key("big"),
+        text: agents_core::content::Content::Text("x".repeat(5000)),
+    })
+    .await
+    .unwrap_err();
+    assert!(matches!(err, Error::Refused { why } if why == "too_big"));
+}
+
+#[tokio::test]
 async fn ingest_state_is_kept_with_a_version_and_a_stale_save_is_refused() {
     let fake = Fake::default();
     let t = start(&fake).await;

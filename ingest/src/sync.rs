@@ -28,6 +28,8 @@ use crate::tracker_api::{Appended, Root, Tracker};
 /// Longest comment or body kept in a record, in bytes. Longer text is cut
 /// and says so; the upstream issue has the rest.
 const TEXT_LIMIT: usize = 3500;
+/// Longest title kept in a record, in bytes.
+const TITLE_LIMIT: usize = 200;
 
 pub(crate) struct Settings {
     pub(crate) rules: Vec<Rule>,
@@ -93,14 +95,23 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         let done = self.run(&mut poll, reconcile).await;
         // Saved on failure too, so imports already made are remembered; the
         // cursor only moved if the poll finished.
-        self.tracker
+        let saved = self
+            .tracker
             .save(
                 name,
                 &serde_json::to_value(&poll.state).map_err(anyhow::Error::from)?,
                 version,
             )
-            .await?;
-        done
+            .await;
+        match (done, saved) {
+            (Err(run), Err(save)) => {
+                eprintln!("agents-ingest: the state was not saved either: {save:#}");
+                Err(run)
+            }
+            (Err(run), Ok(_)) => Err(run),
+            (Ok(()), Err(save)) => Err(save.into()),
+            (Ok(()), Ok(_)) => Ok(()),
+        }
     }
 
     async fn run(&self, p: &mut Poll, reconcile: bool) -> Result<(), SourceError> {
@@ -159,8 +170,14 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             p.state
                 .items
                 .insert(key.clone(), tracked(&item, &rule, issue));
-            if rule.mode == Mode::Admit && root.stage == "triage" {
-                self.admit(&item, &rule, issue).await?;
+            // The writes below are idempotent, so each step the crashed poll
+            // may not have reached is redone.
+            self.context(&item, "issue", issue_text(issue)).await?;
+            self.context(&item, "intake", intake_text(&rule, issue))
+                .await?;
+            if rule.mode == Mode::Admit && !root.closed {
+                self.admit(&item, &rule, issue, root.stage == "triage")
+                    .await?;
             }
             p.touched.push(key);
             return Ok(());
@@ -177,7 +194,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             item: item.clone(),
             source: self.source.name().to_owned(),
             upstream_id: key.clone(),
-            title: issue.title.clone(),
+            title: cut_title(&issue.title),
         };
         match self.tracker.append(&imported).await? {
             Appended::Written => {}
@@ -192,7 +209,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         self.context(&item, "intake", intake_text(&rule, issue))
             .await?;
         if rule.mode == Mode::Admit {
-            self.admit(&item, &rule, issue).await?;
+            self.admit(&item, &rule, issue, true).await?;
         }
         p.roots.insert(
             key.clone(),
@@ -217,13 +234,23 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         Ok(())
     }
 
-    /// An admitted root starts accepted, with one triage item and one augment item.
-    async fn admit(&self, item: &ItemId, rule: &Rule, issue: &Issue) -> Result<(), SourceError> {
-        self.write(&WorkRecord::Accepted {
-            item: item.clone(),
-            tier: Some(rule.tier_for(issue)),
-        })
-        .await?;
+    /// An admitted root starts accepted, with one triage item and one augment
+    /// item. `accept` is false once a person may have acted on the root, so a
+    /// retry does not undo their tier.
+    async fn admit(
+        &self,
+        item: &ItemId,
+        rule: &Rule,
+        issue: &Issue,
+        accept: bool,
+    ) -> Result<(), SourceError> {
+        if accept {
+            self.write(&WorkRecord::Accepted {
+                item: item.clone(),
+                tier: Some(rule.tier_for(issue)),
+            })
+            .await?;
+        }
         for (suffix, work, key, title) in [
             ("t", WorkKind::Triage, "triage", "Triage"),
             ("a", WorkKind::Augment, "augment", "Augment"),
@@ -233,7 +260,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 parent: Some(item.clone()),
                 key: Key::new(key).map_err(anyhow::Error::from)?,
                 work,
-                title: format!("{title}: {}", issue.title),
+                title: cut_title(&format!("{title}: {}", issue.title)),
             })
             .await?;
         }
@@ -260,18 +287,21 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     })
                     .await?;
                     set_closed(p, &key, true);
+                    t.closed_by_us = true;
                 }
                 t.closed = Some(how);
                 p.state.items.insert(key, t);
                 return Ok(());
             }
             (Some(_), None) => {
-                if root.closed {
+                // A root a person dismissed stays closed.
+                if root.closed && t.closed_by_us {
                     self.write(&WorkRecord::Reopened {
                         item: t.item.clone(),
                     })
                     .await?;
                     set_closed(p, &key, false);
+                    t.closed_by_us = false;
                 }
                 t.closed = None;
                 t.written_back = false;
@@ -306,7 +336,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 if fp != t.fingerprint {
                     self.write(&WorkRecord::Updated {
                         item: t.item.clone(),
-                        title: (issue.title != t.title).then(|| issue.title.clone()),
+                        title: (issue.title != t.title).then(|| cut_title(&issue.title)),
                     })
                     .await?;
                     self.context(&t.item, "issue", issue_text(issue)).await?;
@@ -425,6 +455,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             })
             .await?;
             set_closed(p, key, true);
+            if let Some(t) = p.state.items.get_mut(key) {
+                t.closed_by_us = true;
+            }
         }
         if let Some(t) = p.state.items.get_mut(key) {
             t.closed = Some(Closed::Dropped);
@@ -507,7 +540,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .roots
                 .get(&key)
                 .and_then(|r| r.pr.as_deref())
-                .and_then(IssueRef::parse);
+                .and_then(IssueRef::parse)
+                .filter(|pr| self.may_write_to(&key, pr));
             if let Some(pr) = pr {
                 let note = format!(
                     "{key} was closed upstream as not planned, so this pull request is now a draft. \
@@ -522,6 +556,24 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             }
         }
         Ok(())
+    }
+
+    /// The pull request comes from an agent, so it is trusted only in the
+    /// repo of the issue it works on, and only if a rule takes that repo.
+    fn may_write_to(&self, key: &str, pr: &IssueRef) -> bool {
+        let Some(issue) = IssueRef::parse(key) else {
+            return false;
+        };
+        let named = self
+            .settings
+            .rules
+            .iter()
+            .any(|r| r.repo.eq_ignore_ascii_case(&issue.repo));
+        let allowed = named && pr.repo.eq_ignore_ascii_case(&issue.repo);
+        if !allowed {
+            eprintln!("agents-ingest: ignoring the pull request {pr} for {key}: not in its repo");
+        }
+        allowed
     }
 
     // ---- writes ----
@@ -564,6 +616,7 @@ fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
         pending_links: Default::default(),
         linked: Default::default(),
         written_back: false,
+        closed_by_us: false,
         moved_to: None,
     }
 }
@@ -631,6 +684,14 @@ fn intake_text(rule: &Rule, issue: &Issue) -> String {
         rule.name,
         rule.tier_for(issue)
     )
+}
+
+fn cut_title(s: &str) -> String {
+    let mut end = TITLE_LIMIT.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_owned()
 }
 
 /// Text cut at a character boundary to fit a record.

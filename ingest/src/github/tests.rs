@@ -105,6 +105,53 @@ async fn pages_are_followed_and_a_cut_listing_resumes_where_it_stopped() {
 }
 
 #[tokio::test]
+async fn a_truncated_listing_of_only_pull_requests_still_moves_the_cursor() {
+    let gh = Script::default();
+    let next = "<https://api.github.com/repos/GetFelix/felix/issues?page=2>; rel=\"next\"";
+    let mut pr = issue(900, |_| {});
+    pr["pull_request"] = json!({ "url": "x" });
+    pr["updated_at"] = json!("2026-11-10T09:00:00Z");
+    gh.on(
+        "GET",
+        "/issues?state",
+        with(ok(json!([pr.clone()])), &[("link", next)]),
+    );
+    pr["updated_at"] = json!("2026-11-10T10:00:00Z");
+    gh.on("GET", "page=2", with(ok(json!([pr])), &[("link", next)]));
+    let before = Cursor {
+        issues_since: Some("2026-11-01T00:00:00Z".into()),
+        ..Cursor::default()
+    };
+    let changes = github(&gh).changed(&repos(), &before).await.unwrap();
+    assert!(changes.issues.is_empty());
+    assert_eq!(
+        changes.cursor.issues_since.as_deref(),
+        Some("2026-11-10T10:00:00Z")
+    );
+}
+
+#[tokio::test]
+async fn a_missing_repo_or_a_malformed_item_does_not_stop_the_other_repos() {
+    let gh = Script::default();
+    gh.on("GET", "/repos/Gone/repo/issues?", status(404, &[]));
+    let mut bad = issue(5, |_| {});
+    bad.as_object_mut().unwrap().remove("number");
+    gh.on(
+        "GET",
+        "/repos/GetFelix/felix/issues?",
+        ok(json!([bad, issue(6, |_| {})])),
+    );
+    let repos = vec!["Gone/repo".to_owned(), "GetFelix/felix".to_owned()];
+    let changes = github(&gh)
+        .changed(&repos, &Cursor::default())
+        .await
+        .unwrap();
+    assert_eq!(changes.issues.len(), 1);
+    assert_eq!(changes.issues[0].id.number, 6);
+    assert!(changes.cursor.issues_since.is_some());
+}
+
+#[tokio::test]
 async fn an_unchanged_listing_is_asked_with_its_etag_and_costs_nothing() {
     let gh = Script::default();
     gh.on("GET", "/issues/comments?", ok(json!([])));

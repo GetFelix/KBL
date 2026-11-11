@@ -149,6 +149,112 @@ async fn an_issue_is_imported_once_across_re_polls_and_a_lost_cursor() {
     assert_eq!(rig.tracker.state().items.len(), 3);
 }
 
+fn imported_record() -> WorkRecord {
+    WorkRecord::Imported {
+        item: item_id(UP),
+        source: "github".into(),
+        upstream_id: UP.into(),
+        title: "stale read".into(),
+    }
+}
+
+async fn finishes_the_import(first: Vec<WorkRecord>) {
+    let rig = rig();
+    for r in first {
+        rig.tracker.append(&r).await.unwrap();
+    }
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    let root = &s.items[&item_id(UP)];
+    let entries: Vec<_> = root.context.keys().map(|k| k.as_str().to_owned()).collect();
+    assert_eq!(entries, ["intake", "issue"]);
+    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.children.len(), 2);
+    assert_eq!(s.stage(&root.id), Some(Stage::Ready));
+    assert_eq!(rig.tracker.count("imported"), 1);
+}
+
+#[tokio::test]
+async fn a_crash_right_after_imported_is_finished_by_the_next_poll() {
+    finishes_the_import(vec![imported_record()]).await;
+}
+
+#[tokio::test]
+async fn a_crash_right_after_accepted_is_finished_by_the_next_poll() {
+    finishes_the_import(vec![
+        imported_record(),
+        WorkRecord::Accepted {
+            item: item_id(UP),
+            tier: Some(1),
+        },
+    ])
+    .await;
+}
+
+#[tokio::test]
+async fn a_pull_request_in_another_repo_is_never_written_to() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.hold(UP, Some("Other/repo#2210"));
+    rig.gh.on("GET", "/pulls/2210", ok(fixture("pull")));
+    rig.gh.on("POST", "/graphql", ok(json!({ "data": {} })));
+    rig.gh.on("POST", "/comments", status(201, &[]));
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "not_planned",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.gh.sent().iter().all(|r| !r.url.contains("Other/repo")));
+    assert!(rig.gh.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_root_a_person_dismissed_is_not_reopened_with_the_issue() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.tracker
+        .append(&WorkRecord::Closed {
+            item: item.clone(),
+            why: CloseWhy::Dismissed,
+        })
+        .await
+        .unwrap();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("reopened"), 0);
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Dismissed)
+    );
+}
+
+#[test]
+fn only_a_plain_owner_repo_number_is_a_reference() {
+    assert!(IssueRef::parse("GetFelix/felix#812").is_some());
+    for bad in [
+        "a/b/c#1", "a/b#+1", "a/b#01", "a/b#0x1", "/b#1", "a/#1", "a/../b#1", "a b/c#1", "a/b#1#2",
+        "a/b",
+    ] {
+        assert!(IssueRef::parse(bad).is_none(), "{bad}");
+    }
+}
+
 #[tokio::test]
 async fn an_issue_that_matches_no_rule_or_an_excluded_label_is_not_imported() {
     let rig = rig();
