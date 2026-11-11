@@ -52,8 +52,7 @@ the same log:
 - **Why is this line here.** From a hunk in the diff to the `edit` that made
   it, the decision that edit carries out, and the evidence that decision
   cites. This is the question reviewers actually ask.
-- **Replay.** The run's timeline, filtered to this item, scrubbed step by step
-  as the swarm view does.
+- **Replay.** The run's timeline, filtered to this item, scrubbed step by step.
 
 **Explained where you stop.** When the reviewer lets go of the scrubber, or
 steps to a point with the arrow keys, a short panel says three things about
@@ -157,7 +156,7 @@ which feeds the trust numbers on the metrics tab.
 - The `work.events` stream gives every record one order across agents,
   people and attempts, which a story needs.
 - Offsets are the citations. Range reads and the fold give any point in the
-  history in under a second (demonstration 4).
+  history in under a second (demonstration 5).
 - The recorded publisher makes authorship verified, not claimed. Through
   felix-gateway this needs gaps 7 and 9.
 - Large outputs (test logs, model responses) are artifacts by hash, so a

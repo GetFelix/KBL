@@ -9,7 +9,7 @@
 - Felix is the only backend. A feature that needs a database, a queue or a coordinator process of ours is out of scope.
 - The model is untrusted. Anything an agent must not be able to do is enforced by a Felix grant on that agent's token, never only by a check in `felix-mcp`.
 - Every coordination step goes on the run log, refusals included. If the viewer cannot replay it, it did not happen.
-- The demo must run without a model. Every agent role has a scripted stand-in, and CI uses it.
+- Tests must run without a model. Every agent role has a scripted stand-in, and CI uses it.
 - Plain TypeScript in `viewer/`, no UI framework.
 - Format with `cargo fmt` and prettier. Pin dependency versions.
 

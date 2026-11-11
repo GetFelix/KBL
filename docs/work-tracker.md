@@ -1,6 +1,6 @@
 # A work tracker for coding agents
 
-It applies the swarm in
+It applies the Felix pieces in
 [design.md](design.md) to a job that never ends: bugs arrive from an upstream
 tracker, agents pick up the triage, and coding agents ask for the next piece
 of work, fix it and hand it back.
@@ -37,7 +37,7 @@ operations as MCP tools in `felix-mcp` for agents:
 | Tool | Does |
 |---|---|
 | `work_next` | Claims the highest-priority ready item the agent can take |
-| `work_extend` | Keeps the claim while the agent works (done by `felix-mcp`, as for tasks) |
+| `work_extend` | Keeps the claim while the agent works (sent by `felix-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency between items |
 | `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal |
@@ -45,20 +45,89 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)) |
 
-The `felix-mcp` work tools call the tracker over REST with the agent's own
-token. The tracker validates each call and does the Felix writes itself, so an
-agent never writes the work streams or keys directly.
+Every `felix-mcp` work tool, claiming included, calls the tracker over REST
+with the agent's own token. The tracker checks the token, does the Felix work
+itself and logs it in the same step, so an agent never touches the work
+streams or keys. `work_next` polls the ready streams' consumer group as a
+member named after the agent; `work_extend`, `work_complete` and
+`work_release` extend, ack or nack that delivery. A claim is never held
+without a `claimed` record, and an item is never acked before its `done`
+record is written. An agent that dies stops extending, its claim lapses, and
+the group hands the item to another agent.
+
+The agent named on each record is the one the tracker authenticated. Felix
+records the tracker as the publisher of every `work.events` record, so the
+agent's identity is the tracker's attestation, written into the record.
 
 An ingest worker pulls new and changed items from GitHub, ADO or Jira. For each
 root it posts one triage item and one augment item, once. Triaging again is a
 person's action. People edit any record through REST or the viewer.
+
+```mermaid
+flowchart LR
+    subgraph Sources
+        GH[GitHub]
+        ADO[Azure DevOps]
+        JIRA[Jira]
+        P[People, in the dashboard]
+    end
+    subgraph Agents
+        A1[Agent + felix-mcp]
+        A2[Agent + felix-mcp]
+    end
+    subgraph Kibble
+        T[Tracker]
+    end
+    subgraph Felix
+        WE[(work.events)]
+        RD[(work.ready.p0 to p3<br/>one consumer group)]
+        KV[(item and budget keys)]
+    end
+    D[Dashboard]
+    GH --> T
+    ADO --> T
+    JIRA --> T
+    P --> T
+    A1 <--> T
+    A2 <--> T
+    T -- every change --> WE
+    T -- ready items --> RD
+    RD -- claims, as a member per agent --> T
+    T --> KV
+    WE -- fold --> D
+```
+
+Everything goes through the tracker: imports, people's actions and every
+agent call. It is the only writer of `work.events`, the ready streams and the
+keys, and the dashboard is a fold of `work.events`.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent (felix-mcp)
+    participant T as Tracker
+    participant G as Ready streams (consumer group)
+    participant L as work.events
+    A->>T: work_next (agent token)
+    T->>G: poll as member "agent"
+    G-->>T: item, 90 s visibility
+    T->>L: claimed
+    T-->>A: item
+    loop every 30 s while working
+        A->>T: work_extend
+        T->>G: extend
+    end
+    A->>T: work_complete
+    T->>L: done
+    T->>G: ack
+    Note over A,G: An agent that stops extending loses the claim after 90 s and the group hands the item to another agent.
+```
 
 ### Grants
 
 | Principal | May do |
 |---|---|
 | The tracker | The only publisher of `work.events` and `work.ready.*`, and the only writer of item and budget keys |
-| An agent | Call the tracker with its own token. Claim from `work.ready.*` through its consumer group. Read items and the stream |
+| An agent | Call the tracker with its own token, for claims and everything else. Read items and the stream. No access to `work.ready.*` |
 | A person | Use the dashboard and REST. Their actions reach `work.events` through the tracker |
 | The viewer | Read only |
 
@@ -88,7 +157,7 @@ the tracker to think, because the tracker does not.
 
 ## The Felix mapping
 
-It reuses the pieces the swarm already has. No database.
+It reuses the pieces the run resources already use. No database.
 
 - **`work.events` is the record.** Every change is a record: imported,
   triaged, linked, context added, claimed, progress, done. The board view and
@@ -100,8 +169,9 @@ It reuses the pieces the swarm already has. No database.
   is the board pattern.
 - **Only ready items are claimable.** The tracker folds `work.events`, and when
   an item's last dependency is done it publishes the item to a ready stream.
-  Agents claim from that stream through a consumer group, with the 90 second
-  visibility and 30 second extension that tasks use. A dead agent's item goes
+  The tracker claims from that stream for agents through one consumer group,
+  as a member named after each agent, with the 90 second visibility and 30
+  second extension that tasks use. A dead agent's item goes
   back to the queue.
 - **Priority is a stream per tier.** A group hands records out in offset order,
   so `work_next` polls `work.ready.p0` first, then `p1`, and so on.
@@ -155,8 +225,8 @@ reported or measured.
 
 ## The dashboard
 
-The swarm view shows one run. The dashboard shows everything before and around
-runs: what waits on you, where work is piling up, and what the team delivered.
+The dashboard shows everything before and around
+an attempt: what waits on you, where work is piling up, and what the team delivered.
 It is the page someone opens first in the morning. It has three tabs.
 
 ### My queue
@@ -276,12 +346,19 @@ These come from `work.events` alone. Cost and minutes arrive as `cost` and
 [dashboard-research.md](dashboard-research.md) says why each part is there and
 how much evidence stands behind it.
 
-The look is fixed the same way as the swarm view's: `prototype/intake-frame.html`
+The look is fixed in a style frame before anything talks to Felix: `prototype/intake-frame.html`
 folds a hand-written `work.events` fixture (three trackers, a blocked chain, items
 waiting on a person, held items, PRs in review, two weeks of finished work), a
 copy with the review limit reached, and a generated burst of 320 items.
 `node scripts/check-intake.mjs` checks them, including that My queue matches
 what waits on the viewer and that actions append records.
+
+**Look.** Felix cyan-teal (`hsl(192, 90%, 46%)` dark, `hsl(192, 90%, 40%)` light) is work in
+motion and the current selection. Amber is for trouble the system handled, and red
+only for a refusal, so red always means Felix said no. Shapes carry meaning before
+colour does, so the page reads in greyscale. Inter is for names and labels and
+JetBrains Mono for ids, offsets, versions, counts and money. It is dark by default
+with a light theme, and `prefers-reduced-motion` turns movement into a single flash.
 
 ![My queue](screenshots/dashboard-queue.png)
 

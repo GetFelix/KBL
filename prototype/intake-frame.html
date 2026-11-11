@@ -1114,7 +1114,7 @@ function detailHtml(it, chain) {
         `${it.pr.rated ? `<div class="rated">Marked ${esc(it.pr.rated)}</div>` : ''}</div>` : '');
   } else if (stage === 'done') body = `<div class="blk">Merged by ${esc(it.by)} as <a href="#pr/${it.prNum}" data-open>PR ${esc(it.prNum)}</a>.</div>`;
   body += storyBlock(it);
-  const run = it.holder && it.run ? ` · <a href="#run/${esc(it.run)}" title="Opens the run in the swarm view at the claim">open run ${esc(it.run)}</a>` : '';
+  const run = it.holder && it.run ? ` · <a href="#run/${esc(it.run)}" title="Opens the run at the claim">open run ${esc(it.run)}</a>` : '';
   let chainHtml = '';
   if (chain) {
     const chip = (k) => { const o = state.items.get(k); return `<button data-k="${esc(k)}" title="${esc(o.title)}">${esc(o.ref)}</button><span class="st">${esc(STAGE_NAME[o.stage] ?? o.stage)}${o.holder ? `, ${esc(o.holder)}` : ''}</span><span class="gap"></span>`; };
