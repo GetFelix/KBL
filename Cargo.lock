@@ -13,6 +13,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "agents-ingest"
+version = "0.0.0"
+dependencies = [
+ "agents-core",
+ "anyhow",
+ "axum",
+ "clap",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+]
+
+[[package]]
 name = "agents-tool"
 version = "0.0.0"
 dependencies = [

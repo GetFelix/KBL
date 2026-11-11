@@ -1,0 +1,10 @@
+{
+  "url": "https://api.github.com/repos/GetFelix/felix/pulls/2210",
+  "number": 2210,
+  "node_id": "PR_kwDOAAAA2210",
+  "state": "open",
+  "draft": false,
+  "title": "Fix the stale read",
+  "user": { "login": "kibble[bot]", "type": "Bot" },
+  "merged": false
+}

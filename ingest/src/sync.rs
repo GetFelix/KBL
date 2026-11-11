@@ -1,0 +1,649 @@
+//! One poll: read what changed upstream, compare it with what ingest
+//! imported, and write the difference to the tracker.
+//!
+//! Every step is idempotent, because a poll can stop anywhere (a rate limit,
+//! a crash) and the next one starts from the saved cursor, listing some
+//! issues again. The tracker's fold refuses a second `imported` for an
+//! upstream id, which is what makes an issue import once; ingest's own state
+//! only avoids asking again.
+//!
+//! The upstream-change table is in docs/work-tracker.md.
+
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+use agents_core::content::Content;
+use agents_core::names::{ItemId, Key};
+use agents_core::work::{CloseWhy, WorkKind, WorkRecord};
+use anyhow::Context;
+use sha2::{Digest, Sha256};
+
+use crate::config::{Mode, Rule};
+use crate::rules::first_match;
+use crate::source::{
+    Changes, Closed, Comment, Fetched, Issue, IssueRef, Source, SourceError, WriteBack,
+};
+use crate::state::{State, Tracked};
+use crate::tracker_api::{Appended, Root, Tracker};
+
+/// Longest comment or body kept in a record, in bytes. Longer text is cut
+/// and says so; the upstream issue has the rest.
+const TEXT_LIMIT: usize = 3500;
+
+pub(crate) struct Settings {
+    pub(crate) rules: Vec<Rule>,
+    pub(crate) repos: Vec<String>,
+    /// Polls between full reconciles, which notice transfers and deletions.
+    pub(crate) reconcile_every: u32,
+}
+
+pub(crate) struct Ingest<S, T> {
+    source: S,
+    tracker: T,
+    settings: Settings,
+    /// Lower-cased logins of our own credential.
+    own: HashSet<String>,
+}
+
+/// What one poll knows about the tracker's side, kept current as it writes.
+struct Poll {
+    state: State,
+    /// Imported roots by upstream id.
+    roots: HashMap<String, Root>,
+    /// Issues seen this poll that are open and in scope, whose links to read.
+    touched: Vec<String>,
+}
+
+impl<S: Source, T: Tracker> Ingest<S, T> {
+    pub(crate) fn new(source: S, tracker: T, settings: Settings) -> Self {
+        let own = source
+            .own_logins()
+            .iter()
+            .map(|l| l.to_ascii_lowercase())
+            .collect();
+        Self {
+            source,
+            tracker,
+            settings,
+            own,
+        }
+    }
+
+    /// Polls once. `reconcile` forces a full reconcile now (a webhook said an
+    /// issue was transferred or deleted).
+    pub(crate) async fn poll(&self, reconcile: bool) -> Result<(), SourceError> {
+        let name = self.source.name();
+        let (saved, version) = self.tracker.load(name).await?;
+        let state: State = match saved {
+            Some(v) => serde_json::from_value(v).context("the saved ingest state is unreadable")?,
+            None => State::default(),
+        };
+        let roots = self
+            .tracker
+            .roots()
+            .await?
+            .into_iter()
+            .filter(|r| r.source == name)
+            .map(|r| (r.upstream_id.clone(), r))
+            .collect();
+        let mut poll = Poll {
+            state,
+            roots,
+            touched: Vec::new(),
+        };
+        let done = self.run(&mut poll, reconcile).await;
+        // Saved on failure too, so imports already made are remembered; the
+        // cursor only moved if the poll finished.
+        self.tracker
+            .save(
+                name,
+                &serde_json::to_value(&poll.state).map_err(anyhow::Error::from)?,
+                version,
+            )
+            .await?;
+        done
+    }
+
+    async fn run(&self, p: &mut Poll, reconcile: bool) -> Result<(), SourceError> {
+        let Changes {
+            issues,
+            comments,
+            cursor,
+        } = self
+            .source
+            .changed(&self.settings.repos, &p.state.cursor)
+            .await?;
+        for issue in issues {
+            self.on_issue(p, &issue).await?;
+        }
+        for c in comments {
+            self.on_comment(p, &c).await?;
+        }
+        self.retry_waiting(p).await?;
+        p.state.polls += 1;
+        if reconcile || p.state.polls >= self.settings.reconcile_every {
+            p.state.polls = 0;
+            self.reconcile(p).await?;
+        }
+        self.link(p).await?;
+        self.write_back(p).await?;
+        p.state.cursor = cursor;
+        Ok(())
+    }
+
+    // ---- issues ----
+
+    async fn on_issue(&self, p: &mut Poll, issue: &Issue) -> Result<(), SourceError> {
+        let key = issue.id.to_string();
+        match p.state.items.get(&key).cloned() {
+            None => self.consider(p, issue).await,
+            Some(t) if t.moved_to.is_some() => Ok(()),
+            Some(t) => self.follow(p, issue, t).await,
+        }
+    }
+
+    /// An issue ingest has not imported: import it if a rule takes it and the
+    /// rule has room, or leave it waiting upstream.
+    async fn consider(&self, p: &mut Poll, issue: &Issue) -> Result<(), SourceError> {
+        let key = issue.id.to_string();
+        let rule = match first_match(&self.settings.rules, issue) {
+            Some(r) if issue.closed.is_none() => r.clone(),
+            _ => {
+                p.state.waiting.remove(&key);
+                return Ok(());
+            }
+        };
+        if let Some(root) = p.roots.get(&key).cloned() {
+            // Imported by a poll that stopped before it saved.
+            let item = root.item.clone();
+            p.state.waiting.remove(&key);
+            p.state
+                .items
+                .insert(key.clone(), tracked(&item, &rule, issue));
+            if rule.mode == Mode::Admit && root.stage == "triage" {
+                self.admit(&item, &rule, issue).await?;
+            }
+            p.touched.push(key);
+            return Ok(());
+        }
+        if let Some(cap) = rule.cap
+            && open_roots(p, &rule.name) >= cap as usize
+        {
+            p.state.waiting.insert(key);
+            return Ok(());
+        }
+        p.state.waiting.remove(&key);
+        let item = item_id(&key);
+        let imported = WorkRecord::Imported {
+            item: item.clone(),
+            source: self.source.name().to_owned(),
+            upstream_id: key.clone(),
+            title: issue.title.clone(),
+        };
+        match self.tracker.append(&imported).await? {
+            Appended::Written => {}
+            // Someone else's root has this id: it is imported, so leave it.
+            Appended::Refused(why) if why == "duplicate" => {}
+            Appended::Refused(why) => {
+                eprintln!("agents-ingest: {key} was not imported: {why}");
+                return Ok(());
+            }
+        }
+        self.context(&item, "issue", issue_text(issue)).await?;
+        self.context(&item, "intake", intake_text(&rule, issue))
+            .await?;
+        if rule.mode == Mode::Admit {
+            self.admit(&item, &rule, issue).await?;
+        }
+        p.roots.insert(
+            key.clone(),
+            Root {
+                item: item.clone(),
+                source: self.source.name().to_owned(),
+                upstream_id: key.clone(),
+                stage: if rule.mode == Mode::Admit {
+                    "ready"
+                } else {
+                    "triage"
+                }
+                .to_owned(),
+                closed: false,
+                pr: None,
+            },
+        );
+        p.state
+            .items
+            .insert(key.clone(), tracked(&item, &rule, issue));
+        p.touched.push(key);
+        Ok(())
+    }
+
+    /// An admitted root starts accepted, with one triage item and one augment item.
+    async fn admit(&self, item: &ItemId, rule: &Rule, issue: &Issue) -> Result<(), SourceError> {
+        self.write(&WorkRecord::Accepted {
+            item: item.clone(),
+            tier: Some(rule.tier_for(issue)),
+        })
+        .await?;
+        for (suffix, work, key, title) in [
+            ("t", WorkKind::Triage, "triage", "Triage"),
+            ("a", WorkKind::Augment, "augment", "Augment"),
+        ] {
+            self.write(&WorkRecord::Proposed {
+                item: ItemId::new(format!("{item}-{suffix}")).map_err(anyhow::Error::from)?,
+                parent: Some(item.clone()),
+                key: Key::new(key).map_err(anyhow::Error::from)?,
+                work,
+                title: format!("{title}: {}", issue.title),
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// An issue ingest imported before.
+    async fn follow(&self, p: &mut Poll, issue: &Issue, mut t: Tracked) -> Result<(), SourceError> {
+        let key = issue.id.to_string();
+        let Some(root) = p.roots.get(&key).cloned() else {
+            eprintln!("agents-ingest: {key} is tracked but the tracker has no root for it");
+            return Ok(());
+        };
+        match (t.closed, issue.closed) {
+            (None, Some(how)) => {
+                if !root.closed {
+                    let why = match how {
+                        Closed::Completed => CloseWhy::Completed,
+                        Closed::Dropped => CloseWhy::Upstream,
+                    };
+                    self.write(&WorkRecord::Closed {
+                        item: t.item.clone(),
+                        why,
+                    })
+                    .await?;
+                    set_closed(p, &key, true);
+                }
+                t.closed = Some(how);
+                p.state.items.insert(key, t);
+                return Ok(());
+            }
+            (Some(_), None) => {
+                if root.closed {
+                    self.write(&WorkRecord::Reopened {
+                        item: t.item.clone(),
+                    })
+                    .await?;
+                    set_closed(p, &key, false);
+                }
+                t.closed = None;
+                t.written_back = false;
+                t.in_scope = true;
+            }
+            (Some(_), Some(how)) => {
+                t.closed = Some(how);
+                p.state.items.insert(key, t);
+                return Ok(());
+            }
+            (None, None) => {}
+        }
+        let still_open = p.roots.get(&key).is_some_and(|r| !r.closed);
+        if still_open {
+            let in_rule = self
+                .settings
+                .rules
+                .iter()
+                .find(|r| r.name == t.rule)
+                .is_some_and(|r| r.filter(issue));
+            if !in_rule {
+                if t.in_scope {
+                    self.write(&WorkRecord::LeftScope {
+                        item: t.item.clone(),
+                    })
+                    .await?;
+                    t.in_scope = false;
+                }
+            } else {
+                t.in_scope = true;
+                let fp = fingerprint(issue);
+                if fp != t.fingerprint {
+                    self.write(&WorkRecord::Updated {
+                        item: t.item.clone(),
+                        title: (issue.title != t.title).then(|| issue.title.clone()),
+                    })
+                    .await?;
+                    self.context(&t.item, "issue", issue_text(issue)).await?;
+                    t.fingerprint = fp;
+                    t.title.clone_from(&issue.title);
+                }
+                p.touched.push(key.clone());
+            }
+        }
+        p.state.items.insert(key, t);
+        Ok(())
+    }
+
+    // ---- comments ----
+
+    async fn on_comment(&self, p: &mut Poll, c: &Comment) -> Result<(), SourceError> {
+        // Our own comments (a pull request note) are not new information.
+        if self.own.contains(&c.author.to_ascii_lowercase()) {
+            return Ok(());
+        }
+        let key = c.issue.to_string();
+        let Some(t) = p.state.items.get(&key) else {
+            return Ok(());
+        };
+        if p.roots.get(&key).is_none_or(|r| r.closed)
+            || t.comments.get(&c.id) == Some(&c.updated_at)
+        {
+            return Ok(());
+        }
+        let item = t.item.clone();
+        let text = format!("@{} commented:\n{}", c.author, cut(&c.body));
+        self.context(&item, &format!("gh-c{}", c.id), text).await?;
+        if let Some(t) = p.state.items.get_mut(&key) {
+            t.comments.insert(c.id, c.updated_at.clone());
+        }
+        Ok(())
+    }
+
+    // ---- waiting, reconcile, links, write back ----
+
+    /// Matches that were over their rule's cap, oldest first, as roots close.
+    async fn retry_waiting(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let mut waiting: Vec<IssueRef> = p
+            .state
+            .waiting
+            .iter()
+            .filter_map(|k| IssueRef::parse(k))
+            .collect();
+        waiting.sort();
+        for id in waiting {
+            match self.source.fetch(&id).await? {
+                Fetched::Issue(issue) => self.consider(p, &issue).await?,
+                Fetched::Moved(_) | Fetched::Gone => {
+                    p.state.waiting.remove(&id.to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Fetches each open imported issue, which finds what no listing shows.
+    async fn reconcile(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let keys: Vec<String> = p
+            .state
+            .items
+            .iter()
+            .filter(|(_, t)| t.closed.is_none() && t.moved_to.is_none())
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in keys {
+            let Some(id) = IssueRef::parse(&key) else {
+                continue;
+            };
+            match self.source.fetch(&id).await? {
+                Fetched::Issue(issue) => self.on_issue(p, &issue).await?,
+                Fetched::Moved(to) => self.moved(p, &key, &to).await?,
+                Fetched::Gone => self.gone(p, &key).await?,
+            }
+        }
+        Ok(())
+    }
+
+    /// Transferred: the same item under its new id, with a record of the move.
+    async fn moved(&self, p: &mut Poll, old: &str, to: &IssueRef) -> Result<(), SourceError> {
+        let new = to.to_string();
+        let Some(t) = p.state.items.get(old).cloned() else {
+            return Ok(());
+        };
+        if p.state.items.contains_key(&new) {
+            return Ok(());
+        }
+        let text = format!("Moved upstream from {old} to {new}.");
+        self.context(&t.item, "moved", text).await?;
+        if let Some(root) = p.roots.get(old).cloned() {
+            p.roots.insert(new.clone(), root);
+        }
+        p.state.items.insert(new.clone(), t);
+        if let Some(o) = p.state.items.get_mut(old) {
+            o.moved_to = Some(new.clone());
+        }
+        match self.source.fetch(to).await? {
+            Fetched::Issue(issue) => self.on_issue(p, &issue).await,
+            _ => Ok(()),
+        }
+    }
+
+    /// Deleted upstream, or no longer visible: dropped.
+    async fn gone(&self, p: &mut Poll, key: &str) -> Result<(), SourceError> {
+        let (Some(t), Some(root)) = (p.state.items.get(key).cloned(), p.roots.get(key)) else {
+            return Ok(());
+        };
+        if !root.closed {
+            self.write(&WorkRecord::Closed {
+                item: t.item.clone(),
+                why: CloseWhy::Upstream,
+            })
+            .await?;
+            set_closed(p, key, true);
+        }
+        if let Some(t) = p.state.items.get_mut(key) {
+            t.closed = Some(Closed::Dropped);
+        }
+        Ok(())
+    }
+
+    /// Blocked-by and sub-issue links become edges once both ends are imported.
+    async fn link(&self, p: &mut Poll) -> Result<(), SourceError> {
+        for key in std::mem::take(&mut p.touched) {
+            let Some(id) = IssueRef::parse(&key) else {
+                continue;
+            };
+            let links = self.source.links(&id).await?;
+            if let Some(t) = p.state.items.get_mut(&key) {
+                let found: Vec<String> = links
+                    .blocked_by
+                    .iter()
+                    .chain(&links.sub_issues)
+                    .map(ToString::to_string)
+                    .filter(|l| !t.linked.contains(l))
+                    .collect();
+                t.pending_links.extend(found);
+            }
+        }
+        let waiting: Vec<(String, ItemId, Vec<String>)> = p
+            .state
+            .items
+            .iter()
+            .filter(|(_, t)| !t.pending_links.is_empty() && t.closed.is_none())
+            .map(|(k, t)| {
+                (
+                    k.clone(),
+                    t.item.clone(),
+                    t.pending_links.iter().cloned().collect(),
+                )
+            })
+            .collect();
+        for (key, item, pending) in waiting {
+            for to in pending {
+                let Some(other) = p.state.items.get(&to).map(|o| o.item.clone()) else {
+                    continue;
+                };
+                match self
+                    .tracker
+                    .append(&WorkRecord::Linked {
+                        item: item.clone(),
+                        to: other,
+                    })
+                    .await?
+                {
+                    Appended::Written => {}
+                    Appended::Refused(why) => {
+                        eprintln!("agents-ingest: link {key} -> {to} refused: {why}");
+                    }
+                }
+                if let Some(t) = p.state.items.get_mut(&key) {
+                    t.pending_links.remove(&to);
+                    t.linked.insert(to);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// An issue dropped while an agent's pull request is open: the request
+    /// becomes a draft with a note. Retried until it succeeds.
+    async fn write_back(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let due: Vec<String> = p
+            .state
+            .items
+            .iter()
+            .filter(|(_, t)| {
+                t.closed == Some(Closed::Dropped) && !t.written_back && t.moved_to.is_none()
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in due {
+            let pr = p
+                .roots
+                .get(&key)
+                .and_then(|r| r.pr.as_deref())
+                .and_then(IssueRef::parse);
+            if let Some(pr) = pr {
+                let note = format!(
+                    "{key} was closed upstream as not planned, so this pull request is now a draft. \
+                     Nothing further will be done on it until a person decides."
+                );
+                self.source
+                    .write_back(&WriteBack::DraftPullRequest { pr, note })
+                    .await?;
+            }
+            if let Some(t) = p.state.items.get_mut(&key) {
+                t.written_back = true;
+            }
+        }
+        Ok(())
+    }
+
+    // ---- writes ----
+
+    /// Appends a record. A refusal that says it is already there is fine; any
+    /// other refusal is logged, since the next poll will find the same thing.
+    async fn write(&self, record: &WorkRecord) -> Result<(), SourceError> {
+        match self.tracker.append(record).await? {
+            Appended::Written => {}
+            Appended::Refused(why) if why == "duplicate" => {}
+            Appended::Refused(why) => {
+                eprintln!(
+                    "agents-ingest: a {} record was refused: {why}",
+                    record.kind()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn context(&self, item: &ItemId, entry: &str, text: String) -> Result<(), SourceError> {
+        self.write(&WorkRecord::Context {
+            item: item.clone(),
+            entry: Key::new(entry).map_err(anyhow::Error::from)?,
+            text: Content::Text(text),
+        })
+        .await
+    }
+}
+
+fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
+    Tracked {
+        item: item.clone(),
+        rule: rule.name.clone(),
+        fingerprint: fingerprint(issue),
+        title: issue.title.clone(),
+        closed: None,
+        in_scope: true,
+        comments: BTreeMap::new(),
+        pending_links: Default::default(),
+        linked: Default::default(),
+        written_back: false,
+        moved_to: None,
+    }
+}
+
+/// Open roots the rule has now.
+fn open_roots(p: &Poll, rule: &str) -> usize {
+    p.state
+        .items
+        .iter()
+        .filter(|(_, t)| t.rule == rule && t.moved_to.is_none())
+        .filter(|(k, _)| p.roots.get(*k).is_some_and(|r| !r.closed))
+        .map(|(_, t)| &t.item)
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+fn set_closed(p: &mut Poll, key: &str, closed: bool) {
+    if let Some(r) = p.roots.get_mut(key) {
+        r.closed = closed;
+    }
+}
+
+/// A stable item id for an upstream id, so a retry after a crash names the
+/// same item instead of making a second one.
+pub(crate) fn item_id(upstream: &str) -> ItemId {
+    let digest = Sha256::digest(upstream.as_bytes());
+    let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
+    ItemId::new(format!("g{hex}")).expect("hex is a valid name")
+}
+
+/// Hashes what an edit would change: title, body and labels.
+fn fingerprint(issue: &Issue) -> String {
+    let mut labels: Vec<String> = issue
+        .labels
+        .iter()
+        .map(|l| l.to_ascii_lowercase())
+        .collect();
+    labels.sort();
+    let mut h = Sha256::new();
+    for part in [&issue.title, &issue.body, &labels.join("\n")] {
+        h.update(part.len().to_le_bytes());
+        h.update(part.as_bytes());
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn issue_text(issue: &Issue) -> String {
+    format!(
+        "{} by @{}\n{}\n\n{}",
+        issue.id,
+        issue.author,
+        issue.url,
+        cut(&issue.body)
+    )
+}
+
+fn intake_text(rule: &Rule, issue: &Issue) -> String {
+    let repo = rule.target_repo.as_deref().unwrap_or(&issue.id.repo);
+    let how = match rule.mode {
+        Mode::Admit => "admitted",
+        Mode::Propose => "proposed, waiting for a person to accept it",
+    };
+    format!(
+        "Rule {}: {how}. Work in {repo}. Tier {}.",
+        rule.name,
+        rule.tier_for(issue)
+    )
+}
+
+/// Text cut at a character boundary to fit a record.
+fn cut(s: &str) -> String {
+    if s.len() <= TEXT_LIMIT {
+        return s.to_owned();
+    }
+    let mut end = TEXT_LIMIT;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n[cut; the rest is upstream]", &s[..end])
+}
+
+#[cfg(test)]
+mod tests;
