@@ -236,6 +236,8 @@ cargo build -p felix-mcp -p agents-tool
 node dev/scripted.mjs --seed 2 --workers 3   # runs a job and checks each task ended as the seed says
 node dev/check-scripted.mjs                  # runs one seed twice with different crews and compares
 node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
+node dev/check-death.mjs                     # kills workers holding tasks, restarts one, and finishes a task twice
+node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
 agents-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
 
