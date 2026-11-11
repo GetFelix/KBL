@@ -85,7 +85,7 @@
   #headline.on { display: block; }
   #headline span { color: var(--muted); font-weight: 500; }
 
-  nav { display: none; }
+  #nav { display: none; }
   main { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 18px; }
   .board { position: relative; padding-bottom: 24px; display: grid; grid-template-columns: repeat(7, minmax(150px, 1fr)); gap: 10px; align-items: start; min-width: min-content; }
   #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 3; }
@@ -170,7 +170,7 @@
   .detail .blk { margin-top: 10px; font-size: 12.5px; line-height: 1.45; }
   .detail .blk h4 { margin: 0 0 3px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
   .detail .blk .kv { display: grid; grid-template-columns: 62px 1fr; gap: 2px 8px; }
-  .detail .blk .kv span:nth-child(odd) { color: var(--muted); }
+  .detail .blk .kv > span:nth-child(odd) { color: var(--muted); }
   .detail .blk .unsure { color: var(--amber); }
   .detail .warn { color: var(--amber); }
   .detail .rated { color: var(--cyan); font-weight: 600; }
@@ -247,27 +247,20 @@
   #live.on { background: var(--cyan); border-color: var(--cyan); color: var(--on-cyan); }
 
   @media (max-width: 1100px) {
-    .queue { grid-template-columns: minmax(0, 1fr); }
-    #side { position: static; }
-    .queue.has-sel #side { order: -1; }
-    .queue:not(.has-sel) #side { display: none; }
     .metrics .wide { grid-column: auto; }
   }
   @media (max-width: 760px) {
     header { height: 48px; padding: 0 10px; gap: 8px; }
-    .brand span, .sep { display: none; }
-    .brand img { width: 28px; height: 28px; }
-    .tabs button { padding: 0 8px; font-size: 13px; gap: 5px; }
     #status { padding: 6px 12px; gap: 6px; }
     #status .scope, #status .chip.open { display: none; }
     #headline { padding: 8px 12px 0; font-size: 13px; }
-    nav { display: none; flex: none; gap: 6px; overflow-x: auto; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: none; }
-    nav.on { display: flex; }
-    nav::-webkit-scrollbar { display: none; }
-    nav a { flex: none; display: flex; align-items: baseline; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); font-size: 12px; font-weight: 600; text-decoration: none; }
-    nav a b { font: 600 13px "JetBrains Mono", monospace; color: var(--text); }
-    nav a.you { border-color: var(--cyan); }
-    nav a.you b { color: var(--cyan); }
+    #nav { display: none; flex: none; gap: 6px; overflow-x: auto; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); scrollbar-width: none; }
+    #nav.on { display: flex; }
+    #nav::-webkit-scrollbar { display: none; }
+    #nav a { flex: none; display: flex; align-items: baseline; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); font-size: 12px; font-weight: 600; text-decoration: none; }
+    #nav a b { font: 600 13px "JetBrains Mono", monospace; color: var(--text); }
+    #nav a.you { border-color: var(--cyan); }
+    #nav a.you b { color: var(--cyan); }
     main { padding: 10px 12px 14px; }
     .board { display: flex; flex-direction: column; align-items: stretch; gap: 10px; min-width: 0; }
     #links { display: none; }
@@ -499,41 +492,309 @@
     .dlg { padding: 14px 14px 16px; }
     #modal { align-items: flex-end; padding: 8px; }
   }
+  /* ---------- shell: sidebar, top bar, list, side panel ---------- */
+  #app { flex: 1; min-height: 0; display: flex; }
+  #page { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  #work { flex: 1; min-height: 0; display: flex; }
+  main { padding: 0; container-type: inline-size; }
+  #v-board, #v-metrics, #v-replay { padding: 14px 16px 18px; }
+  .board { grid-template-columns: repeat(7, minmax(170px, 1fr)); }
+  svg.g { flex: none; }
+  .ic { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; color: var(--muted); display: inline-grid; place-items: center; font-size: 15px; }
+  .ic:hover:not(:disabled) { background: var(--card-hover); color: var(--text); }
+  kbd.mod { margin-left: 2px; }
+
+  #sidebar { flex: none; width: 232px; display: flex; flex-direction: column; gap: 2px; padding: 10px 8px 8px; background: var(--panel); border-right: 1px solid var(--line); overflow-y: auto; }
+  body.nosb #sidebar { display: none; }
+  #sidebar .brand { padding: 0 2px 10px 6px; font-size: 14.5px; }
+  #sidebar .brand img { width: 30px; height: 30px; }
+  #sidebar .brand .ic { margin-left: auto; }
+  #palbtn { display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; margin-bottom: 8px; padding: 0 8px; color: var(--muted); background: var(--bg); border-color: var(--line); font-size: 12.5px; text-align: left; }
+  #palbtn span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #snav { display: flex; flex-direction: column; gap: 2px; }
+  .sn { display: flex; align-items: center; gap: 9px; width: 100%; height: 28px; padding: 0 8px; border: 0; border-radius: 6px; color: var(--muted); font-size: 13px; text-align: left; }
+  .sn:hover:not(:disabled) { background: var(--card-hover); color: var(--text); }
+  .sn[aria-current="page"] { background: var(--cyan-soft); color: var(--text); font-weight: 600; }
+  .sn[aria-current="page"] svg.g { color: var(--cyan); }
+  .sn .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sn b { font: 600 11px "JetBrains Mono", monospace; color: var(--muted); }
+  .sn b:empty { display: none; }
+  .sn b.hot { background: var(--cyan); color: var(--on-cyan); border-radius: 999px; padding: 2px 7px; }
+  .sn .tag { width: 30px; text-align: center; padding: 3px 0; }
+  .sh { padding: 14px 8px 4px; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .sfoot { margin-top: auto; display: flex; align-items: center; gap: 2px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .sfoot .me { flex: 1; min-width: 0; display: flex; gap: 8px; align-items: center; font-size: 12.5px; padding-left: 6px; }
+  .avatar { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--cyan-soft); color: var(--cyan); display: grid; place-items: center; font: 600 10.5px Inter, sans-serif; text-transform: uppercase; }
+
+  header { height: 46px; gap: 8px; padding: 0 12px 0 14px; }
+  #menu { display: none; }
+  #vtitle { margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; display: flex; gap: 8px; align-items: baseline; min-width: 0; overflow: hidden; }
+  #vtitle span { font: 500 12px "JetBrains Mono", monospace; color: var(--muted); }
+  .seg { display: flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; height: 28px; margin-left: 6px; }
+  .seg button { border: 0; border-radius: 0; height: 26px; padding: 0 10px; font-size: 12px; font-weight: 600; color: var(--muted); display: flex; gap: 6px; align-items: center; }
+  .seg button[aria-selected="true"] { background: var(--cyan-soft); color: var(--text); }
+  .grow { flex: 1; }
+  #qbox { display: flex; align-items: center; gap: 6px; height: 28px; width: 190px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--muted); }
+  #qbox:focus-within { border-color: var(--cyan); }
+  #q { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: 500 12.5px Inter, sans-serif; }
+  .tb { height: 28px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 0 9px; color: var(--muted); border-color: var(--line); white-space: nowrap; }
+  .tb.primary { background: var(--cyan); border-color: var(--cyan); color: var(--on-cyan); }
+  .tb.primary kbd { background: transparent; color: inherit; border-color: color-mix(in srgb, var(--on-cyan) 45%, transparent); }
+  body[data-view="metrics"] #qbox, body[data-view="replay"] #qbox, body[data-view="metrics"] .workonly, body[data-view="replay"] .workonly, body[data-view="queue"] #layout, body[data-view="metrics"] #layout, body[data-view="replay"] #layout { display: none; }
+
+  #status { padding: 6px 14px; min-height: 39px; }
+  #fchips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-right: auto; min-width: 0; color: var(--muted); }
+  .fchip { height: 26px; border-radius: 7px; border: 1px solid var(--line-strong); font: 500 12px Inter, sans-serif; display: inline-flex; gap: 5px; align-items: center; padding: 0 3px 0 9px; color: var(--muted); white-space: nowrap; }
+  .fchip b { color: var(--text); font-weight: 600; }
+  .fchip i { font-style: normal; color: var(--faint); }
+  .fchip button { border: 0; width: 20px; height: 20px; padding: 0; border-radius: 5px; color: var(--muted); }
+  .fchip button:hover { background: var(--card-hover); }
+  .flink { height: 26px; border: 0; padding: 0 7px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .flink.save { color: var(--cyan); }
+  #headline { padding: 10px 14px 8px; font-size: 13px; border-bottom: 1px solid var(--line); }
+
+  /* rows: My queue and the list */
+  .sti { flex: none; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--muted); display: inline-block; }
+  .sti.s-triage { border-style: dashed; }
+  .sti.s-needs { border-radius: 2px; transform: rotate(45deg) scale(0.8); border-color: var(--cyan); background: var(--cyan); }
+  .sti.s-blocked { background: linear-gradient(var(--muted), var(--muted)) center / 6px 1.5px no-repeat; }
+  .sti.s-held { border-color: var(--cyan); background: conic-gradient(var(--cyan) 50%, transparent 0); }
+  .sti.s-review { border-color: var(--cyan); background: conic-gradient(var(--cyan) 75%, transparent 0); }
+  .sti.s-done { border-color: var(--cyan); background: var(--cyan); }
+  .cb { flex: none; width: 15px; height: 15px; border-radius: 4px; border: 1.5px solid var(--line-strong); display: inline-grid; place-items: center; opacity: 0; cursor: pointer; font: 700 10px/1 Inter, sans-serif; color: var(--on-cyan); }
+  .lrow:hover .cb, .qrow:hover .cb, .row:hover .cb, .cb.on, .anychecked .cb { opacity: 1; }
+  .cb.on { background: var(--cyan); border-color: var(--cyan); }
+  .cb.on::after { content: "✓"; }
+  .row .cb { display: none; margin-right: 2px; }
+  .row:hover .cb, .row .cb.on, .anychecked .row .cb { display: inline-grid; }
+  .lgroup { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 9px; height: 34px; padding: 0 14px 0 12px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 12.5px; font-weight: 600; }
+  .lgroup .n { font: 500 12px "JetBrains Mono", monospace; color: var(--muted); }
+  .lgroup .pc { margin-left: auto; font: 500 11px "JetBrains Mono", monospace; color: var(--muted); }
+  .lgroup .pc.warn b { color: var(--amber); }
+  .lgroup .pc.hot b { color: var(--red); }
+  .lgroup.binding { box-shadow: inset 2px 0 0 var(--amber); }
+  .lrow, .qrow { display: flex; align-items: center; gap: 10px; min-height: 38px; padding: 0 14px 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; cursor: default; outline-offset: -2px; }
+  .lrow:hover, .qrow:hover { background: var(--card-hover); border-color: var(--line); }
+  .lrow.sel, .qrow.sel { background: var(--cyan-soft); box-shadow: inset 2px 0 0 var(--cyan); border-color: var(--line); }
+  .lrow.checked, .qrow.checked, .row.checked { background: var(--cyan-soft); }
+  .lrow .ref { flex: none; width: 74px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .lrow .ti, .qrow .ti { flex: 1 1 0; min-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 13px; }
+  .lrow .st { flex: 0 0 32%; min-width: 0; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .lrow .st > .note, .lrow .st .note { margin: 0; }
+  .lrow .marks, .qrow .marks { margin-top: 0; flex: none; flex-wrap: nowrap; }
+  .lrow .asg { flex: none; width: 34px; text-align: center; }
+  .lrow .tc { flex: none; width: 26px; text-align: center; }
+  .lrow .tag { flex: none; width: 34px; text-align: center; padding: 3px 0; }
+  .lrow .age, .qrow .age { flex: none; width: 34px; margin-left: 0; padding-left: 0; text-align: right; }
+  .list .more { margin: 6px 12px; width: calc(100% - 24px); }
+  .qrow { align-items: flex-start; padding-top: 9px; padding-bottom: 9px; }
+  .qrow .cb { margin-top: 2px; }
+  .qrow .kind { flex: none; width: 62px; margin-top: 4px; }
+  .qmain { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .qmain .l1 { gap: 8px; }
+  .qmain .l1 .ref { color: var(--muted); }
+  .qmain .note { margin-top: 0; font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .qend { flex: none; display: flex; align-items: center; gap: 8px; margin-top: 1px; }
+  .opts { display: flex; flex-wrap: wrap; gap: 5px; }
+  .opt { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px 0 4px; border: 1px solid var(--line-strong); border-radius: 6px; font-size: 12px; color: var(--text); white-space: nowrap; }
+  .opt.def { border-color: var(--cyan); }
+  .opt i { font-style: normal; font-size: 10.5px; color: var(--cyan); font-weight: 600; }
+  .opt.other { color: var(--muted); border-style: dashed; }
+  .quick { flex: none; display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--cyan); background: var(--cyan-soft); color: var(--text); font: 600 11.5px Inter, sans-serif; cursor: pointer; white-space: nowrap; }
+  .quick:hover { background: var(--cyan); color: var(--on-cyan); }
+  .row .quick { margin-top: 6px; }
+
+  /* pull request states */
+  .prs { display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 8px 0 6px; border-radius: 999px; font: 600 11px Inter, sans-serif; white-space: nowrap; border: 1px solid var(--line-strong); color: var(--text); }
+  .prs::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid currentColor; }
+  .prs.noreviewer { color: var(--cyan); border-style: dashed; border-color: var(--cyan); }
+  .prs.approved { color: var(--on-cyan); background: var(--cyan); border-color: var(--cyan); }
+  .prs.approved::before { background: currentColor; }
+  .prs.back { color: var(--amber); border-color: var(--amber); }
+  .prs.back::before { border-radius: 2px; }
+  .row .note:has(.prs) { overflow: visible; }
+  .row .prs { max-width: 100%; height: auto; min-height: 20px; white-space: normal; border-radius: 10px; padding-top: 2px; padding-bottom: 2px; line-height: 1.2; }
+
+  /* side panel */
+  #panel { flex: none; width: 420px; display: none; flex-direction: column; border-left: 1px solid var(--line); background: var(--panel); overflow: auto; outline: none; }
+  #panel.open { display: flex; }
+  body[data-view="board"] #panel { width: 380px; }
+  .phead { position: sticky; top: 0; z-index: 1; flex: none; display: flex; align-items: center; gap: 4px; height: 40px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .phead .ref { margin-right: auto; display: flex; gap: 8px; align-items: center; }
+  #panel .detail { padding: 14px 14px 18px; }
+  #panel .detail b.t { display: block; font-weight: 600; font-size: 15px; line-height: 1.35; }
+  #panel > .hint { padding: 18px 16px; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+  .props { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 2px 8px; margin: 12px 0 0; padding-bottom: 12px; border-bottom: 1px solid var(--line); font-size: 12.5px; align-items: center; }
+  .props dt { color: var(--muted); }
+  .props dd { margin: 0; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-height: 26px; min-width: 0; }
+  .props dd > button { height: 26px; border: 0; padding: 0 6px; margin-left: -6px; display: inline-flex; gap: 7px; align-items: center; font-size: 12.5px; }
+  .props dd > button:hover:not(:disabled) { background: var(--card-hover); }
+  .props dd > button kbd { opacity: 0.75; }
+  .detail .meta a { font-weight: 500; }
+  .acts button kbd.mod { background: transparent; }
+  .errline { margin-top: 10px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--red); color: var(--text); font-size: 12.5px; line-height: 1.45; }
+  .errline b { color: var(--red); }
+  .qcard { margin-top: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--cyan) 45%, var(--line)); border-radius: 10px; background: var(--card); }
+  .qcard .qhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .qcard .kind { font: 600 10px/1 Inter, sans-serif; text-transform: uppercase; letter-spacing: 0.07em; color: var(--cyan); }
+  .qcard .qtext { margin: 8px 0 10px; font-size: 13.5px; line-height: 1.45; font-weight: 600; }
+  .qopts { display: flex; flex-direction: column; gap: 6px; }
+  .qopts button, .qopts .other { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 10px 0 8px; border: 1px solid var(--line-strong); border-radius: 8px; text-align: left; font-size: 13px; font-weight: 500; background: var(--panel); }
+  .qopts button.def { border-color: var(--cyan); background: var(--cyan-soft); font-weight: 600; }
+  .qopts button i { margin-left: auto; font-style: normal; font-size: 11.5px; color: var(--muted); display: inline-flex; gap: 5px; align-items: center; font-weight: 500; }
+  .qopts .other { border-style: dashed; }
+  .qopts .other:focus-within { border-style: solid; border-color: var(--cyan); }
+  .qopts .other input[type="text"] { flex: 1; min-width: 0; width: auto; height: 30px; margin: 0; padding: 0; border: 0; outline: 0; background: transparent; }
+  .qcard .fine { margin-top: 8px; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+
+  /* command palette, menus and the shortcut list */
+  #pal { position: fixed; inset: 0; z-index: 70; display: none; background: rgba(2, 8, 14, 0.5); justify-content: center; align-items: flex-start; padding: 12vh 16px 16px; }
+  #pal.open { display: flex; }
+  :root[data-theme="light"] #pal { background: rgba(20, 40, 55, 0.3); }
+  .pal { width: min(620px, 100%); max-height: 72vh; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); overflow: hidden; }
+  .pal .ctx { padding: 10px 14px 0; }
+  .pal .ctx span { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; display: inline-block; line-height: 20px; height: 22px; align-items: center; padding: 0 8px; border-radius: 6px; background: var(--card); border: 1px solid var(--line); font-size: 11.5px; color: var(--muted); }
+  .pal > input { flex: none; height: 48px; border: 0; outline: 0; background: transparent; color: var(--text); font: 500 15px Inter, sans-serif; padding: 0 16px; border-bottom: 1px solid var(--line); }
+  .pal ul { list-style: none; margin: 0; padding: 6px; overflow: auto; }
+  .pal li.sec { padding: 9px 10px 4px; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .pal li.it { display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 0 10px; border-radius: 7px; font-size: 13px; cursor: pointer; }
+  .pal li.it.on { background: var(--cyan-soft); }
+  .pal li.it .chk { flex: none; width: 12px; color: var(--cyan); font-weight: 700; }
+  .pal li.it .lb { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pal li.it .sub { flex: 1; min-width: 0; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pal li.it .k { margin-left: auto; flex: none; display: flex; gap: 4px; }
+  .pal .none { padding: 18px; color: var(--muted); text-align: center; font-size: 12.5px; }
+  .pal .pfoot { flex: none; border-top: 1px solid var(--line); padding: 8px 14px; display: flex; gap: 16px; font-size: 11.5px; color: var(--muted); }
+  .pal .pfoot span { display: inline-flex; gap: 5px; align-items: center; }
+  .pal h2 { margin: 0; padding: 14px 18px 0; font-size: 15px; display: flex; align-items: center; }
+  .pal h2 .ic { margin-left: auto; }
+  .keys { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 28px; padding: 4px 18px 18px; overflow: auto; }
+  .keys h3 { grid-column: 1 / -1; margin: 14px 0 4px; font-size: 11px; font-weight: 600; color: var(--faint); text-transform: uppercase; letter-spacing: 0.06em; }
+  .keys div { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 12.5px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .keys div span:last-child { display: flex; gap: 4px; flex: none; }
+
+  /* toasts and the bulk bar */
+  #float { position: fixed; z-index: 45; left: 50%; bottom: 92px; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; max-width: calc(100vw - 24px); }
+  #float > * { pointer-events: auto; }
+  .toast { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 5px 6px 5px 14px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 12.5px; font-weight: 600; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3); max-width: 100%; }
+  .toast button { height: 28px; border-color: color-mix(in srgb, var(--bg) 35%, transparent); color: inherit; font-size: 12px; font-weight: 600; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+  .toast button:hover:not(:disabled) { border-color: var(--bg); }
+  .toast .ic { border: 0; width: 26px; color: inherit; opacity: 0.7; }
+  .toast .ic:hover:not(:disabled) { background: transparent; color: inherit; opacity: 1; }
+  .toast.err { background: var(--panel); color: var(--text); border: 1px solid var(--red); font-weight: 500; }
+  .toast.err b { color: var(--red); }
+  .toast.err button { border-color: var(--line-strong); }
+  #bulk { display: none; align-items: center; gap: 6px; height: 46px; padding: 0 8px 0 16px; border-radius: 12px; background: var(--panel); border: 1px solid var(--cyan); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); font-size: 12.5px; max-width: 100%; overflow-x: auto; }
+  #bulk.open { display: flex; }
+  #bulk b { margin-right: 8px; font-weight: 600; white-space: nowrap; }
+  #bulk button { flex: none; height: 30px; display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  #bulk button.primary { border-color: var(--cyan); background: var(--cyan-soft); }
+
+  /* loading and empty */
+  .sk { display: flex; align-items: center; gap: 12px; height: 38px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+  .sk i, .skn i { display: block; height: 10px; border-radius: 5px; background: linear-gradient(90deg, var(--line) 25%, var(--line-strong) 37%, var(--line) 63%); background-size: 400% 100%; animation: shimmer 1.4s ease infinite; }
+  .skn { display: flex; align-items: center; height: 28px; padding: 0 8px; }
+  @keyframes shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+  @media (prefers-reduced-motion: reduce) { .sk i, .skn i { animation: none; } }
+  body.loading footer, body.loading #events, body.loading header > :not(#vtitle), body.loading #palbtn, body.loading .sfoot { visibility: hidden; }
+  .emptyst { margin: 9vh auto 0; max-width: 380px; text-align: center; color: var(--muted); font-size: 13px; line-height: 1.55; padding: 0 16px 24px; }
+  .emptyst img { width: 72px; height: 72px; object-fit: contain; }
+  .emptyst h3 { margin: 10px 0 4px; color: var(--text); font-size: 15px; }
+  .emptyst p { margin: 0; }
+  .emptyst .acts { justify-content: center; margin-top: 14px; }
+
+  footer { padding: 8px 14px 9px; gap: 6px; }
+  footer .low { display: flex; align-items: center; gap: 18px; }
+  footer .scrub { flex: 1 1 260px; min-width: 0; }
+  footer .legend { flex: 0 1 auto; flex-wrap: nowrap; overflow: hidden; }
+  #events { padding: 0 14px; }
+
+  @container (max-width: 840px) { .lrow .st { display: none; } }
+
+  :root[data-density="compact"] .lrow { min-height: 30px; }
+  :root[data-density="compact"] .lgroup { height: 30px; }
+  :root[data-density="compact"] .qrow { padding-top: 6px; padding-bottom: 6px; }
+  :root[data-density="compact"] .qmain .note, :root[data-density="compact"] .qmain .opts { display: none; }
+  :root[data-density="compact"] .row { padding: 5px 8px 6px; }
+  :root[data-density="compact"] .row .title { -webkit-line-clamp: 1; line-clamp: 1; margin-top: 2px; }
+  :root[data-density="compact"] .row .note ~ .note, :root[data-density="compact"] .row .marks { display: none; }
+  :root[data-density="compact"] .body { gap: 4px; padding: 6px; }
+  :root[data-density="compact"] .sn { height: 26px; }
+
+  @media (max-width: 1100px) {
+    #panel { width: 360px; }
+    #qbox { width: 130px; }
+  }
+  @media (max-width: 760px) {
+    #sidebar { display: none; position: fixed; z-index: 55; inset: 0 auto 0 0; width: min(280px, 86vw); box-shadow: 12px 0 40px rgba(0, 0, 0, 0.4); }
+    body.sbopen #sidebar { display: flex; }
+    #menu { display: inline-grid; }
+    #collapse, #qbox, .tb .lbl, .tb kbd { display: none; }
+    header { padding: 0 8px; gap: 6px; }
+    #work { flex-direction: column; }
+    #panel, body[data-view="board"] #panel { width: auto; max-height: 50dvh; border-left: 0; border-top: 1px solid var(--line-strong); }
+    #panel > .hint { display: none; }
+    #v-board, #v-metrics, #v-replay { padding: 10px 12px 14px; }
+    .lrow .asg, .lrow .tag, .lrow .marks, .qrow .kind { display: none; }
+    .lrow .ref { width: 62px; }
+    .lrow, .qrow { padding-left: 10px; padding-right: 10px; gap: 8px; }
+    footer .low { display: block; }
+    #float { bottom: 76px; }
+    .keys { grid-template-columns: minmax(0, 1fr); }
+    #pal { padding-top: 8px; }
+  }
 </style>
 </head>
-<body>
+<body class="loading">
+<div id="app">
+<aside id="sidebar" aria-label="Navigation">
+  <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt=""><span>Kibble</span><button class="ic" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar"></button></div>
+  <button id="palbtn" aria-label="Search or run a command"><span>Search or run a command</span><kbd id="palkey">Ctrl K</kbd></button>
+  <nav id="snav" aria-label="Views"><div class="skn"><i style="width:70%"></i></div><div class="skn"><i style="width:55%"></i></div><div class="skn"><i style="width:62%"></i></div><div class="sh">&nbsp;</div><div class="skn"><i style="width:78%"></i></div><div class="skn"><i style="width:66%"></i></div><div class="skn"><i style="width:48%"></i></div></nav>
+  <div class="sfoot"><span class="me" id="me"></span><button class="ic" id="help" title="Keyboard shortcuts ( ? )" aria-label="Keyboard shortcuts"></button><button class="ic" id="theme" title="Switch theme" aria-label="Switch theme"></button></div>
+</aside>
+<div id="page">
 <header>
-  <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt="Kibble"><span>Kibble</span></div>
-  <div class="sep"></div>
-  <div class="tabs" role="tablist" id="tabs">
-    <button role="tab" data-view="queue" id="t-queue">My queue <b id="qn"></b></button>
-    <button role="tab" data-view="board" id="t-board">Board</button>
-    <button role="tab" data-view="metrics" id="t-metrics">Metrics</button>
-  </div>
-  <button id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  <button class="ic" id="menu" aria-label="Open navigation"></button>
+  <h1 id="vtitle">Kibble</h1>
+  <div class="seg" id="layout" role="tablist" aria-label="Layout"><button role="tab" data-layout="list">List</button><button role="tab" data-layout="board">Board</button></div>
+  <span class="grow"></span>
+  <label id="qbox" class="workonly"><input id="q" type="search" placeholder="Search" aria-label="Search this view" autocomplete="off"><kbd>/</kbd></label>
+  <button class="tb workonly" id="filterbtn" aria-label="Filter"><span class="lbl">Filter</span><kbd>f</kbd></button>
+  <button class="tb workonly" id="displaybtn" aria-label="Display options"><span class="lbl">Display</span></button>
+  <button class="tb primary" id="newbtn" aria-label="New item"><span class="lbl">New item</span><kbd>c</kbd></button>
 </header>
 <div id="status"></div>
 <div id="headline"></div>
 <nav id="nav" aria-label="Stages"></nav>
+<div id="work">
 <main id="main">
-  <div class="queue" id="v-queue"><div id="qlist"></div><aside id="side" tabindex="-1" aria-label="Selected item"></aside></div>
+  <div id="v-queue"><div id="qlist" role="listbox" aria-label="My queue"><div class="sk"><i style="width:56px"></i><i style="width:46%"></i><i style="width:34px;margin-left:auto"></i></div><div class="sk"><i style="width:56px"></i><i style="width:62%"></i><i style="width:34px;margin-left:auto"></i></div><div class="sk"><i style="width:56px"></i><i style="width:38%"></i><i style="width:34px;margin-left:auto"></i></div><div class="sk"><i style="width:56px"></i><i style="width:54%"></i><i style="width:34px;margin-left:auto"></i></div><div class="sk"><i style="width:56px"></i><i style="width:44%"></i><i style="width:34px;margin-left:auto"></i></div><div class="sk"><i style="width:56px"></i><i style="width:58%"></i><i style="width:34px;margin-left:auto"></i></div><div class="sk"><i style="width:56px"></i><i style="width:36%"></i><i style="width:34px;margin-left:auto"></i></div><div class="sk"><i style="width:56px"></i><i style="width:50%"></i><i style="width:34px;margin-left:auto"></i></div></div></div>
+  <div id="v-list"><div class="list" id="list"></div></div>
   <div id="v-board"><div class="board" id="board"><svg id="links" aria-hidden="true"></svg></div></div>
   <div id="v-metrics"></div>
   <div id="v-replay"></div>
 </main>
-<div id="modal"></div>
-<div id="demo-cap"></div><div id="demo-key"></div>
-<section id="dock" aria-label="Selected item"></section>
+<aside id="panel" tabindex="-1" aria-label="Selected item"></aside>
+</div>
 <details id="events"><summary>Recorded by your actions <b id="evn">0</b><span class="last" id="evlast"></span></summary><ol id="evlist"></ol></details>
 <footer>
   <div class="top"><div class="bind" id="bind"></div><div class="rates" id="rates"></div></div>
-  <div class="legend" id="legend"></div>
-  <div class="scrub">
-    <input id="scrub" type="range" aria-label="Show the queue as it was">
-    <span class="at" id="at"></span>
-    <button id="live" aria-label="Back to live">live</button>
+  <div class="low">
+    <div class="scrub">
+      <input id="scrub" type="range" aria-label="Show the queue as it was">
+      <span class="at" id="at"></span>
+      <button id="live" aria-label="Back to live">live</button>
+    </div>
+    <div class="legend" id="legend"></div>
   </div>
 </footer>
+</div>
+</div>
+<div id="float"><div id="toasts" role="status" aria-live="polite"></div><div id="bulk" role="toolbar" aria-label="Selected items"></div></div>
+<div id="pal"></div>
+<div id="modal"></div>
+<div id="demo-cap"></div><div id="demo-key"></div>
 <script type="module">
 const HOUR = 3600, DAY = 86400, MIN = 60;
 // Fallback p85 per stage until the team has enough finished visits of its own.
@@ -550,11 +811,15 @@ const TIER_CAP = 5;  // rows a ready tier shows before "show more"
 const QUEUE_CAP = 40;
 const DONE_SHOWN = HOUR * 24;
 const WINDOW = 14 * DAY;
-const VIEWS = ['queue', 'board', 'metrics'];
+const VIEWS = ['queue', 'list', 'board', 'metrics'];
+const LIST_CAP = 12; // rows a list group shows before "show more"
 
 const params = new URLSearchParams(location.search);
 const root = document.documentElement;
 root.dataset.theme = params.get('theme') || localGet('fa-theme') || 'dark';
+root.dataset.density = params.get('density') || localGet('fa-density') || 'comfortable';
+// ?loading=1 holds the page on the skeleton it shows while the first read is on its way.
+if (params.has('loading')) { root.dataset.ready = '1'; await new Promise(() => {}); }
 const DEMO = params.get('demo') === '1';   // autoplay: a scripted story from fixture-work-demo.json
 const REC = DEMO && params.has('rec');    // the recorder owns the clock
 const fx = await (await fetch(params.get('fixture') || (DEMO ? 'fixture-work-demo.json' : 'fixture-work.json'))).json();
@@ -568,6 +833,29 @@ function localSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const $ = (id) => document.getElementById(id);
 const plural = (n, one, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+const MOD = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl ';
+const svg = (d) => `<svg class="g" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON = {
+  inbox: svg('<path d="M2 9.5 3.6 3.5h8.8L14 9.5v3H2z"/><path d="M2 9.5h3.5l1 1.5h3l1-1.5H14"/>'),
+  list: svg('<path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>'),
+  board: svg('<rect x="2" y="2.5" width="3.2" height="11" rx="1"/><rect x="6.4" y="2.5" width="3.2" height="7" rx="1"/><rect x="10.8" y="2.5" width="3.2" height="9" rx="1"/>'),
+  chart: svg('<path d="M2.5 13.5h11M4.5 11V7.5M8 11V4M11.5 11V6"/>'),
+  view: svg('<path d="M3 4h10M4.5 8h7M6.5 12h3"/>'),
+  link: svg('<path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2-2a2.6 2.6 0 0 0-3.7-3.7l-.7.7"/><path d="M9.2 6.8a2.6 2.6 0 0 0-3.7 0l-2 2a2.6 2.6 0 0 0 3.7 3.7l.7-.7"/>'),
+  expand: svg('<path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9"/>'),
+  sliders: svg('<path d="M2.5 5h6M11.5 5h2M2.5 11h2M7.5 11h6"/><circle cx="10" cy="5" r="1.5"/><circle cx="6" cy="11" r="1.5"/>'),
+  side: svg('<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/>'),
+  menu: svg('<path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>'),
+  plus: svg('<path d="M8 3v10M3 8h10"/>'),
+  help: svg('<circle cx="8" cy="8" r="5.5"/><path d="M6.6 6.5a1.5 1.5 0 1 1 2.2 1.3c-.5.3-.8.6-.8 1.2M8 11.2h.01"/>'),
+  theme: svg('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5a5.5 5.5 0 0 1 0 11z" fill="currentColor"/>'),
+};
+// The key map. docs/work-tracker.md "My queue" carries the same table.
+const KEYMAP = [
+  ['Everywhere', [[`${MOD.trim()} K`, 'Command palette: every action and every place'], ['/', 'Search this view'], ['?', 'This list'], ['g i', 'Go to My queue'], ['g l', 'Go to all work, as a list'], ['g b', 'Go to all work, as a board'], ['g m', 'Go to Metrics'], [`${MOD.trim()} B`, 'Switch between list and board'], ['f', 'Filter'], ['c', 'New item'], ['[', 'Show or hide the sidebar'], ['Esc', 'Close, clear the selection, go back']]],
+  ['In a list or on the board', [['j k', 'Move down, up (arrows work too)'], ['Enter', 'Open the story, or go to the note field'], ['o', 'Open the diff or pull request'], ['x', 'Select the row'], ['Shift j', 'Select more, downwards'], ['Shift k', 'Select more, upwards'], [`${MOD.trim()} A`, 'Select everything shown']]],
+  ['On the open item, or on everything selected', [[`${MOD.trim()} Enter`, "The card's main choice"], ['1 … 9', "The card's numbered choices"], ['s', 'Set status'], ['p', 'Set tier'], ['a', 'Assign'], ['h', 'Snooze for four hours'], [`${MOD.trim()} Z`, 'Undo the last action']]],
+];
 
 function span(s) {
   s = Math.max(0, s);
@@ -654,8 +942,8 @@ function fold(cut) {
       case 'triaged': it.tier = r.tier; break;
       case 'tier_changed': it.tier = r.tier; break;
       case 'linked': it.deps.push(r.on); (dependents.get(r.on) ?? dependents.set(r.on, []).get(r.on)).push(r.item); break;
-      case 'asked': it.asked = r.text; break;
-      case 'answered': it.asked = null; it.answer = r.text; break;
+      case 'asked': it.asked = r.text; it.options = r.options ?? null; it.def = r.default ?? null; it.unclear = r.unclear ?? null; break;
+      case 'answered': it.asked = null; it.answer = r.chosen ?? r.text; break;
       case 'claimed': it.holder = r.agent; it.lastAgent = r.agent; it.human = false; it.run = r.run; it.claimedAt = r.t; it.gaveUp = null;
         if (r.attempt != null) { const b = br(it, r.attempt, r.t); b.agent = r.agent; b.run = r.run; b.claimedAt ??= r.t; if (b.state === 'published') b.state = 'running'; }
         break;
@@ -728,6 +1016,24 @@ function chainOf(state, key) {
 let cut = NOW;
 let selected = params.get('select');
 let view = VIEWS.includes(params.get('view')) ? params.get('view') : 'queue';
+let layout = view === 'list' || view === 'board' ? view : localGet('fa-layout') === 'list' ? 'list' : 'board';
+const checked = new Set();    // rows ticked for a bulk action
+const FILTER_FIELDS = [['stage', 'Status'], ['tier', 'Tier'], ['source', 'Source'], ['agent', 'Agent']];
+const noFilters = () => ({ q: '', mine: false, stage: [], tier: [], source: [], agent: [] });
+let filters = noFilters();
+for (const [f] of FILTER_FIELDS) if (params.get(f)) filters[f] = params.get(f).split(',');
+filters.q = params.get('q') ?? ''; filters.mine = params.get('mine') === '1';
+let group = params.get('group') || 'stage', order = params.get('order') || 'age';
+const BUILTIN_VIEWS = [
+  { id: 'review', name: 'Waiting for review', layout: 'list', filters: { stage: ['review'] } },
+  { id: 'needs', name: 'Failures and questions', layout: 'list', filters: { stage: ['needs'] } },
+  { id: 'urgent', name: 'P0 and P1', layout: 'board', filters: { tier: ['0', '1'] } },
+];
+let savedViews = [];
+try { savedViews = JSON.parse(localGet('fa-views') || '[]'); } catch {}
+let activeView = params.get('sv');
+let failNext = params.get('fail') === '1';   // the next action is refused, to show the error state
+let lastError = null;
 const expanded = new Set();   // stage or stage:tier keys opened with "show more"
 const pending = new Map();    // proposed tier edited in the view, not yet accepted
 let state, by, stats, queue, lastInfo, binding;
@@ -832,28 +1138,35 @@ function renderNow() {
   stats = stageStats(state);
   queue = buildQueue(state);
   if (selected && !state.items.has(selected)) selected = null;
+  for (const k of checked) if (!state.items.has(k)) checked.delete(k);
   const chain = selected ? chainOf(state, selected) : null;
   const busy = by.held.filter((it) => !it.human).length, agents = fx.agents.length;
   const blockedRoots = blockRoots(state, by.blocked);
   binding = constraintOf(by, busy, agents, blockedRoots);
 
-  for (const v of VIEWS) { $('v-' + v).style.display = v === view ? '' : 'none'; $('t-' + v).setAttribute('aria-selected', v === view); }
+  for (const v of VIEWS) $('v-' + v).style.display = v === view ? '' : 'none';
+  document.body.dataset.view = view;
+  document.body.classList.remove('loading');
+  $('main').classList.toggle('anychecked', checked.size > 0);
   $('v-replay').style.display = view === 'replay' ? 'block' : 'none';
   document.body.classList.toggle('replaying', view === 'replay');
   $('nav').classList.toggle('on', view === 'board');
-  $('qn').textContent = queue.rows.length || '';
-  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Kibble: ${{ queue: 'My queue', board: 'Board', metrics: 'Metrics', replay: 'Story' }[view]}`;
+  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Kibble: ${{ queue: 'My queue', list: 'All work', board: 'Board', metrics: 'Metrics', replay: 'Story' }[view]}`;
 
+  renderSidebar();
+  renderTop();
   renderStatus(busy, agents);
   if (view === 'queue') renderQueue();
+  else if (view === 'list') renderList();
   else if (view === 'board') renderBoard(chain, blockedRoots, busy, agents);
   else if (view === 'replay') renderReplay();
   else renderMetrics();
   renderHeadline();
-  renderDock(chain);
+  renderPanel(chain);
+  renderFloat();
   renderEvents();
   renderFooter(busy, agents);
-  $('legend').innerHTML = [['j k', 'move'], ['enter', 'open'], ['a', 'accept'], ['p', 'tier'], ['r', 'retry'], ['x', 'reassign'], ['t', 'take'], ['n', 'note'], ['s', 'snooze'], ['z', 'park'], ['u', 'unblock'], ['y', 'story'], ['v', 'review'], ['c', 'changes'], ['d', 'decline'], ['o', 'diff'], ['1 2 3', 'views']]
+  $('legend').innerHTML = [['j k', 'move'], ['x', 'select'], ['1-9', 'choose'], [`${MOD}↵`, 'main action'], ['s', 'status'], ['p', 'tier'], ['a', 'assign'], ['h', 'snooze'], [`${MOD}K`, 'commands'], ['?', 'all keys']]
     .map(([k, t]) => `<span><kbd>${k}</kbd>${t}</span>`).join('');
   const live = cut >= NOW;
   $('at').textContent = live ? '' : `${span(NOW - cut)} ago`;
@@ -861,6 +1174,7 @@ function renderNow() {
   $('scrub').max = NOW;
   $('scrub').value = cut;
   lastInfo = { colInfo: colInfoOf(), open: [...state.items.values()].filter((it) => it.stage !== 'done' && it.stage !== 'closed').length, busy };
+  syncUrl();
   root.dataset.ready = '1';
 }
 
@@ -896,7 +1210,7 @@ function renderStatus(busy, agents) {
     ? `<span class="chip full" id="capchip" title="Soft limit: agents stop claiming new work until a PR leaves review. Triage, answers and reviews carry on.">review full: agents paused, ${inRev}/${cap}</span>`
     : `<span class="chip${near ? ' warn' : ''}" id="capchip" title="Soft limit on agent PRs in review. At the limit agents stop claiming. It is a setting with no evidence behind its default."><small>review</small>${inRev}/${cap}</span>`;
   const open = [...state.items.values()].filter((it) => it.stage !== 'done' && it.stage !== 'closed').length;
-  $('status').innerHTML = `<span class="scope">${esc(fx.scope)}</span>` +
+  $('status').innerHTML = `<div id="fchips">${filterChips()}</div>` +
     `<button class="chip" id="srcbtn" aria-expanded="false" aria-controls="srcpop"><small>sources</small>+${arrivals}/24h</button>${capChip}` +
     `<span class="chip"><small>agents busy</small>${busy}/${agents}</span><span class="chip open"><small>open</small>${open}</span>` +
     `<div id="srcpop" role="dialog" aria-label="Arrivals by source">${srcRows.map((r) => r.html).join('')}</div>`;
@@ -904,7 +1218,7 @@ function renderStatus(busy, agents) {
 
 function renderHeadline() {
   const h = $('headline');
-  h.classList.toggle('on', view !== 'board');
+  h.classList.toggle('on', view === 'queue' || view === 'metrics');
   if (view === 'queue') {
     const q = queue.rows;
     if (!q.length) { h.innerHTML = `Nothing is waiting on you.`; return; }
@@ -925,8 +1239,20 @@ const reviewState = (it) => {
   if (w === 'agent') return it.pr.ci === 'fail' ? `CI red, ${it.pr.agent} fixing` : `changes asked, ${it.pr.agent} on it`;
   if (w === 'unassigned') return 'CI green, no reviewer';
   if (w === 'merge') return `approved, not merged (${it.reviewer === viewer ? 'you' : it.reviewer})`;
-  return `waits on ${it.reviewer === viewer ? 'you' : esc(it.reviewer)}`;
+  return `waits on ${it.reviewer === viewer ? 'you' : it.reviewer}`;
 };
+const PR_CLASS = { agent: 'back', unassigned: 'noreviewer', merge: 'approved', reviewer: 'waits' };
+const prBadge = (it) => `<span class="prs ${PR_CLASS[waitingOf(it)]}">${esc(reviewState(it))}</span>`;
+// The two review states that only need one click from a person.
+function quickHtml(it) {
+  if (it.stage !== 'review' || cut < NOW) return '';
+  const w = waitingOf(it);
+  if (w === 'unassigned') return `<span class="quick" role="button" data-quick="request_review" data-k="${esc(it.key)}">Request review</span>`;
+  if (w === 'merge') return `<span class="quick" role="button" data-quick="open" data-k="${esc(it.key)}">Open to merge</span>`;
+  return '';
+}
+const stIcon = (stage) => `<i class="sti s-${stage}" aria-hidden="true"></i>`;
+const cbHtml = (k) => `<span class="cb${checked.has(k) ? ' on' : ''}" data-check="${esc(k)}" role="checkbox" aria-checked="${checked.has(k)}" aria-label="Select"></span>`;
 const reviewSize = (it) => `+${it.pr.add} −${it.pr.del} · ${it.pr.files} ${it.pr.files === 1 ? 'file' : 'files'} · CI ${it.pr.ci}${it.rounds ? ` · round ${it.rounds + 1}` : ''}`;
 
 function noteFor(it, stage) {
@@ -949,7 +1275,7 @@ function noteFor(it, stage) {
     return { cls: '', pill: pillHtml(it), notes: [`waits on <b>${esc(open.join(', '))}</b>`] };
   }
   if (stage === 'held') return { cls: '', pill: pillHtml(it), notes: [`<span class="agent">${esc(it.holder)}</span> since ${span(cut - it.claimedAt)}${it.steers ? ` · ${it.steers} ${it.steers === 1 ? 'note' : 'notes'} sent` : ''}`] };
-  if (stage === 'review') return { cls: '', pill: pillHtml(it), notes: [`<b>${esc(reviewState(it))}</b>`, esc(reviewSize(it))] };
+  if (stage === 'review') return { cls: '', pill: pillHtml(it), notes: [prBadge(it), esc(reviewSize(it))], extra: quickHtml(it) };
   if (stage === 'done') return { cls: '', pill: '', notes: [`${esc(it.by)} <b>PR ${esc(it.prNum)}</b>`] };
   return { cls: '', pill: '', notes: [] };
 }
@@ -969,39 +1295,85 @@ function rowHtml(it, stage, chain) {
   const n = noteFor(it, stage);
   let cls = 'row ' + n.cls;
   if (it.key === selected) cls += ' sel'; else if (chain?.all.has(it.key)) cls += ' chain';
+  if (checked.has(it.key)) cls += ' checked';
   if (it.parked || (it.snoozeUntil && it.snoozeUntil > cut)) cls += ' snoozed';
   const l3 = (n.pill || n.notes.length) ? `<span class="l3">${n.pill}<span class="note">${n.notes[0] ?? ''}</span></span>` : '';
   const more = (n.notes.slice(1).map((x) => `<span class="note">${x}</span>`).join('')) + (n.extra ?? '');
   const you = it.human ? '<span class="pill you">you</span>' : '';
   return `<button class="${cls}" data-k="${esc(it.key)}" data-stage="${stage}" aria-pressed="${it.key === selected}" title="${esc(it.title)}">` +
-    `<span class="l1">${tagHtml(it)}<span class="ref">${esc(it.ref)}</span>${you}${ageHtml(it, stage)}</span>` +
+    `<span class="l1">${cbHtml(it.key)}${tagHtml(it)}<span class="ref">${esc(it.ref)}</span>${you}${ageHtml(it, stage)}</span>` +
     `<span class="title">${esc(it.title)}</span>${l3}${more}${marksHtml(it)}</button>`;
 }
 
+function emptyState(kind) {
+  if (kind === 'filter') return `<div class="emptyst"><h3>No items match</h3><p>Nothing here fits the filters or the search. Loosen one, or clear them all.</p><div class="acts"><button data-clearf>Clear filters</button></div></div>`;
+  const held = by.held.filter((it) => !it.human).length, rev = by.review.length;
+  return `<div class="emptyst"><img src="../docs/brand/felix-agents-mark.png" alt=""><h3>You're all caught up</h3>` +
+    `<p>Nothing is waiting on you. Agents hold ${plural(held, 'item')} and ${plural(rev, 'pull request')} ${rev === 1 ? 'is' : 'are'} in review with someone else. New questions, failures and reviews land here.</p>` +
+    `<div class="acts"><button data-go="board">Open the board <kbd>g</kbd><kbd>b</kbd></button></div></div>`;
+}
+
 function renderQueue() {
-  const rows = queue.rows;
+  const rows = queue.rows.filter((r) => matches(r.it));
   const show = expanded.has('queue') ? rows : rows.slice(0, QUEUE_CAP);
   let html = show.map(({ it, kind }) => {
     const stage = it.stage;
     let note;
-    if (kind === 'question') note = `asks: ${esc(it.asked)}`;
-    else if (kind === 'failure') note = `<span class="pill cause">${esc(it.cause)}</span> ${esc(it.msg || it.gaveUp)}`;
-    else if (kind === 'triage') note = `${pillHtml(it, tierOf(it))} ${esc(it.proposal.why)}${it.proposal.dup ? ` · <b>possible duplicate of ${esc(state.items.get(it.proposal.dup)?.ref ?? it.proposal.dup)}</b>` : ''}`;
-    else note = `<b>${esc(reviewState(it))}</b> · ${esc(reviewSize(it))}`;
-    const cls = `qrow ${kind === 'question' ? 'ask' : kind === 'failure' ? 'fail' : ''}${it.key === selected ? ' sel' : ''}`;
+    if (kind === 'question') {
+      const o = it.options ?? [];
+      note = `<span class="opts">${o.map((x, i) => `<span class="opt${x === it.def ? ' def' : ''}"><kbd>${i + 1}</kbd>${esc(x)}${x === it.def ? '<i>default</i>' : ''}</span>`).join('')}<span class="opt other"><kbd>${o.length + 1}</kbd>${o.length ? 'Other' : 'Type an answer'}</span></span>`;
+    } else if (kind === 'failure') note = `<span class="note"><span class="pill cause">${esc(it.cause)}</span> ${esc(it.msg || it.gaveUp)}</span>`;
+    else if (kind === 'triage') note = `<span class="note">${pillHtml(it, tierOf(it))} ${esc(it.proposal.why)}${it.proposal.dup ? ` · <b>possible duplicate of ${esc(state.items.get(it.proposal.dup)?.ref ?? it.proposal.dup)}</b>` : ''}</span>`;
+    else note = `<span class="note">${prBadge(it)} ${esc(reviewSize(it))}${quickHtml(it)}</span>`;
+    const cls = `qrow ${kind === 'question' ? 'ask' : kind === 'failure' ? 'fail' : ''}${it.key === selected ? ' sel' : ''}${checked.has(it.key) ? ' checked' : ''}`;
     const age = cut - it.waitSince;
-    return `<button class="${cls}" data-k="${esc(it.key)}" data-kind="${kind}" aria-pressed="${it.key === selected}">` +
-      `<span class="l1"><span class="kind">${KIND_LABEL[kind]}</span>${tagHtml(it)}<span class="ref">${esc(it.ref)}</span>${it.tier != null ? pillHtml(it) : ''}` +
-      `<span class="age ${ageClass(stage, age)}">${span(age)}</span></span><span class="title">${esc(it.title)}</span><span class="note">${note}</span>${marksHtml(it)}</button>`;
+    return `<div class="${cls}" data-k="${esc(it.key)}" data-kind="${kind}" role="option" aria-selected="${it.key === selected}">${cbHtml(it.key)}` +
+      `<span class="kind">${KIND_LABEL[kind]}</span><span class="qmain"><span class="l1"><span class="ref">${esc(it.ref)}</span><span class="ti">${esc(kind === 'question' ? it.asked : it.title)}</span>${marksHtml(it)}</span>` +
+      `${kind === 'question' ? `<span class="note">${esc(it.title)}</span>` : ''}${note}</span>` +
+      `<span class="qend">${tagHtml(it)}${it.tier != null ? pillHtml(it) : ''}<span class="age ${ageClass(stage, age)}">${span(age)}</span></span></div>`;
   }).join('');
   if (rows.length > QUEUE_CAP) html += expanded.has('queue') ? `<button class="more" data-less="queue">show fewer</button>` : `<button class="more" data-more="queue">${rows.length - QUEUE_CAP} more</button>`;
-  if (!rows.length) html = `<div class="empty">Nothing is waiting on you.</div>`;
+  if (!queue.rows.length) html = emptyState('queue');
+  else if (!rows.length) html = emptyState('filter');
   if (queue.snoozed) html += `<div class="qfoot">${plural(queue.snoozed, 'item')} snoozed or parked, not counted.</div>`;
   $('qlist').innerHTML = html;
-  const it = selected && state.items.get(selected);
-  $('v-queue').classList.toggle('has-sel', !!it);
-  $('side').innerHTML = it ? `<div class="detail">${detailHtml(it, null)}</div>` :
-    `<div class="hint"><b>Pick something from the queue.</b><br>Each card has its actions on single keys. Use <kbd>j</kbd> and <kbd>k</kbd> to move, <kbd>enter</kbd> to open, and <kbd>a</kbd> for the main action. Everything you do is written to the event list below as a work.events record.</div>`;
+}
+
+// The same items as the board, one per line. Grouping and order come from the Display menu.
+function renderList() {
+  const items = STAGES.flatMap(([s]) => by[s]).filter(matches);
+  const sorters = {
+    age: (a, b) => (a.stage === 'done') - (b.stage === 'done') || (a.stage === 'done' ? b.since - a.since : a.since - b.since),
+    tier: (a, b) => (tierOf(a) ?? 9) - (tierOf(b) ?? 9) || a.since - b.since,
+    newest: (a, b) => b.at - a.at,
+  };
+  const groups = group === 'stage' ? STAGES.map(([s, n]) => [s, n, items.filter((it) => it.stage === s), s])
+    : group === 'tier' ? [0, 1, 2, 3, null].map((t) => [`t${t}`, t == null ? 'No tier yet' : `P${t}`, items.filter((it) => (tierOf(it) ?? null) === t)])
+    : group === 'source' ? Object.entries(fx.sources).map(([id, x]) => [id, x.label, items.filter((it) => it.source === id)])
+    : [['all', 'All items', items]];
+  const row = (it) => {
+    const n = noteFor(it, it.stage), who = it.human ? 'you' : it.holder ?? it.pr?.agent ?? '';
+    const cls = `lrow${it.key === selected ? ' sel' : ''}${checked.has(it.key) ? ' checked' : ''}${it.parked || (it.snoozeUntil && it.snoozeUntil > cut) ? ' snoozed' : ''}`;
+    return `<div class="${cls}" data-k="${esc(it.key)}" data-stage="${it.stage}" role="option" aria-selected="${it.key === selected}">${cbHtml(it.key)}${stIcon(it.stage)}` +
+      `<span class="ref mono">${esc(it.ref)}</span><span class="ti">${esc(it.title)}</span>${marksHtml(it)}` +
+      `<span class="st">${it.stage === 'review' ? '' : n.pill.includes('cause') ? n.pill : ''}<span class="note">${n.notes[0] ?? ''}</span></span>${quickHtml(it)}` +
+      `<span class="asg">${who ? `<span class="${who === 'you' ? 'pill you' : 'agent'}">${esc(who)}</span>` : ''}</span><span class="tc">${pillHtml(it, tierOf(it))}</span>${tagHtml(it)}${ageHtml(it, it.stage)}</div>`;
+  };
+  let html = '';
+  for (const [id, name, arr, stage] of groups) {
+    if (!arr.length) continue;
+    arr.sort(sorters[order] ?? sorters.age);
+    const key = `list:${id}`, open = expanded.has(key), shown = open ? arr : arr.slice(0, LIST_CAP);
+    let pc = '';
+    if (stage && stage !== 'done') {
+      const old = arr.reduce((a, b) => (a.since <= b.since ? a : b)), st = stats[stage];
+      pc = `<span class="pc ${ageClass(stage, cut - old.since)}">oldest <b>${span(cut - old.since)}</b>${st.own ? ` · p50 ${span(st.p50)} · p85 ${span(st.p85)}` : ''}</span>`;
+    } else if (stage) pc = `<span class="pc">last 24 hours</span>`;
+    html += `<div class="lgroup${stage && binding?.stage === stage ? ' binding' : ''}" data-group="${id}">${stage ? stIcon(stage) : ''}<span>${esc(name)}</span><span class="n">${arr.length}</span>${pc}</div>` +
+      shown.map(row).join('') +
+      (arr.length > LIST_CAP ? (open ? `<button class="more" data-less="${key}">show fewer</button>` : `<button class="more" data-more="${key}">${arr.length - LIST_CAP} more</button>`) : '');
+  }
+  $('list').innerHTML = html || emptyState('filter');
 }
 
 function renderBoard(chain, blockedRoots, busy, agents) {
@@ -1016,7 +1388,7 @@ function renderBoard(chain, blockedRoots, busy, agents) {
   const cols = [];
   const cap = settings.reviewCap, full = cap != null && by.review.length >= cap;
   for (const [stage, name] of STAGES) {
-    const arr = by[stage];
+    const arr = by[stage].filter(matches);
     const old = stage === 'done' ? null : arr[0];
     const age = old ? cut - old.since : 0;
     const cls = old ? ageClass(stage, age) : '';
@@ -1042,7 +1414,7 @@ function renderBoard(chain, blockedRoots, busy, agents) {
       body = (roots ? `<div class="roots">${roots}</div>` : '') + list(arr, stage, stage, CAP);
     } else body = list(arr, stage, stage, CAP);
     if (stage === 'ready' && full) body = `<div class="banner">Agents paused: review is full (${by.review.length}/${cap}). Ready work waits for a PR to leave review.</div>` + body;
-    cols.push(`<section class="col${stage === 'needs' ? ' you' : ''}${binding?.stage === stage ? ' binding' : ''}" id="c-${stage}" data-stage="${stage}"><h2>${name}<span class="n">${arr.length}</span></h2>${oldLine}<div class="body">${body}</div></section>`);
+    cols.push(`<section class="col${stage === 'needs' ? ' you' : ''}${binding?.stage === stage ? ' binding' : ''}" id="c-${stage}" data-stage="${stage}"><h2>${stIcon(stage)}${name}<span class="n">${arr.length}</span></h2>${oldLine}<div class="body">${body}</div></section>`);
   }
   const board = $('board');
   board.className = 'board' + (chain ? ' picked' : '');
@@ -1067,7 +1439,7 @@ function renderEvents() {
   $('evn').textContent = localEvents.length;
   const fmt = (r) => { const { o, t, kind, item, ...rest } = r; return `<span class="o">#${o}</span><b>${esc(kind)}</b> ${esc(item)} ${esc(Object.entries(rest).map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' '))}`; };
   $('evlast').textContent = localEvents.length ? (() => { const r = localEvents[localEvents.length - 1]; return `${r.kind} ${r.item}`; })() : 'none yet';
-  $('evlist').innerHTML = [...localEvents].reverse().map((r) => `<li>${fmt(r)}</li>`).join('') || `<li>Actions you take are appended here as work.events records.</li>`;
+  $('evlist').innerHTML = [...localEvents].reverse().map((r) => `<li>${fmt(r)}</li>`).join('') || `<li>What you do is listed here as the records it writes.</li>`;
 }
 
 // ---------- the selected item: facts and actions ----------
@@ -1080,7 +1452,7 @@ function storyBlock(it) {
   const list = it.paths.length > 1
     ? `<div class="pl">${it.paths.map((b) => `<div><b>Attempt ${b.n}</b><span class="agent">${esc(b.agent ?? '-')}</span><span class="out ${OUTCOME[b.state]?.[1] ?? ''}">${esc(outcomeOf(b))}</span>${b.pr ? `<span class="meta">PR ${b.pr.n}${b.state === 'draft' ? ' draft' : ''}</span>` : ''}${b.parent ? `<span class="meta">from decision ${lanes.find((l) => l.b.n === b.n).base}, ${esc(b.by)}</span>` : ''}${b.handoff ? `<button class="mk handoff" data-handoff="${b.n}" data-hk="${esc(it.key)}">redo · handoff</button>` : ''}</div>`).join('')}</div>` : '';
   const q = (it.questions ?? []).map((x) => `<span class="mk ${x.answer ? 'qa' : 'q'}">question · ${x.answer ? 'answered' : 'open'}</span>`).join(' ');
-  return `<div class="blk"><h4>Story</h4>${plural(decs, 'decision')} across ${plural(it.paths.length, 'attempt')}${flags.length ? `, <span class="warn">${plural(flags.length, 'place')} where claims and steps disagree</span>` : ''}. <kbd>y</kbd> opens it. ${q}${list}${opens.length >= 2 ? compareHtml(it, true) : ''}</div>`;
+  return `<div class="blk"><h4>Story</h4>${plural(decs, 'decision')} across ${plural(it.paths.length, 'attempt')}${flags.length ? `, <span class="warn">${plural(flags.length, 'place')} where claims and steps disagree</span>` : ''}. <kbd>Enter</kbd> opens it. ${q}${list}${opens.length >= 2 ? compareHtml(it, true) : ''}</div>`;
 }
 
 function detailHtml(it, chain) {
@@ -1095,23 +1467,27 @@ function detailHtml(it, chain) {
       const deps = p.on.map((k) => state.items.get(k)?.ref ?? k);
       const d = p.dup && state.items.get(p.dup);
       body = `<div class="blk"><h4>Proposed by ${esc(p.agent ?? 'an agent')} · a triage work item it completed</h4>${kv([['tier', `${pillHtml(it, t)}${pending.has(it.key) ? ' (edited)' : ''}`], ['why', esc(p.why)], ['after', deps.length ? esc(deps.join(', ')) : 'nothing']])}</div>` +
-        (d ? `<div class="blk warn">Possible duplicate of <b>${esc(d.ref)}</b> (${esc(fx.sources[d.source].label)}): ${esc(d.title)}. <kbd>g</kbd> merges this into it.</div>` : '');
+        (d ? `<div class="blk warn">Possible duplicate of <b>${esc(d.ref)}</b> (${esc(fx.sources[d.source].label)}): ${esc(d.title)}. <kbd>2</kbd> merges this into it.</div>` : '');
     }
   } else if (stage === 'needs') {
     body = it.asked
-      ? `<div class="blk"><h4>Triage asks</h4>${esc(it.asked)}</div>`
+      ? `<div class="qcard"><div class="qhead"><span class="kind">Question</span>${it.unclear ? `<span class="mk q">unclear: ${esc(it.unclear)}</span>` : ''}<span class="meta">${it.unclear ? 'triage could not tell' : 'asked before any work started'} · waiting ${span(cut - it.since)}</span></div>` +
+        `<p class="qtext">${esc(it.asked)}</p><div class="qopts">` +
+        (it.options ?? []).map((o, i) => `<button class="${o === it.def ? 'def' : ''}" data-act="opt${i + 1}"${cut >= NOW ? '' : ' disabled'}><kbd>${i + 1}</kbd><span>${esc(o)}</span>${o === it.def ? `<i>default <kbd class="mod">${MOD}↵</kbd></i>` : ''}</button>`).join('') +
+        `<label class="other"><kbd>${(it.options?.length ?? 0) + 1}</kbd><input type="text" id="note" placeholder="${it.options?.length ? 'Other: type an answer, then Enter' : 'Type an answer, then Enter'}" aria-label="Another answer" autocomplete="off"></label></div>` +
+        `<div class="fine">Your answer is recorded as you give it. An agent picks the work up again from it.</div></div>`
       : it.cause === 'redo limit' ? `<div class="blk"><h4>Redo limit reached · ${it.redos} of ${redoLimit()} used</h4>${esc(it.msg)}</div>`
       : `<div class="blk"><h4>${esc(it.cause)}${it.lastAgent ? ` · last agent ${esc(it.lastAgent)}` : ''}</h4>${it.msg ? `"${esc(it.msg)}"` : esc(it.gaveUp)}<br><span class="meta">${esc(it.gaveUp)}${it.fails ? `, ${plural(it.fails, 'failed attempt')}` : ''}. Two attempts, then a person.</span></div>`;
   } else if (stage === 'blocked') {
     const open = it.deps.filter((d) => !it.resolved.has(d) && !state.items.get(d)?.done).map((d) => state.items.get(d).ref);
     const first = it.deps.find((x) => !it.resolved.has(x) && !state.items.get(x)?.done);
     const behind = [...rootsOf(state, state.items.get(first))].map((k) => state.items.get(k).ref);
-    body = `<div class="blk">Waits on <b>${esc(open.join(' and '))}</b>${behind.length ? `, which waits on <b>${esc(behind.join(' and '))}</b>` : ''}. <kbd>u</kbd> marks <b>${esc(open[0])}</b> resolved${open.length > 1 ? `; press again for ${esc(open.slice(1).join(' and '))}` : ''}.</div>`;
+    body = `<div class="blk">Waits on <b>${esc(open.join(' and '))}</b>${behind.length ? `, which waits on <b>${esc(behind.join(' and '))}</b>` : ''}. <kbd>1</kbd> marks <b>${esc(open[0])}</b> resolved${open.length > 1 ? `; press again for ${esc(open.slice(1).join(' and '))}` : ''}.</div>`;
   } else if (stage === 'held') {
     body = `<div class="blk">Held by ${it.human ? '<span class="pill you">you</span>' : `<span class="agent">${esc(it.holder)}</span>`} for ${span(cut - it.claimedAt)}${it.steers ? `. ${plural(it.steers, 'note')} sent to the agent.` : ''}${it.human ? ' No agent will claim it.' : ''}</div>`;
   } else if (stage === 'review' || (stage === 'done' && it.pr)) {
     const h = it.pr.handoff;
-    body = `<div class="blk">${kv([['PR', `<a href="#diff/${it.pr.n}" data-open>${it.pr.n}</a> by <span class="agent">${esc(it.pr.agent)}</span>`], ['size', esc(reviewSize(it))], ['state', stage === 'review' ? esc(reviewState(it)) : 'merged'], ['rounds', `${it.rounds + 1}${it.bot ? ' · bot approved (not counted as review)' : ''}`]])}</div>` +
+    body = `<div class="blk">${kv([['PR', `<a href="#diff/${it.pr.n}" data-open>${it.pr.n}</a> by <span class="agent">${esc(it.pr.agent)}</span>`], ['size', esc(reviewSize(it))], ['state', stage === 'review' ? prBadge(it) : 'merged'], ['rounds', `${it.rounds + 1}${it.bot ? ' · bot approved (not counted as review)' : ''}`]])}</div>` +
       (h ? `<div class="blk"><h4>Agent's handoff</h4>${kv([['changed', esc(h.changed)], ['verified', esc(h.verified)], ['unsure', h.unsure ? `<span class="unsure">${esc(h.unsure)}</span>` : 'nothing flagged']])}` +
         `${it.pr.rated ? `<div class="rated">Marked ${esc(it.pr.rated)}</div>` : ''}</div>` : '');
   } else if (stage === 'done') body = `<div class="blk">Merged by ${esc(it.by)} as <a href="#pr/${it.prNum}" data-open>PR ${esc(it.prNum)}</a>.</div>`;
@@ -1124,25 +1500,42 @@ function detailHtml(it, chain) {
     const order = (set) => [...set].sort((a, b) => depth(a) - depth(b));
     if (chain.up.size) chainHtml += `<div class="chain">waits on ${order(chain.up).map(chip).join('')}</div>`;
     if (chain.down.size) chainHtml += `<div class="chain">blocks ${order(chain.down).map(chip).join('')}</div>`;
-    if (!chain.up.size && !chain.down.size) chainHtml = `<div class="chain">No dependencies.</div>`;
+    if (!chain.up.size && !chain.down.size && view === 'board') chainHtml = `<div class="chain">No dependencies.</div>`;
   }
-  const needsInput = (it.asked && stage === 'needs') ? 'Answer for the triage agent, then enter'
-    : (stage === 'needs' && it.gaveUp && it.cause !== 'redo limit') ? 'Note for the next attempt (optional)' : (stage === 'held' && !it.human) ? 'Note to the running agent' : null;
+  const needsInput = (stage === 'needs' && !it.asked && it.gaveUp && it.cause !== 'redo limit') ? 'Note for the next attempt (optional)' : (stage === 'held' && !it.human) ? 'Note to the running agent' : null;
   const input = needsInput ? `<input type="text" id="note" placeholder="${needsInput}" aria-label="${needsInput}" autocomplete="off">` : '';
-  const live = cut >= NOW;
-  const acts = actionsFor(it).map((a, i) => `<button class="${i === 0 && a.k !== 'o' ? 'primary' : ''}" data-act="${a.k}"${live ? '' : ' disabled'} title="${esc(a.title ?? a.label)}"><kbd>${a.k}</kbd>${esc(a.label)}</button>`).join('');
-  return `<div class="head">${tagHtml(it)}<span class="ref mono">${esc(it.ref)}</span>${it.tier == null ? (tierOf(it) != null ? pillHtml(it, tierOf(it)) : '') : pillHtml(it)}` +
-    `<b class="t">${esc(it.title)}</b></div>` +
-    `<div class="meta">${esc(STAGE_NAME[stage] ?? stage)} for ${span(cut - it.since)} · arrived ${span(cut - it.at)} ago · ${esc(it.class)}${run}${it.snoozeUntil > cut ? ` · snoozed ${span(it.snoozeUntil - cut)}` : ''}${it.parked ? ' · parked' : ''}</div>` +
-    `${body}${chainHtml}${input}<div class="acts">${acts}${live ? '' : '<span class="meta">Scrub back to live to act.</span>'}</div>`;
+  const live = cut >= NOW, dis = live ? '' : ' disabled';
+  const A = actionsFor(it), prim = primaryOf(A);
+  const has = (id) => A.some((a) => a.id === id);
+  const acts = A.filter((a) => !a.prop && !a.quiet && !a.card).map((a) => `<button class="${a === prim ? 'primary' : ''}" data-act="${a.id}"${dis} title="${esc(a.title ?? a.label)}">${a.n ? `<kbd>${a.n}</kbd>` : a.key ? `<kbd>${a.key}</kbd>` : ''}${esc(a.label)}${a === prim ? `<kbd class="mod">${MOD}↵</kbd>` : ''}</button>`).join('');
+  const t = tierOf(it);
+  const holder = it.human ? '<span class="pill you">you</span>' : it.holder ? `<span class="agent">${esc(it.holder)}</span>` : it.stage === 'review' ? `<span class="agent">${esc(it.pr.agent)}</span>` : stage === 'done' ? esc(it.by ?? '') : 'No one';
+  const prop = (menu, key, on, inner) => (on ? `<button data-menu="${menu}"${dis}>${inner}<kbd>${key}</kbd></button>` : `<span>${inner}</span>`);
+  const props = `<dl class="props"><dt>Status</dt><dd>${prop('status', 's', A.some((a) => a.to), `${stIcon(stage)}${esc(STAGE_NAME[stage] ?? stage)}`)}<span class="meta">for ${span(cut - it.since)}${it.snoozeUntil > cut ? ` · snoozed ${span(it.snoozeUntil - cut)}` : ''}${it.parked ? ' · parked' : ''}</span></dd>` +
+    `<dt>Tier</dt><dd>${prop('tier', 'p', has('tier'), t != null ? `${pillHtml(it, t)}${pending.has(it.key) ? ' edited' : it.tier == null ? ' proposed' : ''}` : 'Not set')}</dd>` +
+    `<dt>Assignee</dt><dd>${prop('assign', 'a', has('assign'), holder)}${run ? `<span class="meta">${run.slice(3)}</span>` : ''}</dd>` +
+    `<dt>Source</dt><dd>${tagHtml(it)}<span>${esc(fx.sources[it.source].label)}</span><span class="meta">${esc(it.class)} · arrived ${span(cut - it.at)} ago</span></dd></dl>`;
+  const err = lastError?.key === it.key ? `<div class="errline" role="alert"><b>Not recorded.</b> ${esc(lastError.text)}</div>` : '';
+  return `<b class="t">${esc(it.title)}</b>${props}${body}${chainHtml}${input}${err}<div class="acts">${acts}${live ? '' : '<span class="meta">Go back to live to act.</span>'}</div>`;
 }
 
-function renderDock(chain) {
-  const dock = $('dock');
-  if (view !== 'board' || !selected) { dock.className = ''; dock.innerHTML = ''; return; }
-  const it = state.items.get(selected);
-  dock.className = 'open';
-  dock.innerHTML = `<div class="detail">${detailHtml(it, chain)}</div>`;
+function renderPanel(chain) {
+  const p = $('panel');
+  const it = selected && view !== 'metrics' && view !== 'replay' ? state.items.get(selected) : null;
+  if (!it) {
+    const hint = view === 'queue' && queue.rows.length > 0;
+    p.className = hint ? 'open' : '';
+    p.innerHTML = hint ? `<div class="hint"><b>Pick something from the queue.</b><br><kbd>j</kbd> <kbd>k</kbd> move. Each card shows its choices as numbers, and <kbd>${MOD}↵</kbd> takes the main one. <kbd>${MOD}K</kbd> finds everything else. What you do is listed below as the records it writes.</div>` : '';
+    return;
+  }
+  const keep = p.dataset.k === it.key ? p.scrollTop : 0;
+  p.className = 'open';
+  p.dataset.k = it.key;
+  p.innerHTML = `<div class="phead"><span class="ref mono">${tagHtml(it)}${esc(it.ref)}</span>` +
+    `<button class="ic" data-copy title="Copy the link to this item" aria-label="Copy link">${ICON.link}</button>` +
+    (hasHistory(it) ? `<button class="ic" data-story title="Open the story (Enter)" aria-label="Open the story">${ICON.expand}</button>` : '') +
+    `<button class="ic" data-closep title="Close (Esc)" aria-label="Close">×</button></div><div class="detail">${detailHtml(it, view === 'queue' ? null : chain)}</div>`;
+  p.scrollTop = keep;
 }
 
 // ---------- actions: each one appends a work.events record, and the view re-folds ----------
@@ -1155,80 +1548,90 @@ function nextAgent(it) {
 }
 const noteText = () => ($('note')?.value ?? '').trim();
 
+// What a person can do with an item. Numbered choices are the card's own verbs,
+// shown on the card and pressed as 1 to 9. Tier, assign, snooze and status sit on
+// the keys other trackers use for them. Everything is also on the palette.
 function actionsFor(it) {
   const s = it.stage, A = [];
-  const add = (k, label, run, title) => A.push({ k, label, run, title });
-  const tierStep = () => add('p', 'Tier', () => {
-    const t = ((tierOf(it) ?? 2) + 1) % 4;
-    if (s === 'triage') pending.set(it.key, t); else emit('tier_changed', it.key, { tier: t });
-  }, 'Change the tier');
-  const snooze = () => add('s', 'Snooze', () => emit('snoozed', it.key, { until: NOW + 4 * HOUR }), 'Hide for 4 hours');
+  let n = 0;
+  const choice = (id, label, run, title, x = {}) => A.push({ id, label, run, title, n: x.n ?? ++n, ...x });
+  const more = (id, key, label, run, title, x = {}) => A.push({ id, key, label, run, title, ...x });
+  const tier = () => more('tier', 'p', 'Set tier', (t) => { if (s === 'triage') pending.set(it.key, t); else emit('tier_changed', it.key, { tier: t }); }, 'Set the tier', { menu: 'tier', prop: true });
+  const assign = () => more('assign', 'a', 'Assign', (who) => (who === viewer ? emit('taken', it.key, { holder: viewer }) : emit('reassigned', it.key, { agent: who ?? nextAgent(it) })), 'Give it to an agent, or take it yourself', { menu: 'assign', prop: true });
+  const snooze = () => more('snooze', 'h', 'Snooze', () => emit('snoozed', it.key, { until: NOW + 4 * HOUR }), 'Hide for 4 hours', { to: 'Snoozed for 4 hours' });
+  const park = () => more('park', null, 'Park', () => emit('parked', it.key, {}), 'Take it off the queue without closing it', { to: 'Parked', quiet: true });
+  const decline = (label, reason, x = {}) => choice('decline', label, () => emit('rejected', it.key, { reason }), 'Close it', { to: 'Closed', ...x });
   if (s === 'triage') {
     if (it.proposal) {
-      add('a', 'Accept', () => {
+      choice('accept', 'Accept', () => {
         const p = it.proposal, tier = tierOf(it);
         emit('triaged', it.key, { tier, ...(pending.has(it.key) ? { edited: true } : {}) });
         for (const d of p.on) if (state.items.has(d)) emit('linked', it.key, { on: d });
         pending.delete(it.key);
-      }, 'Accept the proposed tier and dependencies');
-      tierStep();
-      if (it.proposal.dup && state.items.has(it.proposal.dup)) add('g', 'Merge duplicate', () => emit('rejected', it.key, { reason: 'duplicate', dup: it.proposal.dup }), 'Close this and keep the original');
+      }, 'Accept the proposed tier and dependencies', { n: 1, to: 'Ready' });
+      if (it.proposal.dup && state.items.has(it.proposal.dup)) choice('duplicate', 'Merge duplicate', () => emit('rejected', it.key, { reason: 'duplicate', dup: it.proposal.dup }), 'Close this and keep the original', { n: 2 });
     }
-    add('d', 'Reject', () => emit('rejected', it.key, { reason: 'declined at triage' }));
+    decline('Decline', 'declined at triage', { n: 3 });
+    if (it.proposal) tier();
     snooze();
   } else if (s === 'needs' && it.cause === 'redo limit') {
-    add('t', 'Take it yourself', () => emit('taken', it.key, { holder: viewer }), 'Mark it yours so no agent claims it');
-    add('l', 'Split it', () => emit('split', it.key, {}), 'Close this and split it into smaller items');
-    add('d', 'Close', () => emit('rejected', it.key, { reason: 'closed from needs you' }));
+    choice('take', 'Take it yourself', () => emit('taken', it.key, { holder: viewer }), 'Mark it yours so no agent claims it', { to: 'Held by you' });
+    choice('split', 'Split it', () => emit('split', it.key, {}), 'Close this and split it into smaller items');
+    decline('Close', 'closed from needs you');
     snooze();
+  } else if (s === 'needs' && it.asked) {
+    (it.options ?? []).forEach((o, i) => choice(`opt${i + 1}`, o, () => emit('answered', it.key, { chosen: o }), `Answer "${o}"`, { card: true, done: 'Answered' }));
+    choice('other', 'Other', () => $('note')?.focus(), 'Type a different answer', { card: true });
+    more('answer', null, it.def ? `Answer "${it.def}"` : 'Answer', () => {
+      const t = noteText();
+      if (t) emit('answered', it.key, { text: t }); else if (it.def) emit('answered', it.key, { chosen: it.def }); else $('note')?.focus();
+    }, 'Send what you typed, or the default', { primary: true, card: true });
+    more('decline', null, 'Close', () => emit('rejected', it.key, { reason: 'closed from needs you' }), 'Close it', { to: 'Closed' });
+    tier(); snooze();
   } else if (s === 'needs') {
-    if (it.asked) {
-      add('a', 'Answer', () => { const t = noteText(); if (!t) { $('note')?.focus(); return; } emit('answered', it.key, { text: t }); }, 'Send the answer; the item becomes ready');
-      add('d', 'Close', () => emit('rejected', it.key, { reason: 'closed from needs you' }));
-    } else {
-      add('r', 'Retry', () => { const t = noteText(); emit('retried', it.key, t ? { note: t } : {}); }, 'Requeue, with the note if you wrote one');
-      add('x', 'Reassign', () => emit('reassigned', it.key, { agent: nextAgent(it) }), 'Give it to another agent');
-      add('t', 'Take it', () => emit('taken', it.key, { holder: viewer }), 'Mark it yours so no agent claims it');
-      add('n', 'Note', () => $('note')?.focus(), 'Write a note for the next attempt');
-      add('z', 'Park', () => emit('parked', it.key, {}), 'Take it off the queue without closing it');
-      add('d', 'Close', () => emit('rejected', it.key, { reason: 'closed from needs you' }));
-    }
-    tierStep(); snooze();
+    choice('retry', 'Retry', () => { const t = noteText(); emit('retried', it.key, t ? { note: t } : {}); }, 'Requeue, with the note if you wrote one', { to: 'Ready' });
+    decline('Close', 'closed from needs you');
+    assign(); tier(); snooze(); park();
   } else if (s === 'blocked') {
     const d = it.deps.find((x) => !it.resolved.has(x) && !state.items.get(x)?.done);
-    if (d) add('u', `Unblock ${state.items.get(d).ref}`, () => emit('unblocked', it.key, { on: d }), `Mark ${state.items.get(d).ref} resolved for this item`);
-    tierStep(); snooze();
+    if (d) choice('unblock', `Unblock ${state.items.get(d).ref}`, () => emit('unblocked', it.key, { on: d }), `Mark ${state.items.get(d).ref} resolved for this item`, { to: 'Ready' });
+    tier(); snooze();
   } else if (s === 'ready') {
-    tierStep();
-    add('t', 'Take it', () => emit('taken', it.key, { holder: viewer }));
-    snooze();
+    assign(); tier(); snooze();
   } else if (s === 'held') {
     if (!it.human) {
-      add('n', 'Steer', () => { const t = noteText(); if (!t) { $('note')?.focus(); return; } emit('steered', it.key, { note: t }); }, 'Send a note to the running agent');
-      add('r', 'Stop', () => emit('released', it.key, { agent: it.holder }), 'Stop the agent and requeue the item');
-      add('x', 'Reassign', () => emit('reassigned', it.key, { agent: nextAgent(it) }));
-    } else add('r', 'Release', () => emit('released', it.key, { agent: it.holder }), 'Give it back to the queue');
-    add('t', 'Take it', () => emit('taken', it.key, { holder: viewer }));
+      choice('steer', 'Steer', () => { const t = noteText(); if (!t) { $('note')?.focus(); return; } emit('steered', it.key, { note: t }); }, 'Send a note to the running agent');
+      choice('stop', 'Stop', () => emit('released', it.key, { agent: it.holder }), 'Stop the agent and requeue the item', { to: 'Ready' });
+    } else choice('release', 'Release', () => emit('released', it.key, { agent: it.holder }), 'Give it back to the queue', { to: 'Ready' });
+    assign();
   } else if (s === 'review') {
     const w = waitingOf(it);
-    add('o', 'Open diff', () => $('side')?.querySelector('a[data-open]')?.click() ?? $('dock')?.querySelector('a[data-open]')?.click());
-    if (w === 'unassigned') add('v', 'Request review', () => emit('review_requested', it.key, { reviewer: fx.people.find((p) => p !== viewer) ?? viewer }), 'Ask a reviewer');
+    if (w === 'unassigned') choice('request_review', 'Request review', () => emit('review_requested', it.key, { reviewer: fx.people.find((p) => p !== viewer) ?? viewer }), 'Ask a reviewer');
     if (w === 'reviewer' || w === 'unassigned') {
-      add('a', 'Approve', () => emit('approved', it.key, {}));
-      add('c', 'Changes', () => {
+      choice('approve', 'Approve', () => emit('approved', it.key, {}));
+      choice('changes', 'Request changes', () => {
         if (hasHistory(it)) { openReplay(it.key); const d = decisionsOf(pathOf(it, replay.n)).at(-1); replay.idx = curPath().length - 1; openRedo(d, 'Request changes'); } else emit('changes_requested', it.key, {});
       }, 'Send the PR back from its last decision; your comment becomes the note');
     }
-    if (w === 'merge') add('m', 'Mark merged', () => emit('done', it.key, { agent: it.pr.agent, pr: it.pr.n }), 'Record the merge you did upstream; the tracker never merges');
-    add('d', 'Reject', () => {
+    if (w === 'merge') choice('merged', 'Mark merged', () => emit('done', it.key, { agent: it.pr.agent, pr: it.pr.n }), 'Record the merge you did upstream; the tracker never merges', { to: 'Done' });
+    choice('decline', 'Reject', () => {
       if (it.paths?.length && (it.redos ?? 0) >= redoLimit()) { emit('attempt_rejected', it.key, { attempt: it.paths.at(-1).n, reason: 'wrong approach' }); emit('redo_limit', it.key, { by: undefined }); } else emit('rejected', it.key, { reason: 'wrong approach' });
-    });
-    if (it.pr.handoff && !it.pr.rated) { add('+', 'Summary accurate', () => emit('summary_rated', it.key, { rating: 'accurate' })); add('-', 'Summary inaccurate', () => emit('summary_rated', it.key, { rating: 'inaccurate' })); }
+    }, 'Close the PR as the wrong approach', { to: 'Closed' });
+    more('open', 'o', w === 'merge' ? 'Open to merge' : 'Open diff', () => $('panel')?.querySelector('a[data-open]')?.click(), 'Open the pull request upstream');
+    if (it.pr.handoff && !it.pr.rated) { more('rate_up', null, 'Summary accurate', () => emit('summary_rated', it.key, { rating: 'accurate' })); more('rate_down', null, 'Summary inaccurate', () => emit('summary_rated', it.key, { rating: 'inaccurate' })); }
     snooze();
-  } else if (s === 'done' && it.prNum) add('o', 'Open PR', () => $('dock')?.querySelector('a[data-open]')?.click());
-  if (hasHistory(it)) A.splice(1, 0, { k: 'y', label: 'Story', title: 'Open the story, timeline and attempts', run: () => openReplay(it.key) });
+  } else if (s === 'done' && it.prNum) more('open', 'o', 'Open PR', () => $('panel')?.querySelector('a[data-open]')?.click());
+  if (hasHistory(it)) more('story', 'Enter', 'Story', () => openReplay(it.key), 'Open the story, timeline and attempts');
   return A;
 }
+const primaryOf = (A) => A.find((a) => a.primary) ?? A.find((a) => a.n === 1);
+function findAction(it, x) {
+  const A = actionsFor(it);
+  if (x === 'primary') return primaryOf(A);
+  if (/^[1-9]$/.test(x)) return A.find((a) => a.n === +x);
+  return A.find((a) => a.id === x) ?? A.find((a) => a.key === x);
+}
+const DONE_TEXT = { accept: 'Accepted', duplicate: 'Merged as a duplicate:', decline: 'Closed', take: 'Taken:', split: 'Split', answer: 'Answered', retry: 'Queued again:', unblock: 'Unblocked', steer: 'Note sent on', stop: 'Stopped', release: 'Released', request_review: 'Review requested on', approve: 'Approved', changes: 'Changes requested on', merged: 'Marked merged:', rate_up: 'Summary rated on', rate_down: 'Summary rated on', tier: 'Tier set on', assign: 'Assigned', snooze: 'Snoozed for 4 hours:', park: 'Parked' };
 
 function emit(kind, item, d = {}) {
   NOW += 1;
@@ -1238,24 +1641,72 @@ function emit(kind, item, d = {}) {
   cut = NOW;
 }
 
-function act(key) {
-  if (cut < NOW || !selected) return false;
-  const it = state.items.get(selected);
-  const a = it && actionsFor(it).find((x) => x.k === key);
-  if (!a) return false;
+// What an action applies to: the ticked rows, or else the open item.
+const targets = () => (checked.size ? [...checked] : selected ? [selected] : []).map((k) => state.items.get(k)).filter(Boolean);
+const markNow = () => ({ len: recs.length, ev: localEvents.length, now: NOW, selected, pending: new Map(pending) });
+function rollback(m) {
+  recs.length = m.len; localEvents.length = m.ev; NOW = m.now; cut = NOW;
+  pending.clear(); for (const [k, v] of m.pending) pending.set(k, v);
+  itemRecsCache.clear(); cfdCache.clear();
+}
+
+// Runs one action, by id, number or key, on every target that has it. The view
+// changes at once. The toast offers undo, which takes the records back out.
+function act(x, arg) {
+  const its = targets();
+  if (!its.length) return false;
+  if (cut < NOW) { toast({ text: `You are looking at the queue as it was ${span(NOW - cut)} ago. Go back to live to act.`, err: true, action: { label: 'Back to live', run: () => { cut = NOW; render(); } } }); return false; }
+  const first = its.map((it) => findAction(it, x)).find(Boolean);
+  if (!first) return false;
+  if (first.menu && arg === undefined) { openPal(first.menu); return true; }
   const queueKeys = view === 'queue' ? queue.rows.map((r) => r.it.key) : [];
   const idx = queueKeys.indexOf(selected);
-  const before = localEvents.length;
-  a.run();
-  if (localEvents.length === before) { render(); return true; }
+  const m = markNow();
+  const hit = its.filter((it) => { const a = actionsFor(it).find((y) => y.id === first.id); if (a) a.run(arg); return !!a; });
+  if (recs.length === m.len) { render(); return true; }   // a focus move or an edit that is not a record yet
+  if (failNext) {
+    failNext = false; rollback(m);
+    lastError = { key: hit[0].key, text: `The tracker did not answer, so "${first.label}" on ${hit[0].ref} was put back as it was. Check your connection and try again.` };
+    toast({ text: `Could not save "${first.label}" on ${hit[0].ref}. Nothing was recorded.`, err: true, action: { label: 'Try again', run: () => act(first.id, arg) } });
+    render();
+    return true;
+  }
+  lastError = null;
+  undoStack.push({ ...m, end: recs.length });
+  checked.clear();
   if (view === 'queue') {
     // Like an inbox: after a decision, the next card takes its place.
-    const left = queueKeys.filter((k) => k !== selected);
     state = fold(cut);
     const q = buildQueue(state).rows.map((r) => r.it.key);
     selected = q.includes(selected) ? selected : (q.find((k) => queueKeys.indexOf(k) >= idx) ?? q[q.length - 1] ?? null);
-    void left;
   } else if (!state.items.has(selected)) selected = null;
+  toast({ text: `${first.done ?? DONE_TEXT[first.id] ?? first.label} ${hit.length === 1 ? hit[0].ref : `${hit.length} items`}`, undo: true });
+  render();
+  return true;
+}
+
+const undoStack = [];
+function undo() {
+  const m = undoStack.pop();
+  if (!m || recs.length !== m.end) { undoStack.length = 0; toast({ text: 'Nothing to undo' }); return false; }
+  rollback(m);
+  selected = m.selected; replay = null; dialog = null; drawModal();
+  if (view === 'replay') view = prevView;
+  toast({ text: 'Undone. Nothing was recorded.' });
+  render();
+  return true;
+}
+
+// A new item is filed in one of the trackers and arrives in Triage like any other.
+function createItem(source, title) {
+  title = title.trim();
+  if (!title || cut < NOW) return false;
+  const m = markNow(), key = `new-${Object.keys(fx.items).length + 1}`;
+  fx.items[key] = { source, ref: 'new', title, class: 'bug' };
+  emit('imported', key, {});
+  undoStack.push({ ...m, end: recs.length });
+  if (view === 'list' || view === 'board') selected = key;
+  toast({ text: `Filed in ${fx.sources[source].label}. It waits in Triage for a proposal.`, undo: true });
   render();
   return true;
 }
@@ -1666,7 +2117,7 @@ function storyHtml(it) {
     `<button data-rate="accurate"${live ? '' : ' disabled'}>Accurate</button><button data-rate="inaccurate"${live ? '' : ' disabled'}>Not accurate</button></div>` +
     `<div class="qs"><h4>Questions</h4>${qs || '<div class="fine">No questions yet.</div>'}` +
     `<form class="qform" id="qform"><input type="text" id="qtext" placeholder="Ask about this item, e.g. why not fix it in the client?" aria-label="Ask about this item" autocomplete="off"><button type="submit">Post</button></form>` +
-    `<div class="fine">A question is a work item. Whichever agent claims it answers from this item's history and cites offsets.</div></div>`;
+    `<div class="fine">A question is a work item. Whichever agent claims it answers from this item's history and cites the steps it used.</div></div>`;
 }
 
 function attemptCard(it, b, lanes, cmpWith) {
@@ -1750,7 +2201,7 @@ function renderReplay() {
   const stageName = STAGE_NAME[it.stage] ?? it.stage;
   const needsYou = it.cause === 'redo limit';
   const acts = needsYou
-    ? `<div class="acts"><button class="primary" data-act="t"><kbd>t</kbd>Take it yourself</button><button data-act="l"><kbd>l</kbd>Split it</button></div>` : '';
+    ? `<div class="acts"><button class="primary" data-act="take"><kbd>1</kbd>Take it yourself</button><button data-act="split"><kbd>2</kbd>Split it</button></div>` : '';
   const banner = atLimit
     ? `<div class="banner limit"><span><b>Redo limit reached, ${used} of ${limit} used.</b> ${needsYou ? 'It is in Needs you with every attempt attached. Take it yourself or split it into smaller items.' : 'Another redo is not available.'}</span>${acts}</div>` : '';
   const main = replay.tab === 'story' ? storyHtml(it) : (compareHtml(it) || `<div class="idle">This item has one attempt, so there is nothing to compare yet.</div>`);
@@ -1911,10 +2362,236 @@ window.redoFrom = (decisionNo, instruction = 'Try again from here.') => {
   return doRedo(d, dialog.lines, instruction, true);
 };
 
+// ---------- the shell: filters, sidebar, top bar, toasts, palette ----------
+
+const hasFilters = () => !!(filters.q || filters.mine || FILTER_FIELDS.some(([f]) => filters[f].length));
+function matchesWith(f, it) {
+  if (f.stage.length && !f.stage.includes(it.stage)) return false;
+  if (f.tier.length && !f.tier.includes(String(tierOf(it)))) return false;
+  if (f.source.length && !f.source.includes(it.source)) return false;
+  if (f.agent.length && !f.agent.includes(it.holder ?? it.pr?.agent ?? '')) return false;
+  if (f.mine && !waitKind(it)) return false;
+  return !f.q || `${it.ref} ${it.title} ${it.key}`.toLowerCase().includes(f.q.toLowerCase());
+}
+const matches = (it) => matchesWith(filters, it);
+const allViews = () => [...BUILTIN_VIEWS, ...savedViews];
+function setFilters(f, id = null) { filters = { ...noFilters(), ...structuredClone(f) }; activeView = id; expanded.clear(); checked.clear(); }
+function toggleFilter(f, v) { const a = filters[f], i = a.indexOf(v); if (i < 0) a.push(v); else a.splice(i, 1); activeView = null; render(); }
+function go(v) {
+  if (v === 'work') v = layout;
+  if (v === 'list' || v === 'board') { layout = v; localSet('fa-layout', v); }
+  document.body.classList.remove('sbopen');
+  setView(v);
+}
+function openView(id) { const v = allViews().find((x) => x.id === id); if (v) { setFilters(v.filters, id); go(v.layout); } }
+function openSource(id) { setFilters({ source: [id] }); go(layout); }
+function saveView(name) {
+  name = name.trim();
+  if (!name) return false;
+  const v = { id: `v${savedViews.length + 1}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`, name, layout: view === 'list' ? 'list' : 'board', filters: structuredClone(filters) };
+  savedViews.push(v); localSet('fa-views', JSON.stringify(savedViews)); activeView = v.id;
+  toast({ text: `Saved "${name}". It is in the sidebar under Views.` });
+  render();
+  return true;
+}
+function setTheme(t) { root.dataset.theme = t; localSet('fa-theme', t); }
+function setDensity(d) { root.dataset.density = d; localSet('fa-density', d); render(); }
+function toggleSidebar() { document.body.classList.toggle(innerWidth <= 760 ? 'sbopen' : 'nosb'); render(); }
+function copyLink() { navigator.clipboard?.writeText(location.href).catch(() => {}); toast({ text: 'Link copied' }); }
+
+function filterChips() {
+  const val = { stage: (v) => STAGE_NAME[v] ?? v, tier: (v) => `P${v}`, source: (v) => fx.sources[v]?.label ?? v, agent: (v) => v };
+  const chips = FILTER_FIELDS.filter(([f]) => filters[f].length).map(([f, name]) => `<span class="fchip">${name} <i>is</i> <b>${esc(filters[f].map(val[f]).join(', '))}</b><button data-unfilter="${f}" aria-label="Remove the ${name} filter">×</button></span>`);
+  if (filters.mine) chips.push(`<span class="fchip"><b>Waiting on me</b><button data-unfilter="mine" aria-label="Remove the filter">×</button></span>`);
+  if (filters.q) chips.push(`<span class="fchip">Text <i>has</i> <b>${esc(filters.q)}</b><button data-unfilter="q" aria-label="Remove the search">×</button></span>`);
+  if (!chips.length || view === 'metrics' || view === 'replay') return `<span>${esc(fx.scope)}</span>`;
+  const cur = allViews().find((v) => v.id === activeView);
+  const same = cur && JSON.stringify({ ...noFilters(), ...cur.filters }) === JSON.stringify(filters);
+  return chips.join('') + `<button class="flink" data-clearf>Clear</button>` + (same || view === 'queue' ? '' : `<button class="flink save" data-saveview>Save view</button>`);
+}
+
+function renderSidebar() {
+  const open = [...state.items.values()].filter((it) => OPEN_STAGES.includes(it.stage));
+  const cur = (on) => (on ? ' aria-current="page"' : '');
+  const work = view === 'list' || view === 'board';
+  const srcOnly = !activeView && filters.source.length === 1 && JSON.stringify({ ...filters, source: [] }) === JSON.stringify(noFilters()) ? filters.source[0] : null;
+  $('snav').innerHTML =
+    `<button class="sn" data-go="queue"${cur(view === 'queue')}>${ICON.inbox}<span class="t">My queue</span><b class="${queue.rows.length ? 'hot' : ''}" id="qn">${queue.rows.length || ''}</b></button>` +
+    `<button class="sn" data-go="work"${cur(work && !activeView && !srcOnly)}>${layout === 'list' ? ICON.list : ICON.board}<span class="t">All work</span><b>${open.length}</b></button>` +
+    `<button class="sn" data-go="metrics"${cur(view === 'metrics')}>${ICON.chart}<span class="t">Metrics</span></button>` +
+    `<div class="sh">Views</div>` +
+    allViews().map((v) => `<button class="sn" data-sv="${esc(v.id)}"${cur(work && activeView === v.id)}>${ICON.view}<span class="t">${esc(v.name)}</span><b>${open.filter((it) => matchesWith({ ...noFilters(), ...v.filters }, it)).length}</b></button>`).join('') +
+    `<div class="sh">Sources</div>` +
+    Object.entries(fx.sources).map(([id, x]) => `<button class="sn" data-src="${esc(id)}"${cur(work && srcOnly === id)} title="${esc(x.scope)}"><span class="tag">${esc(x.tag)}</span><span class="t">${esc(x.label)}</span><b>${open.filter((it) => it.source === id).length}</b></button>`).join('');
+  $('me').innerHTML = `<span class="avatar">${esc(viewer[0])}</span><span>${esc(viewer)}</span>`;
+}
+
+function renderTop() {
+  const v = allViews().find((x) => x.id === activeView);
+  const n = view === 'queue' ? queue.rows.length : STAGES.flatMap(([st]) => by[st]).filter(matches).length;
+  const name = { queue: 'My queue', metrics: 'Metrics', replay: 'Story' }[view] ?? v?.name ?? 'All work';
+  $('vtitle').innerHTML = `${esc(name)}${view === 'metrics' || view === 'replay' ? '' : `<span>${n}</span>`}`;
+  for (const b of $('layout').children) b.setAttribute('aria-selected', b.dataset.layout === view);
+  if (document.activeElement !== $('q')) $('q').value = filters.q;
+}
+
+// One toast at a time. An action's toast carries its undo.
+const toasts = [];
+let toastTimer = 0;
+function toast(t) {
+  if (DEMO) return;
+  toasts.splice(0, toasts.length, t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toasts.length = 0; renderFloat(); }, t.err ? 12000 : 6000);
+  renderFloat();
+}
+function renderFloat() {
+  $('toasts').innerHTML = toasts.map((t) => `<div class="toast${t.err ? ' err' : ''}"><span>${esc(t.text)}</span>${t.undo ? `<button data-undo>Undo<kbd>${MOD}Z</kbd></button>` : ''}${t.action ? `<button data-taction>${esc(t.action.label)}</button>` : ''}<button class="ic" data-tclose aria-label="Dismiss">×</button></div>`).join('');
+  const bar = $('bulk');
+  bar.className = checked.size ? 'open' : '';
+  if (!checked.size) { bar.innerHTML = ''; return; }
+  const its = targets();
+  const prims = new Set(its.map((it) => primaryOf(actionsFor(it))?.id));
+  const p = prims.size === 1 ? primaryOf(actionsFor(its[0])) : null;
+  const has = (id) => its.some((it) => actionsFor(it).some((a) => a.id === id));
+  bar.innerHTML = `<b>${its.length} selected</b>` +
+    (p ? `<button class="primary" data-act="${p.id}">${esc(p.label)}<kbd>${MOD}↵</kbd></button>` : '') +
+    (has('tier') ? `<button data-act="tier"><kbd>p</kbd>Tier</button>` : '') + (has('assign') ? `<button data-act="assign"><kbd>a</kbd>Assign</button>` : '') +
+    (has('snooze') ? `<button data-act="snooze"><kbd>h</kbd>Snooze</button>` : '') + `<button data-menu="status"><kbd>s</kbd>Status</button>` +
+    `<button data-palopen>More<kbd>${MOD}K</kbd></button><button class="ic" data-clear title="Clear the selection (Esc)" aria-label="Clear the selection">×</button>`;
+}
+
+// Every item and view has an address: the view, the open item and the filters are in the URL.
+function syncUrl() {
+  if (DEMO) return;
+  const p = new URLSearchParams(location.search);
+  const set = (k, v) => (v ? p.set(k, v) : p.delete(k));
+  set('view', view === 'replay' ? null : view);
+  set('story', view === 'replay' ? replay?.key : null);
+  if (view !== 'replay') for (const k of ['d', 'tab', 'redo', 'note', 'released', 'branch', 'cite']) p.delete(k);
+  set('select', view === 'replay' ? null : selected);
+  for (const [f] of FILTER_FIELDS) set(f, filters[f].join(','));
+  set('q', filters.q); set('mine', filters.mine ? '1' : ''); set('sv', activeView);
+  const url = `${location.pathname}?${p}`;
+  if (url !== location.pathname + location.search) history.replaceState(null, '', url);
+}
+
+let pal = null;
+const TIER_HELP = ['Drop everything', 'Next up', 'Normal', 'When there is time'];
+const PAL_HINT = { all: 'Type a command, or search items', tier: 'Set tier to', assign: 'Assign to', status: 'Move to', filter: 'Filter by', display: 'Display', create: 'Title of the new item', saveview: 'Name this view' };
+function palItems() {
+  const out = [], m = pal.mode, q = pal.q.trim();
+  const add = (sec, label, run, x = {}) => out.push({ sec, label, run, ...x });
+  const its = targets();
+  const keysOf = (a) => (a.n ? [String(a.n)] : a.key ? [a.key === 'Enter' ? '↵' : a.key] : a.primary ? [MOD.trim(), '↵'] : []);
+  if (m === 'tier') [0, 1, 2, 3].forEach((t) => add('', `P${t}`, () => act('tier', t), { sub: TIER_HELP[t], on: its.length > 0 && its.every((it) => tierOf(it) === t) }));
+  else if (m === 'assign') {
+    const busy = new Set([...state.items.values()].filter((x) => x.holder && !x.human).map((x) => x.holder));
+    add('', 'Me', () => act('assign', viewer), { sub: 'Take it yourself, so no agent claims it' });
+    for (const a of fx.agents) add('', a, () => act('assign', a), { sub: busy.has(a) ? 'agent, busy' : 'agent, idle' });
+  } else if (m === 'status') {
+    const seen = new Set();
+    for (const it of its) for (const a of actionsFor(it)) if (a.to && !seen.has(a.id)) { seen.add(a.id); add('', a.to, () => act(a.id), { sub: a.label, k: keysOf(a) }); }
+  } else if (m === 'filter') {
+    add('', 'Waiting on me', () => { filters.mine = !filters.mine; activeView = null; render(); }, { on: filters.mine, stay: true });
+    for (const [st, name] of STAGES) add('Status', name, () => toggleFilter('stage', st), { on: filters.stage.includes(st), stay: true });
+    for (const t of ['0', '1', '2', '3']) add('Tier', `P${t}`, () => toggleFilter('tier', t), { on: filters.tier.includes(t), stay: true, sub: TIER_HELP[t] });
+    for (const [id, x] of Object.entries(fx.sources)) add('Source', x.label, () => toggleFilter('source', id), { on: filters.source.includes(id), stay: true, sub: x.scope });
+    for (const a of fx.agents) add('Agent', a, () => toggleFilter('agent', a), { on: filters.agent.includes(a), stay: true });
+    if (hasFilters()) add('', 'Clear all filters', () => { setFilters(noFilters()); render(); });
+  } else if (m === 'display') {
+    for (const l of ['list', 'board']) add('Layout', l === 'list' ? 'List' : 'Board', () => go(l), { on: view === l });
+    for (const [g, n] of [['stage', 'Status'], ['tier', 'Tier'], ['source', 'Source'], ['none', 'Nothing']]) add('Group the list by', n, () => { group = g; render(); }, { on: group === g, stay: true });
+    for (const [o, n] of [['age', 'Longest in its status'], ['tier', 'Tier'], ['newest', 'Newest']]) add('Order the list by', n, () => { order = o; render(); }, { on: order === o, stay: true });
+    for (const d of ['comfortable', 'compact']) add('Density', d[0].toUpperCase() + d.slice(1), () => setDensity(d), { on: root.dataset.density === d, stay: true });
+    for (const t of ['dark', 'light']) add('Theme', t[0].toUpperCase() + t.slice(1), () => setTheme(t), { on: root.dataset.theme === t, stay: true });
+  } else if (m === 'create') {
+    for (const [id, x] of Object.entries(fx.sources)) add('', `File in ${x.label}`, (t) => createItem(id, t), { sub: x.scope, raw: true, needsText: true });
+  } else if (m === 'saveview') add('', q ? `Save view as "${q}"` : 'Type a name, then Enter', (t) => saveView(t), { raw: true, needsText: true });
+  else {
+    if (its.length) {
+      const sec = `On ${its.length === 1 ? its[0].ref : `${its.length} selected items`}`, seen = new Set();
+      for (const it of its) for (const a of actionsFor(it)) if (!seen.has(a.id) && a.id !== 'other') { seen.add(a.id); add(sec, a.label, () => act(a.id), { sub: a.title, k: keysOf(a) }); }
+      add(sec, 'Set status', () => openPal('status'), { k: ['s'] });
+      if (its.length === 1) add(sec, 'Copy link', copyLink);
+    }
+    add('Go to', 'My queue', () => go('queue'), { k: ['g', 'i'] });
+    add('Go to', 'All work, as a list', () => go('list'), { k: ['g', 'l'] });
+    add('Go to', 'All work, as a board', () => go('board'), { k: ['g', 'b'] });
+    add('Go to', 'Metrics', () => go('metrics'), { k: ['g', 'm'] });
+    for (const v of allViews()) add('Go to', v.name, () => openView(v.id), { sub: 'saved view' });
+    for (const [id, x] of Object.entries(fx.sources)) add('Go to', x.label, () => openSource(id), { sub: x.scope });
+    add('Create', 'New item', () => openPal('create'), { k: ['c'] });
+    add('View', 'Filter', () => openPal('filter'), { k: ['f'] });
+    if (hasFilters()) { add('View', 'Clear filters', () => { setFilters(noFilters()); render(); }); add('View', 'Save this view', () => openPal('saveview')); }
+    add('View', 'Display options', () => openPal('display'), { sub: 'layout, grouping, order, density, theme' });
+    add('View', `Switch to the ${root.dataset.theme === 'light' ? 'dark' : 'light'} theme`, () => setTheme(root.dataset.theme === 'light' ? 'dark' : 'light'));
+    add('View', root.dataset.density === 'compact' ? 'Comfortable rows' : 'Compact rows', () => setDensity(root.dataset.density === 'compact' ? 'comfortable' : 'compact'));
+    add('View', 'Show or hide the sidebar', toggleSidebar, { k: ['['] });
+    if (cut < NOW) add('View', 'Back to live', () => { cut = NOW; render(); });
+    add('Help', 'Keyboard shortcuts', () => openPal('keys'), { k: ['?'] });
+    add('Help', 'Undo the last action', undo, { k: [MOD.trim(), 'Z'] });
+    if (q) {
+      const w = q.toLowerCase();
+      [...state.items.values()].filter((it) => it.stage !== 'closed' && `${it.ref} ${it.title}`.toLowerCase().includes(w)).slice(0, 8)
+        .forEach((it) => add('Items', it.ref, () => {
+          selected = it.key; checked.clear();
+          if (view === 'metrics' || view === 'replay' || (view === 'queue' && !queue.rows.some((r) => r.it.key === it.key))) go(layout); else render();
+        }, { sub: `${it.title} · ${STAGE_NAME[it.stage] ?? it.stage}`, raw: true }));
+    }
+  }
+  if (!q) return out;
+  const words = q.toLowerCase().split(/\s+/);
+  return out.filter((i) => i.raw || words.every((w) => `${i.sec} ${i.label} ${i.sub ?? ''}`.toLowerCase().includes(w)));
+}
+function openPal(mode) {
+  if (dialog) return;
+  pal = { mode, q: '', idx: 0, items: [] };
+  const el = $('pal');
+  el.className = 'open';
+  if (mode === 'keys') {
+    el.innerHTML = `<div class="pal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts"><h2>Keyboard shortcuts<button class="ic" data-palclose aria-label="Close">×</button></h2><div class="keys">` +
+      KEYMAP.map(([h, rows]) => `<h3>${h}</h3>${rows.map(([k, t]) => `<div><span>${t}</span><span>${k.split(' ').map((x) => `<kbd>${x}</kbd>`).join('')}</span></div>`).join('')}`).join('') + `</div></div>`;
+    el.querySelector('button').focus();
+    return;
+  }
+  const its = targets();
+  const ctx = ['tier', 'assign', 'status'].includes(mode) || (mode === 'all' && its.length) ? `<div class="ctx"><span>${its.length === 1 ? `${esc(its[0].ref)} ${esc(its[0].title.slice(0, 64))}` : `${its.length} selected items`}</span></div>` : '';
+  el.innerHTML = `<div class="pal" role="dialog" aria-modal="true" aria-label="${PAL_HINT[mode]}">${ctx}<input id="palq" type="text" placeholder="${PAL_HINT[mode]}" aria-label="${PAL_HINT[mode]}" autocomplete="off" spellcheck="false"><ul id="pallist" role="listbox"></ul>` +
+    `<div class="pfoot"><span><kbd>↑</kbd><kbd>↓</kbd>move</span><span><kbd>↵</kbd>${mode === 'filter' || mode === 'display' ? 'toggle' : 'choose'}</span><span><kbd>Esc</kbd>close</span></div></div>`;
+  $('palq').focus();
+  drawPal();
+}
+function drawPal() {
+  if (!pal || pal.mode === 'keys') return;
+  pal.items = palItems();
+  pal.idx = Math.max(0, Math.min(pal.items.length - 1, pal.idx));
+  let sec = '';
+  $('pallist').innerHTML = pal.items.map((it, i) => {
+    const head = it.sec && it.sec !== sec ? `<li class="sec">${esc(it.sec)}</li>` : '';
+    sec = it.sec;
+    return `${head}<li class="it${i === pal.idx ? ' on' : ''}" role="option" aria-selected="${i === pal.idx}" data-i="${i}">${'on' in it ? `<span class="chk">${it.on ? '✓' : ''}</span>` : ''}<span class="lb">${esc(it.label)}</span><span class="sub">${esc(it.sub ?? '')}</span><span class="k">${(it.k ?? []).map((x) => `<kbd>${esc(x)}</kbd>`).join('')}</span></li>`;
+  }).join('') || `<li class="none">Nothing matches. Try fewer letters.</li>`;
+  $('pallist').querySelector('.on')?.scrollIntoView({ block: 'nearest' });
+}
+function closePal() { pal = null; $('pal').className = ''; $('pal').innerHTML = ''; }
+function runPal(i) {
+  const it = pal?.items[i], text = pal?.q ?? '';
+  if (!it) return;
+  if (it.needsText && !text.trim()) { $('palq').focus(); return; }
+  if (it.stay) { it.run(); drawPal(); return; }
+  closePal();
+  it.run(text);
+}
+
 // ---------- input ----------
 
-function setView(v) { view = v; localSet('fa-view', v); render(); }
-$('tabs').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setView(b.dataset.view); });
+function setView(v) { view = v; render(); }
+for (const [id, icon] of [['collapse', 'side'], ['help', 'help'], ['theme', 'theme'], ['menu', 'menu']]) $(id).innerHTML = ICON[icon];
+$('displaybtn').insertAdjacentHTML('afterbegin', ICON.sliders);
+$('filterbtn').insertAdjacentHTML('afterbegin', ICON.view);
+$('newbtn').insertAdjacentHTML('afterbegin', ICON.plus);
+$('palkey').textContent = `${MOD}K`;
 
 function pick(e) {
   const more = e.target.closest('[data-more]');
@@ -1923,25 +2600,85 @@ function pick(e) {
   if (less) { expanded.delete(less.dataset.less); render(); return true; }
   return false;
 }
-$('board').addEventListener('click', (e) => {
+function toggleCheck(k) { if (checked.has(k)) checked.delete(k); else checked.add(k); render(); }
+$('main').addEventListener('click', (e) => {
+  if (e.target.closest('#v-replay, #v-metrics')) return;
+  const cb = e.target.closest('[data-check]');
+  if (cb) { toggleCheck(cb.dataset.check); return; }
+  const quick = e.target.closest('[data-quick]');
+  if (quick) { checked.clear(); selected = quick.dataset.k; render(); act(quick.dataset.quick); return; }
   if (pick(e)) return;
-  const row = e.target.closest('.row, .root');
-  if (!row) { selected = null; render(); return; }
-  selected = row.dataset.k !== selected ? row.dataset.k : null;
+  if (e.target.closest('[data-clearf]')) { setFilters(noFilters()); render(); return; }
+  const to = e.target.closest('[data-go]');
+  if (to) { go(to.dataset.go); return; }
+  const row = e.target.closest('.row, .root, .lrow, .qrow');
+  if (!row) { if (e.target.closest('#board') && selected) { selected = null; render(); } return; }
+  if (e.metaKey || e.ctrlKey) { toggleCheck(row.dataset.k); return; }
+  selected = view === 'board' && row.dataset.k === selected ? null : row.dataset.k;
   render();
 });
-$('qlist').addEventListener('click', (e) => {
-  if (pick(e)) return;
-  const row = e.target.closest('.qrow');
-  if (row) { selected = row.dataset.k; render(); }
-});
-for (const id of ['dock', 'side']) $(id).addEventListener('click', (e) => {
+$('panel').addEventListener('click', (e) => {
+  if (e.target.closest('[data-closep]')) { selected = null; render(); return; }
+  if (e.target.closest('[data-copy]')) { copyLink(); return; }
+  if (e.target.closest('[data-story]')) { openReplay(selected); return; }
+  const m = e.target.closest('[data-menu]');
+  if (m) { openPal(m.dataset.menu); return; }
   const a = e.target.closest('[data-act]');
   if (a) { act(a.dataset.act); return; }
   const b = e.target.closest('button');
   if (b?.dataset.k) { selected = b.dataset.k; render(); }
 });
+$('sidebar').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.id === 'palbtn') openPal('all');
+  else if (b.id === 'collapse') toggleSidebar();
+  else if (b.id === 'help') openPal('keys');
+  else if (b.id === 'theme') setTheme(root.dataset.theme === 'light' ? 'dark' : 'light');
+  else if (b.dataset.go) { if (b.dataset.go === 'work') setFilters(noFilters()); go(b.dataset.go); }
+  else if (b.dataset.sv) openView(b.dataset.sv);
+  else if (b.dataset.src) openSource(b.dataset.src);
+});
+$('menu').onclick = () => document.body.classList.toggle('sbopen');
+$('page').addEventListener('click', (e) => { if (!e.target.closest('#menu')) document.body.classList.remove('sbopen'); }, true);
+$('layout').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) go(b.dataset.layout); });
+$('filterbtn').onclick = () => openPal('filter');
+$('displaybtn').onclick = () => openPal('display');
+$('newbtn').onclick = () => openPal('create');
+$('q').addEventListener('input', (e) => { filters.q = e.target.value; activeView = null; render(); });
+$('float').addEventListener('click', (e) => {
+  if (e.target.closest('[data-undo]')) { undo(); return; }
+  if (e.target.closest('[data-taction]')) { const t = toasts[0]; toasts.length = 0; renderFloat(); t?.action.run(); return; }
+  if (e.target.closest('[data-tclose]')) { toasts.length = 0; renderFloat(); return; }
+  if (e.target.closest('[data-clear]')) { checked.clear(); render(); return; }
+  if (e.target.closest('[data-palopen]')) { openPal('all'); return; }
+  const m = e.target.closest('[data-menu]');
+  if (m) { openPal(m.dataset.menu); return; }
+  const a = e.target.closest('[data-act]');
+  if (a) act(a.dataset.act);
+});
+$('pal').addEventListener('input', (e) => { if (pal && e.target.id === 'palq') { pal.q = e.target.value; pal.idx = 0; drawPal(); } });
+$('pal').addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (!pal) return;
+  if (e.key === 'Escape' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) { closePal(); e.preventDefault(); return; }
+  if (pal.mode === 'keys') return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const n = pal.items.length;
+    if (n) pal.idx = (pal.idx + (e.key === 'ArrowDown' ? 1 : n - 1)) % n;
+    drawPal(); e.preventDefault();
+  } else if (e.key === 'Enter') { runPal(pal.idx); e.preventDefault(); }
+});
+$('pal').addEventListener('click', (e) => {
+  if (e.target === $('pal') || e.target.closest('[data-palclose]')) { closePal(); return; }
+  const li = e.target.closest('li.it');
+  if (li) runPal(+li.dataset.i);
+});
 $('status').addEventListener('click', (e) => {
+  const u = e.target.closest('[data-unfilter]');
+  if (u) { const f = u.dataset.unfilter; if (f === 'q') filters.q = ''; else if (f === 'mine') filters.mine = false; else filters[f] = []; activeView = null; render(); return; }
+  if (e.target.closest('[data-clearf]')) { setFilters(noFilters()); render(); return; }
+  if (e.target.closest('[data-saveview]')) { openPal('saveview'); return; }
   const b = e.target.closest('#srcbtn');
   if (!b) return;
   const open = $('srcpop').classList.toggle('open');
@@ -2023,51 +2760,81 @@ $('v-replay').addEventListener('submit', (e) => {
 });
 
 function visibleKeys() {
-  if (view === 'queue') return queue.rows.map((r) => r.it.key);
-  return [...document.querySelectorAll('#board .row')].map((e) => e.dataset.k);
+  const rows = view === 'queue' ? '#qlist .qrow' : view === 'list' ? '#list .lrow' : '#board .row';
+  return [...document.querySelectorAll(rows)].map((e) => e.dataset.k);
 }
-function step(dir) {
+function step(dir, extend = false) {
   const ks = visibleKeys();
   if (!ks.length) return;
   const i = ks.indexOf(selected);
+  if (extend && selected) checked.add(selected);
   selected = ks[Math.max(0, Math.min(ks.length - 1, i < 0 ? 0 : i + dir))];
+  if (extend) checked.add(selected);
   render();
-  document.querySelector(`[data-k="${CSS.escape(selected)}"].qrow, #board [data-k="${CSS.escape(selected)}"]`)?.scrollIntoView({ block: 'nearest' });
+  document.querySelector(`#main [data-k="${CSS.escape(selected)}"]:not(.root)`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
+let goKey = 0;   // when g was pressed, for the two-key "go to" shortcuts
 document.addEventListener('keydown', (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
-  if (dialog) { if (e.key === 'Escape') { closeModal(); e.preventDefault(); } return; }
-  if (e.target.matches?.('textarea, [contenteditable="true"]')) { if (e.key === 'Escape') e.target.blur(); return; }
+  const k = e.key;
+  if (pal) { if (k === 'Escape') { closePal(); e.preventDefault(); } return; }
+  if (e.altKey) return;
+  if (e.metaKey || e.ctrlKey) {
+    if (k === 'k') { openPal('all'); e.preventDefault(); return; }
+    if (dialog) return;
+    if (k === 'Enter') { if (act('primary')) e.preventDefault(); return; }
+    if (e.target.matches?.('input, textarea, [contenteditable="true"]')) return;
+    if (k === 'z') { undo(); e.preventDefault(); return; }
+    if (k === 'a' && view !== 'metrics' && view !== 'replay') { for (const key of visibleKeys()) checked.add(key); render(); e.preventDefault(); return; }
+    if (k === 'b' && (view === 'list' || view === 'board')) { go(view === 'list' ? 'board' : 'list'); e.preventDefault(); }
+    return;
+  }
+  if (dialog) { if (k === 'Escape') { closeModal(); e.preventDefault(); } return; }
+  if (e.target.matches?.('textarea, [contenteditable="true"]')) { if (k === 'Escape') e.target.blur(); return; }
+  if (e.target.id === 'q') { if (k === 'Escape' || k === 'Enter') e.target.blur(); return; }
   const typing = e.target.matches?.('input[type="text"]');
   if (typing) {
-    if (e.key === 'Enter') {
+    if (k === 'Enter') {
       const it = state.items.get(selected);
-      const k = it?.asked ? 'a' : it?.stage === 'held' ? 'n' : 'r';
-      act(k);
-    } else if (e.key === 'Escape') e.target.blur();
+      act(it?.asked ? 'answer' : it?.stage === 'held' ? 'steer' : 'retry');
+    } else if (k === 'Escape') e.target.blur();
     return;
   }
   if (e.target.matches?.('input') && e.target.id !== 'rscrub') return;
-  const k = e.key;
+  if (k === '?') { openPal('keys'); e.preventDefault(); return; }
   if (view === 'replay') {
     if (k === 'ArrowRight' || k === 'ArrowLeft') { stepReplay(k === 'ArrowRight' ? 1 : -1, e.shiftKey); e.preventDefault(); return; }
     if (k === 'Escape') { closeReplay(); return; }
     if (k === 'r') { const d = nearestDecision(); if (d) openRedo(d); e.preventDefault(); return; }
-    if (k === 'y') return;
+    if (k === 'Enter') return;
     if (act(k)) e.preventDefault();
     return;
   }
-  if (k === 'Escape') { $('srcpop')?.classList.remove('open'); if (selected) { selected = null; render(); } return; }
-  if (k === '1' || k === '2' || k === '3') { setView(VIEWS[+k - 1]); return; }
+  if (k === 'Escape') {
+    $('srcpop')?.classList.remove('open');
+    if (checked.size) { checked.clear(); render(); } else if (selected) { selected = null; render(); }
+    return;
+  }
+  if (goKey && e.timeStamp - goKey < 1500) {
+    goKey = 0;
+    const to = { i: 'queue', l: 'list', b: 'board', m: 'metrics' }[k];
+    if (to) { go(to); e.preventDefault(); return; }
+  }
+  if (k === 'g') { goKey = e.timeStamp || 1; return; }
+  if (k === '/') { $('q').focus(); e.preventDefault(); return; }
+  if (k === 'c') { openPal('create'); e.preventDefault(); return; }
+  if (k === 'f') { openPal('filter'); e.preventDefault(); return; }
+  if (k === '[') { toggleSidebar(); return; }
   if (view === 'metrics') return;
-  if (k === 'j') { step(1); e.preventDefault(); return; }
-  if (k === 'k') { step(-1); e.preventDefault(); return; }
-  if (k === 'y' && selected && hasHistory(state.items.get(selected))) { openReplay(selected); return; }
+  if (k === 'j' || k === 'J' || k === 'ArrowDown') { step(1, e.shiftKey); e.preventDefault(); return; }
+  if (k === 'k' || k === 'K' || k === 'ArrowUp') { step(-1, e.shiftKey); e.preventDefault(); return; }
+  if (k === 'x' && selected) { toggleCheck(selected); return; }
+  if (k === 's') { if (targets().length) openPal('status'); e.preventDefault(); return; }
   if (k === 'Enter') {
     if (!selected) step(0);
     if (hasHistory(state.items.get(selected))) { openReplay(selected); return; }
-    ($('note') ?? $('side'))?.focus();
+    ($('note') ?? $('panel'))?.focus();
+    e.preventDefault();
     return;
   }
   if (act(k)) e.preventDefault();
@@ -2075,17 +2842,27 @@ document.addEventListener('keydown', (e) => {
 $('scrub').min = FIRST; $('scrub').step = 60;
 $('scrub').oninput = (e) => { cut = +e.target.value; render(); };
 $('live').onclick = () => { cut = NOW; render(); };
-$('theme').onclick = () => {
-  root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
-  localSet('fa-theme', root.dataset.theme);
-};
 addEventListener('resize', () => { if (selected && view === 'board') drawLinks(chainOf(state, selected)); });
 if (params.has('ago')) cut = Math.max(FIRST, NOW - +params.get('ago'));
 
 window.select = (k) => { selected = k; render(); };
 window.scrubTo = (c) => { cut = c; render(); };
 window.setView = setView;
-window.act = (k) => act(k);
+window.act = (k, arg) => act(k, arg);
+window.ux = {
+  openPal, closePal, undo, go,
+  type: (t) => { $('palq').value = t; $('palq').dispatchEvent(new Event('input', { bubbles: true })); },
+  run: (i = pal.idx) => runPal(i),
+  check: (keys) => { checked.clear(); for (const k of keys) checked.add(k); render(); },
+  filter: (f) => { setFilters(f); render(); },
+  info: () => ({
+    view, layout, selected, checked: [...checked], filters, activeView, url: location.search, density: root.dataset.density,
+    toast: toasts[0] ? { text: toasts[0].text, undo: !!toasts[0].undo, err: !!toasts[0].err } : null,
+    pal: pal ? { mode: pal.mode, items: pal.items.map((i) => i.label) } : null,
+    actions: selected ? actionsFor(state.items.get(selected)).map((a) => ({ id: a.id, n: a.n ?? null, key: a.key ?? null })) : [],
+    records: recs.length, views: allViews().map((v) => v.name),
+  }),
+};
 window.stageOf = (k) => state.items.get(k)?.stage;
 window.intakeInfo = () => ({
   kinds: [...new Set(recs.map((r) => r.kind))],
@@ -2224,11 +3001,12 @@ function caption(text) {
 }
 async function press(k, label, o = {}) {
   const el = $('demo-key');
-  el.innerHTML = `${(o.shift ? ['shift', k] : [k]).map((x) => `<kbd>${x}</kbd>`).join('')}<span>${label}</span>`;
+  const keys = k.split(' ');
+  el.innerHTML = `${(o.shift ? ['shift', ...keys] : keys).map((x) => `<kbd>${x}</kbd>`).join('')}<span>${label}</span>`;
   const mine = ++keyTimer;
   anim(el, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, fill: 'both' });
   await sleep(180);
-  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey: !!o.shift, bubbles: true }));
+  for (const key of keys) document.body.dispatchEvent(new KeyboardEvent('keydown', { key, shiftKey: !!o.shift, bubbles: true }));
   sleep(750).then(() => { if (mine === keyTimer) anim(el, [{ opacity: 1 }, { opacity: 0 }], { duration: 250, fill: 'forwards' }); });
 }
 
@@ -2237,7 +3015,7 @@ const FADE = 500;
 function resetDemo() {
   recs.length = BASE_LEN; itemRecsCache.clear(); localEvents.length = 0; ids.clear();
   NOW = fx.now; cut = NOW; selected = null; view = 'board'; dialog = null; replay = null; prevView = 'queue';
-  pending.clear(); expanded.clear(); capNow = '';
+  pending.clear(); expanded.clear(); checked.clear(); undoStack.length = 0; filters = noFilters(); activeView = null; capNow = '';
   $('demo-cap').style.opacity = 0; $('demo-key').style.opacity = 0;
   drawModal();
   render();
@@ -2256,12 +3034,12 @@ async function story() {
   await push('arrive_jira'); await sleep(900);
 
   caption('An agent proposes a tier. One key accepts it.');
-  await press('1', 'my queue'); await sleep(500);
+  await press('g i', 'my queue'); await sleep(500);
   await press('j', 'next'); await sleep(500);
-  for (let i = 0; i < 3; i++) { await press('a', 'accept'); await sleep(i < 2 ? 500 : 700); }
+  for (let i = 0; i < 3; i++) { await press('1', 'accept'); await sleep(i < 2 ? 500 : 700); }
 
   caption('Accepted work is Ready. Agents claim it.');
-  await press('2', 'board'); await sleep(800);
+  await press('g b', 'board'); await sleep(800);
   await push('claim_gh'); await sleep(450);
   await push('claim_ado'); await sleep(450);
   await push('claim_jira'); await sleep(800);
@@ -2273,11 +3051,11 @@ async function story() {
   caption('The fix lands in review with its handoff.');
   await push('work_gh'); await push('pr_gh'); await sleep(500);
   await push('pr_ado'); await sleep(700);
-  await press('1', 'my queue'); await sleep(500);
+  await press('g i', 'my queue'); await sleep(500);
   await press('j', 'next'); await sleep(1600);
 
   caption('Open the story and scrub back to any decision.');
-  await press('y', 'story'); await sleep(800);
+  await press('Enter', 'story'); await sleep(800);
   const slider = $('rscrub');
   const last = +slider.value;
   const target = curPath().findIndex((r, i, p) => r.kind === 'decision' && p.slice(0, i + 1).filter((x) => x.kind === 'decision').length === 3);
@@ -2314,10 +3092,10 @@ async function story() {
   await push('pr_gh2', { agent }); await sleep(800);
 
   caption('The fix merges and Done ticks up.');
-  await press('a', 'approve'); await sleep(700);
-  await press('m', 'mark merged'); await sleep(800);
+  await press('1', 'approve'); await sleep(700);
+  await press('1', 'mark merged'); await sleep(800);
   await press('Escape', 'back'); await sleep(350);
-  await press('2', 'board'); selected = null; render(); await sleep(1500);
+  await press('g b', 'board'); selected = null; render(); await sleep(1500);
 
   demo.runs.push({ seconds: Math.round((clock.t - began + FADE + 250) / 100) / 10, events: localEvents.map((r) => r.kind), done: by.done.length });
   caption('');

@@ -51,7 +51,7 @@ try {
     info = await page.eval('window.intakeInfo()');
     for (const k of ['gh-798', 'jira-218']) check(info.chain.includes(k), `${label}: the chain of gh-801 misses ${k}`);
     check(await page.eval(`document.querySelectorAll('.row.chain').length`) === 2, `${label}: chain rows are not marked`);
-    check(await page.eval(`document.getElementById('dock').classList.contains('open')`), `${label}: no detail for the selected item`);
+    check(await page.eval(`document.getElementById('panel').classList.contains('open')`), `${label}: no detail for the selected item`);
     await new Promise((ok) => setTimeout(ok, 150));
     info = await page.eval('window.intakeInfo()');
     if (size === 'laptop') {
@@ -85,13 +85,13 @@ try {
     check(await page.eval(`document.getElementById('legend').textContent.includes('move')`) || size === 'phone', `${label}: no key legend`);
     check(await page.eval(`document.getElementById('headline').textContent.includes('waiting on you')`), `${label}: no headline sentence`);
 
-    // Keyboard: j selects, a accepts a triage proposal, and the record lands in the event list.
+    // Keyboard: j selects, 1 accepts a triage proposal, and the record lands in the event list.
     const press = (k) => page.eval(`document.dispatchEvent(new KeyboardEvent('keydown', { key: '${k}', bubbles: true }))`);
     for (let i = 0; i < 6; i++) { await press('j'); const k = await page.eval(`document.querySelector('.qrow.sel')?.dataset.kind`); if (k === 'triage') break; }
     check(await page.eval(`document.querySelector('.qrow.sel')?.dataset.kind`) === 'triage', `${label}: j did not reach a triage card`);
     const key = await page.eval(`document.querySelector('.qrow.sel').dataset.k`);
     const before = info.queue.count;
-    await press('a');
+    await press('1');
     info = await page.eval('window.intakeInfo()');
     check(info.queue.count === before - 1, `${label}: accepting did not shrink the queue (${before} to ${info.queue.count})`);
     check(info.localEvents.includes('triaged'), `${label}: accepting wrote no triaged record`);
@@ -102,16 +102,16 @@ try {
     check(await page.eval(`!document.querySelector('#c-triage .row[data-k="${key}"]')`), `${label}: the accepted item is still in Triage`);
     check(['ready', 'blocked'].includes(await page.eval(`window.stageOf('${key}')`)), `${label}: the accepted item is not Ready or Blocked`);
     // A failure can be retried, taken, and the review can be approved; each appends a record.
-    await page.eval(`window.select('gh-774')`); await press('r');
-    await page.eval(`window.select('gh-789')`); await press('a');
-    await page.eval(`window.select('gh-812')`); await press('d');
+    await page.eval(`window.select('gh-774')`); await press('1');
+    await page.eval(`window.select('gh-789')`); await press('1');
+    await page.eval(`window.select('gh-812')`); await press('3');
     info = await page.eval('window.intakeInfo()');
     for (const k of ['retried', 'approved', 'rejected']) check(info.localEvents.includes(k), `${label}: no ${k} record after the action`);
     check(info.queue.count === before - 1 - 1 - 1 + (await page.eval(`window.intakeInfo().queue.kinds.merge ?? 0`)), `${label}: the queue count after three more actions is ${info.queue.count}`);
     await page.eval(`window.setView('queue')`);
     // Scrubbed back, actions are off.
     await page.eval(`window.scrubTo(+document.getElementById('scrub').min + 3600)`);
-    check(await page.eval(`window.act('a')`) === false, `${label}: an action ran while scrubbed back`);
+    check(await page.eval(`window.act('1')`) === false, `${label}: an action ran while scrubbed back`);
 
     // The review limit: reached in one fixture, with agents paused in the header.
     label = `${size} fixture-work-capped.json`;
@@ -129,10 +129,10 @@ try {
     const sub = await page.eval(`document.getElementById('c-review').textContent`);
     for (const t of ['CI green, no reviewer', 'approved, not merged', 'CI red']) check(sub.includes(t), `${label}: In review does not show "${t}"`);
     await page.eval(`window.select('gh-771')`);
-    check(await page.eval(`!!document.querySelector('#dock [data-act="v"]')`), `${label}: no request review action on an unassigned PR`);
-    check(await page.eval(`document.getElementById('dock').textContent.includes("handoff")`), `${label}: the PR card has no agent handoff`);
+    check(await page.eval(`!!document.querySelector('#panel [data-act="request_review"]')`), `${label}: no request review action on an unassigned PR`);
+    check(await page.eval(`document.getElementById('panel').textContent.includes("handoff")`), `${label}: the PR card has no agent handoff`);
     await page.eval(`window.select('ado-4383')`);
-    check(await page.eval(`!!document.querySelector('#dock [data-act="m"]')`), `${label}: no merge action on an approved PR`);
+    check(await page.eval(`!!document.querySelector('#panel [data-act="merged"]')`), `${label}: no merge action on an approved PR`);
 
     // One verdict and one set of counts: footer, Metrics headline, Board and header agree.
     label = `${size} consistency`;
@@ -154,7 +154,7 @@ try {
     }
     await open('fixture-work.json', 'view=board');
     await page.eval(`window.select('gh-803')`);
-    const unb = await page.eval(`document.querySelector('#dock [data-act="u"]').textContent + '|' + document.querySelector('#dock .blk').textContent`);
+    const unb = await page.eval(`document.querySelector('#panel [data-act="unblock"]').textContent + '|' + document.querySelector('#panel .blk').textContent`);
     check(/Unblock #799/.test(unb) && unb.includes('which waits on #798') && unb.includes('marks #799 resolved'), `${label}: Unblock does not say which dependency it resolves: ${unb}`);
 
     // Metrics: every chart is present, and nothing is per person.
@@ -262,11 +262,11 @@ try {
     await open('fixture-work-replay.json', 'view=board&autoclaim=0&story=gh-795');
     info = await page.eval('window.replayInfo()');
     check(info.redos === 3 && info.state === 'needs' && info.paths.length === 4, `${label}: gh-795 is ${info.state} with ${info.redos} redos, ${info.paths.length} paths`);
-    check(await page.eval(`document.querySelector('.banner.limit')?.textContent.includes('Redo limit reached, 3 of 3') && !!document.querySelector('.banner.limit [data-act="t"]') && !!document.querySelector('.banner.limit [data-act="l"]')`), `${label}: the limit banner lacks take it or split it`);
+    check(await page.eval(`document.querySelector('.banner.limit')?.textContent.includes('Redo limit reached, 3 of 3') && !!document.querySelector('.banner.limit [data-act="take"]') && !!document.querySelector('.banner.limit [data-act="split"]')`), `${label}: the limit banner lacks take it or split it`);
     check(await page.eval(`window.redoFrom(1, 'x')`) === false, `${label}: a redo started on the item at its limit`);
     check(await page.eval(`document.querySelectorAll('#path .lane').length`) === 4, `${label}: not every branch is drawn`);
     check(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), `${label}: the story scrolls sideways`);
-    await page.eval(`window.act('l')`);
+    await page.eval(`window.act('split')`);
     check((await page.eval('window.intakeInfo()')).localEvents.includes('split'), `${label}: split wrote no record`);
     // The side-by-side view compares the two open attempts.
     await open('fixture-work-replay.json', 'story=gh-792&tab=side&autoclaim=0');
@@ -292,6 +292,103 @@ try {
     info = await page.eval('window.intakeInfo()');
     if (size === 'laptop') check(info.crossings === 0, `${label}: ${info.crossings} chain segments cross a card that is not in the chain`);
   }
+
+  // Familiar conventions: the keys mean what they mean in other trackers, every
+  // action is on the palette, and an action can be taken back (docs/work-tracker.md "My queue").
+  await page.setViewport(1280, 800);
+  let label = 'conventions';
+  const key = (k, mods = {}, on = 'document') => page.eval(`${on}.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(k)}, bubbles: true, ...${JSON.stringify(mods)} }))`);
+  const ux = () => page.eval('window.ux.info()');
+  const palq = `document.getElementById('palq')`;
+  await open('fixture-work.json', 'view=list');
+  check(page.problems.length === 0, `${label}: page errors: ${page.problems.join('; ')}`);
+  const listed = await page.eval(`document.querySelector('#vtitle span').textContent`);
+  check(await page.eval(`document.querySelectorAll('#list .lgroup').length`) === STAGES.length, `${label}: the list does not group by the board's stages`);
+  check(await page.eval(`document.querySelectorAll('#sidebar .sn').length >= 6 && !!document.querySelector('#sidebar [data-sv]') && !!document.querySelector('#sidebar [data-src]')`), `${label}: the sidebar lacks views or sources`);
+  // Ctrl+K finds a place by name and goes there.
+  await key('k', { ctrlKey: true });
+  let u = await ux();
+  check(u.pal?.mode === 'all' && u.pal.items.includes('My queue') && u.pal.items.includes('New item'), `${label}: Ctrl+K did not open the palette with places and actions`);
+  await page.eval(`window.ux.type('as a board')`);
+  await key('Enter', {}, palq);
+  u = await ux();
+  check(u.view === 'board' && !u.pal, `${label}: the palette did not go to the board`);
+  check(await page.eval(`document.querySelector('#vtitle span').textContent`) === listed, `${label}: the list and the board count different items`);
+  check(u.url.includes('view=board'), `${label}: the view is not in the URL: ${u.url}`);
+  await key('g'); await key('l');
+  check((await ux()).view === 'list', `${label}: g then l did not go to the list`);
+  await key('?');
+  check((await ux()).pal?.mode === 'keys' && await page.eval(`document.getElementById('pal').textContent.includes('Command palette')`), `${label}: ? did not show the shortcuts`);
+  await key('Escape');
+  await key('/');
+  check(await page.eval(`document.activeElement.id`) === 'q', `${label}: / did not focus search`);
+  await page.eval(`document.activeElement.blur()`);
+  // x selects, Shift+j extends, and neither writes a record.
+  const recordsBefore = (await ux()).records;
+  await key('j'); await key('x'); await key('J', { shiftKey: true });
+  u = await ux();
+  check(u.checked.length === 2 && u.records === recordsBefore, `${label}: x and Shift+j selected ${u.checked.length} rows, wrote ${u.records - recordsBefore} records`);
+  check(await page.eval(`document.getElementById('bulk').classList.contains('open') && document.getElementById('bulk').textContent.includes('2 selected')`), `${label}: no bulk bar for a selection`);
+  // A bulk action applies to every selected row and one undo takes all of it back.
+  await key('Enter', { ctrlKey: true });
+  u = await ux();
+  check(u.toast?.undo && /2 items/.test(u.toast.text) && u.checked.length === 0, `${label}: the bulk action gave no undo toast: ${JSON.stringify(u.toast)}`);
+  check((await page.eval('window.intakeInfo()')).localEvents.filter((k) => k === 'triaged').length === 2, `${label}: the bulk accept did not write two records`);
+  await key('z', { ctrlKey: true });
+  u = await ux();
+  check(u.records === recordsBefore && (await page.eval('window.intakeInfo()')).localEvents.length === 0, `${label}: undo left records behind`);
+  // c creates, s sets status, p sets tier, a assigns: each opens its picker.
+  await page.eval(`window.select('gh-774')`);
+  for (const [k, mode] of [['c', 'create'], ['s', 'status'], ['p', 'tier'], ['a', 'assign'], ['f', 'filter']]) {
+    await key(k);
+    check((await ux()).pal?.mode === mode, `${label}: ${k} did not open the ${mode} picker`);
+    await key('Escape', {}, `document.getElementById('pal')`);
+  }
+  await key('s'); await page.eval(`window.ux.type('parked')`); await key('Enter', {}, palq);
+  check((await page.eval('window.intakeInfo()')).localEvents.includes('parked'), `${label}: the status picker did not park the item`);
+  await key('z', { ctrlKey: true });
+  await key('c'); await page.eval(`window.ux.type('Publish stalls after a rebalance')`); await key('Enter', {}, palq);
+  check((await page.eval('window.intakeInfo()')).localEvents.includes('imported') && await page.eval(`document.getElementById('list').textContent.includes('Publish stalls after a rebalance')`), `${label}: c did not create an item in Triage`);
+  // Filters narrow the list, live in the URL, and can be saved as a view.
+  await page.eval(`window.ux.filter({ stage: ['review'] })`);
+  u = await ux();
+  check(u.url.includes('stage=review') && await page.eval(`[...document.querySelectorAll('#list .lrow')].every((r) => r.dataset.stage === 'review')`), `${label}: the status filter did not narrow the list`);
+  await page.eval(`(window.ux.openPal('saveview'), window.ux.type('Reviews'), window.ux.run())`);
+  u = await ux();
+  check(u.views.includes('Reviews') && await page.eval(`document.getElementById('snav').textContent.includes('Reviews')`), `${label}: the saved view is not in the sidebar`);
+  await page.eval(`window.ux.filter({ q: 'no such item anywhere' })`);
+  check(await page.eval(`document.querySelector('#list .emptyst')?.textContent.includes('No items match')`), `${label}: no empty state for filters that match nothing`);
+  // A question offers its options as numbers, the default on the main key, and free text.
+  await open('fixture-work.json', 'view=queue&select=ado-4377');
+  u = await ux();
+  check(u.actions.filter((a) => /^opt/.test(a.id)).length === 3 && await page.eval(`document.querySelectorAll('#panel .qopts button').length === 3 && !!document.querySelector('#panel .qopts input')`), `${label}: the question card lacks its three options or the free text field`);
+  check(await page.eval(`document.querySelector('.qrow.sel .opts')?.textContent.includes('felix-gateway')`), `${label}: the queue row does not show the options`);
+  await key('1');
+  check(await page.eval(`document.getElementById('evlist').textContent.includes('chosen=felix ')`) || await page.eval(`/chosen=felix$/.test(document.querySelector('#evlist li').textContent)`), `${label}: 1 did not answer with the first option`);
+  await key('z', { ctrlKey: true });
+  await page.eval(`window.select('ado-4377')`);
+  await key('Enter', { ctrlKey: true });
+  check(await page.eval(`document.querySelector('#evlist li').textContent.includes('chosen=felix-gateway')`), `${label}: the main key did not answer with the default`);
+  await key('z', { ctrlKey: true });
+  await page.eval(`(window.select('ado-4377'), document.getElementById('note').value = 'Neither: it is the Python client')`);
+  await key('Enter', {}, `document.getElementById('note')`);
+  check(await page.eval(`document.querySelector('#evlist li').textContent.includes('text=Neither: it is the Python client')`), `${label}: free text was not recorded as typed`);
+  // A refused write is put back and says so next to the item.
+  await open('fixture-work.json', 'view=queue&select=gh-808&fail=1');
+  await key('1');
+  u = await ux();
+  check(u.toast?.err && (await page.eval(`window.stageOf('gh-808')`)) === 'triage' && await page.eval(`!!document.querySelector('#panel .errline')`), `${label}: a refused action was not rolled back with an error`);
+  // Empty, loading and density states.
+  await open('fixture-work-quiet.json', 'view=queue');
+  check(await page.eval(`document.querySelector('#qlist .emptyst')?.textContent.includes('caught up')`) && (await page.eval('window.intakeInfo()')).queue.count === 0, `${label}: an empty queue has no empty state`);
+  await open('fixture-work.json', 'loading=1');
+  check(await page.eval(`document.querySelectorAll('#qlist .sk').length >= 6`), `${label}: no skeleton while loading`);
+  const rowHeight = async (d) => { await open('fixture-work.json', `view=list&density=${d}`); return page.eval(`document.querySelector('#list .lrow').getBoundingClientRect().height`); };
+  check(await rowHeight('compact') < await rowHeight('comfortable'), `${label}: compact rows are not shorter`);
+  // The chrome uses plain words.
+  await page.eval(`window.ux.openPal('all')`);
+  const chrome = await page.eval(`['sidebar', 'legend', 'pal'].map((id) => document.getElementById(id).innerText).join(' ') + document.querySelector('header').innerText`);
+  check(!/\b(logs?|streams?|offsets?)\b/i.test(chrome), `${label}: storage wording in the navigation or the palette`);
 
   // The footer's verdict agrees in number and keeps "Show it" apart from the next sentence.
   for (const f of ['fixture-work.json', 'fixture-work-capped.json', 'fixture-work-burst.json', 'fixture-work-replay.json']) {
