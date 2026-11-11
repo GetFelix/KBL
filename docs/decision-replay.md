@@ -72,6 +72,34 @@ changes, so it is cached and the next reviewer gets it instantly.
 The answer comes from a model that sees only this item's log and must cite an
 offset for every claim. An answer it cannot cite says so.
 
+## Redo from here
+
+A reviewer who disagrees with where a fix went can rewind to the decision
+where it went wrong, say what should change, and have an agent take it again
+from there. This is not a rerun: model calls are not repeatable, so the old
+attempt stays exactly as it happened and the redo is a new attempt that
+branches from that point.
+
+- **Where it can start.** At a decision. Agents commit their work at every
+  decision, so the code as it stood at any decision can be restored exactly.
+  Rewinding between two decisions starts from the one before.
+- **What the new attempt knows.** The no-hindsight summary of everything up
+  to that point, the reviewer's note, and by default a short account of what
+  the first attempt did afterwards and why the reviewer rejected it. The
+  reviewer can untick that last part to get a clean second opinion.
+- **What gets recorded.** The note is a `human_input` with who wrote it, and
+  the new attempt starts with a `forked_from` record naming the item, the
+  attempt and the offset. The timeline shows the attempts as branches, so
+  anyone replaying later sees who steered, where and why.
+- **What happens to the first attempt.** Its pull request becomes a draft and
+  stays linked. The two attempts sit side by side (diff, checks, cost, time)
+  until the reviewer picks one. The other is closed with the reason.
+- **Cost.** The redo shows its estimated cost before it starts and counts
+  against the same budget. The cost of a fix includes every branch it took.
+
+"Request changes" on a pull request is the same action from the last
+decision: the comment becomes the note.
+
 ## Claims checked against steps
 
 A decision is the agent's account; the steps are what happened. The story
