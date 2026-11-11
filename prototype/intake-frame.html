@@ -377,6 +377,8 @@
   #explain.dragging .sec, #explain.dragging .src { opacity: 0.25; }
   #explain .drag { display: none; color: var(--muted); font-size: 12.5px; }
   #explain.dragging .drag { display: block; margin-bottom: 8px; }
+  .who { font: 600 10.5px/1 "JetBrains Mono", monospace; color: var(--amber); border: 1px solid var(--amber); border-radius: 5px; padding: 1px 5px; margin-right: 3px; white-space: nowrap; vertical-align: 1px; }
+  .nar li .who { flex: none; margin: 3px 0 0; }
   .cite { display: inline-block; height: 18px; padding: 0 5px; margin: 0 1px; vertical-align: 1px; font: 600 10.5px/16px "JetBrains Mono", monospace; color: var(--cyan); background: var(--cyan-soft); border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
   .cite:hover { border-color: var(--cyan); }
   .cite.on { background: var(--cyan); color: var(--on-cyan); }
@@ -1518,7 +1520,7 @@ function describe(key, o) {
 const cite = (o) => `<button class="cite${replay?.cite === o ? ' on' : ''}" data-cite="${o}" title="${esc(replay ? describe(replay.key, o) : '')}">#${o}</button>`;
 const sentHtml = (s, upTo = Infinity) => {
   const c = (s.cites ?? []).filter((x) => x <= upTo);
-  return c.length ? `<p class="sent">${esc(s.text)} ${c.map(cite).join('')}</p>` : '';   // no offset, not shown
+  return c.length ? `<p class="sent">${s.by ? `<span class="who">${esc(s.by)}</span> ` : ''}${esc(s.text)} ${c.map(cite).join('')}</p>` : '';   // no offset, not shown
 };
 
 // The explanation at a step: the nearest decision at or before it, as recorded.
@@ -1775,10 +1777,30 @@ function redoPlan(d) {
   const slot = decisionsOf(pathOf(it, from)).findIndex((x) => x.o === d.o) + 1;
   return { it, from, est, after, later, slot, fb, total: it.cost + est };
 }
+// What the new agent is told: the decision's recorded so_far, plus every person's
+// steer on the path before the fork that the so_far does not already carry.
+function narrativeFor(it, d, useRecorded = true) {
+  const lines = (useRecorded ? d.so_far ?? [] : []).map((x) => ({ ...x }));
+  const cited = new Set(lines.flatMap((x) => x.cites ?? []));
+  for (const h of pathOf(it, d.attempt)) if (h.kind === 'human_input' && h.o < d.o && !cited.has(h.o)) lines.push({ text: `Steered: “${h.text}”`, cites: [h.o], by: h.by });
+  return lines;
+}
+window.narrativeFor = (key, o, useRecorded = true) => { const it = state.items.get(key); const d = itemRecs(key).find((r) => r.o === o); return narrativeFor(it, d, useRecorded); };
+window.handoffGaps = (key) => {
+  const it = state.items.get(key), out = [];
+  for (const h of itemRecs(key).filter((r) => r.kind === 'handoff')) {
+    const fk = itemRecs(key).find((r) => r.kind === 'forked_from' && r.attempt === h.attempt);
+    if (!fk) continue;
+    const have = new Set(h.narrative.flatMap((x) => x.cites ?? []));
+    const missing = pathOf(it, fk.from).filter((r) => r.kind === 'human_input' && r.o < fk.at && !have.has(r.o)).map((r) => r.o);
+    if (missing.length) out.push({ attempt: h.attempt, missing });
+  }
+  return out;
+};
 function openRedo(d, label = 'Redo from here') {
   const it = state.items.get(replay.key);
   if ((it.redos ?? 0) >= redoLimit() || cut < NOW) return false;
-  const lines = (d.so_far ?? []).map((s) => ({ text: s.text, cites: s.cites, struck: false, added: false, orig: s.text }));
+  const lines = narrativeFor(it, d).map((s) => ({ text: s.text, cites: s.cites, by: s.by, struck: false, added: false, orig: s.text }));
   dialog = { type: 'redo', d, label, lines, instruction: '', includeAfter: true };
   drawModal();
   return true;
@@ -1799,11 +1821,11 @@ function redoBody() {
     `<button data-close>Cancel</button><button class="primary" id="go" ${dialog.instruction.trim() ? '' : 'disabled'}>Hand off to a new attempt</button></div>`;
 }
 const narLine = (l, i) => `<li class="${l.struck ? 'struck' : ''}${l.added ? ' added' : ''}" data-i="${i}"><button class="x" data-strike="${i}" title="${l.struck ? 'Put this line back' : 'Strike this line'}" aria-label="${l.struck ? 'Restore line' : 'Strike line'}">${l.struck ? '↺' : '✕'}</button>` +
-  `<span class="t" contenteditable="${l.struck ? 'false' : 'true'}" role="textbox" aria-label="Narrative line ${i + 1}" data-i="${i}">${esc(l.text)}</span>${l.added ? '<span class="tg">you</span>' : l.text !== l.orig ? '<span class="tg">edited</span>' : (l.cites ?? []).map(cite).join('')}</li>`;
+  `${l.by ? `<span class="who">${esc(l.by)}</span>` : ''}<span class="t" contenteditable="${l.struck ? 'false' : 'true'}" role="textbox" aria-label="Narrative line ${i + 1}" data-i="${i}">${esc(l.text)}</span>${l.added ? '<span class="tg">you</span>' : l.text !== l.orig ? '<span class="tg">edited</span>' : (l.cites ?? []).map(cite).join('')}</li>`;
 
 function handoffBody(h, b) {
   return `<h2>Handoff for attempt ${h.attempt}</h2><p class="sub">One artifact on this item. Written by ${esc(h.by)}, it is what the new agent starts from, with start commit <span class="mono">${esc(h.commit)}</span>.</p>` +
-    `<h4>Story up to the fork</h4><ul class="nar">${h.narrative.map((l) => `<li class="${l.struck ? 'struck' : ''}${l.added ? ' added' : ''}"><span class="t">${esc(l.text)}</span>${l.added ? '<span class="tg">added</span>' : (l.cites ?? []).map((c) => `<span class="tg">#${c}</span>`).join('')}${l.struck ? '<span class="tg">struck</span>' : ''}</li>`).join('')}</ul>` +
+    `<h4>Story up to the fork</h4><ul class="nar">${h.narrative.map((l) => `<li class="${l.struck ? 'struck' : ''}${l.added ? ' added' : ''}">${l.by ? `<span class="who">${esc(l.by)}</span>` : ''}<span class="t">${esc(l.text)}</span>${l.added ? '<span class="tg">added</span>' : (l.cites ?? []).map((c) => `<span class="tg">#${c}</span>`).join('')}${l.struck ? '<span class="tg">struck</span>' : ''}</li>`).join('')}</ul>` +
     `<h4>Instruction</h4><p class="sent" style="margin:0">${esc(h.instruction)}</p>` +
     `<h4>Hindsight</h4><p class="sent" style="margin:0">${h.includeAfter ? 'Includes what the first attempt did afterwards and why it was sent back.' : 'Left out. A clean second opinion.'}</p>` +
     `<div class="foot"><span class="fine">Record #${h.o}${b?.run ? ` · run ${esc(b.run)}` : ''}</span><button data-close>Close</button></div>`;
@@ -1836,7 +1858,7 @@ function doRedo(d, lines, instruction, includeAfter) {
   }
   const commit = `c${n}${key.slice(-3)}${(d.o % 4096).toString(16)}`;
   emit('human_input', key, { input: 'redo', attempt: n, text: firstLine(instruction) });
-  emit('handoff', key, { id: `h${n}`, attempt: n, narrative: lines.map(({ text, cites, struck, added }) => ({ text, cites, ...(struck ? { struck: true } : {}), ...(added ? { added: true } : {}) })), instruction, includeAfter, commit });
+  emit('handoff', key, { id: `h${n}`, attempt: n, narrative: lines.map(({ text, cites, by, struck, added }) => ({ text, cites, ...(by ? { by } : {}), ...(struck ? { struck: true } : {}), ...(added ? { added: true } : {}) })), instruction, includeAfter, commit });
   const ho = recs.length - 1;
   emit('forked_from', key, { attempt: n, from, at: d.o, handoff: ho });
   emit('attempt_published', key, { attempt: n, handoff: ho, commit, by: undefined });

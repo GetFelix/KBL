@@ -306,9 +306,10 @@ class Run:
     """One attempt's records, in order. The working agent writes each decision's
     so_far, what it chose and why; nothing downstream generates text."""
 
-    def __init__(self, L, key, attempt, agent, start_ago, prior=()):
+    def __init__(self, L, key, attempt, agent, start_ago, prior=(), humans=()):
         self.L, self.key, self.attempt, self.agent, self.ago, self.usd = L, key, attempt, agent, start_ago, 0.0
         self.decs = list(prior)  # (id, group, chosen, so_far) for every decision on this path
+        self.humans = list(humans)  # (id, by, text, decisions before it) for every person's steer on this path
         self.last_read = None
 
     def _ev(self, gap_min, kind, **d):
@@ -325,12 +326,22 @@ class Run:
 
     def decide(self, id, gap, group, q, options, chosen, why, cites, claims=(), usd=0.06):
         self.usd += usd
-        so_far = [{"text": f"{LEAD[g]} {lower(c)}.", "cites": ["@" + i]} for i, g, c, _ in self.decs[-3:]]
+        entries = []
+        for i, (di, g, c, _) in enumerate(self.decs):
+            entries += [{"text": f"Steered: “{t}”", "cites": ["@" + hid], "by": by} for hid, by, t, n in self.humans if n == i]
+            entries.append({"text": f"{LEAD[g]} {lower(c)}.", "cites": ["@" + di], "dec": True})
+        entries += [{"text": f"Steered: “{t}”", "cites": ["@" + hid], "by": by} for hid, by, t, n in self.humans if n >= len(self.decs)]
+        decs = [i for i, e in enumerate(entries) if e.get("dec")][-3:]
+        so_far = [{k: v for k, v in e.items() if k != "dec"} for i, e in enumerate(entries) if not e.get("dec") or i in decs]
         if not so_far:
             so_far = [{"text": "Read the report and the code around it; no decision yet.", "cites": ["@" + self.last_read] if self.last_read else cites}]
         self.decs.append((id, group, chosen, so_far))
         self._ev(gap, "decision", id=id, agent=self.agent, group=group, q=q, options=options, chosen=chosen, why=why,
                  cites=list(cites), so_far=so_far, claims=list(claims), usd=usd)
+
+    def humans_before(self, id):
+        k = next(i for i, d in enumerate(self.decs) if d[0] == id)
+        return [h for h in self.humans if h[3] <= k]
 
     def before(self, id):
         out = []
@@ -356,15 +367,21 @@ def redo(L, key, ago, by, new, parent, fork_run, fork_id, note, instruction, str
     """The reviewer's note, the handoff artifact (the fork decision's recorded
     so_far plus the reviewer's edits, and the instruction), the fork record, and
     the new attempt published to Ready. An agent claims it afterwards."""
-    narrative = [{"text": x["text"], "cites": x["cites"], **({"struck": True} if i in strike else {})} for i, x in enumerate(fork_run.so_far_at(fork_id))]
+    narrative = [{**x, **({"struck": True} if i in strike else {})} for i, x in enumerate(fork_run.so_far_at(fork_id))]
     narrative += [{"text": t, "cites": [], "added": True} for t in add]
     hid = f"h{new}"
     for n in close:  # only two attempts stay open, so starting this one closes another
         L.ev(ago + 0.1 * MIN, "attempt_closed", key, attempt=n, reason=f"closed when attempt {new} started, so only two stay open")
-    L.ev(ago, "human_input", key, by=by, input="redo", attempt=new, text=note)
+    L.ev(ago, "human_input", key, id=f"hi{new}", by=by, input="redo", attempt=new, text=note)
     L.ev(ago - 0.2 * MIN, "handoff", key, id=hid, by=by, attempt=new, narrative=narrative, instruction=instruction, includeAfter=include_after, commit=f"c{new}{key[-3:]}e2")
     L.ev(ago - 0.4 * MIN, "forked_from", key, by=by, attempt=new, **{"from": parent}, at="@" + fork_id, handoff="@" + hid)
     L.ev(ago - 0.6 * MIN, "attempt_published", key, attempt=new, handoff="@" + hid, commit=f"c{new}{key[-3:]}e2")
+
+
+NOTE_A2 = "The broker is right: resume means after this offset. Look at how the client counts what it handled."
+NOTE_B2 = "Counting at the ack loses publishes that are still in flight. Dedupe by publish id instead."
+NOTE_B3 = "The limiter is not where the retry comes from. The gateway resends without an id."
+NOTE_B4 = "Stamping in the client breaks old clients. Stamp it at the gateway edge."
 
 
 def replay_items(L):
@@ -398,10 +415,10 @@ def replay_items(L):
           {"changed": "Resumes from the offset after the one the client sent", "verified": "reconnect_resume and the subscribe tests pass", "unsure": ""})
 
     redo(L, k, 5 * HOUR, "dana", 2, 1, a1, "a1d3",
-         "The broker is right: resume means after this offset. Look at how the client counts what it handled.",
+         NOTE_A2,
          "Find where the client picks the offset it sends on resume and fix it there. Leave the broker alone.",
          add=["Resume means after the offset sent. That is the wire contract, so the broker is right."])
-    a2 = Run(L, k, 2, "w5", 5 * HOUR - 2 * MIN, prior=a1.before("a1d3"))
+    a2 = Run(L, k, 2, "w5", 5 * HOUR - 2 * MIN, prior=a1.before("a1d3"), humans=a1.humans_before("a1d3") + [("hi2", "dana", NOTE_A2, len(a1.before("a1d3")))])
     a2.claim()
     a2.tool("a2s1", 4, "read", "client/ack.rs", "Acks offset N when the callback starts; resume sends N")
     a2.decide("a2d3", 3, "cause", "Where does the extra record come from?",
@@ -443,9 +460,9 @@ def replay_items(L):
     b1.decide("b1d4", 2, "verify", "Is it ready?", ["Open the PR", "Test with slow acks"], "Open the PR", "limiter_retry passes.", ["@b1s3"], claims=["tests pass"])
     b1.pr(5, 3133, 31, 14, 2, "pass", "dana", {"changed": "Counts a publish at its ack", "verified": "limiter_retry passes", "unsure": ""})
     redo(L, k, 3 * DAY + 20 * HOUR, "dana", 2, 1, b1, "b1d3",
-         "Counting at the ack loses publishes that are still in flight. Dedupe by publish id instead.",
+         NOTE_B2,
          "Dedupe retried publishes by their publish id in the limiter.")
-    b2 = Run(L, k, 2, "w4", 3 * DAY + 20 * HOUR - 2 * MIN, prior=b1.before("b1d3"))
+    b2 = Run(L, k, 2, "w4", 3 * DAY + 20 * HOUR - 2 * MIN, prior=b1.before("b1d3"), humans=b1.humans_before("b1d3") + [("hi2", "dana", NOTE_B2, len(b1.before("b1d3")))])
     b2.claim()
     b2.decide("b2d3", 4, "fix", "Where should it count?", ["Dedupe by publish id in the limiter", "Dedupe in the gateway"], "Dedupe by publish id in the limiter",
               "The limiter already sees the id on every send.", ["@b1d2"])
@@ -453,9 +470,9 @@ def replay_items(L):
     b2.decide("b2d4", 3, "verify", "Is it ready?", ["Open the PR"], "Open the PR", "The limiter now ignores a repeated id.", ["@b2e1"], claims=["tests pass"])
     b2.pr(4, 3135, 44, 6, 3, "pass", "kim", {"changed": "The limiter ignores a repeated publish id", "verified": "", "unsure": "Did not run the tests"})
     redo(L, k, 3 * DAY + 8 * HOUR, "kim", 3, 1, b1, "b1d2",
-         "The limiter is not where the retry comes from. The gateway resends without an id.",
+         NOTE_B3,
          "Find why a retry arrives without a publish id.", close=[2])
-    b3 = Run(L, k, 3, "w6", 3 * DAY + 8 * HOUR - 2 * MIN, prior=b1.before("b1d2"))
+    b3 = Run(L, k, 3, "w6", 3 * DAY + 8 * HOUR - 2 * MIN, prior=b1.before("b1d2"), humans=b1.humans_before("b1d2") + [("hi3", "kim", NOTE_B3, len(b1.before("b1d2")))])
     b3.claim()
     b3.decide("b3d2", 4, "cause", "Why is the count high?", ["The gateway retries without the id", "The client sends two publishes"], "The gateway retries without the id",
               "Kim's note, and the retry path never copies the id.", ["@b1s1"])
@@ -467,9 +484,9 @@ def replay_items(L):
     b3.decide("b3d4", 2, "verify", "Is it ready?", ["Open the PR"], "Open the PR", "Both retry tests pass.", ["@b3s2"], claims=["tests pass"])
     b3.pr(4, 3138, 52, 9, 3, "pass", "dana", {"changed": "Stamps the publish id in the client before the first send", "verified": "limiter_retry and gateway_retry pass", "unsure": ""})
     redo(L, k, 2 * DAY + 3 * HOUR, "dana", 4, 3, b3, "b3d3",
-         "Stamping in the client breaks old clients. Stamp it at the gateway edge.",
+         NOTE_B4,
          "Stamp the id where a publish enters the gateway.", close=[1])
-    b4 = Run(L, k, 4, "w2", 2 * DAY + 3 * HOUR - 2 * MIN, prior=b3.before("b3d3"))
+    b4 = Run(L, k, 4, "w2", 2 * DAY + 3 * HOUR - 2 * MIN, prior=b3.before("b3d3"), humans=b3.humans_before("b3d3") + [("hi4", "dana", NOTE_B4, len(b3.before("b3d3")))])
     b4.claim()
     b4.decide("b4d3", 4, "fix", "Where should the id be set?", ["Stamp it at the gateway edge"], "Stamp it at the gateway edge", "Dana's note: old clients never send one.", ["@b3d2"])
     b4.edit("b4e1", 9, "gateway/ingress.rs", 11, 0, "@b4d3")

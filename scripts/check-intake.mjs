@@ -218,6 +218,14 @@ try {
     // Between two decisions the nearest earlier one is shown.
     const mid = await page.eval(`window.explainAt('gh-792', 1, ${decs[1][1]} + 1).text`);
     check(mid.includes('unit test on the resume path'), `${label}: a step after decision 2 does not show decision 2`);
+    // Earlier human steering stays on the path: attempt 2's explanation and handoff carry dana's steer.
+    const steer = await page.eval(`(() => { const x = window.explainAt('gh-792', 2, ${decs.find(([n]) => n === 2)[1]}); return { text: x.text, by: x.soFar.filter((l) => l.by).map((l) => l.by), cites: x.soFar.filter((l) => l.by).flatMap((l) => l.cites) }; })()`);
+    check(steer.by.join() === 'dana' && steer.cites.length === 1 && steer.text.includes('The broker is right'), `${label}: attempt 2's "So far" lost dana's steer`);
+    await page.eval(`window.openReplay('gh-792')`);
+    await page.eval(`(() => { const r = document.getElementById('rscrub'); r.value = 9; r.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    check(await page.eval(`[...document.querySelectorAll('#explain .sent')].some((p) => p.querySelector('.who')?.textContent === 'dana' && p.querySelector('.cite'))`), `${label}: a steer is not shown as a person line with an offset`);
+    const stripped = await page.eval(`window.narrativeFor('gh-792', ${decs.find(([n]) => n === 2)[1]}, false).map((l) => ({ by: l.by, text: l.text, cites: l.cites }))`);
+    check(stripped.length === 1 && stripped[0].by === 'dana' && stripped[0].cites.length === 1, `${label}: the dialog does not add the person's steer by itself: ${JSON.stringify(stripped)}`);
     // Questions are work items: one answered with offsets, and a new one waits for an agent.
     check(info.questions.length === 1 && info.questions[0].answered && info.questions[0].cites.length === 2, `${label}: the answered question or its cited offsets are missing`);
     await page.eval(`(() => { document.getElementById('qtext').value = 'Does this affect the Python client?'; document.getElementById('qform').requestSubmit(); })()`);
@@ -228,6 +236,9 @@ try {
     info = await page.eval('window.replayInfo()');
     check(info.redos === 2 && info.paths.length === 3 && info.state === 'ready' && info.lastPathState === 'published', `${label}: after a redo the item is ${info.state}, ${info.paths.length} paths`);
     check(info.handoffs.includes(3), `${label}: no handoff artifact for attempt 3`);
+    const gaps = await page.eval(`window.handoffGaps('gh-792')`);
+    check(gaps.length === 0, `${label}: a handoff leaves out a person's steer on its path: ${JSON.stringify(gaps)}`);
+    check(await page.eval(`window.handoffGaps('gh-795').length`) === 0, `${label}: a fixture handoff leaves out a person's steer`);
     check(info.paths.filter((b) => ['running', 'review', 'draft', 'published'].includes(b.state)).length <= 2, `${label}: more than two attempts are open`);
     check(info.paths[0].state === 'closed' && info.paths[1].state === 'draft', `${label}: the earlier attempts are ${info.paths.map((b) => b.state)}`);
     await page.eval(`window.setView('board')`);
