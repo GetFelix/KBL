@@ -5,7 +5,7 @@
 //      none unless it names the tier;
 //   2. findings become a fix for the author's tree, a proposal for a person,
 //      or nothing;
-//   3. the final reviewer cannot recommend a merge while a fix is open, and
+//   3. the final review waits for the fixes the first pass asked for, and
 //      its verdict is a record while the root stays open for a person.
 //
 //   cargo build -p felix-mcp -p agents-tool -p agents-tracker && node dev/check-tracker-review.mjs
@@ -145,12 +145,12 @@ try {
   const none = await w4.tool("work_next", { wait_seconds: 1 });
   check(!none.claimed, "the deferred finding is not claimable until a person accepts it");
 
-  // 3. The final review.
-  const last = await takeNext(w4, 20, { review_tiers: ["deep"] });
-  check(last.claimed && last.item.review.pass === "final", "w4 was handed the final review");
-  const early = await refusal(() => w4.tool("work_verdict", { verdict: "merge", why: "looks good" }));
-  check(early?.includes("open_children"), "a merge cannot be recommended while a fix is open");
+  // 3. The final review waits for the fix, then reads the tree with it in.
+  const tooSoon = await w4.tool("work_next", { wait_seconds: 1, review_tiers: ["deep"] });
+  check(!tooSoon.claimed, "the final review waits while the fix the first pass asked for is open");
   await w3.tool("work_complete", { item: fix.item.id });
+  const last = await takeNext(w4, 20, { review_tiers: ["deep"] });
+  check(last.claimed && last.item.review.pass === "final", "w4 was handed the final review once the fix landed");
   const noVerdict = await refusal(() => w4.tool("work_complete", { item: last.item.id }));
   check(noVerdict?.includes("missing_field"), "the final review cannot finish without a verdict");
   await w4.tool("work_verdict", { verdict: "merge", why: "the fix landed and the test guards it" });

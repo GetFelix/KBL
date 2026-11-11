@@ -164,10 +164,6 @@ struct Core {
     /// They are published again only after the log moves, or every poll would
     /// publish, refuse and ack the same item forever.
     refused: HashMap<ItemId, Option<u64>>,
-    /// Reviews an author passed over, and when. Each is published again at most
-    /// once per visibility period, so an author that only polls cannot make the
-    /// stream grow by one record per poll.
-    passed: HashMap<ItemId, Instant>,
     /// The state may not match the log: rebuild it before serving.
     stale: bool,
     lease: Option<LeaseHeld>,
@@ -720,15 +716,16 @@ impl<B: Broker> Tracker<B> {
         Ok(None)
     }
 
-    /// Whether the lane has Ready items and every one is a review of a tree this
-    /// agent worked on.
+    /// Whether the lane has published Ready items and every one is a review of a
+    /// tree this agent worked on. Items with no record in the lane (refused, or
+    /// passed over and not yet published again) do not count.
     async fn lane_is_all_own(&self, agent: &AgentName, tier: u8) -> bool {
         let core = self.0.core.lock().await;
         let key = agent_key(agent);
         let mut any = false;
         for (id, it) in &core.state.items {
-            if core.state.stage(id) != Some(Stage::Ready) || self.0.settings.lane(it) != Some(tier)
-            {
+            let published = core.live.get(id).is_some_and(|(t, _)| *t == tier);
+            if !published || core.state.stage(id) != Some(Stage::Ready) {
                 continue;
             }
             any = true;
@@ -760,7 +757,6 @@ impl<B: Broker> Tracker<B> {
             // A newer record for the item stays live.
             if core.live.get(&ready.item) == Some(&(ready.tier, ready.stamp)) {
                 core.live.remove(&ready.item);
-                core.passed.insert(ready.item, Instant::now());
             }
         }
         let ops = vec![Op::Ack(stream.to_owned(), agent.clone(), record.offset)];
@@ -1074,11 +1070,6 @@ impl<B: Broker> Tracker<B> {
                 .iter()
                 .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
                 .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
-                .filter(|(id, _)| {
-                    core.passed
-                        .get(*id)
-                        .is_none_or(|at| at.elapsed() >= self.0.settings.visibility)
-                })
                 .filter_map(|(id, it)| Some((id.clone(), self.0.settings.lane(it)?)))
                 .filter(|(id, tier)| core.live.get(id).is_none_or(|(t, _)| t != tier))
                 .collect()

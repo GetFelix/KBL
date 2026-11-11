@@ -690,6 +690,11 @@ impl State {
         }
     }
 
+    /// Whether a link says `from` waits on `to`, open or not.
+    pub fn is_linked(&self, from: &ItemId, to: &ItemId) -> bool {
+        self.edges.contains(&(from.clone(), to.clone()))
+    }
+
     fn is_closed(&self, id: &ItemId) -> bool {
         self.items.get(id).is_some_and(|i| i.closed.is_some())
     }
@@ -1671,6 +1676,20 @@ impl State {
     }
 
     /// Whether any fix a review asked for is still open under `root`.
+    /// The final review of `pr` under `root`, if it is still unclaimed.
+    fn open_final_review(&self, root: &ItemId, pr: &str) -> Option<ItemId> {
+        let r = self.items.get(root)?;
+        r.children.iter().find_map(|c| {
+            let it = self.items.get(c)?;
+            let spec = it.review.as_ref()?;
+            (spec.pass == ReviewPass::Final
+                && spec.pr == pr
+                && it.closed.is_none()
+                && it.hold.is_none())
+            .then(|| c.clone())
+        })
+    }
+
     fn open_fixes(&self, root: &ItemId) -> bool {
         self.items.get(root).is_some_and(|r| {
             r.children.iter().any(|c| {
@@ -1819,7 +1838,15 @@ impl State {
                     self.flag_over_budget(&root);
                     return Err(why);
                 }
-                let mut fix = Self::blank(&child("fix"), WorkKind::Fix, &shorten("Fix: "));
+                let fix_id = child("fix");
+                // The final review reads the tree with the fix in it, so it waits.
+                // No new final review is made once the fix lands.
+                if spec.pass == ReviewPass::First
+                    && let Some(last) = self.open_final_review(&root, &spec.pr)
+                {
+                    self.edges.insert((last, fix_id.clone()));
+                }
+                let mut fix = Self::blank(&fix_id, WorkKind::Fix, &shorten("Fix: "));
                 fix.parent = Some(root.clone());
                 fix.root = root;
                 fix.depth = depth;

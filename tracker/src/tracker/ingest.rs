@@ -129,8 +129,9 @@ impl<B: Broker> Tracker<B> {
 
     /// When a request opens, the root gets a first-pass review and a final
     /// review of it, each for a reviewer tier, the final waiting for the first.
-    /// Once per request: the ids come from the root and the request. The tracker
-    /// writes them itself, so ingest's token gains no new power.
+    /// Once per request: the ids come from the root and the request. Each piece
+    /// is written only if it is missing, so a retry finishes a partial write.
+    /// The tracker writes them itself, so ingest's token gains no new power.
     async fn open_reviews(&self, core: &mut super::Core, root: &ItemId, pr: &str) {
         let tiers = &self.0.settings.review_tiers;
         let (Some(first_tier), Some(final_tier)) = (tiers.first(), tiers.last()) else {
@@ -138,14 +139,14 @@ impl<B: Broker> Tracker<B> {
         };
         let id = |pass: &str| review_id(root, pr, pass);
         let (first, last) = (id("first"), id("final"));
-        if core.state.items.contains_key(&first) {
-            return;
-        }
         let plan = [
             (&first, ReviewPass::First, first_tier, "First-pass review"),
             (&last, ReviewPass::Final, final_tier, "Final review"),
         ];
         for (item, pass, tier, title) in plan {
+            if core.state.items.contains_key(item) {
+                continue;
+            }
             let record = WorkRecord::Proposed {
                 item: item.clone(),
                 parent: Some(root.clone()),
@@ -165,6 +166,9 @@ impl<B: Broker> Tracker<B> {
                 eprintln!("agents-tracker: could not open the {title} for {pr}: {e}");
                 return;
             }
+        }
+        if core.state.is_linked(&last, &first) {
+            return;
         }
         let wait = WorkRecord::Linked {
             item: last,

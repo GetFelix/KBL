@@ -550,7 +550,8 @@ flowchart LR
 - **Created with the request.** When ingest reports an item's pull request
   open, the tracker adds two `review` children under the root: a first pass
   for the first configured tier and a final review for the last. The final
-  waits for the first. Each request gets them once, and a root has at most 8
+  waits for the first, and for every fix the first pass asks for, so it reads
+  the tree with the fixes in. Each request gets them once, and a root has at most 8
   review items. A person or an agent cannot create one.
 - **Claimed by tier.** The tiers are `AGENTS_REVIEW_TIERS` (default
   `fast,deep`, at most four), one ready stream each (`work.review.r0` to

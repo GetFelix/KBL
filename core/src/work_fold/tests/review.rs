@@ -366,15 +366,23 @@ fn the_final_review_ends_with_a_verdict_a_person_acts_on() {
     assert_eq!(s.stage(&id("r1")), Some(Stage::InReview));
 }
 
+/// The id of the fix the finding at `offset` of `review` makes.
+fn fix_of(l: &Log, review: &str) -> ItemId {
+    let s = state(l);
+    let off = s.items[&id(review)].findings[0];
+    derived_id("fix", &id(review), off)
+}
+
 #[test]
 fn only_a_final_review_gives_a_verdict_and_an_open_fix_blocks_a_merge() {
     let mut l = reviewed();
     l.agent("w2", claimed("v1", 1));
     l.agent("w2", verdict("v1", MergeVerdict::Merge));
     assert_eq!(last(&l), Some(Reject::NotReview));
-    l.agent("w2", finding("v1", FindingVerdict::Fix));
     l.agent("w2", done("v1", 1, 0));
     l.agent("w3", claimed("v2", 1));
+    // The final reviewer finds a fix of its own: a merge waits for it.
+    l.agent("w3", finding("v2", FindingVerdict::Fix));
     l.agent("w3", verdict("v2", MergeVerdict::Merge));
     assert_eq!(last(&l), Some(Reject::OpenChildren));
     l.agent("w3", verdict("v2", MergeVerdict::Block));
@@ -385,6 +393,28 @@ fn only_a_final_review_gives_a_verdict_and_an_open_fix_blocks_a_merge() {
         MergeVerdict::Block
     );
     assert!(!s.merge_ready(&id("r1")));
+}
+
+#[test]
+fn the_final_review_waits_for_a_fix_the_first_pass_asked_for_and_then_can_merge() {
+    let mut l = reviewed();
+    l.agent("w2", claimed("v1", 1));
+    l.agent("w2", finding("v1", FindingVerdict::Fix));
+    l.agent("w2", done("v1", 1, 0));
+    let fix = fix_of(&l, "v1").to_string();
+    // The first pass is done, but the fix is open: nobody can take the final review.
+    assert_eq!(state(&l).stage(&id("v2")), Some(Stage::Blocked));
+    l.agent("w3", claimed("v2", 1));
+    assert_eq!(last(&l), Some(Reject::NotReady));
+    // The fix lands.
+    let fix = fix.as_str();
+    l.agent("w1", claimed(fix, 1));
+    l.agent("w1", done(fix, 1, 0));
+    assert_eq!(state(&l).stage(&id("v2")), Some(Stage::Ready));
+    l.agent("w3", claimed("v2", 1));
+    l.agent("w3", verdict("v2", MergeVerdict::Merge));
+    l.agent("w3", done("v2", 1, 0));
+    assert!(state(&l).merge_ready(&id("r1")));
 }
 
 #[test]

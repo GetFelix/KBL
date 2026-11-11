@@ -23,6 +23,8 @@ struct Net {
     /// Every broker call that changes something, in order.
     calls: Vec<String>,
     fail_publish_on: Option<String>,
+    /// Publishes to the stream that still succeed, then every one fails.
+    publish_budget: Option<(String, u32)>,
     fail_reads: bool,
     extend_stale: bool,
     /// The writer lease key: holder and version, while it is live.
@@ -100,6 +102,14 @@ impl Fake {
             .unwrap()
             .slots
             .insert((stream.to_owned(), offset), Slot::Pending);
+    }
+
+    fn lift_publish_budget(&self) {
+        self.net.lock().unwrap().publish_budget = None;
+    }
+
+    fn fail_publishes_to_after(&self, stream: &str, ok: u32) {
+        self.net.lock().unwrap().publish_budget = Some((stream.to_owned(), ok));
     }
 
     fn fail_publishes_to(&self, stream: Option<&str>) {
@@ -232,6 +242,14 @@ impl Broker for Fake {
         let mut net = self.net.lock().unwrap();
         if net.fail_publish_on.as_deref() == Some(stream) {
             anyhow::bail!("the broker is down");
+        }
+        if let Some((s, left)) = net.publish_budget.as_mut()
+            && s == stream
+        {
+            if *left == 0 {
+                anyhow::bail!("the broker is down");
+            }
+            *left -= 1;
         }
         let log = net.streams.entry(stream.to_owned()).or_default();
         let offset = log.len() as u64;

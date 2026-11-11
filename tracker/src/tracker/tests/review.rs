@@ -67,6 +67,16 @@ fn finding(verdict: FindingVerdict) -> NewFinding {
     }
 }
 
+async fn fix_id(t: &Tracker<Fake>) -> String {
+    let core = t.0.core.lock().await;
+    core.state
+        .items
+        .values()
+        .find(|i| i.finding.is_some() && i.parent.is_some())
+        .map(|i| i.id.to_string())
+        .unwrap()
+}
+
 async fn review_id(t: &Tracker<Fake>, tier: &str) -> ItemId {
     let core = t.0.core.lock().await;
     core.state
@@ -100,6 +110,53 @@ async fn an_opened_request_gets_one_first_pass_and_one_final_review() {
         .await
         .unwrap();
     assert_eq!(fake.kinds().iter().filter(|k| *k == "proposed").count(), 2);
+}
+
+/// A request opened while Felix refuses the writes after `ok` of them, then
+/// reported again once it is back.
+async fn opened_with_a_partial_write(ok: u32) -> (Fake, Tracker<Fake>) {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed_in_felix(&t, "a1").await;
+    claim(&t, "w1").await;
+    t.progress(
+        &agent("w1"),
+        &item("a1"),
+        Content::Text("fixed".into()),
+        None,
+        Some(PR.into()),
+    )
+    .await
+    .unwrap();
+    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    // The status record is one write, then the first pass, the final, the link.
+    fake.fail_publishes_to_after(WORK_EVENTS, ok);
+    t.ingest_record(key("ingest-gh"), status(PrReview::Unreviewed))
+        .await
+        .ok();
+    fake.lift_publish_budget();
+    t.ingest_record(key("ingest-gh"), status(PrReview::Approved))
+        .await
+        .unwrap();
+    (fake, t)
+}
+
+#[tokio::test]
+async fn a_partly_written_pair_of_reviews_is_finished_by_the_next_status() {
+    // Cut off before the first pass, after it, and before the link.
+    for ok in [1, 2, 3] {
+        let (fake, t) = opened_with_a_partial_write(ok).await;
+        assert_eq!(
+            fake.kinds().iter().filter(|k| *k == "proposed").count(),
+            2,
+            "ok = {ok}"
+        );
+        let first = review_id(&t, "fast").await;
+        let last = review_id(&t, "deep").await;
+        let core = t.0.core.lock().await;
+        assert!(core.state.is_linked(&last, &first), "ok = {ok}");
+        assert_eq!(core.state.stage(&last), Some(Stage::Blocked), "ok = {ok}");
+    }
 }
 
 #[tokio::test]
@@ -177,6 +234,53 @@ async fn an_author_polling_for_reviews_does_not_use_up_the_review() {
 }
 
 #[tokio::test]
+async fn an_author_passing_over_its_review_does_not_hold_it_back_from_another() {
+    // w1 wrote a1 (its review is first in the lane); w2 writes a2 (second).
+    let (_fake, t) = opened().await;
+    seed_in_felix(&t, "a2").await;
+    let got = claim(&t, "w2").await;
+    assert_eq!(claimed_id(&got).as_deref(), Some("a2"));
+    t.progress(
+        &agent("w2"),
+        &item("a2"),
+        Content::Text("fixed".into()),
+        None,
+        Some("GetFelix/felix#a2".into()),
+    )
+    .await
+    .unwrap();
+    t.complete(&agent("w2"), &item("a2"), 0).await.unwrap();
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::PrStatus {
+            item: item("a2"),
+            status: PrSnapshot {
+                pr: "GetFelix/felix#a2".into(),
+                phase: PrPhase::Open,
+                review: PrReview::Unreviewed,
+                checks: PrChecks::Green,
+                failing: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    // w1 passes over its own review and takes w2's.
+    let theirs = t
+        .next_for(&agent("w1"), Duration::ZERO, &fast())
+        .await
+        .unwrap();
+    assert_eq!(theirs["item"]["work"], "review");
+    assert_eq!(theirs["item"]["pr"], "GetFelix/felix#a2");
+    // w2 can take w1's review at once, with no wait for the pass-over to expire.
+    let mine = t
+        .next_for(&agent("w2"), Duration::ZERO, &fast())
+        .await
+        .unwrap();
+    assert_eq!(mine["item"]["pr"], PR);
+}
+
+#[tokio::test]
 async fn findings_become_children_and_proposals_and_a_verdict_ends_the_final_review() {
     let (fake, t) = opened().await;
     let got = t
@@ -207,36 +311,32 @@ async fn findings_become_children_and_proposals_and_a_verdict_ends_the_final_rev
     }
     t.complete(&agent("w2"), &first, 0).await.unwrap();
 
-    // Another agent takes the fix; the final reviewer cannot recommend a merge while it is open.
+    // The final review waits for the fix the first pass asked for.
     assert_eq!(claim(&t, "w4").await["item"]["work"], "fix");
+    let early = t
+        .next_for(&agent("w3"), Duration::ZERO, &deep())
+        .await
+        .unwrap();
+    assert!(not_claimed(&early), "{early}");
+    t.complete(&agent("w4"), &item(&fix_id(&t).await), 0)
+        .await
+        .unwrap();
     let fin = t
         .next_for(&agent("w3"), Duration::ZERO, &deep())
         .await
         .unwrap();
     let last = item(fin["item"]["id"].as_str().unwrap());
-    let err = t
-        .review_verdict(&agent("w3"), &last, MergeVerdict::Merge, "good".into())
+    t.review_verdict(&agent("w3"), &last, MergeVerdict::Merge, "good".into())
         .await
-        .unwrap_err();
-    assert!(
-        matches!(&err, Error::Refused { why } if why == "open_children"),
-        "{err}"
-    );
-    t.review_verdict(
-        &agent("w3"),
-        &last,
-        MergeVerdict::Block,
-        "a fix is open".into(),
-    )
-    .await
-    .unwrap();
+        .unwrap();
     t.complete(&agent("w3"), &last, 0).await.unwrap();
     let core = t.0.core.lock().await;
     let v = core.state.items[&item("a1")]
         .review_verdict
         .clone()
         .unwrap();
-    assert_eq!(v.verdict, MergeVerdict::Block);
+    assert_eq!(v.verdict, MergeVerdict::Merge);
+    assert!(core.state.merge_ready(&item("a1")));
     // Merging stays a person's action: nothing here closed the root.
     assert!(core.state.items[&item("a1")].closed.is_none());
     assert!(!fake.kinds().contains(&"closed".to_owned()));
