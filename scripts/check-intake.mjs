@@ -1,7 +1,8 @@
 // Loads the intake frame in headless Chrome at laptop and phone size and checks
 // that both fixtures fold into the design's columns, that selecting an item
 // draws its dependency chain, and that the page stays readable under the burst
-// (docs/work-tracker.md "The dashboard").
+// (docs/work-tracker.md "The dashboard"), and that the decision replay explains a
+// step from what was recorded up to it and nothing after (docs/decision-replay.md).
 // Usage: node scripts/check-intake.mjs
 import { fileURLToPath } from 'node:url';
 import { launch, serve } from './lib/browser.mjs';
@@ -165,6 +166,101 @@ try {
     check(await page.eval(`document.querySelectorAll('#v-metrics svg').length >= 4`), `${label}: fewer than four charts`);
     check(!/\b(dana|kim|ravi)\b/i.test(m), `${label}: a person is named in the metrics`);
     check(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), `${label}: the page scrolls sideways`);
+
+
+    // Decision replay: paths, the story, the explanation at a step, the fork and the redo limit.
+    label = `${size} replay`;
+    await open('fixture-work-replay.json', 'view=board&autoclaim=0');
+    check(page.problems.length === 0, `${label}: page errors: ${page.problems.join('; ')}`);
+    check(await page.eval(`document.querySelector('#c-review .row[data-k="gh-792"] .mk.paths')?.textContent === '2 paths'`), `${label}: the review card for gh-792 has no "2 paths" mark`);
+    check(await page.eval(`document.querySelector('#c-needs .row[data-k="gh-795"] .mk.paths')?.textContent === '4 paths'`), `${label}: the redo-limit card has no "4 paths" mark`);
+    check(await page.eval(`document.querySelector('#c-needs').textContent.includes('redo limit')`), `${label}: Needs you does not group the redo-limit item`);
+    check(await page.eval(`/proposed by w\\d/.test(document.querySelector('#c-triage').textContent)`), `${label}: triage cards do not say which agent proposed`);
+    check(!/kibble|pawprint/i.test(await page.eval(`document.body.innerText`)), `${label}: internal wording in the UI`);
+    // Opening an item with history shows its story.
+    await page.eval(`window.select('gh-792')`);
+    await press('Enter');
+    await new Promise((ok) => setTimeout(ok, 150));
+    info = await page.eval('window.replayInfo()');
+    check(info.view === 'replay', `${label}: Enter on an item with a history did not open its story`);
+    const groups = await page.eval(`[...document.querySelectorAll('.grp > h4')].map((h) => h.firstChild.textContent)`);
+    check(['Understand', 'Reproduce', 'Cause', 'Fix', 'Verify'].every((g) => groups.includes(g)), `${label}: story groups are ${groups}`);
+    check(info.flags.some((f) => f.kind === 'tests') && info.flags.some((f) => f.kind === 'edit'), `${label}: claim-versus-step flags are missing: ${JSON.stringify(info.flags)}`);
+    check(await page.eval(`document.querySelector('.flagstrip')?.textContent.includes('no test ran after the last edit')`), `${label}: the tests-claimed flag does not say what is missing`);
+    // The fork sits at the third decision, in the same column as its first dot.
+    const f = info.forks[0];
+    const forkDecision = await page.eval(`window.__third = [...document.querySelectorAll('#path .lane[data-n="1"] .dot')][2].dataset.o`);
+    check(info.forks.length === 1 && String(f.at) === forkDecision, `${label}: the fork is at #${f.at}, the third decision is #${forkDecision}`);
+    check(info.dots[f.at]?.slot === 3 && info.firstDot[2].slot === 3, `${label}: fork slots are ${info.dots[f.at]?.slot} and ${info.firstDot[2].slot}, expected 3`);
+    check(Math.abs(f.x1 - f.x2) < 3 && Math.abs(info.dots[f.at].x - info.firstDot[2].x) < 3, `${label}: the redo branch does not start under decision 3`);
+    check(info.paths[1].parent === 1 && String(info.paths[1].at) === forkDecision && info.paths[1].by === 'dana', `${label}: the branch does not record who steered and where`);
+    // Dragging shows nothing; letting go shows the panel; every sentence carries an offset.
+    await page.eval(`(() => { const r = document.getElementById('rscrub'); r.value = 4; r.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+    check(await page.eval(`document.getElementById('explain').classList.contains('dragging') && document.querySelectorAll('#explain .sent').length === 0`), `${label}: the panel shows text while dragging`);
+    await page.eval(`(() => { const r = document.getElementById('rscrub'); r.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    info = await page.eval('window.replayInfo()');
+    check(info.sentences.length >= 3 && info.sentences.every((x) => x.cites >= 1), `${label}: a sentence in the panel has no offset: ${JSON.stringify(info.sentences)}`);
+    for (const h of ['So far', 'Right now', 'Why']) check(info.explainText.includes(h), `${label}: the panel lacks "${h}"`);
+    // Arrow keys step and explain at once.
+    const idx0 = (await page.eval('window.replayInfo()')).idx;
+    await press('ArrowRight');
+    check((await page.eval('window.replayInfo()')).idx === idx0 + 1 && (await page.eval('window.replayInfo()')).sentences.length >= 3, `${label}: the arrow key did not step and explain`);
+    // No hindsight: nothing after the step is used, even a record whose text would leak.
+    const leak = { o: 9999999, kind: 'decision', item: 'gh-792', attempt: 2, agent: 'w5', group: 'fix', q: 'LEAKMARKER?', options: ['LEAKMARKER'], chosen: 'LEAKMARKER', why: 'LEAKMARKER', cites: [1], so_far: [{ text: 'LEAKMARKER', cites: [1] }], claims: [] };
+    const decs = await page.eval(`(() => { const out = []; for (const n of [1, 2]) for (const e of document.querySelectorAll('#path .lane[data-n="' + n + '"] .dot')) out.push([n, +e.dataset.o]); return out; })()`);
+    for (const [n, o] of decs) {
+      const ex = await page.eval(`(() => { const x = window.explainAt('gh-792', ${n}, ${o}, [${JSON.stringify(leak)}]); return { text: x.text, cites: x.cites, last: x.last }; })()`);
+      check(!ex.text.includes('LEAKMARKER'), `${label}: the explanation at #${o} used a later record`);
+      check(ex.cites.length > 0 && ex.cites.every((c) => c <= ex.last), `${label}: the explanation at #${o} cites an offset after it`);
+    }
+    const early = await page.eval(`window.explainAt('gh-792', 1, ${decs[1][1]}).text`);
+    check(!early.includes('Add one to the sent offset') && !early.includes('Open the PR'), `${label}: the explanation at decision 2 mentions a later decision`);
+    // Between two decisions the nearest earlier one is shown.
+    const mid = await page.eval(`window.explainAt('gh-792', 1, ${decs[1][1]} + 1).text`);
+    check(mid.includes('unit test on the resume path'), `${label}: a step after decision 2 does not show decision 2`);
+    // Questions are work items: one answered with offsets, and a new one waits for an agent.
+    check(info.questions.length === 1 && info.questions[0].answered && info.questions[0].cites.length === 2, `${label}: the answered question or its cited offsets are missing`);
+    await page.eval(`(() => { document.getElementById('qtext').value = 'Does this affect the Python client?'; document.getElementById('qform').requestSubmit(); })()`);
+    check(await page.eval(`document.querySelector('.qa .mk.q')?.textContent.includes('waiting for an agent')`), `${label}: a posted question does not show as waiting for an agent`);
+    // Redo: a new attempt is published to Ready with its handoff, then an agent claims it.
+    await page.eval(`window.setView('replay')`);
+    check(await page.eval(`window.redoFrom(3, 'Fix it in the client.')`) === true, `${label}: redo from decision 3 failed`);
+    info = await page.eval('window.replayInfo()');
+    check(info.redos === 2 && info.paths.length === 3 && info.state === 'ready' && info.lastPathState === 'published', `${label}: after a redo the item is ${info.state}, ${info.paths.length} paths`);
+    check(info.handoffs.includes(3), `${label}: no handoff artifact for attempt 3`);
+    check(info.paths.filter((b) => ['running', 'review', 'draft', 'published'].includes(b.state)).length <= 2, `${label}: more than two attempts are open`);
+    check(info.paths[0].state === 'closed' && info.paths[1].state === 'draft', `${label}: the earlier attempts are ${info.paths.map((b) => b.state)}`);
+    await page.eval(`window.setView('board')`);
+    check(await page.eval(`!!document.querySelector('#c-ready .row[data-k="gh-792"] .mk.handoff')`), `${label}: the new attempt is not in Ready with a handoff chip`);
+    await page.eval(`document.querySelector('#c-ready .row[data-k="gh-792"] .mk.handoff').click()`);
+    check(await page.eval(`document.querySelector('#modal.open')?.textContent.includes('Handoff for attempt 3') && document.querySelector('#modal').textContent.includes('Fix it in the client.')`), `${label}: the handoff chip does not open the artifact`);
+    await press('Escape');
+    check(await page.eval(`window.claimRedo('gh-792', 3)`) === true && await page.eval(`window.stageOf('gh-792')`) === 'held', `${label}: the claimed redo is not Held`);
+    check(await page.eval(`!!document.querySelector('#c-held .row[data-k="gh-792"] .mk.handoff')`), `${label}: the Held card lost its handoff chip`);
+    // Redo count stops at the limit.
+    await page.eval(`window.openReplay('gh-792')`);
+    await page.eval(`window.claimRedo('gh-792', 3)`);
+    check(await page.eval(`window.redoFrom(2, 'Again.')`) === true, `${label}: the third redo failed`);
+    info = await page.eval('window.replayInfo()');
+    check(info.redos === 3 && info.limit === 3, `${label}: redo count is ${info.redos} of ${info.limit}`);
+    const forksBefore = await page.eval(`window.intakeInfo().localEvents.filter((k) => k === 'forked_from').length`);
+    check(await page.eval(`window.redoFrom(2, 'One too many.')`) === false, `${label}: a fourth redo started past the limit`);
+    check(await page.eval(`window.intakeInfo().localEvents.filter((k) => k === 'forked_from').length`) === forksBefore, `${label}: a record was written past the limit`);
+    check(await page.eval(`document.querySelector('[data-redo="here"]').disabled && document.getElementById('redocount').textContent === 'redo 3 of 3'`), `${label}: the redo button is not disabled at the limit`);
+    // The limit item: three used, in Needs you, take it or split it.
+    await open('fixture-work-replay.json', 'view=board&autoclaim=0&story=gh-795');
+    info = await page.eval('window.replayInfo()');
+    check(info.redos === 3 && info.state === 'needs' && info.paths.length === 4, `${label}: gh-795 is ${info.state} with ${info.redos} redos, ${info.paths.length} paths`);
+    check(await page.eval(`document.querySelector('.banner.limit')?.textContent.includes('Redo limit reached, 3 of 3') && !!document.querySelector('.banner.limit [data-act="t"]') && !!document.querySelector('.banner.limit [data-act="l"]')`), `${label}: the limit banner lacks take it or split it`);
+    check(await page.eval(`window.redoFrom(1, 'x')`) === false, `${label}: a redo started on the item at its limit`);
+    check(await page.eval(`document.querySelectorAll('#path .lane').length`) === 4, `${label}: not every branch is drawn`);
+    check(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), `${label}: the story scrolls sideways`);
+    await page.eval(`window.act('l')`);
+    check((await page.eval('window.intakeInfo()')).localEvents.includes('split'), `${label}: split wrote no record`);
+    // The side-by-side view compares the two open attempts.
+    await open('fixture-work-replay.json', 'story=gh-792&tab=side&autoclaim=0');
+    check(await page.eval(`document.querySelectorAll('.cmp .col2').length === 2 && document.querySelector('.cmpnote')?.textContent.includes('decision 3')`), `${label}: side by side does not compare two attempts at the fork`);
+    check(await page.eval(`document.documentElement.scrollWidth <= innerWidth`), `${label}: the comparison scrolls sideways`);
 
     // The burst: hundreds of items stay a screenful of capped columns.
     label = `${size} fixture-work-burst.json`;

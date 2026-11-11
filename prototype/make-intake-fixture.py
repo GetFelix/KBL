@@ -352,13 +352,15 @@ class Run:
         self._ev(0.5, "pr_opened", agent=self.agent, pr=n, add=add, **{"del": dele}, files=files, ci=ci, reviewer=reviewer, handoff=handoff)
 
 
-def redo(L, key, ago, by, new, parent, fork_run, fork_id, note, instruction, strike=(), add=(), include_after=True):
+def redo(L, key, ago, by, new, parent, fork_run, fork_id, note, instruction, strike=(), add=(), include_after=True, close=()):
     """The reviewer's note, the handoff artifact (the fork decision's recorded
     so_far plus the reviewer's edits, and the instruction), the fork record, and
     the new attempt published to Ready. An agent claims it afterwards."""
     narrative = [{"text": x["text"], "cites": x["cites"], **({"struck": True} if i in strike else {})} for i, x in enumerate(fork_run.so_far_at(fork_id))]
     narrative += [{"text": t, "cites": [], "added": True} for t in add]
     hid = f"h{new}"
+    for n in close:  # only two attempts stay open, so starting this one closes another
+        L.ev(ago + 0.1 * MIN, "attempt_closed", key, attempt=n, reason=f"closed when attempt {new} started, so only two stay open")
     L.ev(ago, "human_input", key, by=by, input="redo", attempt=new, text=note)
     L.ev(ago - 0.2 * MIN, "handoff", key, id=hid, by=by, attempt=new, narrative=narrative, instruction=instruction, includeAfter=include_after, commit=f"c{new}{key[-3:]}e2")
     L.ev(ago - 0.4 * MIN, "forked_from", key, by=by, attempt=new, **{"from": parent}, at="@" + fork_id, handoff="@" + hid)
@@ -452,7 +454,7 @@ def replay_items(L):
     b2.pr(4, 3135, 44, 6, 3, "pass", "kim", {"changed": "The limiter ignores a repeated publish id", "verified": "", "unsure": "Did not run the tests"})
     redo(L, k, 3 * DAY + 8 * HOUR, "kim", 3, 1, b1, "b1d2",
          "The limiter is not where the retry comes from. The gateway resends without an id.",
-         "Find why a retry arrives without a publish id.")
+         "Find why a retry arrives without a publish id.", close=[2])
     b3 = Run(L, k, 3, "w6", 3 * DAY + 8 * HOUR - 2 * MIN, prior=b1.before("b1d2"))
     b3.claim()
     b3.decide("b3d2", 4, "cause", "Why is the count high?", ["The gateway retries without the id", "The client sends two publishes"], "The gateway retries without the id",
@@ -466,7 +468,7 @@ def replay_items(L):
     b3.pr(4, 3138, 52, 9, 3, "pass", "dana", {"changed": "Stamps the publish id in the client before the first send", "verified": "limiter_retry and gateway_retry pass", "unsure": ""})
     redo(L, k, 2 * DAY + 3 * HOUR, "dana", 4, 3, b3, "b3d3",
          "Stamping in the client breaks old clients. Stamp it at the gateway edge.",
-         "Stamp the id where a publish enters the gateway.")
+         "Stamp the id where a publish enters the gateway.", close=[1])
     b4 = Run(L, k, 4, "w2", 2 * DAY + 3 * HOUR - 2 * MIN, prior=b3.before("b3d3"))
     b4.claim()
     b4.decide("b4d3", 4, "fix", "Where should the id be set?", ["Stamp it at the gateway edge"], "Stamp it at the gateway edge", "Dana's note: old clients never send one.", ["@b3d2"])

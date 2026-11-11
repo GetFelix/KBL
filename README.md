@@ -291,7 +291,8 @@ python3 prototype/make-intake-fixture.py
 # Play both fixtures in headless Chrome
 node scripts/check-frame.mjs
 
-# Fold the dashboard fixtures: My queue, the board, the review limit, metrics, actions, the burst
+# Fold the dashboard fixtures: My queue, the board, the review limit, metrics, actions, the burst,
+# and the decision replay (story, explanation at a step, fork, redo limit)
 node scripts/check-intake.mjs
 
 # Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
@@ -304,7 +305,8 @@ node scripts/check-steps.mjs
 cargo test --workspace
 
 # Serve the repository, then open http://localhost:8000/prototype/style-frame.html
-# or http://localhost:8000/prototype/intake-frame.html (?view=queue|board|metrics, ?fixture=fixture-work-capped.json or fixture-work-burst.json, ?select=gh-801, ?theme=light)
+# or http://localhost:8000/prototype/intake-frame.html (?view=queue|board|metrics, ?fixture=fixture-work-capped.json or fixture-work-burst.json, ?select=gh-801, ?theme=light;
+# fixture-work-replay.json with ?story=gh-792 opens the decision replay, ?story=gh-795 the redo limit)
 python3 -m http.server 8000
 ```
 
