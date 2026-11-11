@@ -42,3 +42,7 @@
 {"actor":"person","at_ms":1041,"attempt":1,"by":"gabriel","cost_micros":25000,"default":"rust","item":"r1","kind":"question","options":["rust","python"],"text":{"text":"which client?"}}
 {"actor":"person","at_ms":1042,"by":"gabriel","chosen":"rust","item":"r1","kind":"answer","question":41,"text":{"text":""},"then":{"then":"resume"}}
 {"actor":"person","at_ms":1043,"by":"gabriel","item":"r1","kind":"answer","question":42,"text":{"text":"this is a gateway bug"},"then":{"target":{"repo":"GetFelix/felix-gateway","source":"github"},"then":"prerequisite","title":"gateway needs a CAS call"}}
+{"actor":"person","at_ms":1044,"by":"gabriel","item":"v1","key":"review-first","kind":"proposed","parent":"r1","review":{"pass":"first","pr":"GetFelix/felix#9","tier":"fast"},"title":"First-pass review: GetFelix/felix#9","work":"review"}
+{"actor":"person","at_ms":1045,"attempt":1,"by":"gabriel","chosen":"","commit":"9f3c2ab","item":"r1","kind":"decision","phase":"verify","question":"","revert_check":{"failed_without_fix":true,"passed_with_fix":true,"test":"reads_see_a_fresh_write"},"so_far":"fix in, test added","why":"the test fails without the fix"}
+{"actor":"person","at_ms":1046,"attempt":1,"by":"gabriel","file":"src/read.rs","item":"v1","kind":"finding","line":88,"scenario":"restart between fill and read returns the old value","severity":"high","title":"stale read after restart","verdict":"fix"}
+{"actor":"person","at_ms":1047,"attempt":1,"by":"gabriel","item":"v2","kind":"review_verdict","verdict":"block","why":"a fix is still open"}
