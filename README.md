@@ -1,80 +1,64 @@
-<p align="center"><img src="docs/brand/felix-agents-mark.png" alt="Felix Agents" width="200"></p>
+<p align="center"><img src="docs/brand/felix-agents-mark.png" alt="Kibble" width="200"></p>
 
-# Felix Agents
+# Kibble
 
-Kibble is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix)
-(the repo is still called felix-agents). It pulls bugs in from GitHub, Azure DevOps or Jira, hands each
-piece of work to one agent, keeps dependencies and priorities, and shows the queue in a dashboard. Agents
-from any vendor take work from it through an MCP server, `felix-mcp`. People guide it from the dashboard.
+(repository: felix-agents)
+
+Kibble is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix). It pulls bugs
+in from GitHub, Azure DevOps or Jira, hands each piece of work to one agent, keeps dependencies and priorities,
+and shows the queue in a dashboard. Agents from any vendor take work from it through an MCP server,
+`felix-mcp`. People guide it from the dashboard. The repository is still named felix-agents; the rename is
+tracked in [#92](https://github.com/GetFelix/felix-agents/issues/92).
 
 Kibble is not agentic. The tracker, `felix-mcp` and the dashboard make no model calls and generate no text.
 Triage, gathering context, splitting, answering questions and fixing are all work items that an agent or a
 person completes.
 
-- [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
-- [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
-- [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
-- [docs/brand/story.md](docs/brand/story.md): the story of the product
-- [docs/design.md](docs/design.md): the whole design
+![My queue: what needs you, what agents hold, and what is waiting](docs/screenshots/dashboard-queue.png)
 
-The repo also holds a scripted demo job type: a planner splits a pull request review into tasks for four to
-eight workers, and the viewer draws the swarm and scrubs back through it.
+![Decision replay: scrub through an agent's decisions and see the state at each step](docs/screenshots/replay-scrub.png)
 
-![Eight agents reviewing a pull request: tasks fan out, a worker dies and its task goes to another, an injected agent's writes are refused, and the run scrubs back](docs/screenshots/swarm.gif)
+<sub>Style frames from [prototype/intake-frame.html](prototype/intake-frame.html), drawn from hand-written
+fixtures. The tracker does not talk to Felix yet: only the task tools and the [dev stack](#running-felix-locally)
+do.</sub>
 
-<sub>The viewer's style frame playing a hand-written run
-([prototype/style-frame.html](prototype/style-frame.html), full size:
-[swarm.mp4](docs/screenshots/swarm.mp4)). Nothing talks to Felix yet.</sub>
-
-![An injected agent's writes refused](docs/screenshots/swarm-injection.png)
-
-In the demo, a planner fans work out as tasks, many workers claim them, and results flow
-back. Workers join, leave and die mid-task, and the run carries on: Felix hands
-each task to one worker and gives it to another when that worker stops
-answering, holds the state they share, enforces who may write what, and keeps
-every step in one durable log.
-
-> **Status:** design stage. The viewer is a style frame, and the only thing that
-> runs against Felix is the [dev stack](#running-felix-locally). The plan is in
-> [docs/design.md](docs/design.md) and the work is tracked in
-> [milestones](https://github.com/GetFelix/felix-agents/milestones).
+> **Status:** M0 and M1 are done: the task tools, scripted planner and workers, the death and poison checks, and
+> the dashboard and replay style frames. M2, the tracker itself, is in progress. See [Status](#status).
 
 ## What it shows about Felix
 
-[felix-arena](https://github.com/GetFelix/felix-arena) uses a log as a live feed
-and a replay, [felix-metro](https://github.com/GetFelix/felix-metro) seeks back
-through a long history, and [felix-blocks](https://github.com/GetFelix/felix-blocks)
-is keyed state with many writers. Felix Agents uses all three for a swarm:
+[felix-arena](https://github.com/GetFelix/felix-arena) uses a log as a live feed and a replay,
+[felix-metro](https://github.com/GetFelix/felix-metro) seeks back through a long history, and
+[felix-blocks](https://github.com/GetFelix/felix-blocks) is keyed state with many writers. Kibble puts them to
+work on a backlog that never ends:
 
-- **Each task is done once, even when workers die.** A consumer group hands a task to one worker and gives it to another when the first stops answering. A task that keeps failing is dead-lettered instead of retried forever.
-- **Agents don't overwrite each other.** Shared findings and locks are conditional writes, so a stale write is refused and the agent sees what changed.
-- **The run is a record you can replay.** Every claim, write, message, model call and refusal is on one log, in one order, with the broker's record of who wrote it.
-- **Budgets hold under a race.** Spend goes through counters, reserved before each model call.
-- **A prompt-injected agent stays in its lane.** Each agent has its own token. Whatever the model asks for, Felix refuses writes outside its grants, and the refusals are on the record.
+- **Each piece of work is claimed once, even when agents die.** A consumer group hands an item to one agent and gives it to another when the first stops answering. An item that keeps failing is dead-lettered instead of retried forever.
+- **People and agents don't overwrite each other.** Items are keys written with `cache_put_if` at the version read, so a stale write is refused.
+- **One log is the record.** `work.events` holds every import, claim, decision and refusal in order, with the broker's record of who wrote it. The queue, an item's history and the replay are folds of it.
+- **Budgets hold under a race.** A root's budget only decreases, and a create over it is refused.
+- **Agents stay in their lane.** Each agent has its own token. Only the tracker writes `work.events` and the item keys.
 
 ## What you will be able to do
 
-- Start a run with a goal, a budget and a team of agents, against a real model or scripted stand-ins
-- Kill a worker mid-task and watch another pick its task up
-- Watch a run live in the browser: tasks travelling to workers, results coming back, locks on the board, messages and the budget draining
-- Scrub back to any moment of a run and open any step's prompt, response or tool output
-- Plant a prompt injection in a task and watch Felix refuse what the agent tries
-- Add Felix to Claude Code or another MCP host and join a run from there
+- Bring bugs in from GitHub, Azure DevOps or Jira once each, and add your own work
+- See the queue: what needs you, what agents hold, what waits on what
+- Let any MCP host (Claude Code, the Claude Agent SDK, another vendor's) ask for the next item it can start, through `felix-mcp`
+- Let agents triage, split and add context as work they claim, with children bounded by a budget per root
+- Accept, edit or reject an agent's proposal, or answer its question, from the dashboard
+- Open a fix's decision replay: scrub through what the agent decided, with the fields it recorded and the steps behind them
+- Redo from a past decision as new work, with your note, without touching the first attempt
 
 ## Felix features it uses
 
 | Need | Felix feature |
 |---|---|
-| Handing each task to one worker | A consumer group: per-record ack, visibility timeout, claim extension |
-| A task that never succeeds | Max attempts and dead letters |
-| Shared findings | A log-backed cache with conditional writes (`cache_put_if`) |
-| Locks | `cache_put_if` with a TTL, `cache_delete_if` |
-| Who is alive | A cache with a TTL, expiry delivered to watchers |
-| Agent to agent messages | A durable stream with the publisher recorded |
-| Token and cost budgets | Counters |
-| The record of a run | A durable stream, range reads, subscribe from an offset |
-| What each agent may write | RBAC, down to a cache key prefix |
-| The browser viewer | [felix-gateway](https://github.com/GetFelix/felix-gateway) |
+| Handing each item to one agent | A consumer group: per-record ack, visibility timeout, claim extension, max attempts and dead letters |
+| Priority | A ready stream per tier, polled in order |
+| Items, edges, context and budgets | A log-backed cache with conditional writes (`cache_put_if`, `cache_delete_if`) |
+| Importing an upstream bug once | `cache_put_if` on the upstream id, absent only |
+| The record | A durable stream (`work.events`) with the publisher recorded, range reads, subscribe from an offset |
+| What each principal may write | RBAC, down to a cache key prefix |
+| The browser dashboard | [felix-gateway](https://github.com/GetFelix/felix-gateway) |
 
 Some of this is not yet reachable the way the design wants. The design lists
 it under "Felix gaps", and each one has an issue labelled
@@ -82,18 +66,23 @@ it under "Felix gaps", and each one has an issue labelled
 
 ## How it works
 
-Each agent runs `felix-mcp`, an MCP server holding that agent's own Felix
-token. Its tools are Felix operations: claim a task, write the board, take a
-lease, send a message, store an artifact. The model only acts through those
-tools, so its grants are the agent's grants. A small runtime, `agents-run`,
-calls the model, records spend with a separate token and keeps the agent's
-heartbeat.
+Bugs come in as roots from GitHub, Azure DevOps or Jira, and from people. An ingest worker writes each upstream
+id once and posts one triage item and one augment item for it. An item becomes claimable when its last
+dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
-Everything an agent does is also written to the run's log, which has one shard
-and so one order across all agents. The viewer reads that log through
-felix-gateway, folds it into the state of the run at any offset, and follows it
-live from there. Large prompts and outputs are stored once by hash and fetched
-when you open a step. [docs/design.md](docs/design.md) has the details.
+Each agent runs `felix-mcp` with its own Felix token. `work_next` claims the highest-priority ready item, the
+claim is extended while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead
+agent's item goes back to the queue. An agent adds children only under an item it holds (`split`, `augment`,
+`question` or `test`), within a budget per root. Anything else it finds is a proposal a person accepts.
+
+While it works, the agent records `decide` (what it chose and why, with the phase, a running summary and the
+steps it rests on), `record_step` and `edit`. The dashboard folds these into the story of a fix and its replay.
+A redo from a past decision is a new attempt that starts from that decision's recorded summary and a
+reviewer's note, so the first attempt stays as it happened.
+
+The tracker validates every call and does the Felix writes itself, so an agent never writes the work streams or
+keys directly. [docs/work-tracker.md](docs/work-tracker.md) and [docs/decision-replay.md](docs/decision-replay.md)
+have the details.
 
 ## Status
 
@@ -103,16 +92,19 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
 | 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each |
 | 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
-| 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results | Anyone can see the queue and what it delivered |
+| 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
 | 5 | Shared state: the board, leases, presence and messages | Demonstration 3 |
 | 6 | Real models and budgets: `agents-run` with a model API, artifacts, spend and rate limits | Demonstration 5 |
 | 7 | Replay a run: the fold, the viewer on felix-gateway, scrub and follow | Demonstrations 4 and 8 |
 | 8 | Grants and the injection demo | Demonstration 6 |
-| 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Demonstration 7 |
+| 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Demonstration 7, and it holds under loss |
 | 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
 
-M0 and M1 are in progress: [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run),
-and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The style frame is described in [docs/art.md](docs/art.md).
+M0 and M1 are done. [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run),
+and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The style frames
+are described in [docs/art.md](docs/art.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
+progress. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
+[milestones](https://github.com/GetFelix/felix-agents/milestones).
 
 ## Running Felix locally
 
@@ -291,6 +283,23 @@ certificate file is relative to the host's working directory, so give an absolut
 Issuing a token per agent is not built yet, so for now `dev/check-mcp.mjs` asks the stand-in identity provider for the
 administrator's.
 
+## The scripted swarm demo
+
+The repo also holds a demo job type: a planner splits a pull request review into tasks for four to eight
+workers, and the viewer draws the swarm and scrubs back through it. It uses the same task tools, so a run needs no
+model key.
+
+![Eight agents reviewing a pull request: tasks fan out, a worker dies and its task goes to another, an injected agent's writes are refused, and the run scrubs back](docs/screenshots/swarm.gif)
+
+<sub>The viewer's style frame playing a hand-written run
+([prototype/style-frame.html](prototype/style-frame.html), full size:
+[swarm.mp4](docs/screenshots/swarm.mp4)). Nothing talks to Felix yet.</sub>
+
+![An injected agent's writes refused](docs/screenshots/swarm-injection.png)
+
+Workers join, leave and die mid-task and the run carries on: Felix hands each task to one worker and gives it to
+another when that worker stops answering, and every step lands in one log.
+
 ## Developing
 
 You need Node 22 or later, Python 3, a Chrome or Chromium, and Rust 1.97 or later for the crates. From the repository root:
@@ -343,10 +352,14 @@ conflicts never do, and times a frame on the burst fixture against a reference f
 tray, the budget ring, log rows, captions and timeline markers) and checks that each opens the step panel for the
 record behind it.
 
-CI runs six jobs, lint (with the fixture regeneration), style frame, motion rules, step panel, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
+CI runs seven jobs: lint (with the fixture regeneration), style frame, dashboard frame, motion rules, step panel, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
 
 ## Documentation
 
+- [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
+- [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
+- [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
+- [docs/brand/story.md](docs/brand/story.md): the story of the product
 - [docs/design.md](docs/design.md): the design, data model and build order
 - [docs/art.md](docs/art.md): how the viewer looks and moves
 - [Felix docs](https://docs.getfelix.dev/)
