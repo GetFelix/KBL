@@ -101,6 +101,17 @@ pub enum NeedsYou {
 }
 
 impl Item {
+    /// The attempt number a claim must name: the open attempt for a retry after a
+    /// release, lapse or give-up, a new one otherwise.
+    pub fn next_attempt(&self) -> u32 {
+        let retry = self.pending_fork.is_none() && !self.paths.is_empty();
+        if retry {
+            self.open_path().map_or(1, |p| p.attempt)
+        } else {
+            self.paths.last().map_or(1, |p| p.attempt + 1)
+        }
+    }
+
     /// The newest attempt that is not closed.
     pub fn open_path(&self) -> Option<&Path> {
         self.paths.iter().rev().find(|p| !p.closed)
@@ -561,11 +572,7 @@ impl State {
                     return Err(Reject::NotReady);
                 }
                 let it = self.item_mut(item)?;
-                let want = if retry {
-                    it.open_path().map_or(1, |p| p.attempt)
-                } else {
-                    it.paths.last().map_or(1, |p| p.attempt + 1)
-                };
+                let want = it.next_attempt();
                 if *attempt != want {
                     return Err(Reject::WrongAttempt);
                 }
