@@ -7,8 +7,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use agents_core::names::ItemId;
 use serde::{Deserialize, Serialize};
 
-use agents_core::work::PrSnapshot;
-
 use crate::source::{Closed, Cursor};
 
 /// One imported issue, by upstream id.
@@ -47,9 +45,6 @@ pub(crate) struct Tracked {
     /// Set on the old id of a transferred issue, which is not fetched again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) moved_to: Option<String>,
-    /// The pull request status last written, so an unchanged one is not written again.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) pr_status: Option<PrSnapshot>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -378,3 +378,55 @@ async fn a_pull_request_by_someone_else_is_left_alone() {
     .unwrap();
     assert!(gh.writes().is_empty());
 }
+
+fn runs(list: &[(&str, &str)]) -> Value {
+    let list: Vec<Value> = list
+        .iter()
+        .map(|(n, c)| json!({ "name": n, "conclusion": c, "html_url": format!("u/{n}") }))
+        .collect();
+    json!({ "total_count": list.len(), "check_runs": list })
+}
+
+fn req(names: &[&str]) -> Vec<String> {
+    names.iter().map(|n| (*n).to_owned()).collect()
+}
+
+#[test]
+fn a_required_check_with_no_result_yet_is_pending_not_green() {
+    let r = req(&["unit", "lint"]);
+    let (checks, failing) = check_state(&runs(&[("unit", "success")]), None, Some(&r));
+    assert_eq!((checks, failing), (PrChecks::Pending, None));
+    let (checks, _) = check_state(
+        &runs(&[("unit", "success"), ("lint", "success")]),
+        None,
+        Some(&r),
+    );
+    assert_eq!(checks, PrChecks::Green);
+}
+
+#[test]
+fn an_empty_required_list_means_unknown_and_every_check_counts() {
+    let none: Vec<String> = vec![];
+    let (checks, failing) = check_state(&runs(&[("nightly", "failure")]), None, Some(&none));
+    assert_eq!(checks, PrChecks::Red);
+    assert_eq!(failing.unwrap().name, "nightly");
+    let (checks, _) = check_state(&runs(&[("unit", "success")]), None, Some(&none));
+    assert_eq!(checks, PrChecks::Green);
+}
+
+#[test]
+fn a_required_context_can_be_a_commit_status() {
+    let r = req(&["unit", "ci/legacy"]);
+    let statuses = |state: &str| json!({ "statuses": [{ "context": "ci/legacy", "state": state, "target_url": "u/legacy" }] });
+    let ok = runs(&[("unit", "success")]);
+    let (checks, _) = check_state(&ok, Some(&statuses("success")), Some(&r));
+    assert_eq!(checks, PrChecks::Green);
+    let (checks, failing) = check_state(&ok, Some(&statuses("failure")), Some(&r));
+    assert_eq!(checks, PrChecks::Red);
+    assert_eq!(failing.unwrap().url, "u/legacy");
+    let (checks, _) = check_state(&ok, Some(&statuses("pending")), Some(&r));
+    assert_eq!(checks, PrChecks::Pending);
+    // Without a status for it, the required context is still outstanding.
+    let (checks, _) = check_state(&ok, None, Some(&r));
+    assert_eq!(checks, PrChecks::Pending);
+}

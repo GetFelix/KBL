@@ -270,6 +270,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 pr: None,
+                branch: None,
+                pr_status: None,
             },
         );
         p.state
@@ -474,6 +476,16 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 eprintln!("agents-ingest: {pr} was not opened by us; not reading its state");
                 continue;
             };
+            // The agent names the request, so it must be tied to this item by
+            // more than the agent's word: its reported branch, or a closing
+            // reference to the issue in its body.
+            let branch = p.roots.get(&key).and_then(|r| r.branch.as_deref());
+            let linked = branch.is_some_and(|b| !b.is_empty() && b == pull.head_ref)
+                || closes_issue(&pull.body, &key);
+            if !linked {
+                eprintln!("agents-ingest: {pr} is not linked to {key}; not reading its state");
+                continue;
+            }
             self.on_pull_request(p, &key, status).await?;
         }
         Ok(())
@@ -489,7 +501,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             return Ok(());
         };
         let item = t.item.clone();
-        if t.pr_status.as_ref() != Some(&status) {
+        // Compared with what the fold holds, which a change of `pr` clears.
+        if p.roots.get(key).and_then(|r| r.pr_status.as_ref()) != Some(&status) {
             let record = WorkRecord::PrStatus {
                 item: item.clone(),
                 status: status.clone(),
@@ -504,8 +517,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     return Ok(());
                 }
             }
-            if let Some(t) = p.state.items.get_mut(key) {
-                t.pr_status = Some(status.clone());
+            if let Some(r) = p.roots.get_mut(key) {
+                r.pr_status = Some(status.clone());
             }
         }
         // A merge is the work done; the tracker records it and never merges.
@@ -762,8 +775,37 @@ fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
         write_back_tries: 0,
         closed_by_us: false,
         moved_to: None,
-        pr_status: None,
     }
+}
+
+/// Whether `body` has a closing keyword (close, fix, resolve and their forms)
+/// followed by the issue, as `owner/repo#n` or `#n`.
+fn closes_issue(body: &str, issue: &str) -> bool {
+    let Some((_, number)) = issue.split_once('#') else {
+        return false;
+    };
+    let body = body.to_ascii_lowercase();
+    let issue = issue.to_ascii_lowercase();
+    let words: Vec<&str> = body
+        .split(|c: char| c.is_whitespace() || c == ':')
+        .filter(|w| !w.is_empty())
+        .collect();
+    words.windows(2).any(|w| {
+        let keyword = matches!(
+            w[0],
+            "close"
+                | "closes"
+                | "closed"
+                | "fix"
+                | "fixes"
+                | "fixed"
+                | "resolve"
+                | "resolves"
+                | "resolved"
+        );
+        let target = w[1].trim_end_matches(['.', ',', ';']);
+        keyword && (target == issue || target == format!("#{number}"))
+    })
 }
 
 /// Open roots the rule has now.

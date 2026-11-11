@@ -5,7 +5,7 @@
 use agents_core::artifact::INLINE_LIMIT;
 use agents_core::content::Content;
 use agents_core::names::{ItemId, Key};
-use agents_core::work::{Actor, CloseWhy, WorkKind, WorkRecord};
+use agents_core::work::{Actor, CloseWhy, PrPhase, WorkKind, WorkRecord};
 use agents_core::work_fold::State;
 use serde_json::{Value, json};
 
@@ -91,6 +91,14 @@ impl<B: Broker> Tracker<B> {
             {
                 return Err(refused("not_imported"));
             }
+            if let WorkRecord::Closed {
+                item,
+                why: CloseWhy::Merged,
+            } = &record
+                && !merged_request_reported(&core.state, item)
+            {
+                return Err(refused("not_merged"));
+            }
             self.append(&mut core, Actor::Tracker, by, record).await?
         };
         self.sync_ready().await;
@@ -115,6 +123,8 @@ impl<B: Broker> Tracker<B> {
                     "closed": it.closed.is_some(),
                     "held": it.hold.is_some(),
                     "pr": it.pr,
+                    "branch": it.branch,
+                    "pr_status": it.pr_status,
                 }))
             })
             .collect();
@@ -152,6 +162,16 @@ impl<B: Broker> Tracker<B> {
             Err(e) => Err(Error::Felix(e)),
         }
     }
+}
+
+/// Whether the item's reported request has a merged status. Ingest may close
+/// as merged on no other evidence.
+fn merged_request_reported(state: &State, item: &ItemId) -> bool {
+    state.items.get(item).is_some_and(|it| {
+        it.pr_status
+            .as_ref()
+            .is_some_and(|s| s.phase == PrPhase::Merged && it.pr.as_deref() == Some(s.pr.as_str()))
+    })
 }
 
 fn is_imported(state: &State, item: &ItemId) -> bool {

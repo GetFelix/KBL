@@ -1153,7 +1153,7 @@ fn a_dropped_dependency_sends_the_dependent_to_needs_you() {
     assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
     // A merged dependency frees its dependents instead.
     let mut m = Log(l.0[..l.0.len() - 1].to_vec());
-    m.tracker(WorkRecord::Closed {
+    m.person(WorkRecord::Closed {
         item: id("b"),
         why: CloseWhy::Merged,
     });
@@ -1961,4 +1961,67 @@ fn a_log_from_before_pull_request_status_folds_the_same_and_old_snapshots_still_
         WorkRecord::decode(line).unwrap(),
         WorkRecord::Progress { .. }
     ));
+}
+
+#[test]
+fn a_merged_close_needs_a_merged_status_for_the_reported_request() {
+    let mut l = with_pr();
+    l.0.pop(); // still held, so the agent can swap its request
+    let merge = || WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Merged,
+    };
+    // No status at all, then a merged status of some other request.
+    l.tracker(merge());
+    let mut other = snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Approved);
+    other.phase = PrPhase::Merged;
+    l.tracker(pr_status("r1", other.clone()));
+    l.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: id("r1"),
+            attempt: 1,
+            note: text("swap"),
+            branch: None,
+            pr: Some("GetFelix/felix#10".into()),
+        },
+    );
+    l.tracker(merge());
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections.iter().map(|r| r.why).collect::<Vec<_>>(),
+        [Reject::NotMerged, Reject::NotMerged]
+    );
+    assert_eq!(s.items[&id("r1")].closed, None);
+    // The merged status of the reported request does close it.
+    other.pr = "GetFelix/felix#10".into();
+    l.tracker(pr_status("r1", other));
+    l.tracker(merge());
+    assert_eq!(fold(&l.0).items[&id("r1")].closed, Some(Closure::Merged));
+}
+
+#[test]
+fn a_state_with_a_stalled_source_encodes_and_the_stalls_are_capped() {
+    let mut l = Log::default();
+    let stall = |repo: &str, status| WorkRecord::SourceStalled {
+        source: "github".into(),
+        repo: repo.into(),
+        status,
+    };
+    l.tracker(stall("GetFelix/gone", Some(404)));
+    let s = fold(&l.0);
+    let back: State = serde_json::from_value(serde_json::to_value(&s).unwrap()).unwrap();
+    assert_eq!(back, s);
+    assert_eq!(back.stalled_sources().count(), 1);
+
+    for n in 0..MAX_STALLS + 3 {
+        l.tracker(stall(&format!("o/r{n}"), Some(403)));
+    }
+    let s = fold(&l.0);
+    assert_eq!(s.stalled_sources().count(), MAX_STALLS);
+    assert_eq!(s.rejections.len(), 4);
+    // A known repo can still be updated or cleared at the cap.
+    l.tracker(stall("GetFelix/gone", Some(403)));
+    l.tracker(stall("GetFelix/gone", None));
+    assert_eq!(fold(&l.0).stalled_sources().count(), MAX_STALLS - 1);
 }

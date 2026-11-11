@@ -39,6 +39,8 @@ const MAX_CONTEXT: u32 = 100;
 const MAX_QUESTIONS: u32 = 20;
 const MAX_ANSWERS: u32 = 10;
 const MAX_LINKS: u32 = 100;
+/// Distinct repos that may be reported unreadable at once.
+const MAX_STALLS: usize = 64;
 /// Children and proposals together.
 const MAX_POSTS: u32 = 24;
 
@@ -291,6 +293,8 @@ pub enum Reject {
     WrongPr,
     /// A text field is longer than a record keeps.
     TooLong,
+    /// Upstream sync closed an item as merged without a merged status for its request.
+    NotMerged,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,7 +315,8 @@ pub struct State {
     upstream: BTreeMap<String, ItemId>,
     /// `(source, repo)` to the HTTP status that stopped it being read.
     #[serde(default)]
-    source_stalls: BTreeMap<(String, String), u16>,
+    /// Keyed `source\0repo`: JSON object keys must be strings.
+    source_stalls: BTreeMap<String, u16>,
     child_keys: BTreeSet<(Option<ItemId>, Option<Key>, Key)>,
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
     #[serde(skip)]
@@ -469,9 +474,10 @@ impl State {
 
     /// Repositories a source cannot read, with the HTTP status it got.
     pub fn stalled_sources(&self) -> impl Iterator<Item = (&str, &str, u16)> {
-        self.source_stalls
-            .iter()
-            .map(|((source, repo), status)| (source.as_str(), repo.as_str(), *status))
+        self.source_stalls.iter().filter_map(|(k, status)| {
+            let (source, repo) = k.split_once('\0')?;
+            Some((source, repo, *status))
+        })
     }
 
     /// Children of `id` that are not done.
@@ -1017,6 +1023,17 @@ impl State {
                     return Err(Reject::ActorNotAllowed);
                 }
                 self.item(item)?;
+                // Upstream sync closes as merged only the request the item reports, once merged.
+                if *why == CloseWhy::Merged && rec.actor == Actor::Tracker {
+                    let it = self.item(item)?;
+                    let imported = self.upstream.values().any(|i| i == item);
+                    let merged = it.pr_status.as_ref().is_some_and(|s| {
+                        s.phase == PrPhase::Merged && it.pr.as_deref() == Some(s.pr.as_str())
+                    });
+                    if !imported || !merged {
+                        return Err(Reject::NotMerged);
+                    }
+                }
                 let how = match why {
                     CloseWhy::Merged => Closure::Merged,
                     CloseWhy::Completed => Closure::Completed,
@@ -1173,11 +1190,20 @@ impl State {
                 if source.len() > MAX_PR_REF || repo.len() > MAX_PR_REF {
                     return Err(Reject::TooLong);
                 }
-                let key = (source.clone(), repo.clone());
+                let key = format!("{source}\0{repo}");
                 match status {
-                    Some(code) => self.source_stalls.insert(key, *code),
-                    None => self.source_stalls.remove(&key),
-                };
+                    Some(code) => {
+                        if !self.source_stalls.contains_key(&key)
+                            && self.source_stalls.len() >= MAX_STALLS
+                        {
+                            return Err(Reject::LimitReached);
+                        }
+                        self.source_stalls.insert(key, *code);
+                    }
+                    None => {
+                        self.source_stalls.remove(&key);
+                    }
+                }
             }
             WorkRecord::Unknown => {}
         }

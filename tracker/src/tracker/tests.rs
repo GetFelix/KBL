@@ -1276,3 +1276,35 @@ async fn ingest_state_is_kept_with_a_version_and_a_stale_save_is_refused() {
         .unwrap_err();
     assert!(matches!(err, Error::Refused { why } if why == "stale_state"));
 }
+
+#[tokio::test]
+async fn ingest_cannot_close_as_merged_without_a_merged_status() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::Imported {
+            item: item("mine"),
+            source: "github".into(),
+            upstream_id: "o/r#1".into(),
+            title: "a bug".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let err = t
+        .ingest_record(
+            key("ingest-gh"),
+            WorkRecord::Closed {
+                item: item("mine"),
+                why: agents_core::work::CloseWhy::Merged,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Refused { ref why } if why == "not_merged"),
+        "{err}"
+    );
+    assert_eq!(fake.log().len(), 1);
+}

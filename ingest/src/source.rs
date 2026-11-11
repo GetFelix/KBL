@@ -119,6 +119,9 @@ pub(crate) struct Changes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PullRequest {
     pub(crate) author: String,
+    /// The head branch and the description, which tie it to an issue.
+    pub(crate) head_ref: String,
+    pub(crate) body: String,
     /// None when the author is not one of ours: nothing more is read.
     pub(crate) status: Option<PrSnapshot>,
 }

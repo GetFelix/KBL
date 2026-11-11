@@ -299,11 +299,15 @@ impl<T: Transport> Source for Github<T> {
             .as_str()
             .unwrap_or_default()
             .to_owned();
+        let head_ref = pull["head"]["ref"].as_str().unwrap_or_default().to_owned();
+        let body = pull["body"].as_str().unwrap_or_default().to_owned();
         // Only a request our credential opened is read further: the name
         // comes from an agent, and its checks and reviews steer a person.
         if !self.own.iter().any(|o| o.eq_ignore_ascii_case(&author)) {
             return Ok(Some(PullRequest {
                 author,
+                head_ref,
+                body,
                 status: None,
             }));
         }
@@ -322,6 +326,8 @@ impl<T: Transport> Source for Github<T> {
         if phase != PrPhase::Open {
             return Ok(Some(PullRequest {
                 author,
+                head_ref,
+                body,
                 status: Some(status),
             }));
         }
@@ -351,12 +357,22 @@ impl<T: Transport> Source for Github<T> {
                     self.api, id.repo
                 )))
                 .await?;
+            let combined = self
+                .call(Req::get(format!(
+                    "{}/repos/{}/commits/{sha}/status?per_page=100",
+                    self.api, id.repo
+                )))
+                .await?;
             if runs.status == 200 {
-                (status.checks, status.failing) = check_state(&runs.body, required.as_ref());
+                let statuses = (combined.status == 200).then_some(&combined.body);
+                (status.checks, status.failing) =
+                    check_state(&runs.body, statuses, required.as_ref());
             }
         }
         Ok(Some(PullRequest {
             author,
+            head_ref,
+            body,
             status: Some(status),
         }))
     }
@@ -494,36 +510,79 @@ fn review_state(reviews: &Value, author: &str, asked: bool) -> PrReview {
     }
 }
 
-/// Green, pending or red from the check runs on the head commit. Only the
-/// `required` checks count when they are known. A listing longer than what was
-/// read is pending, since green cannot be shown.
-fn check_state(runs: &Value, required: Option<&Vec<String>>) -> (PrChecks, Option<FailedCheck>) {
+enum Outcome {
+    Pass,
+    Fail,
+    Pending,
+}
+
+/// Green, pending or red from the check runs and commit statuses on the head
+/// commit. Only the `required` names count when they are known, and one with
+/// no result yet keeps the request pending. A listing longer than what was
+/// read is pending too, since green cannot be shown.
+fn check_state(
+    runs: &Value,
+    statuses: Option<&Value>,
+    required: Option<&Vec<String>>,
+) -> (PrChecks, Option<FailedCheck>) {
+    // An empty list means the protection could not tell us, not "nothing needed".
+    let required = required.filter(|r| !r.is_empty());
     let list = runs["check_runs"].as_array().cloned().unwrap_or_default();
-    let counted: Vec<&Value> = list
+    let mut results: Vec<(String, Outcome, String)> = Vec::new();
+    for r in &list {
+        let outcome = match r["conclusion"].as_str() {
+            Some("failure" | "timed_out" | "action_required" | "startup_failure") => Outcome::Fail,
+            Some("success" | "neutral" | "skipped") => Outcome::Pass,
+            // Queued, running or cancelled: not green yet.
+            _ => Outcome::Pending,
+        };
+        results.push((
+            r["name"].as_str().unwrap_or_default().to_owned(),
+            outcome,
+            r["html_url"].as_str().unwrap_or_default().to_owned(),
+        ));
+    }
+    for st in statuses
+        .and_then(|s| s["statuses"].as_array())
+        .into_iter()
+        .flatten()
+    {
+        let outcome = match st["state"].as_str() {
+            Some("success") => Outcome::Pass,
+            Some("failure" | "error") => Outcome::Fail,
+            _ => Outcome::Pending,
+        };
+        results.push((
+            st["context"].as_str().unwrap_or_default().to_owned(),
+            outcome,
+            st["target_url"].as_str().unwrap_or_default().to_owned(),
+        ));
+    }
+    let counted: Vec<&(String, Outcome, String)> = results
         .iter()
-        .filter(|r| {
-            let name = r["name"].as_str().unwrap_or_default();
-            required.is_none_or(|req| req.iter().any(|n| n == name))
-        })
+        .filter(|(name, _, _)| required.is_none_or(|req| req.iter().any(|n| n == name)))
         .collect();
-    let mut failing: Option<FailedCheck> = None;
     let mut pending = runs["total_count"].as_u64().unwrap_or(0) > list.len() as u64;
-    for r in &counted {
-        match r["conclusion"].as_str() {
-            Some("failure" | "timed_out" | "action_required" | "startup_failure") => {
-                let name = cut_bytes(r["name"].as_str().unwrap_or_default(), MAX_CHECK_NAME);
+    if let Some(req) = required {
+        pending |= req
+            .iter()
+            .any(|n| !counted.iter().any(|(name, _, _)| name == n));
+    }
+    let mut failing: Option<FailedCheck> = None;
+    for (name, outcome, url) in &counted {
+        match outcome {
+            Outcome::Fail => {
+                let name = cut_bytes(name, MAX_CHECK_NAME);
                 // The first by name, so the same failure reads the same each poll.
                 if failing.as_ref().is_none_or(|f| name < f.name) {
-                    let url = r["html_url"].as_str().unwrap_or_default();
                     failing = Some(FailedCheck {
                         name,
                         url: cut_bytes(url, MAX_CHECK_URL),
                     });
                 }
             }
-            Some("success" | "neutral" | "skipped") => {}
-            // Queued, running or cancelled: not green yet.
-            _ => pending = true,
+            Outcome::Pending => pending = true,
+            Outcome::Pass => {}
         }
     }
     if failing.is_some() {

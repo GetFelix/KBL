@@ -795,7 +795,7 @@ const PR: &str = "GetFelix/felix#2210";
 
 fn pull(edit: impl FnOnce(&mut Value)) -> Value {
     let mut v = fixture("pull");
-    v["head"] = json!({ "sha": "abc123" });
+    v["head"] = json!({ "sha": "abc123", "ref": "fix/stale-read" });
     v["base"] = json!({ "ref": "main" });
     v["requested_reviewers"] = json!([]);
     v["requested_teams"] = json!([]);
@@ -1058,5 +1058,82 @@ async fn a_pull_request_that_fails_to_read_does_not_stop_the_poll() {
             .state()
             .imported()
             .any(|(_, u, _)| u == "GetFelix/felix#813")
+    );
+}
+
+#[tokio::test]
+async fn an_old_merged_request_swapped_in_by_an_agent_does_not_close_the_root() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    // The reported request is merged, ours, in the same repo, but is about
+    // another branch and another issue.
+    rig.pr(
+        pull(|p| {
+            p["head"]["ref"] = json!("fix/something-else");
+            p["body"] = json!("Fixes #3");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 0);
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+
+    // Named by a closing reference to the issue, the same request is accepted.
+    rig.pr(
+        pull(|p| {
+            p["head"]["ref"] = json!("fix/something-else");
+            p["body"] = json!("Fixes #812.");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Merged)
+    );
+}
+
+#[test]
+fn only_a_closing_keyword_before_the_issue_links_a_request() {
+    assert!(closes_issue("Closes #812", UP));
+    assert!(closes_issue("fixes: GetFelix/felix#812.", UP));
+    assert!(!closes_issue("see #812", UP));
+    assert!(!closes_issue("Fixes #8123", UP));
+    assert!(!closes_issue("Fixes #81", UP));
+}
+
+#[tokio::test]
+async fn flipping_the_reported_request_away_and_back_restores_a_red_status() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    rig.pr(pull(|_| {}), vec![], vec![run("lint", Some("failure"))]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::CheckFailed)
+    );
+    // The agent points `pr` elsewhere and back; the fold forgot the status
+    // when it changed, and ingest has not polled in between.
+    for pr in ["GetFelix/felix#2211", PR] {
+        rig.tracker.person(WorkRecord::Progress {
+            item: item.clone(),
+            attempt: 1,
+            note: agents_core::content::Content::Text("pr".into()),
+            branch: None,
+            pr: Some(pr.into()),
+        });
+    }
+    assert!(rig.tracker.state().items[&item].pr_status.is_none());
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::CheckFailed)
     );
 }
