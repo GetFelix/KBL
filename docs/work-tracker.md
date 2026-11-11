@@ -7,7 +7,7 @@ work, fix it and hand it back.
 
 ## The problem
 
-Bugs arrive in GitHub Issues or Azure DevOps. Agents fix them, but three
+Bugs arrive in GitHub Issues, Azure DevOps or Jira. Agents fix them, but three
 things are missing:
 
 - **Asking for the next piece of work.** An agent has no way to say "give me
@@ -34,10 +34,48 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_progress` | Records a step: a plan, a branch, a PR |
 | `work_complete` / `work_release` | Finishes the item or hands it back |
 
-An ingest worker pulls new and changed items from GitHub or ADO. A triage
+An ingest worker pulls new and changed items from each configured
+[source](#sources). A triage
 agent then dedupes them, sets priority, links dependencies, splits large items
 and writes its reading of each bug as context. People edit any of that through
 REST or the viewer.
+
+## Sources
+
+GitHub, Azure DevOps and Jira are each a source adapter behind one interface,
+so the tracker, the tools and the views never see which system an item came
+from. Adding a tracker later means writing an adapter, nothing else.
+
+An adapter does four things:
+
+- **Lists what changed** since a cursor it keeps in the tracker's cache, and
+  fetches one item. Polling is the record; webhooks (GitHub webhooks, ADO
+  service hooks, Jira webhooks) only wake the poll early, so a missed webhook
+  costs latency, not an item.
+- **Maps fields** into the tracker's: title, body, state, priority, labels and
+  links. Each system's own dependency links come in as edges: GitHub
+  "blocked by" relationships and sub-issues, ADO predecessor and parent links,
+  Jira "blocks" links and sub-tasks.
+- **Selects** what is claimable, with each system's own filter: a label on
+  GitHub, a tag or saved query on ADO, a JQL filter on Jira.
+- **Writes back**: a comment, a link to the pull request, and a state change
+  where the system's workflow allows it (a Jira transition, an ADO state). It
+  carries the claim's version, as below.
+
+| | GitHub | Azure DevOps | Jira |
+|---|---|---|---|
+| Upstream id | `github:GetFelix/felix#812` | `ado:org/project#4410` | `jira:site/FEL-123` |
+| Selected by | label (`agent-ok`) | tag or saved query | JQL filter |
+| Priority from | label | Priority field (1 to 4) | priority field |
+| Edges from | blocked by, sub-issues | predecessor, parent | blocks, sub-tasks |
+| Credentials | GitHub App or token | personal access token or Entra app | API token or OAuth app |
+
+The ingest worker holds the source credentials. Agents never see them: an
+agent writes back through the tracker, which checks its claim first.
+
+Items in ADO or Jira do not name a repository the way a GitHub issue does, so
+each source maps a project, area path or component to the repository an agent
+works in. An item with no mapping is imported to Needs you.
 
 ## The Felix mapping
 
@@ -63,7 +101,7 @@ It reuses the pieces the swarm already has. No database.
   longer matches.
 - **Upstream ids dedupe.** Ingest writes each upstream id with `cache_put_if`
   absent, so a re-polled or redelivered bug is imported once.
-- **Writing back to GitHub or ADO carries the claim's version.** That version
+- **Writing back to a source carries the claim's version.** That version
   is the fencing token, as with leases: the tracker refuses a comment or
   status change from an agent whose claim has lapsed.
 
@@ -134,8 +172,8 @@ work is piling up. It is the page someone opens first in the morning.
 
 M2 and M3 in the [build order](design.md#build-order): GitHub ingest,
 `work_next` and the ready tiers, then triage and dependencies, then Claude Code
-working `agent-ok` issues. The intake view goes live in M4. ADO ingest comes
-after GitHub.
+working `agent-ok` issues. The intake view goes live in M4. GitHub is the first
+source, with the adapter interface in M2; Azure DevOps and Jira follow in M4.
 
 The first source is GetFelix/felix. Only issues labelled `agent-ok` are
 imported as claimable, and replication and storage safety work stays out. An
