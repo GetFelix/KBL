@@ -114,6 +114,7 @@ struct Inner {
     log: Vec<(u64, WorkLogged)>,
     state: State,
     saved: Option<(Value, u64)>,
+    save_fails: bool,
 }
 
 /// A tracker that folds what it is given, so a record the real fold would refuse is refused here.
@@ -126,6 +127,7 @@ impl Default for Fake {
             log: Vec::new(),
             state: State::default(),
             saved: None,
+            save_fails: false,
         })))
     }
 }
@@ -183,6 +185,17 @@ impl Fake {
             .unwrap_or_else(|| panic!("{upstream} is not imported"))
     }
 
+    /// The ingest state as last saved.
+    pub(crate) fn saved_state(&self) -> crate::state::State {
+        let i = self.0.lock().unwrap();
+        serde_json::from_value(i.saved.clone().expect("saved").0).unwrap()
+    }
+
+    /// Every later save is refused.
+    pub(crate) fn fail_saves(&self) {
+        self.0.lock().unwrap().save_fails = true;
+    }
+
     /// Ingest's saved state is lost, as if the cache entry expired.
     pub(crate) fn forget_saved(&self) {
         self.0.lock().unwrap().saved = None;
@@ -231,6 +244,7 @@ impl Tracker for Fake {
 
     async fn save(&self, _: &str, state: &Value, version: Option<u64>) -> Result<u64> {
         let mut i = self.0.lock().unwrap();
+        anyhow::ensure!(!i.save_fails, "the tracker refused the save");
         let now = i.saved.as_ref().map(|(_, v)| *v);
         anyhow::ensure!(now == version, "stale_state");
         let next = now.unwrap_or(0) + 1;

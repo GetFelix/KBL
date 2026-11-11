@@ -30,6 +30,8 @@ use crate::tracker_api::{Appended, Root, Tracker};
 const TEXT_LIMIT: usize = 3500;
 /// Longest title kept in a record, in bytes.
 const TITLE_LIMIT: usize = 200;
+/// Failed write-backs per issue before ingest stops trying.
+const MAX_WRITE_BACK_TRIES: u8 = 3;
 
 pub(crate) struct Settings {
     pub(crate) rules: Vec<Rule>,
@@ -547,9 +549,25 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     "{key} was closed upstream as not planned, so this pull request is now a draft. \
                      Nothing further will be done on it until a person decides."
                 );
-                self.source
+                match self
+                    .source
                     .write_back(&WriteBack::DraftPullRequest { pr, note })
-                    .await?;
+                    .await
+                {
+                    Ok(()) => {}
+                    // The wait applies to the whole poll; try again after it.
+                    Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                    // An agent names the pull request, so a refusal must not hold the cursor.
+                    Err(e) => {
+                        eprintln!("agents-ingest: write-back for {key} failed: {e}");
+                        if let Some(t) = p.state.items.get_mut(&key) {
+                            t.write_back_tries += 1;
+                            if t.write_back_tries < MAX_WRITE_BACK_TRIES {
+                                continue;
+                            }
+                        }
+                    }
+                }
             }
             if let Some(t) = p.state.items.get_mut(&key) {
                 t.written_back = true;
@@ -559,7 +577,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     }
 
     /// The pull request comes from an agent, so it is trusted only in the
-    /// repo of the issue it works on, and only if a rule takes that repo.
+    /// repo of the issue it works on, and only if a rule takes that repo. The
+    /// adapter also checks its author against our own logins.
     fn may_write_to(&self, key: &str, pr: &IssueRef) -> bool {
         let Some(issue) = IssueRef::parse(key) else {
             return false;
@@ -616,6 +635,7 @@ fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
         pending_links: Default::default(),
         linked: Default::default(),
         written_back: false,
+        write_back_tries: 0,
         closed_by_us: false,
         moved_to: None,
     }

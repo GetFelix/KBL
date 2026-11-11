@@ -639,3 +639,51 @@ fn the_item_id_follows_the_upstream_id() {
     assert_ne!(item_id(UP), item_id("GetFelix/felix#813"));
     assert!(item_id(UP).as_str().len() <= 17);
 }
+
+#[tokio::test]
+async fn a_refused_write_back_does_not_hold_the_cursor_and_is_given_up_on() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.hold(UP, Some("GetFelix/felix#2210"));
+    rig.gh.on("GET", "/pulls/2210", ok(fixture("pull")));
+    rig.gh.on("POST", "/graphql", ok(json!({ "data": {} })));
+    rig.gh.on("POST", "/issues/2210/comments", status(403, &[]));
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "not_planned",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    let saved = rig.tracker.saved_state();
+    assert_eq!(
+        saved.cursor.issues_since.as_deref(),
+        Some("2026-11-10T12:00:00Z")
+    );
+    assert_eq!(saved.items[UP].write_back_tries, 1);
+    assert!(!saved.items[UP].written_back);
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    let saved = rig.tracker.saved_state();
+    assert!(saved.items[UP].written_back);
+    let comments = |gh: &Script| {
+        gh.writes()
+            .iter()
+            .filter(|w| w.contains("/comments"))
+            .count()
+    };
+    assert_eq!(comments(&rig.gh), 3);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(comments(&rig.gh), 3);
+}
+
+#[tokio::test]
+async fn when_the_poll_and_the_save_both_fail_the_poll_error_is_returned() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.gh.on("GET", LIST, status(500, &[]));
+    rig.tracker.fail_saves();
+    let err = ingest.poll(false).await.unwrap_err();
+    assert!(err.to_string().contains("500"), "{err}");
+}

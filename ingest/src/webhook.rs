@@ -79,7 +79,8 @@ async fn hook(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> S
     let Some(signed) = signed else {
         return StatusCode::UNAUTHORIZED;
     };
-    if !same(&hex(&hmac_sha256(&app.secret, &body)), signed) {
+    // An empty key makes the signature computable by anyone.
+    if app.secret.is_empty() || !same(&hex(&hmac_sha256(&app.secret, &body)), signed) {
         return StatusCode::UNAUTHORIZED;
     }
     let delivery = headers

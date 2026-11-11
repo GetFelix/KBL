@@ -148,7 +148,8 @@ async fn a_missing_repo_or_a_malformed_item_does_not_stop_the_other_repos() {
         .unwrap();
     assert_eq!(changes.issues.len(), 1);
     assert_eq!(changes.issues[0].id.number, 6);
-    assert!(changes.cursor.issues_since.is_some());
+    // The skipped repo holds the shared cursor back.
+    assert!(changes.cursor.issues_since.is_none());
 }
 
 #[tokio::test]
@@ -289,4 +290,60 @@ fn link_headers_and_redirect_paths_parse() {
         Some(IssueRef::new("o/r", 7))
     );
     assert_eq!(issue_path("https://api.github.com/repos/o/r/pulls/7"), None);
+}
+
+#[tokio::test]
+async fn a_skipped_repo_keeps_the_cursor_so_its_issues_still_arrive() {
+    let gh = Script::default();
+    gh.on(
+        "GET",
+        "/repos/A/a/issues?",
+        ok(json!([
+            issue(1, |i| i["updated_at"] = json!("2026-11-10T12:00:00Z"))
+        ])),
+    );
+    gh.on("GET", "/repos/B/b/issues?", status(404, &[]));
+    let repos = vec!["A/a".to_owned(), "B/b".to_owned()];
+    let before = Cursor {
+        issues_since: Some("2026-11-01T00:00:00Z".into()),
+        ..Cursor::default()
+    };
+    let g = github(&gh);
+    let first = g.changed(&repos, &before).await.unwrap();
+    assert_eq!(first.issues.len(), 1);
+    assert_eq!(first.cursor.issues_since, before.issues_since);
+
+    gh.on(
+        "GET",
+        "/repos/B/b/issues?",
+        ok(json!([
+            issue(2, |i| i["updated_at"] = json!("2026-11-05T00:00:00Z"))
+        ])),
+    );
+    let second = g.changed(&repos, &first.cursor).await.unwrap();
+    assert!(second.issues.iter().any(|i| i.id.repo == "B/b"));
+    assert_eq!(
+        second.cursor.issues_since.as_deref(),
+        Some("2026-11-10T12:00:00Z")
+    );
+}
+
+#[tokio::test]
+async fn a_pull_request_by_someone_else_is_left_alone() {
+    let gh = Script::default();
+    let mut pull = fixture("pull");
+    pull["user"]["login"] = json!("mallory");
+    gh.on("GET", "/pulls/2210", ok(pull));
+    let g = Github::new(
+        "https://api.github.com",
+        gh.clone(),
+        vec!["Kibble[bot]".into()],
+    );
+    g.write_back(&WriteBack::DraftPullRequest {
+        pr: IssueRef::new("GetFelix/felix", 2210),
+        note: "x".into(),
+    })
+    .await
+    .unwrap();
+    assert!(gh.writes().is_empty());
 }

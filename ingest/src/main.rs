@@ -154,3 +154,6 @@ async fn run<S: Source, T: tracker_api::Tracker>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

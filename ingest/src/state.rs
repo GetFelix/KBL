@@ -39,6 +39,9 @@ pub(crate) struct Tracked {
     /// The pull request already made a draft after a drop.
     #[serde(default)]
     pub(crate) written_back: bool,
+    /// Failed write-back attempts; it is given up on after a few.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) write_back_tries: u8,
     /// Set on the old id of a transferred issue, which is not fetched again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) moved_to: Option<String>,
@@ -55,4 +58,8 @@ pub(crate) struct State {
     /// Polls since the last reconcile.
     #[serde(default)]
     pub(crate) polls: u32,
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }

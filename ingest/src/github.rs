@@ -170,6 +170,9 @@ impl<T: Transport> Source for Github<T> {
         // Where each repo's listing got to, to resume the shared cursor.
         let mut reached: Vec<(String, bool)> = Vec::new();
         let mut comment_reached: Vec<(String, bool)> = Vec::new();
+        // The cursor is shared, so it cannot move past what a skipped repo
+        // has not been read up to.
+        let mut skipped = false;
         for repo in repos {
             let state = if cursor.issues_since.is_some() {
                 "all"
@@ -186,6 +189,7 @@ impl<T: Transport> Source for Github<T> {
             let listing = self.pages(url, &cursor.etags, &mut etags).await?;
             if let Some(code) = listing.denied {
                 eprintln!("agents-ingest: {repo} answered {code}; skipping it this poll");
+                skipped = true;
                 continue;
             }
             let mut last = None;
@@ -216,6 +220,7 @@ impl<T: Transport> Source for Github<T> {
                 let listing = self.pages(url, &cursor.etags, &mut etags).await?;
                 if let Some(code) = listing.denied {
                     eprintln!("agents-ingest: comments of {repo} answered {code}; skipping them");
+                    skipped = true;
                     continue;
                 }
                 let mut last = None;
@@ -235,12 +240,17 @@ impl<T: Transport> Source for Github<T> {
         }
         issues.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
         comments.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
-        let issues_since = resume(&reached).or_else(|| cursor.issues_since.clone());
-        // The first poll sees no comments; later ones start where the issues
-        // were, since a comment bumps its issue's update time.
-        let comments_since = match &cursor.comments_since {
-            Some(old) => resume(&comment_reached).or_else(|| Some(old.clone())),
-            None => issues_since.clone(),
+        let (issues_since, comments_since) = if skipped {
+            (cursor.issues_since.clone(), cursor.comments_since.clone())
+        } else {
+            let issues_since = resume(&reached).or_else(|| cursor.issues_since.clone());
+            // The first poll sees no comments; later ones start where the issues
+            // were, since a comment bumps its issue's update time.
+            let comments_since = match &cursor.comments_since {
+                Some(old) => resume(&comment_reached).or_else(|| Some(old.clone())),
+                None => issues_since.clone(),
+            };
+            (issues_since, comments_since)
         };
         Ok(Changes {
             issues,
@@ -313,6 +323,13 @@ impl<T: Transport> Source for Github<T> {
         }
         // A merged or closed pull request needs nothing from us.
         if res.body["state"] != "open" {
+            return Ok(());
+        }
+        // The request is named by an agent, so only one our credential's
+        // identities opened may be touched.
+        let author = res.body["user"]["login"].as_str().unwrap_or_default();
+        if !self.own.iter().any(|o| o.eq_ignore_ascii_case(author)) {
+            eprintln!("agents-ingest: {pr} was not opened by us; leaving it alone");
             return Ok(());
         }
         if res.body["draft"] != true {

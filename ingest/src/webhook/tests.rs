@@ -136,3 +136,15 @@ fn the_delivery_list_is_bounded() {
     assert!(r.first_time("0"));
     assert!(!r.first_time(&(SEEN_LIMIT + 9).to_string()));
 }
+
+#[tokio::test]
+async fn an_empty_secret_accepts_nothing() {
+    let wake = Arc::new(Wake::default());
+    let app = router(String::new(), wake.clone(), Duration::ZERO);
+    let body = r#"{"action":"transferred"}"#;
+    assert_eq!(
+        post(&app, Some(signed(b"", body.as_bytes())), body).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(!wake.reconcile.load(Ordering::SeqCst));
+}
