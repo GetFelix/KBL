@@ -16,7 +16,7 @@ use clap::Parser;
 
 use config::Tokens;
 use felix::Target;
-use tracker::Tracker;
+use tracker::{Settings, Tracker};
 
 #[derive(Parser)]
 #[command(version, about = "The work tracker for Felix Agents")]
@@ -62,6 +62,14 @@ struct Cli {
         hide = true
     )]
     claim_visibility_ms: u64,
+    /// How long the writer lease stands without a renewal, in milliseconds.
+    #[arg(
+        long,
+        env = "AGENTS_TRACKER_LEASE_TTL_MS",
+        default_value_t = 15_000,
+        hide = true
+    )]
+    lease_ttl_ms: u64,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "AGENTS_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -82,17 +90,27 @@ async fn main() -> Result<()> {
         broker_name: cli.broker_name,
     })
     .await?;
+    let ttl = Duration::from_millis(cli.lease_ttl_ms);
     let tracker = Tracker::start(
         felix,
-        Duration::from_millis(cli.claim_visibility_ms),
-        cli.crash_after_poll,
+        Settings {
+            visibility: Duration::from_millis(cli.claim_visibility_ms),
+            lease_ttl: ttl,
+            // Long enough for a killed tracker's lease to run out.
+            lease_wait: ttl * 2,
+            crash_after_poll: cli.crash_after_poll,
+        },
     )
     .await?;
     let listener = tokio::net::TcpListener::bind(cli.listen)
         .await
         .with_context(|| format!("listen on {}", cli.listen))?;
     eprintln!("agents-tracker: listening on {}", listener.local_addr()?);
-    axum::serve(listener, http::router(tracker, tokens))
-        .await
-        .context("serve")
+    let maintain = tracker.clone();
+    tokio::select! {
+        served = axum::serve(listener, http::router(tracker, tokens)) => served.context("serve"),
+        () = async move { maintain.maintain().await } => {
+            anyhow::bail!("the writer lease was lost")
+        }
+    }
 }

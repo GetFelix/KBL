@@ -43,11 +43,28 @@ async fn app() -> Router {
         ) -> Result<Duration, crate::felix::ExtendError> {
             Ok(by)
         }
+        async fn lease_put(
+            &self,
+            _: Vec<u8>,
+            _: Duration,
+            _: Option<u64>,
+        ) -> anyhow::Result<Option<u64>> {
+            Ok(Some(1))
+        }
+        async fn close_idle(&self, _: Duration) {}
     }
     let tokens = Tokens::parse(r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"}}"#).unwrap();
-    let tracker = Tracker::start(Quiet, Duration::from_secs(90), false)
-        .await
-        .unwrap();
+    let tracker = Tracker::start(
+        Quiet,
+        crate::tracker::Settings {
+            visibility: Duration::from_secs(90),
+            lease_ttl: Duration::from_secs(15),
+            lease_wait: Duration::ZERO,
+            crash_after_poll: false,
+        },
+    )
+    .await
+    .unwrap();
     router(tracker, tokens)
 }
 

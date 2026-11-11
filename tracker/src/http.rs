@@ -188,6 +188,7 @@ fn reply(result: Result<Value, Error>) -> Response {
                 Error::NotHeld(_) => (StatusCode::CONFLICT, json!({ "why": "not_held" })),
                 Error::Lost(_) => (StatusCode::CONFLICT, json!({ "why": "lost" })),
                 Error::Felix(_) => (StatusCode::BAD_GATEWAY, json!({})),
+                Error::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, json!({})),
             };
             let mut body = json!({ "error": e.to_string() });
             if let (Some(b), Some(x)) = (body.as_object_mut(), extra.as_object()) {

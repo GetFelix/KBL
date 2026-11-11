@@ -32,6 +32,11 @@ fn the_token_file_must_be_private() {
     assert!(Tokens::load(&path).is_err());
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert!(Tokens::load(&path).is_ok());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(Tokens::load(&path).is_ok());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(Tokens::load(&path).is_err());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     std::fs::remove_dir_all(&dir).ok();
 }
 

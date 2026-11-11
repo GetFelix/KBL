@@ -6,16 +6,21 @@
 //! would have to explain. `work_next` polls the ready tiers as a member named
 //! after the agent and writes `claimed` before it answers: a delivery is never
 //! held without a record, and `done` is written before the ack.
+//!
+//! Locks: `core` guards the fold and the delivery table and is held for state
+//! changes and appends only; each agent has its own lock for its polls and
+//! extends, so one slow Felix call stalls that agent and nobody else.
+//! Every Felix call has a timeout.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agents_core::codec::Codec;
 use agents_core::names::{AgentName, ItemId, Key};
 use agents_core::work::{
-    Actor, ReadyRecord, TIERS, WORK_EVENTS, WorkLogged, WorkRecord, ready_stream,
+    Actor, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS, WorkLogged, WorkRecord, ready_stream,
 };
 use agents_core::work_fold::{Seek, Stage, State};
 use felix_client::GroupRecord;
@@ -29,9 +34,27 @@ use crate::felix::{Broker, ExtendError};
 const POLL_EVERY: Duration = Duration::from_millis(200);
 /// Longest a single `work_next` waits, so a host's tool timeout is not hit.
 pub(crate) const MAX_WAIT: Duration = Duration::from_secs(30);
+/// How long any one Felix call may take.
+const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
 /// Records between the snapshots the startup fold keeps.
 const SNAPSHOT_EVERY: usize = 1000;
 const DEFAULT_TIER: u8 = 2;
+/// How long a tracker without the writer lease keeps running before it exits.
+const FENCE_GRACE: Duration = Duration::from_secs(10);
+/// How long an agent's broker connection stays open with no call from it.
+const MEMBER_IDLE: Duration = Duration::from_secs(600);
+
+pub(crate) struct Settings {
+    /// How long a claim stands without an extension.
+    pub(crate) visibility: Duration,
+    /// How long the writer lease stands without a renewal.
+    pub(crate) lease_ttl: Duration,
+    /// How long a starting tracker waits for another's lease to run out.
+    pub(crate) lease_wait: Duration,
+    /// Dies after the first delivery is polled and before `claimed` is written.
+    /// For the dev-stack check.
+    pub(crate) crash_after_poll: bool,
+}
 
 #[derive(Debug)]
 pub(crate) enum Error {
@@ -43,25 +66,43 @@ pub(crate) enum Error {
     Lost(String),
     /// Felix failed. The call did not complete.
     Felix(anyhow::Error),
+    /// The tracker cannot serve right now: no writer lease, or its state is
+    /// being rebuilt from the log.
+    Unavailable(String),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Refused { why } => write!(f, "refused: {why}"),
-            Error::NotHeld(m) | Error::Lost(m) => f.write_str(m),
+            Error::NotHeld(m) | Error::Lost(m) | Error::Unavailable(m) => f.write_str(m),
             Error::Felix(e) => write!(f, "Felix failed: {e:#}"),
         }
     }
 }
 
-/// One agent's delivery.
-struct Held {
+/// One agent's delivery of one ready record.
+struct Delivery {
+    /// Names this delivery among all the deliveries of the same item.
+    id: u64,
     item: ItemId,
     attempt: u32,
     tier: u8,
-    /// None when the hold comes from the log after a restart, with no delivery to settle.
-    record: Option<GroupRecord>,
+    record: GroupRecord,
+}
+
+/// The delivery the tracker currently stands behind for an item. Only its
+/// agent may settle it: a group ack names an offset, not a delivery, so an ack
+/// from a stale holder would take the next holder's delivery.
+struct Owner {
+    agent: AgentName,
+    id: u64,
+    last_extended: Instant,
+}
+
+struct LeaseHeld {
+    version: u64,
+    valid_until: Instant,
 }
 
 #[derive(Default)]
@@ -69,23 +110,39 @@ struct Core {
     state: State,
     /// The ready record each item is waiting on: tier and stamp.
     live: HashMap<ItemId, (u8, u64)>,
-    held: HashMap<AgentName, Held>,
+    owner: HashMap<ItemId, Owner>,
     /// Items whose claim the fold refused, with the log position of the refusal.
     /// They are published again only after the log moves, or every poll would
     /// publish, refuse and ack the same item forever.
     refused: HashMap<ItemId, Option<u64>>,
-    /// A write failed and may have landed; read the log again before the next call.
+    /// The state may not match the log: rebuild it before serving.
     stale: bool,
+    lease: Option<LeaseHeld>,
+    /// Another tracker took the writer lease.
+    fenced: bool,
 }
+
+/// What to do to Felix once the core lock is released.
+enum Op {
+    Ack(String, AgentName, u64),
+    Nack(String, AgentName, GroupRecord),
+}
+
+type Slot = Arc<Mutex<Option<Delivery>>>;
 
 struct Inner<B> {
     broker: B,
     core: Mutex<Core>,
-    visibility: Duration,
+    slots: StdMutex<HashMap<AgentName, Slot>>,
+    /// One ready-record sync at a time.
+    sync: Mutex<()>,
+    /// One rebuild of the state at a time.
+    reload: Mutex<()>,
+    settings: Settings,
     me: Key,
+    holder: String,
     stamp: AtomicU64,
-    /// Dies after the first delivery is polled and before `claimed` is written. For the dev-stack check.
-    crash_after_poll: bool,
+    next_delivery: AtomicU64,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -97,39 +154,41 @@ impl<B> Clone for Tracker<B> {
 }
 
 impl<B: Broker> Tracker<B> {
-    /// Rebuilds the state from the start of `work.events`, then publishes every
-    /// ready item. Ready records already on the streams are left to be skipped
-    /// as stale, since there is no telling which were acked.
-    pub(crate) async fn start(
-        broker: B,
-        visibility: Duration,
-        crash_after_poll: bool,
-    ) -> anyhow::Result<Self> {
+    /// Takes the writer lease, rebuilds the state from the start of
+    /// `work.events`, takes back the deliveries Felix still holds for agents the
+    /// log shows holding, and publishes every ready item.
+    pub(crate) async fn start(broker: B, settings: Settings) -> anyhow::Result<Self> {
         let tracker = Self(Arc::new(Inner {
             broker,
             core: Mutex::new(Core::default()),
-            visibility,
+            slots: StdMutex::default(),
+            sync: Mutex::new(()),
+            reload: Mutex::new(()),
+            settings,
             me: Key::new("tracker").expect("a valid key"),
+            holder: format!("tracker-{}-{}", std::process::id(), now_micros()),
             stamp: AtomicU64::new(now_micros()),
-            crash_after_poll,
+            next_delivery: AtomicU64::new(1),
         }));
-        {
-            let mut core = tracker.0.core.lock().await;
-            tracker.load(&mut core, false).await?;
-            tracker.sync_ready(&mut core).await;
-            // Take back the deliveries Felix still holds for agents the log shows holding.
-            let holders: Vec<AgentName> = core
-                .state
+        tracker.acquire_lease().await?;
+        let state = tracker.read_state().await?;
+        tracker.0.core.lock().await.state = state;
+        let holders: Vec<AgentName> = {
+            let core = tracker.0.core.lock().await;
+            core.state
                 .items
                 .values()
                 .filter(|i| i.closed.is_none())
                 .filter_map(|i| i.hold.as_ref())
                 .filter_map(|h| AgentName::new(h.by.as_str()).ok())
-                .collect();
-            for agent in holders {
-                tracker.recover(&mut core, &agent).await;
-            }
+                .collect()
+        };
+        for agent in holders {
+            tracker.recover(&agent).await;
         }
+        // A hold whose delivery was not found is gone: free the item.
+        tracker.sweep().await;
+        tracker.sync_ready().await;
         Ok(tracker)
     }
 
@@ -137,35 +196,29 @@ impl<B: Broker> Tracker<B> {
     pub(crate) async fn next(&self, agent: &AgentName, wait: Duration) -> Result<Value, Error> {
         let deadline = Instant::now() + wait.min(MAX_WAIT);
         loop {
+            self.begin().await?;
+            let slot = self.slot(agent);
             {
-                let mut core = self.0.core.lock().await;
-                self.catch_up(&mut core).await?;
-                self.reconcile(&mut core, agent).await;
-                if !core.held.contains_key(agent)
-                    && let Some(attempt) = core.state.held_by(agent.as_str())
-                {
-                    // The log says this agent holds an item after a restart. It never
-                    // gets a second one; try again to take the delivery back.
-                    if !self.recover(&mut core, agent).await {
-                        let item = attempt.0;
-                        core.held.insert(
-                            agent.clone(),
-                            Held {
-                                item,
-                                attempt: attempt.1,
-                                tier: DEFAULT_TIER,
-                                record: None,
-                            },
-                        );
-                    }
+                let mut delivery = slot.lock().await;
+                self.reconcile(agent, &mut delivery).await;
+                if let Some(d) = delivery.as_ref() {
+                    let core = self.0.core.lock().await;
+                    return Ok(claimed(&core.state, d, true));
                 }
-                if let Some(h) = core.held.get(agent) {
-                    return Ok(claimed(&core.state, h, true));
+                let held = self.0.core.lock().await.state.held_by(agent.as_str());
+                if let Some((item, _)) = held {
+                    // The log says this agent holds an item, but the tracker has no
+                    // delivery for it. The sweep frees the item; it is not handed
+                    // back as a live claim.
+                    return Ok(json!({
+                        "claimed": false,
+                        "note": format!("you have no current claim on {item}; it is being released"),
+                    }));
                 }
-                self.sync_ready(&mut core).await;
-                if let Some(h) = self.try_claim(&mut core, agent).await? {
-                    let reply = claimed(&core.state, &h, false);
-                    core.held.insert(agent.clone(), h);
+                self.sync_ready().await;
+                if let Some(d) = self.try_claim(agent).await? {
+                    let reply = claimed(&self.0.core.lock().await.state, &d, false);
+                    *delivery = Some(d);
                     return Ok(reply);
                 }
             }
@@ -179,37 +232,54 @@ impl<B: Broker> Tracker<B> {
 
     /// Keeps the agent's delivery standing for another visibility period.
     pub(crate) async fn extend(&self, agent: &AgentName, item: &ItemId) -> Result<Value, Error> {
-        let (stream, record) = {
-            let mut core = self.0.core.lock().await;
-            self.catch_up(&mut core).await?;
-            if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
-                return Err(lapsed(item));
-            }
-            match core.held.get(agent) {
-                Some(h) if &h.item == item => match &h.record {
-                    Some(r) => (ready_stream(h.tier), r.clone()),
-                    None => return Err(restarted(item)),
-                },
-                _ if core.state.items.get(item).is_some_and(|i| holds(i, agent)) => {
-                    return Err(restarted(item));
-                }
-                _ => return Err(lapsed(item)),
-            }
+        self.begin().await?;
+        let slot = self.slot(agent);
+        let mut delivery = slot.lock().await;
+        if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
+            return Err(lapsed(item));
+        }
+        let Some(d) = delivery.as_ref().filter(|d| &d.item == item) else {
+            let core = self.0.core.lock().await;
+            return Err(match core.state.items.get(item) {
+                Some(i) if holds(i, agent) => restarted(item),
+                _ => lapsed(item),
+            });
         };
-        match self
-            .0
-            .broker
-            .extend(&stream, agent.as_str(), &record, self.0.visibility)
-            .await
-        {
-            Ok(visible) => Ok(json!({
-                "item": item,
-                "deadline_ms": now_ms() + visible.as_millis() as u64,
-            })),
-            Err(ExtendError::Stale) => {
+        let stream = ready_stream(d.tier);
+        let extended = tokio::time::timeout(
+            FELIX_TIMEOUT,
+            self.0.broker.extend(
+                &stream,
+                agent.as_str(),
+                &d.record,
+                self.0.settings.visibility,
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(ExtendError::Failed(anyhow::anyhow!(
+                "Felix did not answer in time"
+            )))
+        });
+        match extended {
+            Ok(visible) => {
                 let mut core = self.0.core.lock().await;
-                if core.held.get(agent).is_some_and(|h| &h.item == item) {
-                    core.held.remove(agent);
+                if let Some(o) = core.owner.get_mut(item)
+                    && o.id == d.id
+                {
+                    o.last_extended = Instant::now();
+                }
+                Ok(json!({
+                    "item": item,
+                    "deadline_ms": now_ms() + visible.as_millis() as u64,
+                }))
+            }
+            Err(ExtendError::Stale) => {
+                // Felix says the delivery is gone, so there is nothing of ours to settle.
+                let d = delivery.take().expect("checked above");
+                let mut core = self.0.core.lock().await;
+                if core.owner.get(item).is_some_and(|o| o.id == d.id) {
+                    core.owner.remove(item);
                 }
                 Err(lapsed(item))
             }
@@ -224,29 +294,17 @@ impl<B: Broker> Tracker<B> {
         item: &ItemId,
         cost_micros: u64,
     ) -> Result<Value, Error> {
-        let mut core = self.0.core.lock().await;
-        self.catch_up(&mut core).await?;
-        if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
-            return Err(lapsed(item));
-        }
-        let attempt = holding(&core, agent, item)?;
-        self.append(
-            &mut core,
-            Actor::Agent,
-            agent_key(agent),
-            WorkRecord::Done {
+        self.finish(
+            agent,
+            item,
+            |attempt| WorkRecord::Done {
                 item: item.clone(),
                 attempt,
                 cost_micros,
             },
-        )
-        .await?;
-        let warning = self.settle(&mut core, agent, item).await;
-        self.sync_ready(&mut core).await;
-        Ok(with_warning(
             json!({ "item": item, "status": "done", "cost_micros": cost_micros }),
-            warning,
-        ))
+        )
+        .await
     }
 
     /// Writes `released`, then hands the delivery back so another agent can take it.
@@ -257,30 +315,18 @@ impl<B: Broker> Tracker<B> {
         reason: Option<String>,
         cost_micros: u64,
     ) -> Result<Value, Error> {
-        let mut core = self.0.core.lock().await;
-        self.catch_up(&mut core).await?;
-        if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
-            return Err(lapsed(item));
-        }
-        let attempt = holding(&core, agent, item)?;
-        self.append(
-            &mut core,
-            Actor::Agent,
-            agent_key(agent),
-            WorkRecord::Released {
+        self.finish(
+            agent,
+            item,
+            |attempt| WorkRecord::Released {
                 item: item.clone(),
                 attempt,
                 reason,
                 cost_micros,
             },
-        )
-        .await?;
-        let warning = self.settle(&mut core, agent, item).await;
-        self.sync_ready(&mut core).await;
-        Ok(with_warning(
             json!({ "item": item, "status": "released" }),
-            warning,
-        ))
+        )
+        .await
     }
 
     /// Writes `gave_up`. The item may be retried once, like a release.
@@ -291,30 +337,18 @@ impl<B: Broker> Tracker<B> {
         reason: String,
         cost_micros: u64,
     ) -> Result<Value, Error> {
-        let mut core = self.0.core.lock().await;
-        self.catch_up(&mut core).await?;
-        if self.reconcile(&mut core, agent).await.as_ref() == Some(item) {
-            return Err(lapsed(item));
-        }
-        let attempt = holding(&core, agent, item)?;
-        self.append(
-            &mut core,
-            Actor::Agent,
-            agent_key(agent),
-            WorkRecord::GaveUp {
+        self.finish(
+            agent,
+            item,
+            |attempt| WorkRecord::GaveUp {
                 item: item.clone(),
                 attempt,
                 reason,
                 cost_micros,
             },
-        )
-        .await?;
-        let warning = self.settle(&mut core, agent, item).await;
-        self.sync_ready(&mut core).await;
-        Ok(with_warning(
             json!({ "item": item, "status": "gave_up" }),
-            warning,
-        ))
+        )
+        .await
     }
 
     /// Appends a record on behalf of a person, if the fold accepts it.
@@ -323,52 +357,190 @@ impl<B: Broker> Tracker<B> {
         person: Key,
         record: WorkRecord,
     ) -> Result<Value, Error> {
-        let mut core = self.0.core.lock().await;
-        self.catch_up(&mut core).await?;
+        self.begin().await?;
         let kind = record.kind();
-        let offset = self
-            .append(&mut core, Actor::Person, person, record)
-            .await?;
-        self.sync_ready(&mut core).await;
+        let offset = {
+            let mut core = self.0.core.lock().await;
+            self.append(&mut core, Actor::Person, person, record)
+                .await?
+        };
+        self.sync_ready().await;
         Ok(json!({ "kind": kind, "offset": offset }))
     }
 
+    /// Frees every hold whose delivery is gone, or that has not been extended
+    /// for a visibility period, so the item is Ready without waiting for
+    /// another agent to poll.
+    pub(crate) async fn sweep(&self) {
+        if self.begin().await.is_err() {
+            return;
+        }
+        {
+            let mut core = self.0.core.lock().await;
+            let now = Instant::now();
+            let visibility = self.0.settings.visibility;
+            let lapsed: Vec<(ItemId, u32)> = core
+                .state
+                .items
+                .values()
+                .filter(|i| i.closed.is_none())
+                .filter_map(|i| i.hold.as_ref().map(|h| (i.id.clone(), h.attempt)))
+                .filter(|(item, _)| {
+                    core.owner
+                        .get(item)
+                        .is_none_or(|o| now.duration_since(o.last_extended) >= visibility)
+                })
+                .collect();
+            for (item, attempt) in lapsed {
+                let released = WorkRecord::Released {
+                    item: item.clone(),
+                    attempt,
+                    reason: Some("lapsed".into()),
+                    cost_micros: 0,
+                };
+                if self
+                    .append(&mut core, Actor::Tracker, self.0.me.clone(), released)
+                    .await
+                    .is_ok()
+                {
+                    // The delivery, if any, lapses in Felix by itself; no one settles it now.
+                    core.owner.remove(&item);
+                }
+            }
+        }
+        self.sync_ready().await;
+    }
+
+    /// Renews the writer lease, sweeps, and closes idle agent connections, until
+    /// the lease is lost for good.
+    pub(crate) async fn maintain(&self) {
+        let every = self.0.settings.lease_ttl / 3;
+        let mut fenced_since: Option<Instant> = None;
+        loop {
+            tokio::time::sleep(every).await;
+            self.renew_lease().await;
+            self.sweep().await;
+            self.0.broker.close_idle(MEMBER_IDLE).await;
+            if self.0.core.lock().await.fenced {
+                let since = *fenced_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= FENCE_GRACE {
+                    eprintln!("agents-tracker: another tracker holds the writer lease; exiting");
+                    return;
+                }
+            } else {
+                fenced_since = None;
+            }
+        }
+    }
+
+    // ---- the writer lease ----
+
+    async fn acquire_lease(&self) -> anyhow::Result<()> {
+        let deadline = Instant::now() + self.0.settings.lease_wait;
+        loop {
+            let started = Instant::now();
+            let put = io(self.0.broker.lease_put(
+                self.0.holder.as_bytes().to_vec(),
+                self.0.settings.lease_ttl,
+                None,
+            ))
+            .await?;
+            if let Some(version) = put {
+                self.0.core.lock().await.lease = Some(LeaseHeld {
+                    version,
+                    valid_until: started + self.0.settings.lease_ttl,
+                });
+                return Ok(());
+            }
+            anyhow::ensure!(
+                Instant::now() < deadline,
+                "another tracker holds the writer lease"
+            );
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }
+
+    pub(crate) async fn renew_lease(&self) {
+        let Some(version) = self.0.core.lock().await.lease.as_ref().map(|l| l.version) else {
+            return;
+        };
+        let started = Instant::now();
+        let put = io(self.0.broker.lease_put(
+            self.0.holder.as_bytes().to_vec(),
+            self.0.settings.lease_ttl,
+            Some(version),
+        ))
+        .await;
+        let mut core = self.0.core.lock().await;
+        match put {
+            Ok(Some(version)) => {
+                core.lease = Some(LeaseHeld {
+                    version,
+                    valid_until: started + self.0.settings.lease_ttl,
+                });
+                core.fenced = false;
+            }
+            // Someone else holds it now.
+            Ok(None) => {
+                core.lease = None;
+                core.fenced = true;
+            }
+            // A blip: the lease stands until its own expiry passes.
+            Err(e) => eprintln!("agents-tracker: could not renew the writer lease: {e:#}"),
+        }
+    }
+
+    // ---- claims ----
+
     /// Polls the tiers in order and returns the first delivery that turns into a claim.
-    async fn try_claim(&self, core: &mut Core, agent: &AgentName) -> Result<Option<Held>, Error> {
+    async fn try_claim(&self, agent: &AgentName) -> Result<Option<Delivery>, Error> {
         for tier in 0..TIERS {
             let stream = ready_stream(tier);
             loop {
-                let polled = self
-                    .0
-                    .broker
-                    .poll(&stream, agent.as_str(), self.0.visibility)
+                let polled =
+                    io(self
+                        .0
+                        .broker
+                        .poll(&stream, agent.as_str(), self.0.settings.visibility))
                     .await
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else { break };
-                if let Some(held) = self.take_delivery(core, agent, tier, record).await? {
-                    return Ok(Some(held));
+                let mut ops = Vec::new();
+                let taken = {
+                    let mut core = self.0.core.lock().await;
+                    self.decide(&mut core, agent, tier, record, &mut ops).await
+                };
+                self.run(ops).await.ok();
+                if let Some(d) = taken? {
+                    return Ok(Some(d));
                 }
             }
         }
         Ok(None)
     }
 
-    /// Turns one delivery into a claim, or acks it when it no longer describes
-    /// claimable work.
-    async fn take_delivery(
+    /// Turns one delivery into a claim, or settles it when it no longer
+    /// describes claimable work.
+    async fn decide(
         &self,
         core: &mut Core,
         agent: &AgentName,
         tier: u8,
         record: GroupRecord,
-    ) -> Result<Option<Held>, Error> {
+        ops: &mut Vec<Op>,
+    ) -> Result<Option<Delivery>, Error> {
         let stream = ready_stream(tier);
+        let ack =
+            |ops: &mut Vec<Op>, offset| ops.push(Op::Ack(stream.clone(), agent.clone(), offset));
+        let nack = |ops: &mut Vec<Op>, rec: &GroupRecord| {
+            ops.push(Op::Nack(stream.clone(), agent.clone(), rec.clone()))
+        };
         let Ok(ready) = ReadyRecord::decode(&record.payload) else {
             eprintln!(
                 "agents-tracker: {stream} offset {} is not a ready record; acked",
                 record.offset
             );
-            self.ack_quiet(&stream, agent, record.offset).await;
+            ack(ops, record.offset);
             return Ok(None);
         };
         let item = ready.item.clone();
@@ -376,7 +548,7 @@ impl<B: Broker> Tracker<B> {
         // No entry means this is the only record the tracker knows of, so it is adopted.
         match core.live.get(&item) {
             Some(&(t, s)) if (t, s) != (ready.tier, ready.stamp) => {
-                self.ack_quiet(&stream, agent, record.offset).await;
+                ack(ops, record.offset);
                 return Ok(None);
             }
             Some(_) => {}
@@ -385,7 +557,7 @@ impl<B: Broker> Tracker<B> {
             }
         }
         if ready.tier != tier {
-            self.ack_quiet(&stream, agent, record.offset).await;
+            ack(ops, record.offset);
             return Ok(None);
         }
         match core.state.stage(&item) {
@@ -394,200 +566,269 @@ impl<B: Broker> Tracker<B> {
                 let Some(hold) = core.state.items.get(&item).and_then(|i| i.hold.clone()) else {
                     return Ok(None);
                 };
-                if hold.by.as_str() == agent.as_str() {
-                    // The agent's own claim, back after a restart. It is already logged.
-                    return Ok(Some(Held {
-                        item,
-                        attempt: hold.attempt,
-                        tier,
-                        record: Some(record),
-                    }));
-                }
                 // Felix handed the item out again, so the old claim lapsed.
+                let lapse = WorkRecord::Released {
+                    item: item.clone(),
+                    attempt: hold.attempt,
+                    reason: Some("lapsed".into()),
+                    cost_micros: 0,
+                };
                 if let Err(e) = self
-                    .append(
-                        core,
-                        Actor::Tracker,
-                        self.0.me.clone(),
-                        WorkRecord::Released {
-                            item: item.clone(),
-                            attempt: hold.attempt,
-                            reason: Some("lapsed".into()),
-                            cost_micros: 0,
-                        },
-                    )
+                    .append(core, Actor::Tracker, self.0.me.clone(), lapse)
                     .await
                 {
-                    self.nack_quiet(&stream, agent, &record).await;
+                    nack(ops, &record);
                     return Err(e);
                 }
-                core.held.retain(|_, h| h.item != item);
             }
             _ => {
                 core.live.remove(&item);
-                self.ack_quiet(&stream, agent, record.offset).await;
+                ack(ops, record.offset);
                 return Ok(None);
             }
         }
-        if self.0.crash_after_poll {
+        if self.0.settings.crash_after_poll {
             std::process::exit(70);
         }
         let attempt = core.state.items[&item].next_attempt();
         let claim = WorkRecord::Claimed {
             item: item.clone(),
             attempt,
-            deadline_ms: now_ms() + self.0.visibility.as_millis() as u64,
+            deadline_ms: now_ms() + self.0.settings.visibility.as_millis() as u64,
         };
         match self
             .append(core, Actor::Agent, agent_key(agent), claim)
             .await
         {
-            Ok(_) => Ok(Some(Held {
-                item,
-                attempt,
-                tier,
-                record: Some(record),
-            })),
+            Ok(_) => {
+                let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
+                // Whoever held the item before no longer owns its delivery, so
+                // nothing it does later can settle this one.
+                core.owner.insert(
+                    item.clone(),
+                    Owner {
+                        agent: agent.clone(),
+                        id,
+                        last_extended: Instant::now(),
+                    },
+                );
+                Ok(Some(Delivery {
+                    id,
+                    item,
+                    attempt,
+                    tier,
+                    record,
+                }))
+            }
             Err(Error::Refused { why }) => {
-                // Over budget or out of tries: a person decides, and a redo publishes again.
                 eprintln!("agents-tracker: {item} not claimable ({why}); skipped");
                 core.live.remove(&item);
-                core.refused.insert(item, core.state.at);
-                self.ack_quiet(&stream, agent, record.offset).await;
+                core.refused.insert(item.clone(), core.state.at);
+                if why == "over_budget" {
+                    self.log_over_budget(core, &item).await;
+                }
+                ack(ops, record.offset);
                 Ok(None)
             }
             Err(e) => {
-                self.nack_quiet(&stream, agent, &record).await;
+                nack(ops, &record);
                 Err(e)
             }
         }
     }
 
-    /// After done, release or give-up: ack the delivery if the item is not ready
-    /// again, otherwise hand it back so another agent can take it.
-    async fn settle(&self, core: &mut Core, agent: &AgentName, item: &ItemId) -> Option<String> {
-        let held = core.held.remove(agent);
-        let ready = core.state.stage(item) == Some(Stage::Ready);
-        if !ready {
-            core.live.remove(item);
+    /// Writes the tracker's refusal so the root sits in Needs you and its ready
+    /// items are not published again. A root already flagged is not logged twice.
+    async fn log_over_budget(&self, core: &mut Core, item: &ItemId) {
+        let flagged = core
+            .state
+            .items
+            .get(item)
+            .and_then(|i| core.state.items.get(&i.root))
+            .is_none_or(|r| r.over_budget);
+        if flagged {
+            return;
         }
-        let Held {
-            tier,
-            record: Some(record),
-            ..
-        } = held?
-        else {
-            return None;
+        let refusal = WorkRecord::Refused {
+            item: Some(item.clone()),
+            op: "claim".into(),
+            reason: RefusalReason::Budget,
         };
-        let stream = ready_stream(tier);
-        let settled = if ready {
-            self.0.broker.nack(&stream, agent.as_str(), &record).await
-        } else {
-            self.0
-                .broker
-                .ack(&stream, agent.as_str(), record.offset)
-                .await
-        };
-        settled
+        let _ = self
+            .append(core, Actor::Tracker, self.0.me.clone(), refusal)
+            .await;
+    }
+
+    /// Shared tail of complete, release and give_up: write the record the fold
+    /// accepts, then settle the delivery.
+    async fn finish(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        record: impl FnOnce(u32) -> WorkRecord,
+        reply: Value,
+    ) -> Result<Value, Error> {
+        self.begin().await?;
+        let slot = self.slot(agent);
+        let mut delivery = slot.lock().await;
+        if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
+            return Err(lapsed(item));
+        }
+        let mut ops = Vec::new();
+        {
+            let mut core = self.0.core.lock().await;
+            let attempt = holding(&core, delivery.as_ref(), agent, item)?;
+            self.append(&mut core, Actor::Agent, agent_key(agent), record(attempt))
+                .await?;
+            let ready = core.state.stage(item) == Some(Stage::Ready);
+            if !ready {
+                core.live.remove(item);
+            }
+            if let Some(d) = delivery.take()
+                && core.owner.get(item).is_some_and(|o| o.id == d.id)
+            {
+                core.owner.remove(item);
+                let stream = ready_stream(d.tier);
+                ops.push(if ready {
+                    Op::Nack(stream, agent.clone(), d.record)
+                } else {
+                    Op::Ack(stream, agent.clone(), d.record.offset)
+                });
+            }
+        }
+        drop(delivery);
+        let warning = self
+            .run(ops)
+            .await
             .err()
-            .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"))
+            .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"));
+        self.sync_ready().await;
+        Ok(with_warning(reply, warning))
     }
 
     /// The fold is the truth for holds. If it no longer shows `agent` holding what
-    /// the tracker has in `held` (a person closed it, an attempt was closed, another
-    /// agent took it), the hold is dropped and the delivery settled. Returns the item.
-    async fn reconcile(&self, core: &mut Core, agent: &AgentName) -> Option<ItemId> {
-        let h = core.held.get(agent)?;
-        let shown = core
-            .state
-            .items
-            .get(&h.item)
-            .and_then(|i| i.hold.as_ref())
-            .is_some_and(|x| x.by.as_str() == agent.as_str() && x.attempt == h.attempt);
-        if shown {
-            return None;
-        }
-        let h = core.held.remove(agent)?;
-        let ready = core.state.stage(&h.item) == Some(Stage::Ready);
-        if !ready {
-            core.live.remove(&h.item);
-        }
-        if let Some(record) = h.record {
-            let stream = ready_stream(h.tier);
-            if ready {
-                self.nack_quiet(&stream, agent, &record).await;
-            } else {
-                self.ack_quiet(&stream, agent, record.offset).await;
+    /// it has a delivery for (a person closed it, an attempt was closed, another
+    /// agent took it), the delivery is dropped. It is settled in Felix only when
+    /// the tracker still stands behind that exact delivery for this agent.
+    async fn reconcile(
+        &self,
+        agent: &AgentName,
+        delivery: &mut Option<Delivery>,
+    ) -> Option<ItemId> {
+        let d = delivery.as_ref()?;
+        let mut ops = Vec::new();
+        {
+            let mut core = self.0.core.lock().await;
+            let ours = core
+                .owner
+                .get(&d.item)
+                .is_some_and(|o| o.id == d.id && &o.agent == agent);
+            let shown = core
+                .state
+                .items
+                .get(&d.item)
+                .and_then(|i| i.hold.as_ref())
+                .is_some_and(|h| h.by.as_str() == agent.as_str() && h.attempt == d.attempt);
+            if shown && ours {
+                return None;
+            }
+            if ours {
+                core.owner.remove(&d.item);
+                let ready = core.state.stage(&d.item) == Some(Stage::Ready);
+                if !ready {
+                    core.live.remove(&d.item);
+                }
+                let stream = ready_stream(d.tier);
+                ops.push(if ready {
+                    Op::Nack(stream, agent.clone(), d.record.clone())
+                } else {
+                    Op::Ack(stream, agent.clone(), d.record.offset)
+                });
             }
         }
-        Some(h.item)
+        self.run(ops).await.ok();
+        delivery.take().map(|d| d.item)
     }
 
     /// Takes back the delivery Felix still holds for `agent`, whose first poll on
-    /// its connection reclaims it. True when the held item's delivery was found.
-    /// Any other delivery the agent had is handed back.
-    async fn recover(&self, core: &mut Core, agent: &AgentName) -> bool {
-        let Some((item, attempt)) = core.state.held_by(agent.as_str()) else {
-            return false;
+    /// its connection reclaims it. Any other delivery the agent had is handed back.
+    async fn recover(&self, agent: &AgentName) {
+        let Some((item, attempt)) = self.0.core.lock().await.state.held_by(agent.as_str()) else {
+            return;
         };
-        let mut found = false;
-        let mut others = Vec::new();
+        let slot = self.slot(agent);
+        let mut delivery = slot.lock().await;
         // The broker reclaims in a connection's first poll, so that poll goes to
         // the tier the item was published on.
-        let first = core
+        let first = self
+            .0
+            .core
+            .lock()
+            .await
             .state
             .items
             .get(&item)
             .and_then(|i| i.tier)
             .unwrap_or(DEFAULT_TIER)
             .min(TIERS - 1);
+        let mut others = Vec::new();
         for tier in std::iter::once(first).chain((0..TIERS).filter(|t| *t != first)) {
             let stream = ready_stream(tier);
             // Bounded, in case the broker keeps handing records back.
             for _ in 0..64 {
-                let Ok(Some(record)) = self
-                    .0
-                    .broker
-                    .poll(&stream, agent.as_str(), self.0.visibility)
+                let Ok(Some(record)) =
+                    io(self
+                        .0
+                        .broker
+                        .poll(&stream, agent.as_str(), self.0.settings.visibility))
                     .await
                 else {
                     break;
                 };
                 match ReadyRecord::decode(&record.payload) {
-                    Ok(ready) if ready.item == item && !found => {
+                    Ok(ready) if ready.item == item && delivery.is_none() => {
+                        let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
+                        let mut core = self.0.core.lock().await;
                         core.live.insert(item.clone(), (ready.tier, ready.stamp));
-                        core.held.insert(
-                            agent.clone(),
-                            Held {
-                                item: item.clone(),
-                                attempt,
-                                tier,
-                                record: Some(record),
+                        core.owner.insert(
+                            item.clone(),
+                            Owner {
+                                agent: agent.clone(),
+                                id,
+                                last_extended: Instant::now(),
                             },
                         );
-                        found = true;
+                        *delivery = Some(Delivery {
+                            id,
+                            item: item.clone(),
+                            attempt,
+                            tier,
+                            record,
+                        });
                     }
-                    _ => others.push((stream.clone(), record)),
+                    _ => others.push(Op::Nack(stream.clone(), agent.clone(), record)),
                 }
             }
         }
-        for (stream, record) in others {
-            self.nack_quiet(&stream, agent, &record).await;
-        }
-        found
+        self.run(others).await.ok();
     }
 
+    // ---- ready records ----
+
     /// Publishes a ready record for every Ready item that has none for its tier.
-    async fn sync_ready(&self, core: &mut Core) {
-        let want: Vec<(ItemId, u8)> = core
-            .state
-            .items
-            .iter()
-            .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
-            .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
-            .map(|(id, it)| (id.clone(), it.tier.unwrap_or(DEFAULT_TIER).min(TIERS - 1)))
-            .filter(|(id, tier)| core.live.get(id).is_none_or(|(t, _)| t != tier))
-            .collect();
+    async fn sync_ready(&self) {
+        let _one_at_a_time = self.0.sync.lock().await;
+        let want: Vec<(ItemId, u8)> = {
+            let core = self.0.core.lock().await;
+            core.state
+                .items
+                .iter()
+                .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
+                .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
+                .map(|(id, it)| (id.clone(), it.tier.unwrap_or(DEFAULT_TIER).min(TIERS - 1)))
+                .filter(|(id, tier)| core.live.get(id).is_none_or(|(t, _)| t != tier))
+                .collect()
+        };
         for (item, tier) in want {
             let stamp = self.0.stamp.fetch_add(1, Ordering::Relaxed);
             let record = ReadyRecord {
@@ -595,20 +836,17 @@ impl<B: Broker> Tracker<B> {
                 tier,
                 stamp,
             };
-            match self
-                .0
-                .broker
-                .publish(&ready_stream(tier), record.encode())
-                .await
-            {
+            match io(self.0.broker.publish(&ready_stream(tier), record.encode())).await {
                 Ok(_) => {
-                    core.live.insert(item, (tier, stamp));
+                    self.0.core.lock().await.live.insert(item, (tier, stamp));
                 }
                 // The next sync tries again.
                 Err(e) => eprintln!("agents-tracker: could not publish {item} as ready: {e:#}"),
             }
         }
     }
+
+    // ---- the log ----
 
     /// Appends `record` if the fold accepts it, and applies it to the live state.
     async fn append(
@@ -618,6 +856,9 @@ impl<B: Broker> Tracker<B> {
         by: Key,
         record: WorkRecord,
     ) -> Result<u64, Error> {
+        if let Some(why) = unavailable(core) {
+            return Err(Error::Unavailable(why));
+        }
         let logged = WorkLogged {
             at_ms: now_ms(),
             by,
@@ -636,10 +877,13 @@ impl<B: Broker> Tracker<B> {
                 .unwrap_or_else(|| "invalid".into());
             return Err(Error::Refused { why });
         }
-        match self.0.broker.publish(WORK_EVENTS, logged.encode()).await {
+        // TODO(felix#1051): make this append conditional on the lease key's version
+        // once Felix can; until then the lease check above narrows the window in
+        // which a tracker that lost the lease can still write, but does not close it.
+        match io(self.0.broker.publish(WORK_EVENTS, logged.encode())).await {
             Ok(offset) => {
                 if offset != guess {
-                    self.load(core, true).await.map_err(Error::Felix)?;
+                    core.stale = true;
                 }
                 Ok(offset)
             }
@@ -650,56 +894,99 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
-    /// Reads the log again if a write failed and may have landed.
-    async fn catch_up(&self, core: &mut Core) -> Result<(), Error> {
-        if core.stale {
-            self.load(core, true).await.map_err(Error::Felix)?;
+    /// Refuses to serve without the writer lease, and rebuilds the state first
+    /// if it may not match the log.
+    async fn begin(&self) -> Result<(), Error> {
+        {
+            let core = self.0.core.lock().await;
+            if let Some(why) = unavailable(&core) {
+                return Err(Error::Unavailable(why));
+            }
+            if !core.stale {
+                return Ok(());
+            }
         }
+        let _one_at_a_time = self.0.reload.lock().await;
+        if !self.0.core.lock().await.stale {
+            return Ok(());
+        }
+        // Built beside the live state and swapped in on success, so a failed read
+        // leaves the tracker refusing to serve rather than serving nothing.
+        let state = self
+            .read_state()
+            .await
+            .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
+        let mut core = self.0.core.lock().await;
+        core.state = state;
+        core.stale = false;
         Ok(())
     }
 
-    /// Folds the records after the last one applied, or all of them when `fresh`. The first load uses seek
-    /// snapshots, which also bounds the replay of a long log.
-    async fn load(&self, core: &mut Core, fresh: bool) -> anyhow::Result<()> {
-        if fresh {
-            core.state = State::default();
-        }
-        let from = core.state.at.map_or(0, |a| a + 1);
+    /// The fold of every record in `work.events`, with seek snapshots.
+    async fn read_state(&self) -> anyhow::Result<State> {
         let mut entries = Vec::new();
-        for (offset, payload) in self.0.broker.read_from(WORK_EVENTS, from).await? {
+        for (offset, payload) in io(self.0.broker.read_from(WORK_EVENTS, 0)).await? {
             match WorkLogged::decode(&payload) {
                 Ok(rec) => entries.push((offset, rec)),
                 Err(e) => eprintln!("agents-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
-        if core.state.at.is_none() {
-            if let Some((last, _)) = entries.last() {
-                let seek = Seek::build(&entries, SNAPSHOT_EVERY);
-                core.state = seek.state_at(&entries, *last);
-            }
-        } else {
-            for (offset, rec) in &entries {
-                core.state.apply(*offset, rec);
-            }
-        }
-        core.stale = false;
-        Ok(())
+        Ok(match entries.last() {
+            Some((last, _)) => Seek::build(&entries, SNAPSHOT_EVERY).state_at(&entries, *last),
+            None => State::default(),
+        })
     }
 
-    async fn ack_quiet(&self, stream: &str, member: &AgentName, offset: u64) {
-        if let Err(e) = self.0.broker.ack(stream, member.as_str(), offset).await {
-            eprintln!("agents-tracker: ack of {stream} offset {offset} failed: {e:#}");
-        }
+    fn slot(&self, agent: &AgentName) -> Slot {
+        self.0
+            .slots
+            .lock()
+            .expect("slots lock")
+            .entry(agent.clone())
+            .or_default()
+            .clone()
     }
 
-    async fn nack_quiet(&self, stream: &str, member: &AgentName, record: &GroupRecord) {
-        if let Err(e) = self.0.broker.nack(stream, member.as_str(), record).await {
-            eprintln!(
-                "agents-tracker: nack of {stream} offset {} failed: {e:#}",
-                record.offset
-            );
+    /// Runs the Felix settles decided under the core lock. Failures are logged;
+    /// the first is returned.
+    async fn run(&self, ops: Vec<Op>) -> anyhow::Result<()> {
+        let mut first = Ok(());
+        for op in ops {
+            let done = match &op {
+                Op::Ack(stream, agent, offset) => {
+                    io(self.0.broker.ack(stream, agent.as_str(), *offset)).await
+                }
+                Op::Nack(stream, agent, record) => {
+                    io(self.0.broker.nack(stream, agent.as_str(), record)).await
+                }
+            };
+            if let Err(e) = done {
+                eprintln!("agents-tracker: settling a delivery failed: {e:#}");
+                if first.is_ok() {
+                    first = Err(e);
+                }
+            }
         }
+        first
     }
+}
+
+/// Why the tracker cannot serve, if it cannot.
+fn unavailable(core: &Core) -> Option<String> {
+    if core.fenced {
+        return Some("another tracker holds the writer lease".into());
+    }
+    match &core.lease {
+        Some(l) if l.valid_until > Instant::now() => None,
+        _ => Some("this tracker does not hold the writer lease".into()),
+    }
+}
+
+/// A Felix call with a time limit.
+async fn io<T>(call: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
+    tokio::time::timeout(FELIX_TIMEOUT, call)
+        .await
+        .map_err(|_| anyhow::anyhow!("Felix did not answer in time"))?
 }
 
 fn holds(item: &agents_core::work_fold::Item, agent: &AgentName) -> bool {
@@ -709,13 +996,18 @@ fn holds(item: &agents_core::work_fold::Item, agent: &AgentName) -> bool {
 }
 
 /// The attempt `agent` holds `item` on: from its delivery, or from the log when
-/// the tracker restarted since the claim.
-fn holding(core: &Core, agent: &AgentName, item: &ItemId) -> Result<u32, Error> {
-    if let Some(h) = core.held.get(agent) {
-        return if &h.item == item {
-            Ok(h.attempt)
+/// the tracker has no delivery for it.
+fn holding(
+    core: &Core,
+    delivery: Option<&Delivery>,
+    agent: &AgentName,
+    item: &ItemId,
+) -> Result<u32, Error> {
+    if let Some(d) = delivery {
+        return if &d.item == item {
+            Ok(d.attempt)
         } else {
-            Err(Error::NotHeld(format!("you hold {}, not {item}", h.item)))
+            Err(Error::NotHeld(format!("you hold {}, not {item}", d.item)))
         };
     }
     match core.state.items.get(item) {
@@ -734,18 +1026,18 @@ fn lapsed(item: &ItemId) -> Error {
 
 fn restarted(item: &ItemId) -> Error {
     Error::Lost(format!(
-        "the tracker restarted after you claimed {item}, so it cannot extend that claim. It will lapse; use work_next for new work"
+        "the tracker has no delivery for your claim on {item}, so it cannot extend it. It will be released; use work_next for new work"
     ))
 }
 
-fn claimed(state: &State, held: &Held, resumed: bool) -> Value {
-    let item = state.items.get(&held.item);
+fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
+    let item = state.items.get(&delivery.item);
     json!({
         "claimed": true,
         "resumed": resumed,
-        "attempt": held.attempt,
+        "attempt": delivery.attempt,
         "item": {
-            "id": held.item,
+            "id": delivery.item,
             "title": item.map(|i| i.title.as_str()),
             "work": item.map(|i| i.work),
             "tier": item.and_then(|i| i.tier),

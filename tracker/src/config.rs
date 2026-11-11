@@ -74,8 +74,8 @@ impl Tokens {
                 .mode()
                 & 0o777;
             anyhow::ensure!(
-                mode == 0o600,
-                "the token file {} has mode {mode:o}; set it to 600",
+                mode == 0o600 || mode == 0o400,
+                "the token file {} has mode {mode:o}; set it to 600 or 400",
                 path.display()
             );
         }

@@ -23,7 +23,13 @@ struct Net {
     /// Every broker call that changes something, in order.
     calls: Vec<String>,
     fail_publish_on: Option<String>,
+    fail_reads: bool,
     extend_stale: bool,
+    /// The writer lease key: holder and version, while it is live.
+    lease: Option<(Vec<u8>, u64)>,
+    lease_versions: u64,
+    /// Polls by this member never answer.
+    hang_member: Option<String>,
 }
 
 /// An in-memory Felix: streams, and a consumer group per ready stream. A `Fake`
@@ -86,6 +92,19 @@ impl Fake {
 
     fn fail_publishes_to(&self, stream: Option<&str>) {
         self.net.lock().unwrap().fail_publish_on = stream.map(str::to_owned);
+    }
+
+    fn fail_reads(&self, fail: bool) {
+        self.net.lock().unwrap().fail_reads = fail;
+    }
+
+    fn hang(&self, member: Option<&str>) {
+        self.net.lock().unwrap().hang_member = member.map(str::to_owned);
+    }
+
+    /// The lease key's time to live passes.
+    fn expire_lease(&self) {
+        self.net.lock().unwrap().lease = None;
     }
 
     fn extends_are_stale(&self, stale: bool) {
@@ -180,6 +199,9 @@ impl Broker for Fake {
 
     async fn read_from(&self, stream: &str, from: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
         let net = self.net.lock().unwrap();
+        if net.fail_reads {
+            anyhow::bail!("the broker is down");
+        }
         Ok(net
             .streams
             .get(stream)
@@ -193,6 +215,9 @@ impl Broker for Fake {
         member: &str,
         _visibility: Duration,
     ) -> anyhow::Result<Option<GroupRecord>> {
+        if self.net.lock().unwrap().hang_member.as_deref() == Some(member) {
+            std::future::pending::<()>().await;
+        }
         let polled = self.poll_sync(stream, member);
         if polled.is_some() {
             self.net
@@ -234,6 +259,29 @@ impl Broker for Fake {
         }
         Ok(by)
     }
+
+    async fn lease_put(
+        &self,
+        holder: Vec<u8>,
+        _ttl: Duration,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut net = self.net.lock().unwrap();
+        let ok = match (&net.lease, expect) {
+            (None, None) => true,
+            (Some((_, v)), Some(e)) => *v == e,
+            _ => false,
+        };
+        if !ok {
+            return Ok(None);
+        }
+        net.lease_versions += 1;
+        let v = net.lease_versions;
+        net.lease = Some((holder, v));
+        Ok(Some(v))
+    }
+
+    async fn close_idle(&self, _idle: Duration) {}
 }
 
 fn agent(name: &str) -> AgentName {
@@ -272,8 +320,30 @@ async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
     .unwrap();
 }
 
+fn settings() -> Settings {
+    Settings {
+        visibility: VIS,
+        lease_ttl: Duration::from_secs(15),
+        lease_wait: Duration::ZERO,
+        crash_after_poll: false,
+    }
+}
+
+/// Time passes, and the tracker renews its lease as it would on its timer.
+async fn pass(t: &Tracker<Fake>, total: Duration) {
+    let mut left = total;
+    while !left.is_zero() {
+        let step = left.min(Duration::from_secs(5));
+        tokio::time::advance(step).await;
+        t.renew_lease().await;
+        left -= step;
+    }
+}
+
+/// A tracker on a new connection. Any earlier tracker's lease has run out by now.
 async fn start(fake: &Fake) -> Tracker<Fake> {
-    Tracker::start(fake.reconnect(), VIS, false).await.unwrap()
+    fake.expire_lease();
+    Tracker::start(fake.reconnect(), settings()).await.unwrap()
 }
 
 async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
@@ -538,7 +608,7 @@ async fn a_restart_takes_back_the_deliveries_felix_still_holds_for_each_agent() 
 }
 
 #[tokio::test]
-async fn a_holder_whose_delivery_is_gone_after_a_restart_keeps_its_item_and_gets_no_second() {
+async fn a_hold_whose_delivery_is_gone_after_a_restart_is_released_not_resumed() {
     let fake = Fake::default();
     let first = start(&fake).await;
     seed(&first, "a1", 2).await;
@@ -551,19 +621,222 @@ async fn a_holder_whose_delivery_is_gone_after_a_restart_keeps_its_item_and_gets
     assert!(fake.poll_and_vanish("work.ready.p2", "w9").is_some());
 
     let second = start(&fake).await;
-    let again = claim(&second, "w1").await;
+    // The hold is freed at startup, without another agent polling.
+    let log = fake.log();
+    let freed = log
+        .iter()
+        .rev()
+        .find(|l| l.record.kind() == "released")
+        .unwrap();
     assert_eq!(
-        (again["resumed"].as_bool(), claimed_id(&again).as_deref()),
-        (Some(true), Some("a1"))
+        (freed.actor, freed.by.as_str()),
+        (Actor::Tracker, "tracker")
     );
-    assert_eq!(fake.kinds().iter().filter(|k| *k == "claimed").count(), 1);
     assert!(matches!(
         second.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_)) | Err(Error::NotHeld(_))
+    ));
+    // w1 is not told it still holds a1.
+    let reply = claim(&second, "w1").await;
+    assert_ne!(reply["resumed"], true);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_hold_that_is_not_extended_is_released_by_the_sweep() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    t.sweep().await;
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "released").count(), 0);
+    pass(&t, VIS + Duration::from_secs(1)).await;
+    t.sweep().await;
+    // Freed with no other agent polling.
+    let log = fake.log();
+    let freed = log.last().unwrap();
+    assert_eq!(freed.record.kind(), "released");
+    assert_eq!(freed.actor, Actor::Tracker);
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
         Err(Error::Lost(_))
     ));
-    // The holder can still finish what the log says it holds.
-    second.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
-    assert_eq!(fake.kinds().last().map(String::as_str), Some("done"));
+    // Once Felix hands the delivery on, anyone can take the now-ready item.
+    fake.lapse("work.ready.p2", 0);
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_extended_hold_is_kept_by_the_sweep() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    for _ in 0..4 {
+        pass(&t, Duration::from_secs(30)).await;
+        t.extend(&agent("w1"), &item("a1")).await.unwrap();
+        t.sweep().await;
+    }
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "released").count(), 0);
+}
+
+#[tokio::test]
+async fn a_stale_holders_late_calls_cannot_settle_the_next_holders_delivery() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    // w1 hangs. A person takes the item back, Felix hands the delivery on, and w2 claims.
+    t.person_record(
+        key("gab"),
+        WorkRecord::Released {
+            item: item("a1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    )
+    .await
+    .unwrap();
+    fake.lapse("work.ready.p2", 0);
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+    let acks_before = fake.calls().iter().filter(|c| c.starts_with("ack")).count();
+    // w1 comes back. None of its calls may touch w2's delivery.
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
+    assert!(matches!(
+        t.complete(&agent("w1"), &item("a1"), 0).await,
+        Err(Error::Lost(_))
+    ));
+    assert!(matches!(
+        t.release(&agent("w1"), &item("a1"), None, 0).await,
+        Err(Error::Lost(_))
+    ));
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Leased("w2".into()));
+    let acks_after = fake.calls().iter().filter(|c| c.starts_with("ack")).count();
+    assert_eq!(acks_before, acks_after);
+    // And w2 can still finish.
+    t.complete(&agent("w2"), &item("a1"), 0).await.unwrap();
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
+}
+
+#[tokio::test]
+async fn a_failed_reload_does_not_empty_the_state_and_nothing_is_served_until_it_works() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    fake.fail_publishes_to(Some(WORK_EVENTS));
+    assert!(t.complete(&agent("w1"), &item("a1"), 0).await.is_err());
+    fake.fail_publishes_to(None);
+    fake.fail_reads(true);
+    // The state must be rebuilt, the read fails: refuse rather than serve an empty board.
+    assert!(matches!(
+        t.next(&agent("w2"), Duration::ZERO).await,
+        Err(Error::Unavailable(_))
+    ));
+    assert!(matches!(
+        t.complete(&agent("w1"), &item("a1"), 0).await,
+        Err(Error::Unavailable(_))
+    ));
+    fake.fail_reads(false);
+    // Rebuilt from the log: the item is still w1's, and finishes once.
+    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn one_hung_felix_call_stalls_only_that_agent() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    seed(&t, "a2", 2).await;
+    claim(&t, "w3").await;
+    fake.hang(Some("w1"));
+    let hung = tokio::spawn({
+        let t = t.clone();
+        async move { t.next(&agent("w1"), Duration::ZERO).await }
+    });
+    tokio::task::yield_now().await;
+    // Others carry on while w1's poll hangs.
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a2"));
+    t.complete(&agent("w3"), &item("a1"), 0).await.unwrap();
+    seed(&t, "a3", 2).await;
+    // The hung call ends by its own timeout.
+    assert!(matches!(hung.await.unwrap(), Err(Error::Felix(_))));
+}
+
+#[tokio::test]
+async fn a_second_tracker_cannot_start_while_the_first_holds_the_lease() {
+    let fake = Fake::default();
+    let _first = start(&fake).await;
+    let second = Tracker::start(fake.reconnect(), settings()).await;
+    assert!(second.is_err());
+}
+
+#[tokio::test]
+async fn a_tracker_that_lost_the_lease_serves_and_writes_nothing() {
+    let fake = Fake::default();
+    let first = start(&fake).await;
+    seed(&first, "a1", 2).await;
+    claim(&first, "w1").await;
+    // The lease runs out and another tracker takes it.
+    let second = start(&fake).await;
+    first.renew_lease().await;
+    let before = fake.log().len();
+    assert!(matches!(
+        first.complete(&agent("w1"), &item("a1"), 0).await,
+        Err(Error::Unavailable(_))
+    ));
+    assert!(matches!(
+        first
+            .person_record(
+                key("gab"),
+                WorkRecord::Imported {
+                    item: item("b1"),
+                    source: "gh".into(),
+                    upstream_id: "b1".into(),
+                    title: "t".into(),
+                },
+            )
+            .await,
+        Err(Error::Unavailable(_))
+    ));
+    assert!(matches!(
+        first.next(&agent("w2"), Duration::ZERO).await,
+        Err(Error::Unavailable(_))
+    ));
+    assert_eq!(fake.log().len(), before);
+    // The one with the lease serves.
+    assert!(second.next(&agent("w2"), Duration::ZERO).await.is_ok());
+}
+
+#[tokio::test]
+async fn an_item_over_budget_leaves_ready_and_is_not_published_again() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::BudgetSet {
+            root: item("a1"),
+            items_left: 5,
+            max_depth: 3,
+            cost_left_micros: 0,
+            redos_per_item: 3,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w1").await), None);
+    assert!(fake.kinds().contains(&"refused".to_owned()));
+    let published = fake.ready_count("work.ready.p2");
+    for _ in 0..3 {
+        assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+    }
+    assert_eq!(fake.ready_count("work.ready.p2"), published);
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "refused").count(), 1);
 }
 
 #[tokio::test]

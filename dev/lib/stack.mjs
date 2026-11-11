@@ -115,6 +115,7 @@ export async function startTracker(tokens, extraEnv = {}) {
       AGENTS_TRACKER_TOKENS_FILE: tokensFile,
       AGENTS_TRACKER_LISTEN: TRACKER_ADDR,
       AGENTS_CLAIM_VISIBILITY_MS: "4000",
+      AGENTS_TRACKER_LEASE_TTL_MS: "3000",
       ...extraEnv,
     },
     stdio: ["ignore", "inherit", "inherit"],

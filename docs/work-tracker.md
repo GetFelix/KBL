@@ -132,7 +132,7 @@ leaves no trace in the log.
 
 Felix cannot yet tell the tracker which principal a token belongs to, so the
 tracker reads a token map from a JSON file (`--tokens-file`, or
-`AGENTS_TRACKER_TOKENS_FILE`). The file must be mode 600, a token may be listed
+`AGENTS_TRACKER_TOKENS_FILE`). The file must be mode 600 or 400, a token may be listed
 once only, and tokens are compared in constant time:
 
 ```json
@@ -159,13 +159,39 @@ acked and skipped when it is delivered. When Felix hands an item to a second
 agent while the log still shows the first as holding it, the claim lapsed: the
 tracker writes `released` with the reason `lapsed`, then the new `claimed`.
 The log is the truth for holds. Before each call the tracker checks that the log
-still shows the agent holding the item; if a person closed the item or the
+still shows the agent holding the item. If a person closed the item or the
 attempt, or another agent took it, the agent's next `extend`, `complete` or
-`release` answers `lost` and the delivery is settled. After a restart the
-tracker opens a connection per agent and takes back the delivery Felix still
-holds for each agent the log shows holding, so their claims carry on. Until an
-agent's delivery is back, `work_next` returns the item it already holds and
-never a second one.
+`release` answers `lost`. The tracker settles a delivery in Felix only when it
+still stands behind that exact delivery for that agent, because a group ack
+names an offset, not a delivery: a stale holder's late call cannot ack the next
+holder's.
+
+A sweep (every few seconds) writes `released` with the reason `lapsed` for a
+hold whose delivery the tracker no longer has, or that has not been extended
+for the visibility period, so the item is Ready without another agent having to
+poll. After a restart the tracker takes back, for each agent the log shows
+holding, the delivery Felix still has for that name; if it is not there the
+hold is released at once. Until then `work_next` answers that the agent has no
+current claim.
+
+The tracker is the only writer, and it holds that role with a lease: a key in
+the `work.tracker` cache, written with a time to live and renewed every third
+of it. A tracker that cannot renew answers 503 to everything, exits after ten
+seconds, and checks the lease before each append. This narrows the window in
+which a second tracker could write but does not close it: that needs an append
+conditioned on the lease key's version, which Felix does not offer yet
+(felix#1051).
+
+The tracker keeps no Felix call under its main lock, and every call has a
+10 second limit, so one slow call stalls the agent that made it and nobody
+else. If a write to `work.events` fails, the tracker rebuilds its state from
+the log before it serves again, and refuses with 503 while it cannot.
+
+**Connection cost.** The broker reclaims a member's deliveries only in a
+connection's first poll, so each active agent has a QUIC connection of its own
+to the broker, opened on its first call and closed after ten minutes without
+one. A connection that fails is opened again with a fresh token on the next
+call.
 
 ### Grants
 
