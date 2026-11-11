@@ -28,6 +28,7 @@ fn every_record() -> Vec<WorkRecord> {
             key: key("split-a"),
             work: WorkKind::Split,
             title: "reader side".into(),
+            review: None,
         },
         WorkRecord::Proposed {
             item: item("p1"),
@@ -35,6 +36,7 @@ fn every_record() -> Vec<WorkRecord> {
             key: key("found-1"),
             work: WorkKind::Fix,
             title: "a second bug".into(),
+            review: None,
         },
         WorkRecord::Triaged {
             item: item("r1"),
@@ -126,6 +128,7 @@ fn every_record() -> Vec<WorkRecord> {
                 stream: WORK_EVENTS.into(),
                 offset: 12,
             }],
+            revert_check: None,
         },
         WorkRecord::Step {
             item: item("r1"),
@@ -305,6 +308,51 @@ fn every_record() -> Vec<WorkRecord> {
                 title: "gateway needs a CAS call".into(),
             }),
         },
+        WorkRecord::Proposed {
+            item: item("v1"),
+            parent: Some(item("r1")),
+            key: key("review-first"),
+            work: WorkKind::Review,
+            title: "First-pass review: GetFelix/felix#9".into(),
+            review: Some(ReviewSpec {
+                pass: ReviewPass::First,
+                tier: "fast".into(),
+                pr: "GetFelix/felix#9".into(),
+            }),
+        },
+        WorkRecord::Decision {
+            item: item("r1"),
+            attempt: 1,
+            phase: Phase::Verify,
+            so_far: "fix in, test added".into(),
+            question: String::new(),
+            options: vec![],
+            chosen: String::new(),
+            why: "the test fails without the fix".into(),
+            commit: "9f3c2ab".into(),
+            evidence: vec![],
+            revert_check: Some(RevertCheck {
+                test: "reads_see_a_fresh_write".into(),
+                failed_without_fix: true,
+                passed_with_fix: true,
+            }),
+        },
+        WorkRecord::Finding {
+            item: item("v1"),
+            attempt: 1,
+            severity: Severity::High,
+            file: "src/read.rs".into(),
+            line: 88,
+            title: "stale read after restart".into(),
+            scenario: "restart between fill and read returns the old value".into(),
+            verdict: FindingVerdict::Fix,
+        },
+        WorkRecord::ReviewVerdict {
+            item: item("v2"),
+            attempt: 1,
+            verdict: MergeVerdict::Block,
+            why: "a fix is still open".into(),
+        },
     ]
 }
 
@@ -334,7 +382,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 32);
+    assert_eq!(kinds.len(), 34);
 }
 
 #[test]

@@ -21,12 +21,14 @@ fn lists_the_run_info_tool_with_a_description() {
             "work_complete",
             "work_context",
             "work_extend",
+            "work_finding",
             "work_link",
             "work_next",
             "work_post",
             "work_progress",
             "work_release",
-            "work_rules"
+            "work_rules",
+            "work_verdict"
         ]
     );
     assert!(tools.iter().all(|tool| tool.description.is_some()));
@@ -66,4 +68,11 @@ fn artifacts_in_a_reply_are_swapped_for_their_text() {
     assert_eq!(reply["context"][0]["text"]["text"], "the long log");
     assert_eq!(reply["context"][1]["text"]["text"], "kept");
     assert_eq!(reply["notes"][0]["text"]["text"], "a long note");
+}
+
+#[test]
+fn a_finding_and_a_verdict_name_one_of_their_words() {
+    assert!(check_one_of("verdict", "fix", &["fix", "defer", "dismiss"]).is_ok());
+    let err = check_one_of("verdict", "ship", &["merge", "block"]).unwrap_err();
+    assert!(err.contains("merge, block"));
 }

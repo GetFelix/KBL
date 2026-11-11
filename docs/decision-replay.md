@@ -27,6 +27,13 @@ per-attempt detail such as model calls. Three record kinds are added to
 | `edit` | `felix-mcp` (`edit` tool) | File, hunk, and the offset of the decision it carries out |
 | `human_input` | the tracker | An answer, a review comment or a change of priority, with who gave it |
 
+A decision can carry a **revert check**: the name of a test, whether it failed
+with the fix reverted, and whether it passed with the fix restored. The test
+name is at most 400 bytes. Only a check where both held counts as proof, and
+the attempt keeps the offsets of those decisions (`proven`). The record is
+the agent's claim, as with any evidence. A reviewer who doubts it re-runs the
+test. See [Review as work](work-tracker.md#review-as-work).
+
 An agent calls `decide` at the points that shape a fix: what it believes the
 cause is, which approach it takes, an alternative it rejects, and a change of
 scope. The worker prompt asks for it at those points and nowhere else; a

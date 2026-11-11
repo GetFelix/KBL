@@ -57,6 +57,7 @@ fn proposed(item: &str, parent: Option<&str>, k: &str, work: WorkKind) -> WorkRe
         key: key(k),
         work,
         title: item.into(),
+        review: None,
     }
 }
 fn claimed(item: &str, attempt: u32) -> WorkRecord {
@@ -78,6 +79,7 @@ fn decision(item: &str, attempt: u32, evidence: Vec<Evidence>) -> WorkRecord {
         why: "the writer holds the lock".into(),
         commit: "abc123".into(),
         evidence,
+        revert_check: None,
     }
 }
 fn done(item: &str, attempt: u32, cost_micros: u64) -> WorkRecord {
@@ -535,6 +537,7 @@ fn a_decision_cannot_cite_the_future_or_skip_its_fields() {
             why: "w".into(),
             commit: "abc".into(),
             evidence: vec![],
+            revert_check: None,
         },
     );
     l.agent(
@@ -1703,6 +1706,7 @@ fn a_decision_needs_its_commit_and_an_empty_why_still_folds() {
         why: why.into(),
         commit: commit.into(),
         evidence: vec![],
+        revert_check: None,
     };
     l.agent("w1", with("the lock is held", ""));
     assert_eq!(last_rejection(&l), Some(Reject::MissingField));
@@ -2814,3 +2818,5 @@ fn chained_answers_stop_at_the_depth_cap() {
     assert_eq!(last_rejection(&l), Some(Reject::TooDeep));
     assert!(fold(&l.0).items[&id(&at)].open_question.is_some());
 }
+
+mod review;

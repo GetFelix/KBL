@@ -46,6 +46,7 @@ fn decide_args() -> Decide {
         why: "the writer holds the lock".into(),
         commit: "abc123".into(),
         evidence: vec![],
+        revert_check: None,
     }
 }
 

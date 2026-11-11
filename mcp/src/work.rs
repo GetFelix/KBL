@@ -123,7 +123,17 @@ impl<T: TrackerApi> Work<T> {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) async fn next(&self, wait: Option<Duration>) -> Result<String, String> {
+        self.next_for(wait, Vec::new()).await
+    }
+
+    /// Like `next`, and the agent also takes reviews of the tiers it names.
+    pub(crate) async fn next_for(
+        &self,
+        wait: Option<Duration>,
+        review_tiers: Vec<String>,
+    ) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
         if let Some(lost) = lost(&mut held) {
             return Err(lost);
@@ -135,10 +145,13 @@ impl<T: TrackerApi> Work<T> {
             }
             return Err(msg);
         }
-        let body = match wait {
+        let mut body = match wait {
             Some(w) => json!({ "wait_seconds": w.as_secs() }),
             None => json!({}),
         };
+        if !review_tiers.is_empty() {
+            body["review_tiers"] = json!(review_tiers);
+        }
         let reply = self
             .0
             .api

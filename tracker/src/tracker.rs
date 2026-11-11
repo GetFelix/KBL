@@ -21,7 +21,8 @@ use agents_core::codec::Codec;
 use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
 use agents_core::work::{
-    Actor, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS, WorkLogged, WorkRecord, ready_stream,
+    Actor, LANES, REVIEW_LANES, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS, WorkLogged,
+    WorkRecord, ready_stream, valid_review_tier,
 };
 use agents_core::work_fold::{Seek, Stage, State};
 use felix_client::GroupRecord;
@@ -48,6 +49,8 @@ const FENCE_GRACE: Duration = Duration::from_secs(10);
 /// Allowance for clock skew between the tracker and the lease's holder of record.
 const LEASE_SKEW: Duration = Duration::from_secs(1);
 const MEMBER_IDLE: Duration = Duration::from_secs(600);
+/// Reviews of its own work one claim looks past in a lane.
+const MAX_OWN_SKIPS: usize = 16;
 
 pub(crate) struct Settings {
     /// The repos each agent may reach beyond its own tree.
@@ -61,6 +64,43 @@ pub(crate) struct Settings {
     /// Dies after the first delivery is polled and before `claimed` is written.
     /// For the dev-stack check.
     pub(crate) crash_after_poll: bool,
+    /// Reviewer tier names, one ready lane each. The first reads a request
+    /// first and the last gives the final review.
+    pub(crate) review_tiers: Vec<String>,
+}
+
+#[cfg(test)]
+pub(crate) fn default_review_tiers() -> Vec<String> {
+    vec!["fast".to_owned(), "deep".to_owned()]
+}
+
+impl Settings {
+    /// Whether the reviewer tiers are names, distinct, and fit the lanes.
+    pub(crate) fn check_review_tiers(&self) -> Result<(), String> {
+        let t = &self.review_tiers;
+        if t.is_empty() || t.len() > usize::from(REVIEW_LANES) {
+            return Err(format!("name between 1 and {REVIEW_LANES} reviewer tiers"));
+        }
+        if let Some(bad) = t.iter().find(|n| !valid_review_tier(n)) {
+            return Err(format!("{bad:?} is not a reviewer tier name"));
+        }
+        if t.iter().enumerate().any(|(i, n)| t[..i].contains(n)) {
+            return Err("reviewer tiers must be different".into());
+        }
+        Ok(())
+    }
+
+    /// The lane a ready item is published on: its priority tier, or its
+    /// reviewer tier's lane. None when a review names a tier that is not configured.
+    fn lane(&self, it: &agents_core::work_fold::Item) -> Option<u8> {
+        match &it.review {
+            Some(spec) => {
+                let i = self.review_tiers.iter().position(|t| *t == spec.tier)?;
+                Some(TIERS + u8::try_from(i).ok()?)
+            }
+            None => Some(it.tier.unwrap_or(DEFAULT_TIER).min(TIERS - 1)),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -202,6 +242,7 @@ impl<B: Broker> Tracker<B> {
     /// `work.events`, takes back the deliveries Felix still holds for agents the
     /// log shows holding, and publishes every ready item.
     pub(crate) async fn start(broker: B, settings: Settings) -> anyhow::Result<Self> {
+        settings.check_review_tiers().map_err(anyhow::Error::msg)?;
         let tracker = Self(Arc::new(Inner {
             broker,
             core: Mutex::new(Core::default()),
@@ -241,7 +282,19 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Claims the highest-priority ready item for `agent`, waiting up to `wait`.
+    #[cfg(test)]
     pub(crate) async fn next(&self, agent: &AgentName, wait: Duration) -> Result<Value, Error> {
+        self.next_for(agent, wait, &[]).await
+    }
+
+    /// Like `next`, and the agent also takes reviews of the tiers it names.
+    pub(crate) async fn next_for(
+        &self,
+        agent: &AgentName,
+        wait: Duration,
+        reviews: &[String],
+    ) -> Result<Value, Error> {
+        let lanes = self.review_lanes(reviews)?;
         let deadline = Instant::now() + wait.min(MAX_WAIT);
         loop {
             self.begin().await?;
@@ -264,7 +317,7 @@ impl<B: Broker> Tracker<B> {
                     }));
                 }
                 self.sync_ready().await;
-                if let Some(d) = self.try_claim(agent).await? {
+                if let Some(d) = self.try_claim(agent, &lanes).await? {
                     let reply = claimed(&self.0.core.lock().await.state, &d, false);
                     *delivery = Some(d);
                     return Ok(reply);
@@ -587,10 +640,44 @@ impl<B: Broker> Tracker<B> {
 
     // ---- claims ----
 
-    /// Polls the tiers in order and returns the first delivery that turns into a claim.
-    async fn try_claim(&self, agent: &AgentName) -> Result<Option<Delivery>, Error> {
-        for tier in 0..TIERS {
+    /// The lanes of the reviewer tiers an agent asks for. Reviews are claimed
+    /// only by naming their tier.
+    fn review_lanes(&self, reviews: &[String]) -> Result<Vec<u8>, Error> {
+        if reviews.len() > usize::from(REVIEW_LANES) {
+            return Err(Error::Invalid(format!(
+                "at most {REVIEW_LANES} reviewer tiers"
+            )));
+        }
+        let mut lanes = Vec::new();
+        for name in reviews {
+            let i = self
+                .0
+                .settings
+                .review_tiers
+                .iter()
+                .position(|t| t == name)
+                .ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "{name:?} is not a reviewer tier here: use one of {}",
+                        self.0.settings.review_tiers.join(", ")
+                    ))
+                })?;
+            let lane = TIERS + u8::try_from(i).unwrap_or(0);
+            if !lanes.contains(&lane) {
+                lanes.push(lane);
+            }
+        }
+        Ok(lanes)
+    }
+
+    /// Polls the priority tiers in order, then the reviewer lanes the agent
+    /// named, and returns the first delivery that turns into a claim.
+    async fn try_claim(&self, agent: &AgentName, review: &[u8]) -> Result<Option<Delivery>, Error> {
+        for tier in (0..TIERS).chain(review.iter().copied()) {
             let stream = ready_stream(tier);
+            // Reviews of the agent's own work wait for another reviewer. They stay
+            // leased to it while it looks further down the lane, then go back.
+            let mut own = Vec::new();
             loop {
                 let polled = self
                     .io(
@@ -602,6 +689,13 @@ impl<B: Broker> Tracker<B> {
                     .await
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else { break };
+                if tier >= TIERS && self.is_own_work(agent, &record).await {
+                    own.push(record);
+                    if own.len() < MAX_OWN_SKIPS {
+                        continue;
+                    }
+                    break;
+                }
                 let mut ops = Vec::new();
                 let taken = {
                     let mut core = self.0.core.lock().await;
@@ -610,11 +704,34 @@ impl<B: Broker> Tracker<B> {
                 };
                 self.run(ops).await.ok();
                 if let Some(d) = taken? {
+                    self.give_back(agent, &stream, own).await;
                     return Ok(Some(d));
                 }
             }
+            self.give_back(agent, &stream, own).await;
         }
         Ok(None)
+    }
+
+    /// Whether the ready record is a review of a tree this agent worked on.
+    async fn is_own_work(&self, agent: &AgentName, record: &GroupRecord) -> bool {
+        let Ok(ready) = ReadyRecord::decode(&record.payload) else {
+            return false;
+        };
+        let core = self.0.core.lock().await;
+        let key = agent_key(agent);
+        core.state
+            .items
+            .get(&ready.item)
+            .is_some_and(|it| core.state.worked_on(&it.root, &key))
+    }
+
+    async fn give_back(&self, agent: &AgentName, stream: &str, records: Vec<GroupRecord>) {
+        let ops = records
+            .into_iter()
+            .map(|r| Op::Nack(stream.to_owned(), agent.clone(), r))
+            .collect();
+        self.run(ops).await.ok();
     }
 
     /// Turns one delivery into a claim, or settles it when it no longer
@@ -858,19 +975,16 @@ impl<B: Broker> Tracker<B> {
         let mut delivery = slot.lock().await;
         // The broker reclaims in a connection's first poll, so that poll goes to
         // the tier the item was published on.
-        let first = self
-            .0
-            .core
-            .lock()
-            .await
-            .state
-            .items
-            .get(&item)
-            .and_then(|i| i.tier)
-            .unwrap_or(DEFAULT_TIER)
-            .min(TIERS - 1);
+        let first = {
+            let core = self.0.core.lock().await;
+            core.state
+                .items
+                .get(&item)
+                .and_then(|i| self.0.settings.lane(i))
+                .unwrap_or(DEFAULT_TIER)
+        };
         let mut others = Vec::new();
-        for tier in std::iter::once(first).chain((0..TIERS).filter(|t| *t != first)) {
+        for tier in std::iter::once(first).chain((0..LANES).filter(|t| *t != first)) {
             let stream = ready_stream(tier);
             // Bounded, in case the broker keeps handing records back.
             for _ in 0..64 {
@@ -925,7 +1039,7 @@ impl<B: Broker> Tracker<B> {
                 .iter()
                 .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
                 .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
-                .map(|(id, it)| (id.clone(), it.tier.unwrap_or(DEFAULT_TIER).min(TIERS - 1)))
+                .filter_map(|(id, it)| Some((id.clone(), self.0.settings.lane(it)?)))
                 .filter(|(id, tier)| core.live.get(id).is_none_or(|(t, _)| t != tier))
                 .collect()
         };
@@ -1203,6 +1317,16 @@ fn restarted(item: &ItemId) -> Error {
 
 fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
     let item = state.items.get(&delivery.item);
+    // A review reads its root's request. A fix a review asked for lands on that
+    // request's branch, so its author goes on from there.
+    let owner = item
+        .filter(|i| i.review.is_some() || i.finding.is_some())
+        .and_then(|i| i.parent.as_ref())
+        .and_then(|p| state.items.get(p));
+    let pr_branch = match owner {
+        Some(root) => agents_core::work::pr_branch(&root.id),
+        None => agents_core::work::pr_branch(&delivery.item),
+    };
     json!({
         "claimed": true,
         "resumed": resumed,
@@ -1216,8 +1340,10 @@ fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
             "root": item.map(|i| &i.root),
             "branch": item.and_then(|i| i.branch.as_ref()),
             // The head branch to open the pull request from; it links the request to this item.
-            "pr_branch": agents_core::work::pr_branch(&delivery.item),
-            "pr": item.and_then(|i| i.pr.as_ref()),
+            "pr_branch": pr_branch,
+            "pr": owner.or(item).and_then(|i| i.pr.as_ref()),
+            "review": item.and_then(|i| i.review.as_ref()),
+            "finding": item.and_then(|i| i.finding),
             "context": item.map(|i| i.context.keys().collect::<Vec<_>>()),
         },
         "deadline_ms": item.and_then(|i| i.hold.as_ref()).map(|h| h.deadline_ms),
@@ -1252,7 +1378,7 @@ pub(crate) fn now_ms() -> u64 {
 
 mod tools;
 
-pub(crate) use tools::{Decide, Post, Prereq, Reply};
+pub(crate) use tools::{Decide, NewFinding, Post, Prereq, Reply};
 
 #[cfg(test)]
 mod tests;

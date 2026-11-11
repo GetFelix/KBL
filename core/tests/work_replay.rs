@@ -75,3 +75,33 @@ fn an_old_log_has_no_rules_and_serializes_as_before() {
     let json = serde_json::to_value(&end).unwrap();
     assert!(json.get("rules").is_none());
 }
+
+/// A log written before reviews existed: an opened pull request creates no
+/// review items on its own, and no new field shows in the folded state.
+#[test]
+fn an_old_log_with_an_open_pull_request_makes_no_reviews() {
+    let log: Vec<_> = include_str!("work_pre_review.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let end = agents_core::work_fold::fold(&log);
+    assert!(end.rejections.is_empty());
+    assert_eq!(end.items.len(), 1);
+    let r1 = &end.items[&ItemId::new("r1").unwrap()];
+    assert!(r1.children.is_empty());
+    assert!(r1.review.is_none() && r1.review_verdict.is_none() && r1.finding.is_none());
+    assert!(r1.findings.is_empty());
+    assert_eq!(stage(&end, "r1"), Stage::InReview);
+    assert!(!end.merge_ready(&r1.id));
+    // The decision has no revert check, so nothing counts as proven.
+    assert!(r1.paths[0].proven.is_empty());
+
+    // The state writes none of the review keys an older build did not know.
+    let json = serde_json::to_value(&end).unwrap();
+    let item = json["items"]["r1"].as_object().unwrap();
+    for key in ["review", "findings", "finding", "review_verdict"] {
+        assert!(!item.contains_key(key), "{key} in {item:?}");
+    }
+    assert!(!item["paths"][0].as_object().unwrap().contains_key("proven"));
+}

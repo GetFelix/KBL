@@ -5,7 +5,7 @@
 use agents_core::artifact::INLINE_LIMIT;
 use agents_core::content::Content;
 use agents_core::names::{ItemId, Key};
-use agents_core::work::{Actor, CloseWhy, PrPhase, WorkKind, WorkRecord};
+use agents_core::work::{Actor, CloseWhy, PrPhase, ReviewPass, ReviewSpec, WorkKind, WorkRecord};
 use agents_core::work_fold::State;
 use serde_json::{Value, json};
 
@@ -58,6 +58,18 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
     }
 }
 
+/// The id of a root's review of a request: the same on every retry.
+fn review_id(root: &ItemId, pr: &str, pass: &str) -> ItemId {
+    let hash =
+        agents_core::artifact::ArtifactId::of(format!("review\n{root}\n{pr}\n{pass}").as_bytes());
+    ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
+}
+
+fn review_key(pr: &str, pass: ReviewPass) -> Key {
+    let hash = agents_core::artifact::ArtifactId::of(format!("{pr}\n{pass:?}").as_bytes());
+    Key::new(format!("review-{}", &hash.as_str()[2..18])).expect("hash characters are valid")
+}
+
 fn refused(why: &str) -> Error {
     Error::Refused { why: why.into() }
 }
@@ -99,10 +111,71 @@ impl<B: Broker> Tracker<B> {
             {
                 return Err(refused("not_merged"));
             }
-            self.append(&mut core, Actor::Tracker, by, record).await?
+            let opened = match &record {
+                WorkRecord::PrStatus { item, status } if status.phase == PrPhase::Open => {
+                    Some((item.clone(), status.pr.clone()))
+                }
+                _ => None,
+            };
+            let offset = self.append(&mut core, Actor::Tracker, by, record).await?;
+            if let Some((root, pr)) = opened {
+                self.open_reviews(&mut core, &root, &pr).await;
+            }
+            offset
         };
         self.sync_ready().await;
         Ok(json!({ "kind": kind, "offset": offset }))
+    }
+
+    /// When a request opens, the root gets a first-pass review and a final
+    /// review of it, each for a reviewer tier, the final waiting for the first.
+    /// Once per request: the ids come from the root and the request. The tracker
+    /// writes them itself, so ingest's token gains no new power.
+    async fn open_reviews(&self, core: &mut super::Core, root: &ItemId, pr: &str) {
+        let tiers = &self.0.settings.review_tiers;
+        let (Some(first_tier), Some(final_tier)) = (tiers.first(), tiers.last()) else {
+            return;
+        };
+        let id = |pass: &str| review_id(root, pr, pass);
+        let (first, last) = (id("first"), id("final"));
+        if core.state.items.contains_key(&first) {
+            return;
+        }
+        let plan = [
+            (&first, ReviewPass::First, first_tier, "First-pass review"),
+            (&last, ReviewPass::Final, final_tier, "Final review"),
+        ];
+        for (item, pass, tier, title) in plan {
+            let record = WorkRecord::Proposed {
+                item: item.clone(),
+                parent: Some(root.clone()),
+                key: review_key(pr, pass),
+                work: WorkKind::Review,
+                title: format!("{title}: {pr}").chars().take(200).collect(),
+                review: Some(ReviewSpec {
+                    pass,
+                    tier: tier.clone(),
+                    pr: pr.to_owned(),
+                }),
+            };
+            if let Err(e) = self
+                .append(core, Actor::Tracker, self.0.me.clone(), record)
+                .await
+            {
+                eprintln!("agents-tracker: could not open the {title} for {pr}: {e}");
+                return;
+            }
+        }
+        let wait = WorkRecord::Linked {
+            item: last,
+            to: first,
+        };
+        if let Err(e) = self
+            .append(core, Actor::Tracker, self.0.me.clone(), wait)
+            .await
+        {
+            eprintln!("agents-tracker: could not order the reviews of {pr}: {e}");
+        }
     }
 
     /// Every imported root: what ingest needs to count a rule's open roots and

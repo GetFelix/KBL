@@ -7,7 +7,10 @@ use std::time::Duration;
 
 use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
-use agents_core::work::{CloseWhy, DoneWhen, Evidence, Phase, Target, WorkRecord};
+use agents_core::work::{
+    CloseWhy, DoneWhen, Evidence, FindingVerdict, MergeVerdict, Phase, RevertCheck, Severity,
+    Target, WorkRecord,
+};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -18,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::config::{Caller, Tokens};
 use crate::felix::Broker;
-use crate::tracker::{Decide, Error, Post, Prereq, Reply, Tracker};
+use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker};
 
 mod ingest;
 
@@ -46,6 +49,8 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
         .route("/v1/work/context/add", post(context_add::<B>))
         .route("/v1/work/progress", post(progress::<B>))
         .route("/v1/work/decide", post(decide::<B>))
+        .route("/v1/work/finding", post(finding::<B>))
+        .route("/v1/work/verdict", post(review_verdict::<B>))
         .route("/v1/work/step", post(step::<B>))
         .route("/v1/work/edit", post(edit::<B>))
         .route("/v1/work/ask", post(ask::<B>))
@@ -66,6 +71,9 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
 #[derive(Deserialize)]
 struct NextBody {
     wait_seconds: Option<u64>,
+    /// Reviewer tiers the agent takes reviews of.
+    #[serde(default)]
+    review_tiers: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -162,6 +170,26 @@ struct DecideBody {
     commit: String,
     #[serde(default)]
     evidence: Vec<Evidence>,
+    #[serde(default)]
+    revert_check: Option<RevertCheck>,
+}
+
+#[derive(Deserialize)]
+struct FindingBody {
+    item: ItemId,
+    severity: Severity,
+    file: String,
+    line: u32,
+    title: String,
+    scenario: String,
+    verdict: FindingVerdict,
+}
+
+#[derive(Deserialize)]
+struct VerdictBody {
+    item: ItemId,
+    verdict: MergeVerdict,
+    why: String,
 }
 
 #[derive(Deserialize)]
@@ -267,7 +295,7 @@ async fn next<B: Broker>(
     let wait = body
         .wait_seconds
         .map_or(Duration::from_secs(10), Duration::from_secs);
-    reply(app.tracker.next(&agent, wait).await)
+    reply(app.tracker.next_for(&agent, wait, &body.review_tiers).await)
 }
 
 async fn extend<B: Broker>(
@@ -436,8 +464,44 @@ async fn decide<B: Broker>(
         why: b.why,
         commit: b.commit,
         evidence: b.evidence,
+        revert_check: b.revert_check,
     };
     reply(app.tracker.decide(&a, &b.item, d).await)
+}
+
+async fn finding<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    headers: HeaderMap,
+    Json(b): Json<FindingBody>,
+) -> Response {
+    let a = match agent(&app, &headers) {
+        Ok(a) => a,
+        Err(d) => return denied(d),
+    };
+    let f = NewFinding {
+        severity: b.severity,
+        file: b.file,
+        line: b.line,
+        title: b.title,
+        scenario: b.scenario,
+        verdict: b.verdict,
+    };
+    reply(app.tracker.finding(&a, &b.item, f).await)
+}
+
+async fn review_verdict<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    headers: HeaderMap,
+    Json(b): Json<VerdictBody>,
+) -> Response {
+    match agent(&app, &headers) {
+        Ok(a) => reply(
+            app.tracker
+                .review_verdict(&a, &b.item, b.verdict, b.why)
+                .await,
+        ),
+        Err(d) => denied(d),
+    }
 }
 
 async fn step<B: Broker>(

@@ -70,6 +70,15 @@ struct Cli {
         hide = true
     )]
     lease_ttl_ms: u64,
+    /// The reviewer tiers, comma separated, at most four. The first reads a pull request
+    /// first, the last gives the final review.
+    #[arg(
+        long,
+        env = "AGENTS_REVIEW_TIERS",
+        value_delimiter = ',',
+        default_value = "fast,deep"
+    )]
+    review_tiers: Vec<String>,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "AGENTS_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -101,6 +110,7 @@ async fn main() -> Result<()> {
             // Long enough for a killed tracker's lease to run out.
             lease_wait: ttl * 2,
             crash_after_poll: cli.crash_after_poll,
+            review_tiers: cli.review_tiers,
         },
     )
     .await?;

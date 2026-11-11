@@ -13,9 +13,14 @@ use crate::names::{InvalidName, ItemId, Key};
 /// The one stream every change to work goes on.
 pub const WORK_EVENTS: &str = "work.events";
 
-/// The ready stream for a tier, which `work_next` polls from `p0` up.
-pub fn ready_stream(tier: u8) -> String {
-    format!("work.ready.p{tier}")
+/// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
+/// `work_next` polls from `p0` up. The lanes after them are one per reviewer
+/// tier, polled only by an agent that names that tier.
+pub fn ready_stream(lane: u8) -> String {
+    match lane.checked_sub(TIERS) {
+        None => format!("work.ready.p{lane}"),
+        Some(r) => format!("work.review.r{r}"),
+    }
 }
 
 /// The consumer group on every ready stream. One group, so a claim on any tier
@@ -24,6 +29,12 @@ pub const READY_GROUP: &str = "agents";
 
 /// How many ready tiers there are: `work.ready.p0` to `p3`.
 pub const TIERS: u8 = 4;
+
+/// How many reviewer tiers there are: `work.review.r0` to `r3`.
+pub const REVIEW_LANES: u8 = 4;
+
+/// Priority lanes and reviewer lanes together.
+pub const LANES: u8 = TIERS + REVIEW_LANES;
 
 /// What goes on a ready stream. `stamp` makes each publish distinct, so a
 /// delivery can be told from an older record of the same item that a tier
@@ -108,6 +119,9 @@ pub enum WorkKind {
     Test,
     /// Work that carries on from an answered question. Only the fold creates it.
     Resume,
+    /// A first-pass or final review of an item's pull request. Only the
+    /// tracker creates it, when the request opens.
+    Review,
 }
 
 impl WorkKind {
@@ -117,6 +131,100 @@ impl WorkKind {
             self,
             WorkKind::Split | WorkKind::Augment | WorkKind::Question | WorkKind::Test
         )
+    }
+}
+
+/// Longest reviewer tier name, in bytes.
+pub const MAX_REVIEW_TIER: usize = 32;
+
+/// Most review items one root may have, across its pull requests.
+pub const MAX_REVIEWS_PER_ROOT: usize = 8;
+
+/// Most findings one review attempt may record.
+pub const MAX_FINDINGS: u32 = 40;
+
+/// Longest finding title, file path, scenario, verdict reason and tested
+/// name, in bytes.
+pub const MAX_FINDING_TITLE: usize = 200;
+pub const MAX_FINDING_FILE: usize = 400;
+pub const MAX_SCENARIO: usize = 4096;
+pub const MAX_VERDICT_WHY: usize = 2048;
+pub const MAX_REVERT_TEST: usize = 400;
+
+/// Whether `tier` is a name a reviewer tier may have: lowercase letters,
+/// digits and dashes. Kibble never runs a model, so the tier only says which
+/// kind of reviewer should claim the review.
+pub fn valid_review_tier(tier: &str) -> bool {
+    !tier.is_empty()
+        && tier.len() <= MAX_REVIEW_TIER
+        && tier
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+/// Which review of a pull request an item is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewPass {
+    First,
+    /// The last review. It ends with a [`MergeVerdict`].
+    Final,
+}
+
+/// What a review item is: which pass, for which tier of reviewer, of which
+/// pull request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewSpec {
+    pub pass: ReviewPass,
+    pub tier: String,
+    /// The `pr` of the root this review reads, so a review of an older
+    /// request cannot speak for a newer one.
+    pub pr: String,
+}
+
+/// How much a finding matters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// What a finding leads to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FindingVerdict {
+    /// Becomes a child of the pull request's root, for its author.
+    Fix,
+    /// Becomes a proposal a person accepts.
+    Defer,
+    /// Recorded and nothing more.
+    Dismiss,
+}
+
+/// What a final review recommends. Merging stays a person's action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeVerdict {
+    Merge,
+    Block,
+}
+
+/// A revert check on a fix's decision: the test, and whether it failed with
+/// the fix reverted and passed with it restored.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevertCheck {
+    pub test: String,
+    pub failed_without_fix: bool,
+    pub passed_with_fix: bool,
+}
+
+impl RevertCheck {
+    /// Whether the check shows the test guards the fix.
+    pub fn proves(&self) -> bool {
+        self.failed_without_fix && self.passed_with_fix
     }
 }
 
@@ -335,6 +443,9 @@ pub enum WorkRecord {
         key: Key,
         work: WorkKind,
         title: String,
+        /// Set exactly on a review item, which only the tracker creates.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        review: Option<ReviewSpec>,
     },
     /// The answer to an item's triage work: a proposal for a person.
     Triaged {
@@ -463,6 +574,28 @@ pub enum WorkRecord {
         commit: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         evidence: Vec<Evidence>,
+        /// Whether a test was shown to fail without this fix and pass with it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revert_check: Option<RevertCheck>,
+    },
+    /// One finding of a review, written by the agent holding the review item.
+    /// A `fix` becomes a child of the root, a `defer` a proposal.
+    Finding {
+        item: ItemId,
+        attempt: u32,
+        severity: Severity,
+        file: String,
+        line: u32,
+        title: String,
+        scenario: String,
+        verdict: FindingVerdict,
+    },
+    /// How a final review ends. A recommendation: a person merges.
+    ReviewVerdict {
+        item: ItemId,
+        attempt: u32,
+        verdict: MergeVerdict,
+        why: String,
     },
     Step {
         item: ItemId,
@@ -599,6 +732,8 @@ impl WorkRecord {
             WorkRecord::Question { .. } => "question",
             WorkRecord::Answer { .. } => "answer",
             WorkRecord::Decision { .. } => "decision",
+            WorkRecord::Finding { .. } => "finding",
+            WorkRecord::ReviewVerdict { .. } => "review_verdict",
             WorkRecord::Step { .. } => "step",
             WorkRecord::Edit { .. } => "edit",
             WorkRecord::HumanInput { .. } => "human_input",

@@ -36,7 +36,7 @@ operations as MCP tools in `felix-mcp` for agents:
 
 | Tool | Does |
 |---|---|
-| `work_next` | Claims the highest-priority ready item the agent can take. The reply carries the [standing rules](#standing-rules) in effect |
+| `work_next` | Claims the highest-priority ready item the agent can take. The reply carries the [standing rules](#standing-rules) in effect. With `review_tiers` it also takes [reviews](#review-as-work) of those tiers |
 | `work_extend` | Keeps the claim while the agent works (sent by `felix-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency between items in one tree |
@@ -45,7 +45,8 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_progress` | Records a plan, a branch or a PR |
 | `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
-| `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)) |
+| `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
+| `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
 
 Every `felix-mcp` work tool, claiming included, calls the tracker over REST
 with the agent's own token. The tracker checks the token, does the Felix work
@@ -127,8 +128,8 @@ sequenceDiagram
 ### Running the tracker
 
 `agents-tracker` signs in to Felix as its own principal, creates `work.events`,
-`work.ready.p0` to `p3` and the consumer group on each tier if they are not
-there, and folds `work.events` from the start (with seek snapshots) before it
+`work.ready.p0` to `p3`, `work.review.r0` to `r3` and the consumer group on each if
+they are not there, and folds `work.events` from the start (with seek snapshots) before it
 serves. It appends a record only when the fold accepts it, so a refused call
 leaves no trace in the log.
 
@@ -529,6 +530,68 @@ The full file is longer: machine limits, scratch directories, review and merge
 steps. Keep the rules to what fits in 8 KiB. A root can add its own `checks`,
 for example the one crate a fix touches, without repeating the rest.
 
+### Review as work
+
+A review is claimable work with a reviewer tier. Kibble never runs a model:
+the tier is a name such as `fast` or `deep` that says which kind of reviewer
+should claim it, and the agents decide what each name means.
+
+```mermaid
+flowchart LR
+    PR[Request opens<br/>pr_status: open] --> F[First-pass review<br/>tier fast]
+    F -->|finding: fix| X[Fix, child of the root<br/>for the author]
+    F -->|finding: defer| D[Proposal<br/>a person accepts]
+    F --> L[Final review<br/>tier deep]
+    X --> L
+    L --> V[Verdict: merge or block]
+    V --> P[A person merges]
+```
+
+- **Created with the request.** When ingest reports an item's pull request
+  open, the tracker adds two `review` children under the root: a first pass
+  for the first configured tier and a final review for the last. The final
+  waits for the first. Each request gets them once, and a root has at most 8
+  review items. A person or an agent cannot create one.
+- **Claimed by tier.** The tiers are `AGENTS_REVIEW_TIERS` (default
+  `fast,deep`, at most four), one ready stream each (`work.review.r0` to
+  `r3`). `work_next` gives a review only to an agent that names its tier in
+  `review_tiers`, so ordinary work never blocks behind a review and a review
+  never reaches an agent that did not ask. An unknown tier is refused.
+- **Never your own work.** An agent that claimed the root, or any fix or
+  resume under it, is never given a review of that tree. The tracker skips
+  it, and the fold refuses the claim as a second check. An agent that takes a
+  fix a review asked for becomes an author too, so it cannot give the final
+  review.
+- **Findings are records.** `work_finding` writes severity (low, medium,
+  high, critical), file, line, title, the scenario that goes wrong, and a
+  verdict. A review holds at most 40 findings, a file is at most 400 bytes, a
+  title 200, a scenario 4096. A finding is about the request the root still
+  reports; a review of an older one is refused.
+  - `fix` becomes a child of the root, accepted and ready, that draws one
+    item from the root's budget. Its claim reply gives the request's branch,
+    so the author goes on from there. Any agent may take it, the author
+    included. It is done when its attempt is, since it lands in the request.
+  - `defer` becomes a proposal in the root's repo that waits in the
+    Proposed column for a person. It draws nothing from the budget.
+  - `dismiss` is recorded and does nothing else.
+- **Revert checks.** A fix's `decide` call can carry `revert_check`: the test,
+  whether it failed with the fix reverted, and whether it passed with it
+  restored. The attempt lists the decisions where both held, so the
+  dashboard shows which fixes a test guards.
+- **The verdict.** A final review ends with `work_verdict`, `merge` or `block`
+  and a reason, and cannot complete without one. A merge is refused while a
+  fix a review asked for is open. The verdict sits on the root with the
+  request it was about, and goes stale if the root reports another. The
+  dashboard shows it; merging stays a person's action, and nothing in this
+  flow closes the root.
+
+Threat model: a reviewer is an agent, so everything it writes is bounded and
+attributed to its token. It can fail to find a bug or recommend a merge it
+should not, which is why the verdict is advice. It cannot merge, close, accept
+its own proposal, or review its own work. Two tokens run by one person count
+as two agents, so keeping an author and its reviewers on separate tokens is
+the operator's job.
+
 ### Kinds of work
 
 | Kind | Claimed by | The answer comes back as |
@@ -540,6 +603,7 @@ for example the one crate a fix touches, without repeating the rest.
 | `question` | Any agent | An answer record that cites stream and offset |
 | `resume` | Any agent | Whatever the asker was doing, carried on from the answer. Only an answer creates it |
 | `test` | Any agent | Test follow-up for an item, as progress records |
+| `review` | An agent that names the reviewer tier, and did not work on the request | Findings, and for a final review a verdict. Only the tracker creates it. See [Review as work](#review-as-work) |
 
 Root-shaping changes (a tier, or a split of a root at triage) and out-of-scope
 work are proposals that a person accepts. Children under a held item are live.
@@ -567,7 +631,8 @@ It reuses the pieces the run resources already use. No database.
   second extension that tasks use. A dead agent's item goes
   back to the queue.
 - **Priority is a stream per tier.** A group hands records out in offset order,
-  so `work_next` polls `work.ready.p0` first, then `p1`, and so on.
+  so `work_next` polls `work.ready.p0` first, then `p1`, and so on, then the
+  review streams the agent named.
   Reprioritizing a ready item publishes it again on its new tier. The old
   record is acked and skipped when claimed, because its item version no
   longer matches.

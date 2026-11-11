@@ -409,6 +409,7 @@ pub(super) fn settings() -> Settings {
         lease_ttl: Duration::from_secs(15),
         lease_wait: Duration::ZERO,
         crash_after_poll: false,
+        review_tiers: default_review_tiers(),
     }
 }
 
@@ -1182,6 +1183,7 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
             key: key("fix"),
             work: agents_core::work::WorkKind::Fix,
             title: "mine to run".into(),
+            review: None,
         },
     )
     .await
@@ -1228,6 +1230,7 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
             key: key("triage"),
             work: agents_core::work::WorkKind::Triage,
             title: "t".into(),
+            review: None,
         },
     ] {
         let err = ingest(record).await.unwrap_err();
@@ -1316,7 +1319,7 @@ async fn ingest_cannot_close_as_merged_without_a_merged_status() {
     assert_eq!(fake.log().len(), 1);
 }
 
-async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
+pub(super) async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
     t.person_record(
         key("gab"),
         WorkRecord::Imported {
@@ -1441,3 +1444,5 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
     let read = t.rules_read(&agent("w1"), &item("a1")).await.unwrap();
     assert_eq!(read["rules"], claimed["rules"]);
 }
+
+mod review;

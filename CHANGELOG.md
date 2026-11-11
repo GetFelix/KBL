@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Review is claimable work. When an item's pull request opens, the tracker adds
+  a first-pass and a final `review` item, each for a reviewer tier
+  (`AGENTS_REVIEW_TIERS`, default `fast,deep`, one `work.review.rN` stream
+  each). `work_next` takes `review_tiers`, and an agent is never given a
+  review of work it did. `work_finding` records a finding (severity, file,
+  line, scenario, verdict): a `fix` becomes a child for the author, a `defer`
+  a proposal a person accepts. A final review ends with `work_verdict`, merge
+  or block, which the dashboard shows and a person acts on. `decide` takes a
+  `revert_check`. Every field and count is bounded. Logs from before fold as
+  they did; older trackers fold the new records as `unknown`.
+
 - Questions can offer options. `work_ask` takes `options` (at most 8) and a
   `default`, and a person picks one or types free text, which is stored as
   written. An answer appends a claimable `resume` item under the asking item
