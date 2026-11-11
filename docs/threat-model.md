@@ -135,7 +135,7 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 
 | Route | Who can call it | What it could steer | Check |
 |---|---|---|---|
-| `/webhook` | Anyone who can reach the port | Make ingest spend GitHub requests; inject data | A webhook carries no data into the tracker, it only wakes the poll. HMAC signature, and an empty secret refuses everything (`ingest/src/webhook.rs:83`). A repeated delivery id is dropped (`ingest/src/webhook.rs:90`). Wakes are spaced (`ingest/src/webhook.rs:101`) |
+| `/webhook` | Anyone who can reach the port | Make ingest spend GitHub requests; inject data | A webhook carries no data into the tracker, it only wakes the poll. HMAC signature, and an empty secret refuses everything (`ingest/src/webhook.rs:83`). A repeated delivery id is dropped (`ingest/src/webhook.rs:90`), which stops GitHub's own redeliveries and nothing else: the signature covers the body, not the delivery id, so a captured body can be sent again under a new id. Over plain HTTP anyone on the path can capture one (#158). What bounds a replay is that wakes are spaced (`ingest/src/webhook.rs:101`) and a wake only starts a poll |
 
 ### What ingest believes
 
@@ -182,7 +182,7 @@ with the agent's Felix token, so Felix grants are the check.
 | `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/felix-agents/issues/29)) |
 | `task_claim` | The run's `workers` group | Felix hands a task to one member. The two-attempt limit is in `felix-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/felix-agents/issues/39)) |
 | `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Task bodies are not hash-checked ([#150](https://github.com/GetFelix/felix-agents/issues/150)) |
-| `task_release` | The `workers` group and run log | The member check is `felix-mcp`'s own (`mcp/src/tasks.rs:584`). In Felix: **None** (#29) |
+| `task_release` | The `workers` group and run log | `felix-mcp` only releases the task it holds (`mcp/src/tasks.rs:584`). In Felix: **None** (#29) |
 | `task_give_up` | The `workers` group and run log | Same |
 
 ## Records on work.events
@@ -259,7 +259,7 @@ grants test with a raw client).
 | Forged artifacts and statuses | Bytes under another id; a green check; an approval; a release | Hash check on read; statuses come from ingest only; `shipped` is not an agent's |
 | Merges into other branches | Merge into a side branch and report the item merged | A merge counts only into the default branch, by someone else |
 | Budget escapes | Free questions, free prerequisites, resume work past the depth limit | Cost is charged on ask and prerequisite; depth applies to resume work. Reported cost is still the agent's word (#155) |
-| Forged webhooks | Wake ingest in a loop | Signature, replay list, spacing |
+| Forged webhooks | Wake ingest in a loop | Signature and spacing. A captured body can be replayed under a new delivery id, and it only wakes the poll |
 
 ## Gaps
 
