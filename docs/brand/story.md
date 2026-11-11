@@ -18,10 +18,10 @@ Kibble turns the backlog into something agents can eat.
 
 - **It gathers the work.** Kibble watches your trackers and brings every new
   bug into one queue, once, however many places it was filed.
-- **It breaks it down.** A triage agent reads each bug, sets a priority, spots
-  duplicates, links what it depends on and splits big ones into pieces an
-  agent can finish and a person can review in one sitting. You accept the
-  proposal with one key or change it.
+- **It breaks it down.** Triage is work too: an agent picks it up, proposes a
+  priority, spots duplicates, links what each bug depends on and splits big
+  ones into pieces an agent can finish and a person can review in one
+  sitting. You accept the proposal with one key or change it.
 - **It feeds the agents.** Coding agents claim ready pieces, one piece to one
   agent. An agent that stalls or crashes loses its claim and the piece goes to
   another. A piece that keeps beating them comes to a person instead of
@@ -37,8 +37,9 @@ Kibble turns the backlog into something agents can eat.
 
 ## What it is not
 
-Not another agent. Kibble works with the coding agents you already use and
-gives them a queue, a claim and a record. Not a tracker that waits for people
+Not another agent. Kibble runs no models itself: it works with the coding
+agents you already use and gives them a queue, a claim and a record. Every
+judgement it shows, from triage to a fix, is work an agent or a person did. Not a tracker that waits for people
 either: work moves without anyone dragging cards. And not a scoreboard.
 Kibble measures the flow of work, never the people doing it.
 
