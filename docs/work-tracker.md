@@ -435,8 +435,9 @@ neither takes the question's `default`. The fold then does two things:
   again.
 
 Asking ends the attempt's hold once answered, so `work_ask` takes the
-attempt's `cost_micros` so far and the fold charges it then, like a release
-does. A resume item sits one level below the asking item and obeys the root's
+attempt's `cost_micros` since its claim or its last ask, and the fold charges
+it then, like a release does. A later release or give-up reports only the cost
+spent after the ask, so nothing is charged twice. A resume item sits one level below the asking item and obeys the root's
 depth cap (`too_deep`). If the asking item was never accepted, as with an
 unclear triage, its resume item exists but is not claimable until a person
 accepts the item.
