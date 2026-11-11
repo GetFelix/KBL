@@ -119,6 +119,9 @@ struct PostBody {
     /// For `prerequisite`: `merged` (default) or `released`.
     #[serde(default)]
     done_when: DoneWhen,
+    /// What the attempt cost so far.
+    #[serde(default)]
+    cost_micros: u64,
 }
 
 #[derive(Deserialize)]
@@ -328,7 +331,7 @@ async fn work_post<B: Broker>(
         };
         return reply(
             app.tracker
-                .prerequisite(&a, &b.item, b.key, which, b.done_when)
+                .prerequisite(&a, &b.item, b.key, which, b.done_when, b.cost_micros)
                 .await,
         );
     }

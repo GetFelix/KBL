@@ -136,6 +136,7 @@ impl<B: Broker> Tracker<B> {
         key: Key,
         which: Prereq,
         done_when: DoneWhen,
+        cost_micros: u64,
     ) -> Result<Value, Error> {
         let (prerequisite, new) = match which {
             Prereq::New {
@@ -225,6 +226,7 @@ impl<B: Broker> Tracker<B> {
                 key,
                 new,
                 done_when,
+                cost_micros,
             }
         };
         let reply = json!({
@@ -715,6 +717,13 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             field("title", title)?;
             if title.is_empty() {
                 return Err(Error::Invalid("a title is needed".into()));
+            }
+            Ok(())
+        }
+        WorkRecord::Shipped { release, .. } => {
+            field("release", release)?;
+            if release.is_empty() {
+                return Err(Error::Invalid("a release is needed".into()));
             }
             Ok(())
         }

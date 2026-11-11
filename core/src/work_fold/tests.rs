@@ -1794,6 +1794,7 @@ fn needs(prereq: &str, new: bool, done_when: DoneWhen) -> WorkRecord {
             evidence: vec![],
         }),
         done_when,
+        cost_micros: 0,
     }
 }
 
@@ -1947,8 +1948,73 @@ fn a_prerequisite_on_an_existing_item_counts_as_a_post_too() {
     let s = fold(&l.0);
     assert!(s.rejections.is_empty());
     assert_eq!(s.items[&id("r1")].paths[0].posts, 1);
-    assert_eq!(
-        s.edge_done.get(&(id("r1"), id("r2"))),
-        Some(&DoneWhen::Released)
+    assert!(s.release_edges.contains(&(id("r1"), id("r2"))));
+}
+
+fn with_cost(mut r: WorkRecord, cost: u64) -> WorkRecord {
+    if let WorkRecord::Prerequisite { cost_micros, .. } = &mut r {
+        *cost_micros = cost;
+    }
+    r
+}
+
+#[test]
+fn a_reopened_prerequisite_needs_a_new_release() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Released));
+    l.person(accept("g1"));
+    l.person(merged("g1"));
+    l.person(WorkRecord::Shipped {
+        item: id("g1"),
+        release: "0.4.0".into(),
+    });
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Ready));
+    l.tracker(WorkRecord::Reopened { item: id("g1") });
+    assert!(fold(&l.0).items[&id("g1")].release.is_none());
+    l.person(accept("g1"));
+    l.person(merged("g1"));
+    // Merged again, but the old release does not count.
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Blocked));
+}
+
+#[test]
+fn a_prerequisite_charges_its_cost_and_a_chain_hits_the_budget() {
+    let mut l = held_root();
+    l.agent(
+        "w1",
+        with_cost(needs("g1", true, DoneWhen::Merged), 1_000_000),
     );
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("r1")].cost_micros, 1_000_000);
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, 0);
+    l.person(accept("g1"));
+    l.person(merged("g1"));
+    l.agent("w1", claimed("r1", 1));
+    assert_eq!(last_rejection(&l), Some(Reject::OverBudget));
+}
+
+#[test]
+fn prerequisite_evidence_cannot_cite_the_future() {
+    let mut l = held_root();
+    let mut r = needs("g1", true, DoneWhen::Merged);
+    let next = l.0.len() as u64;
+    if let WorkRecord::Prerequisite { new: Some(n), .. } = &mut r {
+        n.evidence = vec![Evidence {
+            stream: WORK_EVENTS.into(),
+            offset: next + 5,
+        }];
+    }
+    l.agent("w1", r);
+    assert_eq!(last_rejection(&l), Some(Reject::EvidenceFromTheFuture));
+    assert!(fold(&l.0).items[&id("r1")].hold.is_some());
+}
+
+#[test]
+fn a_state_with_a_release_edge_encodes() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Released));
+    let s = fold(&l.0);
+    assert_eq!(s.release_edges.len(), 1);
+    let json = serde_json::to_string(&s).unwrap();
+    assert_eq!(serde_json::from_str::<State>(&json).unwrap(), s);
 }

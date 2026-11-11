@@ -228,6 +228,9 @@ pub enum WorkRecord {
         new: Option<NewPrerequisite>,
         #[serde(default)]
         done_when: DoneWhen,
+        /// What the attempt cost so far, charged like a release.
+        #[serde(default)]
+        cost_micros: u64,
     },
     /// A person or upstream sync says a release carries a finished item, which
     /// frees dependents whose edge waits for a release.

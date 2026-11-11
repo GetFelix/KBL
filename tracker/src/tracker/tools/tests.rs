@@ -922,7 +922,7 @@ async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
     let (fake, t) = granted().await;
     let (w1, a1) = (agent("w1"), item("a1"));
     let reply = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged)
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
         .await
         .unwrap();
     assert_eq!(reply["status"], "blocked");
@@ -950,7 +950,7 @@ async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
     // A retry answers with the first call's work and writes nothing.
     let before = fake.log().len();
     let again = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged)
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
         .await
         .unwrap();
     assert_eq!(again["created"], false);
@@ -963,7 +963,7 @@ async fn the_item_is_ready_again_when_the_prerequisite_is_merged() {
     let (_fake, t) = granted().await;
     let (w1, a1) = (agent("w1"), item("a1"));
     let reply = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged)
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
         .await
         .unwrap();
     let g = id_of(&json!({ "item": reply["prerequisite"] }));
@@ -1008,7 +1008,7 @@ async fn a_release_link_waits_for_the_release_not_the_merge() {
     let (_fake, t) = granted().await;
     let (w1, a1) = (agent("w1"), item("a1"));
     let reply = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Released)
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Released, 0)
         .await
         .unwrap();
     let g = id_of(&json!({ "item": reply["prerequisite"] }));
@@ -1059,7 +1059,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
     };
     assert_eq!(
         why(t
-            .prerequisite(&w1, &a1, key("k"), elsewhere, DoneWhen::Merged)
+            .prerequisite(&w1, &a1, key("k"), elsewhere, DoneWhen::Merged, 0)
             .await),
         "no_grant"
     );
@@ -1072,6 +1072,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
                 key("k"),
                 Prereq::Existing(item(foreign)),
                 DoneWhen::Merged,
+                0,
             )
             .await;
         assert_eq!(why(r), "unknown_item");
@@ -1087,6 +1088,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
             key("k"),
             Prereq::Existing(item("f2")),
             DoneWhen::Merged,
+            0,
         )
         .await
         .unwrap();
@@ -1095,7 +1097,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
     // And an agent that holds nothing cannot name a prerequisite at all.
     assert_eq!(
         why(t
-            .prerequisite(&agent("w2"), &a1, key("k"), gateway(), DoneWhen::Merged)
+            .prerequisite(&agent("w2"), &a1, key("k"), gateway(), DoneWhen::Merged, 0)
             .await),
         "not_held"
     );
@@ -1112,9 +1114,26 @@ async fn prerequisites_share_the_per_attempt_post_cap() {
     }
     assert_eq!(
         why(t
-            .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged)
+            .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
             .await),
         "limit_reached"
     );
     assert_eq!(stage(&t, &a1).await, Some(Stage::Held));
+}
+
+#[tokio::test]
+async fn a_release_name_is_not_empty_and_is_bounded() {
+    let (_fake, t) = granted().await;
+    for release in [String::new(), "x".repeat(5000)] {
+        let r = t
+            .person_record(
+                key("gab"),
+                WorkRecord::Shipped {
+                    item: item("a1"),
+                    release,
+                },
+            )
+            .await;
+        assert_eq!(why(r), "invalid");
+    }
 }

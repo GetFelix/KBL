@@ -34,5 +34,5 @@ fn an_old_log_folds_to_the_states_it_always_did() {
     assert_eq!(stage(&end, "c2"), Stage::Closed);
     assert_eq!(stage(&end, "r2"), Stage::Ready);
     // No edge in an old log waits for a release.
-    assert!(end.edge_done.is_empty());
+    assert!(end.release_edges.is_empty());
 }

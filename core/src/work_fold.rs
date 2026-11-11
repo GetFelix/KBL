@@ -296,7 +296,7 @@ pub struct State {
     pub edges: BTreeSet<(ItemId, ItemId)>,
     /// Edges that wait for a release. Any edge not listed waits for a merge.
     #[serde(default)]
-    pub edge_done: BTreeMap<(ItemId, ItemId), DoneWhen>,
+    pub release_edges: BTreeSet<(ItemId, ItemId)>,
     pub budgets: BTreeMap<ItemId, Budget>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
@@ -483,8 +483,7 @@ impl State {
         match dep.closed {
             None => true,
             Some(Closure::Merged | Closure::Completed) => {
-                dep.release.is_none()
-                    && self.edge_done.get(&(from.clone(), to.clone())) == Some(&DoneWhen::Released)
+                dep.release.is_none() && self.release_edges.contains(&(from.clone(), to.clone()))
             }
             Some(_) => false,
         }
@@ -673,6 +672,7 @@ impl State {
                 key,
                 new,
                 done_when,
+                cost_micros,
             } => self.prerequisite(
                 offset,
                 rec,
@@ -682,6 +682,7 @@ impl State {
                 key,
                 new.as_ref(),
                 *done_when,
+                *cost_micros,
             )?,
             WorkRecord::Shipped { item, release } => {
                 if rec.actor == Actor::Agent {
@@ -722,7 +723,7 @@ impl State {
                 }
                 self.item(item)?;
                 self.edges.remove(&(item.clone(), to.clone()));
-                self.edge_done.remove(&(item.clone(), to.clone()));
+                self.release_edges.remove(&(item.clone(), to.clone()));
             }
             WorkRecord::Context { item, entry, .. } => {
                 self.item(item)?;
@@ -1067,6 +1068,8 @@ impl State {
                     return Err(Reject::NotClosed);
                 }
                 it.closed = None;
+                // A new merge needs a new release.
+                it.release = None;
                 // Back to Triage: a person accepts it again.
                 it.accepted = false;
                 it.left_scope = false;
@@ -1297,6 +1300,7 @@ impl State {
         key: &Key,
         new: Option<&NewPrerequisite>,
         done_when: DoneWhen,
+        cost_micros: u64,
     ) -> Result<(), Reject> {
         self.agent_holder(item, attempt, rec)?;
         if self.path_mut(item, attempt)?.posts >= MAX_POSTS {
@@ -1308,6 +1312,7 @@ impl State {
                 if n.title.is_empty() || n.target.repo.is_empty() || n.target.source.is_empty() {
                     return Err(Reject::MissingField);
                 }
+                Self::check_evidence(offset, &n.evidence)?;
                 if self.items.contains_key(prerequisite) || self.child_keys.contains(&scope) {
                     return Err(Reject::Duplicate);
                 }
@@ -1332,10 +1337,17 @@ impl State {
             self.new_item(p);
         }
         self.edges.insert((item.clone(), prerequisite.clone()));
-        self.edge_done
-            .insert((item.clone(), prerequisite.clone()), done_when);
+        let edge = (item.clone(), prerequisite.clone());
+        if done_when == DoneWhen::Released {
+            self.release_edges.insert(edge);
+        } else {
+            self.release_edges.remove(&edge);
+        }
+        let root = self.item(item)?.root.clone();
+        self.draw_cost(&root, cost_micros);
         let it = self.item_mut(item)?;
         it.hold = None;
+        it.cost_micros += cost_micros;
         if let Some(p) = it.paths.iter_mut().find(|p| p.attempt == attempt) {
             // Waiting on another repo is not a failed try.
             p.tries = p.tries.saturating_sub(1);

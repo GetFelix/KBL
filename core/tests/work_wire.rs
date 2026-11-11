@@ -211,6 +211,7 @@ fn every_record() -> Vec<WorkRecord> {
                 }],
             }),
             done_when: DoneWhen::Released,
+            cost_micros: 25_000,
         },
         WorkRecord::Prerequisite {
             item: item("r1"),
@@ -219,6 +220,7 @@ fn every_record() -> Vec<WorkRecord> {
             key: key("need-existing"),
             new: None,
             done_when: DoneWhen::Merged,
+            cost_micros: 0,
         },
         WorkRecord::Shipped {
             item: item("g1"),

@@ -156,6 +156,8 @@ struct WorkPostArgs {
     existing: Option<String>,
     /// `prerequisite` only: `merged` (the default) or `released`, for work you need shipped in a release.
     done_when: Option<String>,
+    /// `prerequisite` only: what this attempt cost so far, in millionths of a dollar.
+    cost_micros: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -410,6 +412,7 @@ impl Server {
                     "target_source": a.target_source, "target_repo": a.target_repo,
                     "why": why, "evidence": evidence, "existing": a.existing,
                     "done_when": a.done_when.unwrap_or_else(|| "merged".into()),
+                    "cost_micros": a.cost_micros.unwrap_or(0),
                 }),
             )
             .await
