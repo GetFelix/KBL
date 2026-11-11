@@ -1,5 +1,8 @@
 name: tmp-lock
-on: workflow_dispatch
+on:
+  push:
+    branches: [fa-wasm]
+    paths: [".github/workflows/tmp-lock.yml"]
 permissions:
   contents: read
 jobs:
