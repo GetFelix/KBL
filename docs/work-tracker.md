@@ -694,13 +694,51 @@ reported or measured.
 
 The dashboard shows everything before and around
 an attempt: what waits on you, where work is piling up, and what the team delivered.
-It is the page someone opens first in the morning. It has three tabs.
+It is the page someone opens first in the morning.
+
+It is laid out like the trackers people already use, so nobody has to learn it.
+[usability-test.md](usability-test.md) is the test that checks this with five
+people who use Linear or Jira every day.
+
+### Finding your way around
+
+- **Sidebar.** My queue with its count, All work, Metrics, then saved views
+  and one entry per source. `[` hides it.
+- **List and board.** All work has two layouts of the same items. The board
+  shows the stages as columns. The list shows one item per line, grouped by
+  stage, tier or source. `Ctrl+B` switches, and a saved view remembers its
+  layout.
+- **Side panel.** Selecting an item opens it on the right: status, tier,
+  assignee and source at the top, then what the item needs and its choices.
+  `Esc` closes it.
+- **Command palette.** `Ctrl+K` (`Cmd+K` on a Mac) lists every action for the
+  open item and every place to go, and finds items by number or title. Anything
+  that has no key of its own is here.
+- **Search and filters.** `/` searches the view. `f` filters by status, tier,
+  source, agent, or "waiting on me". Filters show as chips, and a set of
+  filters can be saved as a view in the sidebar.
+- **Selecting several.** `x` ticks a row and `Shift+j` ticks more. A bar
+  appears with the actions the ticked items share, and one action applies to
+  all of them.
+- **Undo.** Every action changes the view at once and shows a toast with
+  Undo (`Ctrl+Z`) for six seconds. If the tracker refuses the write, the
+  change is put back and the item says what happened and what to do.
+- **Addresses.** The view, the open item and the filters are in the URL, so a
+  link opens the same thing for someone else.
+- **Loading and empty.** The first read shows placeholder rows in the shape
+  of the list. An empty queue says so and points at the board. Filters that
+  match nothing offer to clear themselves.
+- **Light, dark and density.** Under Display: two themes and comfortable or
+  compact rows.
+
+My queue is the only place things arrive. Nothing pops up when a record lands.
 
 ### My queue
 
 The landing view. It lists everything that waits on the person looking:
 
-- a question an agent asked, with its options as keys, or an item triage found unclear,
+- a question an agent asked, or an item triage found unclear. The card shows
+  the options as numbers with the default marked, and a field for any other answer,
 - a failure that needs a decision,
 - a triage proposal to accept,
 - a PR to review, or an approved one to merge.
@@ -709,30 +747,83 @@ Items are ordered by how long they have waited, oldest first, with tier as the
 tie-break. The count is in the tab title, so it shows without opening the page.
 Snoozed and parked items drop out of the count.
 
-Every card is keyboard first. `j` and `k` move, `enter` opens, and one letter
-acts. A legend shows the keys.
+Every card is keyboard first, and the keys mean what they mean in Linear,
+GitHub and Jira. `?` shows the map in the page.
 
-| Key | On a card | Records |
+| Key | What it does | Records |
 |---|---|---|
-| `a` | Accept a proposal, approve a PR, answer a question | `triaged` and `linked`, `approved`, `answered` |
-| `p` | Change the tier (on a proposal: edit it before accepting) | `tier_changed` |
-| `d` | Reject or close | `rejected` |
-| `g` | Merge a duplicate into the item it duplicates | `rejected` with the original |
-| `r` | Retry a failure (with the note, if one is typed), or stop a held item | `retried`, `released` |
-| `x` | Reassign to another agent | `reassigned` |
-| `t` | Take it yourself, so no agent claims it | `taken` |
-| `n` | Write a note: for the next attempt, or steering a running agent | `steered` |
-| `s` / `z` | Snooze for four hours / park | `snoozed`, `parked` |
-| `u` | Unblock: mark a dependency resolved | `unblocked` |
-| `v` / `c` | Request a reviewer / send a PR back with changes | `review_requested`, `changes_requested` |
-| `m` | Record a merge done upstream | `done` |
-| `o` | Open the diff or PR | nothing |
-| `+` / `-` | Mark the agent's summary accurate or inaccurate | `summary_rated` |
+| `Ctrl+K` | Command palette: every action and every place, by name | nothing |
+| `/` | Search the view | nothing |
+| `?` | Show the key map | nothing |
+| `j` `k`, or the arrows | Move | nothing |
+| `Enter` | Open the item's story, or go to its note field | nothing |
+| `o` | Open the diff or pull request | nothing |
+| `x`, `Shift+j`, `Shift+k`, `Ctrl+A` | Select a row, select more, select all | nothing |
+| `Ctrl+Enter` | The card's main choice | what that choice records |
+| `1` to `9` | The card's numbered choices (table below) | what that choice records |
+| `s` | Set status. Lists only the moves a person can make from here, such as snooze, park, close, retry or mark merged | the record of that move |
+| `p` | Set tier (on a proposal: edit it before accepting) | `tier_changed` |
+| `a` | Assign to an agent, or to yourself so no agent claims it | `reassigned`, `taken` |
+| `h` | Snooze for four hours | `snoozed` |
+| `c` | New item, filed in one of the trackers | `imported`, when ingest sees it |
+| `f` | Filter | nothing |
+| `g` then `i`, `l`, `b`, `m` | Go to My queue, the list, the board, Metrics | nothing |
+| `Ctrl+B` | Switch between list and board | nothing |
+| `[` | Show or hide the sidebar | nothing |
+| `Ctrl+Z` | Undo the last action | takes its records back |
+| `Esc` | Close the panel, clear the selection, go back | nothing |
+
+On a Mac, `Ctrl` is `Cmd`.
+
+What only Kibble has is not on a letter. Each card shows its own choices as
+numbers, so they need no memorising. `Ctrl+Enter` takes the card's main choice: the
+first, except on a question, where it sends the default (below). It works from
+the note box, not from search or other text fields:
+
+| Card | `1` | `2` | `3` | `4` |
+|---|---|---|---|---|
+| Triage proposal | Accept: `triaged`, `linked` | Merge into the item it duplicates: `rejected` with the original | Decline: `rejected` | |
+| Question | The first option: `answered` | The second option | and so on | The number after the last option goes to the free text field |
+| Failure | Retry, with the note if one is typed: `retried` | Close: `rejected` | | |
+| Redo limit reached | Take it yourself: `taken` | Split it: `split` | Close: `rejected` | |
+| Blocked | Mark the dependency resolved: `unblocked` | | | |
+| Held by an agent | Send the note: `steered` | Stop it: `released` | | |
+| Held by you | Release: `released` | | | |
+| PR with no reviewer | Ask a person to review it, picked from a list: `review_requested` | Approve: `approved` | Send back with changes: `changes_requested` | Reject: `rejected` |
+| PR waiting on you | Approve: `approved` | Send back with changes: `changes_requested` | Reject: `rejected` | |
+| PR approved, not merged | Record a merge done upstream: `done` | Reject: `rejected` | | |
+
+On a question, `Ctrl+Enter` sends what is typed in the free text field, or the
+default option if nothing is typed. Marking the agent's summary accurate or
+inaccurate (`summary_rated`) and parking an item are buttons on the card and
+entries on the palette.
+
+The letters changed to match other trackers. Someone who knew the old map can
+read this once:
+
+| Was | Now |
+|---|---|
+| `x` reassign | `a` assigns. `x` selects |
+| `c` send a PR back | A numbered choice on the PR card. `c` creates |
+| `s` snooze | `h` snoozes. `s` sets status |
+| `a` accept, approve, answer | `Ctrl+Enter`, or `1`. `a` assigns |
+| `t` take it | `a`, then Me |
+| `d` reject or close | A numbered choice, and Closed under `s` |
+| `g` merge a duplicate | `2` on a triage card. `g` starts a go-to |
+| `r` retry or stop, `u` unblock, `v` request a reviewer, `m` record a merge | Numbered choices on their cards |
+| `n` note | `Enter` goes to the note field |
+| `z` park | `s`, then Parked |
+| `+` `-` rate the summary | Buttons on the card, and the palette |
+| `y` story | `Enter` |
+| `1` `2` `3` views | `g` then `i`, `l`, `b` or `m` |
 
 In the style frame these actions are local. Each one appends a `work.events`
 record to a list on the page and the view folds again, so the board is still
-a fold of the log and the list shows exactly what would be written. Live, the
-same actions go through the tracker's REST API and MCP tools.
+a fold of the log and the list shows exactly what would be written. Undo takes
+the records back out. Live, the same actions go through the tracker's REST API
+and MCP tools. The history is append-only, so the plan for the live
+dashboard is to show the change at once and send the write when the undo
+toast closes, or at once if the page is closed first.
 
 ### Board
 
@@ -754,8 +845,9 @@ The stages, left to right. An item sits in exactly one and moves right as
   note, reassign it or take the item.
 - **In review** is an agent PR waiting on a person. A card shows the PR, its
   size (lines and files), CI state, review rounds, who it waits on and for how
-  long. Two states have their own wording and action: "CI green, no reviewer"
-  (request a review) and "approved, not merged" (open it to merge). Both come
+  long. Two states have their own badge and a one-click action on the card:
+  "CI green, no reviewer" (Request review) and "approved, not merged" (Open to
+  merge). Both come
   from the `pr_status` ingest records. A failed required check moves the item
   to Needs you with the check's name and a link, unless an agent holds it. The tracker
   never merges. It records the merge it sees. A PR also carries the agent's
@@ -820,7 +912,8 @@ folds a hand-written `work.events` fixture (three trackers, a blocked chain, ite
 waiting on a person, held items, PRs in review, two weeks of finished work), a
 copy with the review limit reached, and a generated burst of 320 items.
 `node scripts/check-intake.mjs` checks them, including that My queue matches
-what waits on the viewer and that actions append records.
+what waits on the viewer, that actions append records, and that the keys above
+do what the table says.
 
 **Look.** Felix cyan-teal (`hsl(192, 90%, 46%)` dark, `hsl(192, 90%, 40%)` light) is work in
 motion and the current selection. Amber is for trouble the system handled, and red
@@ -828,12 +921,25 @@ only for a refusal, so red always means Felix said no. Shapes carry meaning befo
 colour does, so the page reads in greyscale. Inter is for names and labels and
 JetBrains Mono for ids, offsets, versions, counts and money. It is dark by default
 with a light theme, and `prefers-reduced-motion` turns movement into a single flash.
+Rows come in two densities. The layout has no novelties: a sidebar, a list or
+a board, and a panel.
 
-![My queue](screenshots/dashboard-queue.png)
+![My queue, with a question open](screenshots/ux/queue-dark.png)
 
-![Board](screenshots/dashboard-board.png)
+![All work as a list, light theme](screenshots/ux/list-light.png)
+
+![All work as a board](screenshots/ux/board-dark.png)
+
+![The command palette](screenshots/ux/palette-dark.png)
+
+![Several items selected, and the undo toast](screenshots/ux/bulk-undo-dark.png)
+
+![Pull requests waiting for review](screenshots/ux/review-states-light.png)
 
 ![Metrics](screenshots/dashboard-metrics.png)
+
+`docs/screenshots/ux/` has every view and state in both themes.
+`node scripts/shoot-intake.mjs docs/screenshots` takes them again.
 
 ## Where Felix stops
 

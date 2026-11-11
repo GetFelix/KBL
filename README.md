@@ -306,7 +306,7 @@ cargo test --workspace
 # Build and test the dashboard (see dashboard/README.md for the one-time setup)
 cd dashboard && npm ci && npm run wasm && npm test && cd ..
 
-# Serve the repository, then open http://localhost:8000/prototype/intake-frame.html (?view=queue|board|metrics, ?fixture=fixture-work-capped.json or fixture-work-burst.json, ?select=gh-801, ?theme=light;
+# Serve the repository, then open http://localhost:8000/prototype/intake-frame.html (?view=queue|list|board|metrics, ?fixture=fixture-work-capped.json, fixture-work-burst.json or fixture-work-quiet.json, ?select=gh-801, ?theme=light, ?density=compact;
 # fixture-work-replay.json with ?story=gh-792 opens the decision replay, ?story=gh-795 the redo limit)
 python3 -m http.server 8000
 ```
@@ -314,7 +314,8 @@ python3 -m http.server 8000
 `check-intake.mjs` looks for Chrome, Chromium or Edge in the usual install paths; set `CHROME` to a binary
 otherwise. Chrome gets 60 s to start (`CHROME_STARTUP_MS` changes that); if it exits or never comes up, the error
 includes its exit code and stderr. The launcher is `scripts/lib/browser.mjs`; new checks should use it.
-`scripts/shoot-intake.mjs` takes the stills in `docs/screenshots/` from the same page.
+`scripts/shoot-intake.mjs` takes the stills in `docs/screenshots/` from the same page, including every view and state in both themes under `docs/screenshots/ux/`.
+Press `?` in the frame for its keys, or `Ctrl+K` for the command palette. [docs/usability-test.md](docs/usability-test.md) is the script for testing it with people.
 `prototype/intake-frame.html?demo=1` (add `&theme=light` for the light theme) plays a 30-second scripted story from `prototype/fixture-work-demo.json`: records only, nothing generated. `scripts/record-demo.mjs` records it frame by frame to mp4 and webp; the page owns its clock, so no frame is dropped.
 
 CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Rust checks (format, clippy, tests), the dashboard build (WebAssembly fold, TypeScript checks, tests, Vite build) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
@@ -323,6 +324,7 @@ CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Ru
 
 - [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
 - [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
+- [docs/threat-model.md](docs/threat-model.md): who can reach what, and the check behind every route and record kind
 - [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
 - [docs/brand/story.md](docs/brand/story.md): the story of the product
 - [docs/design.md](docs/design.md): the design, data model and build order
