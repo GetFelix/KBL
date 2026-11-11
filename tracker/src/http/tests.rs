@@ -54,7 +54,10 @@ async fn app() -> Router {
         async fn forget(&self, _: Option<&str>) {}
         async fn close_idle(&self, _: Duration) {}
     }
-    let tokens = Tokens::parse(r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"}}"#).unwrap();
+    let tokens = Tokens::parse(
+        r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"},"ingest":{"tok-ing":"ingest-gh"}}"#,
+    )
+    .unwrap();
     let tracker = Tracker::start(
         Quiet,
         crate::tracker::Settings {
@@ -148,6 +151,36 @@ async fn a_lost_claim_is_a_conflict_with_a_reason() {
     assert_eq!(
         (status, reply["why"].as_str()),
         (StatusCode::CONFLICT, Some("lost"))
+    );
+}
+
+#[tokio::test]
+async fn the_ingest_token_writes_sync_records_and_nothing_else() {
+    let app = app().await;
+    let record = json!({ "record": { "kind": "imported", "item": "a1", "source": "gh", "upstream_id": "1", "title": "t" } });
+    for token in ["tok-w1", "tok-gab"] {
+        assert_eq!(
+            call(&app, "/v1/ingest/records", Some(token), record.clone())
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let (status, reply) = call(&app, "/v1/ingest/records", Some("tok-ing"), record).await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("imported"))
+    );
+    let claim = json!({ "wait_seconds": 0 });
+    assert_eq!(
+        call(&app, "/v1/work/next", Some("tok-ing"), claim).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let budget = json!({ "record": { "kind": "budget_set", "root": "a1", "items_left": 9, "max_depth": 3, "cost_left_micros": 1, "redos_per_item": 3 } });
+    let (status, reply) = call(&app, "/v1/ingest/records", Some("tok-ing"), budget).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_allowed"))
     );
 }
 

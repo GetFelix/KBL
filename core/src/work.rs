@@ -306,6 +306,20 @@ pub enum WorkRecord {
     },
     /// A person rejects a proposal that was never accepted.
     Rejected { item: ItemId },
+    /// The upstream issue's title, body or labels changed. The item shows
+    /// "changed upstream since triage" until its next `triaged`; no new work
+    /// follows. `title` is the new title when it changed.
+    Updated {
+        item: ItemId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
+    /// The upstream issue no longer matches the rule that admitted it. A
+    /// holder finishes or releases, then the item stops in Needs you.
+    LeftScope { item: ItemId },
+    /// The upstream issue was reopened: the same root goes back to Triage with
+    /// its history and its remaining budget.
+    Reopened { item: ItemId },
     /// A person closes or abandons one attempt, which frees one of the two open slots.
     AttemptClosed { item: ItemId, attempt: u32 },
     /// A person moves an item to another tier.
@@ -363,6 +377,9 @@ impl WorkRecord {
             WorkRecord::ForkedFrom { .. } => "forked_from",
             WorkRecord::Closed { .. } => "closed",
             WorkRecord::Rejected { .. } => "rejected",
+            WorkRecord::Updated { .. } => "updated",
+            WorkRecord::LeftScope { .. } => "left_scope",
+            WorkRecord::Reopened { .. } => "reopened",
             WorkRecord::AttemptClosed { .. } => "attempt_closed",
             WorkRecord::TierChanged { .. } => "tier_changed",
             WorkRecord::Edited { .. } => "edited",

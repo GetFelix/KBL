@@ -162,6 +162,16 @@ fn every_record() -> Vec<WorkRecord> {
             why: CloseWhy::Completed,
         },
         WorkRecord::Rejected { item: item("p1") },
+        WorkRecord::Updated {
+            item: item("r1"),
+            title: Some("reads miss a fresh write after restart".into()),
+        },
+        WorkRecord::Updated {
+            item: item("r1"),
+            title: None,
+        },
+        WorkRecord::LeftScope { item: item("r1") },
+        WorkRecord::Reopened { item: item("r1") },
         WorkRecord::AttemptClosed {
             item: item("r1"),
             attempt: 1,
@@ -212,7 +222,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 24);
+    assert_eq!(kinds.len(), 27);
 }
 
 #[test]

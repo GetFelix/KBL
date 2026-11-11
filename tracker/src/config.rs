@@ -42,6 +42,9 @@ struct File {
     /// Token to a person's key. A person may append the records a person may write.
     #[serde(default = "Pairs::empty")]
     people: Pairs<Key>,
+    /// Token to an ingest worker's key. It may append the upstream sync records and keep its cursor.
+    #[serde(default = "Pairs::empty")]
+    ingest: Pairs<Key>,
 }
 
 impl<T> Pairs<T> {
@@ -53,12 +56,14 @@ impl<T> Pairs<T> {
 pub(crate) enum Caller {
     Agent(AgentName),
     Person(Key),
+    Ingest(Key),
 }
 
 #[derive(Default)]
 pub(crate) struct Tokens {
     agents: Vec<(String, AgentName)>,
     people: Vec<(String, Key)>,
+    ingest: Vec<(String, Key)>,
 }
 
 impl Tokens {
@@ -92,7 +97,8 @@ impl Tokens {
             .0
             .iter()
             .map(|(t, _)| t)
-            .chain(file.people.0.iter().map(|(t, _)| t));
+            .chain(file.people.0.iter().map(|(t, _)| t))
+            .chain(file.ingest.0.iter().map(|(t, _)| t));
         for token in all {
             anyhow::ensure!(!token.is_empty(), "a token is empty");
             anyhow::ensure!(
@@ -103,6 +109,7 @@ impl Tokens {
         Ok(Self {
             agents: file.agents.0,
             people: file.people.0,
+            ingest: file.ingest.0,
         })
     }
 
@@ -118,6 +125,11 @@ impl Tokens {
         for (t, person) in &self.people {
             if same(t, token) {
                 found = Some(Caller::Person(person.clone()));
+            }
+        }
+        for (t, worker) in &self.ingest {
+            if same(t, token) {
+                found = Some(Caller::Ingest(worker.clone()));
             }
         }
         found

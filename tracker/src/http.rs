@@ -20,6 +20,8 @@ use crate::config::{Caller, Tokens};
 use crate::felix::Broker;
 use crate::tracker::{Decide, Error, Post, Tracker};
 
+mod ingest;
+
 /// A call the token does not allow: status and why.
 type Denied = (StatusCode, &'static str);
 
@@ -37,6 +39,7 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
         .route("/v1/work/release", post(release::<B>))
         .route("/v1/work/give_up", post(give_up::<B>))
         .route("/v1/work/records", post(records::<B>))
+        .merge(ingest::routes::<B>())
         .route("/v1/work/post", post(work_post::<B>))
         .route("/v1/work/link", post(link::<B>))
         .route("/v1/work/context", post(context_read::<B>))
@@ -561,14 +564,18 @@ fn caller<B>(app: &App<B>, headers: &HeaderMap) -> Result<Caller, Denied> {
 fn agent<B>(app: &App<B>, headers: &HeaderMap) -> Result<AgentName, Denied> {
     match caller(app, headers)? {
         Caller::Agent(a) => Ok(a),
-        Caller::Person(_) => Err((StatusCode::FORBIDDEN, "this call is for an agent's token")),
+        Caller::Person(_) | Caller::Ingest(_) => {
+            Err((StatusCode::FORBIDDEN, "this call is for an agent's token"))
+        }
     }
 }
 
 fn person<B>(app: &App<B>, headers: &HeaderMap) -> Result<Key, Denied> {
     match caller(app, headers)? {
         Caller::Person(p) => Ok(p),
-        Caller::Agent(_) => Err((StatusCode::FORBIDDEN, "this call is for a person's token")),
+        Caller::Agent(_) | Caller::Ingest(_) => {
+            Err((StatusCode::FORBIDDEN, "this call is for a person's token"))
+        }
     }
 }
 
