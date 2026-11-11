@@ -102,11 +102,11 @@ the next claim resumes from the recorded decisions (#140).
 
 Already planned: dependencies (#67), budgets and lineage (#96), decision
 records (#84), redo from a decision (#94), review limit (#90), time to first
-human action (#91), the dashboard (#74, #132).
+human action (#91), the dashboard (#74, #132), standing rules per root or
+source, delivered with every claim (#133).
 
 New, from this case study:
 
-- Standing rules per root or source, delivered with every claim (#133).
 - Review as claimable work with a reviewer tier, findings as records, and
   deferred findings as proposals (#134).
 - Pull request and CI state from ingest, so In review and Needs you are fed

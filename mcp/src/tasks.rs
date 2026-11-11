@@ -25,6 +25,9 @@ use crate::felix::{Backend, ExtendError};
 use crate::keepalive::{self, Claim, Health, at_risk};
 
 /// How long a claim stands without an extension.
+/// Most bytes of an artifact `artifact_text` hands back: what a store accepts.
+const MAX_ARTIFACT_TEXT: usize = PART_SIZE;
+
 const VISIBILITY: Duration = Duration::from_secs(90);
 /// How often a held claim is extended. Three tries fit in one visibility.
 const EXTEND_EVERY: Duration = Duration::from_secs(30);
@@ -476,12 +479,20 @@ impl<B: Backend> Tasks<B> {
         Ok(content)
     }
 
-    /// The text of an artifact, or a line saying it could not be read.
+    /// The text of an artifact, or a line saying it could not be read, was
+    /// stored under the wrong hash or is over [`MAX_ARTIFACT_TEXT`].
     pub(crate) async fn artifact_text(&self, id: &str) -> String {
         let blobs = self.0.resources.blobs();
+        let unreadable = || format!("(artifact {id} could not be read)");
+        let Ok(want) = ArtifactId::parse(id) else {
+            return unreadable();
+        };
         match self.0.backend.cache_get(&blobs, id).await {
-            Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
-            _ => format!("(artifact {id} could not be read)"),
+            // The cache is shared, so the bytes must hash to the id they were fetched by.
+            Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+            _ => unreadable(),
         }
     }
 

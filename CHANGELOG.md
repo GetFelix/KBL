@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Standing rules per repo and per root: a person sets text and checks-before-push
+  with `POST /v1/work/rules` (`rules_set`), and every claim reply and `work_next`
+  returns the rules in effect with their version. The root's parts override the
+  repo's; agents can read rules but never write them. Older trackers fold
+  `rules_set` as `unknown`.
+
 - Ingest keeps one cursor per repo. A repo that answers 403 or 404 stalls only
   itself and is reported in Needs you as `source_stalled`; state saved with the
   single cursor seeds every repo once.

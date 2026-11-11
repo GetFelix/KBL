@@ -1207,6 +1207,8 @@ fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
             "context": item.map(|i| i.context.keys().collect::<Vec<_>>()),
         },
         "deadline_ms": item.and_then(|i| i.hold.as_ref()).map(|h| h.deadline_ms),
+        // Read-only for the agent: only a person's `rules_set` changes it.
+        "rules": state.rules_for(&delivery.item),
     })
 }
 

@@ -178,6 +178,12 @@ struct WorkContextArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct WorkRulesArgs {
+    /// Defaults to the item you hold.
+    item: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct WorkProgressArgs {
     /// Defaults to the item you hold.
     item: Option<String>,
@@ -336,12 +342,24 @@ impl Server {
     }
 
     #[tool(
-        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time."
+        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time."
     )]
     async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
         self.work()?
             .next(a.wait_seconds.map(Duration::from_secs))
             .await
+    }
+
+    #[tool(
+        description = "Read the standing rules in effect for an item you hold: the text to follow and the checks to run before you push, with their version. They come with work_next too; call this to see them again. You cannot change them."
+    )]
+    async fn work_rules(&self, Parameters(a): Parameters<WorkRulesArgs>) -> Result<String, String> {
+        let item = self.item_or_held(a.item).await?;
+        let reply = self
+            .work()?
+            .tool("/v1/work/rules/read", json!({ "item": item }))
+            .await?;
+        Ok(reply.to_string())
     }
 
     #[tool(

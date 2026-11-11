@@ -58,6 +58,8 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
         .route("/v1/work/close", post(close::<B>))
         .route("/v1/work/unlink", post(unlink::<B>))
         .route("/v1/work/budget", post(budget::<B>))
+        .route("/v1/work/rules", post(rules::<B>))
+        .route("/v1/work/rules/read", post(rules_read::<B>))
         .with_state(Arc::new(App { tracker, tokens }))
 }
 
@@ -225,6 +227,15 @@ struct BudgetBody {
     max_depth: u8,
     cost_left_micros: u64,
     redos_per_item: u8,
+}
+
+#[derive(Deserialize)]
+struct RulesBody {
+    source: String,
+    repo: String,
+    root: Option<ItemId>,
+    text: Option<String>,
+    checks: Option<Vec<String>>,
 }
 
 async fn next<B: Broker>(
@@ -586,6 +597,34 @@ async fn budget<B: Broker>(
         redos_per_item: b.redos_per_item,
     };
     as_person(&app, &headers, record).await
+}
+
+async fn rules<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    headers: HeaderMap,
+    Json(b): Json<RulesBody>,
+) -> Response {
+    let record = WorkRecord::RulesSet {
+        target: Target {
+            source: b.source,
+            repo: b.repo,
+        },
+        root: b.root,
+        text: b.text,
+        checks: b.checks,
+    };
+    as_person(&app, &headers, record).await
+}
+
+async fn rules_read<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    headers: HeaderMap,
+    Json(b): Json<ItemBody>,
+) -> Response {
+    match agent(&app, &headers) {
+        Ok(a) => reply(app.tracker.rules_read(&a, &b.item).await),
+        Err(d) => denied(d),
+    }
 }
 
 fn caller<B>(app: &App<B>, headers: &HeaderMap) -> Result<Caller, Denied> {

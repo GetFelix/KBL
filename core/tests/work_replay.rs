@@ -36,3 +36,15 @@ fn an_old_log_folds_to_the_states_it_always_did() {
     // No edge in an old log waits for a release.
     assert!(end.release_edges.is_empty());
 }
+
+#[test]
+fn an_old_log_has_no_rules_and_serializes_as_before() {
+    let end = agents_core::work_fold::fold(&log());
+    assert!(end.rules.is_empty());
+    for id in end.items.keys() {
+        assert!(end.rules_for(id).is_none());
+    }
+    // A state with no rules writes the same JSON a pre-rules build wrote.
+    let json = serde_json::to_value(&end).unwrap();
+    assert!(json.get("rules").is_none());
+}
