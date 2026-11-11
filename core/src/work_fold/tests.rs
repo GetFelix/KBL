@@ -857,6 +857,7 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
             text: text("which?"),
             options: vec![],
             default: None,
+            cost_micros: 0,
         },
     );
     l.agent("w3", proposed("q1", Some("r1"), "q", WorkKind::Question));
@@ -1718,6 +1719,7 @@ fn question_rec(item: &str) -> WorkRecord {
         text: text("which?"),
         options: vec![],
         default: None,
+        cost_micros: 0,
     }
 }
 
@@ -2319,6 +2321,7 @@ fn asked_with_options() -> (Log, u64, u64) {
             text: text("which?"),
             options: vec!["read".into(), "write".into()],
             default: Some("read".into()),
+            cost_micros: 0,
         },
     );
     (l, d, q)
@@ -2410,6 +2413,7 @@ fn options_and_default_are_bounded() {
         text: text("which?"),
         options,
         default,
+        cost_micros: 0,
     };
     let opts = |n: usize| (0..n).map(|i| format!("o{i}")).collect::<Vec<_>>();
     for (rec, why) in [
@@ -2504,6 +2508,7 @@ fn only_a_person_can_move_work_to_another_repo() {
             text: text("where?"),
             options: vec![],
             default: None,
+            cost_micros: 0,
         },
     );
     l.agent("w1", proposed("q1", Some("r1"), "q", WorkKind::Question));
@@ -2540,7 +2545,6 @@ fn a_move_needs_a_target_and_a_title_within_bounds() {
         assert!(fold(&l.0).edges.is_empty());
     }
 }
-
 
 fn felix() -> Target {
     Target {
@@ -2716,4 +2720,97 @@ fn a_root_with_empty_checks_clears_the_repos_checks_but_keeps_its_text() {
     assert_eq!(r.text.as_deref(), Some("repo text"));
     assert!(r.checks.is_empty());
     assert_eq!(s.rules.len(), 2);
+}
+
+fn ask_on(item: &str, cost_micros: u64) -> WorkRecord {
+    WorkRecord::Question {
+        item: id(item),
+        attempt: 1,
+        text: text("which?"),
+        options: vec![],
+        default: None,
+        cost_micros,
+    }
+}
+
+fn answer_on(item: &str, question: u64) -> WorkRecord {
+    WorkRecord::Answer {
+        item: id(item),
+        question,
+        text: text("this"),
+        evidence: vec![],
+        chosen: None,
+        then: Some(Then::Resume),
+    }
+}
+
+#[test]
+fn asking_charges_the_cost_so_far_because_the_answer_ends_the_hold() {
+    let mut l = held_root();
+    let q = l.agent("w1", ask_on("r1", 400_000));
+    let s = fold(&l.0);
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, 600_000);
+    assert_eq!(s.items[&id("r1")].cost_micros, 400_000);
+    l.person(answer_on("r1", q));
+    // The hold is gone, so a release could not report it: it was charged once, at the ask.
+    let s = fold(&l.0);
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, 600_000);
+    assert!(s.items[&id("r1")].hold.is_none());
+}
+
+#[test]
+fn a_chain_of_asks_runs_the_root_out_of_budget() {
+    let mut l = held_root();
+    l.agent("w1", ask_on("r1", 600_000));
+    let q = l.agent("w1", ask_on("r1", 400_000));
+    assert_eq!(fold(&l.0).budgets[&id("r1")].cost_left_micros, 0);
+    l.person(answer_on("r1", q));
+    let rid = resumes(&fold(&l.0))[0].id.clone();
+    l.agent("w2", claimed(rid.as_str(), 1));
+    assert_eq!(last_rejection(&l), Some(Reject::OverBudget));
+}
+
+#[test]
+fn resume_work_for_an_unaccepted_item_waits_for_its_acceptance() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    let t = l.person(triaged_unclear("r1"));
+    l.person(answer_on("r1", t));
+    let s = fold(&l.0);
+    let rid = resumes(&s)[0].id.clone();
+    assert!(s.rejections.is_empty());
+    assert!(s.items.keys().all(|i| s.stage(i) != Some(Stage::Ready)));
+    l.agent("w2", claimed(rid.as_str(), 1));
+    assert_eq!(last_rejection(&l), Some(Reject::NotReady));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(1),
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&rid), Some(Stage::Ready));
+    assert_eq!(s.items[&rid].tier, Some(1));
+}
+
+#[test]
+fn chained_answers_stop_at_the_depth_cap() {
+    let mut l = held_root();
+    let mut at = "r1".to_string();
+    let mut q = l.agent("w1", ask_on("r1", 0));
+    // held_root allows three levels below the root.
+    for n in 1..=3 {
+        l.person(answer_on(&at, q));
+        assert!(fold(&l.0).rejections.is_empty(), "level {n}");
+        let r = resumes(&fold(&l.0))
+            .into_iter()
+            .find(|i| i.depth == n)
+            .unwrap()
+            .id
+            .clone();
+        l.agent("w2", claimed(r.as_str(), 1));
+        at = r.to_string();
+        q = l.agent("w2", ask_on(&at, 0));
+    }
+    l.person(answer_on(&at, q));
+    assert_eq!(last_rejection(&l), Some(Reject::TooDeep));
+    assert!(fold(&l.0).items[&id(&at)].open_question.is_some());
 }

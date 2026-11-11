@@ -64,7 +64,6 @@ fn an_old_question_and_answer_fold_as_they_always_did() {
     assert_eq!(end.rejections[0].offset, 7);
 }
 
-
 #[test]
 fn an_old_log_has_no_rules_and_serializes_as_before() {
     let end = agents_core::work_fold::fold(&log());

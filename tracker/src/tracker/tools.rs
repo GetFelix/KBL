@@ -426,6 +426,7 @@ impl<B: Broker> Tracker<B> {
         text: Content,
         options: Vec<String>,
         default: Option<String>,
+        cost_micros: u64,
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
         check_options(&options, default.as_deref())?;
@@ -435,6 +436,7 @@ impl<B: Broker> Tracker<B> {
             text,
             options,
             default,
+            cost_micros,
         })
         .await
     }

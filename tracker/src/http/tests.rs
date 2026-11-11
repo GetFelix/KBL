@@ -372,7 +372,6 @@ async fn an_agent_token_cannot_move_work_to_another_repo() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
-
 #[tokio::test]
 async fn only_a_person_token_sets_rules() {
     let app = app().await;

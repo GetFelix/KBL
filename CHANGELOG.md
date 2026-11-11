@@ -9,7 +9,7 @@
   item stays out of Ready meanwhile. A person's answer can name another repo
   (`moves_to`) to create a prerequisite there instead. Triage can mark an item
   `unclear` (scope, repo or acceptance), which sends it to a person as a
-  question. Logs from before fold as they did; older trackers ignore the new
+  question. `work_ask` also takes `cost_micros`, charged when asking. Logs from before fold as they did; older trackers ignore the new
   fields and start no resume work.
 
 - Standing rules per repo and per root: a person sets text and checks-before-push

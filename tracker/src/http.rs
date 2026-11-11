@@ -477,6 +477,9 @@ struct AskBody {
     #[serde(default)]
     options: Vec<String>,
     default: Option<String>,
+    /// What the attempt cost so far. Asking ends the hold, so this is the last chance to report it.
+    #[serde(default)]
+    cost_micros: u64,
 }
 
 async fn ask<B: Broker>(
@@ -487,7 +490,7 @@ async fn ask<B: Broker>(
     match agent(&app, &headers) {
         Ok(a) => reply(
             app.tracker
-                .ask(&a, &b.item, b.text, b.options, b.default)
+                .ask(&a, &b.item, b.text, b.options, b.default, b.cost_micros)
                 .await,
         ),
         Err(d) => denied(d),

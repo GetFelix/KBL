@@ -254,6 +254,8 @@ struct WorkAskArgs {
     options: Option<Vec<String>>,
     /// The option taken when the person answers without choosing. Must be one of `options`.
     default: Option<String>,
+    /// What this attempt has cost so far, in micro-dollars. Report it here: the answer ends your hold.
+    cost_micros: Option<u64>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -582,6 +584,7 @@ impl Server {
                     "text": text,
                     "options": a.options.unwrap_or_default(),
                     "default": a.default,
+                    "cost_micros": a.cost_micros.unwrap_or(0),
                 }),
             )
             .await?;

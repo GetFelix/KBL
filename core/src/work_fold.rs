@@ -836,6 +836,17 @@ impl State {
                         .entry(item.clone())
                         .or_insert_with(Budget::for_new_root);
                 }
+                // Resume work an unaccepted item's answer made waits for this.
+                let tier = self.item(item)?.tier;
+                let waiting: Vec<ItemId> = self.item(item)?.children.clone();
+                for c in waiting {
+                    if let Some(c) = self.items.get_mut(&c)
+                        && c.work == WorkKind::Resume
+                    {
+                        c.accepted = true;
+                        c.tier = tier;
+                    }
+                }
             }
             WorkRecord::Prerequisite {
                 item,
@@ -1084,6 +1095,7 @@ impl State {
                 attempt,
                 options,
                 default,
+                cost_micros,
                 ..
             } => {
                 self.agent_holder(item, *attempt, rec)?;
@@ -1093,7 +1105,10 @@ impl State {
                     return Err(Reject::LimitReached);
                 }
                 p.questions += 1;
+                let root = self.item(item)?.root.clone();
+                self.draw_cost(&root, *cost_micros);
                 let it = self.item_mut(item)?;
+                it.cost_micros += cost_micros;
                 it.open_question = Some(offset);
                 it.ask = Some(Ask {
                     options: options.clone(),
@@ -1714,8 +1729,18 @@ impl State {
         let Some(then) = then else {
             return Ok(());
         };
-        if self.item(item)?.closed.is_some() {
+        let par = self.item(item)?;
+        if par.closed.is_some() {
             return Err(Reject::Closed);
+        }
+        if matches!(then, Then::Resume) {
+            let max = self
+                .budgets
+                .get(&par.root)
+                .map_or(DEFAULT_MAX_DEPTH, |b| b.max_depth);
+            if par.depth.saturating_add(1) > max {
+                return Err(Reject::TooDeep);
+            }
         }
         let Then::Prerequisite { target, title } = then else {
             return Ok(());
@@ -1771,7 +1796,8 @@ impl State {
                 r.parent = Some(item.clone());
                 r.root = par.root.clone();
                 r.depth = par.depth.saturating_add(1);
-                r.accepted = true;
+                // Work nobody accepted stays unclaimable until a person accepts the item.
+                r.accepted = par.accepted;
                 r.tier = par.tier;
                 for (name, at) in [
                     ("question", Some(question)),

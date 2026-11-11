@@ -431,6 +431,10 @@ pub enum WorkRecord {
         /// The option taken when a person answers without choosing.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         default: Option<String>,
+        /// What the attempt cost so far, charged when the question is asked: the
+        /// answer ends the hold, so a later release cannot report it.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        cost_micros: u64,
     },
     /// `question` is the offset of the `question` record it answers. An agent
     /// may answer only while it holds a `question` work item under `item`.
@@ -625,4 +629,8 @@ pub struct WorkLogged {
     pub actor: Actor,
     #[serde(flatten)]
     pub record: WorkRecord,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }

@@ -434,6 +434,13 @@ neither takes the question's `default`. The fold then does two things:
   beside the agent doing the resume work. When that is done, the item is Ready
   again.
 
+Asking ends the attempt's hold once answered, so `work_ask` takes the
+attempt's `cost_micros` so far and the fold charges it then, like a release
+does. A resume item sits one level below the asking item and obeys the root's
+depth cap (`too_deep`). If the asking item was never accepted, as with an
+unclear triage, its resume item exists but is not claimable until a person
+accepts the item.
+
 A second answer to the same question appends nothing: the question is no
 longer open, and the call is refused.
 

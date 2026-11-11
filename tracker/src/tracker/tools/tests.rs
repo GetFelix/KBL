@@ -583,7 +583,7 @@ async fn asking_and_answering_a_question() {
     let (_fake, t) = held().await;
     let a = agent("w1");
     let asked = t
-        .ask(&a, &item("a1"), text("which cache?"), vec![], None)
+        .ask(&a, &item("a1"), text("which cache?"), vec![], None, 0)
         .await
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
@@ -626,7 +626,7 @@ async fn a_worker_on_a_question_item_answers_for_its_parent() {
     let a = agent("w1");
     let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
     let asked = t
-        .ask(&a, &item("a1"), text("which cache?"), vec![], None)
+        .ask(&a, &item("a1"), text("which cache?"), vec![], None, 0)
         .await
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
@@ -798,6 +798,7 @@ async fn the_question_text_is_read_back_with_the_context() {
             text("which cache?"),
             vec![],
             None,
+            0,
         )
         .await
         .unwrap();
@@ -812,13 +813,13 @@ async fn an_answer_to_a_stale_question_is_refused() {
     let a = agent("w1");
     let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
     let old = t
-        .ask(&a, &item("a1"), text("one?"), vec![], None)
+        .ask(&a, &item("a1"), text("one?"), vec![], None, 0)
         .await
         .unwrap()["offset"]
         .as_u64()
         .unwrap();
     let open = t
-        .ask(&a, &item("a1"), text("two?"), vec![], None)
+        .ask(&a, &item("a1"), text("two?"), vec![], None, 0)
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -865,7 +866,7 @@ async fn evidence_is_bounded_in_size_and_count() {
     d.why = String::new();
     assert_eq!(why(t.decide(&agent("w1"), &item("a1"), d).await), "invalid");
     let q = t
-        .ask(&agent("w1"), &item("a1"), text("which?"), vec![], None)
+        .ask(&agent("w1"), &item("a1"), text("which?"), vec![], None, 0)
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -1207,6 +1208,7 @@ async fn asked_with_options() -> (Fake, crate::tracker::Tracker<Fake>, u64) {
             text("which cache?"),
             vec!["read".into(), "write".into()],
             Some("read".into()),
+            0,
         )
         .await
         .unwrap()["offset"]
@@ -1532,7 +1534,7 @@ async fn options_are_bounded_when_asking() {
     let before = fake.log().len();
     let (w1, a1) = (agent("w1"), item("a1"));
     let ask = |options: Vec<String>, default: Option<String>| {
-        t.ask(&w1, &a1, text("which?"), options, default)
+        t.ask(&w1, &a1, text("which?"), options, default, 0)
     };
     let many = (0..=agents_core::work::MAX_ASK_OPTIONS)
         .map(|i| format!("o{i}"))

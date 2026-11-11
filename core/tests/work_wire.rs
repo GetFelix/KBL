@@ -99,6 +99,7 @@ fn every_record() -> Vec<WorkRecord> {
             text: text("which client?"),
             options: vec![],
             default: None,
+            cost_micros: 0,
         },
         WorkRecord::Answer {
             item: item("r1"),
@@ -280,6 +281,7 @@ fn every_record() -> Vec<WorkRecord> {
             text: text("which client?"),
             options: vec!["rust".into(), "python".into()],
             default: Some("rust".into()),
+            cost_micros: 25_000,
         },
         WorkRecord::Answer {
             item: item("r1"),
