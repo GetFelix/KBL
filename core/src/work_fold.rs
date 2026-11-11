@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, Evidence, RefusalReason, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    Actor, CloseWhy, Evidence, RefusalReason, TIERS, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
 };
 
 #[cfg(test)]
@@ -28,6 +28,15 @@ const ATTEMPTS_ALLOWED: u32 = 2;
 /// Attempts that may be open on one item at once: the current one and the one compared with it.
 const OPEN_ATTEMPTS: usize = 2;
 const DEFAULT_TIER: u8 = 2;
+/// What one attempt may write, per kind. A looping agent is refused at the cap
+/// instead of filling the stream.
+const MAX_DECISIONS: usize = 200;
+const MAX_STEPS: usize = 500;
+const MAX_EDITS: usize = 500;
+const MAX_PROGRESS: u32 = 100;
+const MAX_CONTEXT: u32 = 100;
+/// Children and proposals together.
+const MAX_POSTS: u32 = 24;
 
 /// A root's work budget. Agent records only ever lower it; a person's
 /// `budget_set` is the one way up.
@@ -158,6 +167,17 @@ pub struct Path {
     pub edits: Vec<u64>,
     /// Offsets of the `human_input` records addressed to this attempt.
     pub human_inputs: Vec<u64>,
+    #[serde(default)]
+    pub progress: u32,
+    /// Context entries the attempt wrote, on its item or the one it works for.
+    #[serde(default)]
+    pub context_writes: u32,
+    /// Children and proposals the attempt created.
+    #[serde(default)]
+    pub posts: u32,
+    /// A cap refusal is already on the log for this attempt.
+    #[serde(default)]
+    pub capped: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -221,6 +241,12 @@ pub enum Reject {
     Closed,
     /// Only a proposal that was never accepted can be rejected.
     NotAProposal,
+    /// The attempt wrote as many records of this kind as it may.
+    LimitReached,
+    /// A tier is 0 to 3.
+    BadTier,
+    /// An agent linked items of different trees.
+    CrossRoot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -533,6 +559,9 @@ impl State {
                 why,
                 duplicate_of,
             } => {
+                if *tier >= TIERS {
+                    return Err(Reject::BadTier);
+                }
                 self.may_triage(item, rec)?;
                 self.item_mut(item)?.proposal = Some(Proposal {
                     tier: *tier,
@@ -545,8 +574,13 @@ impl State {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
                 }
+                if tier.is_some_and(|t| t >= TIERS) {
+                    return Err(Reject::BadTier);
+                }
                 let it = self.item_mut(item)?;
+                // A tier a person set while editing outranks the triage proposal.
                 it.tier = tier
+                    .or(it.tier)
                     .or(it.proposal.as_ref().map(|p| p.tier))
                     .or(Some(DEFAULT_TIER));
                 it.accepted = true;
@@ -560,6 +594,9 @@ impl State {
             WorkRecord::Linked { item, to } => {
                 self.item(item)?;
                 self.item(to)?;
+                if rec.actor == Actor::Agent {
+                    self.agent_may_link(item, to, rec)?;
+                }
                 if item == to || self.reaches(to, item) {
                     return Err(Reject::Cycle);
                 }
@@ -573,6 +610,17 @@ impl State {
                 self.edges.remove(&(item.clone(), to.clone()));
             }
             WorkRecord::Context { item, entry, .. } => {
+                self.item(item)?;
+                if rec.actor == Actor::Agent {
+                    let (worker, attempt) = self
+                        .agent_scope(item, &rec.by, false)
+                        .ok_or(Reject::NotHolder)?;
+                    let p = self.path_mut(&worker, attempt)?;
+                    if p.context_writes >= MAX_CONTEXT {
+                        return Err(Reject::LimitReached);
+                    }
+                    p.context_writes += 1;
+                }
                 self.item_mut(item)?.context.insert(entry.clone(), offset);
             }
             WorkRecord::Claimed {
@@ -627,6 +675,10 @@ impl State {
                         steps: Vec::new(),
                         edits: Vec::new(),
                         human_inputs: Vec::new(),
+                        progress: 0,
+                        context_writes: 0,
+                        posts: 0,
+                        capped: false,
                     });
                 }
                 it.hold = Some(Hold {
@@ -643,6 +695,13 @@ impl State {
                 ..
             } => {
                 self.acting_on(item, *attempt, rec)?;
+                if rec.actor == Actor::Agent {
+                    let p = self.path_mut(item, *attempt)?;
+                    if p.progress >= MAX_PROGRESS {
+                        return Err(Reject::LimitReached);
+                    }
+                    p.progress += 1;
+                }
                 let it = self.item_mut(item)?;
                 if branch.is_some() {
                     it.branch = branch.clone();
@@ -736,20 +795,29 @@ impl State {
                 item,
                 attempt,
                 so_far,
+                why,
                 commit,
                 evidence,
                 ..
             } => {
                 self.agent_holder(item, *attempt, rec)?;
-                if so_far.is_empty() || commit.is_empty() {
+                if so_far.is_empty() || why.is_empty() || commit.is_empty() {
                     return Err(Reject::MissingField);
                 }
                 Self::check_evidence(offset, evidence)?;
-                self.path_mut(item, *attempt)?.decisions.push(offset);
+                let p = self.path_mut(item, *attempt)?;
+                if p.decisions.len() >= MAX_DECISIONS {
+                    return Err(Reject::LimitReached);
+                }
+                p.decisions.push(offset);
             }
             WorkRecord::Step { item, attempt, .. } => {
                 self.agent_holder(item, *attempt, rec)?;
-                self.path_mut(item, *attempt)?.steps.push(offset);
+                let p = self.path_mut(item, *attempt)?;
+                if p.steps.len() >= MAX_STEPS {
+                    return Err(Reject::LimitReached);
+                }
+                p.steps.push(offset);
             }
             WorkRecord::Edit {
                 item,
@@ -761,6 +829,9 @@ impl State {
                 let p = self.path_mut(item, *attempt)?;
                 if !p.decisions.contains(decision) {
                     return Err(Reject::UnknownDecision);
+                }
+                if p.edits.len() >= MAX_EDITS {
+                    return Err(Reject::LimitReached);
                 }
                 p.edits.push(offset);
             }
@@ -875,9 +946,52 @@ impl State {
                 };
                 self.item_mut(root)?.over_budget = false;
             }
+            WorkRecord::TierChanged { item, tier } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if *tier >= TIERS {
+                    return Err(Reject::BadTier);
+                }
+                let it = self.item_mut(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                it.tier = Some(*tier);
+            }
+            WorkRecord::Edited { item, title, tier } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if tier.is_some_and(|t| t >= TIERS) {
+                    return Err(Reject::BadTier);
+                }
+                let it = self.item_mut(item)?;
+                // Once accepted the item is in the queue; its tier changes with `tier_changed`.
+                if it.accepted {
+                    return Err(Reject::NotAProposal);
+                }
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                if let Some(t) = title {
+                    it.title = t.clone();
+                }
+                if tier.is_some() {
+                    it.tier = *tier;
+                }
+            }
             WorkRecord::Refused { item, reason, .. } => {
                 if rec.actor != Actor::Tracker {
                     return Err(Reject::ActorNotAllowed);
+                }
+                if let (Some(id), RefusalReason::Limit) = (item, reason) {
+                    // Logged once per attempt, so a looping agent cannot fill the stream with refusals.
+                    if let Some(attempt) = self.items.get(id).and_then(|i| i.hold.as_ref()).map(|h| h.attempt)
+                        && let Ok(p) = self.path_mut(id, attempt)
+                    {
+                        p.capped = true;
+                    }
                 }
                 if let (Some(id), RefusalReason::Budget) = (item, reason)
                     && let Some(root) = self.items.get(id).map(|i| i.root.clone())
@@ -922,6 +1036,15 @@ impl State {
         match (rec.actor, parent) {
             // An agent's fix is out of scope for its task: a root once a person accepts it.
             (Actor::Agent, _) if work == WorkKind::Fix => {
+                // The proposal counts against the attempt that found it.
+                let (held, attempt) = self
+                    .held_by(rec.by.as_str())
+                    .ok_or(Reject::NoHeldParent)?;
+                let p = self.path_mut(&held, attempt)?;
+                if p.posts >= MAX_POSTS {
+                    return Err(Reject::LimitReached);
+                }
+                p.posts += 1;
                 item.proposed_by_agent = true;
             }
             (Actor::Agent, Some(p)) if work.is_live_child() => {
@@ -931,6 +1054,10 @@ impl State {
                     _ => return Err(Reject::NoHeldParent),
                 }
                 let (root, depth) = (par.root.clone(), par.depth.saturating_add(1));
+                let attempt = par.hold.as_ref().map_or(0, |h| h.attempt);
+                if self.path_mut(p, attempt)?.posts >= MAX_POSTS {
+                    return Err(Reject::LimitReached);
+                }
                 let b = self.budgets.get_mut(&root).ok_or(Reject::UnknownItem)?;
                 let refused = if depth > b.max_depth {
                     Some(Reject::TooDeep)
@@ -944,6 +1071,7 @@ impl State {
                     self.flag_over_budget(&root);
                     return Err(why);
                 }
+                self.path_mut(p, attempt)?.posts += 1;
                 item.depth = depth;
                 item.parent = Some(p.clone());
                 item.root = root;
@@ -998,6 +1126,42 @@ impl State {
         } else {
             Err(Reject::NotHolder)
         }
+    }
+
+    /// The item `by` holds that lets it act on `id`: `id` itself or one of its
+    /// children, or with `parent` its parent. The item's open attempt comes with it.
+    fn agent_scope(&self, id: &ItemId, by: &Key, parent: bool) -> Option<(ItemId, u32)> {
+        let it = self.items.get(id)?;
+        let held = |i: &Item| {
+            i.hold
+                .as_ref()
+                .filter(|h| h.by == *by && i.closed.is_none())
+                .map(|h| (i.id.clone(), h.attempt))
+        };
+        held(it)
+            .or_else(|| {
+                it.children
+                    .iter()
+                    .filter_map(|c| self.items.get(c))
+                    .find_map(held)
+            })
+            .or_else(|| {
+                parent
+                    .then(|| it.parent.as_ref().and_then(|p| self.items.get(p)))
+                    .flatten()
+                    .and_then(held)
+            })
+    }
+
+    /// An agent adds an edge only inside one tree, on an item it works on or a
+    /// sibling under the item it holds.
+    fn agent_may_link(&self, item: &ItemId, to: &ItemId, rec: &WorkLogged) -> Result<(), Reject> {
+        if self.item(item)?.root != self.item(to)?.root {
+            return Err(Reject::CrossRoot);
+        }
+        self.agent_scope(item, &rec.by, true)
+            .map(|_| ())
+            .ok_or(Reject::NotHolder)
     }
 
     /// Answers come from a person or the agent holding a question item under `item`.

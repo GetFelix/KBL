@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agents_core::codec::Codec;
+use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
 use agents_core::work::{
     Actor, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS, WorkLogged, WorkRecord, ready_stream,
@@ -62,6 +63,8 @@ pub(crate) struct Settings {
 pub(crate) enum Error {
     /// The fold would not take the record. `why` is its reason in snake case.
     Refused { why: String },
+    /// The call is malformed or over a size limit; nothing was tried.
+    Invalid(String),
     /// The caller does not hold the item.
     NotHeld(String),
     /// The claim lapsed or went to another agent.
@@ -77,7 +80,9 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Refused { why } => write!(f, "refused: {why}"),
-            Error::NotHeld(m) | Error::Lost(m) | Error::Unavailable(m) => f.write_str(m),
+            Error::NotHeld(m) | Error::Lost(m) | Error::Unavailable(m) | Error::Invalid(m) => {
+                f.write_str(m)
+            }
             Error::Felix(e) => write!(f, "Felix failed: {e:#}"),
         }
     }
@@ -122,6 +127,21 @@ struct Core {
     lease: Option<LeaseHeld>,
     /// Another tracker took the writer lease.
     fenced: bool,
+    /// The text of context, note and answer records by offset, so a read does
+    /// not scan the log.
+    texts: HashMap<u64, Content>,
+}
+
+/// Keeps the text of the records a read shows.
+fn remember(texts: &mut HashMap<u64, Content>, offset: u64, record: &WorkRecord) {
+    match record {
+        WorkRecord::Context { text, .. }
+        | WorkRecord::HumanInput { text, .. }
+        | WorkRecord::Answer { text, .. } => {
+            texts.insert(offset, text.clone());
+        }
+        _ => {}
+    }
 }
 
 /// What to do to Felix once the core lock is released.
@@ -173,8 +193,12 @@ impl<B: Broker> Tracker<B> {
             next_delivery: AtomicU64::new(1),
         }));
         tracker.acquire_lease().await?;
-        let state = tracker.read_state().await?;
-        tracker.0.core.lock().await.state = state;
+        let (state, texts) = tracker.read_state().await?;
+        {
+            let mut core = tracker.0.core.lock().await;
+            core.state = state;
+            core.texts = texts;
+        }
         let holders: Vec<AgentName> = {
             let core = tracker.0.core.lock().await;
             core.state
@@ -387,6 +411,7 @@ impl<B: Broker> Tracker<B> {
         person: Key,
         record: WorkRecord,
     ) -> Result<Value, Error> {
+        tools::check_sizes(&record)?;
         self.begin().await?;
         let kind = record.kind();
         let offset = {
@@ -558,7 +583,7 @@ impl<B: Broker> Tracker<B> {
                 let mut ops = Vec::new();
                 let taken = {
                     let mut core = self.0.core.lock().await;
-                    self.decide(&mut core, agent, tier, record, &mut ops).await
+                    self.claim_from(&mut core, agent, tier, record, &mut ops).await
                 };
                 self.run(ops).await.ok();
                 if let Some(d) = taken? {
@@ -571,7 +596,7 @@ impl<B: Broker> Tracker<B> {
 
     /// Turns one delivery into a claim, or settles it when it no longer
     /// describes claimable work.
-    async fn decide(
+    async fn claim_from(
         &self,
         core: &mut Core,
         agent: &AgentName,
@@ -946,6 +971,7 @@ impl<B: Broker> Tracker<B> {
                 if offset != guess {
                     core.stale = true;
                 }
+                remember(&mut core.texts, offset, &logged.record);
                 Ok(offset)
             }
             Err(e) => {
@@ -985,18 +1011,19 @@ impl<B: Broker> Tracker<B> {
         }
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
-        let state = self
+        let (state, texts) = self
             .read_state()
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
         let mut core = self.0.core.lock().await;
         core.state = state;
+        core.texts = texts;
         core.stale = false;
         Ok(())
     }
 
     /// The fold of every record in `work.events`, with seek snapshots.
-    async fn read_state(&self) -> anyhow::Result<State> {
+    async fn read_state(&self) -> anyhow::Result<(State, HashMap<u64, Content>)> {
         let mut entries = Vec::new();
         for (offset, payload) in self
             .io(None, self.0.broker.read_from(WORK_EVENTS, 0))
@@ -1007,10 +1034,15 @@ impl<B: Broker> Tracker<B> {
                 Err(e) => eprintln!("agents-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
-        Ok(match entries.last() {
+        let mut texts = HashMap::new();
+        for (offset, rec) in &entries {
+            remember(&mut texts, *offset, &rec.record);
+        }
+        let state = match entries.last() {
             Some((last, _)) => Seek::build(&entries, SNAPSHOT_EVERY).state_at(&entries, *last),
             None => State::default(),
-        })
+        };
+        Ok((state, texts))
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {
@@ -1190,6 +1222,10 @@ pub(crate) fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
 }
+
+mod tools;
+
+pub(crate) use tools::{Decide, Post};
 
 #[cfg(test)]
 mod tests;
