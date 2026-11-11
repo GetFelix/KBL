@@ -1281,3 +1281,123 @@ fn try_apply_leaves_no_trace_when_it_refuses() {
     s.apply(3, &claim);
     assert!(s.items[&id("r1")].over_budget);
 }
+
+fn accepted_root(l: &mut Log, item: &str) {
+    l.tracker(imported(item));
+    l.person(WorkRecord::Accepted {
+        item: id(item),
+        tier: None,
+    });
+}
+
+#[test]
+fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "r1");
+    l.tracker(WorkRecord::Updated {
+        item: id("r1"),
+        title: Some("new title".into()),
+    });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    let it = &s.items[&id("r1")];
+    assert!(it.changed_upstream);
+    assert_eq!(it.title, "new title");
+    // It makes no work: the item is still Ready, with no children.
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+    assert!(it.children.is_empty());
+
+    l.person(WorkRecord::Triaged {
+        item: id("r1"),
+        tier: 1,
+        why: "again".into(),
+        duplicate_of: None,
+    });
+    assert!(!fold(&l.0).items[&id("r1")].changed_upstream);
+
+    // An agent cannot write it, and a closed item takes none.
+    l.agent(
+        "w1",
+        WorkRecord::Updated {
+            item: id("r1"),
+            title: None,
+        },
+    );
+    assert_eq!(
+        fold(&l.0).rejections.last().unwrap().why,
+        Reject::ActorNotAllowed
+    );
+}
+
+#[test]
+fn leaving_scope_stops_a_free_item_and_waits_for_a_holder() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "r1");
+    accepted_root(&mut l, "r2");
+    l.agent("w1", claimed("r2", 1));
+    l.tracker(WorkRecord::LeftScope { item: id("r1") });
+    l.tracker(WorkRecord::LeftScope { item: id("r2") });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::LeftScope));
+    // The holder keeps going.
+    assert_eq!(s.stage(&id("r2")), Some(Stage::Held));
+    // A claim on the withdrawn item is refused.
+    l.agent("w2", claimed("r1", 1));
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotReady);
+    // Released, it stops.
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r2"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    let s = fold(&l.0);
+    assert_eq!(s.needs_you(&id("r2")), Some(NeedsYou::LeftScope));
+}
+
+#[test]
+fn reopening_returns_the_same_root_to_triage_with_its_budget() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "r1");
+    l.tracker(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Upstream,
+    });
+    let before = fold(&l.0).budgets[&id("r1")].clone();
+    l.tracker(WorkRecord::Reopened { item: id("r1") });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Triage));
+    assert_eq!(s.budgets[&id("r1")], before);
+    assert!(s.items[&id("r1")].changed_upstream);
+    // An item that is open cannot be reopened.
+    l.tracker(WorkRecord::Reopened { item: id("r1") });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotClosed);
+}
+
+#[test]
+fn upstream_sync_records_are_about_open_roots() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "r1");
+    l.tracker(proposed("c1", Some("r1"), "t", WorkKind::Triage));
+    l.tracker(WorkRecord::LeftScope { item: id("c1") });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotARoot);
+    l.tracker(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Completed,
+    });
+    l.tracker(WorkRecord::LeftScope { item: id("r1") });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::Closed);
+    assert_eq!(
+        fold(&l.0)
+            .imported()
+            .map(|(s, u, i)| (s.to_owned(), u.to_owned(), i.clone()))
+            .collect::<Vec<_>>(),
+        vec![("github".to_owned(), "felix#r1".to_owned(), id("r1"))]
+    );
+}

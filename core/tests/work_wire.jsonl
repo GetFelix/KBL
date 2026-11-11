@@ -23,6 +23,10 @@
 {"kind":"closed","item":"r1","why":"merged"}
 {"kind":"closed","item":"r2","why":"completed"}
 {"kind":"rejected","item":"p1"}
+{"kind":"updated","item":"r1","title":"reads miss a fresh write after restart"}
+{"kind":"updated","item":"r1"}
+{"kind":"left_scope","item":"r1"}
+{"kind":"reopened","item":"r1"}
 {"kind":"attempt_closed","item":"r1","attempt":1}
 {"kind":"budget_set","root":"r1","items_left":20,"max_depth":3,"cost_left_micros":30000000,"redos_per_item":3}
 {"kind":"refused","item":"r1","op":"work_post","reason":"budget"}

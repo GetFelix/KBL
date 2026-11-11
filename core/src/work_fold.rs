@@ -98,6 +98,8 @@ pub enum NeedsYou {
     TriesUsed,
     /// Every attempt was closed and none was redone.
     NoOpenAttempt,
+    /// The upstream issue left its intake rule and nobody holds the item.
+    LeftScope,
 }
 
 impl Item {
@@ -170,6 +172,10 @@ pub struct Item {
     pub depth: u8,
     pub children: Vec<ItemId>,
     pub proposed_by_agent: bool,
+    /// The upstream issue changed after the last triage answer.
+    pub changed_upstream: bool,
+    /// The upstream issue no longer matches the rule that admitted it.
+    pub left_scope: bool,
     pub accepted: bool,
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
@@ -221,6 +227,10 @@ pub enum Reject {
     Closed,
     /// Only a proposal that was never accepted can be rejected.
     NotAProposal,
+    /// Only a closed item can be reopened.
+    NotClosed,
+    /// Upstream sync records are about roots.
+    NotARoot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,6 +301,14 @@ impl State {
         })
     }
 
+    /// Every imported root with its source and upstream id.
+    pub fn imported(&self) -> impl Iterator<Item = (&str, &str, &ItemId)> {
+        self.upstream.iter().filter_map(|(up, item)| {
+            let (source, id) = up.split_once('\n')?;
+            Some((source, id, item))
+        })
+    }
+
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
         Some(match it.closed {
@@ -330,6 +348,10 @@ impl State {
         }
         if it.over_budget {
             return Some(NeedsYou::OverBudget);
+        }
+        // A holder may finish or release first; only then does the item stop.
+        if it.left_scope && it.hold.is_none() {
+            return Some(NeedsYou::LeftScope);
         }
         let dropped = self.edges.iter().any(|(a, b)| {
             a == id
@@ -477,6 +499,8 @@ impl State {
             depth: 0,
             children: Vec::new(),
             proposed_by_agent: false,
+            changed_upstream: false,
+            left_scope: false,
             accepted: false,
             tier: None,
             proposal: None,
@@ -540,6 +564,7 @@ impl State {
                     duplicate_of: duplicate_of.clone(),
                     at: offset,
                 });
+                self.item_mut(item)?.changed_upstream = false;
             }
             WorkRecord::Accepted { item, tier } => {
                 if rec.actor == Actor::Agent {
@@ -845,6 +870,34 @@ impl State {
                 }
                 self.close(item, Closure::Rejected);
             }
+            WorkRecord::Updated { item, title } => {
+                let it = self.upstream_sync(item, rec)?;
+                if let Some(t) = title {
+                    it.title.clone_from(t);
+                }
+                it.changed_upstream = true;
+            }
+            WorkRecord::LeftScope { item } => {
+                self.upstream_sync(item, rec)?.left_scope = true;
+            }
+            WorkRecord::Reopened { item } => {
+                if rec.actor == Actor::Agent {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item_mut(item)?;
+                if it.parent.is_some() {
+                    return Err(Reject::NotARoot);
+                }
+                if it.closed.is_none() {
+                    return Err(Reject::NotClosed);
+                }
+                it.closed = None;
+                // Back to Triage: a person accepts it again.
+                it.accepted = false;
+                it.left_scope = false;
+                it.changed_upstream = true;
+                it.proposal = None;
+            }
             WorkRecord::AttemptClosed { item, attempt } => {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
@@ -888,6 +941,21 @@ impl State {
             WorkRecord::Unknown => {}
         }
         Ok(())
+    }
+
+    /// The open root an upstream sync record is about.
+    fn upstream_sync(&mut self, id: &ItemId, rec: &WorkLogged) -> Result<&mut Item, Reject> {
+        if rec.actor == Actor::Agent {
+            return Err(Reject::ActorNotAllowed);
+        }
+        let it = self.item_mut(id)?;
+        if it.parent.is_some() {
+            return Err(Reject::NotARoot);
+        }
+        if it.closed.is_some() {
+            return Err(Reject::Closed);
+        }
+        Ok(it)
     }
 
     fn path_mut(&mut self, item: &ItemId, attempt: u32) -> Result<&mut Path, Reject> {
