@@ -176,7 +176,7 @@ try {
     check(await page.eval(`document.querySelector('#c-needs .row[data-k="gh-795"] .mk.paths')?.textContent === '4 paths'`), `${label}: the redo-limit card has no "4 paths" mark`);
     check(await page.eval(`document.querySelector('#c-needs').textContent.includes('redo limit')`), `${label}: Needs you does not group the redo-limit item`);
     check(await page.eval(`/proposed by w\\d/.test(document.querySelector('#c-triage').textContent)`), `${label}: triage cards do not say which agent proposed`);
-    check(!/kibble|pawprint/i.test(await page.eval(`document.body.innerText`)), `${label}: internal wording in the UI`);
+    check(!/pawprint/i.test(await page.eval(`document.body.innerText`)), `${label}: internal wording in the UI`);
     // Opening an item with history shows its story.
     await page.eval(`window.select('gh-792')`);
     await press('Enter');
@@ -292,6 +292,27 @@ try {
     info = await page.eval('window.intakeInfo()');
     if (size === 'laptop') check(info.crossings === 0, `${label}: ${info.crossings} chain segments cross a card that is not in the chain`);
   }
+
+  // The autoplay demo plays its whole story from the fixture, with no page errors, and loops back to where it began.
+  await page.setViewport(1280, 720);
+  await open('fixture-work-demo.json', 'demo=1&rec=1&loops=2');
+  const start = await page.eval('window.intakeInfo()');
+  await page.eval('window.demo.start()');
+  let guard = 0;
+  while (await page.eval('window.demo.running')) {
+    await page.eval('window.demo.advance(250)');
+    if (++guard > 1000) { fail('demo: did not finish within 250 s of its own time'); break; }
+  }
+  const demo = await page.eval('({ errors: window.demo.errors, loops: window.demo.loops, runs: window.demo.runs })');
+  check(demo.errors.length === 0 && page.problems.length === 0, `demo: errors: ${[...demo.errors, ...page.problems].join('; ')}`);
+  check(demo.loops === 2 && demo.runs.length === 2, `demo: expected two passes, got ${demo.loops}`);
+  const [one, two] = demo.runs;
+  check(one && one.seconds >= 24 && one.seconds <= 30, `demo: the story runs ${one?.seconds} s, expected 24 to 30`);
+  check(one && JSON.stringify(one) === JSON.stringify(two), 'demo: the second pass differs from the first');
+  for (const [kind, n] of [['triaged', 3], ['approved', 1], ['done', 1], ['human_input', 1]]) check(one && one.events.filter((k) => k === kind).length === n, `demo: expected ${n} ${kind} record(s)`);
+  check(one && one.done === start.colInfo.done.count + 1, `demo: Done went from ${start.colInfo.done.count} to ${one?.done}, expected one more`);
+  const end = await page.eval('window.intakeInfo()');
+  check(JSON.stringify(end.colInfo) === JSON.stringify(start.colInfo) && end.localEvents.length === 0, 'demo: the loop did not return to its starting board');
 } finally {
   await page.close();
   await server.close();

@@ -312,6 +312,7 @@ python3 -m http.server 8000
 otherwise. Chrome gets 60 s to start (`CHROME_STARTUP_MS` changes that); if it exits or never comes up, the error
 includes its exit code and stderr. The launcher is `scripts/lib/browser.mjs`; new checks should use it.
 `scripts/shoot-intake.mjs` takes the stills in `docs/screenshots/` from the same page.
+`prototype/intake-frame.html?demo=1` (add `&theme=light` for the light theme) plays a 30-second scripted story from `prototype/fixture-work-demo.json`: records only, nothing generated. `scripts/record-demo.mjs` records it frame by frame to mp4 and webp; the page owns its clock, so no frame is dropped.
 
 CI runs four jobs: lint (with the fixture regeneration), dashboard frame, the Rust checks (format, clippy, tests) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
 

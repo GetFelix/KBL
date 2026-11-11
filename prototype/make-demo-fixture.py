@@ -23,9 +23,7 @@ items = {
     "ado-4388": {"source": "ado", "ref": "AB#4388", "title": "Lease renewal logs the wrong holder", "class": "bug"},
     "jira-209": {"source": "jira", "ref": "PLAT-209", "title": "Quickstart lists a removed flag", "class": "docs"},
     "gh-796": {"source": "github", "ref": "#796", "title": "Idle publisher is dropped after 30 s", "class": "bug"},
-    "ado-4391": {"source": "ado", "ref": "AB#4391", "title": "Health probe returns 200 during shutdown", "class": "bug"},
     "gh-798": {"source": "github", "ref": "#798", "title": "Metrics endpoint reports negative lag", "class": "bug"},
-    "jira-228": {"source": "jira", "ref": "PLAT-228", "title": "Config reference misses the retry limit", "class": "docs"},
     "ado-4402": {"source": "ado", "ref": "AB#4402", "title": "Gateway returns 500 on an empty batch", "class": "bug"},
     STORY: {"source": "github", "ref": "#801", "title": "Subscribe resumes one record early after a reconnect", "class": "bug"},
     "ado-4420": {"source": "ado", "ref": "AB#4420", "title": "Retry drops the idempotency key", "class": "bug"},
@@ -46,8 +44,7 @@ done("gh-780", 3 * HOUR, "w2", 3098, 1)
 done("ado-4388", 6 * HOUR, "w4", 3101, 2)
 done("jira-209", 11 * HOUR, "w5", 3103, 3)
 add(-5 * HOUR, "imported", "gh-796"); add(-4 * HOUR, "triaged", "gh-796", tier=2, by="dana")
-add(-3 * HOUR, "imported", "ado-4391"); add(-2 * HOUR, "triaged", "ado-4391", tier=3, by="dana")
-for key, agent, ago in (("gh-798", "w1", 40 * 60), ("jira-228", "w5", 25 * 60)):
+for key, agent, ago in (("gh-798", "w1", 40 * 60),):
     add(-ago - 2 * HOUR, "imported", key); add(-ago - HOUR, "triaged", key, tier=2, by="dana")
     add(-ago, "claimed", key, agent=agent, run="r-" + key)
 add(-3 * HOUR, "imported", "ado-4402"); add(-150 * 60, "triaged", "ado-4402", tier=1, by="dana")

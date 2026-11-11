@@ -1046,7 +1046,7 @@ function renderBoard(chain, blockedRoots, busy, agents) {
   board.className = 'board' + (chain ? ' picked' : '');
   board.innerHTML = `<svg id="links" aria-hidden="true"></svg>` + cols.join('');
   $('nav').innerHTML = STAGES.map(([k, n]) => `<a href="#c-${k}" data-nav="${k}"${k === 'needs' ? ' class="you"' : ''}>${n} <b>${by[k].length}</b></a>`).join('');
-  requestAnimationFrame(() => drawLinks(chain));
+  requestAnimationFrame(() => { if (!chain || [...chain.all].every((k) => state.items.has(k))) drawLinks(chain); });
 }
 
 function renderFooter() {
@@ -2144,7 +2144,7 @@ if (params.has('story')) {
 const clock = { t: 0, timers: [], starts: new WeakMap() };
 const sleep = (ms) => new Promise((ok) => clock.timers.push({ at: clock.t + ms, ok }));
 const macrotask = () => new Promise((ok) => setTimeout(ok, 0));
-const demo = { loops: 0, errors: [], running: false, advance: null, length: 0 };
+const demo = { loops: 0, errors: [], running: false, advance: null, runs: [] };
 
 // Animations follow the demo clock when recording; otherwise they run normally.
 function syncAnims() {
@@ -2225,7 +2225,7 @@ async function press(k, label, o = {}) {
   el.innerHTML = `${(o.shift ? ['shift', k] : [k]).map((x) => `<kbd>${x}</kbd>`).join('')}<span>${label}</span>`;
   const mine = ++keyTimer;
   anim(el, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, fill: 'both' });
-  await sleep(240);
+  await sleep(180);
   document.body.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey: !!o.shift, bubbles: true }));
   sleep(1100).then(() => { if (mine === keyTimer) anim(el, [{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }); });
 }
@@ -2242,80 +2242,82 @@ function resetDemo() {
 }
 
 async function story() {
+  const began = clock.t;
   const fade = (from, to) => anim(document.body, [{ opacity: from }, { opacity: to }], { duration: FADE, fill: 'both', easing: 'ease-in-out' });
   const holder = () => state.items.get('gh-801').holder;
   fade(0, 1);
-  await sleep(FADE + 300);
+  await sleep(250);
 
   caption('Bugs arrive from GitHub, Azure DevOps and Jira.');
-  await push('arrive_gh'); await sleep(1100);
-  await push('arrive_ado'); await sleep(1100);
-  await push('arrive_jira'); await sleep(1200);
+  await push('arrive_gh'); await sleep(900);
+  await push('arrive_ado'); await sleep(900);
+  await push('arrive_jira'); await sleep(900);
 
   caption('An agent proposes a tier. One key accepts it.');
-  await press('1', 'my queue'); await sleep(700);
-  await press('j', 'next'); await sleep(700);
-  for (let i = 0; i < 3; i++) { await press('a', 'accept'); await sleep(i < 2 ? 650 : 900); }
+  await press('1', 'my queue'); await sleep(500);
+  await press('j', 'next'); await sleep(500);
+  for (let i = 0; i < 3; i++) { await press('a', 'accept'); await sleep(i < 2 ? 500 : 700); }
 
   caption('Accepted work is Ready. Agents claim it.');
-  await press('2', 'board'); await sleep(1000);
-  await push('claim_gh'); await sleep(600);
-  await push('claim_ado'); await sleep(600);
-  await push('claim_jira'); await sleep(1100);
+  await press('2', 'board'); await sleep(800);
+  await push('claim_gh'); await sleep(450);
+  await push('claim_ado'); await sleep(450);
+  await push('claim_jira'); await sleep(800);
 
   caption('A claim lapsed, so the item went to another agent.');
-  await push('lapse_ado'); await sleep(1100);
-  await push('reclaim_ado'); await sleep(1300);
+  await push('lapse_ado'); await sleep(900);
+  await push('reclaim_ado'); await sleep(1000);
 
   caption('The fix lands in review with its handoff.');
-  await push('work_gh'); await push('pr_gh'); await sleep(700);
-  await push('pr_ado'); await sleep(1000);
-  await press('1', 'my queue'); await sleep(600);
-  await press('j', 'next'); await sleep(2000);
+  await push('work_gh'); await push('pr_gh'); await sleep(500);
+  await push('pr_ado'); await sleep(700);
+  await press('1', 'my queue'); await sleep(500);
+  await press('j', 'next'); await sleep(1600);
 
   caption('Open the story and scrub back to any decision.');
-  await press('y', 'story'); await sleep(1000);
+  await press('y', 'story'); await sleep(800);
   const slider = $('rscrub');
   const last = +slider.value;
   const target = curPath().findIndex((r, i, p) => r.kind === 'decision' && p.slice(0, i + 1).filter((x) => x.kind === 'decision').length === 3);
-  const steps = 30;
+  const steps = 24;
   for (let i = 1; i <= steps; i++) {
     const e = i / steps, ease = e * e * (3 - 2 * e);
     slider.value = Math.round(last + (target - last) * ease);
     slider.dispatchEvent(new Event('input', { bubbles: true }));
     await sleep(33);
   }
-  await sleep(200);
+  await sleep(150);
   slider.dispatchEvent(new Event('change', { bubbles: true }));
   caption('Let go: what it knew, what it chose, and why.');
-  await sleep(2800);
+  await sleep(2500);
 
   caption('Redo from that decision to branch the path.');
-  await press('r', 'redo from here'); await sleep(500);
+  await press('r', 'redo from here'); await sleep(400);
   const box = $('instr'), text = fx.redo.instruction;
   for (let i = 1; i <= text.length; i++) {
     box.value = text.slice(0, i);
     box.dispatchEvent(new Event('input', { bubbles: true }));
-    await sleep(15);
+    await sleep(12);
   }
-  await sleep(600);
+  await sleep(500);
   $('go').classList.add('pressed');
   await sleep(160);
   $('go').click();
   ids.set('redo', recs.findLast((r) => r.kind === 'human_input' && r.item === 'gh-801').o);
-  await sleep(1200);
+  await sleep(900);
   claimRedo('gh-801', 2);
-  await sleep(600);
+  await sleep(400);
   const agent = holder();
-  await push('work_gh2', { agent }, 110);
-  await push('pr_gh2', { agent }); await sleep(1000);
+  await push('work_gh2', { agent }, 100);
+  await push('pr_gh2', { agent }); await sleep(800);
 
   caption('The fix merges and Done ticks up.');
-  await press('a', 'approve'); await sleep(900);
-  await press('m', 'mark merged'); await sleep(1000);
-  await press('Escape', 'back'); await sleep(500);
-  await press('2', 'board'); await sleep(2200);
+  await press('a', 'approve'); await sleep(700);
+  await press('m', 'mark merged'); await sleep(800);
+  await press('Escape', 'back'); await sleep(350);
+  await press('2', 'board'); selected = null; render(); await sleep(1500);
 
+  demo.runs.push({ seconds: Math.round((clock.t - began + FADE + 250) / 100) / 10, events: localEvents.map((r) => r.kind), done: by.done.length });
   caption('');
   fade(1, 0);
   await sleep(FADE + 250);
@@ -2328,7 +2330,7 @@ async function run() {
       await story();
       demo.loops++;
       resetDemo();
-      if (REC) break;
+      if (REC && demo.loops >= (Number(params.get('loops')) || 1)) break;
     }
   } catch (e) {
     demo.errors.push(String(e.stack || e));

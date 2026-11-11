@@ -6,7 +6,7 @@
 // Usage: node scripts/record-demo.mjs --out <path-without-extension> [--theme dark|light]
 //          [--page prototype/intake-frame.html] [--query "demo=1&rec=1"] [--size 1600x900]
 //          [--fps 30] [--crf 28] [--poster <seconds>] [--frames <dir>]
-// Needs ffmpeg on PATH.
+// Needs ffmpeg and cwebp on PATH.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -48,6 +48,9 @@ try {
 }
 const ff = (args) => execFileSync('ffmpeg', ['-y', '-loglevel', 'error', ...args], { stdio: 'inherit' });
 ff(['-framerate', String(FPS), '-i', join(frames, 'f%05d.png'), '-c:v', 'libx264', '-preset', 'slow', '-crf', CRF, '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', `${out}.mp4`]);
-if (arg.poster) ff(['-framerate', String(FPS), '-i', join(frames, 'f%05d.png'), '-vf', `select=eq(n\\,${Math.round(Number(arg.poster) * FPS)})`, '-frames:v', '1', '-c:v', 'libwebp', '-quality', '82', `${out}.webp`]);
+if (arg.poster) {
+  const still = join(frames, `f${String(Math.round(Number(arg.poster) * FPS)).padStart(5, '0')}.png`);
+  execFileSync('cwebp', ['-quiet', '-q', '82', still, '-o', `${out}.webp`], { stdio: 'inherit' });
+}
 if (!arg.frames) rmSync(frames, { recursive: true, force: true });
 console.log(`${out}.mp4: ${n} frames, ${(n / FPS).toFixed(1)} s`);
