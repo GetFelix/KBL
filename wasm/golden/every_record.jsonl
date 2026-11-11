@@ -1,0 +1,44 @@
+{"actor":"person","at_ms":1000,"by":"gabriel","item":"r1","kind":"imported","source":"github","title":"reads miss a fresh write","upstream_id":"felix#2204"}
+{"actor":"person","at_ms":1001,"by":"gabriel","item":"c1","key":"split-a","kind":"proposed","parent":"r1","title":"reader side","work":"split"}
+{"actor":"person","at_ms":1002,"by":"gabriel","item":"p1","key":"found-1","kind":"proposed","title":"a second bug","work":"fix"}
+{"actor":"person","at_ms":1003,"by":"gabriel","duplicate_of":"r0","item":"r1","kind":"triaged","tier":1,"why":"data loss on restart"}
+{"actor":"person","at_ms":1004,"by":"gabriel","item":"r1","kind":"accepted","tier":1}
+{"actor":"person","at_ms":1005,"by":"gabriel","item":"c1","kind":"accepted"}
+{"actor":"person","at_ms":1006,"by":"gabriel","item":"c2","kind":"linked","to":"c1"}
+{"actor":"person","at_ms":1007,"by":"gabriel","item":"c2","kind":"unlinked","to":"c1"}
+{"actor":"person","at_ms":1008,"by":"gabriel","entry":"repro","item":"r1","kind":"context","text":{"text":"run it twice"}}
+{"actor":"person","at_ms":1009,"attempt":1,"by":"gabriel","deadline_ms":1800000090000,"item":"r1","kind":"claimed"}
+{"actor":"person","at_ms":1010,"attempt":1,"branch":"fix/r1","by":"gabriel","item":"r1","kind":"progress","note":{"text":"plan: fix the reader"},"pr":"GetFelix/felix#2210"}
+{"actor":"person","at_ms":1011,"attempt":2,"by":"gabriel","cost_micros":1250000,"item":"r1","kind":"done"}
+{"actor":"person","at_ms":1012,"attempt":1,"by":"gabriel","cost_micros":30000,"item":"r1","kind":"released","reason":"claim lapsed"}
+{"actor":"person","at_ms":1013,"attempt":1,"by":"gabriel","cost_micros":400000,"item":"r1","kind":"gave_up","reason":"cannot reproduce"}
+{"actor":"person","at_ms":1014,"attempt":1,"by":"gabriel","item":"r1","kind":"question","text":{"text":"which client?"}}
+{"actor":"person","at_ms":1015,"by":"gabriel","evidence":[{"offset":38,"stream":"work.events"}],"item":"r1","kind":"answer","question":40,"text":{"text":"the rust one"}}
+{"actor":"person","at_ms":1016,"attempt":1,"by":"gabriel","chosen":"reader","commit":"9f3c2ab","evidence":[{"offset":12,"stream":"work.events"}],"item":"r1","kind":"decision","options":["reader","writer"],"phase":"cause","question":"where does it go wrong","so_far":"the read races the fill","why":"the writer holds the lock"}
+{"actor":"person","at_ms":1017,"attempt":1,"by":"gabriel","command":"cargo test -p felix-cache","exit_code":101,"item":"r1","kind":"step","output":{"text":"1 failed"}}
+{"actor":"person","at_ms":1018,"attempt":1,"by":"gabriel","decision":14,"file":"src/cache.rs","hunk":{"text":"@@ -10,2 +10,3 @@"},"item":"r1","kind":"edit"}
+{"actor":"person","at_ms":1019,"attempt":1,"by":"gabriel","input":"review_comment","item":"r1","kind":"human_input","text":{"text":"not in the reader"}}
+{"actor":"person","at_ms":1020,"by":"gabriel","input":"priority_change","item":"r1","kind":"human_input","text":{"text":"p0"}}
+{"actor":"person","at":14,"at_ms":1021,"by":"gabriel","from_attempt":1,"item":"r1","kind":"forked_from","note":22}
+{"actor":"person","at_ms":1022,"by":"gabriel","item":"r1","kind":"closed","why":"merged"}
+{"actor":"person","at_ms":1023,"by":"gabriel","item":"r2","kind":"closed","why":"completed"}
+{"actor":"person","at_ms":1024,"by":"gabriel","item":"p1","kind":"rejected"}
+{"actor":"person","at_ms":1025,"by":"gabriel","item":"r1","kind":"updated","title":"reads miss a fresh write after restart"}
+{"actor":"person","at_ms":1026,"by":"gabriel","item":"r1","kind":"updated"}
+{"actor":"person","at_ms":1027,"by":"gabriel","item":"r1","kind":"left_scope"}
+{"actor":"person","at_ms":1028,"by":"gabriel","item":"r1","kind":"reopened"}
+{"actor":"person","at_ms":1029,"attempt":1,"by":"gabriel","item":"r1","kind":"attempt_closed"}
+{"actor":"person","at_ms":1030,"by":"gabriel","cost_left_micros":30000000,"items_left":20,"kind":"budget_set","max_depth":3,"redos_per_item":3,"root":"r1"}
+{"actor":"person","at_ms":1031,"by":"gabriel","checks":["task lint"],"kind":"rules_set","target":{"repo":"GetFelix/felix","source":"github"},"text":"one worktree per lane"}
+{"actor":"person","at_ms":1032,"by":"gabriel","checks":[],"kind":"rules_set","root":"r1","target":{"repo":"GetFelix/felix","source":"github"}}
+{"actor":"person","at_ms":1033,"by":"gabriel","item":"r1","kind":"pr_status","status":{"checks":"red","failing":{"name":"lint","url":"https://github.com/GetFelix/felix/actions/runs/1"},"phase":"open","pr":"GetFelix/felix#9","review":"unreviewed"}}
+{"actor":"person","at_ms":1034,"by":"gabriel","kind":"source_stalled","repo":"GetFelix/gone","source":"github","status":404}
+{"actor":"person","at_ms":1035,"by":"gabriel","item":"r1","kind":"refused","op":"work_post","reason":"budget"}
+{"actor":"person","at_ms":1036,"by":"gabriel","kind":"refused","op":"work_post","reason":"limit"}
+{"actor":"person","at_ms":1037,"attempt":1,"by":"gabriel","cost_micros":25000,"done_when":"released","item":"r1","key":"need-cas","kind":"prerequisite","new":{"evidence":[{"offset":12,"stream":"work.events"}],"target":{"repo":"GetFelix/felix-gateway","source":"github"},"title":"gateway needs a CAS call","why":{"text":"the client cannot swap atomically"}},"prerequisite":"g1"}
+{"actor":"person","at_ms":1038,"attempt":1,"by":"gabriel","cost_micros":0,"done_when":"merged","item":"r1","key":"need-existing","kind":"prerequisite","prerequisite":"g2"}
+{"actor":"person","at_ms":1039,"by":"gabriel","item":"g1","kind":"shipped","release":"0.4.0"}
+{"actor":"person","at_ms":1040,"by":"gabriel","item":"r1","kind":"triaged","tier":2,"unclear":"repo","why":"which repo does this belong in"}
+{"actor":"person","at_ms":1041,"attempt":1,"by":"gabriel","cost_micros":25000,"default":"rust","item":"r1","kind":"question","options":["rust","python"],"text":{"text":"which client?"}}
+{"actor":"person","at_ms":1042,"by":"gabriel","chosen":"rust","item":"r1","kind":"answer","question":41,"text":{"text":""},"then":{"then":"resume"}}
+{"actor":"person","at_ms":1043,"by":"gabriel","item":"r1","kind":"answer","question":42,"text":{"text":"this is a gateway bug"},"then":{"target":{"repo":"GetFelix/felix-gateway","source":"github"},"then":"prerequisite","title":"gateway needs a CAS call"}}

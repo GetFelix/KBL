@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kibble</title>
+    <style>
+      body { font: 15px/1.4 system-ui, sans-serif; margin: 2rem auto; max-width: 48rem; padding: 0 1rem; color: #1b2328; background: #fff; }
+      @media (prefers-color-scheme: dark) { body { color: #e6edf0; background: #12171a; } }
+      #status { opacity: 0.7; margin-bottom: 1rem; }
+      ul { list-style: none; padding: 0; }
+      li { display: flex; gap: 0.75rem; padding: 0.35rem 0; border-bottom: 1px solid #8884; }
+      .stage { min-width: 6rem; font-variant: small-caps; opacity: 0.8; }
+      .id { font-family: ui-monospace, monospace; min-width: 5rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Kibble</h1>
+    <div id="status">Connecting</div>
+    <ul id="items"></ul>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

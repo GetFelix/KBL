@@ -1,0 +1,21 @@
+{
+  "name": "kibble-dashboard",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The Kibble dashboard: follows work.events through felix-gateway and folds it with the core crate as WebAssembly",
+  "scripts": {
+    "wasm": "node scripts/build-wasm.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.ts\"",
+    "dev": "npm run wasm && vite",
+    "build": "npm run wasm && npm run typecheck && vite build"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "7.2.2"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
