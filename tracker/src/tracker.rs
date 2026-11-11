@@ -164,6 +164,10 @@ struct Core {
     /// They are published again only after the log moves, or every poll would
     /// publish, refuse and ack the same item forever.
     refused: HashMap<ItemId, Option<u64>>,
+    /// Reviews an author passed over, and when. Each is published again at most
+    /// once per visibility period, so an author that only polls cannot make the
+    /// stream grow by one record per poll.
+    passed: HashMap<ItemId, Instant>,
     /// The state may not match the log: rebuild it before serving.
     stale: bool,
     lease: Option<LeaseHeld>,
@@ -673,6 +677,10 @@ impl<B: Broker> Tracker<B> {
     async fn try_claim(&self, agent: &AgentName, review: &[u8]) -> Result<Option<Delivery>, Error> {
         for tier in (0..TIERS).chain(review.iter().copied()) {
             let stream = ready_stream(tier);
+            // Nothing in this lane is for this agent: leave the records alone.
+            if tier >= TIERS && self.lane_is_all_own(agent, tier).await {
+                continue;
+            }
             // A review of the agent's own work is for another reviewer. It is acked and
             // published again, not nacked: Felix counts every handout as an attempt and
             // dead-letters a record at its bound, so a nacking author would eat the review.
@@ -712,6 +720,25 @@ impl<B: Broker> Tracker<B> {
         Ok(None)
     }
 
+    /// Whether the lane has Ready items and every one is a review of a tree this
+    /// agent worked on.
+    async fn lane_is_all_own(&self, agent: &AgentName, tier: u8) -> bool {
+        let core = self.0.core.lock().await;
+        let key = agent_key(agent);
+        let mut any = false;
+        for (id, it) in &core.state.items {
+            if core.state.stage(id) != Some(Stage::Ready) || self.0.settings.lane(it) != Some(tier)
+            {
+                continue;
+            }
+            any = true;
+            if !core.state.worked_on(&it.root, &key) {
+                return false;
+            }
+        }
+        any
+    }
+
     /// Whether the ready record is a review of a tree this agent worked on.
     async fn is_own_work(&self, agent: &AgentName, record: &GroupRecord) -> bool {
         let Ok(ready) = ReadyRecord::decode(&record.payload) else {
@@ -726,13 +753,20 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Acks a ready record this agent may not take and forgets that it was
-    /// published, so the next sync publishes it again with a fresh stamp.
+    /// published, so a later sync publishes it again with a fresh stamp.
     async fn pass_over(&self, agent: &AgentName, stream: &str, record: GroupRecord) {
         if let Ok(ready) = ReadyRecord::decode(&record.payload) {
-            self.0.core.lock().await.live.remove(&ready.item);
+            let mut core = self.0.core.lock().await;
+            // A newer record for the item stays live.
+            if core.live.get(&ready.item) == Some(&(ready.tier, ready.stamp)) {
+                core.live.remove(&ready.item);
+                core.passed.insert(ready.item, Instant::now());
+            }
         }
         let ops = vec![Op::Ack(stream.to_owned(), agent.clone(), record.offset)];
-        self.run(ops).await.ok();
+        if let Err(e) = self.run(ops).await {
+            eprintln!("agents-tracker: could not ack a passed-over review: {e:#}");
+        }
     }
 
     /// Turns one delivery into a claim, or settles it when it no longer
@@ -1040,6 +1074,11 @@ impl<B: Broker> Tracker<B> {
                 .iter()
                 .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
                 .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
+                .filter(|(id, _)| {
+                    core.passed
+                        .get(*id)
+                        .is_none_or(|at| at.elapsed() >= self.0.settings.visibility)
+                })
                 .filter_map(|(id, it)| Some((id.clone(), self.0.settings.lane(it)?)))
                 .filter(|(id, tier)| core.live.get(id).is_none_or(|(t, _)| t != tier))
                 .collect()

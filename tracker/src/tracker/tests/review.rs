@@ -154,7 +154,7 @@ async fn an_agent_is_never_given_a_review_of_its_own_pull_request() {
 
 #[tokio::test]
 async fn an_author_polling_for_reviews_does_not_use_up_the_review() {
-    let (_fake, t) = opened().await;
+    let (fake, t) = opened().await;
     // More polls than Felix's attempt bound.
     for _ in 0..8 {
         let own = t
@@ -163,6 +163,12 @@ async fn an_author_polling_for_reviews_does_not_use_up_the_review() {
             .unwrap();
         assert!(not_claimed(&own));
     }
+    // The polls did not touch the record, or republish it.
+    let calls = fake.calls();
+    let on_lane = |p: &str| calls.iter().filter(|c| c.starts_with(p)).count();
+    assert_eq!(on_lane("publish work.review"), 1);
+    assert_eq!(on_lane("ack work.review"), 0);
+    assert_eq!(on_lane("nack work.review"), 0);
     let other = t
         .next_for(&agent("w2"), Duration::ZERO, &fast())
         .await
