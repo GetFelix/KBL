@@ -25,10 +25,15 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::Linked { .. }
         | WorkRecord::Updated { .. }
         | WorkRecord::LeftScope { .. }
+        | WorkRecord::PrStatus { .. }
+        | WorkRecord::SourceStalled { .. }
         | WorkRecord::Reopened { .. } => true,
         // The two items an admitted root starts with.
         WorkRecord::Proposed { work, .. } => matches!(work, WorkKind::Triage | WorkKind::Augment),
-        WorkRecord::Closed { why, .. } => matches!(why, CloseWhy::Completed | CloseWhy::Upstream),
+        WorkRecord::Closed { why, .. } => matches!(
+            why,
+            CloseWhy::Completed | CloseWhy::Upstream | CloseWhy::Merged
+        ),
         _ => false,
     }
 }
@@ -41,6 +46,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::Context { item, .. }
         | WorkRecord::Updated { item, .. }
         | WorkRecord::LeftScope { item }
+        | WorkRecord::PrStatus { item, .. }
         | WorkRecord::Reopened { item }
         | WorkRecord::Closed { item, .. } => vec![item],
         WorkRecord::Linked { item, to } => vec![item, to],

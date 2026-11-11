@@ -148,3 +148,29 @@ async fn an_empty_secret_accepts_nothing() {
     );
     assert!(!wake.reconcile.load(Ordering::SeqCst));
 }
+
+#[tokio::test]
+async fn check_suite_pull_request_and_review_events_wake_the_poll() {
+    let wake = Arc::new(Wake::default());
+    let app = router("s3cret".into(), wake.clone(), Duration::ZERO);
+    for (i, event) in ["check_suite", "pull_request", "pull_request_review"]
+        .into_iter()
+        .enumerate()
+    {
+        let body = format!(r#"{{"action":"completed","event":"{event}"}}"#);
+        let sig = signed(b"s3cret", body.as_bytes());
+        let delivery = format!("d{i}");
+        assert_eq!(
+            post_with(&app, Some(sig), &body, Some(&delivery)).await,
+            StatusCode::ACCEPTED
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            wake.notify.notified(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{event} did not wake the poll"));
+    }
+    // These events carry no data into the tracker and force no reconcile.
+    assert!(!wake.reconcile.load(Ordering::SeqCst));
+}

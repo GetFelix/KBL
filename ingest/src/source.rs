@@ -7,6 +7,7 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
+use agents_core::work::PrSnapshot;
 use serde::{Deserialize, Serialize};
 
 /// An issue in an upstream tracker: `GetFelix/felix#812` on GitHub.
@@ -101,13 +102,25 @@ pub(crate) struct Cursor {
     pub(crate) etags: BTreeMap<String, String>,
 }
 
-/// What changed since a cursor, and the cursor to resume from.
+/// What changed since the cursors, and the cursor each repo resumes from.
 #[derive(Debug, Default)]
 pub(crate) struct Changes {
     /// Oldest change first.
     pub(crate) issues: Vec<Issue>,
     pub(crate) comments: Vec<Comment>,
-    pub(crate) cursor: Cursor,
+    /// A cursor per repo read this poll. A repo that was not read keeps the
+    /// one it had, so it is absent here.
+    pub(crate) cursors: BTreeMap<String, Cursor>,
+    /// Repos that answered 403 or 404, with the status. Their cursors did not move.
+    pub(crate) denied: BTreeMap<String, u16>,
+}
+
+/// A pull request as upstream describes it now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PullRequest {
+    pub(crate) author: String,
+    /// None when the author is not one of ours: nothing more is read.
+    pub(crate) status: Option<PrSnapshot>,
 }
 
 /// What a fetch of one issue found.
@@ -174,12 +187,18 @@ pub(crate) trait Source: Send + Sync {
     /// imported back.
     fn own_logins(&self) -> Vec<String>;
 
-    /// Issues and comments changed since `cursor` in `repos`.
+    /// Issues and comments changed in `repos` since each repo's own cursor.
     fn changed(
         &self,
         repos: &[String],
-        cursor: &Cursor,
+        cursors: &BTreeMap<String, Cursor>,
     ) -> impl Future<Output = Result<Changes, SourceError>> + Send;
+
+    /// The pull request's phase, reviews and checks, or none if it is gone.
+    fn pull_request(
+        &self,
+        id: &IssueRef,
+    ) -> impl Future<Output = Result<Option<PullRequest>, SourceError>> + Send;
 
     fn fetch(&self, id: &IssueRef) -> impl Future<Output = Result<Fetched, SourceError>> + Send;
 

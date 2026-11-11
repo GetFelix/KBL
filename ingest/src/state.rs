@@ -7,6 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use agents_core::names::ItemId;
 use serde::{Deserialize, Serialize};
 
+use agents_core::work::PrSnapshot;
+
 use crate::source::{Closed, Cursor};
 
 /// One imported issue, by upstream id.
@@ -45,11 +47,25 @@ pub(crate) struct Tracked {
     /// Set on the old id of a transferred issue, which is not fetched again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) moved_to: Option<String>,
+    /// The pull request status last written, so an unchanged one is not written again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pr_status: Option<PrSnapshot>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct State {
-    pub(crate) cursor: Cursor,
+    /// Where each repo's polling resumes, so a repo that cannot be read
+    /// stalls only itself.
+    #[serde(default)]
+    pub(crate) cursors: BTreeMap<String, Cursor>,
+    /// The single cursor older versions kept for all repos. Read once: the
+    /// first poll gives it to every repo and drops it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) cursor: Option<Cursor>,
+    /// Repos last reported as unreadable, with the status, so the report is
+    /// written when it changes and not on every poll.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) stalled: BTreeMap<String, u16>,
     /// Upstream id (`owner/repo#n`) to the issue. A transferred issue has an
     /// entry under each id.
     pub(crate) items: BTreeMap<String, Tracked>,
@@ -58,6 +74,19 @@ pub(crate) struct State {
     /// Polls since the last reconcile.
     #[serde(default)]
     pub(crate) polls: u32,
+}
+
+impl State {
+    /// Moves the old shared cursor into one cursor per repo in `repos` that has none.
+    pub(crate) fn migrate(&mut self, repos: &[String]) {
+        if let Some(old) = self.cursor.take() {
+            for repo in repos {
+                self.cursors
+                    .entry(repo.clone())
+                    .or_insert_with(|| old.clone());
+            }
+        }
+    }
 }
 
 fn is_zero(n: &u8) -> bool {

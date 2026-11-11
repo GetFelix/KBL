@@ -158,6 +158,12 @@ impl Fake {
         self.push(by, Actor::Agent, record).expect("accepted");
     }
 
+    /// A person's record, which must be accepted.
+    pub(crate) fn person(&self, record: WorkRecord) {
+        self.push("gabriel", Actor::Person, record)
+            .expect("accepted");
+    }
+
     pub(crate) fn kinds(&self) -> Vec<&'static str> {
         self.0
             .lock()
@@ -189,6 +195,16 @@ impl Fake {
     pub(crate) fn saved_state(&self) -> crate::state::State {
         let i = self.0.lock().unwrap();
         serde_json::from_value(i.saved.clone().expect("saved").0).unwrap()
+    }
+
+    /// Saved state written by an older version, in its own form.
+    pub(crate) fn seed_saved(&self, state: Value) {
+        self.0.lock().unwrap().saved = Some((state, 1));
+    }
+
+    /// The saved state as JSON, exactly as written.
+    pub(crate) fn saved_raw(&self) -> Value {
+        self.0.lock().unwrap().saved.clone().expect("saved").0
     }
 
     /// Every later save is refused.

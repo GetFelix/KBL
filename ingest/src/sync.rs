@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use agents_core::content::Content;
 use agents_core::names::{ItemId, Key};
-use agents_core::work::{CloseWhy, WorkKind, WorkRecord};
+use agents_core::work::{CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord};
 use anyhow::Context;
 use sha2::{Digest, Sha256};
 
@@ -81,6 +81,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             Some(v) => serde_json::from_value(v).context("the saved ingest state is unreadable")?,
             None => State::default(),
         };
+        let mut state = state;
+        state.migrate(&self.settings.repos);
         let roots = self
             .tracker
             .roots()
@@ -96,7 +98,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         };
         let done = self.run(&mut poll, reconcile).await;
         // Saved on failure too, so imports already made are remembered; the
-        // cursor only moved if the poll finished.
+        // cursors only moved if the poll finished.
         let saved = self
             .tracker
             .save(
@@ -120,11 +122,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         let Changes {
             issues,
             comments,
-            cursor,
+            cursors,
+            denied,
         } = self
             .source
-            .changed(&self.settings.repos, &p.state.cursor)
+            .changed(&self.settings.repos, &p.state.cursors)
             .await?;
+        self.report_stalls(p, &denied).await?;
         for issue in issues {
             self.on_issue(p, &issue).await?;
         }
@@ -132,6 +136,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             self.on_comment(p, &c).await?;
         }
         self.retry_waiting(p).await?;
+        self.pull_requests(p).await?;
         p.state.polls += 1;
         if reconcile || p.state.polls >= self.settings.reconcile_every {
             p.state.polls = 0;
@@ -139,7 +144,45 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         self.link(p).await?;
         self.write_back(p).await?;
-        p.state.cursor = cursor;
+        p.state.cursors.extend(cursors);
+        Ok(())
+    }
+
+    /// Tells the tracker which repos cannot be read, when that changes. Only
+    /// those repos stall: the others' cursors move on.
+    async fn report_stalls(
+        &self,
+        p: &mut Poll,
+        denied: &BTreeMap<String, u16>,
+    ) -> Result<(), SourceError> {
+        let source = self.source.name().to_owned();
+        for (repo, code) in denied {
+            if p.state.stalled.get(repo) != Some(code) {
+                self.write(&WorkRecord::SourceStalled {
+                    source: source.clone(),
+                    repo: repo.clone(),
+                    status: Some(*code),
+                })
+                .await?;
+                p.state.stalled.insert(repo.clone(), *code);
+            }
+        }
+        let cleared: Vec<String> = p
+            .state
+            .stalled
+            .keys()
+            .filter(|r| !denied.contains_key(*r))
+            .cloned()
+            .collect();
+        for repo in cleared {
+            self.write(&WorkRecord::SourceStalled {
+                source: source.clone(),
+                repo: repo.clone(),
+                status: None,
+            })
+            .await?;
+            p.state.stalled.remove(&repo);
+        }
         Ok(())
     }
 
@@ -399,6 +442,87 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         Ok(())
     }
 
+    /// Reads the pull request each open root reports and records its phase,
+    /// reviews and checks when they changed. Only a request our credential
+    /// opened, in the repo of its issue, is read; see [`Self::may_write_to`].
+    async fn pull_requests(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let mut due: Vec<(String, IssueRef)> = p
+            .roots
+            .iter()
+            .filter(|(k, r)| {
+                !r.closed && p.state.items.get(*k).is_some_and(|t| t.moved_to.is_none())
+            })
+            .filter_map(|(k, r)| {
+                let pr = IssueRef::parse(r.pr.as_deref()?)?;
+                self.may_write_to(k, &pr).then(|| (k.clone(), pr))
+            })
+            .collect();
+        due.sort();
+        for (key, pr) in due {
+            let pull = match self.source.pull_request(&pr).await {
+                Ok(Some(pull)) => pull,
+                Ok(None) => continue,
+                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                // The name comes from an agent; one bad request must not stop the poll.
+                Err(e) => {
+                    eprintln!("agents-ingest: could not read {pr} for {key}: {e}");
+                    continue;
+                }
+            };
+            let ours = self.own.contains(&pull.author.to_ascii_lowercase());
+            let Some(status) = pull.status.filter(|_| ours) else {
+                eprintln!("agents-ingest: {pr} was not opened by us; not reading its state");
+                continue;
+            };
+            self.on_pull_request(p, &key, status).await?;
+        }
+        Ok(())
+    }
+
+    async fn on_pull_request(
+        &self,
+        p: &mut Poll,
+        key: &str,
+        status: PrSnapshot,
+    ) -> Result<(), SourceError> {
+        let Some(t) = p.state.items.get(key) else {
+            return Ok(());
+        };
+        let item = t.item.clone();
+        if t.pr_status.as_ref() != Some(&status) {
+            let record = WorkRecord::PrStatus {
+                item: item.clone(),
+                status: status.clone(),
+            };
+            match self.tracker.append(&record).await? {
+                Appended::Written => {}
+                Appended::Refused(why) if why == "duplicate" => {}
+                Appended::Refused(why) => {
+                    eprintln!(
+                        "agents-ingest: the state of the pull request for {key} was refused: {why}"
+                    );
+                    return Ok(());
+                }
+            }
+            if let Some(t) = p.state.items.get_mut(key) {
+                t.pr_status = Some(status.clone());
+            }
+        }
+        // A merge is the work done; the tracker records it and never merges.
+        if status.phase == PrPhase::Merged && p.roots.get(key).is_some_and(|r| !r.closed) {
+            self.write(&WorkRecord::Closed {
+                item,
+                why: CloseWhy::Merged,
+            })
+            .await?;
+            set_closed(p, key, true);
+            if let Some(t) = p.state.items.get_mut(key) {
+                t.closed_by_us = true;
+            }
+        }
+        Ok(())
+    }
+
     /// Fetches each open imported issue, which finds what no listing shows.
     async fn reconcile(&self, p: &mut Poll) -> Result<(), SourceError> {
         let keys: Vec<String> = p
@@ -638,6 +762,7 @@ fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
         write_back_tries: 0,
         closed_by_us: false,
         moved_to: None,
+        pr_status: None,
     }
 }
 

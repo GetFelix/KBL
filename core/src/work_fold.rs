@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, Evidence, RefusalReason, TIERS, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    Actor, CloseWhy, Evidence, MAX_PR_REF, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason,
+    TIERS, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
 };
 
 #[cfg(test)]
@@ -112,6 +113,18 @@ pub enum NeedsYou {
     NoOpenAttempt,
     /// The upstream issue left its intake rule and nobody holds the item.
     LeftScope,
+    /// A check on the pull request failed, which `Item::pr_status` names.
+    CheckFailed,
+}
+
+/// What an open pull request waits for, where the board words it specially.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PrWaits {
+    /// Checks pass and nobody has been asked to review.
+    CiGreenNoReviewer,
+    /// Approved and not merged: a person merges it.
+    ApprovedNotMerged,
 }
 
 impl Item {
@@ -218,6 +231,9 @@ pub struct Item {
     pub open_question: Option<u64>,
     pub branch: Option<String>,
     pub pr: Option<String>,
+    /// Upstream's view of `pr`, as the last `pr_status` said.
+    #[serde(default)]
+    pub pr_status: Option<PrSnapshot>,
     pub cost_micros: u64,
     pub context: BTreeMap<Key, u64>,
     pub paths: Vec<Path>,
@@ -271,6 +287,10 @@ pub enum Reject {
     CrossRoot,
     /// An answer names a question that is not the open one.
     NotOpenQuestion,
+    /// A pull request status names a request the item does not report.
+    WrongPr,
+    /// A text field is longer than a record keeps.
+    TooLong,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,6 +309,9 @@ pub struct State {
     pub budgets: BTreeMap<ItemId, Budget>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
+    /// `(source, repo)` to the HTTP status that stopped it being read.
+    #[serde(default)]
+    source_stalls: BTreeMap<(String, String), u16>,
     child_keys: BTreeSet<(Option<ItemId>, Option<Key>, Key)>,
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
     #[serde(skip)]
@@ -393,6 +416,14 @@ impl State {
         if it.left_scope && it.hold.is_none() {
             return Some(NeedsYou::LeftScope);
         }
+        if it.hold.is_none()
+            && it
+                .pr_status
+                .as_ref()
+                .is_some_and(|s| s.phase == PrPhase::Open && s.checks == PrChecks::Red)
+        {
+            return Some(NeedsYou::CheckFailed);
+        }
         let dropped = self.edges.iter().any(|(a, b)| {
             a == id
                 && self.items.get(b).is_some_and(|d| {
@@ -421,6 +452,26 @@ impl State {
             }
         }
         None
+    }
+
+    /// The wording an open pull request gets on the board, if it has one.
+    /// A red check outranks both: that item is in Needs you.
+    pub fn pr_waits(&self, id: &ItemId) -> Option<PrWaits> {
+        let it = self.items.get(id)?;
+        let s = it.pr_status.as_ref().filter(|s| s.phase == PrPhase::Open)?;
+        match (s.checks, s.review) {
+            (PrChecks::Red, _) => None,
+            (_, PrReview::Approved) => Some(PrWaits::ApprovedNotMerged),
+            (PrChecks::Green, PrReview::Unreviewed) => Some(PrWaits::CiGreenNoReviewer),
+            _ => None,
+        }
+    }
+
+    /// Repositories a source cannot read, with the HTTP status it got.
+    pub fn stalled_sources(&self) -> impl Iterator<Item = (&str, &str, u16)> {
+        self.source_stalls
+            .iter()
+            .map(|((source, repo), status)| (source.as_str(), repo.as_str(), *status))
     }
 
     /// Children of `id` that are not done.
@@ -551,6 +602,7 @@ impl State {
             open_question: None,
             branch: None,
             pr: None,
+            pr_status: None,
             cost_micros: 0,
             context: BTreeMap::new(),
             paths: Vec::new(),
@@ -758,6 +810,10 @@ impl State {
                     it.branch = branch.clone();
                 }
                 if pr.is_some() {
+                    // A status describes one request; a new one starts blank.
+                    if it.pr != *pr {
+                        it.pr_status = None;
+                    }
                     it.pr = pr.clone();
                 }
             }
@@ -1092,6 +1148,36 @@ impl State {
                 {
                     self.item_mut(&root)?.over_budget = true;
                 }
+            }
+            WorkRecord::PrStatus { item, status } => {
+                let it = self.upstream_sync(item, rec)?;
+                if it.pr.as_deref() != Some(status.pr.as_str()) {
+                    return Err(Reject::WrongPr);
+                }
+                if !status.fits() {
+                    return Err(Reject::TooLong);
+                }
+                if !status.consistent() {
+                    return Err(Reject::MissingField);
+                }
+                it.pr_status = Some(status.clone());
+            }
+            WorkRecord::SourceStalled {
+                source,
+                repo,
+                status,
+            } => {
+                if rec.actor != Actor::Tracker {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if source.len() > MAX_PR_REF || repo.len() > MAX_PR_REF {
+                    return Err(Reject::TooLong);
+                }
+                let key = (source.clone(), repo.clone());
+                match status {
+                    Some(code) => self.source_stalls.insert(key, *code),
+                    None => self.source_stalls.remove(&key),
+                };
             }
             WorkRecord::Unknown => {}
         }

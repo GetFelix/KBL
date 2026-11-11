@@ -1192,6 +1192,16 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
         WorkRecord::Reopened {
             item: item("theirs"),
         },
+        WorkRecord::PrStatus {
+            item: item("theirs"),
+            status: agents_core::work::PrSnapshot {
+                pr: "o/r#2".into(),
+                phase: agents_core::work::PrPhase::Merged,
+                review: agents_core::work::PrReview::Approved,
+                checks: agents_core::work::PrChecks::Green,
+                failing: None,
+            },
+        },
         WorkRecord::Linked {
             item: item("mine"),
             to: item("theirs"),

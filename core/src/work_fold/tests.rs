@@ -1777,3 +1777,188 @@ fn an_answer_is_taken_only_for_the_open_question() {
     l.person(answer_rec(open));
     assert_eq!(last_rejection(&l), Some(Reject::NotOpenQuestion));
 }
+
+// ---- pull request status and stalled sources ----
+
+use crate::work::{FailedCheck, PrChecks, PrPhase, PrReview, PrSnapshot};
+
+fn snapshot(pr: &str, checks: PrChecks, review: PrReview) -> PrSnapshot {
+    let failing = (checks == PrChecks::Red).then(|| FailedCheck {
+        name: "lint".into(),
+        url: "https://example.test/lint".into(),
+    });
+    PrSnapshot {
+        pr: pr.into(),
+        phase: PrPhase::Open,
+        review,
+        checks,
+        failing,
+    }
+}
+
+fn pr_status(item: &str, status: PrSnapshot) -> WorkRecord {
+    WorkRecord::PrStatus {
+        item: id(item),
+        status,
+    }
+}
+
+/// A root whose agent reported a pull request and finished.
+fn with_pr() -> Log {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(1),
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: id("r1"),
+            attempt: 1,
+            note: text("opened"),
+            branch: None,
+            pr: Some("GetFelix/felix#9".into()),
+        },
+    );
+    l.agent("w1", done("r1", 1, 0));
+    l
+}
+
+#[test]
+fn a_red_check_puts_the_item_in_needs_you_and_green_takes_it_out() {
+    let mut l = with_pr();
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::InReview));
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed),
+    ));
+    let s = fold(&l.0);
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::CheckFailed));
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
+    assert_eq!(s.pr_waits(&id("r1")), None);
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Unreviewed),
+    ));
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::InReview));
+    assert_eq!(s.pr_waits(&id("r1")), Some(PrWaits::CiGreenNoReviewer));
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Approved),
+    ));
+    assert_eq!(
+        fold(&l.0).pr_waits(&id("r1")),
+        Some(PrWaits::ApprovedNotMerged)
+    );
+    assert!(fold(&l.0).rejections.is_empty());
+}
+
+#[test]
+fn a_status_is_refused_when_it_is_not_for_the_reported_request_or_not_from_sync() {
+    let mut l = with_pr();
+    let good = snapshot("GetFelix/felix#9", PrChecks::Green, PrReview::Unreviewed);
+    // Another request than the one the item reports.
+    l.tracker(pr_status(
+        "r1",
+        snapshot("Evil/repo#1", PrChecks::Green, PrReview::Unreviewed),
+    ));
+    // An agent cannot write it, even for its own request.
+    l.agent("w1", pr_status("r1", good.clone()));
+    // Red without a failing check, and a failing check on green.
+    let mut bare = snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed);
+    bare.failing = None;
+    l.tracker(pr_status("r1", bare));
+    let mut stray = good.clone();
+    stray.failing = Some(FailedCheck {
+        name: "x".into(),
+        url: "u".into(),
+    });
+    l.tracker(pr_status("r1", stray));
+    // Text over the record limits.
+    let mut long = snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed);
+    long.failing.as_mut().unwrap().name = "n".repeat(201);
+    l.tracker(pr_status("r1", long));
+    let s = fold(&l.0);
+    let why: Vec<Reject> = s.rejections.iter().map(|r| r.why).collect();
+    assert_eq!(
+        why,
+        [
+            Reject::WrongPr,
+            Reject::ActorNotAllowed,
+            Reject::MissingField,
+            Reject::MissingField,
+            Reject::TooLong
+        ]
+    );
+    assert!(s.items[&id("r1")].pr_status.is_none());
+}
+
+#[test]
+fn a_held_item_is_not_moved_by_a_red_check_and_a_new_request_clears_the_status() {
+    let mut l = with_pr();
+    l.0.pop(); // the agent has not finished: it still holds the item
+    l.tracker(pr_status(
+        "r1",
+        snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed),
+    ));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.needs_you(&id("r1")), None);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Held));
+    // A different request resets what was known about the old one.
+    l.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: id("r1"),
+            attempt: 1,
+            note: text("new pr"),
+            branch: None,
+            pr: Some("GetFelix/felix#10".into()),
+        },
+    );
+    assert!(fold(&l.0).items[&id("r1")].pr_status.is_none());
+}
+
+#[test]
+fn only_the_tracker_reports_a_stalled_source() {
+    let mut l = Log::default();
+    let stall = |status| WorkRecord::SourceStalled {
+        source: "github".into(),
+        repo: "GetFelix/gone".into(),
+        status,
+    };
+    l.agent("w1", stall(Some(404)));
+    l.person(stall(Some(404)));
+    assert_eq!(fold(&l.0).stalled_sources().count(), 0);
+    l.tracker(stall(Some(404)));
+    assert_eq!(
+        fold(&l.0).stalled_sources().collect::<Vec<_>>(),
+        [("github", "GetFelix/gone", 404)]
+    );
+    l.tracker(stall(None));
+    assert_eq!(fold(&l.0).stalled_sources().count(), 0);
+}
+
+#[test]
+fn a_log_from_before_pull_request_status_folds_the_same_and_old_snapshots_still_load() {
+    // The fixed story has no new record kinds, so nothing about it may change.
+    let s = fold(&story().0);
+    assert!(s.items.values().all(|i| i.pr_status.is_none()));
+    assert_eq!(s.stalled_sources().count(), 0);
+    // A snapshot written before the fields existed reads back as the same state.
+    let mut v = serde_json::to_value(&s).unwrap();
+    v.as_object_mut().unwrap().remove("source_stalls");
+    for item in v["items"].as_object_mut().unwrap().values_mut() {
+        item.as_object_mut().unwrap().remove("pr_status");
+    }
+    assert_eq!(serde_json::from_value::<State>(v).unwrap(), s);
+    // A pre-change record line decodes to the record it always did.
+    let line = br#"{"kind":"progress","item":"r1","attempt":1,"note":{"text":"x"},"pr":"GetFelix/felix#9"}"#;
+    assert!(matches!(
+        WorkRecord::decode(line).unwrap(),
+        WorkRecord::Progress { .. }
+    ));
+}

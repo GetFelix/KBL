@@ -241,7 +241,9 @@ call.
 GitHub, then writes through the three `ingest` calls above under its own token,
 and it makes no model calls. `agents-ingest --config ingest.json` polls every
 `poll_seconds` (default 60); `--once` polls once. `--webhook-listen` adds an
-endpoint whose only effect is to wake the poll: it checks `X-Hub-Signature-256`
+endpoint whose only effect is to wake the poll (a `check_suite`,
+`pull_request` or `pull_request_review` event makes the next poll read the
+pull request states at once): it checks `X-Hub-Signature-256`
 against the secret named by `--webhook-secret-env`, and a `transferred` or
 `deleted` event also forces a reconcile. An empty secret is refused, a repeated
 `X-GitHub-Delivery` id is dropped, and wakes are at least
@@ -276,8 +278,13 @@ request, so a GitHub App installation token can be refreshed beside the worker
 
 What it does with GitHub:
 
-- **Cursor.** Issues and comments are listed `since` the saved cursor, oldest
-  first. Re-listing is safe, because each step is idempotent. A single-page
+- **Cursor.** Each repo has its own cursor. Issues and comments are listed
+  `since` that repo's cursor, oldest first. Re-listing is safe, because each
+  step is idempotent. A repo that answers 403 or 404 (removed, renamed, or the
+  App lost access) keeps its cursor and stalls only itself: the tracker gets a
+  `source_stalled` record, shown in Needs you for that source, and a second
+  record when the repo can be read again. State saved with the older single
+  cursor is read once: every repo starts from it. A single-page
   listing is requested with `If-None-Match`, so an unchanged repo costs no rate
   limit. A spent budget or `retry-after` makes every later call wait.
 - **Import once.** The item id is derived from the upstream id, and the fold
@@ -297,6 +304,17 @@ What it does with GitHub:
 - **Dropped with an open pull request.** After `closed` (dropped), the worker
   makes the pull request in the item's `pr` a draft and comments on it, once.
   It is the only write to GitHub.
+- **Pull request state.** Each poll reads the pull request in an open root's
+  `pr`, and writes a `pr_status` record when its phase, reviews or checks
+  changed. It reads only a request that a rule's repo names, in the repo of
+  the issue, opened by one of `own_logins`; any other is skipped (this is the
+  same check as the draft write-back). Reviews count only from the repo's
+  owners, members and collaborators, the latest per reviewer; a dismissed
+  review no longer counts. Checks are the check runs on the head commit. When
+  the credential may read the base branch's protection, only the required
+  checks count; otherwise every check does. A listing too long to read in one
+  page counts as pending, never green. A merged request also closes the root
+  as merged (`closed` with reason merged, which the ingest token may now write).
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 
@@ -546,7 +564,9 @@ The stages, left to right. An item sits in exactly one and moves right as
 - **In review** is an agent PR waiting on a person. A card shows the PR, its
   size (lines and files), CI state, review rounds, who it waits on and for how
   long. Two states have their own wording and action: "CI green, no reviewer"
-  (request a review) and "approved, not merged" (open it to merge). The tracker
+  (request a review) and "approved, not merged" (open it to merge). Both come
+  from the `pr_status` ingest records. A failed required check moves the item
+  to Needs you with the check's name and a link, unless an agent holds it. The tracker
   never merges. It records the merge it sees. A PR also carries the agent's
   handoff: what it changed, what it checked, what it is unsure of. The
   reviewer can mark the summary accurate or not.

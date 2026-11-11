@@ -183,6 +183,24 @@ fn every_record() -> Vec<WorkRecord> {
             cost_left_micros: 30_000_000,
             redos_per_item: 3,
         },
+        WorkRecord::PrStatus {
+            item: item("r1"),
+            status: PrSnapshot {
+                pr: "GetFelix/felix#9".into(),
+                phase: PrPhase::Open,
+                review: PrReview::Unreviewed,
+                checks: PrChecks::Red,
+                failing: Some(FailedCheck {
+                    name: "lint".into(),
+                    url: "https://github.com/GetFelix/felix/actions/runs/1".into(),
+                }),
+            },
+        },
+        WorkRecord::SourceStalled {
+            source: "github".into(),
+            repo: "GetFelix/gone".into(),
+            status: Some(404),
+        },
         WorkRecord::Refused {
             item: Some(item("r1")),
             op: "work_post".into(),
@@ -222,7 +240,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 27);
+    assert_eq!(kinds.len(), 29);
 }
 
 #[test]

@@ -29,5 +29,7 @@
 {"kind":"reopened","item":"r1"}
 {"kind":"attempt_closed","item":"r1","attempt":1}
 {"kind":"budget_set","root":"r1","items_left":20,"max_depth":3,"cost_left_micros":30000000,"redos_per_item":3}
+{"kind":"pr_status","item":"r1","status":{"pr":"GetFelix/felix#9","phase":"open","review":"unreviewed","checks":"red","failing":{"name":"lint","url":"https://github.com/GetFelix/felix/actions/runs/1"}}}
+{"kind":"source_stalled","source":"github","repo":"GetFelix/gone","status":404}
 {"kind":"refused","item":"r1","op":"work_post","reason":"budget"}
 {"kind":"refused","op":"work_post","reason":"limit"}
