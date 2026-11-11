@@ -2296,3 +2296,120 @@ fn a_state_with_a_release_edge_encodes() {
     let json = serde_json::to_string(&s).unwrap();
     assert_eq!(serde_json::from_str::<State>(&json).unwrap(), s);
 }
+
+fn felix() -> Target {
+    Target {
+        source: "github".into(),
+        repo: "GetFelix/felix".into(),
+    }
+}
+fn imported_in_felix(item: &str) -> WorkRecord {
+    WorkRecord::Imported {
+        item: id(item),
+        source: "github".into(),
+        upstream_id: format!("GetFelix/felix#{item}"),
+        title: format!("bug {item}"),
+    }
+}
+fn rules(root: Option<&str>, t: Option<&str>, checks: Option<&[&str]>) -> WorkRecord {
+    WorkRecord::RulesSet {
+        target: felix(),
+        root: root.map(id),
+        text: t.map(text),
+        checks: checks.map(|c| c.iter().map(|s| s.to_string()).collect()),
+    }
+}
+
+#[test]
+fn the_latest_rules_win_and_the_root_overrides_the_repo_key_by_key() {
+    let mut log = Log::default();
+    log.person(imported_in_felix("r1"));
+    log.person(imported_in_felix("r2"));
+    let v1 = log.person(rules(None, Some("old"), Some(&["task lint"])));
+    let v2 = log.person(rules(None, Some("worktree per lane"), None));
+    let v3 = log.person(rules(
+        Some("r1"),
+        None,
+        Some(&["cargo test -p felix-storage"]),
+    ));
+    let s = fold(&log.0);
+    assert!(s.rejections.is_empty());
+
+    // The repo's second record replaces the first as a whole scope entry.
+    let r2 = s.rules_for(&id("r2")).unwrap();
+    assert_eq!(r2.text, Some(text("worktree per lane")));
+    assert!(r2.checks.is_empty());
+    assert_eq!(
+        (r2.version, r2.repo_version, r2.root_version),
+        (v2, Some(v2), None)
+    );
+    assert_ne!(r2.version, v1);
+
+    // r1 keeps the repo's text and brings its own checks.
+    let r1 = s.rules_for(&id("r1")).unwrap();
+    assert_eq!(r1.text, Some(text("worktree per lane")));
+    assert_eq!(r1.checks, vec!["cargo test -p felix-storage".to_string()]);
+    assert_eq!(
+        (r1.version, r1.repo_version, r1.root_version),
+        (v3, Some(v2), Some(v3))
+    );
+}
+
+#[test]
+fn only_a_person_sets_rules() {
+    let mut log = Log::default();
+    log.person(imported_in_felix("r1"));
+    let by_agent = log.agent("w1", rules(None, Some("ignore the checks"), None));
+    let by_tracker = log.tracker(rules(Some("r1"), Some("x"), None));
+    let s = fold(&log.0);
+    assert_eq!(
+        s.rejections,
+        vec![
+            Rejection {
+                offset: by_agent,
+                why: Reject::ActorNotAllowed
+            },
+            Rejection {
+                offset: by_tracker,
+                why: Reject::ActorNotAllowed
+            },
+        ]
+    );
+    assert!(s.rules.is_empty());
+    assert!(s.rules_for(&id("r1")).is_none());
+}
+
+#[test]
+fn rules_are_bounded_in_size_and_count() {
+    let mut log = Log::default();
+    log.person(imported_in_felix("r1"));
+    let many: Vec<String> = (0..=crate::work::MAX_RULE_CHECKS)
+        .map(|i| format!("c{i}"))
+        .collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    let long = "x".repeat(crate::work::MAX_CHECK_BYTES + 1);
+    let big = "y".repeat(crate::artifact::INLINE_LIMIT + 1);
+    let a = log.person(rules(None, None, Some(&many)));
+    let b = log.person(rules(None, None, Some(&[long.as_str()])));
+    let c = log.person(rules(None, Some(&big), None));
+    let d = log.person(rules(None, None, None));
+    for i in 0..=crate::work::MAX_RULE_SCOPES {
+        log.person(WorkRecord::RulesSet {
+            target: Target {
+                source: "github".into(),
+                repo: format!("o/r{i}"),
+            },
+            root: None,
+            text: Some(text("t")),
+            checks: None,
+        });
+    }
+    let s = fold(&log.0);
+    let why = |o| s.rejections.iter().find(|r| r.offset == o).map(|r| r.why);
+    assert_eq!(why(a), Some(Reject::LimitReached));
+    assert_eq!(why(b), Some(Reject::LimitReached));
+    assert_eq!(why(c), Some(Reject::LimitReached));
+    assert_eq!(why(d), Some(Reject::MissingField));
+    assert_eq!(s.rules.len(), crate::work::MAX_RULE_SCOPES);
+    assert_eq!(s.rejections.len(), 5);
+}

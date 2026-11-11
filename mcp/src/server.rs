@@ -336,12 +336,19 @@ impl Server {
     }
 
     #[tool(
-        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time."
+        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time."
     )]
     async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
-        self.work()?
+        let reply = self
+            .work()?
             .next(a.wait_seconds.map(Duration::from_secs))
-            .await
+            .await?;
+        // Rules too long to sit in a record come back as an artifact; the agent gets the text.
+        let Ok(mut value) = serde_json::from_str::<Value>(&reply) else {
+            return Ok(reply);
+        };
+        self.inline_artifacts(&mut value).await;
+        Ok(value.to_string())
     }
 
     #[tool(

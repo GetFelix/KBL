@@ -36,7 +36,7 @@ operations as MCP tools in `felix-mcp` for agents:
 
 | Tool | Does |
 |---|---|
-| `work_next` | Claims the highest-priority ready item the agent can take |
+| `work_next` | Claims the highest-priority ready item the agent can take. The reply carries the [standing rules](#standing-rules) in effect |
 | `work_extend` | Keeps the claim while the agent works (sent by `felix-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency between items in one tree |
@@ -202,6 +202,7 @@ record if the fold accepts it:
 | `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
+| `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |
 
 Ready records carry a stamp. When the tracker sees an item become Ready it
 publishes a record, and a record that is not the newest for its item (a tier
@@ -408,6 +409,59 @@ in. An `existing` item must be in its own tree or in a repository its grants
 name, and an item it cannot see is refused as `unknown_item`, the same answer
 as one that does not exist. The plain `work_link` call still refuses another
 tree (`cross_root`). Cycles are refused across trees too.
+
+### Standing rules
+
+A repo has rules every agent on it must follow: where to work, where builds go,
+which git commands are off limits, what to run before a push. Without a place
+to keep them, each brief repeats them and drifts. The tracker stores them once
+and sends them with every claim, so a brief carries only the issue.
+
+Rules have two parts, each optional:
+
+- `text`: what the agent must follow, as inline text or, over 4 KiB, an
+  artifact the caller stored first, like any long text.
+- `checks`: commands to run before pushing, at most 20, each at most 500 bytes.
+  The agent runs them. The tracker never does.
+
+A person sets them with `POST /v1/work/rules {source, repo, root?, text?, checks?}`,
+which writes a `rules_set` record. Without `root` the rules are the repo's; with
+it they are that root's own. The latest record for a scope wins and its offset
+is the version. A record can set one part and leave the other alone. For an
+item, the root's parts override the repo's part by part: a root that sets only
+`checks` keeps the repo's `text`. At most 500 scopes have rules.
+
+Every claim reply, and so the `work_next` tool, carries what is in effect:
+
+```json
+"rules": {
+  "text": {"text": "One worktree per lane, off origin/main. ..."},
+  "checks": ["task lint", "cargo test -p felix-storage"],
+  "version": 412,
+  "repo_version": 380,
+  "root_version": 412
+}
+```
+
+`rules` is `null` when nothing is set. `version` is the newest record that
+contributes, so an agent that resumed a claim can tell its rules changed.
+Agents read rules and cannot write them: the fold takes `rules_set` from a
+person only, and the tracker refuses it from an agent or the ingest token.
+
+For example, the Felix workspace's lane rules, summarised:
+
+```json
+{
+  "source": "github",
+  "repo": "GetFelix/felix",
+  "text": {"text": "Work in your own git worktree off origin/main, named <lane>-<issue>. Export CARGO_TARGET_DIR (one per worktree) before any cargo or git command. Never git stash, never force-push, never run git in the main checkout. Commit with the personal email and no AI attribution lines. Pass -R GetFelix/<repo> on gh writes. A regression test must fail with the fix reverted. Docs ship in the same PR."},
+  "checks": ["task lint", "task docs:evidence", "cargo test -p <crate>"]
+}
+```
+
+The full file is longer: machine limits, scratch directories, review and merge
+steps. It would go in as an artifact, and a root can add its own `checks`, for
+example the one crate a fix touches, without repeating the rest.
 
 ### Kinds of work
 

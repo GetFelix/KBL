@@ -727,6 +727,15 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             }
             Ok(())
         }
+        WorkRecord::RulesSet { text, checks, .. } => {
+            if let Some(text) = text {
+                check_content("text", text)?;
+            }
+            for c in checks.iter().flatten() {
+                field("check", c)?;
+            }
+            Ok(())
+        }
         WorkRecord::Progress { note, .. } => check_content("note", note),
         WorkRecord::Step { output, .. } => check_content("output", output),
         WorkRecord::Edit { hunk, .. } => check_content("hunk", hunk),
