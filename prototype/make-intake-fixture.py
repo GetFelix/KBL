@@ -9,7 +9,12 @@ same morning with the review limit reached. fixture-work-burst.json is
 generated: a few hundred items, most of them arriving in the last hour, to
 check the view stays readable. Same input, same files.
 
-Both use display fields (seconds, short ids). The viewer moves to the real
+fixture-work-replay.json is the same morning plus two items with a recorded
+history for the decision replay: one that took two attempts with a fork at its
+third decision, and one that used up its redos. Their records are the new
+kinds: decision, edit, tool, human_input, forked_from.
+
+All use display fields (seconds, short ids). The viewer moves to the real
 work.events format when it reads from Felix.
 """
 import json
@@ -68,7 +73,7 @@ class Log:
         return key
 
     def propose(self, key, ago, tier, on=(), why="", dup=None):
-        d = {"tier": tier, "on": list(on), "why": why}
+        d = {"tier": tier, "on": list(on), "why": why, "agent": "w" + str(sum(map(ord, key)) % 3 + 1)}
         if dup:
             d["dup"] = dup
         self.ev(ago, "proposed", key, **d)
@@ -137,6 +142,19 @@ class Log:
     def write(self, name, title, scope, agents, cap=REVIEW_CAP):
         self.events.sort(key=lambda e: e["t"])
         records = [{"o": o, **e} for o, e in enumerate(self.events)]
+        ids = {r["id"]: r["o"] for r in records if "id" in r}
+
+        def resolve(v):
+            # "@name" points at the record with that id; offsets are known only after sorting.
+            if isinstance(v, str) and v.startswith("@"):
+                return ids[v[1:]]
+            if isinstance(v, list):
+                return [resolve(x) for x in v]
+            if isinstance(v, dict):
+                return {k: resolve(x) for k, x in v.items()}
+            return v
+
+        records = [resolve(r) for r in records]
         doc = {
             "title": title,
             "scope": scope,
@@ -277,7 +295,209 @@ def history(L, agents):
             done.append((key, t))
 
 
-def hand(capped=False):
+LEAD = {"understand": "Understood it as", "reproduce": "Reproduced it with", "cause": "Believed the cause is", "fix": "Chose to fix it by", "verify": "Checked it by"}
+
+
+def lower(t):
+    return t[0].lower() + t[1:]
+
+
+class Run:
+    """One attempt's records, in order. The working agent writes each decision's
+    so_far, what it chose and why; nothing downstream generates text."""
+
+    def __init__(self, L, key, attempt, agent, start_ago, prior=(), humans=()):
+        self.L, self.key, self.attempt, self.agent, self.ago, self.usd = L, key, attempt, agent, start_ago, 0.0
+        self.decs = list(prior)  # (id, group, chosen, so_far) for every decision on this path
+        self.humans = list(humans)  # (id, by, text, decisions before it) for every person's steer on this path
+        self.last_read = None
+
+    def _ev(self, gap_min, kind, **d):
+        self.ago -= gap_min * MIN
+        self.L.ev(self.ago, kind, self.key, attempt=self.attempt, **d)
+
+    def claim(self):
+        self.L.ev(self.ago, "claimed", self.key, agent=self.agent, run="r-" + self.key.replace("-", "")[:5] + str(self.attempt), attempt=self.attempt)
+
+    def tool(self, id, gap, tool, what, result, ok=True, usd=0.02):
+        self.usd += usd
+        self.last_read = id
+        self._ev(gap, "tool", id=id, agent=self.agent, tool=tool, what=what, result=result, ok=ok, usd=usd)
+
+    def decide(self, id, gap, group, q, options, chosen, why, cites, claims=(), usd=0.06):
+        self.usd += usd
+        entries = []
+        for i, (di, g, c, _) in enumerate(self.decs):
+            entries += [{"text": f"Steered: “{t}”", "cites": ["@" + hid], "by": by} for hid, by, t, n in self.humans if n == i]
+            entries.append({"text": f"{LEAD[g]} {lower(c)}.", "cites": ["@" + di], "dec": True})
+        entries += [{"text": f"Steered: “{t}”", "cites": ["@" + hid], "by": by} for hid, by, t, n in self.humans if n >= len(self.decs)]
+        decs = [i for i, e in enumerate(entries) if e.get("dec")][-3:]
+        so_far = [{k: v for k, v in e.items() if k != "dec"} for i, e in enumerate(entries) if not e.get("dec") or i in decs]
+        if not so_far:
+            so_far = [{"text": "Read the report and the code around it; no decision yet.", "cites": ["@" + self.last_read] if self.last_read else cites}]
+        self.decs.append((id, group, chosen, so_far))
+        self._ev(gap, "decision", id=id, agent=self.agent, group=group, q=q, options=options, chosen=chosen, why=why,
+                 cites=list(cites), so_far=so_far, claims=list(claims), usd=usd)
+
+    def humans_before(self, id):
+        k = next(i for i, d in enumerate(self.decs) if d[0] == id)
+        return [h for h in self.humans if h[3] <= k]
+
+    def before(self, id):
+        out = []
+        for d in self.decs:
+            if d[0] == id:
+                break
+            out.append(d)
+        return out
+
+    def so_far_at(self, id):
+        return next(d[3] for d in self.decs if d[0] == id)
+
+    def edit(self, id, gap, file, add, dele, decision):
+        self.usd += 0.04
+        self._ev(gap, "edit", id=id, agent=self.agent, file=file, add=add, **{"del": dele}, decision=decision, usd=0.04)
+
+    def pr(self, gap, n, add, dele, files, ci, reviewer, handoff):
+        self._ev(gap, "cost", usd=round(self.usd, 2))
+        self._ev(0.5, "pr_opened", agent=self.agent, pr=n, add=add, **{"del": dele}, files=files, ci=ci, reviewer=reviewer, handoff=handoff)
+
+
+def redo(L, key, ago, by, new, parent, fork_run, fork_id, note, instruction, strike=(), add=(), include_after=True, close=()):
+    """The reviewer's note, the handoff artifact (the fork decision's recorded
+    so_far plus the reviewer's edits, and the instruction), the fork record, and
+    the new attempt published to Ready. An agent claims it afterwards."""
+    narrative = [{**x, **({"struck": True} if i in strike else {})} for i, x in enumerate(fork_run.so_far_at(fork_id))]
+    narrative += [{"text": t, "cites": [], "added": True} for t in add]
+    hid = f"h{new}"
+    for n in close:  # only two attempts stay open, so starting this one closes another
+        L.ev(ago + 0.1 * MIN, "attempt_closed", key, attempt=n, reason=f"closed when attempt {new} started, so only two stay open")
+    L.ev(ago, "human_input", key, id=f"hi{new}", by=by, input="redo", attempt=new, text=note)
+    L.ev(ago - 0.2 * MIN, "handoff", key, id=hid, by=by, attempt=new, narrative=narrative, instruction=instruction, includeAfter=include_after, commit=f"c{new}{key[-3:]}e2")
+    L.ev(ago - 0.4 * MIN, "forked_from", key, by=by, attempt=new, **{"from": parent}, at="@" + fork_id, handoff="@" + hid)
+    L.ev(ago - 0.6 * MIN, "attempt_published", key, attempt=new, handoff="@" + hid, commit=f"c{new}{key[-3:]}e2")
+
+
+NOTE_A2 = "The broker is right: resume means after this offset. Look at how the client counts what it handled."
+NOTE_B2 = "Counting at the ack loses publishes that are still in flight. Dedupe by publish id instead."
+NOTE_B3 = "The limiter is not where the retry comes from. The gateway resends without an id."
+NOTE_B4 = "Stamping in the client breaks old clients. Stamp it at the gateway edge."
+
+
+def replay_items(L):
+    """gh-792: two attempts, forked at the third decision. gh-795: four attempts, three redos used."""
+    k = L.item("gh-792", "github", "#792", "Subscribe resumes one record early after a reconnect", 3 * DAY + HOUR)
+    L.triage(k, 3 * DAY, 1)
+
+    a1 = Run(L, k, 1, "w3", 30 * HOUR)
+    a1.claim()
+    a1.tool("a1s1", 3, "search", "resume_offset in the subscribe path", "7 hits in 3 files")
+    a1.tool("a1s2", 4, "read", "The reporter's client log", "Offset 4120 is delivered twice after the reconnect")
+    a1.decide("a1d1", 2, "understand", "What does the report show?", ["A duplicate delivery after a reconnect", "A lost record after a reconnect"],
+              "A duplicate delivery after a reconnect", "The log has offset 4120 twice and no gap.", ["@a1s2"])
+    a1.tool("a1s3", 5, "test", "reconnect_resume", "Failed: expected next offset 4121, got 4120", ok=False, usd=0.05)
+    a1.decide("a1d2", 2, "reproduce", "Can I reproduce it here?", ["A unit test on the resume path", "A cluster run that kills a connection"],
+              "A unit test on the resume path", "It fails the same way without a cluster, in two seconds.", ["@a1s3"])
+    a1.tool("a1s4", 4, "read", "resume_from in broker/subscribe.rs", "Replays from the offset the client sent")
+    a1.decide("a1d3", 3, "cause", "Where does the extra record come from?",
+              ["The broker replays from the offset the client sent, not the one after it", "The client sends the offset it handled, not the next one"],
+              "The broker replays from the offset the client sent, not the one after it",
+              "resume_from starts at the sent offset, so the last record the client saw comes back.", ["@a1s4", "@a1s3"])
+    a1.edit("a1e1", 6, "broker/subscribe.rs", 2, 1, "@a1d3")
+    a1.decide("a1d4", 2, "fix", "How should the broker fix it?", ["Add one to the sent offset", "Keep the next offset per subscription"],
+              "Add one to the sent offset", "It is the smallest change and the wire contract stays as written.", ["@a1s4"])
+    a1.edit("a1e2", 7, "broker/subscribe.rs", 3, 0, "@a1d4")
+    a1.tool("a1s5", 5, "test", "reconnect_resume and the subscribe tests", "Passed: 22 tests", usd=0.06)
+    a1.edit("a1e3", 4, "tests/support.rs", 12, 0, None)
+    a1.decide("a1d5", 2, "verify", "Is it ready for review?", ["Open the PR", "Run the cluster tests first"],
+              "Open the PR", "reconnect_resume and the subscribe tests pass.", ["@a1s5"], claims=["tests pass"])
+    a1.pr(6, 3140, 17, 1, 3, "pass", "dana",
+          {"changed": "Resumes from the offset after the one the client sent", "verified": "reconnect_resume and the subscribe tests pass", "unsure": ""})
+
+    redo(L, k, 5 * HOUR, "dana", 2, 1, a1, "a1d3",
+         NOTE_A2,
+         "Find where the client picks the offset it sends on resume and fix it there. Leave the broker alone.",
+         add=["Resume means after the offset sent. That is the wire contract, so the broker is right."])
+    a2 = Run(L, k, 2, "w5", 5 * HOUR - 2 * MIN, prior=a1.before("a1d3"), humans=a1.humans_before("a1d3") + [("hi2", "dana", NOTE_A2, len(a1.before("a1d3")))])
+    a2.claim()
+    a2.tool("a2s1", 4, "read", "client/ack.rs", "Acks offset N when the callback starts; resume sends N")
+    a2.decide("a2d3", 3, "cause", "Where does the extra record come from?",
+              ["The client resumes from the last handled offset, not the next one", "The broker replays too early"],
+              "The client resumes from the last handled offset, not the next one",
+              "Dana's note and client/ack.rs agree: resume has to send the handled offset plus one.", ["@a2s1"])
+    a2.edit("a2e1", 6, "client/ack.rs", 4, 2, "@a2d3")
+    a2.decide("a2d4", 2, "fix", "How should the client track it?", ["Send handled plus one when it resumes", "Keep the next offset at ack time"],
+              "Keep the next offset at ack time", "One place sets the next offset, so a retry cannot drift from it.", ["@a2s1"])
+    a2.edit("a2e2", 8, "client/ack.rs", 6, 2, "@a2d4")
+    a2.edit("a2e3", 4, "client/resume.rs", 3, 1, "@a2d4")
+    a2.tool("a2s2", 6, "test", "reconnect_resume and the client tests", "Passed: 36 tests", usd=0.07)
+    a2.decide("a2d5", 2, "verify", "Is it ready for review?", ["Open the PR", "Run the cluster tests first"],
+              "Open the PR", "reconnect_resume and the client tests pass after the last edit.", ["@a2s2"], claims=["tests pass"])
+    a2.pr(5, 3151, 28, 7, 3, "pass", "dana",
+          {"changed": "The client keeps the next offset at ack time and resumes from it", "verified": "reconnect_resume and 36 client tests pass", "unsure": "Did not run the cluster tests"})
+    # A question is a work item: it waits for whichever agent claims it, then answers with offsets.
+    L.ev(70 * MIN, "question_posted", k, id="q1", by="dana", attempt=2, text="Why not fix it in the broker?")
+    L.ev(35 * MIN, "question_answered", k, to="@q1", agent="w6",
+         text="The broker already resumes after the offset it is sent; the client sent the offset of the record it was still handling.",
+         cites=["@a1s4", "@a2s1"])
+
+    # An item that used up its redos.
+    k = L.item("gh-795", "github", "#795", "Rate limit counts a retried publish twice", 5 * DAY)
+    L.triage(k, 5 * DAY - HOUR, 1)
+
+    b1 = Run(L, k, 1, "w2", 4 * DAY)
+    b1.claim()
+    b1.tool("b1s1", 3, "search", "the per-tenant counter", "4 hits in 2 files")
+    b1.decide("b1d1", 2, "understand", "Which counter is wrong?", ["The per-tenant publish counter", "The global limiter"],
+              "The per-tenant publish counter", "Only tenants that retry go over their limit.", ["@b1s1"])
+    b1.tool("b1s2", 5, "test", "limiter_retry", "Failed: counted 2, expected 1", ok=False, usd=0.05)
+    b1.decide("b1d2", 3, "cause", "Why is the count high?", ["A retried publish is counted twice", "Batches are counted per record"],
+              "A retried publish is counted twice", "limiter_retry counts 2 for one publish sent twice.", ["@b1s2"])
+    b1.decide("b1d3", 3, "fix", "Where should it count?", ["Count at the ack, not at the receive", "Dedupe retries by publish id"],
+              "Count at the ack, not at the receive", "A publish that is never acked then costs nothing.", ["@b1d2"])
+    b1.edit("b1e1", 6, "gateway/limiter.rs", 9, 4, "@b1d3")
+    b1.tool("b1s3", 4, "test", "limiter_retry", "Passed", usd=0.04)
+    b1.decide("b1d4", 2, "verify", "Is it ready?", ["Open the PR", "Test with slow acks"], "Open the PR", "limiter_retry passes.", ["@b1s3"], claims=["tests pass"])
+    b1.pr(5, 3133, 31, 14, 2, "pass", "dana", {"changed": "Counts a publish at its ack", "verified": "limiter_retry passes", "unsure": ""})
+    redo(L, k, 3 * DAY + 20 * HOUR, "dana", 2, 1, b1, "b1d3",
+         NOTE_B2,
+         "Dedupe retried publishes by their publish id in the limiter.")
+    b2 = Run(L, k, 2, "w4", 3 * DAY + 20 * HOUR - 2 * MIN, prior=b1.before("b1d3"), humans=b1.humans_before("b1d3") + [("hi2", "dana", NOTE_B2, len(b1.before("b1d3")))])
+    b2.claim()
+    b2.decide("b2d3", 4, "fix", "Where should it count?", ["Dedupe by publish id in the limiter", "Dedupe in the gateway"], "Dedupe by publish id in the limiter",
+              "The limiter already sees the id on every send.", ["@b1d2"])
+    b2.edit("b2e1", 8, "gateway/limiter.rs", 14, 3, "@b2d3")
+    b2.decide("b2d4", 3, "verify", "Is it ready?", ["Open the PR"], "Open the PR", "The limiter now ignores a repeated id.", ["@b2e1"], claims=["tests pass"])
+    b2.pr(4, 3135, 44, 6, 3, "pass", "kim", {"changed": "The limiter ignores a repeated publish id", "verified": "", "unsure": "Did not run the tests"})
+    redo(L, k, 3 * DAY + 8 * HOUR, "kim", 3, 1, b1, "b1d2",
+         NOTE_B3,
+         "Find why a retry arrives without a publish id.", close=[2])
+    b3 = Run(L, k, 3, "w6", 3 * DAY + 8 * HOUR - 2 * MIN, prior=b1.before("b1d2"), humans=b1.humans_before("b1d2") + [("hi3", "kim", NOTE_B3, len(b1.before("b1d2")))])
+    b3.claim()
+    b3.decide("b3d2", 4, "cause", "Why is the count high?", ["The gateway retries without the id", "The client sends two publishes"], "The gateway retries without the id",
+              "Kim's note, and the retry path never copies the id.", ["@b1s1"])
+    b3.tool("b3s1", 5, "read", "gateway/retry.rs", "Builds a fresh request on a retry")
+    b3.decide("b3d3", 2, "fix", "Where should the id be set?", ["Stamp it before the first send", "Copy it onto the retry"], "Stamp it before the first send",
+              "Then every retry carries the same id.", ["@b3s1"])
+    b3.edit("b3e1", 7, "client/publish.rs", 8, 1, "@b3d3")
+    b3.tool("b3s2", 5, "test", "limiter_retry and gateway_retry", "Passed", usd=0.06)
+    b3.decide("b3d4", 2, "verify", "Is it ready?", ["Open the PR"], "Open the PR", "Both retry tests pass.", ["@b3s2"], claims=["tests pass"])
+    b3.pr(4, 3138, 52, 9, 3, "pass", "dana", {"changed": "Stamps the publish id in the client before the first send", "verified": "limiter_retry and gateway_retry pass", "unsure": ""})
+    redo(L, k, 2 * DAY + 3 * HOUR, "dana", 4, 3, b3, "b3d3",
+         NOTE_B4,
+         "Stamp the id where a publish enters the gateway.", close=[1])
+    b4 = Run(L, k, 4, "w2", 2 * DAY + 3 * HOUR - 2 * MIN, prior=b3.before("b3d3"), humans=b3.humans_before("b3d3") + [("hi4", "dana", NOTE_B4, len(b3.before("b3d3")))])
+    b4.claim()
+    b4.decide("b4d3", 4, "fix", "Where should the id be set?", ["Stamp it at the gateway edge"], "Stamp it at the gateway edge", "Dana's note: old clients never send one.", ["@b3d2"])
+    b4.edit("b4e1", 9, "gateway/ingress.rs", 11, 0, "@b4d3")
+    b4.tool("b4s1", 5, "test", "gateway_retry", "Failed: 2 of 9", ok=False, usd=0.05)
+    b4.decide("b4d4", 2, "verify", "Is it ready?", ["Open the PR", "Fix the two failures"], "Open the PR", "Most of gateway_retry passes.", ["@b4s1"], claims=["tests pass"])
+    b4.pr(4, 3141, 38, 5, 2, "fail", "dana", {"changed": "Stamps the publish id at the gateway edge", "verified": "", "unsure": "Two gateway_retry cases fail"})
+    L.ev(2 * DAY - 2 * HOUR, "attempt_rejected", k, by="dana", attempt=4, reason="Still counts a retry whose first send timed out")
+    L.ev(2 * DAY - 2 * HOUR - 5, "redo_limit", k)
+
+
+def hand(capped=False, replay=False):
     L = Log()
     agents = [f"w{i}" for i in range(1, 7)]
     history(L, agents)
@@ -427,8 +647,11 @@ def hand(capped=False):
         L.human(k, done + 30 * MIN, 8 + i)
         L.done(k, done, agent, 3000 + n, edited=i % 5 == 2)
 
-    name = "fixture-work-capped.json" if capped else "fixture-work.json"
-    L.write(name, "Review limit reached" if capped else "Morning intake", "GetFelix/felix, platform/Gateway, PLAT", agents)
+    if replay:
+        replay_items(L)
+    name = "fixture-work-replay.json" if replay else "fixture-work-capped.json" if capped else "fixture-work.json"
+    title = "Decision replay" if replay else "Review limit reached" if capped else "Morning intake"
+    L.write(name, title, "GetFelix/felix, platform/Gateway, PLAT", agents, cap=8 if replay else REVIEW_CAP)
     return L
 
 
@@ -489,4 +712,5 @@ def burst():
 
 hand()
 hand(capped=True)
+hand(replay=True)
 burst()

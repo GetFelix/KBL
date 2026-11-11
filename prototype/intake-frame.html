@@ -280,6 +280,212 @@
     .legend { display: none; }
     .rates { gap: 4px 14px; }
   }
+
+  /* ---------- decision replay ---------- */
+  .marks { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+  .mk { display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 6px; border-radius: 999px; font: 600 10.5px/1 "JetBrains Mono", monospace; border: 1px solid var(--line-strong); color: var(--muted); background: transparent; white-space: nowrap; }
+  .mk.paths { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 55%, var(--line)); }
+  .mk.handoff { color: var(--cyan); background: var(--cyan-soft); border-color: transparent; cursor: pointer; }
+  .mk.handoff:hover { border-color: var(--cyan); }
+  .mk.q { color: var(--amber); border-color: var(--amber); }
+  .mk.qa { color: var(--muted); }
+  button.mk { height: 18px; }
+
+  #v-replay { display: none; }
+  body.replaying footer, body.replaying #headline { display: none; }
+  .rhead { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .rhead .back { width: 30px; padding: 0; font-size: 15px; }
+  .rhead .tt { font-weight: 600; font-size: 15px; flex: 1 1 260px; min-width: 0; }
+  .rhead .meta { color: var(--muted); font-size: 12px; flex-basis: 100%; margin: -4px 0 0 40px; }
+  .rhead .ra { display: flex; gap: 6px; flex-wrap: wrap; margin-left: auto; align-items: center; }
+  .rhead .ra button.primary { border-color: var(--cyan); background: var(--cyan-soft); font-weight: 600; font-size: 12px; }
+  .redocount { font: 600 11.5px "JetBrains Mono", monospace; color: var(--muted); }
+  .redocount.full { color: var(--amber); }
+  .rgrid { display: flex; flex-direction: column; gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 14px; min-width: 0; }
+  .card > h3 { margin: 0 0 10px; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; display: flex; align-items: baseline; gap: 10px; }
+  .card > h3 .hint { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 500; font-size: 11.5px; color: var(--faint); }
+  .rcols { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 12px; align-items: start; }
+  #explain { position: sticky; top: 0; }
+  .banner.limit { margin-bottom: 12px; font-size: 12.5px; padding: 8px 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .banner.limit b { color: var(--text); }
+  .banner.limit .acts { margin: 0 0 0 auto; }
+
+  /* the path */
+  .path { position: relative; display: flex; flex-direction: column; gap: 4px; }
+  .forks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+  .forks path { fill: none; stroke: var(--cyan); stroke-width: 1.75; stroke-dasharray: 4 3; opacity: 0.85; }
+  .lane { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 0 8px; padding: 6px 0 7px; border-top: 1px solid var(--line); }
+  .lane:first-of-type { border-top: 0; }
+  .lane.off .dots, .lane.off .fk { opacity: 0.62; }
+  .lab { grid-row: 1 / span 2; text-align: left; height: auto; border: 0; padding: 2px 0; display: flex; flex-direction: column; gap: 3px; align-items: flex-start; min-width: 0; border-radius: 6px; }
+  .lab:hover { border: 0; }
+  .lab b { font-size: 12px; font-weight: 600; }
+  .lab.on b { color: var(--cyan); }
+  .lab .agent { font-size: 10.5px; padding: 0 5px; }
+  .out { font: 600 10px/1 "JetBrains Mono", monospace; padding: 3px 6px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); white-space: nowrap; }
+  .out.run, .out.pub { color: var(--cyan); border-color: var(--cyan); }
+  .out.rev { color: var(--on-cyan); background: var(--cyan); border-color: var(--cyan); }
+  .out.draft { border-style: dashed; color: var(--muted); }
+  .out.rej { color: var(--amber); border-color: var(--amber); }
+  .out.ok { color: var(--on-cyan); background: var(--cyan); border-color: var(--cyan); }
+  .dots { display: grid; grid-template-columns: repeat(var(--n), minmax(0, 1fr)); align-items: center; height: 30px; }
+  .cellp { position: relative; display: flex; justify-content: center; align-items: center; height: 30px; }
+  .cellp::before { content: ""; position: absolute; top: 14px; height: 2px; left: 0; right: 0; background: var(--line-strong); }
+  .cellp.first::before { left: 50%; }
+  .cellp.last::before { right: 50%; }
+  .cellp.alone::before { display: none; }
+  .dot { position: relative; z-index: 1; width: 20px; height: 20px; min-width: 20px; padding: 0; border-radius: 50%; border: 2px solid var(--cyan); background: var(--panel); font: 600 9.5px/1 "JetBrains Mono", monospace; color: var(--cyan); display: grid; place-items: center; }
+  .dot.past { background: var(--cyan); color: var(--on-cyan); }
+  .dot.off { border-color: var(--line-strong); color: var(--muted); }
+  .dot.past.off { background: var(--line-strong); color: var(--text); }
+  .dot.flag { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--amber); }
+  .dot.cur { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text); }
+  .dot.cur.flag { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--amber), 0 0 0 6px var(--panel), 0 0 0 7px var(--text); }
+  .dot.start { border-style: dashed; background: var(--panel); animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) { .dot.start { animation: none; } }
+  .term { position: relative; z-index: 1; width: 14px; height: 14px; border-radius: 3px; border: 2px solid var(--line-strong); background: var(--panel); }
+  .term.rev, .term.ok { background: var(--cyan); border-color: var(--cyan); }
+  .term.run, .term.pub { border-color: var(--cyan); }
+  .term.draft { border-style: dashed; border-color: var(--muted); }
+  .term.rej { background: var(--amber); border-color: var(--amber); }
+  .fk { margin-top: 2px; font-size: 11.5px; color: var(--muted); line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; padding-left: var(--fkpad, 0); grid-column: 2; }
+  .ft { background: var(--panel); box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .lane > * { position: relative; z-index: 1; }
+  .fk b { color: var(--text); font-weight: 600; }
+  .scrubrow { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .scrubrow .rs { position: relative; flex: 1 1 200px; min-width: 0; height: 26px; }
+  .scrubrow .rs input { position: absolute; inset: 0; width: 100%; margin: 0; accent-color: var(--cyan); }
+  .scrubrow .tk { position: absolute; top: 0; width: 2px; height: 6px; background: var(--faint); pointer-events: none; transform: translateX(-1px); }
+  .scrubrow .tk.d { background: var(--cyan); height: 8px; }
+  .scrubrow .tk.fl { background: var(--amber); }
+  .scrubrow .at { font: 500 12px "JetBrains Mono", monospace; color: var(--muted); }
+  .scrubrow .kh { flex-basis: 100%; font-size: 11.5px; color: var(--faint); }
+
+  /* explanation */
+  #explain .sec { margin-top: 12px; }
+  #explain .sec:first-of-type { margin-top: 0; }
+  #explain h4 { margin: 0 0 4px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+  #explain .sent { margin: 0 0 5px; font-size: 13px; line-height: 1.45; }
+  #explain .opts { margin: 4px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); }
+  #explain .opts li::before { content: "– "; }
+  #explain .opts li.pick { color: var(--text); }
+  #explain .opts li.pick::before { content: "✓ "; color: var(--cyan); }
+  #explain .idle { color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+  #explain .src { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); background: none; border-left: 0; border-right: 0; border-bottom: 0; border-radius: 0; font-size: 11.5px; color: var(--faint); }
+  #explain.dragging .sec, #explain.dragging .src { opacity: 0.25; }
+  #explain .drag { display: none; color: var(--muted); font-size: 12.5px; }
+  #explain.dragging .drag { display: block; margin-bottom: 8px; }
+  .who { font: 600 10.5px/1 "JetBrains Mono", monospace; color: var(--amber); border: 1px solid var(--amber); border-radius: 5px; padding: 1px 5px; margin-right: 3px; white-space: nowrap; vertical-align: 1px; }
+  .nar li .who { flex: none; margin: 3px 0 0; }
+  .cite { display: inline-block; height: 18px; padding: 0 5px; margin: 0 1px; vertical-align: 1px; font: 600 10.5px/16px "JetBrains Mono", monospace; color: var(--cyan); background: var(--cyan-soft); border: 1px solid transparent; border-radius: 5px; cursor: pointer; }
+  .cite:hover { border-color: var(--cyan); }
+  .cite.on { background: var(--cyan); color: var(--on-cyan); }
+  .stepcard { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--card); font-size: 12px; line-height: 1.45; }
+  .stepcard .k { font: 600 10.5px "JetBrains Mono", monospace; color: var(--cyan); }
+  .stepcard .r { color: var(--muted); }
+
+  /* story */
+  .tabsr { display: flex; gap: 4px; margin: -4px 0 10px; border-bottom: 1px solid var(--line); }
+  .tabsr button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; height: 30px; padding: 0 10px; color: var(--muted); font-weight: 600; }
+  .tabsr button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--cyan); }
+  .flagstrip { border: 1px solid var(--amber); background: var(--amber-soft); border-radius: 9px; padding: 8px 10px; margin-bottom: 12px; font-size: 12.5px; }
+  .flagstrip b { color: var(--amber); }
+  .flagstrip ul { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+  .flagstrip li { line-height: 1.4; }
+  .grp { margin-top: 12px; }
+  .grp:first-of-type { margin-top: 0; }
+  .grp > h4 { margin: 0 0 4px; display: flex; gap: 8px; align-items: baseline; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+  .grp > h4 span { font: 500 10.5px "JetBrains Mono", monospace; color: var(--faint); letter-spacing: 0; }
+  .dec { border: 1px solid var(--line); border-radius: 9px; background: var(--card); margin-bottom: 5px; }
+  .dec.off { opacity: 0.6; }
+  .dec.sel { border-color: var(--cyan); }
+  .dec summary { list-style: none; cursor: pointer; padding: 7px 9px; display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 1.35; }
+  .dec summary::-webkit-details-marker { display: none; }
+  .dec summary .an { font: 600 10px "JetBrains Mono", monospace; color: var(--muted); border: 1px solid var(--line-strong); border-radius: 4px; padding: 2px 4px; flex: none; }
+  .dec summary .ch { min-width: 0; flex: 1; }
+  .dec summary .ch b { font-weight: 600; }
+  .dec summary .ch small { display: block; color: var(--muted); font-size: 11.5px; }
+  .dec .body2 { padding: 0 9px 9px 9px; font-size: 12.5px; line-height: 1.45; display: flex; flex-direction: column; gap: 5px; }
+  .dec .body2 .why { color: var(--text); }
+  .dec .body2 ul { margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+  .dec .body2 li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+  .fl { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 999px; font: 600 10px/1 "JetBrains Mono", monospace; color: var(--amber); border: 1px solid var(--amber); white-space: nowrap; }
+  .fl.note { color: var(--on-amber); background: var(--amber); }
+  .orph { border: 1px dashed var(--amber); border-radius: 9px; padding: 6px 9px; margin-bottom: 5px; font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .rate { display: flex; gap: 6px; align-items: center; margin-top: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .rate .rated { color: var(--cyan); font-weight: 600; }
+  .qs { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+  .qs h4 { margin: 0 0 6px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; }
+  .qa { border: 1px solid var(--line); border-radius: 9px; background: var(--card); padding: 8px 10px; margin-bottom: 6px; font-size: 12.5px; line-height: 1.45; }
+  .qa .who { color: var(--muted); font-size: 11.5px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .qa .ans { margin-top: 5px; }
+  .qform { display: flex; gap: 6px; margin-top: 6px; }
+  .qform input { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text); font: 500 12.5px Inter, sans-serif; }
+  .qs .fine { margin-top: 5px; color: var(--faint); font-size: 11.5px; }
+
+  /* side by side */
+  .cmp { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .cmp .col2 { border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 10px 11px; min-width: 0; }
+  .cmp .col2.now { border-color: color-mix(in srgb, var(--cyan) 55%, var(--line)); }
+  .cmp .ch2 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; font-size: 13px; }
+  .cmp .ch2 .out { margin-left: auto; }
+  .cmp dl { margin: 8px 0 0; display: grid; grid-template-columns: 62px minmax(0, 1fr); gap: 4px 8px; font-size: 12px; }
+  .cmp dt { color: var(--muted); }
+  .cmp dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+  .cmp .diffbar { display: inline-flex; gap: 1px; vertical-align: middle; margin-left: 4px; }
+  .cmp .diffbar i { width: 5px; height: 9px; display: block; background: var(--cyan); }
+  .cmp .diffbar i.d { background: var(--amber); }
+  .cmp .pick { margin-top: 10px; }
+  .cmpnote { margin-top: 10px; font-size: 12.5px; line-height: 1.45; padding: 8px 10px; border-radius: 9px; background: var(--cyan-soft); }
+  .cmpnote b { font-weight: 600; }
+  .detail .cmp { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 8px; }
+  .detail .cmp dl { grid-template-columns: 48px minmax(0, 1fr); font-size: 11.5px; }
+  .detail .pl { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+  .detail .pl div { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  /* dialogs */
+  #modal { position: fixed; inset: 0; z-index: 50; display: none; background: rgba(2, 8, 14, 0.62); align-items: center; justify-content: center; padding: 16px; }
+  #modal.open { display: flex; }
+  .dlg { width: min(640px, 100%); max-height: 100%; overflow: auto; background: var(--panel); border: 1px solid var(--line-strong); border-radius: 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45); padding: 16px 18px 18px; }
+  .dlg h2 { margin: 0; font-size: 16px; }
+  .dlg .sub { margin: 3px 0 0; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+  .dlg h4 { margin: 14px 0 5px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); font-weight: 600; display: flex; gap: 8px; align-items: baseline; }
+  .dlg h4 span { text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--faint); font-size: 11.5px; }
+  .nar { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .nar li { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; background: var(--card); font-size: 12.5px; line-height: 1.45; }
+  .nar li .t { flex: 1; min-width: 0; outline: none; }
+  .nar li .t:focus { text-decoration: underline dotted var(--cyan); }
+  .nar li button.x { flex: none; width: 22px; height: 22px; padding: 0; font-size: 12px; color: var(--muted); }
+  .nar li.struck .t { text-decoration: line-through; color: var(--faint); }
+  .nar li.added { border-style: dashed; }
+  .nar li .tg { font: 600 10px "JetBrains Mono", monospace; color: var(--cyan); white-space: nowrap; }
+  .dlg textarea { width: 100%; min-height: 70px; resize: vertical; border-radius: 8px; border: 1px solid var(--line-strong); background: var(--card); color: var(--text); padding: 8px 10px; font: 500 12.5px/1.45 Inter, sans-serif; }
+  .dlg textarea:focus-visible, .nar .t:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
+  .dlg label.chk { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; line-height: 1.4; cursor: pointer; }
+  .dlg label.chk input { margin-top: 2px; accent-color: var(--cyan); }
+  .dlg .after { margin: 4px 0 0 24px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .dlg .cost { display: flex; gap: 8px 16px; flex-wrap: wrap; align-items: baseline; margin-top: 14px; padding: 9px 11px; border-radius: 9px; background: var(--cyan-soft); font-size: 12.5px; }
+  .dlg .cost b { font: 600 15px "JetBrains Mono", monospace; }
+  .dlg .cost span { color: var(--muted); }
+  .dlg .foot { display: flex; gap: 8px; margin-top: 14px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+  .dlg .foot .fine { margin-right: auto; font-size: 11.5px; color: var(--muted); flex: 1 1 200px; }
+  .dlg .foot button.primary { border-color: var(--cyan); background: var(--cyan); color: var(--on-cyan); font-weight: 600; }
+  .dlg .foot button.primary:disabled { background: transparent; color: inherit; border-color: var(--line-strong); }
+  @media (max-width: 1100px) {
+    .rcols { grid-template-columns: minmax(0, 1fr); }
+    #explain { position: static; order: -1; }
+  }
+  @media (max-width: 760px) {
+    .lane { grid-template-columns: 70px minmax(0, 1fr); gap: 0 6px; }
+    .rhead .meta { margin-left: 0; }
+    .rhead .ra { margin-left: 0; flex-basis: 100%; }
+    .cmp { grid-template-columns: minmax(0, 1fr); }
+    .card { padding: 10px 11px 12px; }
+    .dlg { padding: 14px 14px 16px; }
+    #modal { align-items: flex-end; padding: 8px; }
+  }
 </style>
 </head>
 <body>
@@ -300,7 +506,9 @@
   <div class="queue" id="v-queue"><div id="qlist"></div><aside id="side" tabindex="-1" aria-label="Selected item"></aside></div>
   <div id="v-board"><div class="board" id="board"><svg id="links" aria-hidden="true"></svg></div></div>
   <div id="v-metrics"></div>
+  <div id="v-replay"></div>
 </main>
+<div id="modal"></div>
 <section id="dock" aria-label="Selected item"></section>
 <details id="events"><summary>Recorded by your actions <b id="evn">0</b><span class="last" id="evlast"></span></summary><ol id="evlist"></ol></details>
 <footer>
@@ -396,6 +604,12 @@ function fold(cut) {
     for (const d of it.deps) if (!it.resolved.has(d) && !items.get(d)?.done) return 'blocked';
     return 'ready';
   };
+  const br = (it, n, t) => {
+    it.paths ??= [];
+    let b = it.paths.find((x) => x.n === n);
+    if (!b) { b = { n, parent: null, at: null, by: null, note: '', agent: null, state: 'running', pr: null, cost: 0, start: t, claimedAt: null, end: null, handoff: null, reason: '', run: null }; it.paths.push(b); }
+    return b;
+  };
   const settle = (it, t) => {
     const s = stageOf(it);
     if (s !== it.stage) {
@@ -420,13 +634,15 @@ function fold(cut) {
     // The first person-made record while an item waits on a person is the reaction time.
     if (r.by && r.kind !== 'snoozed' && it.waitSince != null && !it.reacted) { reactions.push({ kind: it.hwKind, dt: r.t - it.waitSince, key: it.key }); it.reacted = true; }
     switch (r.kind) {
-      case 'proposed': it.proposal = { tier: r.tier, on: r.on ?? [], why: r.why ?? '', dup: r.dup ?? null }; break;
+      case 'proposed': it.proposal = { tier: r.tier, on: r.on ?? [], why: r.why ?? '', dup: r.dup ?? null, agent: r.agent ?? null }; break;
       case 'triaged': it.tier = r.tier; break;
       case 'tier_changed': it.tier = r.tier; break;
       case 'linked': it.deps.push(r.on); (dependents.get(r.on) ?? dependents.set(r.on, []).get(r.on)).push(r.item); break;
       case 'asked': it.asked = r.text; break;
       case 'answered': it.asked = null; it.answer = r.text; break;
-      case 'claimed': it.holder = r.agent; it.lastAgent = r.agent; it.human = false; it.run = r.run; it.claimedAt = r.t; it.gaveUp = null; break;
+      case 'claimed': it.holder = r.agent; it.lastAgent = r.agent; it.human = false; it.run = r.run; it.claimedAt = r.t; it.gaveUp = null;
+        if (r.attempt != null) { const b = br(it, r.attempt, r.t); b.agent = r.agent; b.run = r.run; b.claimedAt ??= r.t; if (b.state === 'published') b.state = 'running'; }
+        break;
       case 'failed': it.holder = null; it.attempts = r.attempts; it.fails++; break;
       case 'gave_up': it.holder = null; it.gaveUp = r.reason; it.cause = r.cause ?? 'gave up'; it.msg = r.msg ?? ''; it.lastAgent = r.agent; break;
       case 'released': it.holder = null; break;
@@ -439,7 +655,9 @@ function fold(cut) {
       case 'unblocked': it.resolved.add(r.on); break;
       case 'pr_opened':
         it.pr = { n: r.pr, add: r.add, del: r.del, files: r.files, ci: r.ci, agent: r.agent, handoff: r.handoff ?? null, rated: null };
-        it.reviewer = r.reviewer ?? null; it.holder = null; it.changesReq = false; it.approved = false; it.hadPr = true; break;
+        it.reviewer = r.reviewer ?? null; it.holder = null; it.changesReq = false; it.approved = false; it.hadPr = true;
+        if (r.attempt != null) { const b = br(it, r.attempt, r.t); b.pr = it.pr; b.state = 'review'; b.end = r.t; }
+        break;
       case 'review_requested': it.reviewer = r.reviewer; break;
       case 'pr_updated': if (it.pr) { it.pr.ci = r.ci ?? 'running'; } it.changesReq = false; break;
       case 'ci': if (it.pr) it.pr.ci = r.state; break;
@@ -447,10 +665,29 @@ function fold(cut) {
       case 'approved': it.approved = true; break;
       case 'bot_review': it.bot = true; break;
       case 'summary_rated': if (it.pr) it.pr.rated = r.rating; break;
-      case 'rejected': it.closed = true; it.closedAt = r.t; it.reason = r.reason; it.closedAfterPr = !!it.pr; if (r.dup) it.dupOf = r.dup; break;
-      case 'done': it.done = true; it.doneAt = r.t; it.holder = null; it.by = r.agent ?? r.by; it.prNum = r.pr ?? it.pr?.n; if (r.edited) it.edited = true; break;
+      case 'human_input': if (r.input === 'redo') { const b = br(it, r.attempt, r.t); b.note = r.text; b.by = r.by; } break;
+      case 'handoff': br(it, r.attempt, r.t).handoff = r; break;
+      case 'forked_from': {
+        const b = br(it, r.attempt, r.t), p = br(it, r.from, r.t);
+        b.parent = r.from; b.at = r.at; b.by = r.by; b.state = 'published';
+        if (p.state === 'review') p.state = 'draft'; else if (p.state === 'running') p.state = 'stopped';
+        it.redos = (it.redos ?? 0) + 1; it.pr = null; it.holder = null; it.changesReq = false; it.approved = false; break;
+      }
+      case 'attempt_published': { const b = br(it, r.attempt, r.t); b.commit = r.commit; if (b.state !== 'running') b.state = 'published'; it.gaveUp = null; it.holder = null; break; }
+      case 'attempt_rejected': { const b = br(it, r.attempt, r.t); b.state = 'rejected'; b.reason = r.reason; break; }
+      case 'attempt_closed': { const b = br(it, r.attempt, r.t); b.state = 'closed'; b.reason = r.reason; break; }
+      case 'attempt_picked': for (const b of it.paths ?? []) { if (b.n === r.attempt) b.state = 'picked'; else if (['running', 'review', 'draft', 'published'].includes(b.state)) { b.state = 'closed'; b.reason = `attempt ${r.attempt} was picked`; } } break;
+      case 'redo_limit': it.holder = null; it.gaveUp = `${it.redos ?? 0} redos used`; it.cause = 'redo limit'; it.msg = 'The redo limit is reached. Take it yourself or split it into smaller items.'; break;
+      case 'split': it.closed = true; it.closedAt = r.t; it.reason = 'split into smaller items'; break;
+      case 'question_posted': (it.questions ??= []).push({ id: r.id, o: r.o, by: r.by, text: r.text, answer: null }); break;
+      case 'question_answered': { const q = (it.questions ?? []).find((x) => x.o === r.to); if (q) q.answer = { agent: r.agent, text: r.text, cites: r.cites ?? [] }; break; }
+      case 'story_rated': it.storyRated = r.rating; break;
+      case 'rejected': for (const b of it.paths ?? []) if (b.state === 'review') { b.state = 'rejected'; b.reason = r.reason; }
+        it.closed = true; it.closedAt = r.t; it.reason = r.reason; it.closedAfterPr = !!it.pr; if (r.dup) it.dupOf = r.dup; break;
+      case 'done': for (const b of it.paths ?? []) if (b.state === 'review') b.state = 'merged';
+        it.done = true; it.doneAt = r.t; it.holder = null; it.by = r.agent ?? r.by; it.prNum = r.pr ?? it.pr?.n; if (r.edited) it.edited = true; break;
       case 'reverted': it.reverted = true; break;
-      case 'cost': it.cost += r.usd; if (r.failed) it.failCost += r.usd; break;
+      case 'cost': it.cost += r.usd; if (r.failed) it.failCost += r.usd; if (r.attempt != null) br(it, r.attempt, r.t).cost += r.usd; break;
       case 'human': it.humanMin += r.min; break;
       default: break;
     }
@@ -585,19 +822,22 @@ function render() {
   binding = constraintOf(by, busy, agents, blockedRoots);
 
   for (const v of VIEWS) { $('v-' + v).style.display = v === view ? '' : 'none'; $('t-' + v).setAttribute('aria-selected', v === view); }
+  $('v-replay').style.display = view === 'replay' ? 'block' : 'none';
+  document.body.classList.toggle('replaying', view === 'replay');
   $('nav').classList.toggle('on', view === 'board');
   $('qn').textContent = queue.rows.length || '';
-  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Felix Agents: ${{ queue: 'My queue', board: 'Board', metrics: 'Metrics' }[view]}`;
+  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Felix Agents: ${{ queue: 'My queue', board: 'Board', metrics: 'Metrics', replay: 'Story' }[view]}`;
 
   renderStatus(busy, agents);
   if (view === 'queue') renderQueue();
   else if (view === 'board') renderBoard(chain, blockedRoots, busy, agents);
+  else if (view === 'replay') renderReplay();
   else renderMetrics();
   renderHeadline();
   renderDock(chain);
   renderEvents();
   renderFooter(busy, agents);
-  $('legend').innerHTML = [['j k', 'move'], ['enter', 'open'], ['a', 'accept'], ['p', 'tier'], ['r', 'retry'], ['x', 'reassign'], ['t', 'take'], ['n', 'note'], ['s', 'snooze'], ['z', 'park'], ['u', 'unblock'], ['v', 'review'], ['c', 'changes'], ['d', 'decline'], ['o', 'diff'], ['1 2 3', 'views']]
+  $('legend').innerHTML = [['j k', 'move'], ['enter', 'open'], ['a', 'accept'], ['p', 'tier'], ['r', 'retry'], ['x', 'reassign'], ['t', 'take'], ['n', 'note'], ['s', 'snooze'], ['z', 'park'], ['u', 'unblock'], ['y', 'story'], ['v', 'review'], ['c', 'changes'], ['d', 'decline'], ['o', 'diff'], ['1 2 3', 'views']]
     .map(([k, t]) => `<span><kbd>${k}</kbd>${t}</span>`).join('');
   const live = cut >= NOW;
   $('at').textContent = live ? '' : `${span(NOW - cut)} ago`;
@@ -680,9 +920,13 @@ function noteFor(it, stage) {
   }
   if (stage === 'triage') {
     const p = it.proposal;
-    if (!p) return { cls: '', pill: '', notes: ['not read by triage yet'] };
+    if (!p) return { cls: '', pill: '', notes: ['no triage proposal yet'] };
     const dup = p.dup ? `<span class="note dup">maybe a duplicate of <b>${esc(state.items.get(p.dup)?.ref ?? p.dup)}</b></span>` : '';
-    return { cls: '', pill: pillHtml(it, tierOf(it)), notes: [`why P${tierOf(it)}: ${esc(p.why)}`], extra: dup };
+    return { cls: '', pill: pillHtml(it, tierOf(it)), notes: [`why P${tierOf(it)}: ${esc(p.why)}`], extra: dup + (p.agent ? `<span class="note">proposed by <b>${esc(p.agent)}</b></span>` : '') };
+  }
+  if (stage === 'ready' && it.paths?.at(-1)?.handoff && it.paths.at(-1).state === 'published') {
+    const b = it.paths.at(-1);
+    return { cls: '', pill: pillHtml(it), notes: [`attempt ${b.n}, redone from attempt ${b.parent}`] };
   }
   if (stage === 'blocked') {
     const open = it.deps.filter((d) => !it.resolved.has(d) && !state.items.get(d)?.done).map((d) => state.items.get(d).ref);
@@ -692,6 +936,17 @@ function noteFor(it, stage) {
   if (stage === 'review') return { cls: '', pill: pillHtml(it), notes: [`<b>${esc(reviewState(it))}</b>`, esc(reviewSize(it))] };
   if (stage === 'done') return { cls: '', pill: '', notes: [`${esc(it.by)} <b>PR ${esc(it.prNum)}</b>`] };
   return { cls: '', pill: '', notes: [] };
+}
+
+// Small chips on a card: how many paths it took, an open handoff, a question.
+function marksHtml(it) {
+  const m = [];
+  if ((it.paths?.length ?? 0) > 1) m.push(`<span class="mk paths" title="Attempts that branched from each other">${it.paths.length} paths</span>`);
+  const cur = it.paths?.at(-1);
+  if (cur?.handoff && ['published', 'running'].includes(cur.state)) m.push(`<span class="mk handoff" role="button" tabindex="0" data-handoff="${cur.n}" data-hk="${esc(it.key)}" title="Open the handoff the new attempt starts from">redo · handoff</span>`);
+  const open = (it.questions ?? []).filter((q) => !q.answer).length;
+  if (open) m.push(`<span class="mk q">${open} ${open === 1 ? 'question' : 'questions'}</span>`);
+  return m.length ? `<span class="marks">${m.join('')}</span>` : '';
 }
 
 function rowHtml(it, stage, chain) {
@@ -704,7 +959,7 @@ function rowHtml(it, stage, chain) {
   const you = it.human ? '<span class="pill you">you</span>' : '';
   return `<button class="${cls}" data-k="${esc(it.key)}" data-stage="${stage}" aria-pressed="${it.key === selected}" title="${esc(it.title)}">` +
     `<span class="l1">${tagHtml(it)}<span class="ref">${esc(it.ref)}</span>${you}${ageHtml(it, stage)}</span>` +
-    `<span class="title">${esc(it.title)}</span>${l3}${more}</button>`;
+    `<span class="title">${esc(it.title)}</span>${l3}${more}${marksHtml(it)}</button>`;
 }
 
 function renderQueue() {
@@ -721,7 +976,7 @@ function renderQueue() {
     const age = cut - it.waitSince;
     return `<button class="${cls}" data-k="${esc(it.key)}" data-kind="${kind}" aria-pressed="${it.key === selected}">` +
       `<span class="l1"><span class="kind">${KIND_LABEL[kind]}</span>${tagHtml(it)}<span class="ref">${esc(it.ref)}</span>${it.tier != null ? pillHtml(it) : ''}` +
-      `<span class="age ${ageClass(stage, age)}">${span(age)}</span></span><span class="title">${esc(it.title)}</span><span class="note">${note}</span></button>`;
+      `<span class="age ${ageClass(stage, age)}">${span(age)}</span></span><span class="title">${esc(it.title)}</span><span class="note">${note}</span>${marksHtml(it)}</button>`;
   }).join('');
   if (rows.length > QUEUE_CAP) html += expanded.has('queue') ? `<button class="more" data-less="queue">show fewer</button>` : `<button class="more" data-more="queue">${rows.length - QUEUE_CAP} more</button>`;
   if (!rows.length) html = `<div class="empty">Nothing is waiting on you.</div>`;
@@ -763,7 +1018,7 @@ function renderBoard(chain, blockedRoots, busy, agents) {
         return `<div class="tierhead ${ageClass('ready', a)}"><span class="pill p${t}">P${t}</span><span>${tier.length}</span><span class="tc">oldest ${span(a)}</span></div>` + list(tier, 'ready', `ready:${t}`, TIER_CAP);
       }).join('');
     } else if (stage === 'needs') {
-      const groups = [['question', arr.filter((it) => it.asked)], ...['tests red', 'timeout', 'claim lost', 'gave up'].map((c) => [c, arr.filter((it) => !it.asked && it.cause === c)])];
+      const groups = [['question', arr.filter((it) => it.asked)], ...['redo limit', 'tests red', 'timeout', 'claim lost', 'gave up'].map((c) => [c, arr.filter((it) => !it.asked && it.cause === c)])];
       body = groups.filter(([, g]) => g.length).map(([c, g]) => `<div class="tierhead"><span class="mono">${c === 'question' ? 'questions' : esc(c)}</span><span>${g.length}</span></div>` + list(g, 'needs', `needs:${c}`, CAP)).join('');
     } else if (stage === 'blocked') {
       const roots = blockedRoots.slice(0, 3).map(({ it, holds }) =>
@@ -801,23 +1056,35 @@ function renderEvents() {
 
 // ---------- the selected item: facts and actions ----------
 
+function storyBlock(it) {
+  if (!hasHistory(it)) return '';
+  const flags = allFlags(it), decs = itemRecs(it.key).filter((r) => r.kind === 'decision').length;
+  const lanes = lanesOf(it);
+  const opens = it.paths.filter((b) => OPEN_ATT.includes(b.state));
+  const list = it.paths.length > 1
+    ? `<div class="pl">${it.paths.map((b) => `<div><b>Attempt ${b.n}</b><span class="agent">${esc(b.agent ?? '-')}</span><span class="out ${OUTCOME[b.state]?.[1] ?? ''}">${esc(outcomeOf(b))}</span>${b.pr ? `<span class="meta">PR ${b.pr.n}${b.state === 'draft' ? ' draft' : ''}</span>` : ''}${b.parent ? `<span class="meta">from decision ${lanes.find((l) => l.b.n === b.n).base}, ${esc(b.by)}</span>` : ''}${b.handoff ? `<button class="mk handoff" data-handoff="${b.n}" data-hk="${esc(it.key)}">redo · handoff</button>` : ''}</div>`).join('')}</div>` : '';
+  const q = (it.questions ?? []).map((x) => `<span class="mk ${x.answer ? 'qa' : 'q'}">question · ${x.answer ? 'answered' : 'open'}</span>`).join(' ');
+  return `<div class="blk"><h4>Story</h4>${plural(decs, 'decision')} across ${plural(it.paths.length, 'attempt')}${flags.length ? `, <span class="warn">${plural(flags.length, 'place')} where claims and steps disagree</span>` : ''}. <kbd>y</kbd> opens it. ${q}${list}${opens.length >= 2 ? compareHtml(it, true) : ''}</div>`;
+}
+
 function detailHtml(it, chain) {
   const stage = it.stage;
   const kv = (rows) => `<div class="kv">${rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join('')}</div>`;
   let body = '';
   if (stage === 'triage') {
     const p = it.proposal;
-    if (!p) body = `<div class="blk">The triage agent has not read this yet.</div>`;
+    if (!p) body = `<div class="blk">No triage work item has been completed for this yet.</div>`;
     else {
       const t = tierOf(it);
       const deps = p.on.map((k) => state.items.get(k)?.ref ?? k);
       const d = p.dup && state.items.get(p.dup);
-      body = `<div class="blk"><h4>Triage agent proposes</h4>${kv([['tier', `${pillHtml(it, t)}${pending.has(it.key) ? ' (edited)' : ''}`], ['why', esc(p.why)], ['after', deps.length ? esc(deps.join(', ')) : 'nothing']])}</div>` +
+      body = `<div class="blk"><h4>Proposed by ${esc(p.agent ?? 'an agent')} · a triage work item it completed</h4>${kv([['tier', `${pillHtml(it, t)}${pending.has(it.key) ? ' (edited)' : ''}`], ['why', esc(p.why)], ['after', deps.length ? esc(deps.join(', ')) : 'nothing']])}</div>` +
         (d ? `<div class="blk warn">Possible duplicate of <b>${esc(d.ref)}</b> (${esc(fx.sources[d.source].label)}): ${esc(d.title)}. <kbd>g</kbd> merges this into it.</div>` : '');
     }
   } else if (stage === 'needs') {
     body = it.asked
       ? `<div class="blk"><h4>Triage asks</h4>${esc(it.asked)}</div>`
+      : it.cause === 'redo limit' ? `<div class="blk"><h4>Redo limit reached · ${it.redos} of ${redoLimit()} used</h4>${esc(it.msg)}</div>`
       : `<div class="blk"><h4>${esc(it.cause)}${it.lastAgent ? ` · last agent ${esc(it.lastAgent)}` : ''}</h4>${it.msg ? `"${esc(it.msg)}"` : esc(it.gaveUp)}<br><span class="meta">${esc(it.gaveUp)}${it.fails ? `, ${plural(it.fails, 'failed attempt')}` : ''}. Two attempts, then a person.</span></div>`;
   } else if (stage === 'blocked') {
     const open = it.deps.filter((d) => !it.resolved.has(d) && !state.items.get(d)?.done).map((d) => state.items.get(d).ref);
@@ -832,6 +1099,7 @@ function detailHtml(it, chain) {
       (h ? `<div class="blk"><h4>Agent's handoff</h4>${kv([['changed', esc(h.changed)], ['verified', esc(h.verified)], ['unsure', h.unsure ? `<span class="unsure">${esc(h.unsure)}</span>` : 'nothing flagged']])}` +
         `${it.pr.rated ? `<div class="rated">Marked ${esc(it.pr.rated)}</div>` : ''}</div>` : '');
   } else if (stage === 'done') body = `<div class="blk">Merged by ${esc(it.by)} as <a href="#pr/${it.prNum}" data-open>PR ${esc(it.prNum)}</a>.</div>`;
+  body += storyBlock(it);
   const run = it.holder && it.run ? ` · <a href="#run/${esc(it.run)}" title="Opens the run in the swarm view at the claim">open run ${esc(it.run)}</a>` : '';
   let chainHtml = '';
   if (chain) {
@@ -843,7 +1111,7 @@ function detailHtml(it, chain) {
     if (!chain.up.size && !chain.down.size) chainHtml = `<div class="chain">No dependencies.</div>`;
   }
   const needsInput = (it.asked && stage === 'needs') ? 'Answer for the triage agent, then enter'
-    : (stage === 'needs' && it.gaveUp) ? 'Note for the next attempt (optional)' : (stage === 'held' && !it.human) ? 'Note to the running agent' : null;
+    : (stage === 'needs' && it.gaveUp && it.cause !== 'redo limit') ? 'Note for the next attempt (optional)' : (stage === 'held' && !it.human) ? 'Note to the running agent' : null;
   const input = needsInput ? `<input type="text" id="note" placeholder="${needsInput}" aria-label="${needsInput}" autocomplete="off">` : '';
   const live = cut >= NOW;
   const acts = actionsFor(it).map((a, i) => `<button class="${i === 0 && a.k !== 'o' ? 'primary' : ''}" data-act="${a.k}"${live ? '' : ' disabled'} title="${esc(a.title ?? a.label)}"><kbd>${a.k}</kbd>${esc(a.label)}</button>`).join('');
@@ -892,6 +1160,11 @@ function actionsFor(it) {
     }
     add('d', 'Reject', () => emit('rejected', it.key, { reason: 'declined at triage' }));
     snooze();
+  } else if (s === 'needs' && it.cause === 'redo limit') {
+    add('t', 'Take it yourself', () => emit('taken', it.key, { holder: viewer }), 'Mark it yours so no agent claims it');
+    add('l', 'Split it', () => emit('split', it.key, {}), 'Close this and split it into smaller items');
+    add('d', 'Close', () => emit('rejected', it.key, { reason: 'closed from needs you' }));
+    snooze();
   } else if (s === 'needs') {
     if (it.asked) {
       add('a', 'Answer', () => { const t = noteText(); if (!t) { $('note')?.focus(); return; } emit('answered', it.key, { text: t }); }, 'Send the answer; the item becomes ready');
@@ -926,13 +1199,18 @@ function actionsFor(it) {
     if (w === 'unassigned') add('v', 'Request review', () => emit('review_requested', it.key, { reviewer: fx.people.find((p) => p !== viewer) ?? viewer }), 'Ask a reviewer');
     if (w === 'reviewer' || w === 'unassigned') {
       add('a', 'Approve', () => emit('approved', it.key, {}));
-      add('c', 'Changes', () => emit('changes_requested', it.key, {}), 'Send the PR back to the agent with your comments');
+      add('c', 'Changes', () => {
+        if (hasHistory(it)) { openReplay(it.key); const d = decisionsOf(pathOf(it, replay.n)).at(-1); replay.idx = curPath().length - 1; openRedo(d, 'Request changes'); } else emit('changes_requested', it.key, {});
+      }, 'Send the PR back from its last decision; your comment becomes the note');
     }
     if (w === 'merge') add('m', 'Mark merged', () => emit('done', it.key, { agent: it.pr.agent, pr: it.pr.n }), 'Record the merge you did upstream; the tracker never merges');
-    add('d', 'Reject', () => emit('rejected', it.key, { reason: 'wrong approach' }));
+    add('d', 'Reject', () => {
+      if (it.paths?.length && (it.redos ?? 0) >= redoLimit()) { emit('attempt_rejected', it.key, { attempt: it.paths.at(-1).n, reason: 'wrong approach' }); emit('redo_limit', it.key, { by: undefined }); } else emit('rejected', it.key, { reason: 'wrong approach' });
+    });
     if (it.pr.handoff && !it.pr.rated) { add('+', 'Summary accurate', () => emit('summary_rated', it.key, { rating: 'accurate' })); add('-', 'Summary inaccurate', () => emit('summary_rated', it.key, { rating: 'inaccurate' })); }
     snooze();
   } else if (s === 'done' && it.prNum) add('o', 'Open PR', () => $('dock')?.querySelector('a[data-open]')?.click());
+  if (hasHistory(it)) A.splice(1, 0, { k: 'y', label: 'Story', title: 'Open the story, timeline and attempts', run: () => openReplay(it.key) });
   return A;
 }
 
@@ -1160,6 +1438,463 @@ function drawLinks(chain) {
   svg.innerHTML = out;
 }
 
+
+// ---------- decision replay ----------
+// Everything on screen here is a field some agent or person recorded. The
+// dashboard generates no text: the panel shows the nearest decision's so_far,
+// the decision and the why, and the handoff is that so_far plus edits.
+
+const GROUPS = [['understand', 'Understand'], ['reproduce', 'Reproduce'], ['cause', 'Cause'], ['fix', 'Fix'], ['verify', 'Verify']];
+const PATH_KINDS = new Set(['decision', 'edit', 'tool', 'human_input', 'forked_from']);
+const OPEN_ATT = ['running', 'review', 'draft', 'published'];
+const OUTCOME = {
+  running: ['running', 'run'], review: ['in review', 'rev'], draft: ['draft, kept', 'draft'], rejected: ['rejected', 'rej'], merged: ['merged', 'ok'],
+  published: ['ready', 'pub'], picked: ['picked', 'ok'], closed: ['closed', 'rej'], stopped: ['stopped', 'rej'],
+};
+const redoLimit = () => settings.redoLimit ?? 3;
+let replay = null;       // { key, n, idx, tab, released, dragging, cite }
+let dialog = null;       // the open redo or handoff dialog
+let prevView = 'queue';
+
+const itemRecsCache = new Map();
+function itemRecs(key) {
+  const ck = `${key}:${recs.length}`;
+  if (!itemRecsCache.has(ck)) itemRecsCache.set(ck, recs.filter((r) => r.item === key));
+  return itemRecsCache.get(ck);
+}
+const hasHistory = (it) => !!it && itemRecs(it.key).some((r) => r.kind === 'decision');
+const byOffset = (key, o) => itemRecs(key).find((r) => r.o === o);
+
+// The records one attempt stands on: its ancestors up to each fork, then its own.
+function pathOf(it, n) {
+  const all = itemRecs(it.key).filter((r) => r.attempt != null && PATH_KINDS.has(r.kind));
+  const chain = [];
+  for (let b = it.paths?.find((x) => x.n === n); b; b = b.parent ? it.paths.find((x) => x.n === b.parent) : null) chain.unshift(b);
+  const out = [];
+  chain.forEach((b, i) => { const next = chain[i + 1]; for (const r of all) if (r.attempt === b.n && (!next || r.o < next.at)) out.push(r); });
+  return out;
+}
+const decisionsOf = (path) => path.filter((r) => r.kind === 'decision');
+
+function lanesOf(it) {
+  return it.paths.map((b) => {
+    const path = pathOf(it, b.n);
+    const decs = decisionsOf(path);
+    const own = decs.filter((d) => d.attempt === b.n);
+    const base = decs.length - own.length + 1;
+    return { b, path, own, base, slots: own.map((d, i) => base + i) };
+  });
+}
+
+// Where a story and its steps disagree.
+function flagsOf(path) {
+  const out = [];
+  let lastEdit = null, lastTest = null;
+  for (const r of path) {
+    if (r.kind === 'edit') {
+      lastEdit = r.o;
+      if (!r.decision) out.push({ o: r.o, attempt: r.attempt, kind: 'edit', text: `Edit to ${r.file} (+${r.add} −${r.del}) has no decision behind it` });
+    } else if (r.kind === 'tool' && r.tool === 'test') lastTest = r;
+    else if (r.kind === 'decision' && r.claims?.includes('tests pass')) {
+      if (!lastTest || (lastEdit != null && lastTest.o < lastEdit)) out.push({ o: r.o, attempt: r.attempt, kind: 'tests', text: lastTest ? `Says the tests pass, but no test ran after the last edit (#${lastEdit})` : 'Says the tests pass, but no test was run' });
+      else if (!lastTest.ok) out.push({ o: r.o, attempt: r.attempt, kind: 'tests', text: `Says the tests pass, but the last test run failed (#${lastTest.o})` });
+    }
+  }
+  return out;
+}
+function allFlags(it) {
+  const seen = new Set(), out = [];
+  for (const l of lanesOf(it)) for (const f of flagsOf(l.path)) if (f.attempt === l.b.n && !seen.has(f.o)) { seen.add(f.o); out.push(f); }
+  return out.sort((a, b) => a.o - b.o);
+}
+
+function describe(key, o) {
+  const r = byOffset(key, o);
+  if (!r) return `#${o}`;
+  if (r.kind === 'decision') return `Decision: ${r.chosen}`;
+  if (r.kind === 'tool') return `${r.tool} · ${r.what}: ${r.result}`;
+  if (r.kind === 'edit') return `Edit ${r.file} +${r.add} −${r.del}`;
+  if (r.kind === 'human_input') return `${r.by}: ${r.text}`;
+  return r.kind;
+}
+const cite = (o) => `<button class="cite${replay?.cite === o ? ' on' : ''}" data-cite="${o}" title="${esc(replay ? describe(replay.key, o) : '')}">#${o}</button>`;
+const sentHtml = (s, upTo = Infinity) => {
+  const c = (s.cites ?? []).filter((x) => x <= upTo);
+  return c.length ? `<p class="sent">${s.by ? `<span class="who">${esc(s.by)}</span> ` : ''}${esc(s.text)} ${c.map(cite).join('')}</p>` : '';   // no offset, not shown
+};
+
+// The explanation at a step: the nearest decision at or before it, as recorded.
+function explainAt(key, n, idx, extra = []) {
+  const it = state.items.get(key);
+  const path = [...pathOf(it, n), ...extra];
+  const upto = path.slice(0, idx + 1);
+  const at = upto[upto.length - 1];
+  let d = null;
+  for (let i = upto.length - 1; i >= 0; i--) if (upto[i].kind === 'decision') { d = upto[i]; break; }
+  if (!d) return { none: true, at, last: at?.o ?? null, text: '', cites: [] };
+  const last = at.o;
+  const soFar = (d.so_far ?? []).filter((s) => (s.cites ?? []).some((c) => c <= last));
+  const right = [{ text: `${d.q} ${d.chosen}.`, cites: [d.o] }];
+  const step = at !== d ? { text: `Since then: ${describe(key, at.o)}.`, cites: [at.o] } : null;
+  const why = [{ text: d.why, cites: d.cites }];
+  const text = [...soFar, ...right, ...(step ? [step] : []), ...why].map((s) => s.text).join(' ');
+  return { d, at, last, soFar, right, step, why, options: d.options, text, cites: [...soFar, ...right, ...why].flatMap((s) => s.cites) };
+}
+
+const curRec = () => { const p = curPath(); return p[Math.max(0, Math.min(p.length - 1, replay.idx))]; };
+function curPath() { const it = state.items.get(replay.key); return pathOf(it, replay.n); }
+function nearestDecision() {
+  const p = curPath();
+  for (let i = Math.min(replay.idx, p.length - 1); i >= 0; i--) if (p[i].kind === 'decision') return p[i];
+  return p.find((r) => r.kind === 'decision') ?? null;
+}
+
+function openReplay(key, opts = {}) {
+  const it = state.items.get(key);
+  if (!hasHistory(it)) return false;
+  if (view !== 'replay') prevView = view;
+  const n = opts.n ?? it.paths.at(-1).n;
+  replay = { key, n, idx: 0, tab: opts.tab ?? 'story', released: false, dragging: false, cite: null };
+  replay.idx = curPath().length - 1;
+  if (opts.d) { const p = curPath(); let c = 0; replay.idx = p.findIndex((r) => r.kind === 'decision' && ++c === opts.d); replay.released = opts.released ?? true; }
+  selected = key;
+  view = 'replay';
+  render();
+  return true;
+}
+function closeReplay() { view = prevView === 'replay' ? 'queue' : prevView; dialog = null; render(); }
+
+function lanesHtml(it) {
+  const lanes = lanesOf(it);
+  const cols = Math.max(...lanes.map((l) => l.base + Math.max(l.own.length, 1)));
+  const path = curPath();
+  const upTo = path[Math.min(replay.idx, path.length - 1)]?.o ?? -1;
+  const flagSet = new Set(allFlags(it).filter((f) => f.kind === 'tests').map((f) => f.o));
+  const cur = nearestDecision();
+  const onPath = new Set(path.map((r) => r.o));
+  return lanes.map(({ b, own, base }) => {
+    const [label, cls] = OUTCOME[b.state] ?? [b.state, ''];
+    const cells = [];
+    const slots = own.length ? own.map((d, i) => ({ d, slot: base + i })) : [{ d: null, slot: base }];
+    slots.forEach(({ d, slot }, i) => {
+      const pos = `grid-column:${slot}`;
+      const cls2 = ['cellp', i === 0 ? 'first' : ''].join(' ');
+      if (!d) cells.push(`<div class="${cls2}" style="${pos}"><span class="dot start" title="Waiting for the first decision" aria-hidden="true"></span></div>`);
+      else {
+        const off = !onPath.has(d.o);
+        const k = ['dot', d.o <= upTo && !off ? 'past' : '', off ? 'off' : '', flagSet.has(d.o) ? 'flag' : '', cur && d.o === cur.o ? 'cur' : ''].join(' ');
+        cells.push(`<div class="${cls2}" style="${pos}"><button class="${k}" data-o="${d.o}" data-n="${b.n}" data-slot="${slot}" title="Decision ${slot}: ${esc(d.chosen)}" aria-label="Decision ${slot}, attempt ${b.n}: ${esc(d.chosen)}">${slot}</button></div>`);
+      }
+    });
+    const endCol = base + slots.length;
+    cells.push(`<div class="cellp last" style="grid-column:${endCol}"><span class="term ${cls}" title="${esc(label)}"></span></div>`);
+    const lab = `<button class="lab${b.n === replay.n ? ' on' : ''}" data-branch="${b.n}" aria-pressed="${b.n === replay.n}"><b>Attempt ${b.n}</b><span class="agent">${esc(b.agent ?? '-')}</span><span class="out ${cls}">${esc(label)}</span></button>`;
+    const fk = b.parent ? `<div class="fk" style="--fkpad:calc(${base - 1} / ${cols} * 100% + 50% / ${cols} - 6px)"><span class="ft"><b>${esc(b.by)}</b> steered at decision ${base}: “${esc((b.note || '').split('\n')[0])}”</span></div>` : '';
+    return `<div class="lane${path.some((r) => r.attempt === b.n) ? '' : ' off'}" data-n="${b.n}">${lab}<div class="dots" style="--n:${cols}">${cells.join('')}</div>${fk}</div>`;
+  }).join('');
+}
+
+function drawForks() {
+  const svg = $('forks');
+  if (!svg) return;
+  const box = $('path').getBoundingClientRect();
+  const it = state.items.get(replay.key);
+  let out = '';
+  for (const b of it.paths) {
+    if (!b.parent) continue;
+    const to = $('path').querySelector(`.lane[data-n="${b.n}"] .dots .cellp.first`);
+    const dot = $('path').querySelector(`.dot[data-o="${b.at}"]`);
+    if (!to || !dot) continue;
+    const a = dot.getBoundingClientRect(), c = to.getBoundingClientRect();
+    const x1 = a.left + a.width / 2 - box.left, y1 = a.bottom - box.top, x2 = c.left + c.width / 2 - box.left, y2 = c.top + c.height / 2 - box.top - 10;
+    const my = (y1 + y2) / 2;
+    out += `<path data-at="${b.at}" data-to="${b.n}" data-x1="${x1.toFixed(1)}" data-x2="${x2.toFixed(1)}" d="M${x1},${y1} C${x1},${my} ${x2},${my} ${x2},${y2}"></path>`;
+  }
+  svg.innerHTML = out;
+}
+
+const outcomeOf = (b) => OUTCOME[b.state]?.[0] ?? b.state;
+const money = (n) => `$${n.toFixed(2)}`;
+
+function storyHtml(it) {
+  const lanes = lanesOf(it);
+  const path = curPath();
+  const onPath = new Set(path.map((r) => r.o));
+  const decs = lanes.flatMap((l) => l.own.map((d, i) => ({ d, slot: l.slots[i], n: l.b.n }))).sort((a, b) => a.d.o - b.d.o);
+  const flags = allFlags(it);
+  const flagOf = new Map(flags.map((f) => [f.o, f]));
+  const editsOf = (d) => itemRecs(it.key).filter((r) => r.kind === 'edit' && r.decision === d.o);
+  const strip = flags.length
+    ? `<div class="flagstrip"><b>${plural(flags.length, 'place')} to look at hardest</b><ul>${flags.map((f) => `<li>Attempt ${f.attempt}: ${esc(f.text)} ${cite(f.o)}</li>`).join('')}</ul></div>` : '';
+  const grp = GROUPS.map(([g, name]) => {
+    const rows = decs.filter((x) => x.d.group === g);
+    if (!rows.length) return '';
+    return `<div class="grp"><h4>${name}<span>${rows.length}</span></h4>` + rows.map(({ d, slot, n }) => {
+      const f = flagOf.get(d.o);
+      const ed = editsOf(d);
+      return `<details class="dec${onPath.has(d.o) ? '' : ' off'}${replay.cite === d.o ? ' sel' : ''}" data-o="${d.o}"><summary><span class="an">A${n}</span>` +
+        `<span class="ch"><b>${esc(d.chosen)}</b><small>${esc(d.q)} · decision ${slot} · ${esc(d.agent)}</small></span>${f ? `<span class="fl">check</span>` : ''}${cite(d.o)}</summary>` +
+        `<div class="body2"><span class="why">${esc(d.why)}</span>` +
+        `<ul>${d.options.map((o) => `<li>${o === d.chosen ? 'Chose' : 'Considered'}: ${esc(o)}</li>`).join('')}</ul>` +
+        `<ul>${(d.cites ?? []).map((c) => `<li>Rests on ${cite(c)} ${esc(describe(it.key, c))}</li>`).join('')}${ed.map((e) => `<li>Carried out by ${cite(e.o)} ${esc(describe(it.key, e.o))}</li>`).join('')}</ul>` +
+        `${f ? `<span><span class="fl note">${f.kind === 'tests' ? 'claim vs steps' : 'no decision'}</span> ${esc(f.text)}</span>` : ''}</div></details>`;
+    }).join('') + `</div>`;
+  }).join('');
+  const orphans = flags.filter((f) => f.kind === 'edit').map((f) => `<div class="orph"><span class="fl note">no decision</span><span>Attempt ${f.attempt}: ${esc(f.text)}</span> ${cite(f.o)}</div>`).join('');
+  const qs = (it.questions ?? []).map((q) => `<div class="qa"><div class="who"><span class="mk ${q.answer ? 'qa' : 'q'}">question · ${q.answer ? 'answered' : 'waiting for an agent'}</span> ${esc(q.by)} asked ${cite(q.o)}</div><div>${esc(q.text)}</div>` +
+    (q.answer ? `<div class="ans">${esc(q.answer.text)} ${(q.answer.cites ?? []).map(cite).join('')}<div class="who">answered by <span class="agent">${esc(q.answer.agent)}</span></div></div>` : '') + `</div>`).join('');
+  const live = cut >= NOW;
+  const rated = it.storyRated;
+  return `${strip}${grp}${orphans ? `<div class="grp"><h4>Edits with no decision</h4>${orphans}</div>` : ''}` +
+    `<div class="rate">${rated ? `<span class="rated">You marked this story ${rated}.</span>` : `Does this story match the diff?`}` +
+    `<button data-rate="accurate"${live ? '' : ' disabled'}>Accurate</button><button data-rate="inaccurate"${live ? '' : ' disabled'}>Not accurate</button></div>` +
+    `<div class="qs"><h4>Questions</h4>${qs || '<div class="fine">No questions yet.</div>'}` +
+    `<form class="qform" id="qform"><input type="text" id="qtext" placeholder="Ask about this item, e.g. why not fix it in the client?" aria-label="Ask about this item" autocomplete="off"><button type="submit">Post</button></form>` +
+    `<div class="fine">A question is a work item. Whichever agent claims it answers from this item's history and cites offsets.</div></div>`;
+}
+
+function attemptCard(it, b, lanes, cmpWith) {
+  const lane = lanes.find((l) => l.b.n === b.n);
+  const [label, cls] = OUTCOME[b.state] ?? [b.state, ''];
+  const pr = b.pr;
+  const tot = (pr?.add ?? 0) + (pr?.del ?? 0);
+  const bars = pr ? Array.from({ length: 8 }, (_, i) => `<i class="${i < Math.round((pr.add / Math.max(1, tot)) * 8) ? '' : 'd'}"></i>`).join('') : '';
+  const from = b.parent ? `decision ${lane.base} of attempt ${b.parent}, ${esc(b.by)}` : 'the start';
+  const live = cut >= NOW && OPEN_ATT.includes(b.state);
+  return `<div class="col2${b.n === it.paths.at(-1).n ? ' now' : ''}" data-n="${b.n}"><div class="ch2">Attempt ${b.n}<span class="agent">${esc(b.agent ?? '-')}</span><span class="out ${cls}">${esc(label)}</span></div><dl>` +
+    `<dt>PR</dt><dd>${pr ? `${pr.n}${b.state === 'draft' ? ' (draft)' : ''}` : 'none yet'}</dd>` +
+    `<dt>Diff</dt><dd>${pr ? `+${pr.add} −${pr.del} · ${plural(pr.files, 'file')}<span class="diffbar">${bars}</span>` : '-'}</dd>` +
+    `<dt>Checks</dt><dd>${pr ? `CI ${esc(pr.ci)}` : '-'}</dd>` +
+    `<dt>Cost</dt><dd>${money(b.cost)}</dd>` +
+    `<dt>Time</dt><dd>${b.end && b.claimedAt ? span(b.end - b.claimedAt) : b.claimedAt ? `${span(cut - b.claimedAt)} so far` : 'not started'}</dd>` +
+    `<dt>From</dt><dd>${from}</dd>` +
+    `<dt>Run</dt><dd>${b.run ? `<a href="#run/${esc(b.run)}">${esc(b.run)}</a>` : '-'}${b.handoff ? ` · <button class="mk handoff" data-handoff="${b.n}" data-hk="${esc(it.key)}">redo · handoff</button>` : ''}</dd></dl>` +
+    `${cmpWith && live ? `<div class="acts pick"><button class="primary" data-pick="${b.n}" title="Close the other attempt with this as the reason">Pick this one</button></div>` : ''}</div>`;
+}
+function compareHtml(it, compact = false) {
+  const lanes = lanesOf(it);
+  const opens = it.paths.filter((b) => OPEN_ATT.includes(b.state));
+  const two = opens.length >= 2 ? opens.slice(-2) : it.paths.slice(-2);
+  if (two.length < 2) return '';
+  const pa = decisionsOf(pathOf(it, two[0].n)), pb = decisionsOf(pathOf(it, two[1].n));
+  let diff = '';
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if (pa[i]?.chosen !== pb[i]?.chosen) { diff = `<div class="cmpnote"><b>Where they differ, decision ${i + 1}.</b> Attempt ${two[0].n} chose “${esc(pa[i]?.chosen ?? 'nothing yet')}”. Attempt ${two[1].n} chose “${esc(pb[i]?.chosen ?? 'nothing yet')}”.${two[1].note ? ` ${esc(two[1].by)}'s note: “${esc(two[1].note)}”` : ''}</div>`; break; }
+  }
+  return `<div class="cmp">${two.map((b) => attemptCard(it, b, lanes, opens.length >= 2)).join('')}</div>${compact ? '' : diff}`;
+}
+
+function explainHtml() {
+  const it = state.items.get(replay.key);
+  const path = curPath();
+  const idx = Math.min(replay.idx, path.length - 1);
+  const rec = path[idx];
+  const head = `<h3>At this point<span class="hint">step ${idx + 1} of ${path.length}</span></h3>`;
+  if (!replay.released) return `${head}<div class="idle">Drag the scrubber and let go, or press <kbd>←</kbd> <kbd>→</kbd>. The panel shows what the agent recorded at the nearest decision. Nothing is generated.</div>`;
+  const ex = explainAt(replay.key, replay.n, idx);
+  if (ex.none) return `${head}<div class="idle">No decision has been recorded by step ${idx + 1} (#${rec.o}). Move to a later step.</div>`;
+  const li = (s) => sentHtml(s, ex.last);
+  const sec = (name, body) => `<div class="sec"><h4>${name}</h4>${body}</div>`;
+  const card = replay.cite != null ? `<div class="stepcard"><span class="k">#${replay.cite}</span> ${esc(describe(replay.key, replay.cite))}<div class="r">${esc(byOffset(replay.key, replay.cite)?.agent ?? byOffset(replay.key, replay.cite)?.by ?? '')}</div></div>` : '';
+  return `${head}<div class="drag">Release to see what was recorded here.</div>` +
+    sec('So far', ex.soFar.map(li).join('') || '<div class="idle">Nothing recorded yet.</div>') +
+    sec('Right now', ex.right.map(li).join('') + (ex.step ? li(ex.step) : '') + `<ul class="opts">${ex.options.map((o) => `<li class="${o === ex.d.chosen ? 'pick' : ''}">${esc(o)}</li>`).join('')}</ul>`) +
+    sec('Why', ex.why.map(li).join('')) + card +
+    `<div class="src">Written by <b>${esc(ex.d.agent)}</b> when it made decision #${ex.d.o}. Nothing after #${ex.last} is used.</div>`;
+}
+function refreshExplain() {
+  $('explain').innerHTML = explainHtml();
+  $('explain').classList.toggle('dragging', replay.dragging);
+  refreshDots();
+}
+function refreshDots() {
+  const path = curPath(), idx = Math.min(replay.idx, path.length - 1), upTo = path[idx]?.o ?? -1, cur = nearestDecision();
+  const onPath = new Set(path.map((r) => r.o));
+  for (const d of $('path').querySelectorAll('.dot[data-o]')) {
+    const o = +d.dataset.o;
+    d.classList.toggle('past', o <= upTo && onPath.has(o));
+    d.classList.toggle('cur', !!cur && o === cur.o);
+  }
+  const at = $('rat');
+  if (at) at.textContent = `step ${idx + 1} of ${path.length} · #${path[idx]?.o}`;
+}
+
+function renderReplay() {
+  const it = state.items.get(replay.key);
+  if (!it) { closeReplay(); return; }
+  const path = curPath();
+  const idx = Math.min(replay.idx, path.length - 1);
+  const used = it.redos ?? 0, limit = redoLimit();
+  const atLimit = used >= limit;
+  const live = cut >= NOW;
+  const nd = nearestDecision();
+  const flags = allFlags(it);
+  const flagAt = new Set(flags.map((f) => f.o));
+  const ticks = path.map((r, i) => (r.kind === 'decision' || flagAt.has(r.o)) ? `<i class="tk${r.kind === 'decision' ? ' d' : ''}${flagAt.has(r.o) ? ' fl' : ''}" style="left:calc(8px + (100% - 16px) * ${path.length > 1 ? i / (path.length - 1) : 0})"></i>` : '').join('');
+  const stageName = STAGE_NAME[it.stage] ?? it.stage;
+  const needsYou = it.cause === 'redo limit';
+  const acts = needsYou
+    ? `<div class="acts"><button class="primary" data-act="t"><kbd>t</kbd>Take it yourself</button><button data-act="l"><kbd>l</kbd>Split it</button></div>` : '';
+  const banner = atLimit
+    ? `<div class="banner limit"><span><b>Redo limit reached, ${used} of ${limit} used.</b> ${needsYou ? 'It is in Needs you with every attempt attached. Take it yourself or split it into smaller items.' : 'Another redo is not available.'}</span>${acts}</div>` : '';
+  const main = replay.tab === 'story' ? storyHtml(it) : (compareHtml(it) || `<div class="idle">This item has one attempt, so there is nothing to compare yet.</div>`);
+  $('v-replay').innerHTML = `<div class="rhead"><button class="back" data-back aria-label="Back" title="Back (esc)">←</button>${tagHtml(it)}<span class="ref mono">${esc(it.ref)}</span><b class="tt">${esc(it.title)}</b>` +
+    `<div class="ra"><span class="redocount${atLimit ? ' full' : ''}" id="redocount">redo ${used} of ${limit}</span>` +
+    `<button data-redo="here" ${atLimit || !live || !nd ? 'disabled' : ''} class="primary" title="${atLimit ? 'The redo limit is reached' : 'Start a new attempt from the decision at the scrubber'}"><kbd>r</kbd>Redo from decision ${nd ? lanesOf(it).flatMap((l) => l.own.map((d, i) => [d, l.slots[i]])).find(([d]) => d.o === nd.o)?.[1] ?? '' : ''}</button>` +
+    `<button data-redo="last" ${atLimit || !live || it.stage !== 'review' ? 'disabled' : ''} title="Send it back from the last decision. Your comment becomes the note.">Request changes</button></div>` +
+    `<div class="meta">${esc(stageName)} · ${plural(it.paths.length, 'path')} · ${money(it.cost)} across every attempt · ${plural(decisionsOf(path).length, 'decision')} on this path</div></div>` +
+    banner +
+    `<div class="rgrid"><section class="card"><h3>Timeline<span class="hint">who steered, where, and how each path ended</span></h3><div class="path" id="path"><svg class="forks" id="forks" aria-hidden="true"></svg>${lanesHtml(it)}</div>` +
+    `<div class="scrubrow"><div class="rs"><input type="range" id="rscrub" min="0" max="${path.length - 1}" step="1" value="${idx}" aria-label="Step through attempt ${replay.n}">${ticks}</div><span class="at" id="rat"></span>` +
+    `<span class="kh"><kbd>←</kbd> <kbd>→</kbd> step · <kbd>shift</kbd> jump to a decision · let go to explain</span></div></section>` +
+    `<div class="rcols"><section class="card"><div class="tabsr" role="tablist"><button role="tab" data-tab="story" aria-selected="${replay.tab === 'story'}">Story</button><button role="tab" data-tab="side" aria-selected="${replay.tab === 'side'}">Side by side${it.paths.length > 1 ? ` <span class="mono">${it.paths.length}</span>` : ''}</button></div>${main}</section>` +
+    `<aside class="card" id="explain" aria-live="polite">${explainHtml()}</aside></div></div>`;
+  refreshDots();
+  requestAnimationFrame(drawForks);
+}
+
+function stepReplay(dir, jump) {
+  const p = curPath();
+  let i = replay.idx + dir;
+  if (jump) while (i >= 0 && i < p.length && p[i].kind !== 'decision') i += dir;
+  if (i < 0 || i >= p.length) return;
+  replay.idx = i; replay.released = true; replay.dragging = false;
+  $('rscrub').value = i;
+  refreshExplain();
+}
+window.replayStep = (dir, jump = false) => stepReplay(dir, jump);
+
+// ---------- redo ----------
+
+const firstLine = (s) => String(s ?? '').split('\n')[0];
+function redoPlan(d) {
+  const it = state.items.get(replay.key);
+  const from = d.attempt;
+  const after = itemRecs(it.key).filter((r) => r.attempt === from && r.o >= d.o && (r.usd ?? 0) > 0).reduce((a, r) => a + r.usd, 0);
+  const est = after + 0.15;
+  const fb = it.paths.find((p) => p.n === from);
+  const later = decisionsOf(pathOf(it, from)).filter((x) => x.o > d.o && x.attempt === from);
+  const slot = decisionsOf(pathOf(it, from)).findIndex((x) => x.o === d.o) + 1;
+  return { it, from, est, after, later, slot, fb, total: it.cost + est };
+}
+// What the new agent is told: the decision's recorded so_far, plus every person's
+// steer on the path before the fork that the so_far does not already carry.
+function narrativeFor(it, d, useRecorded = true) {
+  const lines = (useRecorded ? d.so_far ?? [] : []).map((x) => ({ ...x }));
+  const cited = new Set(lines.flatMap((x) => x.cites ?? []));
+  for (const h of pathOf(it, d.attempt)) if (h.kind === 'human_input' && h.o < d.o && !cited.has(h.o)) lines.push({ text: `Steered: “${h.text}”`, cites: [h.o], by: h.by });
+  return lines;
+}
+window.narrativeFor = (key, o, useRecorded = true) => { const it = state.items.get(key); const d = itemRecs(key).find((r) => r.o === o); return narrativeFor(it, d, useRecorded); };
+window.handoffGaps = (key) => {
+  const it = state.items.get(key), out = [];
+  for (const h of itemRecs(key).filter((r) => r.kind === 'handoff')) {
+    const fk = itemRecs(key).find((r) => r.kind === 'forked_from' && r.attempt === h.attempt);
+    if (!fk) continue;
+    const have = new Set(h.narrative.flatMap((x) => x.cites ?? []));
+    const missing = pathOf(it, fk.from).filter((r) => r.kind === 'human_input' && r.o < fk.at && !have.has(r.o)).map((r) => r.o);
+    if (missing.length) out.push({ attempt: h.attempt, missing });
+  }
+  return out;
+};
+function openRedo(d, label = 'Redo from here') {
+  const it = state.items.get(replay.key);
+  if ((it.redos ?? 0) >= redoLimit() || cut < NOW) return false;
+  const lines = narrativeFor(it, d).map((s) => ({ text: s.text, cites: s.cites, by: s.by, struck: false, added: false, orig: s.text }));
+  dialog = { type: 'redo', d, label, lines, instruction: '', includeAfter: true };
+  drawModal();
+  return true;
+}
+function redoBody() {
+  const { it, from, est, later, slot, fb, total } = redoPlan(dialog.d);
+  const used = it.redos ?? 0;
+  const afterTxt = later.length
+    ? `After this point attempt ${from} chose ${later.map((x) => `“${esc(x.chosen)}”`).join(', then ')}${fb?.pr ? `, and opened PR ${fb.pr.n}` : ''}. It also gets your note as the reason it was sent back.`
+    : `Attempt ${from} recorded nothing after this decision.`;
+  return `<h2>${esc(dialog.label)}</h2><p class="sub">A new attempt starts at decision ${slot}, <b>${esc(dialog.d.q)}</b> Attempt ${from} stays exactly as it happened${fb?.pr ? `, and its PR ${fb.pr.n} becomes a draft you can compare` : ''}. This is a new attempt, not a rerun.</p>` +
+    `<h4>What the new agent is told<span>from what the agent recorded up to here. Strike, correct or add.</span></h4><ul class="nar" id="nar">${dialog.lines.map((l, i) => narLine(l, i)).join('')}</ul>` +
+    `<button id="addline" style="margin-top:6px;height:26px;font-size:12px">+ Add a line</button>` +
+    `<h4>Instruction</h4><textarea id="instr" placeholder="What should change? e.g. look at how the client counts what it handled." aria-label="Instruction for the new attempt">${esc(dialog.instruction)}</textarea>` +
+    `<h4>Hindsight</h4><label class="chk"><input type="checkbox" id="after"${dialog.includeAfter ? ' checked' : ''}><span>Include what attempt ${from} did afterwards and why it was sent back</span></label><div class="after">${dialog.includeAfter ? afterTxt : 'Left out. The new agent gets a clean second opinion.'}</div>` +
+    `<div class="cost"><span>Estimated cost</span><b>${money(est)}</b><span>${money(redoPlan(dialog.d).after)} spent after this point last time, plus the handoff. Counts against the same budget. The fix would total ${money(total)}.</span></div>` +
+    `<div class="foot"><span class="fine">Redo ${used + 1} of ${redoLimit()}.${(it.paths.filter((p) => OPEN_ATT.includes(p.state)).length >= 2) ? ' Only two attempts stay open, so the older one is closed.' : ''} It goes to Ready with this handoff attached, and an agent claims it like any other work.</span>` +
+    `<button data-close>Cancel</button><button class="primary" id="go" ${dialog.instruction.trim() ? '' : 'disabled'}>Hand off to a new attempt</button></div>`;
+}
+const narLine = (l, i) => `<li class="${l.struck ? 'struck' : ''}${l.added ? ' added' : ''}" data-i="${i}"><button class="x" data-strike="${i}" title="${l.struck ? 'Put this line back' : 'Strike this line'}" aria-label="${l.struck ? 'Restore line' : 'Strike line'}">${l.struck ? '↺' : '✕'}</button>` +
+  `${l.by ? `<span class="who">${esc(l.by)}</span>` : ''}<span class="t" contenteditable="${l.struck ? 'false' : 'true'}" role="textbox" aria-label="Narrative line ${i + 1}" data-i="${i}">${esc(l.text)}</span>${l.added ? '<span class="tg">you</span>' : l.text !== l.orig ? '<span class="tg">edited</span>' : (l.cites ?? []).map(cite).join('')}</li>`;
+
+function handoffBody(h, b) {
+  return `<h2>Handoff for attempt ${h.attempt}</h2><p class="sub">One artifact on this item. Written by ${esc(h.by)}, it is what the new agent starts from, with start commit <span class="mono">${esc(h.commit)}</span>.</p>` +
+    `<h4>Story up to the fork</h4><ul class="nar">${h.narrative.map((l) => `<li class="${l.struck ? 'struck' : ''}${l.added ? ' added' : ''}">${l.by ? `<span class="who">${esc(l.by)}</span>` : ''}<span class="t">${esc(l.text)}</span>${l.added ? '<span class="tg">added</span>' : (l.cites ?? []).map((c) => `<span class="tg">#${c}</span>`).join('')}${l.struck ? '<span class="tg">struck</span>' : ''}</li>`).join('')}</ul>` +
+    `<h4>Instruction</h4><p class="sent" style="margin:0">${esc(h.instruction)}</p>` +
+    `<h4>Hindsight</h4><p class="sent" style="margin:0">${h.includeAfter ? 'Includes what the first attempt did afterwards and why it was sent back.' : 'Left out. A clean second opinion.'}</p>` +
+    `<div class="foot"><span class="fine">Record #${h.o}${b?.run ? ` · run ${esc(b.run)}` : ''}</span><button data-close>Close</button></div>`;
+}
+function openHandoff(key, n) {
+  const h = itemRecs(key).find((r) => r.kind === 'handoff' && r.attempt === n);
+  if (!h) return;
+  const it = state.items.get(key);
+  dialog = { type: 'handoff', h, b: it?.paths?.find((p) => p.n === n) };
+  drawModal();
+}
+function drawModal() {
+  const m = $('modal');
+  if (!dialog) { m.className = ''; m.innerHTML = ''; return; }
+  m.className = 'open';
+  m.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${dialog.type === 'redo' ? 'Redo from here' : 'Handoff'}">${dialog.type === 'redo' ? redoBody() : handoffBody(dialog.h, dialog.b)}</div>`;
+  (dialog.type === 'redo' ? $('instr') : m.querySelector('[data-close]'))?.focus();
+}
+function closeModal() { dialog = null; drawModal(); }
+
+function doRedo(d, lines, instruction, includeAfter) {
+  const it = state.items.get(replay.key);
+  if ((it.redos ?? 0) >= redoLimit() || cut < NOW) return false;
+  const key = it.key, from = d.attempt;
+  const n = Math.max(...it.paths.map((p) => p.n)) + 1;
+  const opens = it.paths.filter((p) => OPEN_ATT.includes(p.state));
+  if (opens.length >= 2) {
+    const victim = opens.filter((p) => p.n !== from).sort((a, b) => a.n - b.n)[0] ?? opens[0];
+    emit('attempt_closed', key, { attempt: victim.n, reason: `closed when attempt ${n} started, so only two stay open` });
+  }
+  const commit = `c${n}${key.slice(-3)}${(d.o % 4096).toString(16)}`;
+  emit('human_input', key, { input: 'redo', attempt: n, text: firstLine(instruction) });
+  emit('handoff', key, { id: `h${n}`, attempt: n, narrative: lines.map(({ text, cites, by, struck, added }) => ({ text, cites, ...(by ? { by } : {}), ...(struck ? { struck: true } : {}), ...(added ? { added: true } : {}) })), instruction, includeAfter, commit });
+  const ho = recs.length - 1;
+  emit('forked_from', key, { attempt: n, from, at: d.o, handoff: ho });
+  emit('attempt_published', key, { attempt: n, handoff: ho, commit, by: undefined });
+  replay.n = n; replay.idx = 0; replay.released = false; replay.tab = 'story';
+  replay.idx = Math.max(0, curPath().length - 1);
+  if (params.get('autoclaim') !== '0') setTimeout(() => claimRedo(key, n), 2500);
+  closeModalQuiet();
+  render();
+  return true;
+}
+function closeModalQuiet() { dialog = null; drawModal(); }
+function claimRedo(key, n) {
+  state = state ?? fold(cut);
+  const it = fold(NOW).items.get(key);
+  const b = it?.paths?.find((p) => p.n === n);
+  if (!b || b.state !== 'published') return false;
+  const agent = nextAgent(it);
+  emit('claimed', key, { agent, attempt: n, run: 'r-' + key.replace('-', '').slice(0, 5) + n, by: undefined });
+  render();
+  return true;
+}
+window.claimRedo = claimRedo;
+
+function confirmRedo() {
+  const instruction = $('instr').value.trim();
+  if (!instruction) return false;
+  return doRedo(dialog.d, dialog.lines, instruction, dialog.includeAfter);
+}
+window.redoFrom = (decisionNo, instruction = 'Try again from here.') => {
+  const it = state.items.get(replay.key);
+  const d = decisionsOf(pathOf(it, replay.n))[decisionNo - 1];
+  if (!d || !openRedo(d)) return false;
+  dialog.instruction = instruction;
+  return doRedo(d, dialog.lines, instruction, true);
+};
+
 // ---------- input ----------
 
 function setView(v) { view = v; localSet('fa-view', v); render(); }
@@ -1209,6 +1944,68 @@ $('nav').addEventListener('click', (e) => {
   $('c-' + a.dataset.nav).scrollIntoView({ block: 'start' });
 });
 
+// Replay view and dialogs.
+document.addEventListener('click', (e) => {
+  const h = e.target.closest('[data-handoff]');
+  if (h) { e.stopPropagation(); e.preventDefault(); openHandoff(h.dataset.hk, +h.dataset.handoff); }
+}, true);
+$('modal').addEventListener('click', (e) => {
+  if (e.target === $('modal') || e.target.closest('[data-close]')) { closeModal(); return; }
+  const x = e.target.closest('[data-strike]');
+  if (x && dialog?.type === 'redo') { const l = dialog.lines[+x.dataset.strike]; l.struck = !l.struck; keepTyped(); return; }
+  if (e.target.closest('#addline') && dialog?.type === 'redo') { dialog.lines.push({ text: 'Add what you know', cites: [], struck: false, added: true, orig: '' }); keepTyped(); return; }
+  if (e.target.closest('#go')) confirmRedo();
+});
+function keepTyped() { if ($('instr')) dialog.instruction = $('instr').value; drawModal(); $('instr')?.setSelectionRange(dialog.instruction.length, dialog.instruction.length); }
+$('modal').addEventListener('input', (e) => {
+  if (!dialog || dialog.type !== 'redo') return;
+  if (e.target.id === 'instr') { dialog.instruction = e.target.value; $('go').disabled = !e.target.value.trim(); }
+  else if (e.target.classList.contains('t')) dialog.lines[+e.target.dataset.i].text = e.target.textContent;
+});
+$('modal').addEventListener('change', (e) => {
+  if (e.target.id === 'after') { dialog.includeAfter = e.target.checked; dialog.instruction = $('instr').value; drawModal(); }
+});
+$('v-replay').addEventListener('click', (e) => {
+  if (e.target.closest('[data-back]')) { closeReplay(); return; }
+  const c = e.target.closest('[data-cite]');
+  if (c) { replay.cite = replay.cite === +c.dataset.cite ? null : +c.dataset.cite; replay.released = true; if (c.closest('#explain')) refreshExplain(); else renderReplay(); return; }
+  const dot = e.target.closest('.dot[data-o]');
+  if (dot) {
+    const n = +dot.dataset.n, o = +dot.dataset.o;
+    if (n !== replay.n && !curPath().some((r) => r.o === o)) replay.n = n;
+    const p = curPath();
+    replay.idx = Math.max(0, p.findIndex((r) => r.o === o)); replay.released = true; renderReplay(); return;
+  }
+  const lab = e.target.closest('[data-branch]');
+  if (lab) { replay.n = +lab.dataset.branch; replay.idx = curPath().length - 1; replay.released = false; renderReplay(); return; }
+  const tab = e.target.closest('[data-tab]');
+  if (tab) { replay.tab = tab.dataset.tab; renderReplay(); return; }
+  const r = e.target.closest('[data-redo]');
+  if (r) { const d = r.dataset.redo === 'last' ? decisionsOf(curPath()).at(-1) : nearestDecision(); if (d) openRedo(d, r.dataset.redo === 'last' ? 'Request changes' : 'Redo from here'); return; }
+  const rate = e.target.closest('[data-rate]');
+  if (rate) { emit('story_rated', replay.key, { rating: rate.dataset.rate }); render(); return; }
+  const pick = e.target.closest('[data-pick]');
+  if (pick) { emit('attempt_picked', replay.key, { attempt: +pick.dataset.pick }); render(); return; }
+  const a = e.target.closest('[data-act]');
+  if (a) { act(a.dataset.act); }
+});
+$('v-replay').addEventListener('input', (e) => {
+  if (e.target.id !== 'rscrub') return;
+  replay.dragging = true; replay.released = false; replay.idx = +e.target.value;
+  $('explain').classList.add('dragging'); refreshDots();
+});
+$('v-replay').addEventListener('change', (e) => {
+  if (e.target.id !== 'rscrub') return;
+  replay.dragging = false; replay.released = true; replay.idx = +e.target.value; refreshExplain();
+});
+$('v-replay').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const t = $('qtext').value.trim();
+  if (!t || cut < NOW) return;
+  emit('question_posted', replay.key, { id: 'q' + recs.length, attempt: replay.n, text: t });
+  render();
+});
+
 function visibleKeys() {
   if (view === 'queue') return queue.rows.map((r) => r.it.key);
   return [...document.querySelectorAll('#board .row')].map((e) => e.dataset.k);
@@ -1224,6 +2021,8 @@ function step(dir) {
 
 document.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (dialog) { if (e.key === 'Escape') { closeModal(); e.preventDefault(); } return; }
+  if (e.target.matches?.('textarea, [contenteditable="true"]')) { if (e.key === 'Escape') e.target.blur(); return; }
   const typing = e.target.matches?.('input[type="text"]');
   if (typing) {
     if (e.key === 'Enter') {
@@ -1233,15 +2032,25 @@ document.addEventListener('keydown', (e) => {
     } else if (e.key === 'Escape') e.target.blur();
     return;
   }
-  if (e.target.matches?.('input')) return;
+  if (e.target.matches?.('input') && e.target.id !== 'rscrub') return;
   const k = e.key;
+  if (view === 'replay') {
+    if (k === 'ArrowRight' || k === 'ArrowLeft') { stepReplay(k === 'ArrowRight' ? 1 : -1, e.shiftKey); e.preventDefault(); return; }
+    if (k === 'Escape') { closeReplay(); return; }
+    if (k === 'r') { const d = nearestDecision(); if (d) openRedo(d); e.preventDefault(); return; }
+    if (k === 'y') return;
+    if (act(k)) e.preventDefault();
+    return;
+  }
   if (k === 'Escape') { $('srcpop')?.classList.remove('open'); if (selected) { selected = null; render(); } return; }
   if (k === '1' || k === '2' || k === '3') { setView(VIEWS[+k - 1]); return; }
   if (view === 'metrics') return;
   if (k === 'j') { step(1); e.preventDefault(); return; }
   if (k === 'k') { step(-1); e.preventDefault(); return; }
+  if (k === 'y' && selected && hasHistory(state.items.get(selected))) { openReplay(selected); return; }
   if (k === 'Enter') {
     if (!selected) step(0);
+    if (hasHistory(state.items.get(selected))) { openReplay(selected); return; }
     ($('note') ?? $('side'))?.focus();
     return;
   }
@@ -1285,7 +2094,34 @@ window.intakeInfo = () => ({
   })(),
   chain: selected ? [...chainOf(state, selected).all] : [],
 });
+window.openReplay = (key, o) => openReplay(key, o);
+window.explainAt = (key, n, o, extra = []) => {
+  const path = pathOf(state.items.get(key), n);
+  return explainAt(key, n, path.findIndex((r) => r.o === o), extra);
+};
+window.replayInfo = () => {
+  const it = state.items.get(replay?.key ?? selected);
+  if (!it) return null;
+  const forks = [...document.querySelectorAll('#forks path')].map((p) => ({ at: +p.dataset.at, to: +p.dataset.to, x1: +p.dataset.x1, x2: +p.dataset.x2 }));
+  const dot = (o) => { const e = document.querySelector(`#path .dot[data-o="${o}"]`); if (!e) return null; const r = e.getBoundingClientRect(); return { slot: +e.dataset.slot, x: r.left + r.width / 2, n: +e.dataset.n }; };
+  return {
+    view, redos: it.redos ?? 0, limit: redoLimit(), paths: it.paths?.map((b) => ({ n: b.n, parent: b.parent, at: b.at, state: b.state, by: b.by })) ?? [],
+    forks, dots: Object.fromEntries(it.paths.filter((b) => b.at != null).flatMap((b) => [b.at, ...it.paths.filter((x) => x.parent === b.n).map((x) => x.at)]).map((o) => [o, dot(o)])),
+    firstDot: Object.fromEntries(it.paths.map((b) => { const e = document.querySelector(`#path .lane[data-n="${b.n}"] .dots .cellp.first`); if (!e) return [b.n, null]; const r = e.getBoundingClientRect(); return [b.n, { x: r.left + r.width / 2, slot: +(e.style.gridColumn.split('/')[0] || 0) }]; })),
+    sentences: [...document.querySelectorAll('#explain .sent')].map((p) => ({ text: p.textContent, cites: p.querySelectorAll('.cite').length })),
+    explainText: $('explain')?.textContent ?? '', idx: replay?.idx, released: replay?.released,
+    flags: allFlags(it).map((f) => ({ o: f.o, kind: f.kind })), state: it.stage, cost: it.cost,
+    questions: (it.questions ?? []).map((q) => ({ answered: !!q.answer, cites: q.answer?.cites ?? [] })),
+    handoffs: itemRecs(it.key).filter((r) => r.kind === 'handoff').map((h) => h.attempt),
+    lastPathState: it.paths?.at(-1)?.state,
+  };
+};
 render();
+if (params.has('story')) {
+  openReplay(params.get('story'), { n: params.has('branch') ? +params.get('branch') : undefined, d: params.has('d') ? +params.get('d') : undefined, tab: params.get('tab') ?? 'story', released: params.get('released') !== '0' });
+  if (params.get('redo')) { const d = nearestDecision(); if (d && openRedo(d)) { dialog.instruction = params.get('note') ?? ''; drawModal(); } }
+  if (params.get('cite')) { replay.cite = +params.get('cite'); renderReplay(); }
+}
 </script>
 </body>
 </html>

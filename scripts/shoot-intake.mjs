@@ -18,6 +18,13 @@ const SHOTS = [
   ['dashboard-phone', 'fixture-work.json', 'view=queue&select=gh-790', 390, 844, 'dark'],
   ['dashboard-phone-board', 'fixture-work-capped.json', 'view=board', 390, 844, 'light'],
   ['dashboard-phone-metrics', 'fixture-work.json', 'view=metrics', 390, 844, 'dark'],
+  ['replay-story', 'fixture-work-replay.json', 'story=gh-792&released=0&autoclaim=0', 1280, 1480, 'dark'],
+  ['replay-scrub', 'fixture-work-replay.json', 'story=gh-792&d=3&autoclaim=0', 1280, 1000, 'dark'],
+  ['replay-redo', 'fixture-work-replay.json', 'story=gh-792&d=3&redo=1&autoclaim=0&note=Fix%20it%20where%20the%20client%20picks%20the%20offset%2C%20not%20in%20the%20broker.', 1280, 900, 'dark'],
+  ['replay-side-by-side', 'fixture-work-replay.json', 'story=gh-792&tab=side&autoclaim=0', 1280, 1000, 'dark'],
+  ['replay-limit', 'fixture-work-replay.json', 'story=gh-795&released=0&autoclaim=0', 1280, 1000, 'dark'],
+  ['replay-queue-light', 'fixture-work-replay.json', 'view=queue&select=gh-792&autoclaim=0', 1280, 900, 'light'],
+  ['replay-phone', 'fixture-work-replay.json', 'story=gh-792&d=3&autoclaim=0', 390, 1700, 'dark'],
 ];
 const server = await serve(fileURLToPath(new URL('..', import.meta.url)));
 const page = await launch();
