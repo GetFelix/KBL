@@ -553,6 +553,9 @@ once, and `docs/art.md` describes what the frame draws.
 replay nobody can read proves nothing, so the look is fixed before anything is
 built behind it.
 
+**Beyond the demo.** [work-tracker.md](work-tracker.md) proposes a work tracker
+for coding agents built on the same pieces, to follow M4.
+
 ## Risks, and what this surfaces in Felix
 
 - **Clocks.** Lease and presence expiry run on the cache leader's clock. A leader whose clock jumps forward expires entries early, for good (`cache.md:354-355`). Two agents could then both hold a lease; the fencing token is what protects anything outside Felix.
