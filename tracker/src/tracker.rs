@@ -690,6 +690,9 @@ impl<B: Broker> Tracker<B> {
                     .await
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else { break };
+                if tier >= TIERS {
+                    eprintln!("DIAG {agent} polled {stream} offset {} attempts {:?}", record.offset, record.attempts);
+                }
                 if tier >= TIERS && self.is_own_work(agent, &record).await {
                     let again = seen.contains(&record.offset);
                     seen.push(record.offset);
