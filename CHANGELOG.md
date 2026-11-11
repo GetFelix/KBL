@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A threat model, [docs/threat-model.md](docs/threat-model.md): actors, assets, trust
+  boundaries, and for every tracker route, ingest route, MCP tool and record kind
+  the fields an agent controls and the check that stops misuse. CI fails when a
+  new one has no row, and the pull request template asks for it.
 - The dashboard style frame follows the conventions of Linear, Jira and GitHub
   Projects: a sidebar, list and board layouts of the same items, a side panel,
   a command palette (`Ctrl+K`), `?` for shortcuts, `/` for search, filters,

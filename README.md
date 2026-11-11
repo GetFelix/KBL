@@ -321,6 +321,7 @@ CI runs four jobs: lint (with the fixture regeneration), dashboard frame, the Ru
 
 - [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
 - [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
+- [docs/threat-model.md](docs/threat-model.md): who can reach what, and the check behind every route and record kind
 - [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
 - [docs/brand/story.md](docs/brand/story.md): the story of the product
 - [docs/design.md](docs/design.md): the design, data model and build order
