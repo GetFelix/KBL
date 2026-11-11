@@ -51,6 +51,7 @@ async fn app() -> Router {
         ) -> anyhow::Result<Option<u64>> {
             Ok(Some(1))
         }
+        async fn forget(&self, _: Option<&str>) {}
         async fn close_idle(&self, _: Duration) {}
     }
     let tokens = Tokens::parse(r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"}}"#).unwrap();

@@ -42,6 +42,8 @@ const DEFAULT_TIER: u8 = 2;
 /// How long a tracker without the writer lease keeps running before it exits.
 const FENCE_GRACE: Duration = Duration::from_secs(10);
 /// How long an agent's broker connection stays open with no call from it.
+/// Allowance for clock skew between the tracker and the lease's holder of record.
+const LEASE_SKEW: Duration = Duration::from_secs(1);
 const MEMBER_IDLE: Duration = Duration::from_secs(600);
 
 pub(crate) struct Settings {
@@ -246,27 +248,32 @@ impl<B: Broker> Tracker<B> {
             });
         };
         let stream = ready_stream(d.tier);
-        let extended = tokio::time::timeout(
-            FELIX_TIMEOUT,
-            self.0.broker.extend(
-                &stream,
-                agent.as_str(),
-                &d.record,
-                self.0.settings.visibility,
-            ),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            Err(ExtendError::Failed(anyhow::anyhow!(
-                "Felix did not answer in time"
-            )))
-        });
+        let mut extended = self.try_extend(&stream, agent, d).await;
+        if matches!(extended, Err(ExtendError::Failed(_))) {
+            // The connection may have dropped; a live agent keeps its claim on a new one.
+            self.0.broker.forget(Some(agent.as_str())).await;
+            extended = self.try_extend(&stream, agent, d).await;
+        }
         match extended {
             Ok(visible) => {
+                // The hold may have been released while Felix was answering.
                 let mut core = self.0.core.lock().await;
-                if let Some(o) = core.owner.get_mut(item)
-                    && o.id == d.id
-                {
+                let ours = core.owner.get(item).is_some_and(|o| o.id == d.id);
+                let shown = core
+                    .state
+                    .items
+                    .get(item)
+                    .and_then(|i| i.hold.as_ref())
+                    .is_some_and(|h| h.by.as_str() == agent.as_str() && h.attempt == d.attempt);
+                if !(ours && shown) {
+                    if ours {
+                        core.owner.remove(item);
+                    }
+                    drop(core);
+                    delivery.take();
+                    return Err(lapsed(item));
+                }
+                if let Some(o) = core.owner.get_mut(item) {
                     o.last_extended = Instant::now();
                 }
                 Ok(json!({
@@ -285,6 +292,29 @@ impl<B: Broker> Tracker<B> {
             }
             Err(ExtendError::Failed(e)) => Err(Error::Felix(e)),
         }
+    }
+
+    async fn try_extend(
+        &self,
+        stream: &str,
+        agent: &AgentName,
+        d: &Delivery,
+    ) -> Result<Duration, ExtendError> {
+        tokio::time::timeout(
+            FELIX_TIMEOUT,
+            self.0.broker.extend(
+                stream,
+                agent.as_str(),
+                &d.record,
+                self.0.settings.visibility,
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            Err(ExtendError::Failed(anyhow::anyhow!(
+                "Felix did not answer in time"
+            )))
+        })
     }
 
     /// Writes `done`, then acks the delivery. `cost_micros` is what the agent reports.
@@ -375,37 +405,47 @@ impl<B: Broker> Tracker<B> {
         if self.begin().await.is_err() {
             return;
         }
-        {
-            let mut core = self.0.core.lock().await;
+        let visibility = self.0.settings.visibility;
+        // The lock is taken per hold, so one slow append does not keep it for the rest.
+        let lapsed: Vec<ItemId> = {
+            let core = self.0.core.lock().await;
             let now = Instant::now();
-            let visibility = self.0.settings.visibility;
-            let lapsed: Vec<(ItemId, u32)> = core
-                .state
+            core.state
                 .items
                 .values()
-                .filter(|i| i.closed.is_none())
-                .filter_map(|i| i.hold.as_ref().map(|h| (i.id.clone(), h.attempt)))
-                .filter(|(item, _)| {
-                    core.owner
-                        .get(item)
-                        .is_none_or(|o| now.duration_since(o.last_extended) >= visibility)
-                })
-                .collect();
-            for (item, attempt) in lapsed {
-                let released = WorkRecord::Released {
-                    item: item.clone(),
-                    attempt,
-                    reason: Some("lapsed".into()),
-                    cost_micros: 0,
-                };
-                if self
-                    .append(&mut core, Actor::Tracker, self.0.me.clone(), released)
-                    .await
-                    .is_ok()
-                {
-                    // The delivery, if any, lapses in Felix by itself; no one settles it now.
-                    core.owner.remove(&item);
-                }
+                .filter(|i| i.closed.is_none() && i.hold.is_some())
+                .filter(|i| expired(&core, &i.id, now, visibility))
+                .map(|i| i.id.clone())
+                .collect()
+        };
+        for item in lapsed {
+            let mut core = self.0.core.lock().await;
+            // Checked again: the agent may have extended or finished meanwhile.
+            let Some(attempt) = core
+                .state
+                .items
+                .get(&item)
+                .and_then(|i| i.hold.as_ref())
+                .map(|h| h.attempt)
+            else {
+                continue;
+            };
+            if !expired(&core, &item, Instant::now(), visibility) {
+                continue;
+            }
+            let released = WorkRecord::Released {
+                item: item.clone(),
+                attempt,
+                reason: Some("lapsed".into()),
+                cost_micros: 0,
+            };
+            if self
+                .append(&mut core, Actor::Tracker, self.0.me.clone(), released)
+                .await
+                .is_ok()
+            {
+                // The delivery, if any, lapses in Felix by itself; no one settles it now.
+                core.owner.remove(&item);
             }
         }
         self.sync_ready().await;
@@ -439,12 +479,16 @@ impl<B: Broker> Tracker<B> {
         let deadline = Instant::now() + self.0.settings.lease_wait;
         loop {
             let started = Instant::now();
-            let put = io(self.0.broker.lease_put(
-                self.0.holder.as_bytes().to_vec(),
-                self.0.settings.lease_ttl,
-                None,
-            ))
-            .await?;
+            let put = self
+                .io(
+                    None,
+                    self.0.broker.lease_put(
+                        self.0.holder.as_bytes().to_vec(),
+                        self.0.settings.lease_ttl,
+                        None,
+                    ),
+                )
+                .await?;
             if let Some(version) = put {
                 self.0.core.lock().await.lease = Some(LeaseHeld {
                     version,
@@ -465,12 +509,16 @@ impl<B: Broker> Tracker<B> {
             return;
         };
         let started = Instant::now();
-        let put = io(self.0.broker.lease_put(
-            self.0.holder.as_bytes().to_vec(),
-            self.0.settings.lease_ttl,
-            Some(version),
-        ))
-        .await;
+        let put = self
+            .io(
+                None,
+                self.0.broker.lease_put(
+                    self.0.holder.as_bytes().to_vec(),
+                    self.0.settings.lease_ttl,
+                    Some(version),
+                ),
+            )
+            .await;
         let mut core = self.0.core.lock().await;
         match put {
             Ok(Some(version)) => {
@@ -497,11 +545,13 @@ impl<B: Broker> Tracker<B> {
         for tier in 0..TIERS {
             let stream = ready_stream(tier);
             loop {
-                let polled =
-                    io(self
-                        .0
-                        .broker
-                        .poll(&stream, agent.as_str(), self.0.settings.visibility))
+                let polled = self
+                    .io(
+                        Some(agent.as_str()),
+                        self.0
+                            .broker
+                            .poll(&stream, agent.as_str(), self.0.settings.visibility),
+                    )
                     .await
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else { break };
@@ -776,11 +826,13 @@ impl<B: Broker> Tracker<B> {
             let stream = ready_stream(tier);
             // Bounded, in case the broker keeps handing records back.
             for _ in 0..64 {
-                let Ok(Some(record)) =
-                    io(self
-                        .0
-                        .broker
-                        .poll(&stream, agent.as_str(), self.0.settings.visibility))
+                let Ok(Some(record)) = self
+                    .io(
+                        Some(agent.as_str()),
+                        self.0
+                            .broker
+                            .poll(&stream, agent.as_str(), self.0.settings.visibility),
+                    )
                     .await
                 else {
                     break;
@@ -836,7 +888,13 @@ impl<B: Broker> Tracker<B> {
                 tier,
                 stamp,
             };
-            match io(self.0.broker.publish(&ready_stream(tier), record.encode())).await {
+            match self
+                .io(
+                    None,
+                    self.0.broker.publish(&ready_stream(tier), record.encode()),
+                )
+                .await
+            {
                 Ok(_) => {
                     self.0.core.lock().await.live.insert(item, (tier, stamp));
                 }
@@ -856,7 +914,7 @@ impl<B: Broker> Tracker<B> {
         by: Key,
         record: WorkRecord,
     ) -> Result<u64, Error> {
-        if let Some(why) = unavailable(core) {
+        if let Some(why) = unavailable(core, self.lease_margin()) {
             return Err(Error::Unavailable(why));
         }
         let logged = WorkLogged {
@@ -880,7 +938,10 @@ impl<B: Broker> Tracker<B> {
         // TODO(felix#1051): make this append conditional on the lease key's version
         // once Felix can; until then the lease check above narrows the window in
         // which a tracker that lost the lease can still write, but does not close it.
-        match io(self.0.broker.publish(WORK_EVENTS, logged.encode())).await {
+        match self
+            .io(None, self.0.broker.publish(WORK_EVENTS, logged.encode()))
+            .await
+        {
             Ok(offset) => {
                 if offset != guess {
                     core.stale = true;
@@ -897,9 +958,21 @@ impl<B: Broker> Tracker<B> {
     /// Refuses to serve without the writer lease, and rebuilds the state first
     /// if it may not match the log.
     async fn begin(&self) -> Result<(), Error> {
+        // Renew first when the lease is too close to running out for a write to land.
+        let near = {
+            let core = self.0.core.lock().await;
+            !core.fenced
+                && core
+                    .lease
+                    .as_ref()
+                    .is_some_and(|l| l.valid_until <= Instant::now() + self.lease_margin())
+        };
+        if near {
+            self.renew_lease().await;
+        }
         {
             let core = self.0.core.lock().await;
-            if let Some(why) = unavailable(&core) {
+            if let Some(why) = unavailable(&core, self.lease_margin()) {
                 return Err(Error::Unavailable(why));
             }
             if !core.stale {
@@ -925,7 +998,10 @@ impl<B: Broker> Tracker<B> {
     /// The fold of every record in `work.events`, with seek snapshots.
     async fn read_state(&self) -> anyhow::Result<State> {
         let mut entries = Vec::new();
-        for (offset, payload) in io(self.0.broker.read_from(WORK_EVENTS, 0)).await? {
+        for (offset, payload) in self
+            .io(None, self.0.broker.read_from(WORK_EVENTS, 0))
+            .await?
+        {
             match WorkLogged::decode(&payload) {
                 Ok(rec) => entries.push((offset, rec)),
                 Err(e) => eprintln!("agents-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
@@ -947,19 +1023,52 @@ impl<B: Broker> Tracker<B> {
             .clone()
     }
 
-    /// Runs the Felix settles decided under the core lock. Failures are logged;
-    /// the first is returned.
+    /// A Felix call with a time limit. A failure or a timeout means the
+    /// connection it used may be dead, so it is dropped and the next call opens
+    /// a new one. `member` names an agent's connection; none is the log's.
+    async fn io<T>(
+        &self,
+        member: Option<&str>,
+        call: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        let done = tokio::time::timeout(FELIX_TIMEOUT, call)
+            .await
+            .map_err(|_| anyhow::anyhow!("Felix did not answer in time"))
+            .and_then(|r| r);
+        if done.is_err() {
+            self.0.broker.forget(member).await;
+        }
+        done
+    }
+
+    /// Runs the Felix settles decided under the core lock. A settle that fails
+    /// is tried once more on a new connection. Failures are logged; the first
+    /// is returned.
     async fn run(&self, ops: Vec<Op>) -> anyhow::Result<()> {
         let mut first = Ok(());
         for op in ops {
-            let done = match &op {
-                Op::Ack(stream, agent, offset) => {
-                    io(self.0.broker.ack(stream, agent.as_str(), *offset)).await
+            let mut done = Ok(());
+            for _ in 0..2 {
+                done = match &op {
+                    Op::Ack(stream, agent, offset) => {
+                        self.io(
+                            Some(agent.as_str()),
+                            self.0.broker.ack(stream, agent.as_str(), *offset),
+                        )
+                        .await
+                    }
+                    Op::Nack(stream, agent, record) => {
+                        self.io(
+                            Some(agent.as_str()),
+                            self.0.broker.nack(stream, agent.as_str(), record),
+                        )
+                        .await
+                    }
+                };
+                if done.is_ok() {
+                    break;
                 }
-                Op::Nack(stream, agent, record) => {
-                    io(self.0.broker.nack(stream, agent.as_str(), record)).await
-                }
-            };
+            }
             if let Err(e) = done {
                 eprintln!("agents-tracker: settling a delivery failed: {e:#}");
                 if first.is_ok() {
@@ -969,24 +1078,31 @@ impl<B: Broker> Tracker<B> {
         }
         first
     }
+
+    /// How long before the lease runs out the tracker stops writing: a write
+    /// that takes the full Felix timeout must still land inside it.
+    fn lease_margin(&self) -> Duration {
+        (FELIX_TIMEOUT + LEASE_SKEW).min(self.0.settings.lease_ttl / 2)
+    }
+}
+
+/// Whether the hold on `item` has no delivery behind it, or was last extended
+/// a visibility period ago.
+fn expired(core: &Core, item: &ItemId, now: Instant, visibility: Duration) -> bool {
+    core.owner
+        .get(item)
+        .is_none_or(|o| now.duration_since(o.last_extended) >= visibility)
 }
 
 /// Why the tracker cannot serve, if it cannot.
-fn unavailable(core: &Core) -> Option<String> {
+fn unavailable(core: &Core, margin: Duration) -> Option<String> {
     if core.fenced {
         return Some("another tracker holds the writer lease".into());
     }
     match &core.lease {
-        Some(l) if l.valid_until > Instant::now() => None,
+        Some(l) if l.valid_until > Instant::now() + margin => None,
         _ => Some("this tracker does not hold the writer lease".into()),
     }
-}
-
-/// A Felix call with a time limit.
-async fn io<T>(call: impl Future<Output = anyhow::Result<T>>) -> anyhow::Result<T> {
-    tokio::time::timeout(FELIX_TIMEOUT, call)
-        .await
-        .map_err(|_| anyhow::anyhow!("Felix did not answer in time"))?
 }
 
 fn holds(item: &agents_core::work_fold::Item, agent: &AgentName) -> bool {

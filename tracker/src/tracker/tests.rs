@@ -30,6 +30,11 @@ struct Net {
     lease_versions: u64,
     /// Polls by this member never answer.
     hang_member: Option<String>,
+    /// Members whose connection has dropped: their calls fail until it is forgotten.
+    dead: HashSet<String>,
+    forgets: Vec<Option<String>>,
+    fail_lease: bool,
+    gate_extend: bool,
 }
 
 /// An in-memory Felix: streams, and a consumer group per ready stream. A `Fake`
@@ -38,6 +43,7 @@ struct Net {
 #[derive(Clone, Default)]
 struct Fake {
     net: Arc<StdMutex<Net>>,
+    gate: Arc<tokio::sync::Notify>,
     polled: Arc<StdMutex<HashSet<String>>>,
 }
 
@@ -45,6 +51,7 @@ impl Fake {
     fn reconnect(&self) -> Fake {
         Fake {
             net: self.net.clone(),
+            gate: self.gate.clone(),
             polled: Arc::default(),
         }
     }
@@ -92,6 +99,28 @@ impl Fake {
 
     fn fail_publishes_to(&self, stream: Option<&str>) {
         self.net.lock().unwrap().fail_publish_on = stream.map(str::to_owned);
+    }
+
+    /// An agent's connection to the broker drops.
+    fn drop_connection(&self, member: &str) {
+        self.net.lock().unwrap().dead.insert(member.to_owned());
+    }
+
+    fn forgets(&self) -> Vec<Option<String>> {
+        self.net.lock().unwrap().forgets.clone()
+    }
+
+    fn fail_lease(&self, fail: bool) {
+        self.net.lock().unwrap().fail_lease = fail;
+    }
+
+    /// The next extend waits for `open_gate`.
+    fn hold_extends(&self) {
+        self.net.lock().unwrap().gate_extend = true;
+    }
+
+    fn open_gate(&self) {
+        self.gate.notify_one();
     }
 
     fn fail_reads(&self, fail: bool) {
@@ -218,6 +247,9 @@ impl Broker for Fake {
         if self.net.lock().unwrap().hang_member.as_deref() == Some(member) {
             std::future::pending::<()>().await;
         }
+        if self.net.lock().unwrap().dead.contains(member) {
+            anyhow::bail!("the connection dropped");
+        }
         let polled = self.poll_sync(stream, member);
         if polled.is_some() {
             self.net
@@ -229,15 +261,21 @@ impl Broker for Fake {
         Ok(polled)
     }
 
-    async fn ack(&self, stream: &str, _member: &str, offset: u64) -> anyhow::Result<()> {
+    async fn ack(&self, stream: &str, member: &str, offset: u64) -> anyhow::Result<()> {
         let mut net = self.net.lock().unwrap();
+        if net.dead.contains(member) {
+            anyhow::bail!("the connection dropped");
+        }
         net.slots.insert((stream.to_owned(), offset), Slot::Acked);
         net.calls.push(format!("ack {stream}"));
         Ok(())
     }
 
-    async fn nack(&self, stream: &str, _member: &str, record: &GroupRecord) -> anyhow::Result<()> {
+    async fn nack(&self, stream: &str, member: &str, record: &GroupRecord) -> anyhow::Result<()> {
         let mut net = self.net.lock().unwrap();
+        if net.dead.contains(member) {
+            anyhow::bail!("the connection dropped");
+        }
         net.slots
             .insert((stream.to_owned(), record.offset), Slot::Pending);
         net.calls.push(format!("nack {stream}"));
@@ -251,7 +289,17 @@ impl Broker for Fake {
         record: &GroupRecord,
         by: Duration,
     ) -> Result<Duration, ExtendError> {
+        let gated = self.net.lock().unwrap().gate_extend;
+        if gated {
+            self.gate.notified().await;
+            self.net.lock().unwrap().gate_extend = false;
+        }
         let net = self.net.lock().unwrap();
+        if net.dead.contains(member) {
+            return Err(ExtendError::Failed(anyhow::anyhow!(
+                "the connection dropped"
+            )));
+        }
         let mine = net.slots.get(&(stream.to_owned(), record.offset))
             == Some(&Slot::Leased(member.to_owned()));
         if net.extend_stale || !mine {
@@ -267,6 +315,9 @@ impl Broker for Fake {
         expect: Option<u64>,
     ) -> anyhow::Result<Option<u64>> {
         let mut net = self.net.lock().unwrap();
+        if net.fail_lease {
+            anyhow::bail!("the broker is down");
+        }
         let ok = match (&net.lease, expect) {
             (None, None) => true,
             (Some((_, v)), Some(e)) => *v == e,
@@ -279,6 +330,15 @@ impl Broker for Fake {
         let v = net.lease_versions;
         net.lease = Some((holder, v));
         Ok(Some(v))
+    }
+
+    async fn forget(&self, member: Option<&str>) {
+        let mut net = self.net.lock().unwrap();
+        net.forgets.push(member.map(str::to_owned));
+        if let Some(m) = member {
+            net.dead.remove(m);
+            self.polled.lock().unwrap().remove(m);
+        }
     }
 
     async fn close_idle(&self, _idle: Duration) {}
@@ -748,23 +808,101 @@ async fn a_failed_reload_does_not_empty_the_state_and_nothing_is_served_until_it
 
 #[tokio::test(start_paused = true)]
 async fn one_hung_felix_call_stalls_only_that_agent() {
+    // The outer limit makes a missing timeout fail the test instead of hanging it.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        let fake = Fake::default();
+        let t = start(&fake).await;
+        seed(&t, "a1", 2).await;
+        seed(&t, "a2", 2).await;
+        claim(&t, "w3").await;
+        fake.hang(Some("w1"));
+        let hung = tokio::spawn({
+            let t = t.clone();
+            async move { t.next(&agent("w1"), Duration::ZERO).await }
+        });
+        tokio::task::yield_now().await;
+        // Others carry on while w1's poll hangs.
+        assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a2"));
+        t.complete(&agent("w3"), &item("a1"), 0).await.unwrap();
+        seed(&t, "a3", 2).await;
+        // The hung call ends by its own timeout, and its connection is dropped.
+        assert!(matches!(hung.await.unwrap(), Err(Error::Felix(_))));
+        assert!(fake.forgets().contains(&Some("w1".to_owned())));
+    })
+    .await
+    .expect("a hung Felix call stalled the tracker");
+}
+
+#[tokio::test]
+async fn a_dropped_connection_does_not_cost_a_live_agent_its_claim() {
     let fake = Fake::default();
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
-    seed(&t, "a2", 2).await;
-    claim(&t, "w3").await;
-    fake.hang(Some("w1"));
-    let hung = tokio::spawn({
+    claim(&t, "w1").await;
+    fake.drop_connection("w1");
+    // The extend reconnects within the same call and the claim stands.
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_ok());
+    assert!(fake.forgets().contains(&Some("w1".to_owned())));
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Leased("w1".into()));
+    // Settling reconnects too.
+    fake.drop_connection("w1");
+    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "released").count(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_lease_must_outlast_a_write_before_the_tracker_writes() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    // The lease cannot be renewed, and what is left is less than a write may take.
+    fake.fail_lease(true);
+    tokio::time::advance(Duration::from_secs(9)).await;
+    assert!(matches!(
+        t.person_record(
+            key("gab"),
+            WorkRecord::Accepted {
+                item: item("a1"),
+                tier: Some(1),
+            },
+        )
+        .await,
+        Err(Error::Unavailable(_))
+    ));
+    // Once renewal works the tracker renews first and writes.
+    fake.fail_lease(false);
+    assert!(t.next(&agent("w1"), Duration::ZERO).await.is_ok());
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_extend_that_lands_after_the_sweep_freed_the_hold_is_lost() {
+    let fake = Fake::default();
+    fake.expire_lease();
+    let t = Tracker::start(
+        fake.reconnect(),
+        Settings {
+            visibility: Duration::from_secs(5),
+            ..settings()
+        },
+    )
+    .await
+    .unwrap();
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    fake.hold_extends();
+    let extending = tokio::spawn({
         let t = t.clone();
-        async move { t.next(&agent("w1"), Duration::ZERO).await }
+        async move { t.extend(&agent("w1"), &item("a1")).await }
     });
     tokio::task::yield_now().await;
-    // Others carry on while w1's poll hangs.
-    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a2"));
-    t.complete(&agent("w3"), &item("a1"), 0).await.unwrap();
-    seed(&t, "a3", 2).await;
-    // The hung call ends by its own timeout.
-    assert!(matches!(hung.await.unwrap(), Err(Error::Felix(_))));
+    // While Felix is still answering, the hold lapses and the sweep frees it.
+    pass(&t, Duration::from_secs(6)).await;
+    t.sweep().await;
+    assert_eq!(fake.kinds().last().map(String::as_str), Some("released"));
+    fake.open_gate();
+    let r = extending.await.unwrap();
+    assert!(matches!(r, Err(Error::Lost(_))), "{r:?}");
 }
 
 #[tokio::test]

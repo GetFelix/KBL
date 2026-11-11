@@ -103,6 +103,10 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         expect: Option<u64>,
     ) -> impl Future<Output = Result<Option<u64>>> + Send;
 
+    /// Drops a connection that failed or timed out, so the next call opens a
+    /// new one: `member`'s, or the log's when none.
+    fn forget(&self, member: Option<&str>) -> impl Future<Output = ()> + Send;
+
     /// Closes the connections of agents that have made no call for `idle`.
     fn close_idle(&self, idle: Duration) -> impl Future<Output = ()> + Send;
 }
@@ -530,6 +534,15 @@ impl Broker for Felix {
         }
         .await;
         self.forget_main(done).await
+    }
+
+    async fn forget(&self, member: Option<&str>) {
+        match member {
+            Some(m) => {
+                self.members.lock().await.remove(m);
+            }
+            None => *self.main.lock().await = None,
+        }
     }
 
     async fn close_idle(&self, idle: Duration) {
