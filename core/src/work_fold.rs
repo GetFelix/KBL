@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, Evidence, RefusalReason, TIERS, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    Actor, CloseWhy, DoneWhen, Evidence, NewPrerequisite, RefusalReason, TIERS, Target,
+    WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
 };
 
 #[cfg(test)]
@@ -224,6 +225,13 @@ pub struct Item {
     /// Human inputs that name no attempt, and so steer every path.
     pub human_inputs: Vec<u64>,
     pub pending_fork: Option<Fork>,
+    /// The repo the work lands in: derived for an imported root from its
+    /// `owner/repo#number` id, named by an agent's prerequisite.
+    #[serde(default)]
+    pub target: Option<Target>,
+    /// The release that carries this item, once a `shipped` record names it.
+    #[serde(default)]
+    pub release: Option<String>,
 }
 
 /// Why a record changed nothing.
@@ -286,6 +294,9 @@ pub struct State {
     pub items: BTreeMap<ItemId, Item>,
     /// `(a, b)`: a waits on b.
     pub edges: BTreeSet<(ItemId, ItemId)>,
+    /// Edges that wait for a release. Any edge not listed waits for a merge.
+    #[serde(default)]
+    pub edge_done: BTreeMap<(ItemId, ItemId), DoneWhen>,
     pub budgets: BTreeMap<ItemId, Budget>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
@@ -369,7 +380,7 @@ impl State {
             None if self
                 .edges
                 .iter()
-                .any(|(a, b)| a == id && !self.is_closed(b)) =>
+                .any(|(a, b)| a == id && self.waits_on(a, b)) =>
             {
                 Stage::Blocked
             }
@@ -461,6 +472,22 @@ impl State {
         out.sort_unstable();
         out.dedup();
         out
+    }
+
+    /// Whether the edge "`from` waits on `to`" still holds `from`. A dropped
+    /// `to` frees it here and sends `from` to Needs you instead.
+    fn waits_on(&self, from: &ItemId, to: &ItemId) -> bool {
+        let Some(dep) = self.items.get(to) else {
+            return true;
+        };
+        match dep.closed {
+            None => true,
+            Some(Closure::Merged | Closure::Completed) => {
+                dep.release.is_none()
+                    && self.edge_done.get(&(from.clone(), to.clone())) == Some(&DoneWhen::Released)
+            }
+            Some(_) => false,
+        }
     }
 
     fn is_closed(&self, id: &ItemId) -> bool {
@@ -556,6 +583,8 @@ impl State {
             paths: Vec::new(),
             human_inputs: Vec::new(),
             pending_fork: None,
+            target: None,
+            release: None,
         }
     }
 
@@ -582,7 +611,14 @@ impl State {
                 }
                 self.upstream.insert(up, item.clone());
                 self.budgets.insert(item.clone(), Budget::for_new_root());
-                self.new_item(Self::blank(item, WorkKind::Fix, title));
+                let mut root = Self::blank(item, WorkKind::Fix, title);
+                root.target = upstream_id.split_once('#').and_then(|(repo, _)| {
+                    repo.contains('/').then(|| Target {
+                        source: source.clone(),
+                        repo: repo.to_owned(),
+                    })
+                });
+                self.new_item(root);
             }
             WorkRecord::Proposed {
                 item,
@@ -630,6 +666,36 @@ impl State {
                         .or_insert_with(Budget::for_new_root);
                 }
             }
+            WorkRecord::Prerequisite {
+                item,
+                attempt,
+                prerequisite,
+                key,
+                new,
+                done_when,
+            } => self.prerequisite(
+                offset,
+                rec,
+                item,
+                *attempt,
+                prerequisite,
+                key,
+                new.as_ref(),
+                *done_when,
+            )?,
+            WorkRecord::Shipped { item, release } => {
+                if rec.actor == Actor::Agent {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if release.is_empty() {
+                    return Err(Reject::MissingField);
+                }
+                let it = self.item_mut(item)?;
+                if !matches!(it.closed, Some(Closure::Merged | Closure::Completed)) {
+                    return Err(Reject::NotClosed);
+                }
+                it.release = Some(release.clone());
+            }
             WorkRecord::Linked { item, to } => {
                 self.item(item)?;
                 self.item(to)?;
@@ -656,6 +722,7 @@ impl State {
                 }
                 self.item(item)?;
                 self.edges.remove(&(item.clone(), to.clone()));
+                self.edge_done.remove(&(item.clone(), to.clone()));
             }
             WorkRecord::Context { item, entry, .. } => {
                 self.item(item)?;
@@ -1214,6 +1281,66 @@ impl State {
         }
         self.child_keys.insert(scope);
         self.new_item(item);
+        Ok(())
+    }
+
+    /// The held item waits on a prerequisite, possibly one this record creates.
+    /// Every check runs before the first change, so a refusal leaves no trace.
+    #[allow(clippy::too_many_arguments)]
+    fn prerequisite(
+        &mut self,
+        offset: u64,
+        rec: &WorkLogged,
+        item: &ItemId,
+        attempt: u32,
+        prerequisite: &ItemId,
+        key: &Key,
+        new: Option<&NewPrerequisite>,
+        done_when: DoneWhen,
+    ) -> Result<(), Reject> {
+        self.agent_holder(item, attempt, rec)?;
+        if self.path_mut(item, attempt)?.posts >= MAX_POSTS {
+            return Err(Reject::LimitReached);
+        }
+        let scope = (None, Some(rec.by.clone()), key.clone());
+        match new {
+            Some(n) => {
+                if n.title.is_empty() || n.target.repo.is_empty() || n.target.source.is_empty() {
+                    return Err(Reject::MissingField);
+                }
+                if self.items.contains_key(prerequisite) || self.child_keys.contains(&scope) {
+                    return Err(Reject::Duplicate);
+                }
+            }
+            None => {
+                if self.item(prerequisite)?.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+            }
+        }
+        if item == prerequisite || self.reaches(prerequisite, item) {
+            return Err(Reject::Cycle);
+        }
+        if let Some(n) = new {
+            let mut p = Self::blank(prerequisite, WorkKind::Fix, &n.title);
+            p.proposed_by_agent = true;
+            p.target = Some(n.target.clone());
+            if let Ok(entry) = Key::new("prerequisite") {
+                p.context.insert(entry, offset);
+            }
+            self.child_keys.insert(scope);
+            self.new_item(p);
+        }
+        self.edges.insert((item.clone(), prerequisite.clone()));
+        self.edge_done
+            .insert((item.clone(), prerequisite.clone()), done_when);
+        let it = self.item_mut(item)?;
+        it.hold = None;
+        if let Some(p) = it.paths.iter_mut().find(|p| p.attempt == attempt) {
+            // Waiting on another repo is not a failed try.
+            p.tries = p.tries.saturating_sub(1);
+            p.posts += 1;
+        }
         Ok(())
     }
 

@@ -139,10 +139,23 @@ struct WorkPostArgs {
     item: Option<String>,
     /// Your own key for this piece of work, 1 to 64 characters of A-Z, a-z, 0-9, - and _. Sending the same key again returns the first item instead of making a second.
     key: String,
-    /// `split`, `augment`, `question` or `test` for work inside this item, or `proposal` for a bug or task outside it. A proposal waits for a person to accept it.
+    /// `split`, `augment`, `question` or `test` for work inside this item, `proposal` for a bug or task outside it, or `prerequisite` when you cannot go on until work in another repo is done. A proposal waits for a person to accept it.
     work: String,
-    /// What the work is, in a line.
+    /// What the work is, in a line. Not used with `existing`.
+    #[serde(default)]
     title: String,
+    /// `prerequisite` only: the source of the repo that needs the work, such as `github`.
+    target_source: Option<String>,
+    /// `prerequisite` only: the repo that needs the work, as `owner/repo`. It must be one you may reach.
+    target_repo: Option<String>,
+    /// `prerequisite` only: why you cannot go on without it.
+    why: Option<String>,
+    /// `prerequisite` only: stream and offset of the steps that show it.
+    evidence: Option<Vec<EvidenceArg>>,
+    /// `prerequisite` only: the id of an item that already exists, instead of making a new one. Give it and nothing else.
+    existing: Option<String>,
+    /// `prerequisite` only: `merged` (the default) or `released`, for work you need shipped in a release.
+    done_when: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -364,18 +377,42 @@ impl Server {
     }
 
     #[tool(
-        description = "Create work under the item you hold: split, augment, question or test, live at once and counted against the root's budget. Use `proposal` for a bug or task outside this item; a person decides whether it becomes work. Sending the same key again is safe."
+        description = "Create work under the item you hold: split, augment, question or test, live at once and counted against the root's budget. Use `proposal` for a bug or task outside this item; a person decides whether it becomes work. Use `prerequisite` when you cannot go on until work in another repo is done: give target_source, target_repo, title and why, or `existing` for an item that is already there. It ends your claim as blocked without costing a try, and the item comes back to Ready when the work is done (`done_when`: merged or released). Sending the same key again is safe."
     )]
     async fn work_post(&self, Parameters(a): Parameters<WorkPostArgs>) -> Result<String, String> {
         let item = self.item_or_held(a.item).await?;
-        let reply = self
-            .work()?
-            .tool(
-                "/v1/work/post",
-                json!({ "item": item, "key": a.key, "work": a.work, "title": a.title }),
+        if a.work != "prerequisite" {
+            let reply = self
+                .work()?
+                .tool(
+                    "/v1/work/post",
+                    json!({ "item": item, "key": a.key, "work": a.work, "title": a.title }),
+                )
+                .await?;
+            return Ok(reply.to_string());
+        }
+        let why = match a.why {
+            Some(w) => Some(self.content(w).await?),
+            None => None,
+        };
+        let evidence: Vec<_> = a
+            .evidence
+            .unwrap_or_default()
+            .into_iter()
+            .map(|e| json!({ "stream": e.stream, "offset": e.offset }))
+            .collect();
+        // The claim ends with this call, so the keep-alive stops with it.
+        self.work()?
+            .finish_post(
+                &item,
+                json!({
+                    "item": item, "key": a.key, "work": a.work, "title": a.title,
+                    "target_source": a.target_source, "target_repo": a.target_repo,
+                    "why": why, "evidence": evidence, "existing": a.existing,
+                    "done_when": a.done_when.unwrap_or_else(|| "merged".into()),
+                }),
             )
-            .await?;
-        Ok(reply.to_string())
+            .await
     }
 
     #[tool(

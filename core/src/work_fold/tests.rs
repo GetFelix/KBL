@@ -1,7 +1,7 @@
 use super::*;
 use crate::codec::Codec;
 use crate::content::Content;
-use crate::work::{CloseWhy, HumanKind, Phase};
+use crate::work::{CloseWhy, DoneWhen, HumanKind, NewPrerequisite, Phase, Target};
 
 fn id(s: &str) -> ItemId {
     ItemId::new(s).unwrap()
@@ -1776,4 +1776,179 @@ fn an_answer_is_taken_only_for_the_open_question() {
     // Nothing is open now, so the same answer again is refused.
     l.person(answer_rec(open));
     assert_eq!(last_rejection(&l), Some(Reject::NotOpenQuestion));
+}
+
+fn needs(prereq: &str, new: bool, done_when: DoneWhen) -> WorkRecord {
+    WorkRecord::Prerequisite {
+        item: id("r1"),
+        attempt: 1,
+        prerequisite: id(prereq),
+        key: key("need"),
+        new: new.then(|| NewPrerequisite {
+            target: Target {
+                source: "github".into(),
+                repo: "GetFelix/felix-gateway".into(),
+            },
+            title: "gateway needs a CAS call".into(),
+            why: text("the client cannot swap atomically"),
+            evidence: vec![],
+        }),
+        done_when,
+    }
+}
+
+fn accept(item: &str) -> WorkRecord {
+    WorkRecord::Accepted {
+        item: id(item),
+        tier: None,
+    }
+}
+
+fn merged(item: &str) -> WorkRecord {
+    WorkRecord::Closed {
+        item: id(item),
+        why: CloseWhy::Merged,
+    }
+}
+
+#[test]
+fn a_prerequisite_blocks_the_holder_without_costing_a_try() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    let r1 = &s.items[&id("r1")];
+    assert!(r1.hold.is_none());
+    assert_eq!(r1.paths[0].tries, 0);
+    assert_eq!(r1.paths[0].posts, 1);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Blocked));
+    // The proposal waits in the other repo's Triage, as an agent's proposal.
+    let g1 = &s.items[&id("g1")];
+    assert!(g1.parent.is_none() && g1.proposed_by_agent && !g1.accepted);
+    assert_eq!(g1.target.as_ref().unwrap().repo, "GetFelix/felix-gateway");
+    assert_eq!(s.stage(&id("g1")), Some(Stage::Proposed));
+    assert!(s.edges.contains(&(id("r1"), id("g1"))));
+    // The resumed claim is the first try again.
+    l.person(accept("g1"));
+    l.person(merged("g1"));
+    l.agent("w1", claimed("r1", 1));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.items[&id("r1")].paths[0].tries, 1);
+}
+
+#[test]
+fn a_finished_prerequisite_frees_the_holder() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    l.person(accept("g1"));
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Blocked));
+    l.person(merged("g1"));
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_dropped_prerequisite_sends_the_holder_to_needs_you() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    l.person(WorkRecord::Rejected { item: id("g1") });
+    let s = fold(&l.0);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::DependencyDropped));
+}
+
+#[test]
+fn a_link_that_waits_for_a_release_outlasts_the_merge() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Released));
+    l.person(accept("g1"));
+    let shipped = || WorkRecord::Shipped {
+        item: id("g1"),
+        release: "0.4.0".into(),
+    };
+    // Nothing ships before it is merged.
+    l.person(shipped());
+    assert_eq!(last_rejection(&l), Some(Reject::NotClosed));
+    l.person(merged("g1"));
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Blocked));
+    // An agent cannot say a release happened.
+    l.agent("w1", shipped());
+    assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Blocked));
+    l.person(shipped());
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("g1")].release.as_deref(), Some("0.4.0"));
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_link_that_waits_for_a_merge_does_not_wait_for_the_release() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    l.person(accept("g1"));
+    l.person(merged("g1"));
+    let s = fold(&l.0);
+    assert!(s.items[&id("g1")].release.is_none());
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_prerequisite_cannot_close_a_cycle_and_a_refusal_leaves_the_claim() {
+    let mut l = held_root();
+    // Another tree whose item already waits on the held one.
+    l.tracker(imported("r2"));
+    l.person(accept("r2"));
+    l.person(WorkRecord::Linked {
+        item: id("r2"),
+        to: id("r1"),
+    });
+    l.agent("w1", needs("r2", false, DoneWhen::Merged));
+    assert_eq!(last_rejection(&l), Some(Reject::Cycle));
+    l.agent("w1", needs("r1", false, DoneWhen::Merged));
+    assert_eq!(last_rejection(&l), Some(Reject::Cycle));
+    let s = fold(&l.0);
+    assert!(s.items[&id("r1")].hold.is_some());
+    assert_eq!(s.items[&id("r1")].paths[0].posts, 0);
+    assert_eq!(s.edges.len(), 1);
+}
+
+#[test]
+fn only_the_holder_names_a_prerequisite_and_a_new_one_needs_an_unused_key() {
+    let mut l = held_root();
+    l.agent("w2", needs("g1", true, DoneWhen::Merged));
+    assert_eq!(last_rejection(&l), Some(Reject::NotHolder));
+    l.person(needs("g1", true, DoneWhen::Merged));
+    assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
+    // The agent used the key for a proposal already.
+    l.agent("w1", proposed("p1", None, "need", WorkKind::Fix));
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    assert_eq!(last_rejection(&l), Some(Reject::Duplicate));
+    assert!(fold(&l.0).items[&id("r1")].hold.is_some());
+}
+
+#[test]
+fn prerequisites_count_toward_the_post_cap() {
+    let mut l = held_root();
+    for i in 0..MAX_POSTS {
+        let (item, k) = (format!("p{i}"), format!("k{i}"));
+        l.agent("w1", proposed(&item, None, &k, WorkKind::Fix));
+    }
+    assert!(fold(&l.0).rejections.is_empty());
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    assert!(!fold(&l.0).items.contains_key(&id("g1")));
+}
+
+#[test]
+fn a_prerequisite_on_an_existing_item_counts_as_a_post_too() {
+    let mut l = held_root();
+    l.tracker(imported("r2"));
+    l.agent("w1", needs("r2", false, DoneWhen::Released));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.items[&id("r1")].paths[0].posts, 1);
+    assert_eq!(
+        s.edge_done.get(&(id("r1"), id("r2"))),
+        Some(&DoneWhen::Released)
+    );
 }

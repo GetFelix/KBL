@@ -39,8 +39,8 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_next` | Claims the highest-priority ready item the agent can take |
 | `work_extend` | Keeps the claim while the agent works (sent by `felix-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
-| `work_link` | Adds a dependency between items |
-| `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal |
+| `work_link` | Adds a dependency between items in one tree |
+| `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal, except `prerequisite`, which is work another repo must do first |
 | `work_progress` | Records a plan, a branch or a PR |
 | `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you. Answers one while holding a `question` item under it |
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
@@ -137,8 +137,16 @@ tracker reads a token map from a JSON file (`--tokens-file`, or
 once only, and tokens are compared in constant time:
 
 ```json
-{ "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" }, "ingest": { "<token>": "ingest-gh" } }
+{
+  "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" }, "ingest": { "<token>": "ingest-gh" },
+  "grants": { "w1": ["GetFelix/felix-gateway"] }
+}
 ```
+
+`grants` is optional. It lists, per agent, the repositories it may file a
+[prerequisite](#prerequisites-in-another-repo) in or link to, beyond the
+repository of the tree it is working in. An agent with no grant can reach only
+its own tree's repository.
 
 An agent's token maps to its name, which goes on every record it causes and is
 the consumer-group member name. `felix-mcp` reads `AGENTS_TRACKER_URL` and
@@ -167,7 +175,8 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | Call | Does |
 |---|---|
 | `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing |
-| `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree |
+| `POST /v1/work/post` `{item, key, work: "prerequisite", ...}` | Work another repo must do first. See [Prerequisites in another repo](#prerequisites-in-another-repo) |
+| `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree. The edge is refused with `cycle` if `to` already waits on `item`, directly or through other items |
 | `POST /v1/work/context` `{item}` | Reads an item's context entries and the notes people left for the attempt |
 | `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds |
 | `POST /v1/work/progress` `{item, note, branch, pr}` | Records progress on the held item |
@@ -321,6 +330,56 @@ attempt is logged as refused, so a looping agent cannot fill the stream with
 records or with refusals. Each field is also limited in size: text over 4 KiB
 must be an artifact, and a title, command or reason is at most 4 KiB.
 
+### Splitting and ordering
+
+A large item is split by posting `split` children under it. They are live at
+once and draw from the root's budget. To run them in order, the agent links
+each child to the one it waits on with `work_link`; children with no edge
+between them run in parallel. A child with an unfinished dependency is
+Blocked, and becomes Ready the moment that dependency is done, because
+readiness is recomputed from the fold and never stored. A person splits by
+hand with the same records, which draw nothing from the budget. The parent
+cannot complete while a child is open.
+
+### Prerequisites in another repo
+
+An agent sometimes finds that its item needs a change in another repo first: a
+`felix-blocks` task needs a `felix-gateway` feature. `work_post` with
+`work: "prerequisite"` handles it in one call:
+
+| Field | Meaning |
+|---|---|
+| `target_source`, `target_repo`, `title`, `why`, `evidence` | A new proposal in that repo's Triage, with the reason and the steps that show it. `why` is shown with the proposal |
+| `existing` | Instead of the five above: an item that already exists, to avoid a duplicate |
+| `done_when` | `merged` (default) or `released`. `released` also waits for the release that carries the work |
+
+One record does all of it:
+
+- The proposal is created as an agent's proposal, so a person accepts it into
+  the target repo like any other.
+- The held item is linked to it and waits on it.
+- The claim ends as `blocked`. It is not a release or a give-up, so it
+  spends none of the item's two tries. The next claim resumes the same attempt
+  with its decisions and `so_far`.
+- It counts toward the attempt's 24 posts.
+
+When the prerequisite is closed as merged, a link that waits for a merge frees
+the item, and it is Ready again. `work_context` then lists what the item
+waited on, with each prerequisite's stage, pull request and release. A link
+that waits for a release stays blocked until a person records
+`{"kind": "shipped", "item": ..., "release": "0.4.0"}` on the finished
+prerequisite. The fold takes that record from people only and only for an item
+that is done; ingest does not write it yet. If a person rejects or dismisses
+the prerequisite, the held item goes to Needs you as "dependency dropped".
+
+This is the only cross-tree link an agent can make, and the tracker checks it
+before the fold sees the record. A new prerequisite must target a repository
+the agent's [grants](#running-the-tracker) name or the one its own tree works
+in. An `existing` item must be in its own tree or in a repository its grants
+name, and an item it cannot see is refused as `unknown_item`, the same answer
+as one that does not exist. The plain `work_link` call still refuses another
+tree (`cross_root`). Cycles are refused across trees too.
+
 ### Kinds of work
 
 | Kind | Claimed by | The answer comes back as |
@@ -458,7 +517,7 @@ slipping by.
   agent-supplied key, written with `cache_put_if` absent, so a retry never
   duplicates.
 - **Proposals are capped per attempt.** They share the 24-post limit with
-  children.
+  children and prerequisites.
 - **Attempts.** A claim that ends in a release, a lapse or a give-up may be
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most

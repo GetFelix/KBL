@@ -50,6 +50,8 @@ const LEASE_SKEW: Duration = Duration::from_secs(1);
 const MEMBER_IDLE: Duration = Duration::from_secs(600);
 
 pub(crate) struct Settings {
+    /// The repos each agent may reach beyond its own tree.
+    pub(crate) grants: crate::config::Grants,
     /// How long a claim stands without an extension.
     pub(crate) visibility: Duration,
     /// How long the writer lease stands without a renewal.
@@ -142,6 +144,9 @@ fn remember(texts: &mut HashMap<u64, Content>, offset: u64, record: &WorkRecord)
         | WorkRecord::Question { text, .. }
         | WorkRecord::Answer { text, .. } => {
             texts.insert(offset, text.clone());
+        }
+        WorkRecord::Prerequisite { new: Some(n), .. } => {
+            texts.insert(offset, n.why.clone());
         }
         _ => {}
     }
@@ -1229,7 +1234,7 @@ pub(crate) fn now_ms() -> u64 {
 
 mod tools;
 
-pub(crate) use tools::{Decide, Post};
+pub(crate) use tools::{Decide, Post, Prereq};
 
 #[cfg(test)]
 mod tests;
