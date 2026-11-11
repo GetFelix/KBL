@@ -522,6 +522,7 @@ version = "0.0.0"
 dependencies = [
  "agents-core",
  "anyhow",
+ "bytes",
  "clap",
  "felix-client",
  "rmcp",

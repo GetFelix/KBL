@@ -6,6 +6,7 @@
 
 mod felix;
 mod server;
+mod tasks;
 
 use std::path::PathBuf;
 
