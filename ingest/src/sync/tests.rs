@@ -797,6 +797,8 @@ fn pull(edit: impl FnOnce(&mut Value)) -> Value {
     let mut v = fixture("pull");
     v["head"] = json!({ "sha": "abc123", "ref": "fix/stale-read" });
     v["base"] = json!({ "ref": "main" });
+    // Created after the Fake tracker's clock starts, so after the first claim.
+    v["created_at"] = json!("2027-01-15T09:00:00Z");
     v["requested_reviewers"] = json!([]);
     v["requested_teams"] = json!([]);
     edit(&mut v);
@@ -1136,4 +1138,25 @@ async fn flipping_the_reported_request_away_and_back_restores_a_red_status() {
         rig.tracker.state().needs_you(&item),
         Some(NeedsYou::CheckFailed)
     );
+}
+
+#[tokio::test]
+async fn an_old_merged_request_with_the_matching_branch_created_before_the_claim_is_refused() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    // The branch matches what the agent reported, and the body even names the
+    // issue, but the request is older than the first claim.
+    rig.pr(
+        pull(|p| {
+            p["created_at"] = json!("2026-11-01T00:00:00Z");
+            p["body"] = json!("Fixes #812");
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("pr_status"), 0);
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
 }

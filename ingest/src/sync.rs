@@ -271,6 +271,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 closed: false,
                 pr: None,
                 branch: None,
+                claimed_at_ms: None,
                 pr_status: None,
             },
         );
@@ -480,10 +481,22 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             // more than the agent's word: its reported branch, or a closing
             // reference to the issue in its body.
             let branch = p.roots.get(&key).and_then(|r| r.branch.as_deref());
-            let linked = branch.is_some_and(|b| !b.is_empty() && b == pull.head_ref)
-                || closes_issue(&pull.body, &key);
+            let claimed = p.roots.get(&key).and_then(|r| r.claimed_at_ms);
+            let closes = closes_issue(&pull.body, &key);
+            // A request made before the first claim cannot be this item's
+            // work, whatever branch the agent names. With no claim time, only
+            // a closing reference will do.
+            let linked = match claimed {
+                Some(at) => {
+                    pull.created_ms.is_some_and(|c| c >= at)
+                        && (branch.is_some_and(|b| !b.is_empty() && b == pull.head_ref) || closes)
+                }
+                None => closes,
+            };
             if !linked {
-                eprintln!("agents-ingest: {pr} is not linked to {key}; not reading its state");
+                eprintln!(
+                    "agents-ingest: {pr} is not linked to {key} (branch, reference or age); not reading its state"
+                );
                 continue;
             }
             self.on_pull_request(p, &key, status).await?;

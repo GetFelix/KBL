@@ -22,6 +22,9 @@ pub(crate) struct Root {
     /// The branch the agent reported.
     #[serde(default)]
     pub(crate) branch: Option<String>,
+    /// When the item was first claimed, in milliseconds since the epoch.
+    #[serde(default)]
+    pub(crate) claimed_at_ms: Option<u64>,
     /// What the fold holds for `pr`, which differs from what ingest last
     /// wrote when the agent changed `pr` in between.
     #[serde(default)]

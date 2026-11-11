@@ -301,6 +301,7 @@ impl<T: Transport> Source for Github<T> {
             .to_owned();
         let head_ref = pull["head"]["ref"].as_str().unwrap_or_default().to_owned();
         let body = pull["body"].as_str().unwrap_or_default().to_owned();
+        let created_ms = pull["created_at"].as_str().and_then(parse_utc_ms);
         // Only a request our credential opened is read further: the name
         // comes from an agent, and its checks and reviews steer a person.
         if !self.own.iter().any(|o| o.eq_ignore_ascii_case(&author)) {
@@ -308,6 +309,7 @@ impl<T: Transport> Source for Github<T> {
                 author,
                 head_ref,
                 body,
+                created_ms,
                 status: None,
             }));
         }
@@ -328,6 +330,7 @@ impl<T: Transport> Source for Github<T> {
                 author,
                 head_ref,
                 body,
+                created_ms,
                 status: Some(status),
             }));
         }
@@ -373,6 +376,7 @@ impl<T: Transport> Source for Github<T> {
             author,
             head_ref,
             body,
+            created_ms,
             status: Some(status),
         }))
     }
@@ -594,6 +598,30 @@ fn check_state(
     } else {
         (PrChecks::Green, None)
     }
+}
+
+/// Milliseconds since the epoch from `YYYY-MM-DDTHH:MM:SSZ`, as GitHub writes times.
+fn parse_utc_ms(t: &str) -> Option<u64> {
+    let b = t.as_bytes();
+    if b.len() != 20 || b[19] != b'Z' || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' {
+        return None;
+    }
+    let n = |r: std::ops::Range<usize>| t.get(r)?.parse::<i64>().ok();
+    let (y, m, d) = (n(0..4)?, n(5..7)?, n(8..10)?);
+    let (h, mi, s) = (n(11..13)?, n(14..16)?, n(17..19)?);
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    // Days from the civil date (proleptic Gregorian).
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(((days * 24 + h) * 60 + mi) * 60 + s)
+        .ok()
+        .map(|x| x * 1000)
 }
 
 fn cut_bytes(s: &str, max: usize) -> String {

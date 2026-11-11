@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 use crate::github::{Req, Res, Transport};
 use crate::tracker_api::{Appended, Root, Saved, Tracker};
 
+/// The Fake tracker's clock at offset zero: 2027-01-15T08:00:00Z.
+pub(crate) const CLOCK_START_MS: u64 = 1_800_000_000_000;
+
 pub(crate) fn fixture(name: &str) -> Value {
     let path = format!("{}/fixtures/{name}.json", env!("CARGO_MANIFEST_DIR"));
     serde_json::from_str(&std::fs::read_to_string(&path).expect(&path)).expect(&path)
@@ -137,7 +140,7 @@ impl Fake {
         let mut i = self.0.lock().unwrap();
         let offset = i.log.len() as u64;
         let logged = WorkLogged {
-            at_ms: offset,
+            at_ms: CLOCK_START_MS + offset,
             by: Key::new(by).unwrap(),
             actor,
             record,
@@ -237,6 +240,7 @@ impl Tracker for Fake {
                     closed: it.closed.is_some(),
                     pr: it.pr.clone(),
                     branch: it.branch.clone(),
+                    claimed_at_ms: it.first_claim_ms,
                     pr_status: it.pr_status.clone(),
                 }
             })

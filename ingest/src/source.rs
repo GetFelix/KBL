@@ -122,6 +122,8 @@ pub(crate) struct PullRequest {
     /// The head branch and the description, which tie it to an issue.
     pub(crate) head_ref: String,
     pub(crate) body: String,
+    /// When it was created, in milliseconds since the epoch.
+    pub(crate) created_ms: Option<u64>,
     /// None when the author is not one of ours: nothing more is read.
     pub(crate) status: Option<PrSnapshot>,
 }

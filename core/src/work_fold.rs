@@ -236,6 +236,9 @@ pub struct Item {
     /// Upstream's view of `pr`, as the last `pr_status` said.
     #[serde(default)]
     pub pr_status: Option<PrSnapshot>,
+    /// When the first claim on the item was logged, in the tracker's clock.
+    #[serde(default)]
+    pub first_claim_ms: Option<u64>,
     pub cost_micros: u64,
     pub context: BTreeMap<Key, u64>,
     pub paths: Vec<Path>,
@@ -609,6 +612,7 @@ impl State {
             branch: None,
             pr: None,
             pr_status: None,
+            first_claim_ms: None,
             cost_micros: 0,
             context: BTreeMap::new(),
             paths: Vec::new(),
@@ -762,6 +766,7 @@ impl State {
                     return Err(Reject::NotReady);
                 }
                 let it = self.item_mut(item)?;
+                it.first_claim_ms.get_or_insert(rec.at_ms);
                 let want = it.next_attempt();
                 if *attempt != want {
                     return Err(Reject::WrongAttempt);

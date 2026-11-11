@@ -430,3 +430,18 @@ fn a_required_context_can_be_a_commit_status() {
     let (checks, _) = check_state(&ok, None, Some(&r));
     assert_eq!(checks, PrChecks::Pending);
 }
+
+#[test]
+fn github_times_parse_to_epoch_milliseconds() {
+    assert_eq!(parse_utc_ms("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(
+        parse_utc_ms("2027-01-15T08:00:00Z"),
+        Some(1_800_000_000_000)
+    );
+    assert_eq!(
+        parse_utc_ms("2024-02-29T12:30:01Z"),
+        Some(1_709_209_801_000)
+    );
+    assert_eq!(parse_utc_ms("2027-13-15T08:00:00Z"), None);
+    assert_eq!(parse_utc_ms("yesterday"), None);
+}
