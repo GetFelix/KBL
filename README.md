@@ -236,8 +236,12 @@ cargo build -p felix-mcp -p agents-tool
 node dev/scripted.mjs --seed 2 --workers 3   # runs a job and checks each task ended as the seed says
 node dev/check-scripted.mjs                  # runs one seed twice with different crews and compares
 node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
+node dev/check-death.mjs                     # kills workers holding tasks, restarts one, and finishes a task twice
+node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
 agents-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
+
+The death check kills a worker and lets a stalled claim lapse with a 2 second claim visibility so it finishes quickly, and restarts a worker under the default 90 seconds to show it does not wait for the claim to lapse.
 
 To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mcp add`):
 

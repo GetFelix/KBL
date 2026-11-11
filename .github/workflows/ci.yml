@@ -111,6 +111,10 @@ jobs:
         run: node dev/check-tasks.mjs
       - name: Run a scripted job twice from one seed
         run: node dev/check-scripted.mjs
+      - name: Kill workers holding tasks
+        run: node dev/check-death.mjs
+      - name: Dead-letter a poison task
+        run: node dev/check-poison.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml logs
       - if: always()
