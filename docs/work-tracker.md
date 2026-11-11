@@ -122,6 +122,45 @@ sequenceDiagram
     Note over A,G: An agent that stops extending loses the claim after 90 s and the group hands the item to another agent.
 ```
 
+### Running the tracker
+
+`agents-tracker` signs in to Felix as its own principal, creates `work.events`,
+`work.ready.p0` to `p3` and the consumer group on each tier if they are not
+there, and folds `work.events` from the start (with seek snapshots) before it
+serves. It appends a record only when the fold accepts it, so a refused call
+leaves no trace in the log.
+
+Felix cannot yet tell the tracker which principal a token belongs to, so the
+tracker reads a token map from a JSON file (`--tokens-file`, or
+`AGENTS_TRACKER_TOKENS_FILE`):
+
+```json
+{ "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" } }
+```
+
+An agent's token maps to its name, which goes on every record it causes and is
+the consumer-group member name. `felix-mcp` reads `AGENTS_TRACKER_URL` and
+`AGENTS_TRACKER_TOKEN`; without them the work tools say they are not set up.
+
+| Call | Token | Does |
+|---|---|---|
+| `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item. An agent that already holds one gets it again, marked `resumed` |
+| `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed |
+| `POST /v1/work/complete` `{item, cost_micros}` | agent | Writes `done`, then acks |
+| `POST /v1/work/release` `{item, reason, cost_micros}` | agent | Writes `released`, then hands the delivery back |
+| `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
+| `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
+
+Ready records carry a stamp. When the tracker sees an item become Ready it
+publishes a record, and a record that is not the newest for its item (a tier
+changed, the tracker restarted, the item was closed or blocked meanwhile) is
+acked and skipped when it is delivered. When Felix hands an item to a second
+agent while the log still shows the first as holding it, the claim lapsed: the
+tracker writes `released` with the reason `lapsed`, then the new `claimed`.
+After a tracker restart the claims held across it cannot be extended; they
+lapse, and `work_complete` from the holder still works until another agent
+takes the item.
+
 ### Grants
 
 | Principal | May do |

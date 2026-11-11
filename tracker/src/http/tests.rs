@@ -39,7 +39,7 @@ async fn app() -> Router {
         }
     }
     let tokens = Tokens::parse(r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"}}"#).unwrap();
-    let tracker = Tracker::start(Quiet, Duration::from_secs(90))
+    let tracker = Tracker::start(Quiet, Duration::from_secs(90), false)
         .await
         .unwrap();
     router(tracker, tokens)

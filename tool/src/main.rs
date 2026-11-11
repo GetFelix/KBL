@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use agents_core::codec::Codec;
 use agents_core::names::{Resources, RunId, WORKERS_GROUP};
+use agents_core::work::WORK_EVENTS;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 
@@ -65,6 +66,15 @@ enum Command {
     /// Work with runs.
     #[command(subcommand)]
     Run(RunCommand),
+    /// Read the work tracker's log.
+    #[command(subcommand)]
+    Work(WorkCommand),
+}
+
+#[derive(Subcommand)]
+enum WorkCommand {
+    /// Print `work.events`, one JSON record per line.
+    Log,
 }
 
 #[derive(Subcommand)]
@@ -108,6 +118,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Command::Run(RunCommand::Create(args)) => create(target, args).await,
         Command::Run(RunCommand::Log { run }) => log(target, &run).await,
+        Command::Work(WorkCommand::Log) => print_stream(target, WORK_EVENTS).await,
     }
 }
 
@@ -159,8 +170,12 @@ async fn create(target: Target, args: CreateArgs) -> Result<()> {
 
 async fn log(target: Target, run: &str) -> Result<()> {
     let run = RunId::new(run).map_err(|e| anyhow::anyhow!("{e}"))?;
+    print_stream(target, &Resources::new(run).log()).await
+}
+
+async fn print_stream(target: Target, stream: &str) -> Result<()> {
     let broker = Session::sign_in(target).await?.broker().await?;
-    for payload in broker.read_all(&Resources::new(run).log()).await? {
+    for payload in broker.read_all(stream).await? {
         println!("{}", String::from_utf8_lossy(&payload));
     }
     Ok(())

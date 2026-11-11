@@ -62,6 +62,9 @@ struct Cli {
         hide = true
     )]
     claim_visibility_ms: u64,
+    /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
+    #[arg(long, env = "AGENTS_TRACKER_CRASH_AFTER_POLL", hide = true)]
+    crash_after_poll: bool,
 }
 
 #[tokio::main]
@@ -79,7 +82,12 @@ async fn main() -> Result<()> {
         broker_name: cli.broker_name,
     })
     .await?;
-    let tracker = Tracker::start(felix, Duration::from_millis(cli.claim_visibility_ms)).await?;
+    let tracker = Tracker::start(
+        felix,
+        Duration::from_millis(cli.claim_visibility_ms),
+        cli.crash_after_poll,
+    )
+    .await?;
     let listener = tokio::net::TcpListener::bind(cli.listen)
         .await
         .with_context(|| format!("listen on {}", cli.listen))?;

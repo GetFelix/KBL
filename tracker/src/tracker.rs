@@ -84,6 +84,8 @@ struct Inner<B> {
     visibility: Duration,
     me: Key,
     stamp: AtomicU64,
+    /// Dies after the first delivery is polled and before `claimed` is written. For the dev-stack check.
+    crash_after_poll: bool,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -98,13 +100,18 @@ impl<B: Broker> Tracker<B> {
     /// Rebuilds the state from the start of `work.events`, then publishes every
     /// ready item. Ready records already on the streams are left to be skipped
     /// as stale, since there is no telling which were acked.
-    pub(crate) async fn start(broker: B, visibility: Duration) -> anyhow::Result<Self> {
+    pub(crate) async fn start(
+        broker: B,
+        visibility: Duration,
+        crash_after_poll: bool,
+    ) -> anyhow::Result<Self> {
         let tracker = Self(Arc::new(Inner {
             broker,
             core: Mutex::new(Core::default()),
             visibility,
             me: Key::new("tracker").expect("a valid key"),
             stamp: AtomicU64::new(now_ms() * 1000),
+            crash_after_poll,
         }));
         {
             let mut core = tracker.0.core.lock().await;
@@ -377,6 +384,9 @@ impl<B: Broker> Tracker<B> {
                 self.ack_quiet(&stream, record.offset).await;
                 return Ok(None);
             }
+        }
+        if self.0.crash_after_poll {
+            std::process::exit(70);
         }
         let attempt = core.state.items[&item].next_attempt();
         let claim = WorkRecord::Claimed {

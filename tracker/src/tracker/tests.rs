@@ -239,7 +239,7 @@ async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
 }
 
 async fn start(fake: &Fake) -> Tracker<Fake> {
-    Tracker::start(fake.clone(), VIS).await.unwrap()
+    Tracker::start(fake.clone(), VIS, false).await.unwrap()
 }
 
 async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
