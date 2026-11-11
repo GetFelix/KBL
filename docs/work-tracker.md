@@ -136,7 +136,7 @@ tracker reads a token map from a JSON file (`--tokens-file`, or
 once only, and tokens are compared in constant time:
 
 ```json
-{ "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" } }
+{ "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" }, "ingest": { "<token>": "ingest-gh" } }
 ```
 
 An agent's token maps to its name, which goes on every record it causes and is
@@ -151,6 +151,9 @@ the consumer-group member name. `felix-mcp` reads `AGENTS_TRACKER_URL` and
 | `POST /v1/work/release` `{item, reason, cost_micros}` | agent | Writes `released`, then hands the delivery back |
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
+| `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
+| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, and its pull request |
+| `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 
 Ready records carry a stamp. When the tracker sees an item become Ready it
 publishes a record, and a record that is not the newest for its item (a tier
@@ -192,6 +195,67 @@ connection's first poll, so each active agent has a QUIC connection of its own
 to the broker, opened on its first call and closed after ten minutes without
 one. A connection that fails is opened again with a fresh token on the next
 call.
+
+### Running the ingest worker
+
+`agents-ingest` is a separate binary. It never writes to Felix: it reads
+GitHub, then writes through the three `ingest` calls above under its own token,
+and it makes no model calls. `agents-ingest --config ingest.json` polls every
+`poll_seconds` (default 60); `--once` polls once. `--webhook-listen` adds an
+endpoint whose only effect is to wake the poll: it checks `X-Hub-Signature-256`
+against the secret named by `--webhook-secret-env`, and a `transferred` or
+`deleted` event also forces a reconcile.
+
+```json
+{
+  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "AGENTS_INGEST_TOKEN" },
+  "github": { "token_file": "/run/secrets/github-token", "own_logins": ["kibble[bot]"] },
+  "rules": [
+    {
+      "name": "agent-ok", "repo": "GetFelix/felix", "mode": "admit",
+      "labels_all": ["agent-ok"], "labels_excluded": ["wontfix"],
+      "priority_labels": { "p0": 0, "p1": 1 }, "default_tier": 2, "cap": 5
+    }
+  ]
+}
+```
+
+A rule's `repo`, `labels_all`, `labels_any`, `labels_excluded`, `milestone`,
+`assignee` and `type` are ANDed; `mode` is `admit` or `propose`; `cap` limits
+open roots; `target_repo` names where agents work (default: the issue's repo).
+The first rule that matches takes the issue. The GitHub credential is a token
+read from `token_file` or `token_env`; the file is read again for every
+request, so a GitHub App installation token can be refreshed beside the worker
+(the worker does not mint installation tokens itself).
+
+What it does with GitHub:
+
+- **Cursor.** Issues and comments are listed `since` the saved cursor, oldest
+  first. Re-listing is safe, because each step is idempotent. A single-page
+  listing is requested with `If-None-Match`, so an unchanged repo costs no rate
+  limit. A spent budget or `retry-after` makes every later call wait.
+- **Import once.** The item id is derived from the upstream id, and the fold
+  refuses a second `imported` for it. A poll that stops before it saves finds
+  its root again on the next poll and adds nothing.
+- **Admit** writes `imported`, context for the issue text and the rule,
+  `accepted` with the tier, and a triage and an augment item. **Propose**
+  writes `imported` and the context, and leaves the root in Triage.
+- **Cap.** A match over its rule's cap is not imported and is looked at again
+  on later polls, oldest first, as roots close.
+- **Comments** become `context` entries (`gh-c<id>`) that name the author.
+  Comments by ingest's own logins are skipped, and an edited comment replaces
+  its entry.
+- **Transfers and deletions** show in no listing, so every `reconcile_every`
+  polls (default 20) each open imported issue is fetched. A redirect is a move
+  (`context` entry `moved`, new id, same item); a missing issue is dropped.
+- **Dropped with an open pull request.** After `closed` (dropped), the worker
+  makes the pull request in the item's `pr` a draft and comments on it, once.
+  It is the only write to GitHub.
+- **Links.** Blocked-by and sub-issues become `linked` edges once both issues
+  are imported.
+
+An issue that leaves its rule and later returns stays in Needs you: `left_scope`
+has no matching record to clear it, so a person decides.
 
 ### Grants
 
