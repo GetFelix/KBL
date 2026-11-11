@@ -94,6 +94,8 @@ pub enum WorkKind {
     Split,
     Question,
     Test,
+    /// Work that carries on from an answered question. Only the fold creates it.
+    Resume,
 }
 
 impl WorkKind {
@@ -104,6 +106,41 @@ impl WorkKind {
             WorkKind::Split | WorkKind::Augment | WorkKind::Question | WorkKind::Test
         )
     }
+}
+
+/// Most options a question may offer.
+pub const MAX_ASK_OPTIONS: usize = 8;
+
+/// Longest option, default or chosen option, in bytes.
+pub const MAX_ASK_OPTION_LEN: usize = 200;
+
+/// Longest title a record carries, in bytes.
+pub const MAX_TITLE: usize = 4096;
+
+/// What triage could not settle by itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unclear {
+    /// What the item asks for is not clear.
+    Scope,
+    /// Which repository the work belongs in is not clear.
+    Repo,
+    /// What would count as done is not clear.
+    Acceptance,
+}
+
+/// What an answer leads to. An answer without one only closes the question,
+/// which is how every answer logged before this field existed folds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "then", rename_all = "snake_case")]
+pub enum Then {
+    /// Claimable work under the asking item, carrying the question, the answer
+    /// and what the asker knew.
+    Resume,
+    /// The work belongs in another repo: a proposal in its Triage that the
+    /// asking item waits on. Only a person may answer this way, and the
+    /// answer's text is the reason shown with the proposal.
+    Prerequisite { target: Target, title: String },
 }
 
 /// The part of a fix a decision belongs to.
@@ -294,6 +331,9 @@ pub enum WorkRecord {
         why: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         duplicate_of: Option<ItemId>,
+        /// Triage could not settle the item. It goes to a person as a question.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unclear: Option<Unclear>,
     },
     /// The holder cannot go on until `prerequisite` is done. With `new`, the
     /// record also creates that prerequisite as a proposal in the target
@@ -373,6 +413,12 @@ pub enum WorkRecord {
         item: ItemId,
         attempt: u32,
         text: Content,
+        /// Choices to pick from. A person may always answer with free text instead.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+        /// The option taken when a person answers without choosing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
     },
     /// `question` is the offset of the `question` record it answers. An agent
     /// may answer only while it holds a `question` work item under `item`.
@@ -382,6 +428,11 @@ pub enum WorkRecord {
         text: Content,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         evidence: Vec<Evidence>,
+        /// The option picked, one of the question's. Free text goes in `text` and is never read.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chosen: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        then: Option<Then>,
     },
     Decision {
         item: ItemId,

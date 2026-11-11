@@ -12,7 +12,8 @@ use agents_core::artifact::{ArtifactId, INLINE_LIMIT};
 use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
 use agents_core::work::{
-    Actor, DoneWhen, Evidence, NewPrerequisite, Phase, RefusalReason, Target, WorkKind, WorkRecord,
+    Actor, DoneWhen, Evidence, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, NewPrerequisite, Phase,
+    RefusalReason, Target, Then, WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -62,6 +63,16 @@ pub(crate) enum Prereq {
     },
     /// An item that exists already, if the agent's grants can see it.
     Existing(ItemId),
+}
+
+/// What a person's answer adds to its text.
+#[derive(Default)]
+pub(crate) struct Reply {
+    /// One of the question's options.
+    pub(crate) chosen: Option<String>,
+    /// The work belongs in this repo: a prerequisite there, with this title,
+    /// instead of resume work.
+    pub(crate) moves_to: Option<(Target, String)>,
 }
 
 /// What a decision carries, as the agent wrote it.
@@ -388,17 +399,25 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Asks a person a question; the item waits in Needs you until one answers.
+    ///
+    /// `options` are choices a person can pick; they may always type something
+    /// else. `default` is the option taken when they answer without choosing.
     pub(crate) async fn ask(
         &self,
         agent: &AgentName,
         item: &ItemId,
         text: Content,
+        options: Vec<String>,
+        default: Option<String>,
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
+        check_options(&options, default.as_deref())?;
         self.held_write(agent, item, "ask", |attempt| WorkRecord::Question {
             item: item.clone(),
             attempt,
             text,
+            options,
+            default,
         })
         .await
     }
@@ -521,17 +540,22 @@ impl<B: Broker> Tracker<B> {
         question: u64,
         text: Content,
         evidence: Vec<Evidence>,
+        chosen: Option<String>,
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
         check_evidence(&evidence)?;
+        check_answered(&text, chosen.as_deref())?;
         self.begin().await?;
         let offset = {
             let mut core = self.0.core.lock().await;
+            // An agent's answer never moves work to another repo.
             let record = WorkRecord::Answer {
                 item: item.clone(),
                 question,
                 text,
                 evidence,
+                chosen,
+                then: Some(Then::Resume),
             };
             self.agent_append(&mut core, agent, item, "answer", record)
                 .await?
@@ -549,15 +573,33 @@ impl<B: Broker> Tracker<B> {
         question: Option<u64>,
         text: Content,
         evidence: Vec<Evidence>,
+        reply: Reply,
     ) -> Result<Value, Error> {
         self.begin().await?;
-        let question = {
+        let (question, default) = {
             let core = self.0.core.lock().await;
-            question
-                .or_else(|| core.state.items.get(item).and_then(|i| i.open_question))
+            let it = core.state.items.get(item);
+            let question = question
+                .or_else(|| it.and_then(|i| i.open_question))
                 .ok_or_else(|| Error::Refused {
                     why: "no_open_question".into(),
-                })?
+                })?;
+            let default = it
+                .filter(|i| i.open_question == Some(question))
+                .and_then(|i| i.ask.as_ref())
+                .and_then(|a| a.default.clone());
+            (question, default)
+        };
+        // Answering without choosing or typing takes the question's default.
+        let chosen = reply.chosen.or_else(|| {
+            matches!(&text, Content::Text(t) if t.is_empty())
+                .then_some(default)
+                .flatten()
+        });
+        check_answered(&text, chosen.as_deref())?;
+        let then = match reply.moves_to {
+            Some((target, title)) => Then::Prerequisite { target, title },
+            None => Then::Resume,
         };
         self.person_record(
             person,
@@ -566,6 +608,8 @@ impl<B: Broker> Tracker<B> {
                 question,
                 text,
                 evidence,
+                chosen,
+                then: Some(then),
             },
         )
         .await
@@ -667,6 +711,42 @@ fn item_for(parent: Option<&ItemId>, kind: Post, agent: &AgentName, key: &Key) -
     ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
 }
 
+fn check_options(options: &[String], default: Option<&str>) -> Result<(), Error> {
+    if options.len() > MAX_ASK_OPTIONS {
+        return Err(Error::Invalid(format!("at most {MAX_ASK_OPTIONS} options")));
+    }
+    for (i, o) in options.iter().enumerate() {
+        if o.is_empty() || options[..i].contains(o) {
+            return Err(Error::Invalid(
+                "options must be non-empty and different".into(),
+            ));
+        }
+        if o.len() > MAX_ASK_OPTION_LEN {
+            return Err(Error::Invalid(format!(
+                "an option is {} bytes; at most {MAX_ASK_OPTION_LEN}",
+                o.len()
+            )));
+        }
+    }
+    if default.is_some_and(|d| !options.iter().any(|o| o == d)) {
+        return Err(Error::Invalid(
+            "the default must be one of the options".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// An answer picks an option or says something, one of the two.
+fn check_answered(text: &Content, chosen: Option<&str>) -> Result<(), Error> {
+    let empty = matches!(text, Content::Text(t) if t.is_empty());
+    if chosen.is_none() == empty {
+        return Err(Error::Invalid(
+            "answer with one of the options or with text, not both".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn check_evidence(evidence: &[Evidence]) -> Result<(), Error> {
     if evidence.len() > MAX_EVIDENCE {
         return Err(Error::Invalid(format!(
@@ -704,13 +784,40 @@ fn check_content(name: &str, content: &Content) -> Result<(), Error> {
 /// The size rules for any record a caller writes.
 pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
     match record {
-        WorkRecord::Answer { text, evidence, .. } => {
+        WorkRecord::Answer {
+            text,
+            evidence,
+            chosen,
+            then,
+            ..
+        } => {
             check_content("text", text)?;
-            check_evidence(evidence)
+            check_evidence(evidence)?;
+            if let Some(c) = chosen {
+                field("chosen", c)?;
+            }
+            if let Some(Then::Prerequisite { target, title }) = then {
+                field("title", title)?;
+                field("target source", &target.source)?;
+                field("target repo", &target.repo)?;
+                if title.is_empty() || target.source.is_empty() || target.repo.is_empty() {
+                    return Err(Error::Invalid("a target and a title are needed".into()));
+                }
+            }
+            Ok(())
         }
-        WorkRecord::Context { text, .. }
-        | WorkRecord::Question { text, .. }
-        | WorkRecord::HumanInput { text, .. } => check_content("text", text),
+        WorkRecord::Question {
+            text,
+            options,
+            default,
+            ..
+        } => {
+            check_content("text", text)?;
+            check_options(options, default.as_deref())
+        }
+        WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {
+            check_content("text", text)
+        }
         WorkRecord::Edited {
             title: Some(title), ..
         } => {

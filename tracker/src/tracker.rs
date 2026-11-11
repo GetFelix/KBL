@@ -131,7 +131,7 @@ struct Core {
     lease: Option<LeaseHeld>,
     /// Another tracker took the writer lease.
     fenced: bool,
-    /// The text of context, note and answer records by offset, so a read does
+    /// The text of context, note, question, answer, decision and triage records by offset, so a read does
     /// not scan the log.
     texts: HashMap<u64, Content>,
 }
@@ -141,9 +141,23 @@ fn remember(texts: &mut HashMap<u64, Content>, offset: u64, record: &WorkRecord)
     match record {
         WorkRecord::Context { text, .. }
         | WorkRecord::HumanInput { text, .. }
-        | WorkRecord::Question { text, .. }
-        | WorkRecord::Answer { text, .. } => {
+        | WorkRecord::Question { text, .. } => {
             texts.insert(offset, text.clone());
+        }
+        // An answer picks an option or says something, never both, so one entry reads back either.
+        WorkRecord::Answer { text, chosen, .. } => {
+            let text = match chosen {
+                Some(c) => Content::Text(c.clone()),
+                None => text.clone(),
+            };
+            texts.insert(offset, text);
+        }
+        // What the asker knew, which resume work reads as `so_far`.
+        WorkRecord::Decision { so_far, .. } => {
+            texts.insert(offset, Content::Text(so_far.clone()));
+        }
+        WorkRecord::Triaged { why, .. } => {
+            texts.insert(offset, Content::Text(why.clone()));
         }
         WorkRecord::Prerequisite { new: Some(n), .. } => {
             texts.insert(offset, n.why.clone());
@@ -1236,7 +1250,7 @@ pub(crate) fn now_ms() -> u64 {
 
 mod tools;
 
-pub(crate) use tools::{Decide, Post, Prereq};
+pub(crate) use tools::{Decide, Post, Prereq, Reply};
 
 #[cfg(test)]
 mod tests;

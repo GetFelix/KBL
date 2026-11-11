@@ -42,7 +42,7 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_link` | Adds a dependency between items in one tree |
 | `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal, except `prerequisite`, which is work another repo must do first |
 | `work_progress` | Records a plan, a branch or a PR |
-| `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you. Answers one while holding a `question` item under it |
+| `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)) |
 
@@ -183,7 +183,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` |
 | `POST /v1/work/step` `{item, command, exit_code, output}` | A command the agent ran |
 | `POST /v1/work/edit` `{item, file, hunk, decision}` | A code change and the offset of the decision it carries out |
-| `POST /v1/work/ask` `{item, text}` / `POST /v1/work/answer` `{item, question, text, evidence}` | Asks a person, or answers as the holder of a `question` item |
+| `POST /v1/work/ask` `{item, text, options?, default?}` / `POST /v1/work/answer` `{item, question, text?, chosen?, evidence}` | Asks a person, or answers as the holder of a `question` item. An answer starts resume work; see [Questions with choices](#questions-with-choices) |
 
 Text in a record stays inline up to 4 KiB. Longer text is an artifact the
 caller stored first and names by its hash; `felix-mcp` does that for the
@@ -197,7 +197,7 @@ record if the fold accepts it:
 | `POST /v1/work/proposals/accept` `{item, tier?}` | `accepted`. A proposal's tier comes from the edit, then this call, then triage |
 | `POST /v1/work/proposals/edit` `{item, title?, tier?}` | `edited`, for an item nobody has accepted yet |
 | `POST /v1/work/proposals/reject` `{item}` | `rejected`, for an item nobody has accepted |
-| `POST /v1/work/questions/answer` `{item, text, question?, evidence?}` | `answer`. The question defaults to the open one |
+| `POST /v1/work/questions/answer` `{item, text?, chosen?, moves_to?, question?, evidence?}` | `answer`. The question defaults to the open one. `moves_to` is `{source, repo, title}` |
 | `POST /v1/work/tier` `{item, tier}` | `tier_changed`. A ready item is published again on its new tier |
 | `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
@@ -357,7 +357,8 @@ edits, 100 progress records, 100 context entries, 20 questions, 10
 answers, 100 links, and 24 children and proposals together. A call over a cap is refused, and the first refusal in an
 attempt is logged as refused, so a looping agent cannot fill the stream with
 records or with refusals. Each field is also limited in size: text over 4 KiB
-must be an artifact, and a title, command or reason is at most 4 KiB.
+must be an artifact, and a title, command or reason is at most 4 KiB. A
+question offers at most 8 options of at most 200 bytes each.
 
 ### Splitting and ordering
 
@@ -409,6 +410,57 @@ name, and an item it cannot see is refused as `unknown_item`, the same answer
 as one that does not exist. The plain `work_link` call still refuses another
 tree (`cross_root`). Cycles are refused across trees too.
 
+### Questions with choices
+
+A question can offer options. `work_ask` takes `options` (at most 8, each at
+most 200 bytes, none repeated) and a `default`, which must be one of them. A
+person picks one with a key, or types something else. Free text is always
+offered, and it is stored exactly as typed. Nothing reads it: the tracker runs
+no model, so it never decides what a person meant.
+
+An answer, from the dashboard or from `work_answer`, is one `answer` record
+with either `chosen` (one of the options) or text, never both. An answer with
+neither takes the question's `default`. The fold then does two things:
+
+- It appends one claimable `resume` item under the asking item. The item
+  carries three context entries: `question`, `answer` and `so_far`, which is
+  the asker's last decision on that attempt. Any eligible agent may claim it,
+  not only the one that asked, and `work_context` reads the three entries.
+- It ends the asker's hold on the item at no cost to its tries. The asking
+  item stays out of Ready while its resume item is open, so no one claims it
+  beside the agent doing the resume work. When that is done, the item is Ready
+  again.
+
+A second answer to the same question appends nothing: the question is no
+longer open, and the call is refused.
+
+If the answer says the work belongs in another repo, the person sends
+`moves_to` with the source, repo and a title. The fold then creates a
+[prerequisite](#prerequisites-in-another-repo) there instead of a resume item:
+a proposal in that repo's Triage, with the asking item waiting on it. The
+answer's text is the reason shown with the proposal. Routing a question to the
+people who own a repo waits for roles (#120); until then every question goes
+to My queue.
+
+Triage can mark an item `unclear` with a reason, `scope`, `repo` or
+`acceptance`. The item then reaches a person as a question in Needs you
+("unclear"), not as Ready work, even after someone accepts it. The person's
+answer starts resume work like any other.
+
+Questions that fold before this existed carry no options and their answers
+start no work, so older logs fold as they did.
+
+What each new route and record lets a caller do:
+
+| Route or record | Who can write it | What an agent could steer |
+|---|---|---|
+| `question` with `options` and `default` | The agent holding the item | The wording a person sees. Counts and sizes are bounded, and the existing 20 questions per attempt still apply |
+| `answer` with `chosen` | A person, or an agent holding a `question` item under the asking item | Which option is recorded. It must be one the question offered |
+| `answer` that starts resume work | The same | The text the resume agent reads, as any answer can. There is one resume item per question |
+| `answer` with `moves_to` | A person only. The agent route refuses it (403) and the fold refuses it from an agent (`actor_not_allowed`) | Nothing directly. An agent can shape the question a person reads, but only the person puts work in another repo's Triage |
+| `triaged` with `unclear` | The agent holding the triage item, or a person | That an item waits for a person. It cannot make an item Ready or move it to another repo |
+| the `resume` item | The fold only. `work_post` does not accept it | Nothing: no caller creates it |
+
 ### Kinds of work
 
 | Kind | Claimed by | The answer comes back as |
@@ -418,6 +470,7 @@ tree (`cross_root`). Cycles are refused across trees too.
 | `augment` | Any agent | Context records on the item: repro steps, related code, logs, linked issues, affected areas |
 | `split` | The agent holding the item | Live child items, within the budget below |
 | `question` | Any agent | An answer record that cites stream and offset |
+| `resume` | Any agent | Whatever the asker was doing, carried on from the answer. Only an answer creates it |
 | `test` | Any agent | Test follow-up for an item, as progress records |
 
 Root-shaping changes (a tier, or a split of a root at triage) and out-of-scope
@@ -579,7 +632,7 @@ It is the page someone opens first in the morning. It has three tabs.
 
 The landing view. It lists everything that waits on the person looking:
 
-- a question an agent asked,
+- a question an agent asked, with its options as keys, or an item triage found unclear,
 - a failure that needs a decision,
 - a triage proposal to accept,
 - a PR to review, or an approved one to merge.

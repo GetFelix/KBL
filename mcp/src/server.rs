@@ -244,6 +244,10 @@ struct WorkAskArgs {
     item: Option<String>,
     /// What you need a person to tell you. The item waits for the answer.
     question: String,
+    /// Up to 8 short choices (200 bytes each). The person can always type something else instead.
+    options: Option<Vec<String>>,
+    /// The option taken when the person answers without choosing. Must be one of `options`.
+    default: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -252,7 +256,10 @@ struct WorkAnswerArgs {
     item: String,
     /// The offset of the question record.
     question: u64,
+    /// Free text. Leave it empty when you pick an option.
     answer: String,
+    /// One of the options the question offered.
+    chosen: Option<String>,
     evidence: Option<Vec<EvidenceArg>>,
 }
 
@@ -543,20 +550,28 @@ impl Server {
     }
 
     #[tool(
-        description = "Ask a person a question you cannot settle yourself. The item waits in Needs you until they answer. Answers with the question's offset."
+        description = "Ask a person a question you cannot settle yourself. Offer options when the answer is a choice; they can always type something else. The item waits in Needs you until they answer, then a resume item carrying the question, the answer and your last so_far is open for any agent to claim. Answers with the question's offset."
     )]
     async fn work_ask(&self, Parameters(a): Parameters<WorkAskArgs>) -> Result<String, String> {
         let item = self.item_or_held(a.item).await?;
         let text = self.content(a.question).await?;
         let reply = self
             .work()?
-            .tool("/v1/work/ask", json!({ "item": item, "text": text }))
+            .tool(
+                "/v1/work/ask",
+                json!({
+                    "item": item,
+                    "text": text,
+                    "options": a.options.unwrap_or_default(),
+                    "default": a.default,
+                }),
+            )
             .await?;
         Ok(reply.to_string())
     }
 
     #[tool(
-        description = "Answer a question on an item while you hold a `question` item under it. Cite the records your answer rests on."
+        description = "Answer a question on an item while you hold a `question` item under it. Pick one of its options with `chosen`, or write free text. Cite the records your answer rests on."
     )]
     async fn work_answer(
         &self,
@@ -568,7 +583,13 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/answer",
-                json!({ "item": a.item, "question": a.question, "text": text, "evidence": evidence }),
+                json!({
+                    "item": a.item,
+                    "question": a.question,
+                    "text": text,
+                    "chosen": a.chosen,
+                    "evidence": evidence,
+                }),
             )
             .await?;
         Ok(reply.to_string())

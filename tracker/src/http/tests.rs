@@ -360,3 +360,14 @@ async fn a_prerequisite_is_an_agent_call_with_one_of_two_shapes() {
         (StatusCode::CONFLICT, Some("not_held"))
     );
 }
+
+#[tokio::test]
+async fn an_agent_token_cannot_move_work_to_another_repo() {
+    let app = app().await;
+    let body = json!({
+        "item": "a1", "question": 1, "text": { "text": "x" },
+        "moves_to": { "source": "gh", "repo": "o/other", "title": "t" }
+    });
+    let (status, _) = call(&app, "/v1/work/answer", Some("tok-w1"), body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

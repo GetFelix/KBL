@@ -36,3 +36,7 @@
 {"kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"g1","key":"need-cas","new":{"target":{"source":"github","repo":"GetFelix/felix-gateway"},"title":"gateway needs a CAS call","why":{"text":"the client cannot swap atomically"},"evidence":[{"stream":"work.events","offset":12}]},"done_when":"released","cost_micros":25000}
 {"kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"g2","key":"need-existing","done_when":"merged","cost_micros":0}
 {"kind":"shipped","item":"g1","release":"0.4.0"}
+{"kind":"triaged","item":"r1","tier":2,"why":"which repo does this belong in","unclear":"repo"}
+{"kind":"question","item":"r1","attempt":1,"text":{"text":"which client?"},"options":["rust","python"],"default":"rust"}
+{"kind":"answer","item":"r1","question":41,"text":{"text":""},"chosen":"rust","then":{"then":"resume"}}
+{"kind":"answer","item":"r1","question":42,"text":{"text":"this is a gateway bug"},"then":{"then":"prerequisite","target":{"source":"github","repo":"GetFelix/felix-gateway"},"title":"gateway needs a CAS call"}}

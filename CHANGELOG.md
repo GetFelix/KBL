@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Questions can offer options. `work_ask` takes `options` (at most 8) and a
+  `default`, and a person picks one or types free text, which is stored as
+  written. An answer appends a claimable `resume` item under the asking item
+  that carries the question, the answer and the asker's `so_far`; the asking
+  item stays out of Ready meanwhile. A person's answer can name another repo
+  (`moves_to`) to create a prerequisite there instead. Triage can mark an item
+  `unclear` (scope, repo or acceptance), which sends it to a person as a
+  question. Logs from before fold as they did; older trackers ignore the new
+  fields and start no resume work.
+
 - Ingest keeps one cursor per repo. A repo that answers 403 or 404 stalls only
   itself and is reported in Needs you as `source_stalled`; state saved with the
   single cursor seeds every repo once.
