@@ -63,6 +63,65 @@ An ingest worker pulls new and changed items from GitHub, ADO or Jira. For each
 root it posts one triage item and one augment item, once. Triaging again is a
 person's action. People edit any record through REST or the viewer.
 
+```mermaid
+flowchart LR
+    subgraph Sources
+        GH[GitHub]
+        ADO[Azure DevOps]
+        JIRA[Jira]
+        P[People, in the dashboard]
+    end
+    subgraph Agents
+        A1[Agent + felix-mcp]
+        A2[Agent + felix-mcp]
+    end
+    subgraph Kibble
+        T[Tracker]
+    end
+    subgraph Felix
+        WE[(work.events)]
+        RD[(work.ready.p0 to p3<br/>one consumer group)]
+        KV[(item and budget keys)]
+    end
+    D[Dashboard]
+    GH --> T
+    ADO --> T
+    JIRA --> T
+    P --> T
+    A1 <--> T
+    A2 <--> T
+    T -- every change --> WE
+    T -- ready items --> RD
+    RD -- claims, as a member per agent --> T
+    T --> KV
+    WE -- fold --> D
+```
+
+Everything goes through the tracker: imports, people's actions and every
+agent call. It is the only writer of `work.events`, the ready streams and the
+keys, and the dashboard is a fold of `work.events`.
+
+```mermaid
+sequenceDiagram
+    participant A as Agent (felix-mcp)
+    participant T as Tracker
+    participant G as Ready streams (consumer group)
+    participant L as work.events
+    A->>T: work_next (agent token)
+    T->>G: poll as member "agent"
+    G-->>T: item, 90 s visibility
+    T->>L: claimed
+    T-->>A: item
+    loop every 30 s while working
+        A->>T: work_extend
+        T->>G: extend
+    end
+    A->>T: work_complete
+    T->>L: done
+    T->>G: ack
+    Note over A,G: An agent that stops extending loses the claim after 90 s and the group hands the item to another agent.
+```
+
 ### Grants
 
 | Principal | May do |
