@@ -35,7 +35,7 @@ after something went wrong.
 **Out of scope**
 
 - Being an agent framework. There is no planning library, prompt library or memory system. The roles in the demo are short prompts
-- Re-executing a run from a past point. Model calls are not deterministic, so the replay shows what happened and does not pretend to rerun it
+- Rerunning a past run as it was. Model calls are not deterministic, so the replay shows what happened. A redo from a past decision is a new attempt that branches from there ([decision-replay.md](decision-replay.md#redo-from-here)), never a rerun
 - Long-term agent memory or vector search
 - Hosting models or holding model keys for anyone but the person running `agents-run`
 - Anything that needs a database, a queue or a coordinator process of ours. If it cannot be expressed in Felix streams, consumer groups, caches and counters, it is out
@@ -558,6 +558,10 @@ scripted demo.
 | 8 | Grants and the injection demo | Demonstration 6 |
 | 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Demonstration 7, and it holds under loss |
 | 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
+
+**Why it was done this way.** [decision-replay.md](decision-replay.md) records an
+agent's decisions with their evidence and reads them back as a story for
+reviewers: recording in M3, the story view in M4, full replay and questions in M7.
 
 **M0 comes first on purpose**, for the reason the other showcases give: a
 view nobody can read proves nothing, so the look is fixed before anything is
