@@ -30,6 +30,8 @@ use tokio::time::Instant;
 
 use crate::felix::{Broker, ExtendError};
 
+mod ingest;
+
 /// How often `work_next` looks again while it waits for work.
 const POLL_EVERY: Duration = Duration::from_millis(200);
 /// Longest a single `work_next` waits, so a host's tool timeout is not hit.

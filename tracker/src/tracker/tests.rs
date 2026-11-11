@@ -35,6 +35,8 @@ struct Net {
     forgets: Vec<Option<String>>,
     fail_lease: bool,
     gate_extend: bool,
+    /// Ingest's saved state by name, with versions.
+    cursors: HashMap<String, (Vec<u8>, u64)>,
 }
 
 /// An in-memory Felix: streams, and a consumer group per ready stream. A `Fake`
@@ -330,6 +332,26 @@ impl Broker for Fake {
         let v = net.lease_versions;
         net.lease = Some((holder, v));
         Ok(Some(v))
+    }
+
+    async fn cursor_get(&self, name: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        Ok(self.net.lock().unwrap().cursors.get(name).cloned())
+    }
+
+    async fn cursor_put(
+        &self,
+        name: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut net = self.net.lock().unwrap();
+        let now = net.cursors.get(name).map(|(_, v)| *v);
+        if now != expect {
+            return Ok(None);
+        }
+        let next = now.unwrap_or(0) + 1;
+        net.cursors.insert(name.to_owned(), (value, next));
+        Ok(Some(next))
     }
 
     async fn forget(&self, member: Option<&str>) {
@@ -1071,4 +1093,88 @@ async fn a_record_the_fold_refuses_is_not_appended() {
         "{err}"
     );
     assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn ingest_writes_upstream_records_as_the_tracker_under_its_own_name() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let imported = WorkRecord::Imported {
+        item: item("r1"),
+        source: "github".into(),
+        upstream_id: "GetFelix/felix#1".into(),
+        title: "a bug".into(),
+    };
+    t.ingest_record(key("ingest-gh"), imported.clone())
+        .await
+        .unwrap();
+    // The same upstream id again is the fold's duplicate, not a second root.
+    let again = WorkRecord::Imported {
+        item: item("r2"),
+        source: "github".into(),
+        upstream_id: "GetFelix/felix#1".into(),
+        title: "a bug".into(),
+    };
+    let err = t.ingest_record(key("ingest-gh"), again).await.unwrap_err();
+    assert!(matches!(err, Error::Refused { why } if why == "duplicate"));
+    let log = fake.log();
+    assert_eq!(log.len(), 1);
+    assert_eq!(log[0].by, key("ingest-gh"));
+    assert_eq!(log[0].actor, Actor::Tracker);
+    let roots = t.ingest_roots().await.unwrap();
+    assert_eq!(roots["roots"][0]["upstream_id"], "GetFelix/felix#1");
+    assert_eq!(roots["roots"][0]["closed"], false);
+}
+
+#[tokio::test]
+async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    for record in [
+        WorkRecord::BudgetSet {
+            root: item("r1"),
+            items_left: 99,
+            max_depth: 9,
+            cost_left_micros: 1,
+            redos_per_item: 9,
+        },
+        WorkRecord::Rejected { item: item("r1") },
+        WorkRecord::Closed {
+            item: item("r1"),
+            why: agents_core::work::CloseWhy::Dismissed,
+        },
+    ] {
+        let err = t.ingest_record(key("ingest-gh"), record).await.unwrap_err();
+        assert!(matches!(err, Error::Refused { why } if why == "not_allowed"));
+    }
+    assert!(fake.log().is_empty());
+}
+
+#[tokio::test]
+async fn ingest_state_is_kept_with_a_version_and_a_stale_save_is_refused() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    assert_eq!(
+        t.ingest_state("github").await.unwrap()["state"],
+        Value::Null
+    );
+    let v1 = t
+        .ingest_save("github", &json!({"since": "a"}), None)
+        .await
+        .unwrap();
+    assert_eq!(v1["version"], 1);
+    // A restarted tracker still has it.
+    fake.expire_lease();
+    let t2 = Tracker::start(fake.reconnect(), settings()).await.unwrap();
+    let got = t2.ingest_state("github").await.unwrap();
+    assert_eq!(got["state"], json!({"since": "a"}));
+    // Saving at the version it read goes through; saving at an old one does not.
+    t2.ingest_save("github", &json!({"since": "b"}), Some(1))
+        .await
+        .unwrap();
+    let err = t2
+        .ingest_save("github", &json!({"since": "c"}), Some(1))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Refused { why } if why == "stale_state"));
 }

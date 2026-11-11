@@ -19,6 +19,11 @@ use serde_json::{Value, json};
 /// The cache and key that hold the tracker's writer lease.
 const LEASE_CACHE: &str = "work.tracker";
 const LEASE_KEY: &str = "writer";
+
+/// The key ingest's state for source `name` is kept under, in the lease cache.
+fn cursor_key(name: &str) -> String {
+    format!("ingest-{name}")
+}
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
 const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
@@ -102,6 +107,26 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         ttl: Duration,
         expect: Option<u64>,
     ) -> impl Future<Output = Result<Option<u64>>> + Send;
+
+    /// The value ingest keeps under `name` and its version.
+    fn cursor_get(
+        &self,
+        _name: &str,
+    ) -> impl Future<Output = Result<Option<(Vec<u8>, u64)>>> + Send {
+        async { bail!("this broker keeps no ingest cursors") }
+    }
+
+    /// Writes ingest's value under `name` if its version is still `expect`
+    /// (none: the key must be absent). Returns the new version, or none when
+    /// the condition failed.
+    fn cursor_put(
+        &self,
+        _name: &str,
+        _value: Vec<u8>,
+        _expect: Option<u64>,
+    ) -> impl Future<Output = Result<Option<u64>>> + Send {
+        async { bail!("this broker keeps no ingest cursors") }
+    }
 
     /// Drops a connection that failed or timed out, so the next call opens a
     /// new one: `member`'s, or the log's when none.
@@ -527,6 +552,54 @@ impl Broker for Felix {
                     LEASE_KEY,
                     Bytes::from(holder),
                     Some(ttl.as_millis() as u64),
+                    condition,
+                )
+                .await?;
+            Ok(put.applied.then_some(put.version).flatten())
+        }
+        .await;
+        self.forget_main(done).await
+    }
+
+    async fn cursor_get(&self, name: &str) -> Result<Option<(Vec<u8>, u64)>> {
+        let done = async {
+            let got = self
+                .main()
+                .await?
+                .cache_get_versioned(
+                    self.tenant(),
+                    self.namespace(),
+                    LEASE_CACHE,
+                    &cursor_key(name),
+                )
+                .await?;
+            Ok(got.map(|v| (v.value.to_vec(), v.version)))
+        }
+        .await;
+        self.forget_main(done).await
+    }
+
+    async fn cursor_put(
+        &self,
+        name: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> Result<Option<u64>> {
+        let condition = match expect {
+            None => CacheCondition::Absent,
+            Some(v) => CacheCondition::Version(v),
+        };
+        let done = async {
+            let put = self
+                .main()
+                .await?
+                .cache_put_if(
+                    self.tenant(),
+                    self.namespace(),
+                    LEASE_CACHE,
+                    &cursor_key(name),
+                    Bytes::from(value),
+                    None,
                     condition,
                 )
                 .await?;
