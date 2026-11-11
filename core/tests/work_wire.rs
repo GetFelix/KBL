@@ -211,6 +211,39 @@ fn every_record() -> Vec<WorkRecord> {
             op: "work_post".into(),
             reason: RefusalReason::Limit,
         },
+        WorkRecord::Prerequisite {
+            item: item("r1"),
+            attempt: 1,
+            prerequisite: item("g1"),
+            key: key("need-cas"),
+            new: Some(NewPrerequisite {
+                target: Target {
+                    source: "github".into(),
+                    repo: "GetFelix/felix-gateway".into(),
+                },
+                title: "gateway needs a CAS call".into(),
+                why: text("the client cannot swap atomically"),
+                evidence: vec![Evidence {
+                    stream: WORK_EVENTS.into(),
+                    offset: 12,
+                }],
+            }),
+            done_when: DoneWhen::Released,
+            cost_micros: 25_000,
+        },
+        WorkRecord::Prerequisite {
+            item: item("r1"),
+            attempt: 1,
+            prerequisite: item("g2"),
+            key: key("need-existing"),
+            new: None,
+            done_when: DoneWhen::Merged,
+            cost_micros: 0,
+        },
+        WorkRecord::Shipped {
+            item: item("g1"),
+            release: "0.4.0".into(),
+        },
     ]
 }
 
@@ -240,7 +273,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 29);
+    assert_eq!(kinds.len(), 31);
 }
 
 #[test]

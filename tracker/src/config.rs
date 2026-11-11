@@ -2,6 +2,7 @@
 //! belongs to, so the tracker reads a token map from a file. Each agent's token
 //! maps to its name, and the name is what goes on its records.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use agents_core::names::{AgentName, Key};
@@ -45,7 +46,14 @@ struct File {
     /// Token to an ingest worker's key. It may append the upstream sync records and keep its cursor.
     #[serde(default = "Pairs::empty")]
     ingest: Pairs<Key>,
+    /// Agent name to the repos it may reach outside its own tree.
+    #[serde(default)]
+    grants: BTreeMap<String, Vec<String>>,
 }
+
+/// Agent name to the repos it may file prerequisites in and link to, beyond
+/// the repo of the tree it is working in.
+pub(crate) type Grants = BTreeMap<String, Vec<String>>;
 
 impl<T> Pairs<T> {
     fn empty() -> Self {
@@ -64,6 +72,7 @@ pub(crate) struct Tokens {
     agents: Vec<(String, AgentName)>,
     people: Vec<(String, Key)>,
     ingest: Vec<(String, Key)>,
+    grants: Grants,
 }
 
 impl Tokens {
@@ -106,11 +115,26 @@ impl Tokens {
                 "a token is listed more than once, or as both an agent and a person"
             );
         }
+        for (agent, repos) in &file.grants {
+            anyhow::ensure!(
+                file.agents.0.iter().any(|(_, a)| a.as_str() == agent),
+                "grants name {agent:?}, which is not an agent"
+            );
+            anyhow::ensure!(
+                repos.iter().all(|r| r.contains('/')),
+                "a grant for {agent:?} is not an owner/repo"
+            );
+        }
         Ok(Self {
             agents: file.agents.0,
             people: file.people.0,
             ingest: file.ingest.0,
+            grants: file.grants,
         })
+    }
+
+    pub(crate) fn grants(&self) -> Grants {
+        self.grants.clone()
     }
 
     /// Looks the token up without stopping at the first match or at the first

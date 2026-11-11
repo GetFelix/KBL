@@ -79,6 +79,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let tokens = Tokens::load(&cli.tokens_file)?;
+    let grants = tokens.grants();
     let felix = felix::connect(Target {
         tenant: cli.tenant,
         namespace: cli.namespace,
@@ -94,6 +95,7 @@ async fn main() -> Result<()> {
     let tracker = Tracker::start(
         felix,
         Settings {
+            grants,
             visibility: Duration::from_millis(cli.claim_visibility_ms),
             lease_ttl: ttl,
             // Long enough for a killed tracker's lease to run out.

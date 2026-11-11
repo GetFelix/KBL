@@ -1,13 +1,15 @@
 use agents_core::content::Content;
 use agents_core::names::ItemId;
 use agents_core::work::{
-    CloseWhy, Evidence, Phase, RefusalReason, WORK_EVENTS, WorkKind, WorkRecord,
+    CloseWhy, DoneWhen, Evidence, Phase, RefusalReason, Target, WORK_EVENTS, WorkKind, WorkRecord,
 };
 use agents_core::work_fold::Stage;
-use serde_json::Value;
+use serde_json::{Value, json};
 
-use super::super::tests::{Fake, agent, claim, claimed_id, item, key, seed, start};
-use super::{Decide, Post};
+use super::super::tests::{
+    Fake, agent, claim, claimed_id, item, key, seed, settings, start, start_with,
+};
+use super::{Decide, Post, Prereq};
 use crate::tracker::Error;
 
 fn text(s: &str) -> Content {
@@ -855,4 +857,283 @@ async fn an_edited_title_is_bounded_and_not_empty() {
         .await;
     assert_eq!(why(r), "invalid");
     assert_eq!(fake.log().len(), before);
+}
+
+/// A tracker where w1 holds `a1`, an issue in `GetFelix/felix`, and may reach `GetFelix/felix-gateway`.
+async fn granted() -> (Fake, crate::tracker::Tracker<Fake>) {
+    let fake = Fake::default();
+    let grants = [("w1".to_owned(), vec!["GetFelix/felix-gateway".to_owned()])].into();
+    let t = start_with(
+        &fake,
+        crate::tracker::Settings {
+            grants,
+            ..settings()
+        },
+    )
+    .await;
+    import(&t, "a1", "GetFelix/felix#1").await;
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: item("a1"),
+            tier: Some(2),
+        },
+    )
+    .await;
+    assert!(claimed_id(&claim(&t, "w1").await).is_some());
+    (fake, t)
+}
+
+async fn person(t: &crate::tracker::Tracker<Fake>, record: WorkRecord) {
+    t.person_record(key("gab"), record).await.unwrap();
+}
+
+async fn import(t: &crate::tracker::Tracker<Fake>, id: &str, upstream: &str) {
+    person(
+        t,
+        WorkRecord::Imported {
+            item: item(id),
+            source: "github".into(),
+            upstream_id: upstream.into(),
+            title: format!("fix {id}"),
+        },
+    )
+    .await;
+}
+
+fn gateway() -> Prereq {
+    Prereq::New {
+        target: Target {
+            source: "github".into(),
+            repo: "GetFelix/felix-gateway".into(),
+        },
+        title: "gateway needs a CAS call".into(),
+        why: text("the client cannot swap atomically"),
+        evidence: vec![],
+    }
+}
+
+async fn stage(t: &crate::tracker::Tracker<Fake>, id: &ItemId) -> Option<Stage> {
+    t.0.core.lock().await.state.stage(id)
+}
+
+#[tokio::test]
+async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
+    let (fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    let reply = t
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .await
+        .unwrap();
+    assert_eq!(reply["status"], "blocked");
+    let g = id_of(&json!({ "item": reply["prerequisite"] }));
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Blocked));
+    // The proposal sits in Triage of the other repo, with the reason beside it.
+    assert_eq!(stage(&t, &g).await, Some(Stage::Proposed));
+    {
+        let core = t.0.core.lock().await;
+        let it = &core.state.items[&g];
+        assert_eq!(it.target.as_ref().unwrap().repo, "GetFelix/felix-gateway");
+        let at = it.context.values().next().unwrap();
+        assert_eq!(core.texts[at], text("the client cannot swap atomically"));
+        // No try was spent and nothing was released or given up.
+        assert_eq!(core.state.items[&a1].paths[0].tries, 0);
+    }
+    assert!(
+        !fake
+            .kinds()
+            .iter()
+            .any(|k| k == "released" || k == "gave_up")
+    );
+    // Nobody else can claim a blocked item.
+    assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+    // A retry answers with the first call's work and writes nothing.
+    let before = fake.log().len();
+    let again = t
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .await
+        .unwrap();
+    assert_eq!(again["created"], false);
+    assert_eq!(again["prerequisite"], reply["prerequisite"]);
+    assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn the_item_is_ready_again_when_the_prerequisite_is_merged() {
+    let (_fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    let reply = t
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .await
+        .unwrap();
+    let g = id_of(&json!({ "item": reply["prerequisite"] }));
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: g.clone(),
+            tier: None,
+        },
+    )
+    .await;
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Blocked));
+    person(
+        &t,
+        WorkRecord::Progress {
+            item: g.clone(),
+            attempt: 1,
+            note: text("pr"),
+            branch: None,
+            pr: Some("GetFelix/felix-gateway#9".into()),
+        },
+    )
+    .await;
+    person(
+        &t,
+        WorkRecord::Closed {
+            item: g.clone(),
+            why: CloseWhy::Merged,
+        },
+    )
+    .await;
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Ready));
+    // The next claim resumes the same attempt and sees where the work landed.
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+    let ctx = t.context_read(&agent("w2"), &a1).await.unwrap();
+    assert_eq!(ctx["prerequisites"][0]["item"], g.as_str());
+    assert_eq!(ctx["prerequisites"][0]["pr"], "GetFelix/felix-gateway#9");
+}
+
+#[tokio::test]
+async fn a_release_link_waits_for_the_release_not_the_merge() {
+    let (_fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    let reply = t
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Released, 0)
+        .await
+        .unwrap();
+    let g = id_of(&json!({ "item": reply["prerequisite"] }));
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: g.clone(),
+            tier: None,
+        },
+    )
+    .await;
+    person(
+        &t,
+        WorkRecord::Closed {
+            item: g.clone(),
+            why: CloseWhy::Merged,
+        },
+    )
+    .await;
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Blocked));
+    person(
+        &t,
+        WorkRecord::Shipped {
+            item: g,
+            release: "0.4.0".into(),
+        },
+    )
+    .await;
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Ready));
+}
+
+#[tokio::test]
+async fn an_agent_reaches_only_the_repos_its_grants_name() {
+    let (fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    import(&t, "f1", "other/secret#4").await;
+    import(&t, "f2", "GetFelix/felix-gateway#4").await;
+    let kinds = fake.kinds();
+    // A new prerequisite in a repo nobody granted.
+    let elsewhere = Prereq::New {
+        target: Target {
+            source: "github".into(),
+            repo: "other/secret".into(),
+        },
+        title: "x".into(),
+        why: text("y"),
+        evidence: vec![],
+    };
+    assert_eq!(
+        why(t
+            .prerequisite(&w1, &a1, key("k"), elsewhere, DoneWhen::Merged, 0)
+            .await),
+        "no_grant"
+    );
+    // An existing item in one, which looks the same as a missing item.
+    for foreign in ["f1", "nope"] {
+        let r = t
+            .prerequisite(
+                &w1,
+                &a1,
+                key("k"),
+                Prereq::Existing(item(foreign)),
+                DoneWhen::Merged,
+                0,
+            )
+            .await;
+        assert_eq!(why(r), "unknown_item");
+    }
+    // The plain link tool never crosses trees, granted or not.
+    assert_eq!(why(t.link(&w1, &a1, &item("f2")).await), "cross_root");
+    assert_eq!(fake.kinds(), kinds);
+    // An item in a granted repo may be linked instead of creating a duplicate.
+    let reply = t
+        .prerequisite(
+            &w1,
+            &a1,
+            key("k"),
+            Prereq::Existing(item("f2")),
+            DoneWhen::Merged,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["created"], false);
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Blocked));
+    // And an agent that holds nothing cannot name a prerequisite at all.
+    assert_eq!(
+        why(t
+            .prerequisite(&agent("w2"), &a1, key("k"), gateway(), DoneWhen::Merged, 0)
+            .await),
+        "not_held"
+    );
+}
+
+#[tokio::test]
+async fn prerequisites_share_the_per_attempt_post_cap() {
+    let (_fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    for n in 0..24 {
+        post(&t, "w1", "a1", &format!("p{n}"), "proposal")
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        why(t
+            .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+            .await),
+        "limit_reached"
+    );
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Held));
+}
+
+#[tokio::test]
+async fn a_release_name_is_not_empty_and_is_bounded() {
+    let (_fake, t) = granted().await;
+    for release in [String::new(), "x".repeat(5000)] {
+        let r = t
+            .person_record(
+                key("gab"),
+                WorkRecord::Shipped {
+                    item: item("a1"),
+                    release,
+                },
+            )
+            .await;
+        assert_eq!(why(r), "invalid");
+    }
 }

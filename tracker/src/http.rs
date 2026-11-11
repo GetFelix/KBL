@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
-use agents_core::work::{CloseWhy, Evidence, Phase, WorkRecord};
+use agents_core::work::{CloseWhy, DoneWhen, Evidence, Phase, Target, WorkRecord};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use crate::config::{Caller, Tokens};
 use crate::felix::Broker;
-use crate::tracker::{Decide, Error, Post, Tracker};
+use crate::tracker::{Decide, Error, Post, Prereq, Tracker};
 
 mod ingest;
 
@@ -105,7 +105,23 @@ struct PostBody {
     item: ItemId,
     key: Key,
     work: String,
+    #[serde(default)]
     title: String,
+    /// For `prerequisite`: where the new work belongs.
+    target_source: Option<String>,
+    target_repo: Option<String>,
+    /// For `prerequisite`: why the held item cannot go on without it.
+    why: Option<Content>,
+    #[serde(default)]
+    evidence: Vec<Evidence>,
+    /// For `prerequisite`: an item that exists already, instead of a new one.
+    existing: Option<ItemId>,
+    /// For `prerequisite`: `merged` (default) or `released`.
+    #[serde(default)]
+    done_when: DoneWhen,
+    /// What the attempt cost so far.
+    #[serde(default)]
+    cost_micros: u64,
 }
 
 #[derive(Deserialize)]
@@ -298,6 +314,27 @@ async fn work_post<B: Broker>(
         Ok(a) => a,
         Err(d) => return denied(d),
     };
+    if b.work == "prerequisite" {
+        let which = match (b.existing, b.target_source, b.target_repo, b.why) {
+            (Some(id), None, None, None) if b.title.is_empty() => Prereq::Existing(id),
+            (None, Some(source), Some(repo), Some(why)) => Prereq::New {
+                target: Target { source, repo },
+                title: b.title,
+                why,
+                evidence: b.evidence,
+            },
+            _ => {
+                return reply(Err(Error::Invalid(
+                    "a prerequisite names either `existing`, or a target_source, target_repo, title and why".into(),
+                )));
+            }
+        };
+        return reply(
+            app.tracker
+                .prerequisite(&a, &b.item, b.key, which, b.done_when, b.cost_micros)
+                .await,
+        );
+    }
     let kind = match Post::parse(&b.work) {
         Ok(k) => k,
         Err(e) => return reply(Err(e)),

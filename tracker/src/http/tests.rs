@@ -61,6 +61,7 @@ async fn app() -> Router {
     let tracker = Tracker::start(
         Quiet,
         crate::tracker::Settings {
+            grants: Default::default(),
             visibility: Duration::from_secs(90),
             lease_ttl: Duration::from_secs(15),
             lease_wait: Duration::ZERO,
@@ -313,5 +314,49 @@ async fn an_unknown_kind_of_work_is_a_bad_request() {
     assert_eq!(
         (status, reply["why"].as_str()),
         (StatusCode::BAD_REQUEST, Some("invalid"))
+    );
+}
+
+#[tokio::test]
+async fn a_prerequisite_is_an_agent_call_with_one_of_two_shapes() {
+    let app = app().await;
+    let new = json!({
+        "item": "a1", "key": "k", "work": "prerequisite", "title": "t",
+        "target_source": "github", "target_repo": "o/r", "why": { "text": "w" }
+    });
+    // People post nothing on an agent's behalf.
+    assert_eq!(
+        call(&app, "/v1/work/post", Some("tok-gab"), new.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    // Nor can anyone write the record through the person or ingest routes.
+    let record = json!({ "record": {
+        "kind": "prerequisite", "item": "a1", "attempt": 1, "prerequisite": "g1", "key": "k"
+    } });
+    for (path, token) in [
+        ("/v1/work/records", "tok-gab"),
+        ("/v1/ingest/records", "tok-ing"),
+    ] {
+        let (status, _) = call(&app, path, Some(token), record.clone()).await;
+        assert_ne!(status, StatusCode::OK);
+    }
+    // Mixing the shapes, or leaving out the reason, never reaches the tracker.
+    for bad in [
+        json!({ "item": "a1", "key": "k", "work": "prerequisite", "title": "t", "existing": "g1" }),
+        json!({ "item": "a1", "key": "k", "work": "prerequisite", "title": "t", "target_source": "github", "target_repo": "o/r" }),
+    ] {
+        let (status, reply) = call(&app, "/v1/work/post", Some("tok-w1"), bad).await;
+        assert_eq!(
+            (status, reply["why"].as_str()),
+            (StatusCode::BAD_REQUEST, Some("invalid"))
+        );
+    }
+    // A well-formed one reaches the holder check.
+    let (status, reply) = call(&app, "/v1/work/post", Some("tok-w1"), new).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_held"))
     );
 }

@@ -48,3 +48,18 @@ fn tokens_of_other_lengths_or_with_a_shared_prefix_do_not_match() {
     assert!(tokens.who("abcdeg").is_none());
     assert!(tokens.who("abcdef").is_some());
 }
+
+#[test]
+fn grants_name_agents_and_owner_repo_pairs() {
+    let ok = Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w1":["GetFelix/felix-gateway"]}}"#)
+        .unwrap();
+    assert_eq!(ok.grants()["w1"], ["GetFelix/felix-gateway"]);
+    assert!(Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w2":["a/b"]}}"#).is_err());
+    assert!(Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w1":["*"]}}"#).is_err());
+    assert!(
+        Tokens::parse(r#"{"agents":{"t":"w1"}}"#)
+            .unwrap()
+            .grants()
+            .is_empty()
+    );
+}
