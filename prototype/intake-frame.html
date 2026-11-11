@@ -68,7 +68,7 @@
 
   nav { display: none; }
   main { flex: 1; min-height: 0; overflow: auto; padding: 14px 18px 18px; }
-  .board { position: relative; display: grid; grid-template-columns: 170px repeat(6, minmax(168px, 1fr)); gap: 10px; align-items: start; min-width: min-content; }
+  .board { position: relative; padding-bottom: 24px; display: grid; grid-template-columns: 170px repeat(6, minmax(168px, 1fr)); gap: 10px; align-items: start; min-width: min-content; }
   #links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; z-index: 3; }
   #links path { fill: none; stroke: var(--cyan); stroke-width: 1.75; opacity: 0.9; }
   #links path.far { stroke-dasharray: 3 4; opacity: 0.7; }
@@ -151,7 +151,7 @@
   .verdict.grow b { color: var(--amber); }
   .scrub { display: flex; align-items: center; gap: 10px; }
   .scrub input { flex: 1; min-width: 0; accent-color: var(--cyan); }
-  .scrub .at { font: 500 12px "JetBrains Mono", monospace; color: var(--muted); min-width: 84px; text-align: right; }
+  .scrub .at { font: 500 12px "JetBrains Mono", monospace; color: var(--muted); min-width: 0; text-align: right; }
   #live { font: 600 12px Inter, sans-serif; }
   #live.on { background: var(--cyan); border-color: var(--cyan); color: var(--on-cyan); }
 
@@ -175,7 +175,7 @@
     #dock { padding: 10px 12px; max-height: 42dvh; overflow: auto; }
     footer { padding: 8px 12px 10px; gap: 6px; }
     .rates { gap: 4px 14px; }
-    .scrub .at { min-width: 60px; }
+    
   }
 </style>
 </head>
@@ -412,7 +412,7 @@ function render() {
     `<span class="m"><small>in</small>${inDay}/day</span><span class="m"><small>out</small>${outDay}/day</span>` +
     `<span class="m"><small>oldest ready</small>${oldReady ? `${span(cut - oldReady.since)} (${esc(oldReady.ref)})` : 'none'}</span>${verdict}`;
   const live = cut >= NOW;
-  $('at').textContent = live ? 'live' : `${span(NOW - cut)} ago`;
+  $('at').textContent = live ? '' : `${span(NOW - cut)} ago`;
   $('live').classList.toggle('on', live);
   $('scrub').value = cut;
 
@@ -444,17 +444,41 @@ function renderDock(chain) {
     `<div class="meta">${esc(stageName)} for ${span(cut - it.since)} · arrived ${span(cut - it.at)} ago${it.holder ? ` · held by <span class="agent">${esc(it.holder)}</span>` : ''}${run}</div>${chainHtml}`;
 }
 
-// Curves from each dependency to the item that waits on it, between rows in view.
+// Lines from each dependency to the item that waits on it. They run in the
+// gutters between columns and, to pass a column, under its last card, so they
+// never cross a card's text.
+let segments = [];
 function drawLinks(chain) {
   const svg = $('links');
   svg.innerHTML = '';
+  segments = [];
   if (!chain || getComputedStyle(svg).display === 'none') return;
-  const b = $('board').getBoundingClientRect();
+  const board = $('board');
+  const b = board.getBoundingClientRect();
+  const cols = [...board.querySelectorAll('.col')].map((c) => { const r = c.getBoundingClientRect(); return { l: r.left - b.left, r: r.right - b.left, b: r.bottom - b.top }; });
   const pos = (k) => {
-    const el = $('board').querySelector(`.row[data-k="${CSS.escape(k)}"]`);
+    const el = board.querySelector(`.row[data-k="${CSS.escape(k)}"]`);
     if (!el) return null;
     const r = el.getBoundingClientRect();
-    return { l: r.left - b.left, r: r.right - b.left, y: r.top - b.top + r.height / 2 };
+    return { l: r.left - b.left, r: r.right - b.left, y: r.top - b.top + r.height / 2, col: [...board.querySelectorAll('.col')].indexOf(el.closest('.col')) };
+  };
+  // The gutter between column i and i + 1 (or beside the first and last).
+  const gutter = (i, side) => {
+    const j = side < 0 ? i - 1 : i;
+    if (j < 0) return cols[0].l - 5;
+    if (j >= cols.length - 1) return cols[cols.length - 1].r + 5;
+    return (cols[j].r + cols[j + 1].l) / 2;
+  };
+  const round = (pts) => {
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const [px, py] = pts[i - 1], [x, y] = pts[i], [nx, ny] = pts[i + 1];
+      const r = Math.min(5, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
+      const u = (a, b2) => Math.sign(b2 - a);
+      d += ` L${x - u(px, x) * r},${y - u(py, y) * r} Q${x},${y} ${x + u(x, nx) * r},${y + u(y, ny) * r}`;
+    }
+    const e = pts[pts.length - 1];
+    return d + ` L${e[0]},${e[1]}`;
   };
   let out = '';
   for (const k of chain.all) {
@@ -463,22 +487,21 @@ function drawLinks(chain) {
       if (!chain.all.has(d)) continue;
       const from = pos(d);
       if (!from || !to) continue;
-      let p, a, z;
-      if (Math.abs(from.l - to.l) < 4) {
-        // Same column: bow out to the right edge.
-        a = [from.r, from.y]; z = [to.r, to.y];
-        const x = from.r + 14;
-        p = `M${a[0]},${a[1]} C${x},${a[1]} ${x},${z[1]} ${z[0]},${z[1]}`;
-      } else if (from.l > to.l) {
-        a = [from.l, from.y]; z = [to.r, to.y];
-        const m = (a[0] + z[0]) / 2;
-        p = `M${a[0]},${a[1]} C${m},${a[1]} ${m},${z[1]} ${z[0]},${z[1]}`;
-      } else {
-        a = [from.r, from.y]; z = [to.l, to.y];
-        const m = (a[0] + z[0]) / 2;
-        p = `M${a[0]},${a[1]} C${m},${a[1]} ${m},${z[1]} ${z[0]},${z[1]}`;
+      const dir = to.col < from.col ? -1 : 1;
+      const same = from.col === to.col;
+      const g1 = gutter(from.col, same ? 1 : dir), g2 = gutter(to.col, same ? 1 : -dir);
+      const sx = (same || dir > 0) ? from.r : from.l;
+      const tx = (same || dir < 0) ? to.r : to.l;
+      const pts = [[sx, from.y], [g1, from.y]];
+      if (Math.abs(g1 - g2) > 1) {
+        const lo = Math.min(from.col, to.col) + 1, hi = Math.max(from.col, to.col) - 1;
+        const between = cols.slice(lo, hi + 1);
+        const y = between.length ? Math.max(...between.map((c) => c.b)) + 7 : null;
+        if (y !== null) pts.push([g1, y], [g2, y]);
       }
-      out += `<path d="${p}"></path><circle cx="${a[0]}" cy="${a[1]}" r="3"></circle><circle cx="${z[0]}" cy="${z[1]}" r="3"></circle>`;
+      pts.push([g2, to.y], [tx, to.y]);
+      for (let i = 1; i < pts.length; i++) segments.push([...pts[i - 1], ...pts[i]]);
+      out += `<path d="${round(pts)}"></path><circle cx="${sx}" cy="${from.y}" r="3"></circle><circle cx="${tx}" cy="${to.y}" r="3"></circle>`;
     }
   }
   svg.innerHTML = out;
@@ -528,6 +551,12 @@ window.intakeInfo = () => ({
   items: Object.keys(fx.items).length,
   ...lastInfo,
   links: $('links').querySelectorAll('path').length,
+  // Chain segments crossing a card that is not in the chain.
+  crossings: (() => {
+    const b = $('board').getBoundingClientRect();
+    const rows = [...document.querySelectorAll('.row:not(.chain):not(.sel)')].map((e) => { const r = e.getBoundingClientRect(); return [r.left - b.left, r.top - b.top, r.right - b.left, r.bottom - b.top]; });
+    return segments.filter(([x1, y1, x2, y2]) => rows.some(([l, t, r, bt]) => Math.max(x1, x2) > l && Math.min(x1, x2) < r && Math.max(y1, y2) > t && Math.min(y1, y2) < bt)).length;
+  })(),
   chain: selected ? [...chainOf(state, selected).all] : [],
 });
 render();

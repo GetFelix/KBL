@@ -44,7 +44,14 @@ try {
     check(await page.eval(`document.getElementById('dock').classList.contains('open')`), `${label}: no detail for the selected item`);
     await new Promise((ok) => setTimeout(ok, 150));
     info = await page.eval('window.intakeInfo()');
-    if (size === 'laptop') check(info.links === 2, `${label}: expected 2 dependency lines, drawn ${info.links}`);
+    if (size === 'laptop') {
+      check(info.links === 2, `${label}: expected 2 dependency lines, drawn ${info.links}`);
+      check(info.crossings === 0, `${label}: ${info.crossings} chain segments cross a card that is not in the chain`);
+    }
+    await page.eval(`window.select('gh-803')`);
+    await new Promise((ok) => setTimeout(ok, 150));
+    info = await page.eval('window.intakeInfo()');
+    if (size === 'laptop') check(info.links === 2 && info.crossings === 0, `${label}: the chain of gh-803 crosses a card (${info.crossings}) or misses a line (${info.links})`);
     await page.eval(`window.select(null)`);
 
     // Scrubbing back folds fewer events.
@@ -66,6 +73,9 @@ try {
     await page.eval(`window.select(document.querySelector('#c-blocked .row').dataset.k)`);
     info = await page.eval('window.intakeInfo()');
     check(info.chain.length > 1, `${label}: a blocked item has no chain`);
+    await new Promise((ok) => setTimeout(ok, 150));
+    info = await page.eval('window.intakeInfo()');
+    if (size === 'laptop') check(info.crossings === 0, `${label}: ${info.crossings} chain segments cross a card that is not in the chain`);
   }
 } finally {
   await page.close();
