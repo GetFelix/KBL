@@ -16,7 +16,7 @@ priority change) becomes regular work or a record the tracker already keeps.
 
 ## The problem
 
-Bugs arrive in GitHub Issues or Azure DevOps. Agents fix them, but three
+Bugs arrive in GitHub Issues, Azure DevOps or Jira. Agents fix them, but three
 things are missing:
 
 - **Asking for the next piece of work.** An agent has no way to say "give me
@@ -39,24 +39,48 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_next` | Claims the highest-priority ready item the agent can take |
 | `work_extend` | Keeps the claim while the agent works (done by `felix-mcp`, as for tasks) |
 | `work_context` | Reads or adds context on an item |
-| `work_link` | Adds a dependency, or splits an item into child items |
-| `work_post` | Adds an item of any kind below, for example a question on an item |
-| `work_progress` | Records a step: a plan, a branch, a PR |
-| `work_complete` / `work_release` | Finishes the item or hands it back |
+| `work_link` | Adds a dependency between items |
+| `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal |
+| `work_progress` | Records a plan, a branch or a PR |
+| `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
+| `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)) |
 
-An ingest worker pulls new and changed items from GitHub or ADO. For each one
-it posts a triage item and an augment item. People edit any record through REST
-or the viewer.
+The `felix-mcp` work tools call the tracker over REST with the agent's own
+token. The tracker validates each call and does the Felix writes itself, so an
+agent never writes the work streams or keys directly.
+
+An ingest worker pulls new and changed items from GitHub, ADO or Jira. For each
+root it posts one triage item and one augment item, once. Triaging again is a
+person's action. People edit any record through REST or the viewer.
+
+### Grants
+
+| Principal | May do |
+|---|---|
+| The tracker | The only publisher of `work.events` and `work.ready.*`, and the only writer of item and budget keys |
+| An agent | Call the tracker with its own token. Claim from `work.ready.*` through its consumer group. Read items and the stream |
+| A person | Use the dashboard and REST. Their actions reach `work.events` through the tracker |
+| The viewer | Read only |
+
+### Limits per attempt
+
+The tracker caps each attempt's records and bytes for `decide`, progress,
+context, messages, board writes and artifacts. A call over the cap is refused
+and logged as refused, so a looping agent cannot fill the stream.
 
 ### Kinds of work
 
 | Kind | Claimed by | The answer comes back as |
 |---|---|---|
 | `fix` | A coding agent | Progress records, a branch, a PR |
-| `triage` | Any agent | A proposal: tier with one line of why, dependencies, possible duplicates, a split, context. A person accepts, edits or rejects it |
+| `triage` | Any agent | A proposal: tier with one line of why, dependencies, possible duplicates, a split of the root, context. A person accepts, edits or rejects it |
 | `augment` | Any agent | Context records on the item: repro steps, related code, logs, linked issues, affected areas |
-| `split` | Any agent | Proposed child items, linked for a person to accept |
-| `question` | Any agent | An answer record that cites offsets |
+| `split` | The agent holding the item | Live child items, within the budget below |
+| `question` | Any agent | An answer record that cites stream and offset |
+| `test` | Any agent | Test follow-up for an item, as progress records |
+
+Root-shaping changes (a tier, or a split of a root at triage) and out-of-scope
+work are proposals that a person accepts. Children under a held item are live.
 
 Triage and augmentation are claimed, extended, completed and given up like
 any other work. A dead agent's triage goes back to the queue. Nothing waits on
@@ -100,14 +124,15 @@ it did. The tracker links each item to its runs.
   validation, and an item's state is a fold.
 - **Roots come from upstream sources and people only.** Agents create
   children, and only under an item they currently hold. Every agent-created
-  item carries its parent and root ids.
+  item carries its parent and root ids. Items people create do not draw from
+  the root budget.
 - **A work budget per root.** Settings, with defaults of at most 12 items in
   the tree, depth at most 3, and a cost cap. Every child, attempt and redo
   draws from it, and budgets only decrease. A create that would exceed the
   budget is refused and logged as refused, and the root goes to Needs you:
   raise the budget, split by hand, or close.
-- **What an agent may create under a held item:** `split`, `augment`,
-  `question` and test follow-ups. Out-of-scope work, such as a new bug it
+- **What an agent may create live under a held item, within budget:** `split`,
+  `augment`, `question` and `test`. Root-shaping changes are proposals. Out-of-scope work, such as a new bug it
   found, is a proposal shown in Triage as "proposed by <agent>". It becomes a
   root only when a person accepts it.
 - **Creation is idempotent.** The child's key is the parent plus an
@@ -116,11 +141,17 @@ it did. The tracker links each item to its runs.
 - **Proposals are rate-limited** per agent and per run.
 - **Closure.** A parent cannot complete while its children are open. A root
   closed upstream cancels its open descendants.
-- **Termination.** Total work is at most (upstream roots + accepted roots) x
-  the per-root budget; agents spend budget and never create it.
+- **Termination.** Agent-created work is at most (upstream roots + accepted
+  roots) x the per-root budget, plus whatever people create. Agents spend
+  budget and never create it.
 
 Budgets are enforced by a compare-and-set on the budget key (`cache_put_if`),
 not by counters, because Felix has no bounded add (gap 42).
+
+**Cost.** Agents from outside report cost on `work_complete` as a cost record
+the tracker cannot verify. The per-root cost cap is hard only for attempts
+under `agents-run`, which measures spend. The Metrics tab labels each figure
+reported or measured.
 
 ## The dashboard
 
@@ -284,7 +315,7 @@ what waits on the viewer and that actions append records.
 
 M2 and M3 in the [build order](design.md#build-order): GitHub ingest,
 `work_next` and the ready tiers, then triage and augmentation as work kinds and dependencies, then Claude Code
-working `agent-ok` issues. The dashboard goes live in M4. ADO ingest comes
+working `agent-ok` issues. The dashboard goes live in M4. ADO and Jira ingest come
 after GitHub.
 
 The first source is GetFelix/felix. Only issues labelled `agent-ok` are

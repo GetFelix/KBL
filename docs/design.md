@@ -24,9 +24,23 @@ together for work handed out exactly once to processes that die, state shared
 between writers that guess, and a record of the whole thing you can trust
 after something went wrong.
 
+**The tracker is the product.** Kibble, the work tracker in
+[work-tracker.md](work-tracker.md), stores, orders, hands out and displays
+work, and makes no model calls. A run is one optional way an attempt is
+worked: a goal, a team and a budget, with its own log. The pull request review
+swarm is a scripted demo job type, and its planner stands in for split work.
+
+**Terms**
+
+- **Item:** a unit of work in the tracker, with a kind, a parent and a root. Its record is `work.events`.
+- **Attempt:** one agent's go at an item, from claim to completion or give-up. A redo is a new attempt.
+- **Run:** the optional swarm resources for an attempt (log, tasks, board, leases, spend). Not every attempt has one.
+- **Task:** one unit the planner hands to the workers inside a run.
+- **Tracker mode:** `felix-mcp` without `AGENTS_RUN` talks to the tracker only, with no run.
+
 **In scope**
 
-- An MCP server, `felix-mcp`, that gives any MCP host (Claude Code, the Claude Agent SDK, other vendors' hosts) Felix-backed tools: tasks, a shared board, leases, messages, artifacts and the run's budget
+- An MCP server, `felix-mcp`, that gives any MCP host (Claude Code, the Claude Agent SDK, other vendors' hosts) Felix-backed tools: the tracker's work tools (`work_next`, `decide`, `record_step`, `edit` and the rest), and, inside a run, tasks, a shared board, leases, messages, artifacts and the budget
 - An optional reference worker, `agents-run`, outside the system boundary: it drives a planner and workers against a model API, records spend and heartbeats, and has a scripted stand-in for every role so the demo runs without a model. The tracker, `felix-mcp` and the viewer make no model calls and generate no text; models run only in workers that come from outside (any vendor) or in `agents-run`
 - A tool, `agents-tool`, that creates a run's resources, the agents' identities and their grants, and exports a finished run
 - A viewer in the browser that draws the swarm live and replays it, through felix-gateway
@@ -38,7 +52,7 @@ after something went wrong.
 - Rerunning a past run as it was. Model calls are not deterministic, so the replay shows what happened. A redo from a past decision is a new attempt that branches from there ([decision-replay.md](decision-replay.md#redo-from-here)), never a rerun
 - Long-term agent memory or vector search
 - Hosting models or holding model keys for anyone but the person running `agents-run`
-- Anything that needs a database, a queue or a coordinator process of ours. If it cannot be expressed in Felix streams, consumer groups, caches and counters, it is out
+- Anything that needs a database, a queue or a coordinator process of ours, except exactly one tracker process whose state is a fold rebuildable from `work.events`. If it cannot be expressed in Felix streams, consumer groups, caches and counters, it is out
 
 ## What it has to demonstrate
 
@@ -120,7 +134,7 @@ So the design draws the line there:
 
 | Resource | Felix kind | Name | Notes |
 |---|---|---|---|
-| Run log | Durable stream, one shard, publishers recorded | `agents.log.<run>` | Every coordination step, in one order. The record of the run |
+| Run log | Durable stream, one shard, publishers recorded | `agents.log.<run>` | Optional per-attempt detail: coordination steps and model calls, in one order. The record of an item is `work.events` |
 | Tasks | Durable stream, one shard, consumer group `workers` | `agents.tasks.<run>` | Posted by the planner, claimed by workers |
 | Messages | Durable stream, one shard, publishers recorded | `agents.msgs.<run>` | Agent to agent, routing key is the recipient |
 | Board | Log-backed cache | `agents.board.<run>` | Shared findings, one key per entry, conditional writes |
@@ -551,7 +565,7 @@ scripted demo.
 | 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
 | 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each |
 | 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
-| 4 | The dashboard, live (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
+| 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
 | 5 | Shared state: the board, leases, presence and messages | Demonstration 3 |
 | 6 | Real models and budgets: `agents-run` with a model API, artifacts, spend and rate limits | Demonstration 5 |
 | 7 | Replay a run: the fold, the viewer on felix-gateway, scrub and follow | Demonstrations 4 and 8 |
