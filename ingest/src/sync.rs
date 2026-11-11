@@ -308,6 +308,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 key: Key::new(key).map_err(anyhow::Error::from)?,
                 work,
                 title: cut_title(&format!("{title}: {}", issue.title)),
+                review: None,
             })
             .await?;
         }

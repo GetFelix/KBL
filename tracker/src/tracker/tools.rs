@@ -12,8 +12,10 @@ use agents_core::artifact::{ArtifactId, INLINE_LIMIT};
 use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
 use agents_core::work::{
-    Actor, DoneWhen, Evidence, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, NewPrerequisite, Phase,
-    RefusalReason, Target, Then, WorkKind, WorkRecord,
+    Actor, DoneWhen, Evidence, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
+    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO, MAX_VERDICT_WHY,
+    MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity, Target, Then,
+    WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -85,6 +87,17 @@ pub(crate) struct Decide {
     pub(crate) why: String,
     pub(crate) commit: String,
     pub(crate) evidence: Vec<Evidence>,
+    pub(crate) revert_check: Option<RevertCheck>,
+}
+
+/// One finding of a review, as the reviewer wrote it.
+pub(crate) struct NewFinding {
+    pub(crate) severity: Severity,
+    pub(crate) file: String,
+    pub(crate) line: u32,
+    pub(crate) title: String,
+    pub(crate) scenario: String,
+    pub(crate) verdict: FindingVerdict,
 }
 
 impl<B: Broker> Tracker<B> {
@@ -126,6 +139,7 @@ impl<B: Broker> Tracker<B> {
                 key,
                 work,
                 title,
+                review: None,
             };
             let offset = self
                 .agent_append(&mut core, agent, parent, "post", record)
@@ -493,6 +507,17 @@ impl<B: Broker> Tracker<B> {
             field("option", o)?;
         }
         check_evidence(&d.evidence)?;
+        if let Some(c) = &d.revert_check {
+            if c.test.is_empty() {
+                return Err(Error::Invalid("a revert check names its test".into()));
+            }
+            if c.test.len() > MAX_REVERT_TEST {
+                return Err(Error::Invalid(format!(
+                    "the test name is {} bytes; at most {MAX_REVERT_TEST}",
+                    c.test.len()
+                )));
+            }
+        }
         self.held_write(agent, item, "decide", |attempt| WorkRecord::Decision {
             item: item.clone(),
             attempt,
@@ -504,6 +529,58 @@ impl<B: Broker> Tracker<B> {
             why: d.why,
             commit: d.commit,
             evidence: d.evidence,
+            revert_check: d.revert_check,
+        })
+        .await
+    }
+
+    /// Records one finding of the review the agent holds. A `fix` becomes a
+    /// child of the request's root and a `defer` a proposal, both made by the fold.
+    pub(crate) async fn finding(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        f: NewFinding,
+    ) -> Result<Value, Error> {
+        bounded("file", &f.file, MAX_FINDING_FILE)?;
+        bounded("title", &f.title, MAX_FINDING_TITLE)?;
+        bounded("scenario", &f.scenario, MAX_SCENARIO)?;
+        if f.line == 0 {
+            return Err(Error::Invalid("a finding names a line, from 1".into()));
+        }
+        let reply = self
+            .held_write(agent, item, "finding", |attempt| WorkRecord::Finding {
+                item: item.clone(),
+                attempt,
+                severity: f.severity,
+                file: f.file,
+                line: f.line,
+                title: f.title,
+                scenario: f.scenario,
+                verdict: f.verdict,
+            })
+            .await?;
+        // A fix or a deferred proposal may be ready or waiting for a person.
+        self.sync_ready().await;
+        Ok(reply)
+    }
+
+    /// Records how the final review ends. A person merges.
+    pub(crate) async fn review_verdict(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        verdict: MergeVerdict,
+        why: String,
+    ) -> Result<Value, Error> {
+        bounded("why", &why, MAX_VERDICT_WHY)?;
+        self.held_write(agent, item, "review_verdict", |attempt| {
+            WorkRecord::ReviewVerdict {
+                item: item.clone(),
+                attempt,
+                verdict,
+                why,
+            }
         })
         .await
     }
@@ -778,6 +855,20 @@ fn check_evidence(evidence: &[Evidence]) -> Result<(), Error> {
     Ok(())
 }
 
+/// A required text no longer than `max` bytes.
+fn bounded(name: &str, value: &str, max: usize) -> Result<(), Error> {
+    if value.is_empty() {
+        return Err(Error::Invalid(format!("{name} is needed")));
+    }
+    if value.len() > max {
+        return Err(Error::Invalid(format!(
+            "{name} is {} bytes; at most {max}",
+            value.len()
+        )));
+    }
+    Ok(())
+}
+
 fn field(name: &str, value: &str) -> Result<(), Error> {
     if value.len() > MAX_FIELD {
         return Err(Error::Invalid(format!(
@@ -871,6 +962,19 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
         WorkRecord::Proposed { title, .. } | WorkRecord::Imported { title, .. } => {
             field("title", title)
         }
+        // Only a holding agent writes these, through the tools, but a person's
+        // record is held to the same bounds.
+        WorkRecord::Finding {
+            file,
+            title,
+            scenario,
+            ..
+        } => {
+            bounded("file", file, MAX_FINDING_FILE)?;
+            bounded("title", title, MAX_FINDING_TITLE)?;
+            bounded("scenario", scenario, MAX_SCENARIO)
+        }
+        WorkRecord::ReviewVerdict { why, .. } => bounded("why", why, MAX_VERDICT_WHY),
         _ => Ok(()),
     }
 }

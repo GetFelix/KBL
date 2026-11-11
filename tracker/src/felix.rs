@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agents_core::work::{READY_GROUP, TIERS, WORK_EVENTS, ready_stream};
+use agents_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use felix_client::{
@@ -258,16 +258,16 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         main: Arc::default(),
         members: Arc::default(),
     };
-    for tier in 0..TIERS {
-        felix.ensure_group(&ready_stream(tier)).await?;
+    for lane in 0..LANES {
+        felix.ensure_group(&ready_stream(lane)).await?;
     }
     Ok(felix)
 }
 
-/// The log and the four ready tiers: one durable stream each, and the lease cache.
+/// The log and the ready lanes: one durable stream each, and the lease cache.
 fn streams_batch() -> Value {
     let streams: Vec<Value> = std::iter::once(WORK_EVENTS.to_owned())
-        .chain((0..TIERS).map(ready_stream))
+        .chain((0..LANES).map(ready_stream))
         .map(|name| {
             json!({
                 "stream": name,

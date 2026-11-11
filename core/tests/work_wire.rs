@@ -28,6 +28,7 @@ fn every_record() -> Vec<WorkRecord> {
             key: key("split-a"),
             work: WorkKind::Split,
             title: "reader side".into(),
+            review: None,
         },
         WorkRecord::Proposed {
             item: item("p1"),
@@ -35,6 +36,7 @@ fn every_record() -> Vec<WorkRecord> {
             key: key("found-1"),
             work: WorkKind::Fix,
             title: "a second bug".into(),
+            review: None,
         },
         WorkRecord::Triaged {
             item: item("r1"),
@@ -126,6 +128,7 @@ fn every_record() -> Vec<WorkRecord> {
                 stream: WORK_EVENTS.into(),
                 offset: 12,
             }],
+            revert_check: None,
         },
         WorkRecord::Step {
             item: item("r1"),
@@ -305,6 +308,126 @@ fn every_record() -> Vec<WorkRecord> {
                 title: "gateway needs a CAS call".into(),
             }),
         },
+        // A request reviewed end to end, on its own root so the records above stay as they were.
+        WorkRecord::Imported {
+            item: item("rv"),
+            source: "github".into(),
+            upstream_id: "GetFelix/felix#9".into(),
+            title: "stale read".into(),
+        },
+        WorkRecord::Accepted {
+            item: item("rv"),
+            tier: Some(1),
+        },
+        WorkRecord::Claimed {
+            item: item("rv"),
+            attempt: 1,
+            deadline_ms: 1_800_000_090_000,
+        },
+        WorkRecord::Decision {
+            item: item("rv"),
+            attempt: 1,
+            phase: Phase::Verify,
+            so_far: "fix in, test added".into(),
+            question: String::new(),
+            options: vec![],
+            chosen: String::new(),
+            why: "the test fails without the fix".into(),
+            commit: "9f3c2ab".into(),
+            evidence: vec![],
+            revert_check: Some(RevertCheck {
+                test: "reads_see_a_fresh_write".into(),
+                failed_without_fix: true,
+                passed_with_fix: true,
+            }),
+        },
+        WorkRecord::Progress {
+            item: item("rv"),
+            attempt: 1,
+            note: text("fixed"),
+            branch: Some("fix/rv".into()),
+            pr: Some("GetFelix/felix#9".into()),
+        },
+        WorkRecord::Done {
+            item: item("rv"),
+            attempt: 1,
+            cost_micros: 0,
+        },
+        WorkRecord::PrStatus {
+            item: item("rv"),
+            status: PrSnapshot {
+                pr: "GetFelix/felix#9".into(),
+                phase: PrPhase::Open,
+                review: PrReview::Unreviewed,
+                checks: PrChecks::Green,
+                failing: None,
+            },
+        },
+        WorkRecord::Proposed {
+            item: item("v1"),
+            parent: Some(item("rv")),
+            key: key("review-first"),
+            work: WorkKind::Review,
+            title: "First-pass review: GetFelix/felix#9".into(),
+            review: Some(ReviewSpec {
+                pass: ReviewPass::First,
+                tier: "fast".into(),
+                pr: "GetFelix/felix#9".into(),
+            }),
+        },
+        WorkRecord::Proposed {
+            item: item("v2"),
+            parent: Some(item("rv")),
+            key: key("review-final"),
+            work: WorkKind::Review,
+            title: "Final review: GetFelix/felix#9".into(),
+            review: Some(ReviewSpec {
+                pass: ReviewPass::Final,
+                tier: "deep".into(),
+                pr: "GetFelix/felix#9".into(),
+            }),
+        },
+        WorkRecord::Claimed {
+            item: item("v1"),
+            attempt: 1,
+            deadline_ms: 1_800_000_090_000,
+        },
+        WorkRecord::Finding {
+            item: item("v1"),
+            attempt: 1,
+            severity: Severity::Medium,
+            file: "src/read.rs".into(),
+            line: 120,
+            title: "other readers skip the check".into(),
+            scenario: "a second reader path never looks at the cache epoch".into(),
+            verdict: FindingVerdict::Defer,
+        },
+        WorkRecord::Done {
+            item: item("v1"),
+            attempt: 1,
+            cost_micros: 0,
+        },
+        WorkRecord::Claimed {
+            item: item("v2"),
+            attempt: 1,
+            deadline_ms: 1_800_000_090_000,
+        },
+        WorkRecord::Finding {
+            item: item("v2"),
+            attempt: 1,
+            severity: Severity::High,
+            file: "src/read.rs".into(),
+            line: 88,
+            title: "stale read after restart".into(),
+            scenario: "restart between fill and read returns the old value".into(),
+            verdict: FindingVerdict::Fix,
+        },
+        WorkRecord::ReviewVerdict {
+            item: item("v2"),
+            attempt: 1,
+            verdict: MergeVerdict::Block,
+            why: "a fix is still open".into(),
+        },
     ]
 }
 
@@ -334,7 +457,7 @@ fn every_kind_round_trips_and_is_covered() {
     kinds.sort_unstable();
     kinds.dedup();
     // Every variant but `unknown`.
-    assert_eq!(kinds.len(), 32);
+    assert_eq!(kinds.len(), 34);
 }
 
 #[test]

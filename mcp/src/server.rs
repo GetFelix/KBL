@@ -80,6 +80,34 @@ struct TaskClaimArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct WorkFindingArgs {
+    /// Defaults to the review you hold.
+    item: Option<String>,
+    /// `low`, `medium`, `high` or `critical`.
+    severity: String,
+    /// The file the finding is in.
+    file: String,
+    /// The line, from 1.
+    line: u32,
+    /// One line naming the problem.
+    title: String,
+    /// The concrete case that goes wrong, so the author can reproduce it.
+    scenario: String,
+    /// `fix` (the author fixes it), `defer` (a person decides whether it is work) or `dismiss`.
+    verdict: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct WorkVerdictArgs {
+    /// Defaults to the review you hold.
+    item: Option<String>,
+    /// `merge` or `block`. A person decides; this is your recommendation.
+    verdict: String,
+    /// Why.
+    why: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct TaskCompleteArgs {
     /// The id of the task you hold.
     task: String,
@@ -107,6 +135,8 @@ struct TaskGiveUpArgs {
 struct WorkNextArgs {
     /// Seconds to wait for an item before answering that there is none. Default 10, at most 30.
     wait_seconds: Option<u64>,
+    /// Reviewer tiers you take reviews of, such as `fast` or `deep`. Without one you are given ordinary work only. You are never given a review of work you did.
+    review_tiers: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -212,6 +242,18 @@ struct DecideArgs {
     commit: String,
     /// The earlier records this rests on.
     evidence: Option<Vec<EvidenceArg>>,
+    /// For a fix: the test, and whether it failed with the fix reverted and passed with it restored.
+    revert_check: Option<RevertCheckArg>,
+}
+
+#[derive(Deserialize, Serialize, JsonSchema)]
+struct RevertCheckArg {
+    /// The test's name.
+    test: String,
+    /// It failed with the fix reverted.
+    failed_without_fix: bool,
+    /// It passed with the fix restored.
+    passed_with_fix: bool,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
@@ -355,8 +397,62 @@ impl Server {
     )]
     async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
         self.work()?
-            .next(a.wait_seconds.map(Duration::from_secs))
+            .next_for(
+                a.wait_seconds.map(Duration::from_secs),
+                a.review_tiers.unwrap_or_default(),
+            )
             .await
+    }
+
+    #[tool(
+        description = "Record one finding of the review you hold: severity, file, line, a title and the scenario that goes wrong. Its verdict decides what follows: `fix` becomes work for the pull request's author, `defer` a proposal a person accepts, `dismiss` is only recorded. Answers with the finding's offset."
+    )]
+    async fn work_finding(
+        &self,
+        Parameters(a): Parameters<WorkFindingArgs>,
+    ) -> Result<String, String> {
+        check_one_of(
+            "severity",
+            &a.severity,
+            &["low", "medium", "high", "critical"],
+        )?;
+        check_one_of("verdict", &a.verdict, &["fix", "defer", "dismiss"])?;
+        let item = self.item_or_held(a.item).await?;
+        let reply = self
+            .work()?
+            .tool(
+                "/v1/work/finding",
+                json!({
+                    "item": item,
+                    "severity": a.severity,
+                    "file": a.file,
+                    "line": a.line,
+                    "title": a.title,
+                    "scenario": a.scenario,
+                    "verdict": a.verdict,
+                }),
+            )
+            .await?;
+        Ok(reply.to_string())
+    }
+
+    #[tool(
+        description = "End the final review you hold with a recommendation, `merge` or `block`, and why. You cannot recommend a merge while a fix a review asked for is open. A person decides whether to merge. Complete the review after."
+    )]
+    async fn work_verdict(
+        &self,
+        Parameters(a): Parameters<WorkVerdictArgs>,
+    ) -> Result<String, String> {
+        check_one_of("verdict", &a.verdict, &["merge", "block"])?;
+        let item = self.item_or_held(a.item).await?;
+        let reply = self
+            .work()?
+            .tool(
+                "/v1/work/verdict",
+                json!({ "item": item, "verdict": a.verdict, "why": a.why }),
+            )
+            .await?;
+        Ok(reply.to_string())
     }
 
     #[tool(
@@ -528,6 +624,7 @@ impl Server {
                     "why": a.why,
                     "commit": a.commit,
                     "evidence": evidence,
+                    "revert_check": a.revert_check,
                 }),
             )
             .await?;
@@ -664,6 +761,17 @@ fn check_phase(phase: &str) -> Result<(), String> {
         Err(format!(
             "phase is {phase:?}; use one of {}",
             PHASES.join(", ")
+        ))
+    }
+}
+
+fn check_one_of(name: &str, value: &str, allowed: &[&str]) -> Result<(), String> {
+    if allowed.contains(&value) {
+        Ok(())
+    } else {
+        Err(format!(
+            "{name} is {value:?}; use one of {}",
+            allowed.join(", ")
         ))
     }
 }

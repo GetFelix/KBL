@@ -113,6 +113,8 @@ jobs:
           node dev/check-tracker-claims.mjs
       - name: Run the work tools against Felix
         run: node dev/check-tracker-work.mjs
+      - name: Run review as work against Felix
+        run: node dev/check-tracker-review.mjs
       - name: Run a scripted job twice from one seed
         run: node dev/check-scripted.mjs
       - name: Kill workers holding tasks

@@ -23,6 +23,8 @@ struct Net {
     /// Every broker call that changes something, in order.
     calls: Vec<String>,
     fail_publish_on: Option<String>,
+    /// Publishes to the stream that still succeed, then every one fails.
+    publish_budget: Option<(String, u32)>,
     fail_reads: bool,
     extend_stale: bool,
     /// The writer lease key: holder and version, while it is live.
@@ -38,6 +40,9 @@ struct Net {
     /// Ingest's saved state by name, with versions.
     cursors: HashMap<String, (Vec<u8>, u64)>,
 }
+
+/// How many times Felix hands a record out before it is dead-lettered.
+const ATTEMPT_BOUND: u32 = 5;
 
 /// An in-memory Felix: streams, and a consumer group per ready stream. A `Fake`
 /// is one tracker's connection; `reconnect` is a restarted tracker. Only a
@@ -97,6 +102,14 @@ impl Fake {
             .unwrap()
             .slots
             .insert((stream.to_owned(), offset), Slot::Pending);
+    }
+
+    fn lift_publish_budget(&self) {
+        self.net.lock().unwrap().publish_budget = None;
+    }
+
+    fn fail_publishes_to_after(&self, stream: &str, ok: u32) {
+        self.net.lock().unwrap().publish_budget = Some((stream.to_owned(), ok));
     }
 
     fn fail_publishes_to(&self, stream: Option<&str>) {
@@ -172,6 +185,15 @@ impl Fake {
             .get(stream)
             .map(|v| v.iter().map(|(o, _)| *o).collect())
             .unwrap_or_default();
+        // Felix dead-letters a record at its attempt bound.
+        for offset in &offsets {
+            let key = (stream.to_owned(), *offset);
+            if net.tries.get(&key).copied().unwrap_or(0) >= ATTEMPT_BOUND
+                && matches!(net.slots.get(&key), None | Some(Slot::Pending))
+            {
+                net.slots.insert(key, Slot::Acked);
+            }
+        }
         let mut pick = None;
         for offset in offsets {
             let key = (stream.to_owned(), offset);
@@ -220,6 +242,14 @@ impl Broker for Fake {
         let mut net = self.net.lock().unwrap();
         if net.fail_publish_on.as_deref() == Some(stream) {
             anyhow::bail!("the broker is down");
+        }
+        if let Some((s, left)) = net.publish_budget.as_mut()
+            && s == stream
+        {
+            if *left == 0 {
+                anyhow::bail!("the broker is down");
+            }
+            *left -= 1;
         }
         let log = net.streams.entry(stream.to_owned()).or_default();
         let offset = log.len() as u64;
@@ -409,6 +439,7 @@ pub(super) fn settings() -> Settings {
         lease_ttl: Duration::from_secs(15),
         lease_wait: Duration::ZERO,
         crash_after_poll: false,
+        review_tiers: default_review_tiers(),
     }
 }
 
@@ -1182,6 +1213,7 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
             key: key("fix"),
             work: agents_core::work::WorkKind::Fix,
             title: "mine to run".into(),
+            review: None,
         },
     )
     .await
@@ -1228,6 +1260,7 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
             key: key("triage"),
             work: agents_core::work::WorkKind::Triage,
             title: "t".into(),
+            review: None,
         },
     ] {
         let err = ingest(record).await.unwrap_err();
@@ -1316,7 +1349,7 @@ async fn ingest_cannot_close_as_merged_without_a_merged_status() {
     assert_eq!(fake.log().len(), 1);
 }
 
-async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
+pub(super) async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
     t.person_record(
         key("gab"),
         WorkRecord::Imported {
@@ -1441,3 +1474,5 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
     let read = t.rules_read(&agent("w1"), &item("a1")).await.unwrap();
     assert_eq!(read["rules"], claimed["rules"]);
 }
+
+mod review;

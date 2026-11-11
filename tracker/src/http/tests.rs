@@ -66,6 +66,7 @@ async fn app() -> Router {
             lease_ttl: Duration::from_secs(15),
             lease_wait: Duration::ZERO,
             crash_after_poll: false,
+            review_tiers: crate::tracker::default_review_tiers(),
         },
     )
     .await

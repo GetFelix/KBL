@@ -42,3 +42,18 @@
 {"actor":"person","at_ms":1041,"attempt":1,"by":"gabriel","cost_micros":25000,"default":"rust","item":"r1","kind":"question","options":["rust","python"],"text":{"text":"which client?"}}
 {"actor":"person","at_ms":1042,"by":"gabriel","chosen":"rust","item":"r1","kind":"answer","question":41,"text":{"text":""},"then":{"then":"resume"}}
 {"actor":"person","at_ms":1043,"by":"gabriel","item":"r1","kind":"answer","question":42,"text":{"text":"this is a gateway bug"},"then":{"target":{"repo":"GetFelix/felix-gateway","source":"github"},"then":"prerequisite","title":"gateway needs a CAS call"}}
+{"actor":"person","at_ms":1044,"by":"gabriel","item":"rv","kind":"imported","source":"github","title":"stale read","upstream_id":"GetFelix/felix#9"}
+{"actor":"person","at_ms":1045,"by":"gabriel","item":"rv","kind":"accepted","tier":1}
+{"actor":"agent","at_ms":1046,"attempt":1,"by":"w1","deadline_ms":1800000090000,"item":"rv","kind":"claimed"}
+{"actor":"agent","at_ms":1047,"attempt":1,"by":"w1","chosen":"","commit":"9f3c2ab","item":"rv","kind":"decision","phase":"verify","question":"","revert_check":{"failed_without_fix":true,"passed_with_fix":true,"test":"reads_see_a_fresh_write"},"so_far":"fix in, test added","why":"the test fails without the fix"}
+{"actor":"agent","at_ms":1048,"attempt":1,"branch":"fix/rv","by":"w1","item":"rv","kind":"progress","note":{"text":"fixed"},"pr":"GetFelix/felix#9"}
+{"actor":"agent","at_ms":1049,"attempt":1,"by":"w1","cost_micros":0,"item":"rv","kind":"done"}
+{"actor":"tracker","at_ms":1050,"by":"ingest","item":"rv","kind":"pr_status","status":{"checks":"green","phase":"open","pr":"GetFelix/felix#9","review":"unreviewed"}}
+{"actor":"tracker","at_ms":1051,"by":"ingest","item":"v1","key":"review-first","kind":"proposed","parent":"rv","review":{"pass":"first","pr":"GetFelix/felix#9","tier":"fast"},"title":"First-pass review: GetFelix/felix#9","work":"review"}
+{"actor":"tracker","at_ms":1052,"by":"ingest","item":"v2","key":"review-final","kind":"proposed","parent":"rv","review":{"pass":"final","pr":"GetFelix/felix#9","tier":"deep"},"title":"Final review: GetFelix/felix#9","work":"review"}
+{"actor":"agent","at_ms":1053,"attempt":1,"by":"w2","deadline_ms":1800000090000,"item":"v1","kind":"claimed"}
+{"actor":"agent","at_ms":1054,"attempt":1,"by":"w2","file":"src/read.rs","item":"v1","kind":"finding","line":120,"scenario":"a second reader path never looks at the cache epoch","severity":"medium","title":"other readers skip the check","verdict":"defer"}
+{"actor":"agent","at_ms":1055,"attempt":1,"by":"w2","cost_micros":0,"item":"v1","kind":"done"}
+{"actor":"agent","at_ms":1056,"attempt":1,"by":"w3","deadline_ms":1800000090000,"item":"v2","kind":"claimed"}
+{"actor":"agent","at_ms":1057,"attempt":1,"by":"w3","file":"src/read.rs","item":"v2","kind":"finding","line":88,"scenario":"restart between fill and read returns the old value","severity":"high","title":"stale read after restart","verdict":"fix"}
+{"actor":"agent","at_ms":1058,"attempt":1,"by":"w3","item":"v2","kind":"review_verdict","verdict":"block","why":"a fix is still open"}

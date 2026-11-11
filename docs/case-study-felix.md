@@ -108,7 +108,8 @@ source, delivered with every claim (#133).
 New, from this case study:
 
 - Review as claimable work with a reviewer tier, findings as records, and
-  deferred findings as proposals (#134).
+  deferred findings as proposals (#134, built: see
+  [Review as work](work-tracker.md#review-as-work)).
 - Pull request and CI state from ingest, so In review and Needs you are fed
   by events (#135).
 - Links across repos and sources (#136).

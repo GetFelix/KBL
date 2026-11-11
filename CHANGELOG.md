@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Review is claimable work. When an item's pull request opens, the tracker adds
+  a first-pass and a final `review` item, each for a reviewer tier
+  (`AGENTS_REVIEW_TIERS`, default `fast,deep`, one `work.review.rN` stream
+  each). `work_next` takes `review_tiers`, and an agent is never given a
+  review of work it did. `work_finding` records a finding (severity, file,
+  line, scenario, verdict): a `fix` becomes a child for the author, a `defer`
+  a proposal a person accepts. A final review ends with `work_verdict`, merge
+  or block, which the dashboard shows and a person acts on. `decide` takes a
+  `revert_check`. Every field and count is bounded. Logs from before fold as
+  they did; older trackers fold the new records as `unknown`.
+
 - A threat model, [docs/threat-model.md](docs/threat-model.md): actors, assets, trust
   boundaries, and for every tracker route, ingest route, MCP tool and record kind
   the fields an agent controls and the check that stops misuse. CI fails when a

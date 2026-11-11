@@ -13,10 +13,12 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
-    MAX_PR_REF, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_TITLE, NewPrerequisite,
-    PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, TIERS, Target, Then, Unclear,
-    WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    Actor, CloseWhy, DoneWhen, Evidence, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
+    MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF,
+    MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT,
+    MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks, PrPhase,
+    PrReview, PrSnapshot, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target, Then, Unclear,
+    WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
 #[cfg(test)]
@@ -46,6 +48,8 @@ const MAX_LINKS: u32 = 100;
 const MAX_STALLS: usize = 64;
 /// Children and proposals together.
 const MAX_POSTS: u32 = 24;
+/// Distinct agents remembered as having worked an item, for the self-review rule.
+const MAX_WORKERS: usize = 32;
 
 /// A root's work budget. Agent records only ever lower it; a person's
 /// `budget_set` is the one way up.
@@ -248,6 +252,29 @@ pub struct Path {
     /// A cap refusal is already on the log for this attempt.
     #[serde(default)]
     pub capped: bool,
+    /// Findings the attempt recorded, when the item is a review.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub findings: u32,
+    /// Offsets of the decisions whose revert check failed without the fix
+    /// and passed with it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub proven: Vec<u64>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// A final review's recommendation, kept on the root it is about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VerdictNote {
+    pub verdict: MergeVerdict,
+    /// The final review that gave it.
+    pub review: ItemId,
+    /// The pull request it is about. Stale once the root reports another.
+    pub pr: String,
+    /// The offset of the `review_verdict` record, which holds the reason.
+    pub at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,6 +323,21 @@ pub struct Item {
     /// The release that carries this item, once a `shipped` record names it.
     #[serde(default)]
     pub release: Option<String>,
+    /// Which review this is, when the item is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewSpec>,
+    /// Offsets of the findings a review recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub findings: Vec<u64>,
+    /// The offset of the finding this item came from, when a review made it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finding: Option<u64>,
+    /// The latest final review's recommendation, on a root.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_verdict: Option<VerdictNote>,
+    /// Agents that claimed the item, so none of them reviews the work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workers: Vec<Key>,
 }
 
 /// Why a record changed nothing.
@@ -353,6 +395,10 @@ pub enum Reject {
     NotMerged,
     /// Another open item already reports this pull request.
     PrInUse,
+    /// The agent worked on the pull request it was asked to review.
+    SelfReview,
+    /// The record is about a review and the item is not the right one.
+    NotReview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -569,6 +615,18 @@ impl State {
         }
     }
 
+    /// Whether the root's final review recommends a merge of the request it
+    /// still reports and no fix a review asked for is open. A person merges.
+    pub fn merge_ready(&self, root: &ItemId) -> bool {
+        self.items.get(root).is_some_and(|r| {
+            r.closed.is_none()
+                && r.review_verdict.as_ref().is_some_and(|v| {
+                    v.verdict == MergeVerdict::Merge && r.pr.as_deref() == Some(v.pr.as_str())
+                })
+                && !self.open_fixes(root)
+        })
+    }
+
     /// Repositories a source cannot read, with the HTTP status it got.
     pub fn stalled_sources(&self) -> impl Iterator<Item = (&str, &str, u16)> {
         self.source_stalls.iter().filter_map(|(k, status)| {
@@ -630,6 +688,11 @@ impl State {
             }
             Some(_) => false,
         }
+    }
+
+    /// Whether a link says `from` waits on `to`, open or not.
+    pub fn is_linked(&self, from: &ItemId, to: &ItemId) -> bool {
+        self.edges.contains(&(from.clone(), to.clone()))
     }
 
     fn is_closed(&self, id: &ItemId) -> bool {
@@ -743,6 +806,11 @@ impl State {
             pending_fork: None,
             target: None,
             release: None,
+            review: None,
+            findings: Vec::new(),
+            finding: None,
+            review_verdict: None,
+            workers: Vec::new(),
         }
     }
 
@@ -784,7 +852,16 @@ impl State {
                 key,
                 work,
                 title,
-            } => self.propose(rec, item, parent.as_ref(), key, *work, title)?,
+                review,
+            } => self.propose(
+                rec,
+                item,
+                parent.as_ref(),
+                key,
+                *work,
+                title,
+                review.as_ref(),
+            )?,
             WorkRecord::Triaged {
                 item,
                 tier,
@@ -954,6 +1031,12 @@ impl State {
                 if stage != Stage::Ready {
                     return Err(Reject::NotReady);
                 }
+                if self.items[item].work == WorkKind::Review {
+                    let root = self.items[item].root.clone();
+                    if self.worked_on(&root, &rec.by) {
+                        return Err(Reject::SelfReview);
+                    }
+                }
                 let it = self.item_mut(item)?;
                 it.first_claim_ms.get_or_insert(rec.at_ms);
                 let want = it.next_attempt();
@@ -982,7 +1065,15 @@ impl State {
                         answers: 0,
                         links: 0,
                         capped: false,
+                        findings: 0,
+                        proven: Vec::new(),
                     });
+                }
+                if it.work != WorkKind::Review
+                    && !it.workers.contains(&rec.by)
+                    && it.workers.len() < MAX_WORKERS
+                {
+                    it.workers.push(rec.by.clone());
                 }
                 it.hold = Some(Hold {
                     by: rec.by.clone(),
@@ -1035,8 +1126,19 @@ impl State {
                 if it.closed.is_some() {
                     return Err(Reject::Closed);
                 }
-                if !self.open_children(item).is_empty() {
+                // Reviews of a pull request do not hold back its author's own completion.
+                if self.open_children(item).iter().any(|c| {
+                    self.items
+                        .get(*c)
+                        .is_some_and(|c| c.work != WorkKind::Review)
+                }) {
                     return Err(Reject::OpenChildren);
+                }
+                if let Some(spec) = &it.review
+                    && spec.pass == ReviewPass::Final
+                    && !self.verdict_given(item)
+                {
+                    return Err(Reject::MissingField);
                 }
                 // Check the attempt before changing anything, so a refusal leaves no trace.
                 let idx = it
@@ -1053,7 +1155,8 @@ impl State {
                 it.hold = None;
                 it.cost_micros += cost_micros;
                 // A fix waits for its merge; other work is finished when its attempt is.
-                if it.work != WorkKind::Fix {
+                // A fix a review asked for lands in the request it came from.
+                if it.work != WorkKind::Fix || it.finding.is_some() {
                     it.closed = Some(Closure::Completed);
                 }
                 self.draw_cost(&root, *cost_micros);
@@ -1159,6 +1262,7 @@ impl State {
                 so_far,
                 commit,
                 evidence,
+                revert_check,
                 ..
             } => {
                 self.agent_holder(item, *attempt, rec)?;
@@ -1166,11 +1270,59 @@ impl State {
                     return Err(Reject::MissingField);
                 }
                 Self::check_evidence(offset, evidence)?;
+                if let Some(c) = revert_check {
+                    if c.test.is_empty() {
+                        return Err(Reject::MissingField);
+                    }
+                    if c.test.len() > MAX_REVERT_TEST {
+                        return Err(Reject::TooLong);
+                    }
+                }
                 let p = self.path_mut(item, *attempt)?;
                 if p.decisions.len() >= MAX_DECISIONS {
                     return Err(Reject::LimitReached);
                 }
                 p.decisions.push(offset);
+                if revert_check.as_ref().is_some_and(|c| c.proves()) {
+                    p.proven.push(offset);
+                }
+            }
+            WorkRecord::Finding {
+                item,
+                attempt,
+                severity: _,
+                file,
+                line,
+                title,
+                scenario,
+                verdict,
+            } => self.finding(
+                offset, rec, item, *attempt, file, *line, title, scenario, *verdict,
+            )?,
+            WorkRecord::ReviewVerdict {
+                item,
+                attempt,
+                verdict,
+                why,
+            } => {
+                self.agent_holder(item, *attempt, rec)?;
+                let (spec, root) = self.final_review(item)?;
+                if why.is_empty() {
+                    return Err(Reject::MissingField);
+                }
+                if why.len() > MAX_VERDICT_WHY {
+                    return Err(Reject::TooLong);
+                }
+                self.check_review_current(&root, &spec)?;
+                if *verdict == MergeVerdict::Merge && self.open_fixes(&root) {
+                    return Err(Reject::OpenChildren);
+                }
+                self.item_mut(&root)?.review_verdict = Some(VerdictNote {
+                    verdict: *verdict,
+                    review: item.clone(),
+                    pr: spec.pr,
+                    at: offset,
+                });
             }
             WorkRecord::Step { item, attempt, .. } => {
                 self.agent_holder(item, *attempt, rec)?;
@@ -1507,6 +1659,254 @@ impl State {
         Ok(())
     }
 
+    /// Whether `by` claimed any item of the tree under `root` that is not a
+    /// review or a triage: the author of the work a review reads.
+    pub fn worked_on(&self, root: &ItemId, by: &Key) -> bool {
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            let Some(it) = self.items.get(id) else {
+                continue;
+            };
+            if !matches!(it.work, WorkKind::Review | WorkKind::Triage) && it.workers.contains(by) {
+                return true;
+            }
+            stack.extend(it.children.iter());
+        }
+        false
+    }
+
+    /// Whether any fix a review asked for is still open under `root`.
+    /// The final review of `pr` under `root`, if it is still unclaimed.
+    fn open_final_review(&self, root: &ItemId, pr: &str) -> Option<ItemId> {
+        let r = self.items.get(root)?;
+        r.children.iter().find_map(|c| {
+            let it = self.items.get(c)?;
+            let spec = it.review.as_ref()?;
+            (spec.pass == ReviewPass::Final
+                && spec.pr == pr
+                && it.closed.is_none()
+                && it.hold.is_none())
+            .then(|| c.clone())
+        })
+    }
+
+    fn open_fixes(&self, root: &ItemId) -> bool {
+        self.items.get(root).is_some_and(|r| {
+            r.children.iter().any(|c| {
+                self.items
+                    .get(c)
+                    .is_some_and(|c| c.finding.is_some() && c.closed.is_none())
+            })
+        })
+    }
+
+    /// Whether the root the final review `review` is under holds a verdict from it.
+    fn verdict_given(&self, review: &ItemId) -> bool {
+        let Some(it) = self.items.get(review) else {
+            return false;
+        };
+        let (Some(spec), Some(root)) = (
+            &it.review,
+            it.parent.as_ref().and_then(|p| self.items.get(p)),
+        ) else {
+            return false;
+        };
+        root.review_verdict
+            .as_ref()
+            .is_some_and(|v| &v.review == review && v.pr == spec.pr)
+    }
+
+    /// The tracker adds a review under an open root that reports the request it reads.
+    fn check_new_review(
+        &self,
+        rec: &WorkLogged,
+        parent: Option<&ItemId>,
+        spec: &ReviewSpec,
+    ) -> Result<(), Reject> {
+        if rec.actor != Actor::Tracker {
+            return Err(Reject::ActorNotAllowed);
+        }
+        let root = parent
+            .ok_or(Reject::MissingField)
+            .and_then(|p| self.item(p))?;
+        if root.parent.is_some() {
+            return Err(Reject::NotARoot);
+        }
+        if root.closed.is_some() {
+            return Err(Reject::Closed);
+        }
+        if !valid_review_tier(&spec.tier) || spec.pr.is_empty() {
+            return Err(Reject::MissingField);
+        }
+        if spec.pr.len() > MAX_PR_REF {
+            return Err(Reject::TooLong);
+        }
+        if root.pr.as_deref() != Some(spec.pr.as_str()) {
+            return Err(Reject::WrongPr);
+        }
+        let reviews = root
+            .children
+            .iter()
+            .filter(|c| self.items.get(*c).is_some_and(|c| c.review.is_some()))
+            .count();
+        if reviews >= MAX_REVIEWS_PER_ROOT {
+            return Err(Reject::LimitReached);
+        }
+        Ok(())
+    }
+
+    /// The spec and root of a review item.
+    fn review_of(&self, review: &ItemId) -> Result<(ReviewSpec, ItemId), Reject> {
+        let it = self.item(review)?;
+        let spec = it.review.clone().ok_or(Reject::NotReview)?;
+        let root = it.parent.clone().ok_or(Reject::NotReview)?;
+        Ok((spec, root))
+    }
+
+    fn final_review(&self, review: &ItemId) -> Result<(ReviewSpec, ItemId), Reject> {
+        let (spec, root) = self.review_of(review)?;
+        if spec.pass != ReviewPass::Final {
+            return Err(Reject::NotReview);
+        }
+        Ok((spec, root))
+    }
+
+    /// A review speaks only for the request its root still reports, while open.
+    fn check_review_current(&self, root: &ItemId, spec: &ReviewSpec) -> Result<(), Reject> {
+        let r = self.item(root)?;
+        if r.closed.is_some() {
+            return Err(Reject::Closed);
+        }
+        if r.pr.as_deref() != Some(spec.pr.as_str()) {
+            return Err(Reject::WrongPr);
+        }
+        Ok(())
+    }
+
+    /// One finding of a review. Every check runs before the first change.
+    #[allow(clippy::too_many_arguments)]
+    fn finding(
+        &mut self,
+        offset: u64,
+        rec: &WorkLogged,
+        review: &ItemId,
+        attempt: u32,
+        file: &str,
+        line: u32,
+        title: &str,
+        scenario: &str,
+        verdict: FindingVerdict,
+    ) -> Result<(), Reject> {
+        self.agent_holder(review, attempt, rec)?;
+        let (spec, root) = self.review_of(review)?;
+        if file.is_empty() || title.is_empty() || scenario.is_empty() || line == 0 {
+            return Err(Reject::MissingField);
+        }
+        if file.len() > MAX_FINDING_FILE
+            || title.len() > MAX_FINDING_TITLE
+            || scenario.len() > MAX_SCENARIO
+        {
+            return Err(Reject::TooLong);
+        }
+        self.check_review_current(&root, &spec)?;
+        let findings = self.path_mut(review, attempt)?.findings;
+        if findings >= MAX_FINDINGS {
+            return Err(Reject::LimitReached);
+        }
+        let child = |tag: &str| derived_id(tag, review, offset);
+        let shorten = |prefix: &str| -> String {
+            format!("{prefix}{title}")
+                .chars()
+                .take(MAX_FINDING_TITLE)
+                .collect()
+        };
+        match verdict {
+            FindingVerdict::Fix => {
+                let reviews = self
+                    .item(&root)?
+                    .children
+                    .iter()
+                    .filter(|c| self.items.get(*c).is_some_and(|c| c.review.is_some()))
+                    .count();
+                if spec.pass == ReviewPass::Final
+                    && self.open_final_review(&root, &spec.pr).is_none()
+                    && reviews >= MAX_REVIEWS_PER_ROOT
+                {
+                    return Err(Reject::LimitReached);
+                }
+                // The fix is work the root's tree spends budget on, like any child.
+                let r = self.item(&root)?;
+                let (depth, tier) = (r.depth.saturating_add(1), r.tier);
+                let b = self.budgets.get_mut(&root).ok_or(Reject::UnknownItem)?;
+                let refused = if depth > b.max_depth {
+                    Some(Reject::TooDeep)
+                } else if b.items_left == 0 || b.cost_left_micros == 0 {
+                    Some(Reject::OverBudget)
+                } else {
+                    b.items_left -= 1;
+                    None
+                };
+                if let Some(why) = refused {
+                    self.flag_over_budget(&root);
+                    return Err(why);
+                }
+                let fix_id = child("fix");
+                // The final review reads the tree with the fix in it, so it waits.
+                // A first pass finds the final review already there. A final review
+                // that asks for a fix is itself out of date once the fix lands, so it
+                // gets a fresh one, a single one however many fixes it asks for.
+                let waiting = match self.open_final_review(&root, &spec.pr) {
+                    Some(last) => Some(last),
+                    None if spec.pass == ReviewPass::Final => {
+                        let last = child("final");
+                        let mut again = Self::blank(
+                            &last,
+                            WorkKind::Review,
+                            &format!("Final review: {}", spec.pr)
+                                .chars()
+                                .take(200)
+                                .collect::<String>(),
+                        );
+                        again.review = Some(spec.clone());
+                        again.parent = Some(root.clone());
+                        again.root = root.clone();
+                        again.depth = depth;
+                        again.accepted = true;
+                        self.new_item(again);
+                        Some(last)
+                    }
+                    None => None,
+                };
+                if let Some(last) = waiting {
+                    self.edges.insert((last, fix_id.clone()));
+                }
+                let mut fix = Self::blank(&fix_id, WorkKind::Fix, &shorten("Fix: "));
+                fix.parent = Some(root.clone());
+                fix.root = root;
+                fix.depth = depth;
+                fix.accepted = true;
+                fix.tier = tier;
+                fix.finding = Some(offset);
+                fix.context.insert(finding_entry(), offset);
+                self.new_item(fix);
+            }
+            FindingVerdict::Defer => {
+                // Out of scope for this request: a person decides whether it is work.
+                let target = self.item(&root)?.target.clone();
+                let mut p = Self::blank(&child("defer"), WorkKind::Fix, &shorten("Deferred: "));
+                p.proposed_by_agent = true;
+                p.target = target;
+                p.finding = Some(offset);
+                p.context.insert(finding_entry(), offset);
+                self.new_item(p);
+            }
+            FindingVerdict::Dismiss => {}
+        }
+        self.path_mut(review, attempt)?.findings += 1;
+        self.item_mut(review)?.findings.push(offset);
+        Ok(())
+    }
+
     /// The open root an upstream sync record is about.
     fn upstream_sync(&mut self, id: &ItemId, rec: &WorkLogged) -> Result<&mut Item, Reject> {
         if rec.actor == Actor::Agent {
@@ -1530,6 +1930,7 @@ impl State {
             .ok_or(Reject::WrongAttempt)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn propose(
         &mut self,
         rec: &WorkLogged,
@@ -1538,9 +1939,16 @@ impl State {
         key: &Key,
         work: WorkKind,
         title: &str,
+        review: Option<&ReviewSpec>,
     ) -> Result<(), Reject> {
         if self.items.contains_key(id) {
             return Err(Reject::Duplicate);
+        }
+        if (work == WorkKind::Review) != review.is_some() {
+            return Err(Reject::MissingField);
+        }
+        if let Some(spec) = review {
+            self.check_new_review(rec, parent, spec)?;
         }
         // Proposals and roots are keyed like children, so a retry never duplicates.
         // Roots and agent proposals are scoped to the proposer, so two agents' keys never collide.
@@ -1551,6 +1959,7 @@ impl State {
             return Err(Reject::Duplicate);
         }
         let mut item = Self::blank(id, work, title);
+        item.review = review.cloned();
         match (rec.actor, parent) {
             // An agent's fix is out of scope for its task: a root once a person accepts it.
             (Actor::Agent, _) if work == WorkKind::Fix => {
@@ -1780,10 +2189,7 @@ impl State {
         let Some(par) = self.items.get(item) else {
             return;
         };
-        let id = |tag: &str| {
-            let hash = ArtifactId::of(format!("{tag}\n{item}\n{question}").as_bytes());
-            ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
-        };
+        let id = |tag: &str| derived_id(tag, item, question);
         match then {
             Then::Resume => {
                 let so_far = par
@@ -1937,6 +2343,17 @@ impl State {
         }
         false
     }
+}
+
+/// The id of an item a record makes: the same on every replay.
+fn derived_id(tag: &str, item: &ItemId, at: u64) -> ItemId {
+    let hash = ArtifactId::of(format!("{tag}\n{item}\n{at}").as_bytes());
+    ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
+}
+
+/// The context entry that points an item at the finding it came from.
+fn finding_entry() -> Key {
+    Key::new("finding").expect("a valid key")
 }
 
 /// Snapshots taken every `every` records, so a seek replays a short tail
