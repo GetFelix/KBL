@@ -36,7 +36,7 @@ work on a backlog that never ends:
 - **People and agents don't overwrite each other.** Items are keys written with `cache_put_if` at the version read, so a stale write is refused.
 - **One log is the record.** `work.events` holds every import, claim, decision and refusal in order, with the broker's record of who wrote it. The queue, an item's history and the replay are folds of it.
 - **Budgets hold under a race.** A root's budget only decreases, and a create over it is refused.
-- **Agents stay in their lane.** Each agent has its own token. Only the tracker writes `work.events` and the item keys.
+- **Agents stay in their lane.** Each agent has its own token and reaches work only through the tracker, which is the only writer of `work.events`, the ready streams and the item keys.
 
 ## What you will be able to do
 
@@ -70,9 +70,11 @@ Bugs come in as roots from GitHub, Azure DevOps or Jira, and from people. An ing
 id once and posts one triage item and one augment item for it. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
-Each agent runs `felix-mcp` with its own Felix token. `work_next` claims the highest-priority ready item, the
-claim is extended while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead
-agent's item goes back to the queue. An agent adds children only under an item it holds (`split`, `augment`,
+Each agent runs `felix-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
+tracker for the highest-priority ready item: the tracker claims it from the ready streams' consumer group as a
+member named after the agent and logs the claim in the same step. `felix-mcp` extends the claim every 30
+seconds while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead agent stops
+extending, so its claim lapses and the item goes to another agent. An agent adds children only under an item it holds (`split`, `augment`,
 `question` or `test`), within a budget per root. Anything else it finds is a proposal a person accepts.
 
 While it works, the agent records `decide` (what it chose and why, with the phase, a running summary and the
