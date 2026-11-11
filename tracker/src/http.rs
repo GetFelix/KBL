@@ -319,7 +319,7 @@ async fn context_read<B: Broker>(
     Json(b): Json<ItemBody>,
 ) -> Response {
     match agent(&app, &headers) {
-        Ok(_) => reply(app.tracker.context_read(&b.item).await),
+        Ok(a) => reply(app.tracker.context_read(&a, &b.item).await),
         Err(d) => denied(d),
     }
 }

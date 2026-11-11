@@ -337,8 +337,10 @@ async fn links_order_siblings_refuse_cycles_and_need_a_hold() {
         assert_eq!(core.state.stage(&c2), Some(Stage::Blocked));
         assert_eq!(core.state.stage(&c1), Some(Stage::Ready));
     }
-    // Linking the same edge again is fine; the reverse closes a cycle.
-    t.link(&agent("w1"), &c2, &c1).await.unwrap();
+    // Linking the same edge again appends nothing; the reverse closes a cycle.
+    let before = fake.log().len();
+    assert_eq!(why(t.link(&agent("w1"), &c2, &c1).await), "already_linked");
+    assert_eq!(fake.log().len(), before);
     assert_eq!(why(t.link(&agent("w1"), &c1, &c2).await), "cycle");
     assert_eq!(why(t.link(&agent("w1"), &c1, &c1).await), "cycle");
     let kinds = fake.kinds();
@@ -387,17 +389,24 @@ async fn context_is_written_by_a_holder_and_read_back_even_after_a_restart() {
         assert_eq!(v["context"][0]["text"]["text"], "run it three times");
         assert_eq!(v["notes"][0]["text"]["text"], "it only fails on arm64");
     };
-    check(&t.context_read(&item("a1")).await.unwrap());
+    check(&t.context_read(&agent("w1"), &item("a1")).await.unwrap());
     let t2 = start(&fake).await;
-    check(&t2.context_read(&item("a1")).await.unwrap());
-    // A stranger may read but not write.
+    check(&t2.context_read(&agent("w1"), &item("a1")).await.unwrap());
+    // A stranger may neither read nor write.
+    assert_eq!(
+        why(t.context_read(&agent("w2"), &item("a1")).await),
+        "not_held"
+    );
     assert_eq!(
         why(t
             .context_add(&agent("w2"), &item("a1"), key("x"), text("y"))
             .await),
         "not_holder"
     );
-    assert_eq!(why(t.context_read(&item("nope")).await), "unknown_item");
+    assert_eq!(
+        why(t.context_read(&agent("w1"), &item("nope")).await),
+        "unknown_item"
+    );
 }
 
 #[tokio::test]
@@ -464,10 +473,12 @@ async fn a_decision_needs_phase_so_far_why_and_commit_and_cannot_cite_the_future
     for d in [
         blank(&|d| d.commit = String::new()),
         blank(&|d| d.so_far = String::new()),
-        blank(&|d| d.why = String::new()),
     ] {
         assert_eq!(why(t.decide(&a, &a1, d).await), "missing_field");
     }
+    // The why is the tool's rule, not the fold's, so old logs still fold.
+    let no_why = blank(&|d| d.why = String::new());
+    assert_eq!(why(t.decide(&a, &a1, no_why).await), "invalid");
     // Evidence is a stream and an offset on the log, and must come before the decision.
     let future = blank(&|d| {
         d.evidence = vec![Evidence {
@@ -742,4 +753,106 @@ async fn the_whole_flow_leaves_only_records_the_fold_accepts() {
         .collect();
     let replay = agents_core::work_fold::fold(&entries);
     assert!(replay.rejections.is_empty(), "{:?}", replay.rejections);
+}
+
+#[tokio::test]
+async fn a_child_is_read_by_the_holder_of_its_parent_and_not_by_a_stranger() {
+    let (_fake, t) = held().await;
+    let c = id_of(&post(&t, "w1", "a1", "one", "split").await.unwrap());
+    assert!(t.context_read(&agent("w1"), &c).await.is_ok());
+    assert_eq!(why(t.context_read(&agent("w2"), &c).await), "not_held");
+}
+
+#[tokio::test]
+async fn the_question_text_is_read_back_with_the_context() {
+    let (_fake, t) = held().await;
+    let asked = t
+        .ask(&agent("w1"), &item("a1"), text("which cache?"))
+        .await
+        .unwrap();
+    let q = asked["offset"].as_u64().unwrap();
+    let core = t.0.core.lock().await;
+    assert_eq!(core.texts[&q], text("which cache?"));
+}
+
+#[tokio::test]
+async fn an_answer_to_a_stale_question_is_refused() {
+    let (fake, t) = held().await;
+    let a = agent("w1");
+    let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
+    let old = t.ask(&a, &item("a1"), text("one?")).await.unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    let open = t.ask(&a, &item("a1"), text("two?")).await.unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    claim_item(&t, "w2", &q_id).await;
+    let before = fake.log().len();
+    let r = t
+        .answer(&agent("w2"), &item("a1"), old, text("late"), vec![])
+        .await;
+    assert_eq!(why(r), "not_open_question");
+    assert_eq!(fake.log().len(), before);
+    let r = t
+        .person_answer(key("gab"), &item("a1"), Some(old), text("late"), vec![])
+        .await;
+    assert_eq!(why(r), "not_open_question");
+    t.answer(&agent("w2"), &item("a1"), open, text("now"), vec![])
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn evidence_is_bounded_in_size_and_count() {
+    let (fake, t) = held().await;
+    let ev = |stream: &str| Evidence {
+        stream: stream.into(),
+        offset: 0,
+    };
+    let big = "s".repeat(super::MAX_FIELD + 1);
+    let before = fake.log().len();
+    let mut d = decide_args();
+    d.evidence = vec![ev(&big)];
+    assert_eq!(why(t.decide(&agent("w1"), &item("a1"), d).await), "invalid");
+    let mut d = decide_args();
+    d.evidence = (0..=super::MAX_EVIDENCE).map(|_| ev("logs")).collect();
+    assert_eq!(why(t.decide(&agent("w1"), &item("a1"), d).await), "invalid");
+    let mut d = decide_args();
+    d.why = String::new();
+    assert_eq!(why(t.decide(&agent("w1"), &item("a1"), d).await), "invalid");
+    let q = t
+        .ask(&agent("w1"), &item("a1"), text("which?"))
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    let before = before + 1;
+    let r = t
+        .person_answer(key("gab"), &item("a1"), Some(q), text("x"), vec![ev(&big)])
+        .await;
+    assert_eq!(why(r), "invalid");
+    let many = (0..=super::MAX_EVIDENCE).map(|_| ev("logs")).collect();
+    let r = t
+        .person_answer(key("gab"), &item("a1"), Some(q), text("x"), many)
+        .await;
+    assert_eq!(why(r), "invalid");
+    assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn an_edited_title_is_bounded_and_not_empty() {
+    let (fake, t) = held().await;
+    let before = fake.log().len();
+    let edit = |title: String| WorkRecord::Edited {
+        item: item("a1"),
+        title: Some(title),
+        tier: None,
+    };
+    let r = t.person_record(key("gab"), edit(String::new())).await;
+    assert_eq!(why(r), "invalid");
+    let r = t
+        .person_record(key("gab"), edit("t".repeat(super::MAX_FIELD + 1)))
+        .await;
+    assert_eq!(why(r), "invalid");
+    assert_eq!(fake.log().len(), before);
 }

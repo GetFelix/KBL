@@ -20,6 +20,7 @@ use crate::felix::Broker;
 /// Longest title, command, file name or reason an agent may write.
 const MAX_FIELD: usize = 4096;
 const MAX_OPTIONS: usize = 16;
+const MAX_EVIDENCE: usize = 32;
 
 /// What `work_post` creates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +119,12 @@ impl<B: Broker> Tracker<B> {
         self.begin().await?;
         {
             let mut core = self.0.core.lock().await;
+            // A replay would append a record that changes nothing.
+            if core.state.edges.contains(&(item.clone(), to.clone())) {
+                return Err(Error::Refused {
+                    why: "already_linked".into(),
+                });
+            }
             let record = WorkRecord::Linked {
                 item: item.clone(),
                 to: to.clone(),
@@ -152,13 +159,28 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// What an agent should know before it works on `item`: its context
-    /// entries, and the notes people wrote for the attempt it is on.
-    pub(crate) async fn context_read(&self, item: &ItemId) -> Result<Value, Error> {
+    /// entries, and the notes people wrote for the attempt it is on. The agent
+    /// must hold the item or its parent.
+    pub(crate) async fn context_read(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+    ) -> Result<Value, Error> {
         self.begin().await?;
         let core = self.0.core.lock().await;
         let it = core.state.items.get(item).ok_or_else(|| Error::Refused {
             why: "unknown_item".into(),
         })?;
+        let parent_held = it
+            .parent
+            .as_ref()
+            .and_then(|p| core.state.items.get(p))
+            .is_some_and(|p| holds(p, agent));
+        if !holds(it, agent) && !parent_held {
+            return Err(Error::NotHeld(format!(
+                "you hold neither {item} nor its parent"
+            )));
+        }
         let text = |offset: &u64| core.texts.get(offset).map_or(Value::Null, |c| json!(c));
         let entries: Vec<Value> = it
             .context
@@ -245,15 +267,16 @@ impl<B: Broker> Tracker<B> {
         ] {
             field(name, v)?;
         }
+        if d.why.is_empty() {
+            return Err(Error::Invalid("why is needed".into()));
+        }
         if d.options.len() > MAX_OPTIONS {
             return Err(Error::Invalid(format!("at most {MAX_OPTIONS} options")));
         }
         for o in &d.options {
             field("option", o)?;
         }
-        for e in &d.evidence {
-            field("evidence stream", &e.stream)?;
-        }
+        check_evidence(&d.evidence)?;
         self.held_write(agent, item, "decide", |attempt| WorkRecord::Decision {
             item: item.clone(),
             attempt,
@@ -322,6 +345,7 @@ impl<B: Broker> Tracker<B> {
         evidence: Vec<Evidence>,
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
+        check_evidence(&evidence)?;
         self.begin().await?;
         let offset = {
             let mut core = self.0.core.lock().await;
@@ -453,6 +477,18 @@ fn item_for(parent: Option<&ItemId>, kind: Post, agent: &AgentName, key: &Key) -
     ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
 }
 
+fn check_evidence(evidence: &[Evidence]) -> Result<(), Error> {
+    if evidence.len() > MAX_EVIDENCE {
+        return Err(Error::Invalid(format!(
+            "at most {MAX_EVIDENCE} evidence entries"
+        )));
+    }
+    for e in evidence {
+        field("evidence stream", &e.stream)?;
+    }
+    Ok(())
+}
+
 fn field(name: &str, value: &str) -> Result<(), Error> {
     if value.len() > MAX_FIELD {
         return Err(Error::Invalid(format!(
@@ -478,10 +514,22 @@ fn check_content(name: &str, content: &Content) -> Result<(), Error> {
 /// The size rules for any record a caller writes.
 pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
     match record {
+        WorkRecord::Answer { text, evidence, .. } => {
+            check_content("text", text)?;
+            check_evidence(evidence)
+        }
         WorkRecord::Context { text, .. }
         | WorkRecord::Question { text, .. }
-        | WorkRecord::Answer { text, .. }
         | WorkRecord::HumanInput { text, .. } => check_content("text", text),
+        WorkRecord::Edited {
+            title: Some(title), ..
+        } => {
+            field("title", title)?;
+            if title.is_empty() {
+                return Err(Error::Invalid("a title is needed".into()));
+            }
+            Ok(())
+        }
         WorkRecord::Progress { note, .. } => check_content("note", note),
         WorkRecord::Step { output, .. } => check_content("output", output),
         WorkRecord::Edit { hunk, .. } => check_content("hunk", hunk),

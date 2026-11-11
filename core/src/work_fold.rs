@@ -35,6 +35,9 @@ const MAX_STEPS: usize = 500;
 const MAX_EDITS: usize = 500;
 const MAX_PROGRESS: u32 = 100;
 const MAX_CONTEXT: u32 = 100;
+const MAX_QUESTIONS: u32 = 20;
+const MAX_ANSWERS: u32 = 10;
+const MAX_LINKS: u32 = 100;
 /// Children and proposals together.
 const MAX_POSTS: u32 = 24;
 
@@ -175,6 +178,15 @@ pub struct Path {
     /// Children and proposals the attempt created.
     #[serde(default)]
     pub posts: u32,
+    /// Questions the attempt asked.
+    #[serde(default)]
+    pub questions: u32,
+    /// Answers the attempt wrote, as the holder of a question item.
+    #[serde(default)]
+    pub answers: u32,
+    /// Edges the attempt added.
+    #[serde(default)]
+    pub links: u32,
     /// A cap refusal is already on the log for this attempt.
     #[serde(default)]
     pub capped: bool,
@@ -247,6 +259,8 @@ pub enum Reject {
     BadTier,
     /// An agent linked items of different trees.
     CrossRoot,
+    /// An answer names a question that is not the open one.
+    NotOpenQuestion,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -594,11 +608,20 @@ impl State {
             WorkRecord::Linked { item, to } => {
                 self.item(item)?;
                 self.item(to)?;
-                if rec.actor == Actor::Agent {
-                    self.agent_may_link(item, to, rec)?;
-                }
+                let scope = if rec.actor == Actor::Agent {
+                    Some(self.agent_may_link(item, to, rec)?)
+                } else {
+                    None
+                };
                 if item == to || self.reaches(to, item) {
                     return Err(Reject::Cycle);
+                }
+                if let Some((worker, attempt)) = scope {
+                    let p = self.path_mut(&worker, attempt)?;
+                    if p.links >= MAX_LINKS {
+                        return Err(Reject::LimitReached);
+                    }
+                    p.links += 1;
                 }
                 self.edges.insert((item.clone(), to.clone()));
             }
@@ -678,6 +701,9 @@ impl State {
                         progress: 0,
                         context_writes: 0,
                         posts: 0,
+                        questions: 0,
+                        answers: 0,
+                        links: 0,
                         capped: false,
                     });
                 }
@@ -776,6 +802,11 @@ impl State {
             }
             WorkRecord::Question { item, attempt, .. } => {
                 self.agent_holder(item, *attempt, rec)?;
+                let p = self.path_mut(item, *attempt)?;
+                if p.questions >= MAX_QUESTIONS {
+                    return Err(Reject::LimitReached);
+                }
+                p.questions += 1;
                 self.item_mut(item)?.open_question = Some(offset);
             }
             WorkRecord::Answer {
@@ -785,23 +816,29 @@ impl State {
                 ..
             } => {
                 Self::check_evidence(offset, evidence)?;
-                self.may_answer(item, rec)?;
-                let it = self.item_mut(item)?;
-                if it.open_question == Some(*question) {
-                    it.open_question = None;
+                let scope = self.may_answer(item, rec)?;
+                if self.item(item)?.open_question != Some(*question) {
+                    return Err(Reject::NotOpenQuestion);
                 }
+                if let Some((worker, attempt)) = scope {
+                    let p = self.path_mut(&worker, attempt)?;
+                    if p.answers >= MAX_ANSWERS {
+                        return Err(Reject::LimitReached);
+                    }
+                    p.answers += 1;
+                }
+                self.item_mut(item)?.open_question = None;
             }
             WorkRecord::Decision {
                 item,
                 attempt,
                 so_far,
-                why,
                 commit,
                 evidence,
                 ..
             } => {
                 self.agent_holder(item, *attempt, rec)?;
-                if so_far.is_empty() || why.is_empty() || commit.is_empty() {
+                if so_far.is_empty() || commit.is_empty() {
                     return Err(Reject::MissingField);
                 }
                 Self::check_evidence(offset, evidence)?;
@@ -1157,36 +1194,38 @@ impl State {
 
     /// An agent adds an edge only inside one tree, on an item it works on or a
     /// sibling under the item it holds.
-    fn agent_may_link(&self, item: &ItemId, to: &ItemId, rec: &WorkLogged) -> Result<(), Reject> {
+    fn agent_may_link(
+        &self,
+        item: &ItemId,
+        to: &ItemId,
+        rec: &WorkLogged,
+    ) -> Result<(ItemId, u32), Reject> {
         if self.item(item)?.root != self.item(to)?.root {
             return Err(Reject::CrossRoot);
         }
         self.agent_scope(item, &rec.by, true)
-            .map(|_| ())
             .ok_or(Reject::NotHolder)
     }
 
     /// Answers come from a person or the agent holding a question item under `item`.
-    fn may_answer(&self, item: &ItemId, rec: &WorkLogged) -> Result<(), Reject> {
+    fn may_answer(&self, item: &ItemId, rec: &WorkLogged) -> Result<Option<(ItemId, u32)>, Reject> {
         let it = self.item(item)?;
         match rec.actor {
-            Actor::Person => Ok(()),
+            Actor::Person => Ok(None),
             Actor::Tracker => Err(Reject::ActorNotAllowed),
-            Actor::Agent => {
-                let holds = it
-                    .children
-                    .iter()
-                    .filter_map(|c| self.items.get(c))
-                    .any(|q| {
-                        q.work == WorkKind::Question
-                            && q.hold.as_ref().is_some_and(|h| h.by == rec.by)
-                    });
-                if holds {
-                    Ok(())
-                } else {
-                    Err(Reject::NotHolder)
-                }
-            }
+            Actor::Agent => it
+                .children
+                .iter()
+                .filter_map(|c| self.items.get(c))
+                .filter(|q| q.work == WorkKind::Question)
+                .find_map(|q| {
+                    q.hold
+                        .as_ref()
+                        .filter(|h| h.by == rec.by)
+                        .map(|h| (q.id.clone(), h.attempt))
+                })
+                .map(Some)
+                .ok_or(Reject::NotHolder),
         }
     }
 

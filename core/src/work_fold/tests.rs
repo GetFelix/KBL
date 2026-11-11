@@ -1563,7 +1563,7 @@ fn a_person_edits_a_proposal_before_accepting_it() {
 }
 
 #[test]
-fn a_decision_needs_its_why_and_its_commit() {
+fn a_decision_needs_its_commit_and_an_empty_why_still_folds() {
     let mut l = held_root();
     let with = |why: &str, commit: &str| WorkRecord::Decision {
         item: id("r1"),
@@ -1577,10 +1577,83 @@ fn a_decision_needs_its_why_and_its_commit() {
         commit: commit.into(),
         evidence: vec![],
     };
-    l.agent("w1", with("", "abc"));
-    assert_eq!(last_rejection(&l), Some(Reject::MissingField));
     l.agent("w1", with("the lock is held", ""));
     assert_eq!(last_rejection(&l), Some(Reject::MissingField));
-    l.agent("w1", with("the lock is held", "abc"));
+    // Logs written before the tool layer asked for a why must fold as they did.
+    l.agent("w1", with("", "abc"));
+    assert_eq!(fold(&l.0).rejections.len(), 1);
     assert_eq!(fold(&l.0).items[&id("r1")].paths[0].decisions.len(), 1);
+}
+
+fn question_rec(item: &str) -> WorkRecord {
+    WorkRecord::Question {
+        item: id(item),
+        attempt: 1,
+        text: text("which?"),
+    }
+}
+
+fn answer_rec(question: u64) -> WorkRecord {
+    WorkRecord::Answer {
+        item: id("r1"),
+        question,
+        text: text("this"),
+        evidence: vec![],
+    }
+}
+
+#[test]
+fn questions_answers_and_links_are_capped_per_attempt() {
+    let mut l = held_root();
+    for _ in 0..MAX_QUESTIONS {
+        l.agent("w1", question_rec("r1"));
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", question_rec("r1"));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+
+    // Each answer closes the question it answers, so ask and answer in turn.
+    let mut l = held_root();
+    l.agent("w1", proposed("q1", Some("r1"), "q", WorkKind::Question));
+    l.agent("w2", claimed("q1", 1));
+    for _ in 0..MAX_ANSWERS {
+        let q = l.agent("w1", question_rec("r1"));
+        l.agent("w2", answer_rec(q));
+    }
+    assert_eq!(last_rejection(&l), None);
+    let q = l.agent("w1", question_rec("r1"));
+    l.agent("w2", answer_rec(q));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    assert_eq!(fold(&l.0).items[&id("r1")].open_question, Some(q));
+
+    // A replayed edge counts, so the fold stops a loop even if the tool layer misses it.
+    let mut l = held_root();
+    l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
+    l.agent("w1", proposed("c2", Some("r1"), "b", WorkKind::Split));
+    let link = || WorkRecord::Linked {
+        item: id("c2"),
+        to: id("c1"),
+    };
+    for _ in 0..MAX_LINKS {
+        l.agent("w1", link());
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", link());
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+}
+
+#[test]
+fn an_answer_is_taken_only_for_the_open_question() {
+    let mut l = held_root();
+    let old = l.agent("w1", question_rec("r1"));
+    let open = l.agent("w1", question_rec("r1"));
+    l.person(answer_rec(old));
+    assert_eq!(last_rejection(&l), Some(Reject::NotOpenQuestion));
+    assert_eq!(fold(&l.0).items[&id("r1")].open_question, Some(open));
+    l.person(answer_rec(open));
+    assert_eq!(fold(&l.0).rejections.len(), 1);
+    assert_eq!(fold(&l.0).items[&id("r1")].open_question, None);
+    // Nothing is open now, so the same answer again is refused.
+    l.person(answer_rec(open));
+    assert_eq!(last_rejection(&l), Some(Reject::NotOpenQuestion));
 }

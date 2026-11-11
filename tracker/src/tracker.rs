@@ -137,6 +137,7 @@ fn remember(texts: &mut HashMap<u64, Content>, offset: u64, record: &WorkRecord)
     match record {
         WorkRecord::Context { text, .. }
         | WorkRecord::HumanInput { text, .. }
+        | WorkRecord::Question { text, .. }
         | WorkRecord::Answer { text, .. } => {
             texts.insert(offset, text.clone());
         }
