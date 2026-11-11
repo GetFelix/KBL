@@ -559,6 +559,10 @@ scripted demo.
 | 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Demonstration 7, and it holds under loss |
 | 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
 
+**Why it was done this way.** [decision-replay.md](decision-replay.md) records an
+agent's decisions with their evidence and reads them back as a story for
+reviewers: recording in M3, the story view in M4, full replay and questions in M7.
+
 **M0 comes first on purpose**, for the reason the other showcases give: a
 view nobody can read proves nothing, so the look is fixed before anything is
 built behind it.
