@@ -443,6 +443,8 @@ async fn a_restart_between_poll_and_log_does_not_hold_the_item() {
     assert!(fake.poll_and_vanish("work.ready.p2", "w1").is_some());
     drop(first);
 
+    // A real restart takes far longer than this; stamps are in microseconds.
+    std::thread::sleep(Duration::from_millis(2));
     let second = start(&fake).await;
     // Nothing was logged for the item, so the restarted tracker offers it again.
     assert_eq!(fake.kinds().iter().filter(|k| *k == "claimed").count(), 0);

@@ -110,7 +110,7 @@ impl<B: Broker> Tracker<B> {
             core: Mutex::new(Core::default()),
             visibility,
             me: Key::new("tracker").expect("a valid key"),
-            stamp: AtomicU64::new(now_ms() * 1000),
+            stamp: AtomicU64::new(now_micros()),
             crash_after_poll,
         }));
         {
@@ -633,6 +633,13 @@ fn with_warning(mut reply: Value, warning: Option<String>) -> Value {
 
 fn agent_key(agent: &AgentName) -> Key {
     Key::new(agent.as_str()).expect("an agent name is a key")
+}
+
+/// Microseconds, so a restarted tracker's stamps start past the old one's.
+fn now_micros() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_micros() as u64)
 }
 
 pub(crate) fn now_ms() -> u64 {

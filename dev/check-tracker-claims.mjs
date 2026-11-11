@@ -104,7 +104,7 @@ try {
 
   // 3. The tracker dies between the poll and the log.
   tracker.kill();
-  tracker = await startTracker(tokens, { AGENTS_TRACKER_CRASH_AFTER_POLL: "1" });
+  tracker = await startTracker(tokens, { AGENTS_TRACKER_CRASH_AFTER_POLL: "true" });
   await seed("crash1", 0);
   let died = false;
   await w1.tool("work_next", { wait_seconds: 5 }).catch(() => (died = true));
