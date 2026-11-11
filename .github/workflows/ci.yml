@@ -22,6 +22,8 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/lint.mjs
+      # Every route, tool and record kind has a row in docs/threat-model.md.
+      - run: node scripts/check-threat-model.mjs
       - run: node --test dev/lib/script.test.mjs
       # The fixtures are generated; the committed files must match the script.
       - run: python3 prototype/make-intake-fixture.py

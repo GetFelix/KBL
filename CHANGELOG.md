@@ -13,6 +13,11 @@
   `revert_check`. Every field and count is bounded. Logs from before fold as
   they did; older trackers fold the new records as `unknown`.
 
+- A threat model, [docs/threat-model.md](docs/threat-model.md): actors, assets, trust
+  boundaries, and for every tracker route, ingest route, MCP tool and record kind
+  the fields an agent controls and the check that stops misuse. CI fails when a
+  new one has no row, and the pull request template asks for it.
+
 - Questions can offer options. `work_ask` takes `options` (at most 8) and a
   `default`, and a person picks one or types free text, which is stored as
   written. An answer appends a claimable `resume` item under the asking item
