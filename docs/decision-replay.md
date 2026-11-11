@@ -97,8 +97,35 @@ branches from that point.
 - **Cost.** The redo shows its estimated cost before it starts and counts
   against the same budget. The cost of a fix includes every branch it took.
 
+- **The handoff is a narrative the reviewer can edit.** The new agent does
+  not get the raw log. It gets the story up to the fork point as a short
+  narrative: what was found, what was tried, what was decided and why. The
+  reviewer edits it before handing off, striking an assumption that was
+  wrong, correcting a fact, adding what they know, and then writes the
+  instruction for the new attempt. The edited narrative and the instruction
+  are what the agent starts from, and both are recorded, so the replay shows
+  exactly what the second agent was told and how it differed from what the
+  first one believed.
+- **Redos are limited.** An item can be redone at most three times (a
+  setting). Each redo is a sign the item was misunderstood or too big, so
+  after the limit it goes to Needs you with its branches attached and two
+  choices: take it yourself, or split it. At most two attempts are open at
+  once, the current one and the one being compared; picking one closes the
+  other.
+
 "Request changes" on a pull request is the same action from the last
 decision: the comment becomes the note.
+
+### The fork in the dashboard
+
+The item's timeline is a path, not a line. Decisions are dots along it, and
+a redo branches off at the decision it started from, marked with who steered
+and the first line of their note. Each branch ends in its outcome: merged,
+in review, rejected, or still running. Selecting a branch replays it; the
+fork point shows the edited narrative next to what the first attempt had
+believed. Board and queue cards for an item with more than one attempt carry
+a small "2 paths" mark, and the review panel compares the open attempts side
+by side.
 
 ## Claims checked against steps
 
