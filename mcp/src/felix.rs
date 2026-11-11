@@ -8,8 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_client::{
-    AckMode, CacheCondition, Client, ClientConfig, GroupMember, GroupPollOptions, GroupRecord,
-    quic_client_config, root_store_from_pem_file,
+    AckMode, BrokerError, CacheCondition, Client, ClientConfig, ErrorCode, GroupMember,
+    GroupPollOptions, GroupRecord, quic_client_config, root_store_from_pem_file,
 };
 
 /// How long the broker may take to accept the connection.
@@ -65,6 +65,23 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         tenant: target.tenant,
         namespace: target.namespace,
     })
+}
+
+/// Why an extension failed.
+#[derive(Debug)]
+pub(crate) enum ExtendError {
+    /// Felix refused with `stale_claim`: the claim lapsed or was handed out again.
+    Stale(anyhow::Error),
+    /// Anything else, which may pass.
+    Failed(anyhow::Error),
+}
+
+impl ExtendError {
+    pub(crate) fn error(&self) -> &anyhow::Error {
+        match self {
+            ExtendError::Stale(e) | ExtendError::Failed(e) => e,
+        }
+    }
 }
 
 /// What the task tools need from Felix, so their rules can be tested without
@@ -132,7 +149,7 @@ pub(crate) trait Backend: Clone + Send + Sync + 'static {
         group: &str,
         record: &GroupRecord,
         by: Duration,
-    ) -> impl Future<Output = Result<Duration>> + Send;
+    ) -> impl Future<Output = Result<Duration, ExtendError>> + Send;
 }
 
 impl Backend for Felix {
@@ -231,9 +248,20 @@ impl Backend for Felix {
         group: &str,
         record: &GroupRecord,
         by: Duration,
-    ) -> Result<Duration> {
+    ) -> Result<Duration, ExtendError> {
         self.client
             .group_extend(&self.tenant, &self.namespace, stream, 0, group, record, by)
             .await
+            .map_err(|e| {
+                // Felix's typed refusal, not its wording, says the claim is gone.
+                let stale = e
+                    .downcast_ref::<BrokerError>()
+                    .is_some_and(|b| b.code == ErrorCode::StaleClaim);
+                if stale {
+                    ExtendError::Stale(e)
+                } else {
+                    ExtendError::Failed(e)
+                }
+            })
     }
 }

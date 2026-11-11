@@ -192,6 +192,13 @@ pub enum Record {
         key: Option<String>,
         error: String,
     },
+    /// The worker's claim on the task lapsed, or was handed out again, while
+    /// it still held the task. Its result may still land, and it may be a duplicate.
+    TaskClaimLost {
+        task: TaskId,
+        offset: u64,
+        attempt: u32,
+    },
     /// A kind this version does not know. A fold skips it.
     #[serde(other)]
     Unknown,
@@ -224,6 +231,7 @@ impl Record {
             Record::BudgetExhausted { .. } => "budget_exhausted",
             Record::RefundUnconfirmed { .. } => "refund_unconfirmed",
             Record::Refused { .. } => "refused",
+            Record::TaskClaimLost { .. } => "task_claim_lost",
             Record::Unknown => "unknown",
         }
     }

@@ -196,19 +196,26 @@ and to another if that worker goes quiet, so a task can be tried more than once 
 
 | Tool | Does |
 |---|---|
-| `task_post` | Puts a task on the run's tasks stream and logs `task_posted`. A body over 4 KiB is stored as an artifact |
+| `task_post` | Puts a task on the run's tasks stream and logs `task_posted`. A body over 4 KiB is stored as an artifact. An `id` you choose is refused if that task already has a result; posting the same id twice before it finishes makes two tasks and one result |
 | `task_claim` | Takes the next task, waiting up to 30 seconds (10 by default), and logs `task_claimed`. A worker holds one task at a time |
-| `task_complete` | Writes the result under the task's key in the results cache only if no result is there, then acknowledges the task. A first result logs `task_done`; a later one is kept as an artifact and logs `task_duplicate` |
+| `task_complete` | Writes the result under the task's key in the results cache only if no result is there, then acknowledges the task, and warns in its reply if the acknowledgement fails (the result still stands). A first result logs `task_done`; a later one is kept as an artifact and logs `task_duplicate` |
 | `task_release` | Hands the task back to the group now (`task_released`) |
 | `task_give_up` | Dead-letters the task so it is not handed out again (`task_dead`) |
 
 While a worker holds a task, `felix-mcp` extends the claim every 30 seconds (it stands for 90), so a model call that
-takes minutes keeps its task and a worker that dies loses it within 90 seconds. A worker restarted under the same name
-gets its tasks back on its first claim. A task delivered a third time is dead-lettered without reaching the model, since
-Felix's attempt limit is one setting for the whole broker and a model task is too costly to try five times. Any
-operation Felix refuses is logged as `refused` and returned to the model as the tool's error.
+takes minutes keeps its task and a worker that dies loses it within 90 seconds. If Felix answers `stale_claim`, or
+extensions fail for a full 90 seconds, `felix-mcp` logs `task_claim_lost` and the agent's next task tool call says the
+claim lapsed and drops the task. After two failed extensions in a row the next call warns that the claim is at risk.
 
-Results over 1 MiB are not supported yet, because the part format is not defined.
+A worker restarted under the same name gets back the tasks its predecessor held, one per `task_claim` and ahead of new
+work. Each counts as another attempt, and one whose claim lapses before it is claimed goes back to the whole group. A
+task that already has a result is acknowledged and logged `task_duplicate` instead of being handed to the model. A task
+delivered a third time is dead-lettered (`task_dead`) without reaching the model, since Felix's attempt limit is one
+setting for the whole broker and a model task is too costly to try five times. A delivery the broker gives no attempt
+count for is dead-lettered too, so the limit cannot fail quietly. `task_claim` never takes longer than the wait asked
+for. Any operation Felix refuses is logged as `refused` and returned to the model as the tool's error.
+
+A body or result over 1 MiB (1,048,576 bytes) is refused, because the format for splitting larger ones is not defined.
 
 With the dev stack running, this starts a planner and five workers and runs a job, a poison task and a restart:
 

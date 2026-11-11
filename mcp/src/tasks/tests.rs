@@ -17,7 +17,18 @@ struct State {
     deliveries: VecDeque<GroupRecord>,
     calls: Vec<String>,
     polls: Vec<(String, GroupMember, Duration)>,
+    waits: Vec<Duration>,
+    poll_takes: Duration,
     fail: Option<&'static str>,
+    extend: Extend,
+}
+
+#[derive(Default, Clone, Copy, PartialEq)]
+enum Extend {
+    #[default]
+    Works,
+    Stale,
+    Down,
 }
 
 impl Fake {
@@ -30,6 +41,23 @@ impl Fake {
             publisher: None,
             timestamp_micros: None,
         });
+    }
+
+    fn extends(&self, how: Extend) {
+        self.0.lock().unwrap().extend = how;
+    }
+
+    fn put_result(&self, task: &str, body: &[u8]) {
+        let value = TaskResult {
+            attempt: 1,
+            agent: AgentName::new("w2").unwrap(),
+            artifact: ArtifactId::of(body),
+        };
+        self.0
+            .lock()
+            .unwrap()
+            .caches
+            .insert(("agents.results.r1".into(), task.into()), value.encode());
     }
 
     fn fail_on(&self, op: &'static str) {
@@ -121,14 +149,19 @@ impl Backend for Fake {
         _group: &str,
         member: &GroupMember,
         visibility: Duration,
-        _wait: Duration,
+        wait: Duration,
     ) -> anyhow::Result<Option<GroupRecord>> {
         self.step("poll", stream.into())?;
-        let mut state = self.0.lock().unwrap();
-        state
-            .polls
-            .push((stream.into(), member.clone(), visibility));
-        Ok(state.deliveries.pop_front())
+        let (takes, next) = {
+            let mut state = self.0.lock().unwrap();
+            state.waits.push(wait);
+            state
+                .polls
+                .push((stream.into(), member.clone(), visibility));
+            (state.poll_takes.min(wait), state.deliveries.pop_front())
+        };
+        tokio::time::sleep(takes).await;
+        Ok(next)
     }
 
     async fn ack(&self, _: &str, _: &str, offset: u64) -> anyhow::Result<()> {
@@ -149,9 +182,14 @@ impl Backend for Fake {
         _: &str,
         record: &GroupRecord,
         by: Duration,
-    ) -> anyhow::Result<Duration> {
-        self.step("extend", record.offset.to_string())?;
-        Ok(by)
+    ) -> Result<Duration, ExtendError> {
+        self.step("extend", record.offset.to_string())
+            .map_err(ExtendError::Failed)?;
+        match self.0.lock().unwrap().extend {
+            Extend::Works => Ok(by),
+            Extend::Stale => Err(ExtendError::Stale(anyhow::anyhow!("the claim lapsed"))),
+            Extend::Down => Err(ExtendError::Failed(anyhow::anyhow!("connection reset"))),
+        }
     }
 }
 
@@ -263,16 +301,6 @@ async fn a_task_on_its_third_delivery_is_dead_lettered_not_handed_to_the_model()
 }
 
 #[tokio::test]
-async fn an_undecodable_record_is_dead_lettered_and_the_next_one_is_claimed() {
-    let fake = Fake::default();
-    fake.deliver(b"not json".to_vec(), 1, 1);
-    fake.deliver(task_bytes("t2"), 2, 1);
-    let reply = json(tasks(&fake).claim(None).await);
-    assert_eq!(reply["task"]["id"], "t2");
-    assert_eq!(fake.calls("dead_letter"), ["dead_letter 1"]);
-}
-
-#[tokio::test]
 async fn one_task_is_held_at_a_time() {
     let fake = Fake::default();
     fake.deliver(task_bytes("t1"), 1, 1);
@@ -299,67 +327,253 @@ async fn one_task_is_held_at_a_time() {
     );
 }
 
-#[tokio::test]
-async fn the_claim_is_extended_while_held_and_not_after() {
+#[tokio::test(start_paused = true)]
+async fn the_claim_is_extended_every_30_seconds_while_held_and_not_after() {
     let fake = Fake::default();
     fake.deliver(task_bytes("t1"), 5, 1);
-    let t = Tasks::with_timing(
-        fake.clone(),
-        Resources::new(RunId::new(RUN).unwrap()),
-        AgentName::new("w1").unwrap(),
-        Duration::from_secs(90),
-        Duration::from_millis(20),
-    );
+    let t = tasks(&fake);
     t.claim(None).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(150)).await;
-    let during = fake.calls("extend").len();
-    assert!(during >= 3, "extended {during} times");
+    tokio::time::sleep(Duration::from_secs(100)).await;
+    assert_eq!(fake.calls("extend").len(), 3);
     assert!(fake.kinds(RUN).contains(&"task_extended"));
 
     t.complete("t1", "done".into()).await.unwrap();
-    let after = fake.calls("extend").len();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_secs(100)).await;
+    assert_eq!(fake.calls("extend").len(), 3, "extended after completing");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_claim_is_logged_and_the_next_call_says_it_was_lost() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 5, 1);
+    let t = tasks(&fake);
+    t.claim(None).await.unwrap();
+    fake.extends(Extend::Stale);
+    tokio::time::sleep(Duration::from_secs(35)).await;
+    assert_eq!(fake.calls("extend").len(), 1, "no more extending once lost");
+    let kinds = fake.kinds(RUN);
+    assert_eq!(&kinds[kinds.len() - 2..], ["refused", "task_claim_lost"]);
+
+    let err = t.complete("t1", "late".into()).await.unwrap_err();
+    assert!(err.contains("lapsed"), "{err}");
+    assert!(fake.cache("agents.results.r1", "t1").is_none());
+    // The loss is reported once; the agent can claim again.
+    assert_eq!(json(t.claim(None).await)["claimed"], false);
+}
+
+#[tokio::test(start_paused = true)]
+async fn failing_extensions_warn_the_model_and_a_lapsed_visibility_loses_the_claim() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 5, 1);
+    fake.deliver(task_bytes("t2"), 6, 1);
+    let t = tasks(&fake);
+    t.claim(None).await.unwrap();
+    fake.extends(Extend::Down);
+    tokio::time::sleep(Duration::from_secs(65)).await;
+    // Two failures in a row, 60 s without an extension: still held, but at risk.
+    assert!(t.claim(None).await.unwrap_err().contains("claim at risk"));
+    assert!(!fake.kinds(RUN).contains(&"task_claim_lost"));
     assert_eq!(
-        fake.calls("extend").len(),
-        after,
-        "extended after completing"
+        fake.kinds(RUN).iter().filter(|k| **k == "refused").count(),
+        2
+    );
+
+    // A working extension clears the warning.
+    fake.extends(Extend::Works);
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    let done = json(t.complete("t1", "x".into()).await);
+    assert!(done.get("warning").is_none(), "{done}");
+
+    fake.extends(Extend::Down);
+    t.claim(None).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(95)).await;
+    assert!(fake.kinds(RUN).contains(&"task_claim_lost"));
+    assert!(
+        t.complete("t2", "x".into())
+            .await
+            .unwrap_err()
+            .contains("lapsed")
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_task_that_already_has_a_result_is_settled_without_reaching_the_model() {
+    let fake = Fake::default();
+    fake.put_result("t1", b"first");
+    // Even on a third delivery, which would otherwise be dead-lettered.
+    fake.deliver(task_bytes("t1"), 1, 3);
+    fake.deliver(task_bytes("t2"), 2, 1);
+    let reply = json(tasks(&fake).claim(None).await);
+    assert_eq!(reply["task"]["id"], "t2");
+    assert_eq!(fake.calls("ack"), ["ack 1"]);
+    assert!(fake.calls("dead_letter").is_empty());
+    assert_eq!(fake.kinds(RUN), ["task_duplicate", "task_claimed"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_claim_never_waits_past_its_deadline() {
+    let fake = Fake::default();
+    // Each poll takes 3 s, so the one after a dead-lettered record gets what is left.
+    fake.0.lock().unwrap().poll_takes = Duration::from_secs(3);
+    fake.deliver(task_bytes("t1"), 1, 3);
+    let t = tasks(&fake);
+    let started = Instant::now();
+    assert_eq!(
+        json(t.claim(Some(Duration::from_secs(5))).await)["claimed"],
+        false
+    );
+    assert!(started.elapsed() <= Duration::from_secs(5));
+    let waits: Vec<_> = fake.0.lock().unwrap().waits.clone();
+    assert!(
+        waits.iter().all(|w| *w <= Duration::from_secs(5)),
+        "{waits:?}"
+    );
+    // A request for longer than the cap is cut to it.
+    fake.0.lock().unwrap().poll_takes = Duration::ZERO;
+    t.claim(Some(Duration::from_secs(600))).await.unwrap();
+    assert_eq!(*fake.0.lock().unwrap().waits.last().unwrap(), MAX_WAIT);
+}
+
 #[tokio::test]
-async fn the_first_result_wins_and_a_second_copy_is_a_duplicate() {
+async fn a_record_that_is_not_a_task_is_dead_lettered_and_reported() {
+    let fake = Fake::default();
+    fake.deliver(b"not json".to_vec(), 1, 1);
+    let err = tasks(&fake).claim(None).await.unwrap_err();
+    assert!(err.contains("not a task"), "{err}");
+    assert_eq!(fake.calls("dead_letter"), ["dead_letter 1"]);
+
+    fake.deliver(b"not json".to_vec(), 2, 1);
+    fake.fail_on("dead_letter");
+    let err = tasks(&fake).claim(None).await.unwrap_err();
+    assert!(err.contains("permission denied"), "{err}");
+    assert!(fake.kinds(RUN).contains(&"refused"));
+}
+
+#[tokio::test]
+async fn a_delivery_without_an_attempt_count_is_dead_lettered_not_counted_as_the_first() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 1, 0);
+    let err = tasks(&fake).claim(None).await.unwrap_err();
+    assert!(err.contains("did not report"), "{err}");
+    assert_eq!(fake.calls("dead_letter"), ["dead_letter 1"]);
+    assert_eq!(fake.kinds(RUN), ["task_dead"]);
+}
+
+#[tokio::test]
+async fn tasks_a_restarted_worker_held_come_back_one_per_claim() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 1, 2);
+    fake.deliver(task_bytes("t2"), 2, 2);
+    let t = tasks(&fake);
+    for id in ["t1", "t2"] {
+        let reply = json(t.claim(None).await);
+        assert_eq!(
+            (reply["task"]["id"].as_str(), reply["attempt"].as_u64()),
+            (Some(id), Some(2))
+        );
+        t.complete(id, "ok".into()).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_failed_ack_after_the_result_won_is_a_warning_not_a_lost_result() {
     let fake = Fake::default();
     fake.deliver(task_bytes("t1"), 1, 1);
     let t = tasks(&fake);
     t.claim(None).await.unwrap();
-    let first = json(t.complete("t1", "first".into()).await);
-    assert_eq!(first["status"], "done");
+    fake.fail_on("ack");
+    let reply = json(t.complete("t1", "x".into()).await);
+    assert_eq!(reply["status"], "done");
+    assert!(
+        reply["warning"]
+            .as_str()
+            .unwrap()
+            .contains("not acknowledged")
+    );
+    assert!(fake.cache("agents.results.r1", "t1").is_some());
+    assert!(fake.kinds(RUN).contains(&"task_done"));
+    // The task is no longer held.
+    fake.0.lock().unwrap().fail = None;
+    assert_eq!(json(t.claim(None).await)["claimed"], false);
+}
 
-    // Felix redelivers the same task, perhaps to another worker.
-    fake.deliver(task_bytes("t1"), 1, 2);
+#[tokio::test]
+async fn giving_up_keeps_the_task_held_when_the_dead_letter_is_refused() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 1, 1);
+    let t = tasks(&fake);
     t.claim(None).await.unwrap();
+    fake.fail_on("dead_letter");
+    assert!(
+        t.give_up("t1", "no".into())
+            .await
+            .unwrap_err()
+            .contains("permission denied")
+    );
+    assert!(!fake.kinds(RUN).contains(&"task_dead"));
+    fake.0.lock().unwrap().fail = None;
+    t.give_up("t1", "no".into()).await.unwrap();
+    assert!(fake.kinds(RUN).contains(&"task_dead"));
+}
+
+#[tokio::test]
+async fn a_given_id_that_already_has_a_result_is_refused() {
+    let fake = Fake::default();
+    fake.put_result("t1", b"x");
+    let err = tasks(&fake)
+        .post(Post {
+            id: Some("t1".into()),
+            title: "again".into(),
+            body: None,
+            parent: None,
+            lease: None,
+            deadline_ms: None,
+        })
+        .await
+        .unwrap_err();
+    assert!(err.contains("already has a result"), "{err}");
+    assert!(fake.calls("publish").is_empty());
+}
+
+#[tokio::test]
+async fn the_first_result_wins_and_a_copy_finished_second_is_a_duplicate() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 1, 1);
+    let t = tasks(&fake);
+    t.claim(None).await.unwrap();
+    // The claim lapsed unnoticed and another worker finished the task first.
+    fake.put_result("t1", b"first");
     let second = json(t.complete("t1", "second".into()).await);
     assert_eq!(second["status"], "duplicate");
 
     let stored = TaskResult::decode(&fake.cache("agents.results.r1", "t1").unwrap()).unwrap();
     assert_eq!(stored.artifact, ArtifactId::of(b"first"));
-    assert_eq!(stored.attempt, 1);
     // The losing result is kept.
     assert_eq!(
         fake.cache("agents.blobs.r1", ArtifactId::of(b"second").as_str())
             .unwrap(),
         b"second"
     );
-    assert_eq!(fake.calls("ack"), ["ack 1", "ack 1"]);
+    assert_eq!(fake.calls("ack"), ["ack 1"]);
+    assert_eq!(fake.kinds(RUN), ["task_claimed", "task_duplicate"]);
+}
+
+#[tokio::test]
+async fn the_first_result_is_done() {
+    let fake = Fake::default();
+    fake.deliver(task_bytes("t1"), 1, 1);
+    let t = tasks(&fake);
+    t.claim(None).await.unwrap();
     assert_eq!(
-        fake.kinds(RUN),
-        [
-            "task_claimed",
-            "task_done",
-            "task_claimed",
-            "task_duplicate"
-        ]
+        json(t.complete("t1", "first".into()).await)["status"],
+        "done"
     );
+    let stored = TaskResult::decode(&fake.cache("agents.results.r1", "t1").unwrap()).unwrap();
+    assert_eq!(
+        (stored.artifact, stored.attempt),
+        (ArtifactId::of(b"first"), 1)
+    );
+    assert_eq!(fake.kinds(RUN), ["task_claimed", "task_done"]);
 }
 
 #[tokio::test]

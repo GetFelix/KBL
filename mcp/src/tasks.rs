@@ -5,7 +5,7 @@
 //! reported on stderr and does not fail the tool: the claim or the result it
 //! describes already happened, and failing would tell the model it did not.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use agents_core::artifact::{ArtifactId, PART_SIZE};
@@ -19,8 +19,9 @@ use felix_client::{GroupMember, GroupRecord};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
-use crate::felix::Backend;
+use crate::felix::{Backend, ExtendError};
 
 /// How long a claim stands without an extension.
 const VISIBILITY: Duration = Duration::from_secs(90);
@@ -33,6 +34,8 @@ const MAX_WAIT: Duration = Duration::from_secs(30);
 /// Deliveries of one task a worker takes on. Felix's own limit is broker-wide
 /// and defaults to 5, too many for a task that costs model calls (gap 1).
 const MAX_ATTEMPTS: u32 = 2;
+/// Extensions in a row that may fail before the model is warned its claim is at risk.
+const RISK_AFTER: u32 = 2;
 
 pub(crate) struct Post {
     pub(crate) id: Option<String>,
@@ -49,6 +52,16 @@ struct Held {
     record: GroupRecord,
     attempt: u32,
     extender: JoinHandle<()>,
+    health: Arc<StdMutex<Health>>,
+}
+
+/// What the extend loop has seen, for the next tool call to report.
+struct Health {
+    /// The claim lapsed or was handed out again.
+    lost: bool,
+    /// Extensions that failed since the last one that worked.
+    failures: u32,
+    last_ok: Instant,
 }
 
 struct Inner<B> {
@@ -92,11 +105,15 @@ impl<B: Backend> Tasks<B> {
     }
 
     pub(crate) async fn post(&self, post: Post) -> Result<String, String> {
+        let given = post.id.is_some();
         let id = match post.id {
             Some(id) => TaskId::new(id),
             None => TaskId::new(format!("t-{:x}-{}", now_ms(), next_seq())),
         }
         .map_err(|e| e.to_string())?;
+        if given && self.result_of(&id).await?.is_some() {
+            return Err(format!("task {id} already has a result; use a new id"));
+        }
         let parent = TaskId::new(post.parent.unwrap_or_else(|| "root".into()))
             .map_err(|e| format!("parent: {e}"))?;
         let lease = post
@@ -137,12 +154,20 @@ impl<B: Backend> Tasks<B> {
 
     pub(crate) async fn claim(&self, wait: Option<Duration>) -> Result<String, String> {
         let wait = wait.unwrap_or(DEFAULT_WAIT).min(MAX_WAIT);
+        let deadline = Instant::now() + wait;
         let mut held = self.0.held.lock().await;
+        if let Some(lost) = lost(&mut held) {
+            return Err(lost);
+        }
         if let Some(h) = held.as_ref() {
-            return Err(format!(
+            let mut msg = format!(
                 "you already hold task {}; complete, release or give it up first",
                 h.task.id
-            ));
+            );
+            if let Some(risk) = at_risk(h) {
+                msg.push_str(&format!(". {risk}"));
+            }
+            return Err(msg);
         }
         let stream = self.0.resources.tasks();
         // The broker acts on `reclaim` in a connection's first poll only, so
@@ -152,59 +177,80 @@ impl<B: Backend> Tasks<B> {
             reclaim: true,
         };
         loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
             let polled = self
                 .checked(
                     "group_poll",
                     &stream,
                     None,
-                    self.0
-                        .backend
-                        .poll(&stream, WORKERS_GROUP, &member, self.0.visibility, wait),
+                    self.0.backend.poll(
+                        &stream,
+                        WORKERS_GROUP,
+                        &member,
+                        self.0.visibility,
+                        remaining,
+                    ),
                 )
                 .await?;
             let Some(record) = polled else {
                 return Ok(json!({ "claimed": false }).to_string());
             };
-            // 0 is a broker that did not say; the delivery is at least the first.
-            let attempt = record.attempts.max(1);
             let task = match Task::decode(&record.payload) {
                 Ok(task) => task,
                 Err(e) => {
-                    eprintln!("felix-mcp: dead-lettering offset {}: {e}", record.offset);
-                    let _ = self
-                        .checked(
-                            "group_dead_letter",
-                            &stream,
-                            None,
-                            self.0
-                                .backend
-                                .dead_letter(&stream, WORKERS_GROUP, record.offset),
-                        )
-                        .await;
-                    continue;
+                    self.dead_letter(record.offset).await?;
+                    return Err(format!(
+                        "dead-lettered the record at offset {}, which is not a task: {e}",
+                        record.offset
+                    ));
                 }
             };
-            if attempt > MAX_ATTEMPTS {
-                let reason = format!("attempts used up after {MAX_ATTEMPTS}");
-                let done = self
-                    .checked(
-                        "group_dead_letter",
-                        &stream,
-                        None,
-                        self.0
-                            .backend
-                            .dead_letter(&stream, WORKERS_GROUP, record.offset),
-                    )
-                    .await;
-                if done.is_ok() {
-                    self.log(Record::TaskDead {
+            // A redelivery of a finished task: settle it without a model run.
+            if let Some(winner) = self.result_of(&task.id).await.ok().flatten() {
+                self.checked(
+                    "group_ack",
+                    &stream,
+                    None,
+                    self.0.backend.ack(&stream, WORKERS_GROUP, record.offset),
+                )
+                .await?;
+                if let Ok(winner) = TaskResult::decode(&winner) {
+                    self.log(Record::TaskDuplicate {
                         task: task.id,
                         offset: record.offset,
-                        attempt,
-                        reason,
+                        attempt: record.attempts,
+                        result: winner.artifact,
                     })
                     .await;
                 }
+                continue;
+            }
+            // 0 is a broker that did not say. Counting it as a first delivery
+            // would let the attempt limit never fire.
+            if record.attempts == 0 {
+                self.dead_letter(record.offset).await?;
+                self.log(Record::TaskDead {
+                    task: task.id.clone(),
+                    offset: record.offset,
+                    attempt: 0,
+                    reason: "the broker did not report an attempt count".into(),
+                })
+                .await;
+                return Err(format!(
+                    "dead-lettered task {}: the broker did not report how many times it was delivered",
+                    task.id
+                ));
+            }
+            let attempt = record.attempts;
+            if attempt > MAX_ATTEMPTS {
+                self.dead_letter(record.offset).await?;
+                self.log(Record::TaskDead {
+                    task: task.id,
+                    offset: record.offset,
+                    attempt,
+                    reason: format!("attempts used up after {MAX_ATTEMPTS}"),
+                })
+                .await;
                 continue;
             }
             self.log(Record::TaskClaimed {
@@ -216,16 +262,23 @@ impl<B: Backend> Tasks<B> {
             .await;
             let shown = self.show(&task).await;
             let offset = record.offset;
+            let health = Arc::new(StdMutex::new(Health {
+                lost: false,
+                failures: 0,
+                last_ok: Instant::now(),
+            }));
             let extender = tokio::spawn(self.clone().keep_alive(
                 task.id.clone(),
                 record.clone(),
                 attempt,
+                health.clone(),
             ));
             *held = Some(Held {
                 task,
                 record,
                 attempt,
                 extender,
+                health,
             });
             return Ok(json!({
                 "claimed": true,
@@ -240,7 +293,11 @@ impl<B: Backend> Tasks<B> {
 
     pub(crate) async fn complete(&self, task: &str, result: String) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
+        if let Some(lost) = lost(&mut held) {
+            return Err(lost);
+        }
         let h = holding(&held, task)?;
+        let risk = at_risk(h);
         let (id, offset, attempt) = (h.task.id.clone(), h.record.offset, h.attempt);
         let artifact = self.store(result.into_bytes()).await?;
         let value = TaskResult {
@@ -302,6 +359,8 @@ impl<B: Backend> Tasks<B> {
         if let Err(e) = acked {
             reply["warning"] =
                 format!("the result is recorded but the task was not acknowledged: {e}").into();
+        } else if let Some(risk) = risk {
+            reply["warning"] = risk.into();
         }
         Ok(reply.to_string())
     }
@@ -312,7 +371,11 @@ impl<B: Backend> Tasks<B> {
         reason: Option<String>,
     ) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
+        if let Some(lost) = lost(&mut held) {
+            return Err(lost);
+        }
         let h = holding(&held, task)?;
+        let risk = at_risk(h);
         let stream = self.0.resources.tasks();
         self.checked(
             "group_nack",
@@ -330,12 +393,19 @@ impl<B: Backend> Tasks<B> {
             reason,
         })
         .await;
-        Ok(json!({ "task": h.task.id, "status": "released" }).to_string())
+        Ok(with_warning(
+            json!({ "task": h.task.id, "status": "released" }),
+            risk,
+        ))
     }
 
     pub(crate) async fn give_up(&self, task: &str, reason: String) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
+        if let Some(lost) = lost(&mut held) {
+            return Err(lost);
+        }
         let h = holding(&held, task)?;
+        let risk = at_risk(h);
         let stream = self.0.resources.tasks();
         self.checked(
             "group_dead_letter",
@@ -355,27 +425,36 @@ impl<B: Backend> Tasks<B> {
             reason,
         })
         .await;
-        Ok(json!({ "task": h.task.id, "status": "dead" }).to_string())
+        Ok(with_warning(
+            json!({ "task": h.task.id, "status": "dead" }),
+            risk,
+        ))
     }
 
     /// Extends the claim until the task is settled and this loop is aborted,
-    /// or Felix says the claim is no longer ours.
-    async fn keep_alive(self, task: TaskId, record: GroupRecord, attempt: u32) {
+    /// or the claim is lost.
+    async fn keep_alive(
+        self,
+        task: TaskId,
+        record: GroupRecord,
+        attempt: u32,
+        health: Arc<StdMutex<Health>>,
+    ) {
         let stream = self.0.resources.tasks();
         loop {
             tokio::time::sleep(self.0.extend_every).await;
             let extended = self
-                .checked(
-                    "group_extend",
-                    &stream,
-                    None,
-                    self.0
-                        .backend
-                        .extend(&stream, WORKERS_GROUP, &record, self.0.visibility),
-                )
+                .0
+                .backend
+                .extend(&stream, WORKERS_GROUP, &record, self.0.visibility)
                 .await;
-            match extended {
+            let gone = match extended {
                 Ok(visible) => {
+                    {
+                        let mut h = health.lock().expect("health lock");
+                        h.failures = 0;
+                        h.last_ok = Instant::now();
+                    }
                     self.log(Record::TaskExtended {
                         task: task.clone(),
                         offset: record.offset,
@@ -383,13 +462,51 @@ impl<B: Backend> Tasks<B> {
                         deadline_ms: now_ms() + visible.as_millis() as u64,
                     })
                     .await;
+                    false
                 }
-                // Lapsed or handed out again: the task is not ours to keep.
-                Err(e) if e.contains("stale_claim") => return,
-                // Anything else may pass before the claim lapses.
-                Err(_) => {}
+                Err(e) => {
+                    self.refuse("group_extend", &stream, None, e.error()).await;
+                    let mut h = health.lock().expect("health lock");
+                    h.failures += 1;
+                    // Lapsed or handed out again, or too long without a working
+                    // extension for the claim to still stand.
+                    matches!(e, ExtendError::Stale(_)) || h.last_ok.elapsed() >= self.0.visibility
+                }
+            };
+            if gone {
+                health.lock().expect("health lock").lost = true;
+                self.log(Record::TaskClaimLost {
+                    task: task.clone(),
+                    offset: record.offset,
+                    attempt,
+                })
+                .await;
+                return;
             }
         }
+    }
+
+    async fn dead_letter(&self, offset: u64) -> Result<(), String> {
+        let stream = self.0.resources.tasks();
+        self.checked(
+            "group_dead_letter",
+            &stream,
+            None,
+            self.0.backend.dead_letter(&stream, WORKERS_GROUP, offset),
+        )
+        .await
+    }
+
+    /// The results cache's value for `task`, when a result has been written.
+    async fn result_of(&self, task: &TaskId) -> Result<Option<Vec<u8>>, String> {
+        let results = self.0.resources.results();
+        self.checked(
+            "cache_get",
+            &results,
+            Some(task.as_str()),
+            self.0.backend.cache_get(&results, task.as_str()),
+        )
+        .await
     }
 
     /// Short text stays inline; longer text becomes an artifact.
@@ -457,17 +574,20 @@ impl<B: Backend> Tasks<B> {
         match call.await {
             Ok(value) => Ok(value),
             Err(e) => {
-                let error = format!("{e:#}");
-                self.log(Record::Refused {
-                    op: op.into(),
-                    resource: resource.into(),
-                    key: key.map(str::to_owned),
-                    error: error.clone(),
-                })
-                .await;
-                Err(format!("{op} on {resource} failed: {error}"))
+                self.refuse(op, resource, key, &e).await;
+                Err(format!("{op} on {resource} failed: {e:#}"))
             }
         }
+    }
+
+    async fn refuse(&self, op: &str, resource: &str, key: Option<&str>, error: &anyhow::Error) {
+        self.log(Record::Refused {
+            op: op.into(),
+            resource: resource.into(),
+            key: key.map(str::to_owned),
+            error: format!("{error:#}"),
+        })
+        .await;
     }
 
     async fn log(&self, record: Record) {
@@ -489,6 +609,36 @@ fn holding<'a>(held: &'a Option<Held>, task: &str) -> Result<&'a Held, String> {
         Some(h) => Err(format!("you hold task {}, not {task}", h.task.id)),
         None => Err("you do not hold a task; claim one first".into()),
     }
+}
+
+/// If the held task's claim was lost, drops the hold and says so once.
+fn lost(held: &mut Option<Held>) -> Option<String> {
+    let gone = held
+        .as_ref()
+        .is_some_and(|h| h.health.lock().expect("health lock").lost);
+    if !gone {
+        return None;
+    }
+    let h = held.take()?;
+    h.extender.abort();
+    Some(format!(
+        "your claim on task {} lapsed and Felix may have given it to another worker. Stop working on it; \
+         use task_claim for new work",
+        h.task.id
+    ))
+}
+
+fn at_risk(h: &Held) -> Option<&'static str> {
+    (h.health.lock().expect("health lock").failures >= RISK_AFTER).then_some(
+        "claim at risk: Felix has not accepted the last extensions, so the task may be handed to another worker soon",
+    )
+}
+
+fn with_warning(mut reply: Value, warning: Option<&str>) -> String {
+    if let Some(w) = warning {
+        reply["warning"] = w.into();
+    }
+    reply.to_string()
 }
 
 fn now_ms() -> u64 {
