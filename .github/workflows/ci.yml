@@ -94,6 +94,8 @@ jobs:
         run: |
           cargo build -p felix-mcp
           node dev/check-mcp.mjs
+      - name: Run the task tools against Felix
+        run: node dev/check-tasks.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml logs
       - if: always()
