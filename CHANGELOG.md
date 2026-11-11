@@ -6,6 +6,15 @@
   boundaries, and for every tracker route, ingest route, MCP tool and record kind
   the fields an agent controls and the check that stops misuse. CI fails when a
   new one has no row, and the pull request template asks for it.
+- The dashboard style frame follows the conventions of Linear, Jira and GitHub
+  Projects: a sidebar, list and board layouts of the same items, a side panel,
+  a command palette (`Ctrl+K`), `?` for shortcuts, `/` for search, filters,
+  saved views, multi-select with bulk actions, undo toasts, loading and empty
+  states, and a density setting. The key map changed: `x` selects, `c`
+  creates, `s` sets status, `a` assigns, and Kibble's own verbs are numbered
+  choices on each card and entries on the palette. Question cards show their
+  options and a free text field. `docs/work-tracker.md` has the new table and
+  `docs/usability-test.md` the five-person test script.
 
 - Questions can offer options. `work_ask` takes `options` (at most 8) and a
   `default`, and a person picks one or types free text, which is stored as

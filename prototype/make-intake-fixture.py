@@ -84,8 +84,14 @@ class Log:
         for d in on:
             self.ev(ago, "linked", key, on=d)
 
-    def ask(self, key, ago, text):
-        self.ev(ago, "asked", key, text=text)
+    def ask(self, key, ago, text, options=(), default=None, unclear=None):
+        d = {"text": text}
+        if options:
+            d["options"] = list(options)
+            d["default"] = default or options[0]
+        if unclear:
+            d["unclear"] = unclear
+        self.ev(ago, "asked", key, **d)
 
     def claim(self, key, ago, agent):
         self.ev(ago, "claimed", key, agent=agent, run="r-" + key.replace("-", "")[:6])
@@ -540,7 +546,7 @@ def hand(capped=False, replay=False):
     # Needs you.
     k = gh(790, "Retention sweep skips a sealed segment after restart", 2 * DAY)
     L.triage(k, 2 * DAY - 20 * MIN, 0)
-    L.ask(k, 2 * DAY - 40 * MIN, "Does it reproduce on 0.7.0, or only on main?")
+    L.ask(k, 2 * DAY - 40 * MIN, "Does it reproduce on 0.7.0, or only on main?", ["Only on main", "On 0.7.0 too"])
     k = gh(774, "Cache TTL test fails one run in twenty", 3 * DAY)
     L.triage(k, 3 * DAY - 10 * MIN, 2)
     L.claim(k, 20 * HOUR, "w3")
@@ -550,7 +556,8 @@ def hand(capped=False, replay=False):
     L.give_up(k, 17 * HOUR - 5, "w1", "attempts used up", "tests red", "The test still fails 1 run in 20; I cannot tell whether the TTL or the clock is wrong.")
     k = ado(4377, "Duplicate delivery reported by one tenant", 26 * HOUR)
     L.triage(k, 25 * HOUR, 1)
-    L.ask(k, 22 * HOUR, "Which tenant, and can we see their consumer logs?")
+    L.ask(k, 22 * HOUR, "Is this a broker bug or a gateway bug? It decides which repo the fix goes in.",
+          ["felix", "felix-gateway", "both"], "felix-gateway", "repo")
     k = jira(214, "Intermittent timeout on the first publish after idle", 5 * HOUR)
     L.triage(k, 4 * HOUR, 2)
     L.claim(k, 3 * HOUR, "w4")
