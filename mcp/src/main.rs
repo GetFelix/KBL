@@ -6,8 +6,10 @@
 
 mod felix;
 mod server;
+mod tasks;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use agents_core::names::{AgentName, RunId};
 use anyhow::{Context, Result};
@@ -43,6 +45,12 @@ struct Cli {
     /// The name in the broker's certificate.
     #[arg(long, env = "AGENTS_FELIX_BROKER_NAME", default_value = "localhost")]
     broker_name: String,
+    /// How long a claim stands without an extension, in milliseconds. For tests.
+    #[arg(long, env = "AGENTS_CLAIM_VISIBILITY_MS", hide = true)]
+    claim_visibility_ms: Option<u64>,
+    /// How often a held claim is extended, in milliseconds. For tests.
+    #[arg(long, env = "AGENTS_EXTEND_EVERY_MS", hide = true)]
+    extend_every_ms: Option<u64>,
 }
 
 #[tokio::main]
@@ -68,7 +76,11 @@ async fn main() -> Result<()> {
         run.as_str()
     );
 
-    let service = Server::new(run, agent, felix)
+    let timing = server::Timing {
+        visibility: cli.claim_visibility_ms.map(Duration::from_millis),
+        extend_every: cli.extend_every_ms.map(Duration::from_millis),
+    };
+    let service = Server::new(run, agent, felix, timing)
         .serve(stdio())
         .await
         .context("start the MCP server")?;

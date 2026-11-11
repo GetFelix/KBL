@@ -170,6 +170,11 @@ fn every_record() -> Vec<Record> {
             key: None,
             error: "Forbidden".into(),
         },
+        Record::TaskClaimLost {
+            task: task("t-01"),
+            offset: 12,
+            attempt: 1,
+        },
     ]
 }
 
@@ -200,7 +205,8 @@ fn _every_kind_has_a_sample(r: &Record) -> usize {
         Record::BudgetExhausted { .. } => 20,
         Record::RefundUnconfirmed { .. } => 21,
         Record::Refused { .. } => 22,
-        Record::Unknown => 23,
+        Record::TaskClaimLost { .. } => 23,
+        Record::Unknown => 24,
     }
 }
 
@@ -212,7 +218,7 @@ fn every_kind_has_a_sample() {
         .collect();
     assert_eq!(
         seen,
-        (0..23).collect::<BTreeSet<_>>(),
+        (0..24).collect::<BTreeSet<_>>(),
         "a kind has no sample (23 is `unknown`, which is never written)"
     );
 }

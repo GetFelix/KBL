@@ -164,6 +164,7 @@ only speak for the agent that wrote it.
 | `agent_gone` | `felix-mcp` (planner) | Which agent, the presence version that expired |
 | `task_posted` | `felix-mcp` (planner) | Task id, parent, title, tasks stream offset |
 | `task_claimed`, `task_extended`, `task_released` | `felix-mcp` | Task id, tasks stream offset, attempt, deadline |
+| `task_claim_lost` | `felix-mcp` | Task id, offset, attempt: the claim lapsed or was handed out again while the worker held the task |
 | `task_done`, `task_duplicate` | `felix-mcp` | Task id, offset, attempt, result artifact; `task_done` is the result that won |
 | `task_dead` | `felix-mcp` | Task id, offset, reason (attempts used up, or given up) |
 | `board_put`, `board_conflict` | `felix-mcp` | Key, version written (and the version it was conditioned on) or version found, value (short text or artifact) |

@@ -91,7 +91,7 @@ when you open a step. [docs/design.md](docs/design.md) has the details.
 | M | Milestone | What it proves | State |
 |---|---|---|---|
 | 0 | The viewer, locked | The swarm reads well, at 8 workers and at 50, before Felix is involved | In progress: [style frame](docs/art.md) |
-| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run), and [`felix-mcp`](#giving-an-agent-its-tools) lists its tools to an MCP host |
+| 1 | Tasks through Felix | One worker per task, even when workers die; poison tasks stop | In progress: [`core`](core/) has the record formats and names, `agents-tool` [creates a run](#creating-a-run), and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools) |
 | 2 | Shared state | The board and locks never silently overwrite | Planned |
 | 3 | Real models and budgets | A run never spends past its limit | Planned |
 | 4 | Replay a run | Scrub to any moment, then follow live with no gap | Planned, needs range reads in the gateway client |
@@ -177,7 +177,7 @@ the id cannot be used again, so use a new one.
 any MCP host can start it: Claude Code, the Claude Agent SDK, or a host from another vendor. One `felix-mcp` process
 serves one agent and holds that agent's Felix token, so the agent can do on Felix only what its token allows.
 
-It has one tool so far, `run_info`, which reports the run, the agent's name and the tenant. The task tools come next.
+`run_info` reports the run, the agent's name and the tenant, and the [task tools](#the-task-tools) post and work tasks.
 On start it connects to the broker, and it exits with the broker's error if the token or address is wrong, so a host
 sees a failed server instead of a list of tools that cannot work.
 
@@ -187,6 +187,41 @@ lists its tools and calls one:
 ```bash
 cargo build -p felix-mcp
 node dev/check-mcp.mjs
+```
+
+### The task tools
+
+A planner posts tasks and workers take them one at a time. Felix hands each task to one worker of the `workers` group
+and to another if that worker goes quiet, so a task can be tried more than once but has one result.
+
+| Tool | Does |
+|---|---|
+| `task_post` | Puts a task on the run's tasks stream and logs `task_posted`. A body over 4 KiB is stored as an artifact. An `id` you choose is refused if that task already has a result; posting the same id twice before it finishes makes two tasks and one result |
+| `task_claim` | Takes the next task, waiting up to 30 seconds (10 by default), and logs `task_claimed`. A worker holds one task at a time |
+| `task_complete` | Writes the result under the task's key in the results cache only if no result is there, then acknowledges the task, and warns in its reply if the acknowledgement fails (the result still stands). A first result logs `task_done`; a later one is kept as an artifact and logs `task_duplicate` |
+| `task_release` | Hands the task back to the group now (`task_released`) |
+| `task_give_up` | Dead-letters the task so it is not handed out again (`task_dead`) |
+
+While a worker holds a task, `felix-mcp` extends the claim every 30 seconds (it stands for 90), so a model call that
+takes minutes keeps its task and a worker that dies loses it within 90 seconds. If Felix answers `stale_claim`, or
+extensions fail for a full 90 seconds, `felix-mcp` logs `task_claim_lost` and the agent's next task tool call says the
+claim lapsed and drops the task, except `task_complete`, which still writes the result (only the first write to a task's key lands, so it is safe), never acknowledges the task, and warns that the claim had lapsed. After two failed extensions in a row the next call warns that the claim is at risk.
+
+A worker restarted under the same name gets back the tasks its predecessor held, one per `task_claim` and ahead of new
+work. Each counts as another attempt, and one whose claim lapses before it is claimed goes back to the whole group. A
+task that already has a result is acknowledged and logged `task_duplicate` instead of being handed to the model. A task
+delivered a third time is dead-lettered (`task_dead`) without reaching the model, since Felix's attempt limit is one
+setting for the whole broker and a model task is too costly to try five times. A delivery the broker gives no attempt
+count for is dead-lettered too, so the limit cannot fail quietly. `task_claim` never takes longer than the wait asked
+for. Any operation Felix refuses is logged as `refused` and returned to the model as the tool's error.
+
+A body or result over 1 MiB (1,048,576 bytes) is refused, because the format for splitting larger ones is not defined.
+
+With the dev stack running, this starts a planner and five workers and runs a job, a poison task and a restart:
+
+```bash
+cargo build -p felix-mcp -p agents-tool
+node dev/check-tasks.mjs
 ```
 
 To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mcp add`):

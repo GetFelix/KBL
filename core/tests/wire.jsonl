@@ -23,3 +23,4 @@
 {"kind":"refund_unconfirmed","agent":"w2","micros":120000}
 {"kind":"refused","op":"board_put","resource":"agents.board.r-7f3a","key":"plan-review","error":"Forbidden: no grant on plan-*"}
 {"kind":"refused","op":"publish","resource":"agents.tasks.r-7f3a","error":"Forbidden"}
+{"kind":"task_claim_lost","task":"t-01","offset":12,"attempt":1}
