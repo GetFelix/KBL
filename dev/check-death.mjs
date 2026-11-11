@@ -3,7 +3,7 @@
 // once as the task's result and once as a duplicate.
 //
 //   cargo build -p felix-mcp -p agents-tool && node dev/check-death.mjs
-import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, killAll, newRunId, runLog, sleep } from "./lib/stack.mjs";
+import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, killAll, newRunId, runLog } from "./lib/stack.mjs";
 
 const RUN = newRunId("death");
 const token = await felixToken();
@@ -53,10 +53,9 @@ try {
   const slow = await agent("w4", quick);
   const first = await slow.tool("task_claim", { wait_seconds: 5 });
   check(first.claimed && first.task.id === "twice", "w4 claimed the task");
-  await sleep(3000);
   const second = await agent("w5", quick);
   const again = await second.tool("task_claim", { wait_seconds: 10 });
-  check(again.claimed && again.task.id === "twice" && again.attempt === 2, "w5 was handed the task after w4's claim lapsed");
+  check(again.claimed && again.task.id === "twice" && again.attempt === 2, "w5 was handed the task once w4's claim lapsed");
   const winner = await second.tool("task_complete", { task: "twice", result: "w5 first" });
   const loser = await slow.tool("task_complete", { task: "twice", result: "w4 second" });
   check(winner.status === "done" && loser.status === "duplicate", "the first result won and the second was a duplicate");

@@ -241,6 +241,8 @@ node dev/check-poison.mjs                    # a task that always fails and one 
 agents-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
 
+The death check kills a worker and lets a stalled claim lapse with a 2 second claim visibility so it finishes quickly, and restarts a worker under the default 90 seconds to show it does not wait for the claim to lapse.
+
 To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mcp add`):
 
 ```json

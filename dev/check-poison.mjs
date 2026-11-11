@@ -17,7 +17,7 @@ try {
     { id: "fine", title: "works", body: "x", fate: "ok" },
   ];
   await scriptedPlanner(await spawnAgent(token, RUN, "planner"), tasks);
-  await scriptedWorker(await spawnAgent(token, RUN, "w1"), tasks, 0);
+  await scriptedWorker(await spawnAgent(token, RUN, "w1"), tasks, 0, RUN);
 
   const log = runLog(RUN);
   const of = (task, kind) => log.filter((r) => r.task === task && r.kind === kind);
