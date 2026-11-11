@@ -621,20 +621,23 @@ impl State {
                     return Err(Reject::OpenChildren);
                 }
                 // Check the attempt before changing anything, so a refusal leaves no trace.
-                match it.paths.iter().find(|p| p.attempt == *attempt) {
-                    None => return Err(Reject::WrongAttempt),
-                    Some(p) if p.closed => return Err(Reject::Closed),
-                    Some(_) => {}
+                let idx = it
+                    .paths
+                    .iter()
+                    .position(|p| p.attempt == *attempt)
+                    .ok_or(Reject::WrongAttempt)?;
+                if it.paths[idx].closed {
+                    return Err(Reject::Closed);
                 }
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
+                it.paths[idx].done = true;
                 it.hold = None;
                 it.cost_micros += cost_micros;
                 // A fix waits for its merge; other work is finished when its attempt is.
                 if it.work != WorkKind::Fix {
                     it.closed = Some(Closure::Completed);
                 }
-                self.path_mut(item, *attempt)?.done = true;
                 self.draw_cost(&root, *cost_micros);
             }
             WorkRecord::Released {
@@ -784,6 +787,7 @@ impl State {
                 self.item(item)?;
                 let how = match why {
                     CloseWhy::Merged => Closure::Merged,
+                    CloseWhy::Completed => Closure::Completed,
                     CloseWhy::Dismissed => Closure::Dismissed,
                     CloseWhy::Upstream => Closure::Upstream,
                 };

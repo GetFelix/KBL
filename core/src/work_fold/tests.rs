@@ -1188,3 +1188,65 @@ fn a_release_must_name_the_running_attempt() {
     });
     assert!(fold(&l.0).items[&id("r1")].hold.is_none());
 }
+
+#[test]
+fn done_for_an_attempt_that_does_not_exist_changes_nothing() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    let before = fold(&l.0);
+    l.person(done("r1", 7, 5_000));
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().unwrap().why, Reject::WrongAttempt);
+    assert_eq!(s.items, before.items);
+    assert_eq!(s.budgets, before.budgets);
+}
+
+#[test]
+fn upstream_closure_counts_as_done_or_dropped_by_its_reason() {
+    let mut l = Log::default();
+    for r in ["a", "b"] {
+        l.tracker(imported(r));
+        l.person(WorkRecord::Accepted {
+            item: id(r),
+            tier: None,
+        });
+    }
+    l.tracker(WorkRecord::Linked {
+        item: id("a"),
+        to: id("b"),
+    });
+    let close = |l: &Log, why: &str| {
+        let mut m = Log(l.0.clone());
+        let line = format!(
+            r#"{{"at_ms":1,"by":"tracker","actor":"tracker","kind":"closed","item":"b"{why}}}"#
+        );
+        m.0.push((
+            m.0.len() as u64,
+            WorkLogged::decode(line.as_bytes()).unwrap(),
+        ));
+        fold(&m.0)
+    };
+    let fixed = close(&l, r#","why":"completed""#);
+    assert_eq!(fixed.stage(&id("b")), Some(Stage::Done));
+    assert_eq!(fixed.stage(&id("a")), Some(Stage::Ready));
+    // Not planned, a duplicate, a reason this version does not know, or none: dropped.
+    for why in [r#","why":"upstream""#, r#","why":"wont_fix_v9""#, ""] {
+        let s = close(&l, why);
+        assert_eq!(s.stage(&id("a")), Some(Stage::NeedsYou), "{why}");
+        assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
+    }
+}

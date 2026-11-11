@@ -21,6 +21,7 @@
 {"kind":"human_input","item":"r1","input":"priority_change","text":{"text":"p0"}}
 {"kind":"forked_from","item":"r1","from_attempt":1,"at":14,"note":22}
 {"kind":"closed","item":"r1","why":"merged"}
+{"kind":"closed","item":"r2","why":"completed"}
 {"kind":"rejected","item":"p1"}
 {"kind":"attempt_closed","item":"r1","attempt":1}
 {"kind":"budget_set","root":"r1","items_left":20,"max_depth":3,"cost_left_micros":30000000,"redos_per_item":3}

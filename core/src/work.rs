@@ -111,13 +111,19 @@ pub enum HumanKind {
 }
 
 /// Why an item was closed by upstream sync or a person.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CloseWhy {
     /// The fix landed upstream.
     Merged,
+    /// Closed upstream as completed or fixed (GitHub `completed`, ADO resolved, Jira Done or Fixed).
+    /// It counts as done, so dependents are freed.
+    Completed,
     Dismissed,
-    /// The upstream issue was closed.
+    /// Closed upstream as not planned, a duplicate or won't fix, or for a reason this version does
+    /// not know. It counts as dropped, so dependents go to Needs you.
+    #[default]
+    #[serde(other)]
     Upstream,
 }
 
@@ -276,7 +282,11 @@ pub enum WorkRecord {
         note: Option<u64>,
     },
     /// A person or upstream sync closes the item and cancels its open descendants.
-    Closed { item: ItemId, why: CloseWhy },
+    Closed {
+        item: ItemId,
+        #[serde(default)]
+        why: CloseWhy,
+    },
     /// A person rejects a proposal that was never accepted.
     Rejected { item: ItemId },
     /// A person closes or abandons one attempt, which frees one of the two open slots.

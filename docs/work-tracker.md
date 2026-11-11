@@ -148,7 +148,7 @@ it did. The tracker links each item to its runs.
   redone. It closes when a person or upstream sync records the merge or closes it.
 - **Closure.** A parent cannot complete while its children are open. Closing
   an item, from upstream or by a person, cancels its open descendants and
-  takes them out of Ready. A proposal nobody accepted can be rejected.
+  takes them out of Ready. An upstream close as completed or fixed counts as done and frees dependents; as not planned, a duplicate or won't fix (or with no reason) it counts as dropped and sends them to Needs you. A proposal nobody accepted can be rejected.
 - **Termination.** Agent-created work is at most (upstream roots + accepted
   roots) x the per-root budget, plus whatever people create. Agents spend
   budget and never create it.

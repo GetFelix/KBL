@@ -157,6 +157,10 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("r1"),
             why: CloseWhy::Merged,
         },
+        WorkRecord::Closed {
+            item: item("r2"),
+            why: CloseWhy::Completed,
+        },
         WorkRecord::Rejected { item: item("p1") },
         WorkRecord::AttemptClosed {
             item: item("r1"),
