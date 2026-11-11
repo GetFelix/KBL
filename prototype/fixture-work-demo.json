@@ -1,0 +1,965 @@
+{
+ "redo": {
+  "instruction": "The broker is right: resume means after this offset. Look at how the client counts what it handled."
+ },
+ "title": "Autoplay demo",
+ "scope": "GetFelix/felix, platform/Gateway, PLAT",
+ "now": 1209600,
+ "viewer": "dana",
+ "people": [
+  "dana",
+  "kim",
+  "ravi"
+ ],
+ "settings": {
+  "reviewCap": 8
+ },
+ "sources": {
+  "github": {
+   "label": "GitHub",
+   "tag": "GH",
+   "scope": "GetFelix/felix"
+  },
+  "ado": {
+   "label": "Azure DevOps",
+   "tag": "ADO",
+   "scope": "platform/Gateway"
+  },
+  "jira": {
+   "label": "Jira",
+   "tag": "JIRA",
+   "scope": "PLAT"
+  }
+ },
+ "agents": [
+  "w1",
+  "w2",
+  "w3",
+  "w4",
+  "w5",
+  "w6"
+ ],
+ "items": {
+  "gh-780": {
+   "source": "github",
+   "ref": "#780",
+   "title": "Retention sweep skips the newest segment",
+   "class": "bug"
+  },
+  "ado-4388": {
+   "source": "ado",
+   "ref": "AB#4388",
+   "title": "Lease renewal logs the wrong holder",
+   "class": "bug"
+  },
+  "jira-209": {
+   "source": "jira",
+   "ref": "PLAT-209",
+   "title": "Quickstart lists a removed flag",
+   "class": "docs"
+  },
+  "gh-798": {
+   "source": "github",
+   "ref": "#798",
+   "title": "Metrics endpoint reports negative lag",
+   "class": "bug"
+  },
+  "ado-4402": {
+   "source": "ado",
+   "ref": "AB#4402",
+   "title": "Gateway returns 500 on an empty batch",
+   "class": "bug"
+  },
+  "gh-801": {
+   "source": "github",
+   "ref": "#801",
+   "title": "Subscribe resumes one record early after a reconnect",
+   "class": "bug"
+  },
+  "ado-4420": {
+   "source": "ado",
+   "ref": "AB#4420",
+   "title": "Retry drops the idempotency key",
+   "class": "bug"
+  },
+  "jira-231": {
+   "source": "jira",
+   "ref": "PLAT-231",
+   "title": "Retention example uses the removed flag",
+   "class": "docs"
+  }
+ },
+ "records": [
+  {
+   "o": 0,
+   "t": 1152000,
+   "kind": "imported",
+   "item": "jira-209"
+  },
+  {
+   "o": 1,
+   "t": 1155600,
+   "kind": "triaged",
+   "item": "jira-209",
+   "tier": 3,
+   "by": "dana"
+  },
+  {
+   "o": 2,
+   "t": 1159200,
+   "kind": "claimed",
+   "item": "jira-209",
+   "agent": "w5",
+   "run": "r-jira-209"
+  },
+  {
+   "o": 3,
+   "t": 1162800,
+   "kind": "pr_opened",
+   "item": "jira-209",
+   "agent": "w5",
+   "pr": 3103,
+   "add": 14,
+   "del": 3,
+   "files": 2,
+   "ci": "pass",
+   "reviewer": "kim"
+  },
+  {
+   "o": 4,
+   "t": 1166400,
+   "kind": "approved",
+   "item": "jira-209",
+   "by": "kim"
+  },
+  {
+   "o": 5,
+   "t": 1170000,
+   "kind": "imported",
+   "item": "ado-4388"
+  },
+  {
+   "o": 6,
+   "t": 1170000,
+   "kind": "done",
+   "item": "jira-209",
+   "agent": "w5",
+   "pr": 3103
+  },
+  {
+   "o": 7,
+   "t": 1173600,
+   "kind": "triaged",
+   "item": "ado-4388",
+   "tier": 2,
+   "by": "dana"
+  },
+  {
+   "o": 8,
+   "t": 1177200,
+   "kind": "claimed",
+   "item": "ado-4388",
+   "agent": "w4",
+   "run": "r-ado-4388"
+  },
+  {
+   "o": 9,
+   "t": 1180800,
+   "kind": "imported",
+   "item": "gh-780"
+  },
+  {
+   "o": 10,
+   "t": 1180800,
+   "kind": "pr_opened",
+   "item": "ado-4388",
+   "agent": "w4",
+   "pr": 3101,
+   "add": 14,
+   "del": 3,
+   "files": 2,
+   "ci": "pass",
+   "reviewer": "kim"
+  },
+  {
+   "o": 11,
+   "t": 1184400,
+   "kind": "triaged",
+   "item": "gh-780",
+   "tier": 1,
+   "by": "dana"
+  },
+  {
+   "o": 12,
+   "t": 1184400,
+   "kind": "approved",
+   "item": "ado-4388",
+   "by": "kim"
+  },
+  {
+   "o": 13,
+   "t": 1188000,
+   "kind": "claimed",
+   "item": "gh-780",
+   "agent": "w2",
+   "run": "r-gh-780"
+  },
+  {
+   "o": 14,
+   "t": 1188000,
+   "kind": "done",
+   "item": "ado-4388",
+   "agent": "w4",
+   "pr": 3101
+  },
+  {
+   "o": 15,
+   "t": 1191600,
+   "kind": "pr_opened",
+   "item": "gh-780",
+   "agent": "w2",
+   "pr": 3098,
+   "add": 14,
+   "del": 3,
+   "files": 2,
+   "ci": "pass",
+   "reviewer": "kim"
+  },
+  {
+   "o": 16,
+   "t": 1195200,
+   "kind": "approved",
+   "item": "gh-780",
+   "by": "kim"
+  },
+  {
+   "o": 17,
+   "t": 1198800,
+   "kind": "done",
+   "item": "gh-780",
+   "agent": "w2",
+   "pr": 3098
+  },
+  {
+   "o": 18,
+   "t": 1198800,
+   "kind": "imported",
+   "item": "ado-4402"
+  },
+  {
+   "o": 19,
+   "t": 1200000,
+   "kind": "imported",
+   "item": "gh-798"
+  },
+  {
+   "o": 20,
+   "t": 1200600,
+   "kind": "triaged",
+   "item": "ado-4402",
+   "tier": 1,
+   "by": "dana"
+  },
+  {
+   "o": 21,
+   "t": 1201800,
+   "kind": "claimed",
+   "item": "ado-4402",
+   "agent": "w3",
+   "run": "r-ado-4402"
+  },
+  {
+   "o": 22,
+   "t": 1203600,
+   "kind": "triaged",
+   "item": "gh-798",
+   "tier": 2,
+   "by": "dana"
+  },
+  {
+   "o": 23,
+   "t": 1206000,
+   "kind": "pr_opened",
+   "item": "ado-4402",
+   "agent": "w3",
+   "pr": 3112,
+   "add": 9,
+   "del": 2,
+   "files": 2,
+   "ci": "pass",
+   "reviewer": "kim",
+   "handoff": {
+    "changed": "An empty batch returns 204",
+    "verified": "The batch tests pass",
+    "unsure": ""
+   }
+  },
+  {
+   "o": 24,
+   "t": 1207200,
+   "kind": "claimed",
+   "item": "gh-798",
+   "agent": "w1",
+   "run": "r-gh-798"
+  }
+ ],
+ "beats": {
+  "arrive_gh": [
+   {
+    "dt": 20,
+    "kind": "imported",
+    "item": "gh-801"
+   },
+   {
+    "dt": 30,
+    "kind": "proposed",
+    "item": "gh-801",
+    "tier": 1,
+    "on": [],
+    "why": "Duplicate delivery after a reconnect; every durable subscriber can hit it.",
+    "agent": "w6"
+   }
+  ],
+  "arrive_ado": [
+   {
+    "dt": 20,
+    "kind": "imported",
+    "item": "ado-4420"
+   },
+   {
+    "dt": 30,
+    "kind": "proposed",
+    "item": "ado-4420",
+    "tier": 2,
+    "on": [],
+    "why": "A retry resends the body without its key, so a charge can repeat.",
+    "agent": "w6"
+   }
+  ],
+  "arrive_jira": [
+   {
+    "dt": 20,
+    "kind": "imported",
+    "item": "jira-231"
+   },
+   {
+    "dt": 30,
+    "kind": "proposed",
+    "item": "jira-231",
+    "tier": 3,
+    "on": [],
+    "why": "Docs only; the flag was removed two releases ago.",
+    "agent": "w6"
+   }
+  ],
+  "claim_gh": [
+   {
+    "kind": "claimed",
+    "item": "gh-801",
+    "agent": "w3",
+    "run": "r-gh7921",
+    "attempt": 1,
+    "dt": 30
+   }
+  ],
+  "claim_ado": [
+   {
+    "dt": 20,
+    "kind": "claimed",
+    "item": "ado-4420",
+    "agent": "w2",
+    "run": "r-ado-4420a"
+   }
+  ],
+  "lapse_ado": [
+   {
+    "dt": 900,
+    "kind": "released",
+    "item": "ado-4420",
+    "agent": "w2"
+   }
+  ],
+  "reclaim_ado": [
+   {
+    "dt": 20,
+    "kind": "claimed",
+    "item": "ado-4420",
+    "agent": "w4",
+    "run": "r-ado-4420b"
+   }
+  ],
+  "claim_jira": [
+   {
+    "dt": 20,
+    "kind": "claimed",
+    "item": "jira-231",
+    "agent": "w6",
+    "run": "r-jira-231"
+   }
+  ],
+  "work_gh": [
+   {
+    "kind": "tool",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1107",
+    "agent": "w3",
+    "tool": "search",
+    "what": "resume_offset in the subscribe path",
+    "result": "7 hits in 3 files",
+    "ok": true,
+    "usd": 0.02,
+    "dt": 180
+   },
+   {
+    "kind": "tool",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1108",
+    "agent": "w3",
+    "tool": "read",
+    "what": "The reporter's client log",
+    "result": "Offset 4120 is delivered twice after the reconnect",
+    "ok": true,
+    "usd": 0.02,
+    "dt": 240
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1109",
+    "agent": "w3",
+    "group": "understand",
+    "q": "What does the report show?",
+    "options": [
+     "A duplicate delivery after a reconnect",
+     "A lost record after a reconnect"
+    ],
+    "chosen": "A duplicate delivery after a reconnect",
+    "why": "The log has offset 4120 twice and no gap.",
+    "cites": [
+     "@s1108"
+    ],
+    "so_far": [
+     {
+      "text": "Read the report and the code around it; no decision yet.",
+      "cites": [
+       "@s1108"
+      ]
+     }
+    ],
+    "claims": [],
+    "usd": 0.06,
+    "dt": 120
+   },
+   {
+    "kind": "tool",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1110",
+    "agent": "w3",
+    "tool": "test",
+    "what": "reconnect_resume",
+    "result": "Failed: expected next offset 4121, got 4120",
+    "ok": false,
+    "usd": 0.05,
+    "dt": 300
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1111",
+    "agent": "w3",
+    "group": "reproduce",
+    "q": "Can I reproduce it here?",
+    "options": [
+     "A unit test on the resume path",
+     "A cluster run that kills a connection"
+    ],
+    "chosen": "A unit test on the resume path",
+    "why": "It fails the same way without a cluster, in two seconds.",
+    "cites": [
+     "@s1110"
+    ],
+    "so_far": [
+     {
+      "text": "Understood it as a duplicate delivery after a reconnect.",
+      "cites": [
+       "@s1109"
+      ]
+     }
+    ],
+    "claims": [],
+    "usd": 0.06,
+    "dt": 120
+   },
+   {
+    "kind": "tool",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1112",
+    "agent": "w3",
+    "tool": "read",
+    "what": "resume_from in broker/subscribe.rs",
+    "result": "Replays from the offset the client sent",
+    "ok": true,
+    "usd": 0.02,
+    "dt": 240
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1113",
+    "agent": "w3",
+    "group": "cause",
+    "q": "Where does the extra record come from?",
+    "options": [
+     "The broker replays from the offset the client sent, not the one after it",
+     "The client sends the offset it handled, not the next one"
+    ],
+    "chosen": "The broker replays from the offset the client sent, not the one after it",
+    "why": "resume_from starts at the sent offset, so the last record the client saw comes back.",
+    "cites": [
+     "@s1112",
+     "@s1110"
+    ],
+    "so_far": [
+     {
+      "text": "Understood it as a duplicate delivery after a reconnect.",
+      "cites": [
+       "@s1109"
+      ]
+     },
+     {
+      "text": "Reproduced it with a unit test on the resume path.",
+      "cites": [
+       "@s1111"
+      ]
+     }
+    ],
+    "claims": [],
+    "usd": 0.06,
+    "dt": 180
+   },
+   {
+    "kind": "edit",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1114",
+    "agent": "w3",
+    "file": "broker/subscribe.rs",
+    "add": 2,
+    "del": 1,
+    "decision": "@s1113",
+    "usd": 0.04,
+    "dt": 360
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1115",
+    "agent": "w3",
+    "group": "fix",
+    "q": "How should the broker fix it?",
+    "options": [
+     "Add one to the sent offset",
+     "Keep the next offset per subscription"
+    ],
+    "chosen": "Add one to the sent offset",
+    "why": "It is the smallest change and the wire contract stays as written.",
+    "cites": [
+     "@s1112"
+    ],
+    "so_far": [
+     {
+      "text": "Understood it as a duplicate delivery after a reconnect.",
+      "cites": [
+       "@s1109"
+      ]
+     },
+     {
+      "text": "Reproduced it with a unit test on the resume path.",
+      "cites": [
+       "@s1111"
+      ]
+     },
+     {
+      "text": "Believed the cause is the broker replays from the offset the client sent, not the one after it.",
+      "cites": [
+       "@s1113"
+      ]
+     }
+    ],
+    "claims": [],
+    "usd": 0.06,
+    "dt": 120
+   },
+   {
+    "kind": "edit",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1116",
+    "agent": "w3",
+    "file": "broker/subscribe.rs",
+    "add": 3,
+    "del": 0,
+    "decision": "@s1115",
+    "usd": 0.04,
+    "dt": 420
+   },
+   {
+    "kind": "tool",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1117",
+    "agent": "w3",
+    "tool": "test",
+    "what": "reconnect_resume and the subscribe tests",
+    "result": "Passed: 22 tests",
+    "ok": true,
+    "usd": 0.06,
+    "dt": 300
+   },
+   {
+    "kind": "edit",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1118",
+    "agent": "w3",
+    "file": "tests/support.rs",
+    "add": 12,
+    "del": 0,
+    "decision": null,
+    "usd": 0.04,
+    "dt": 240
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 1,
+    "id": "s1119",
+    "agent": "w3",
+    "group": "verify",
+    "q": "Is it ready for review?",
+    "options": [
+     "Open the PR",
+     "Run the cluster tests first"
+    ],
+    "chosen": "Open the PR",
+    "why": "reconnect_resume and the subscribe tests pass.",
+    "cites": [
+     "@s1117"
+    ],
+    "so_far": [
+     {
+      "text": "Reproduced it with a unit test on the resume path.",
+      "cites": [
+       "@s1111"
+      ]
+     },
+     {
+      "text": "Believed the cause is the broker replays from the offset the client sent, not the one after it.",
+      "cites": [
+       "@s1113"
+      ]
+     },
+     {
+      "text": "Chose to fix it by add one to the sent offset.",
+      "cites": [
+       "@s1115"
+      ]
+     }
+    ],
+    "claims": [
+     "tests pass"
+    ],
+    "usd": 0.06,
+    "dt": 120
+   },
+   {
+    "kind": "cost",
+    "item": "gh-801",
+    "attempt": 1,
+    "usd": 0.59,
+    "dt": 360
+   }
+  ],
+  "pr_gh": [
+   {
+    "kind": "pr_opened",
+    "item": "gh-801",
+    "attempt": 1,
+    "agent": "w3",
+    "pr": 3140,
+    "add": 17,
+    "del": 1,
+    "files": 3,
+    "ci": "pass",
+    "reviewer": "dana",
+    "handoff": {
+     "changed": "Resumes from the offset after the one the client sent",
+     "verified": "reconnect_resume and the subscribe tests pass",
+     "unsure": ""
+    },
+    "dt": 30
+   }
+  ],
+  "pr_ado": [
+   {
+    "dt": 600,
+    "kind": "pr_opened",
+    "item": "ado-4420",
+    "agent": "w4",
+    "pr": 3129,
+    "add": 11,
+    "del": 2,
+    "files": 2,
+    "ci": "pass",
+    "reviewer": "kim",
+    "handoff": {
+     "changed": "A retry carries the original idempotency key",
+     "verified": "The retry tests pass",
+     "unsure": ""
+    }
+   }
+  ],
+  "work_gh2": [
+   {
+    "kind": "tool",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1217",
+    "agent": "w5",
+    "tool": "read",
+    "what": "client/ack.rs",
+    "result": "Acks offset N when the callback starts; resume sends N",
+    "ok": true,
+    "usd": 0.02,
+    "dt": 30
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1218",
+    "agent": "w5",
+    "group": "cause",
+    "q": "Where does the extra record come from?",
+    "options": [
+     "The client resumes from the last handled offset, not the next one",
+     "The broker replays too early"
+    ],
+    "chosen": "The client resumes from the last handled offset, not the next one",
+    "why": "Dana's note and client/ack.rs agree: resume has to send the handled offset plus one.",
+    "cites": [
+     "@s1217"
+    ],
+    "so_far": [
+     {
+      "text": "Understood it as a duplicate delivery after a reconnect.",
+      "cites": [
+       "@s1109"
+      ]
+     },
+     {
+      "text": "Reproduced it with a unit test on the resume path.",
+      "cites": [
+       "@s1111"
+      ]
+     },
+     {
+      "text": "Steered: “The broker is right: resume means after this offset. Look at how the client counts what it handled.”",
+      "cites": [
+       "@redo"
+      ],
+      "by": "dana"
+     }
+    ],
+    "claims": [],
+    "usd": 0.06,
+    "dt": 180
+   },
+   {
+    "kind": "edit",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1219",
+    "agent": "w5",
+    "file": "client/ack.rs",
+    "add": 4,
+    "del": 2,
+    "decision": "@s1218",
+    "usd": 0.04,
+    "dt": 360
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1220",
+    "agent": "w5",
+    "group": "fix",
+    "q": "How should the client track it?",
+    "options": [
+     "Send handled plus one when it resumes",
+     "Keep the next offset at ack time"
+    ],
+    "chosen": "Keep the next offset at ack time",
+    "why": "One place sets the next offset, so a retry cannot drift from it.",
+    "cites": [
+     "@s1217"
+    ],
+    "so_far": [
+     {
+      "text": "Understood it as a duplicate delivery after a reconnect.",
+      "cites": [
+       "@s1109"
+      ]
+     },
+     {
+      "text": "Reproduced it with a unit test on the resume path.",
+      "cites": [
+       "@s1111"
+      ]
+     },
+     {
+      "text": "Steered: “The broker is right: resume means after this offset. Look at how the client counts what it handled.”",
+      "cites": [
+       "@redo"
+      ],
+      "by": "dana"
+     },
+     {
+      "text": "Believed the cause is the client resumes from the last handled offset, not the next one.",
+      "cites": [
+       "@s1218"
+      ]
+     }
+    ],
+    "claims": [],
+    "usd": 0.06,
+    "dt": 120
+   },
+   {
+    "kind": "edit",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1222",
+    "agent": "w5",
+    "file": "client/ack.rs",
+    "add": 6,
+    "del": 2,
+    "decision": "@s1220",
+    "usd": 0.04,
+    "dt": 480
+   },
+   {
+    "kind": "edit",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1223",
+    "agent": "w5",
+    "file": "client/resume.rs",
+    "add": 3,
+    "del": 1,
+    "decision": "@s1220",
+    "usd": 0.04,
+    "dt": 240
+   },
+   {
+    "kind": "tool",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1225",
+    "agent": "w5",
+    "tool": "test",
+    "what": "reconnect_resume and the client tests",
+    "result": "Passed: 36 tests",
+    "ok": true,
+    "usd": 0.07,
+    "dt": 360
+   },
+   {
+    "kind": "decision",
+    "item": "gh-801",
+    "attempt": 2,
+    "id": "s1226",
+    "agent": "w5",
+    "group": "verify",
+    "q": "Is it ready for review?",
+    "options": [
+     "Open the PR",
+     "Run the cluster tests first"
+    ],
+    "chosen": "Open the PR",
+    "why": "reconnect_resume and the client tests pass after the last edit.",
+    "cites": [
+     "@s1225"
+    ],
+    "so_far": [
+     {
+      "text": "Reproduced it with a unit test on the resume path.",
+      "cites": [
+       "@s1111"
+      ]
+     },
+     {
+      "text": "Steered: “The broker is right: resume means after this offset. Look at how the client counts what it handled.”",
+      "cites": [
+       "@redo"
+      ],
+      "by": "dana"
+     },
+     {
+      "text": "Believed the cause is the client resumes from the last handled offset, not the next one.",
+      "cites": [
+       "@s1218"
+      ]
+     },
+     {
+      "text": "Chose to fix it by keep the next offset at ack time.",
+      "cites": [
+       "@s1220"
+      ]
+     }
+    ],
+    "claims": [
+     "tests pass"
+    ],
+    "usd": 0.06,
+    "dt": 120
+   },
+   {
+    "kind": "cost",
+    "item": "gh-801",
+    "attempt": 2,
+    "usd": 0.39,
+    "dt": 300
+   }
+  ],
+  "pr_gh2": [
+   {
+    "kind": "pr_opened",
+    "item": "gh-801",
+    "attempt": 2,
+    "agent": "w5",
+    "pr": 3151,
+    "add": 28,
+    "del": 7,
+    "files": 3,
+    "ci": "pass",
+    "reviewer": "dana",
+    "handoff": {
+     "changed": "The client keeps the next offset at ack time and resumes from it",
+     "verified": "reconnect_resume and 36 client tests pass",
+     "unsure": "Did not run the cluster tests"
+    },
+    "dt": 30
+   }
+  ]
+ }
+}

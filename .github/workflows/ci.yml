@@ -25,6 +25,7 @@ jobs:
       - run: node --test dev/lib/script.test.mjs
       # The fixtures are generated; the committed files must match the script.
       - run: python3 prototype/make-intake-fixture.py
+      - run: python3 prototype/make-demo-fixture.py
       - run: git diff --exit-code -- prototype
 
   intake:

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Felix Agents dashboard</title>
+<title>Kibble dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -445,6 +445,19 @@
   .detail .pl { display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
   .detail .pl div { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+
+  /* autoplay demo overlays */
+  #demo-cap, #demo-key { position: fixed; z-index: 60; bottom: 150px; display: none; align-items: center; gap: 10px; border-radius: 12px; border: 1px solid var(--line-strong); background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: blur(8px); box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28); pointer-events: none; opacity: 0; }
+  #demo-cap { left: 50%; transform: translateX(-50%); padding: 10px 20px; font: 600 17px Inter, sans-serif; white-space: nowrap; }
+  #demo-key { right: 28px; bottom: 58px; padding: 5px 12px; font: 500 14px Inter, sans-serif; color: var(--muted); }
+  #demo-key kbd { font-size: 14px; }
+  body.demo #demo-cap, body.demo #demo-key { display: flex; }
+  body.demo { cursor: none; }
+  body.demo #events { display: none; }
+  body.demo .legend { visibility: hidden; }
+  .bsep { color: var(--faint); }
+  #go.pressed { transform: scale(0.96); }
+
   /* dialogs */
   #modal { position: fixed; inset: 0; z-index: 50; display: none; background: rgba(2, 8, 14, 0.62); align-items: center; justify-content: center; padding: 16px; }
   #modal.open { display: flex; }
@@ -490,7 +503,7 @@
 </head>
 <body>
 <header>
-  <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt=""><span>Felix Agents</span></div>
+  <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt="Kibble"><span>Kibble</span></div>
   <div class="sep"></div>
   <div class="tabs" role="tablist" id="tabs">
     <button role="tab" data-view="queue" id="t-queue">My queue <b id="qn"></b></button>
@@ -509,6 +522,7 @@
   <div id="v-replay"></div>
 </main>
 <div id="modal"></div>
+<div id="demo-cap"></div><div id="demo-key"></div>
 <section id="dock" aria-label="Selected item"></section>
 <details id="events"><summary>Recorded by your actions <b id="evn">0</b><span class="last" id="evlast"></span></summary><ol id="evlist"></ol></details>
 <footer>
@@ -541,7 +555,9 @@ const VIEWS = ['queue', 'board', 'metrics'];
 const params = new URLSearchParams(location.search);
 const root = document.documentElement;
 root.dataset.theme = params.get('theme') || localGet('fa-theme') || 'dark';
-const fx = await (await fetch(params.get('fixture') || 'fixture-work.json')).json();
+const DEMO = params.get('demo') === '1';   // autoplay: a scripted story from fixture-work-demo.json
+const REC = DEMO && params.has('rec');    // the recorder owns the clock
+const fx = await (await fetch(params.get('fixture') || (DEMO ? 'fixture-work-demo.json' : 'fixture-work.json'))).json();
 await Promise.all([
   document.fonts.load('600 13px Inter'), document.fonts.load('500 12px Inter'), document.fonts.load('700 13px Inter'),
   document.fonts.load('500 11px "JetBrains Mono"'), document.fonts.load('600 12px "JetBrains Mono"'),
@@ -802,7 +818,7 @@ function constraintOf(byStage, busy, agents, roots) {
   add('needs', 'needs you', byStage.needs, `${plural(byStage.needs.length, 'item')} waiting on an answer or a decision, oldest ${span(oldest(byStage.needs))}`);
   add('blocked', 'blocked', byStage.blocked, roots.length ? `${plural(byStage.blocked.length, 'item')} behind ${roots[0].it.ref}, which holds up ${roots[0].holds}` : `${plural(byStage.blocked.length, 'item')} blocked`);
   const full = cap != null && byStage.review.length >= cap;
-  if (byStage.ready.length && busy < agents && !full) add('ready', 'claim path', byStage.ready, `${agents - busy} of ${agents} agents idle while ${byStage.ready.length} are ready`, 2);
+  if (byStage.ready.length && busy < agents && !full) add('ready', 'claim path', byStage.ready, `${agents - busy} of ${agents} agents idle while ${byStage.ready.length} ${byStage.ready.length === 1 ? 'is' : 'are'} ready`, 2);
   if (full) { const c = cands.find((x) => x.stage === 'review'); if (c) c.score = 1e9; }
   cands.sort((a, b) => b.score - a.score);
   return cands[0] ?? null;
@@ -810,7 +826,7 @@ function constraintOf(byStage, busy, agents, roots) {
 
 // ---------- rendering ----------
 
-function render() {
+function renderNow() {
   state = fold(cut);
   by = summarize(state);
   stats = stageStats(state);
@@ -826,7 +842,7 @@ function render() {
   document.body.classList.toggle('replaying', view === 'replay');
   $('nav').classList.toggle('on', view === 'board');
   $('qn').textContent = queue.rows.length || '';
-  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Felix Agents: ${{ queue: 'My queue', board: 'Board', metrics: 'Metrics', replay: 'Story' }[view]}`;
+  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Kibble: ${{ queue: 'My queue', board: 'Board', metrics: 'Metrics', replay: 'Story' }[view]}`;
 
   renderStatus(busy, agents);
   if (view === 'queue') renderQueue();
@@ -1032,7 +1048,7 @@ function renderBoard(chain, blockedRoots, busy, agents) {
   board.className = 'board' + (chain ? ' picked' : '');
   board.innerHTML = `<svg id="links" aria-hidden="true"></svg>` + cols.join('');
   $('nav').innerHTML = STAGES.map(([k, n]) => `<a href="#c-${k}" data-nav="${k}"${k === 'needs' ? ' class="you"' : ''}>${n} <b>${by[k].length}</b></a>`).join('');
-  requestAnimationFrame(() => drawLinks(chain));
+  requestAnimationFrame(() => { if (!chain || [...chain.all].every((k) => state.items.has(k))) drawLinks(chain); });
 }
 
 function renderFooter() {
@@ -1041,7 +1057,7 @@ function renderFooter() {
   const net = inDay - outDay;
   const growth = net <= 0 ? ` <b>Draining.</b>` : ` <b class="grow">Growing by ${net} a day.</b>`;
   const why = binding ? `Binding stage, <b>${esc(binding.label)}</b>: ${binding.text}. <button class="lk" data-bind="${binding.stage}">Show it</button>` : 'Nothing is waiting long.';
-  $('bind').innerHTML = `${why}${growth}`;
+  $('bind').innerHTML = binding ? `${why} <span class="bsep">·</span>${growth}` : `${why}${growth}`;
   const oldReady = by.ready[0];
   $('rates').innerHTML = `<span class="m"><small>in</small>${inDay}/day</span><span class="m"><small>out</small>${outDay}/day</span>` +
     `<span class="m"><small>oldest ready</small>${oldReady ? `${span(cut - oldReady.since)} (${esc(oldReady.ref)})` : 'none'}</span>`;
@@ -1864,7 +1880,7 @@ function doRedo(d, lines, instruction, includeAfter) {
   emit('attempt_published', key, { attempt: n, handoff: ho, commit, by: undefined });
   replay.n = n; replay.idx = 0; replay.released = false; replay.tab = 'story';
   replay.idx = Math.max(0, curPath().length - 1);
-  if (params.get('autoclaim') !== '0') setTimeout(() => claimRedo(key, n), 2500);
+  if (params.get('autoclaim') !== '0' && !DEMO) setTimeout(() => claimRedo(key, n), 2500);
   closeModalQuiet();
   render();
   return true;
@@ -2121,6 +2137,237 @@ if (params.has('story')) {
   openReplay(params.get('story'), { n: params.has('branch') ? +params.get('branch') : undefined, d: params.has('d') ? +params.get('d') : undefined, tab: params.get('tab') ?? 'story', released: params.get('released') !== '0' });
   if (params.get('redo')) { const d = nearestDecision(); if (d && openRedo(d)) { dialog.instruction = params.get('note') ?? ''; drawModal(); } }
   if (params.get('cite')) { replay.cite = +params.get('cite'); renderReplay(); }
+}
+// ---------- autoplay demo (?demo=1) ----------
+// Plays fixture-work-demo.json's beats into the log while the real keys drive
+// the real views. The recorder owns the clock with &rec=1 and calls
+// demo.advance(ms) per frame, so a recording never depends on wall time.
+
+const clock = { t: 0, timers: [], starts: new WeakMap() };
+const sleep = (ms) => new Promise((ok) => clock.timers.push({ at: clock.t + ms, ok }));
+const macrotask = () => new Promise((ok) => setTimeout(ok, 0));
+const demo = { loops: 0, errors: [], running: false, advance: null, runs: [] };
+
+// Animations follow the demo clock when recording; otherwise they run normally.
+function syncAnims() {
+  if (!REC) return;
+  for (const a of document.getAnimations()) {
+    if (!clock.starts.has(a)) { clock.starts.set(a, clock.t - (Number(a.currentTime) || 0)); a.pause(); }
+    a.currentTime = clock.t - clock.starts.get(a);
+  }
+}
+function anim(el, frames, opts) {
+  const a = el.animate(frames, { easing: 'cubic-bezier(.3,.1,.2,1)', fill: 'backwards', ...opts });
+  syncAnims();
+  return a;
+}
+
+function snapshot() {
+  const rows = new Map();
+  for (const e of document.querySelectorAll('#board .row[data-k], #qlist .qrow[data-k]')) rows.set(e.dataset.k, e.getBoundingClientRect());
+  const counts = new Map();
+  for (const e of document.querySelectorAll('#board .col h2 .n')) counts.set(e.closest('.col').id, e.textContent);
+  return { view, rows, counts, modal: !!dialog };
+}
+function render() {
+  if (!DEMO || !state) { renderNow(); return; }
+  const before = snapshot();
+  renderNow();
+  if (before.view !== view) { anim($('main'), [{ opacity: 0 }, { opacity: 1 }], { duration: 420 }); return; }
+  for (const e of document.querySelectorAll('#board .row[data-k], #qlist .qrow[data-k]')) {
+    const was = before.rows.get(e.dataset.k), now = e.getBoundingClientRect();
+    if (!was) { anim(e, [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'none' }], { duration: 650 }); continue; }
+    const dx = was.left - now.left, dy = was.top - now.top;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+      e.style.zIndex = 5;
+      anim(e, [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 900, easing: 'cubic-bezier(.45,0,.2,1)' }).finished.then(() => { e.style.zIndex = ''; }, () => {});
+    }
+  }
+  for (const e of document.querySelectorAll('#board .col h2 .n')) {
+    const was = before.counts.get(e.closest('.col').id);
+    if (was != null && was !== e.textContent) anim(e, [{ transform: 'scale(1.5)', color: 'var(--cyan)' }, { transform: 'none' }], { duration: 700 });
+  }
+  if (dialog && !before.modal) anim(document.querySelector('#modal .dlg'), [{ opacity: 0, transform: 'translateY(10px) scale(.98)' }, { opacity: 1, transform: 'none' }], { duration: 380 });
+}
+
+// Beat records name earlier records as "@id"; the log gives them offsets as they are added.
+const ids = new Map();
+const resolveIds = (v) => {
+  if (typeof v === 'string' && v[0] === '@') { if (!ids.has(v.slice(1))) throw new Error(`unknown record ${v}`); return ids.get(v.slice(1)); }
+  if (Array.isArray(v)) return v.map(resolveIds);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, resolveIds(x)]));
+  return v;
+};
+function push(beat, over = {}, gapMs = 0) {
+  return (async () => {
+    for (const b of fx.beats[beat]) {
+      const { dt, id, ...rest } = b;
+      NOW += dt;
+      const r = resolveIds({ o: recs.length, t: NOW, ...rest, ...(rest.agent && over.agent ? { agent: over.agent } : {}) });
+      recs.push(r);
+      if (id) ids.set(id, r.o);
+      cut = NOW;
+      render();
+      if (gapMs) await sleep(gapMs);
+    }
+  })();
+}
+
+let capNow = '', keyTimer = 0;
+function caption(text) {
+  const c = $('demo-cap');
+  if (text === capNow) return;
+  capNow = text;
+  if (!text) { anim(c, [{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }); return; }
+  c.textContent = text;
+  anim(c, [{ opacity: 0, transform: 'translate(-50%, 8px)' }, { opacity: 1, transform: 'translate(-50%, 0)' }], { duration: 400, fill: 'both' });
+}
+async function press(k, label, o = {}) {
+  const el = $('demo-key');
+  el.innerHTML = `${(o.shift ? ['shift', k] : [k]).map((x) => `<kbd>${x}</kbd>`).join('')}<span>${label}</span>`;
+  const mine = ++keyTimer;
+  anim(el, [{ opacity: 0 }, { opacity: 1 }], { duration: 160, fill: 'both' });
+  await sleep(180);
+  document.body.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey: !!o.shift, bubbles: true }));
+  sleep(750).then(() => { if (mine === keyTimer) anim(el, [{ opacity: 1 }, { opacity: 0 }], { duration: 250, fill: 'forwards' }); });
+}
+
+const BASE_LEN = recs.length;
+const FADE = 500;
+function resetDemo() {
+  recs.length = BASE_LEN; itemRecsCache.clear(); localEvents.length = 0; ids.clear();
+  NOW = fx.now; cut = NOW; selected = null; view = 'board'; dialog = null; replay = null; prevView = 'queue';
+  pending.clear(); expanded.clear(); capNow = '';
+  $('demo-cap').style.opacity = 0; $('demo-key').style.opacity = 0;
+  drawModal();
+  render();
+}
+
+async function story() {
+  const began = clock.t;
+  const fade = (from, to) => anim(document.body, [{ opacity: from }, { opacity: to }], { duration: FADE, fill: 'both', easing: 'ease-in-out' });
+  const holder = () => state.items.get('gh-801').holder;
+  fade(0, 1);
+  await sleep(250);
+
+  caption('Bugs arrive from GitHub, Azure DevOps and Jira.');
+  await push('arrive_gh'); await sleep(900);
+  await push('arrive_ado'); await sleep(900);
+  await push('arrive_jira'); await sleep(900);
+
+  caption('An agent proposes a tier. One key accepts it.');
+  await press('1', 'my queue'); await sleep(500);
+  await press('j', 'next'); await sleep(500);
+  for (let i = 0; i < 3; i++) { await press('a', 'accept'); await sleep(i < 2 ? 500 : 700); }
+
+  caption('Accepted work is Ready. Agents claim it.');
+  await press('2', 'board'); await sleep(800);
+  await push('claim_gh'); await sleep(450);
+  await push('claim_ado'); await sleep(450);
+  await push('claim_jira'); await sleep(800);
+
+  caption('A claim lapsed, so the item went to another agent.');
+  await push('lapse_ado'); await sleep(900);
+  await push('reclaim_ado'); await sleep(1000);
+
+  caption('The fix lands in review with its handoff.');
+  await push('work_gh'); await push('pr_gh'); await sleep(500);
+  await push('pr_ado'); await sleep(700);
+  await press('1', 'my queue'); await sleep(500);
+  await press('j', 'next'); await sleep(1600);
+
+  caption('Open the story and scrub back to any decision.');
+  await press('y', 'story'); await sleep(800);
+  const slider = $('rscrub');
+  const last = +slider.value;
+  const target = curPath().findIndex((r, i, p) => r.kind === 'decision' && p.slice(0, i + 1).filter((x) => x.kind === 'decision').length === 3);
+  const steps = 24;
+  for (let i = 1; i <= steps; i++) {
+    const e = i / steps, ease = e * e * (3 - 2 * e);
+    slider.value = Math.round(last + (target - last) * ease);
+    slider.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(33);
+  }
+  await sleep(150);
+  slider.dispatchEvent(new Event('change', { bubbles: true }));
+  caption('Let go: what it knew, what it chose, and why.');
+  await sleep(2500);
+
+  caption('Redo from that decision to branch the path.');
+  await press('r', 'redo from here'); await sleep(400);
+  const box = $('instr'), text = fx.redo.instruction;
+  for (let i = 1; i <= text.length; i++) {
+    box.value = text.slice(0, i);
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(12);
+  }
+  await sleep(500);
+  $('go').classList.add('pressed');
+  await sleep(160);
+  $('go').click();
+  ids.set('redo', recs.findLast((r) => r.kind === 'human_input' && r.item === 'gh-801').o);
+  await sleep(900);
+  claimRedo('gh-801', 2);
+  await sleep(400);
+  const agent = holder();
+  await push('work_gh2', { agent }, 100);
+  await push('pr_gh2', { agent }); await sleep(800);
+
+  caption('The fix merges and Done ticks up.');
+  await press('a', 'approve'); await sleep(700);
+  await press('m', 'mark merged'); await sleep(800);
+  await press('Escape', 'back'); await sleep(350);
+  await press('2', 'board'); selected = null; render(); await sleep(1500);
+
+  demo.runs.push({ seconds: Math.round((clock.t - began + FADE + 250) / 100) / 10, events: localEvents.map((r) => r.kind), done: by.done.length });
+  caption('');
+  fade(1, 0);
+  await sleep(FADE + 250);
+}
+
+async function run() {
+  demo.running = true;
+  try {
+    for (;;) {
+      await story();
+      demo.loops++;
+      resetDemo();
+      if (REC && demo.loops >= (Number(params.get('loops')) || 1)) break;
+    }
+  } catch (e) {
+    demo.errors.push(String(e.stack || e));
+    console.error('demo failed: ' + (e.stack || e));
+  }
+  demo.running = false;
+}
+
+if (DEMO) {
+  document.body.classList.add('demo');
+  if (!params.has('view')) { view = 'board'; render(); }
+  window.demo = demo;
+  const advance = async (ms) => {
+    const target = clock.t + ms;
+    for (;;) {
+      let next = null;
+      for (const t of clock.timers) if (t.at <= target && (!next || t.at < next.at)) next = t;
+      if (!next) break;
+      clock.timers.splice(clock.timers.indexOf(next), 1);
+      clock.t = Math.max(clock.t, next.at);
+      next.ok();
+      await macrotask();
+    }
+    clock.t = target;
+    syncAnims();
+    demo.t = clock.t;
+  };
+  demo.advance = advance;
+  demo.start = () => { if (!demo.running) run(); };
+  if (!REC) {
+    demo.start();
+    let last = performance.now();
+    const frame = (now) => { advance(Math.min(100, now - last)); last = now; requestAnimationFrame(frame); };
+    requestAnimationFrame(frame);
+  }
 }
 </script>
 </body>
