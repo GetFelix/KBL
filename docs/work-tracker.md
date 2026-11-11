@@ -543,7 +543,10 @@ flowchart LR
     F -->|finding: defer| D[Proposal<br/>a person accepts]
     F --> L[Final review<br/>tier deep]
     X --> L
+    L -->|finding: fix| X2[Fix, child of the root]
+    X2 --> L2[Fresh final review<br/>waits for the fix]
     L --> V[Verdict: merge or block]
+    L2 --> V
     V --> P[A person merges]
 ```
 
@@ -551,8 +554,9 @@ flowchart LR
   open, the tracker adds two `review` children under the root: a first pass
   for the first configured tier and a final review for the last. The final
   waits for the first, and for every fix the first pass asks for, so it reads
-  the tree with the fixes in. Each request gets them once, and a root has at most 8
-  review items. A person or an agent cannot create one.
+  the tree with the fixes in. Each request gets them once, and a root has at
+  most 8 review items, fresh final reviews included. A person or an agent
+  cannot create one.
 - **Claimed by tier.** The tiers are `AGENTS_REVIEW_TIERS` (default
   `fast,deep`, at most four), one ready stream each (`work.review.r0` to
   `r3`). `work_next` gives a review only to an agent that names its tier in
@@ -572,6 +576,10 @@ flowchart LR
     item from the root's budget. Its claim reply gives the request's branch,
     so the author goes on from there. Any agent may take it, the author
     included. It is done when its attempt is, since it lands in the request.
+    A fix filed by the final review makes one fresh final review, however
+    many fixes it asks for. It waits for them, so the verdict that can lead
+    to a merge always reads the tree with the fixes in. The review that asked
+    for them ends with a `block`.
   - `defer` becomes a proposal in the root's repo that waits in the
     Proposed column for a person. It draws nothing from the budget.
   - `dismiss` is recorded and does nothing else.

@@ -11,6 +11,22 @@ use agents_wasm::Folder;
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/golden");
 
+/// Who logs a record. Everyone is a person, except the records of the reviewed request
+/// (`rv` and its reviews `v1`, `v2`), which only the tracker and agents may write.
+fn who(rec: &WorkRecord) -> (&'static str, &'static str) {
+    let item = serde_json::to_value(rec).unwrap()["item"]
+        .as_str()
+        .map(str::to_owned);
+    let reviewed = matches!(item.as_deref(), Some("rv" | "v1" | "v2"));
+    match (reviewed, rec.kind(), item.as_deref()) {
+        (false, ..) | (_, "imported" | "accepted", _) => ("gabriel", "person"),
+        (_, "pr_status" | "proposed", _) => ("ingest", "tracker"),
+        (_, _, Some("v1")) => ("w2", "agent"),
+        (_, _, Some("v2")) => ("w3", "agent"),
+        _ => ("w1", "agent"),
+    }
+}
+
 fn logs() -> Vec<(&'static str, String)> {
     let core = concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests");
     let every = std::fs::read_to_string(format!("{core}/work_wire.jsonl")).unwrap();
@@ -20,8 +36,8 @@ fn logs() -> Vec<(&'static str, String)> {
         .enumerate()
         .map(|(i, l)| {
             let rec = WorkRecord::decode(l.as_bytes()).unwrap();
-            let logged =
-                serde_json::json!({ "at_ms": 1000 + i, "by": "gabriel", "actor": "person" });
+            let (by, actor) = who(&rec);
+            let logged = serde_json::json!({ "at_ms": 1000 + i, "by": by, "actor": actor });
             let mut logged = logged.as_object().unwrap().clone();
             let body = serde_json::to_value(&rec).unwrap();
             logged.extend(body.as_object().unwrap().clone());

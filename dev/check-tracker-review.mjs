@@ -153,10 +153,22 @@ try {
   check(last.claimed && last.item.review.pass === "final", "w4 was handed the final review once the fix landed");
   const noVerdict = await refusal(() => w4.tool("work_complete", { item: last.item.id }));
   check(noVerdict?.includes("missing_field"), "the final review cannot finish without a verdict");
-  await w4.tool("work_verdict", { verdict: "merge", why: "the fix landed and the test guards it" });
+  // The final review asks for a fix of its own: it ends with a block, and a fresh
+  // final review waits for the fix.
+  await w4.tool("work_finding", f("fix", "restart race in the fill"));
+  await w4.tool("work_verdict", { verdict: "block", why: "one more fix" });
   await w4.tool("work_complete", { item: last.item.id });
-  const verdict = workLog().find((r) => r.kind === "review_verdict");
-  check(verdict?.verdict === "merge" && verdict.by === "w4", "the verdict is a record from the final reviewer");
+  const fix2 = await takeNext(w3, 20);
+  check(fix2.claimed && fix2.item.work === "fix", "w3 was handed the fix the final review asked for");
+  const again = await w4.tool("work_next", { wait_seconds: 1, review_tiers: ["deep"] });
+  check(!again.claimed, "the fresh final review waits for the fix the final review asked for");
+  await w3.tool("work_complete", { item: fix2.item.id });
+  const fresh = await takeNext(w4, 20, { review_tiers: ["deep"] });
+  check(fresh.claimed && fresh.item.review.pass === "final" && fresh.item.id !== last.item.id, "w4 was handed a fresh final review once the fix landed");
+  await w4.tool("work_verdict", { verdict: "merge", why: "the fix landed and the test guards it" });
+  await w4.tool("work_complete", { item: fresh.item.id });
+  const verdict = workLog().filter((r) => r.kind === "review_verdict").pop();
+  check(verdict?.verdict === "merge" && verdict.by === "w4" && verdict.item === fresh.item.id, "the verdict is a record from the fresh final review");
   check(!workLog().some((r) => r.kind === "closed" && r.item === "rvroot"), "nothing merged: a person does that");
 
   // Agents cannot write a finding as a person.

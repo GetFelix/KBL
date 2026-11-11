@@ -1822,6 +1822,18 @@ impl State {
         };
         match verdict {
             FindingVerdict::Fix => {
+                let reviews = self
+                    .item(&root)?
+                    .children
+                    .iter()
+                    .filter(|c| self.items.get(*c).is_some_and(|c| c.review.is_some()))
+                    .count();
+                if spec.pass == ReviewPass::Final
+                    && self.open_final_review(&root, &spec.pr).is_none()
+                    && reviews >= MAX_REVIEWS_PER_ROOT
+                {
+                    return Err(Reject::LimitReached);
+                }
                 // The fix is work the root's tree spends budget on, like any child.
                 let r = self.item(&root)?;
                 let (depth, tier) = (r.depth.saturating_add(1), r.tier);
@@ -1840,10 +1852,32 @@ impl State {
                 }
                 let fix_id = child("fix");
                 // The final review reads the tree with the fix in it, so it waits.
-                // No new final review is made once the fix lands.
-                if spec.pass == ReviewPass::First
-                    && let Some(last) = self.open_final_review(&root, &spec.pr)
-                {
+                // A first pass finds the final review already there. A final review
+                // that asks for a fix is itself out of date once the fix lands, so it
+                // gets a fresh one, a single one however many fixes it asks for.
+                let waiting = match self.open_final_review(&root, &spec.pr) {
+                    Some(last) => Some(last),
+                    None if spec.pass == ReviewPass::Final => {
+                        let last = child("final");
+                        let mut again = Self::blank(
+                            &last,
+                            WorkKind::Review,
+                            &format!("Final review: {}", spec.pr)
+                                .chars()
+                                .take(200)
+                                .collect::<String>(),
+                        );
+                        again.review = Some(spec.clone());
+                        again.parent = Some(root.clone());
+                        again.root = root.clone();
+                        again.depth = depth;
+                        again.accepted = true;
+                        self.new_item(again);
+                        Some(last)
+                    }
+                    None => None,
+                };
+                if let Some(last) = waiting {
                     self.edges.insert((last, fix_id.clone()));
                 }
                 let mut fix = Self::blank(&fix_id, WorkKind::Fix, &shorten("Fix: "));

@@ -280,6 +280,78 @@ async fn an_author_passing_over_its_review_does_not_hold_it_back_from_another() 
     assert_eq!(mine["item"]["pr"], PR);
 }
 
+/// w1 wrote a1 and a2 was opened first, so a2's review is the other agents' item
+/// and sits first in the lane; w1's own review of a1 follows it.
+async fn author_beside_a_review_it_cannot_take() -> (Fake, Tracker<Fake>) {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    for (id, who) in [("a2", "w2"), ("a1", "w1")] {
+        seed_in_felix(&t, id).await;
+        claim(&t, who).await;
+        let pr = format!("GetFelix/felix#{id}");
+        t.progress(
+            &agent(who),
+            &item(id),
+            Content::Text("fixed".into()),
+            None,
+            Some(pr.clone()),
+        )
+        .await
+        .unwrap();
+        t.complete(&agent(who), &item(id), 0).await.unwrap();
+        t.ingest_record(
+            key("ingest-gh"),
+            WorkRecord::PrStatus {
+                item: item(id),
+                status: PrSnapshot {
+                    pr,
+                    phase: PrPhase::Open,
+                    review: PrReview::Unreviewed,
+                    checks: PrChecks::Green,
+                    failing: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    }
+    (fake, t)
+}
+
+async fn author_polls_ten_times(fake: &Fake, t: &Tracker<Fake>) -> usize {
+    for _ in 0..10 {
+        let got = t
+            .next_for(&agent("w1"), Duration::ZERO, &fast())
+            .await
+            .unwrap();
+        assert!(not_claimed(&got));
+    }
+    fake.calls()
+        .iter()
+        .filter(|c| c.starts_with("publish work.review"))
+        .count()
+}
+
+#[tokio::test]
+async fn an_author_does_not_churn_beside_a_review_leased_to_someone_else() {
+    let (fake, t) = author_beside_a_review_it_cannot_take().await;
+    // w3 took the other review and its work_next was cut short: the lease stays.
+    fake.poll_and_vanish(&ready_stream(TIERS), "w3").unwrap();
+    // Two first publishes, one republish of w1's own review, then quiet.
+    assert!(author_polls_ten_times(&fake, &t).await <= 3);
+}
+
+#[tokio::test]
+async fn an_author_does_not_churn_beside_a_dead_lettered_review() {
+    let (fake, t) = author_beside_a_review_it_cannot_take().await;
+    fake.net
+        .lock()
+        .unwrap()
+        .slots
+        .insert((ready_stream(TIERS), 0), Slot::Acked);
+    assert!(author_polls_ten_times(&fake, &t).await <= 3);
+}
+
 #[tokio::test]
 async fn findings_become_children_and_proposals_and_a_verdict_ends_the_final_review() {
     let (fake, t) = opened().await;

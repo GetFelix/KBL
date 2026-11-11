@@ -418,6 +418,52 @@ fn the_final_review_waits_for_a_fix_the_first_pass_asked_for_and_then_can_merge(
 }
 
 #[test]
+fn a_fix_from_the_final_review_makes_a_fresh_final_review_that_waits_for_it() {
+    let mut l = at_final();
+    l.agent("w3", finding("v2", FindingVerdict::Fix));
+    l.agent("w3", finding("v2", FindingVerdict::Fix));
+    l.agent("w3", verdict("v2", MergeVerdict::Block));
+    l.agent("w3", done("v2", 1, 0));
+    let s = state(&l);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    // One fresh review for both fixes, blocked until they land.
+    let finals: Vec<_> = s.items[&id("r1")]
+        .children
+        .iter()
+        .filter(|c| {
+            s.items[*c]
+                .review
+                .as_ref()
+                .is_some_and(|r| r.pass == ReviewPass::Final)
+                && s.items[*c].closed.is_none()
+        })
+        .cloned()
+        .collect();
+    assert_eq!(finals.len(), 1);
+    let fresh = finals[0].to_string();
+    assert_eq!(s.stage(&id(&fresh)), Some(Stage::Blocked));
+    assert!(!s.merge_ready(&id("r1")));
+
+    let offs = s.items[&id("v2")].findings.clone();
+    for off in offs {
+        let fix = derived_id("fix", &id("v2"), off).to_string();
+        l.agent("w1", claimed(&fix, 1));
+        l.agent("w1", done(&fix, 1, 0));
+    }
+    assert_eq!(state(&l).stage(&id(&fresh)), Some(Stage::Ready));
+    l.agent("w4", claimed(&fresh, 1));
+    l.agent("w4", verdict(&fresh, MergeVerdict::Merge));
+    l.agent("w4", done(&fresh, 1, 0));
+    let s = state(&l);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert!(s.merge_ready(&id("r1")));
+    assert_eq!(
+        s.items[&id("r1")].review_verdict.as_ref().unwrap().review,
+        id(&fresh)
+    );
+}
+
+#[test]
 fn a_verdict_is_bounded_and_goes_stale_with_the_request() {
     let mut l = at_final();
     l.agent(

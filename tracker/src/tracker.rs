@@ -164,6 +164,10 @@ struct Core {
     /// They are published again only after the log moves, or every poll would
     /// publish, refuse and ack the same item forever.
     refused: HashMap<ItemId, Option<u64>>,
+    /// Review lanes an agent polled and left with nothing after passing over its own
+    /// reviews, by agent and tier. Polling again would pass them over again, and each
+    /// pass is an ack and a fresh publish.
+    emptied: HashMap<(String, u8), Emptied>,
     /// The state may not match the log: rebuild it before serving.
     stale: bool,
     lease: Option<LeaseHeld>,
@@ -172,6 +176,16 @@ struct Core {
     /// The text of context, note, question, answer, decision and triage records by offset, so a read does
     /// not scan the log.
     texts: HashMap<u64, Content>,
+}
+
+/// What a review lane looked like when an agent last left it with nothing to take.
+struct Emptied {
+    at: Option<u64>,
+    /// The published items in the lane that are not the agent's own work.
+    others: Vec<ItemId>,
+    /// A record that is leased or dead-lettered in the lane can come free without a
+    /// change here, so the mark lapses after a visibility period.
+    until: Instant,
 }
 
 /// Keeps the text of the records a read shows.
@@ -674,9 +688,13 @@ impl<B: Broker> Tracker<B> {
         for tier in (0..TIERS).chain(review.iter().copied()) {
             let stream = ready_stream(tier);
             // Nothing in this lane is for this agent: leave the records alone.
-            if tier >= TIERS && self.lane_is_all_own(agent, tier).await {
+            if tier >= TIERS
+                && (self.lane_is_all_own(agent, tier).await
+                    || self.lane_is_emptied(agent, tier).await)
+            {
                 continue;
             }
+            let mut passed = false;
             // A review of the agent's own work is for another reviewer. It is acked and
             // published again, not nacked: Felix counts every handout as an attempt and
             // dead-letters a record at its bound, so a nacking author would eat the review.
@@ -690,8 +708,14 @@ impl<B: Broker> Tracker<B> {
                     )
                     .await
                     .map_err(Error::Felix)?;
-                let Some(record) = polled else { break };
+                let Some(record) = polled else {
+                    if passed {
+                        self.mark_emptied(agent, tier).await;
+                    }
+                    break;
+                };
                 if tier >= TIERS && self.is_own_work(agent, &record).await {
+                    passed = true;
                     // On its own task: a caller that gives up waiting (work_next's time
                     // is up) must not leave the record leased to this agent.
                     let me = self.clone();
@@ -734,6 +758,48 @@ impl<B: Broker> Tracker<B> {
             }
         }
         any
+    }
+
+    /// The published items in the lane that this agent has not worked on, in order.
+    fn lane_others(core: &Core, agent: &AgentName, tier: u8) -> Vec<ItemId> {
+        let key = agent_key(agent);
+        let mut ids: Vec<ItemId> = core
+            .live
+            .iter()
+            .filter(|(_, (t, _))| *t == tier)
+            .filter(|(id, _)| {
+                core.state
+                    .items
+                    .get(*id)
+                    .is_none_or(|it| !core.state.worked_on(&it.root, &key))
+            })
+            .map(|(id, _)| (*id).clone())
+            .collect();
+        ids.sort();
+        ids
+    }
+
+    /// Remembers that the agent passed over its own reviews here and found nothing else.
+    async fn mark_emptied(&self, agent: &AgentName, tier: u8) {
+        let mut core = self.0.core.lock().await;
+        let mark = Emptied {
+            at: core.state.at,
+            others: Self::lane_others(&core, agent, tier),
+            until: Instant::now() + self.0.settings.visibility,
+        };
+        core.emptied.insert((agent.as_str().to_owned(), tier), mark);
+    }
+
+    /// Whether the lane is as the agent left it empty-handed.
+    async fn lane_is_emptied(&self, agent: &AgentName, tier: u8) -> bool {
+        let core = self.0.core.lock().await;
+        core.emptied
+            .get(&(agent.as_str().to_owned(), tier))
+            .is_some_and(|m| {
+                Instant::now() < m.until
+                    && m.at == core.state.at
+                    && m.others == Self::lane_others(&core, agent, tier)
+            })
     }
 
     /// Whether the ready record is a review of a tree this agent worked on.
