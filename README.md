@@ -230,11 +230,15 @@ You need Node 22 or later, Python 3, a Chrome or Chromium, and Rust 1.97 or late
 # Syntax of the page and scripts, and no em dashes in the docs
 node scripts/lint.mjs
 
-# Rewrite the two fixtures; `git diff prototype` should stay empty
+# Rewrite the fixtures; `git diff prototype` should stay empty
 python3 prototype/make-fixture.py
+python3 prototype/make-intake-fixture.py
 
 # Play both fixtures in headless Chrome
 node scripts/check-frame.mjs
+
+# Fold the intake fixtures into columns, draw a dependency chain, check the burst stays capped
+node scripts/check-intake.mjs
 
 # Check the motion rules: seeking equals playback, bursts merge, quiet stretches are skipped, a frame is cheap
 node scripts/check-motion.mjs
@@ -246,6 +250,7 @@ node scripts/check-steps.mjs
 cargo test --workspace
 
 # Serve the repository, then open http://localhost:8000/prototype/style-frame.html
+# or http://localhost:8000/prototype/intake-frame.html (?fixture=fixture-work-burst.json, ?select=gh-801, ?theme=light)
 python3 -m http.server 8000
 ```
 
