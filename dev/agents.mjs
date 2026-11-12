@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 
 // What a session prints, on a line of its own, when work_next says nothing is ready.
@@ -32,6 +33,7 @@ const USAGE = `usage: node dev/agents.mjs --run <run> (--tokens <file> | --agent
                         with KBL_MCP_CONFIG naming that file
   --host-arg <arg>      an argument before the prompt; repeatable. Without --host, the Claude Code defaults are used
   --restart-delay <s>   wait before restarting a session that exited early (default: 5)
+  --max-restarts <n>    give up on a session after n early exits in a row (default: 10)
   --idle-delay <s>      wait before asking again after a session found nothing (default: 15)
 
 The tokens file is JSON: {"w1": {"felix": "...", "tracker": "..."}, ...}. Prefer it to --agent,
@@ -52,6 +54,7 @@ function readOptions(argv) {
       "host-arg": { type: "string", multiple: true },
       "restart-delay": { type: "string", default: "5" },
       "idle-delay": { type: "string", default: "15" },
+      "max-restarts": { type: "string", default: "10" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -59,13 +62,19 @@ function readOptions(argv) {
   if (!values.run) throw new Error(`--run is required\n${USAGE}`);
   const agents = values.tokens ? JSON.parse(readFileSync(values.tokens, "utf8")) : {};
   for (const spec of values.agent ?? []) {
-    const [name, rest = ""] = spec.split("=");
+    const at = spec.indexOf("=");
+    const name = at < 0 ? spec : spec.slice(0, at);
+    const rest = at < 0 ? "" : spec.slice(at + 1);
     const [felix, tracker] = rest.split(",");
     if (!name || !felix || !tracker) throw new Error(`--agent wants <name>=<felix token>,<tracker token>, got "${name}"`);
     agents[name] = { felix, tracker };
   }
   let names = Object.keys(agents);
-  if (values.sessions) names = names.slice(0, Number(values.sessions));
+  if (values.sessions) {
+    const n = Number(values.sessions);
+    if (!Number.isInteger(n) || n < 1) throw new Error("--sessions wants a whole number of at least 1");
+    names = names.slice(0, n);
+  }
   if (names.length === 0) throw new Error(`no agents: give --tokens or --agent\n${USAGE}`);
   for (const name of names) {
     if (!agents[name].felix || !agents[name].tracker) throw new Error(`agent ${name} needs a felix and a tracker token`);
@@ -87,17 +96,27 @@ function readOptions(argv) {
     hostArgs: values["host-arg"] ?? [],
     restartMs: Number(values["restart-delay"]) * 1000,
     idleMs: Number(values["idle-delay"]) * 1000,
+    maxRestarts: Number(values["max-restarts"]),
   };
 }
 
 // The server name the host sees; Claude Code names its tools mcp__kbl__<tool>.
 const SERVER = "kbl";
 
+// The settings kbl-mcp may be given from the launcher's environment. Tokens are never copied.
+const PASSED_ENV = [
+  "KBL_TENANT",
+  "KBL_NAMESPACE",
+  "KBL_FELIX_BROKER",
+  "KBL_FELIX_BROKER_NAME",
+  "KBL_FELIX_CA_FILE",
+  "KBL_CLAIM_VISIBILITY_MS",
+  "KBL_EXTEND_EVERY_MS",
+];
+
 function mcpConfig(options, agent) {
   const env = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith("KBL_") && !/TOKEN|AGENT$/.test(key)) env[key] = value;
-  }
+  for (const key of PASSED_ENV) if (process.env[key] !== undefined) env[key] = process.env[key];
   Object.assign(env, { KBL_RUN: options.run, KBL_AGENT: agent.name, KBL_FELIX_TOKEN: agent.felix, KBL_TRACKER_TOKEN: agent.tracker });
   if (options.caFile) env.KBL_FELIX_CA_FILE = options.caFile;
   if (options.trackerUrl) env.KBL_TRACKER_URL = options.trackerUrl;
@@ -112,10 +131,17 @@ function hostCommand(options, config) {
   return ["claude", ["-p", LOOP_PROMPT, ...defaults]];
 }
 
+function hostEnv() {
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (/^KBL_.*(TOKEN|AGENT)$/.test(key)) delete env[key];
+  return env;
+}
+
 export async function runAgents(argv, log = console.log) {
   const options = readOptions(argv);
   const root = mkdtempSync(join(tmpdir(), "kbl-agents-"));
   let stopping = false;
+  let failed = false;
   const hosts = new Set();
   const wake = new Set();
   const sleep = (ms) =>
@@ -141,18 +167,17 @@ export async function runAgents(argv, log = console.log) {
       let empty = false;
       const child = spawn(command, args, {
         cwd: dir,
-        env: { ...process.env, KBL_MCP_CONFIG: config },
+        env: { ...hostEnv(), KBL_MCP_CONFIG: config },
         stdio: ["ignore", "pipe", "pipe"],
       });
       hosts.add(child);
-      const forward = (out) => (chunk) => {
-        for (const line of String(chunk).split("\n")) {
-          if (line.includes(EMPTY_MARKER)) empty = true;
+      const forward = (stream, out) =>
+        createInterface({ input: stream }).on("line", (line) => {
+          if (line.trim() === EMPTY_MARKER) empty = true;
           if (line) out.write(`[${agent.name}] ${line}\n`);
-        }
-      };
-      child.stdout.on("data", forward(process.stdout));
-      child.stderr.on("data", forward(process.stderr));
+        });
+      forward(child.stdout, process.stdout);
+      forward(child.stderr, process.stderr);
       child.on("error", (e) => {
         log(`${agent.name}: could not start ${command}: ${e.message}`);
         hosts.delete(child);
@@ -170,17 +195,24 @@ export async function runAgents(argv, log = console.log) {
     mkdirSync(dir, { mode: 0o700, recursive: true });
     const config = join(dir, ".mcp.json");
     writeFileSync(config, JSON.stringify(mcpConfig(options, agent), null, 2), { mode: 0o600 });
+    let early = 0;
     while (!stopping) {
       state.set(agent.name, "running");
       log(`starting ${agent.name}`);
       const { code, empty } = await runHost(agent, dir, config);
       if (stopping) break;
       if (empty) {
+        early = 0;
         state.set(agent.name, "idle");
         log(`${agent.name} found nothing ready`);
         await sleep(options.idleMs);
         if (stopping || !active(agent.name)) break;
         continue;
+      }
+      if (++early > options.maxRestarts) {
+        log(`giving up on ${agent.name} after ${options.maxRestarts} early exits in a row`);
+        failed = true;
+        break;
       }
       state.set(agent.name, "restarting");
       log(`restarting ${agent.name} (exited ${code} without saying the queue was empty)`);
@@ -208,7 +240,7 @@ export async function runAgents(argv, log = console.log) {
     rmSync(root, { recursive: true, force: true });
   }
   log(stopping ? "stopped" : "the queue is empty; every session is done");
-  return stopping ? 130 : 0;
+  return stopping ? 130 : failed ? 1 : 0;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

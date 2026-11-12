@@ -72,3 +72,18 @@ test("Ctrl-C stops every session and the launcher", async () => {
     assert.throws(() => process.kill(Number(pid), 0), { code: "ESRCH" }, `host ${pid} is gone`);
   }
 });
+
+test("a marker inside other words does not count, and a token may hold =", () => {
+  const { dir } = setup({});
+  const script = `echo "I will print KBL_QUEUE_EMPTY later"; cp "$KBL_MCP_CONFIG" ${dir}/cfg; exit 1`;
+  const run = spawnSync(
+    "node",
+    [LAUNCHER, "--run", "r1", "--agent", "a=f==,t=", "--mcp", "/bin/kbl-mcp", "--host", "sh", "--host-arg=-c", "--host-arg", script,
+      "--restart-delay", "0", "--max-restarts", "2"],
+    { encoding: "utf8" },
+  );
+  assert.equal(run.status, 1, run.stdout);
+  assert.match(run.stdout, /giving up on a after 2 early exits/);
+  const env = JSON.parse(readFileSync(join(dir, "cfg"), "utf8")).mcpServers.kbl.env;
+  assert.deepEqual([env.KBL_FELIX_TOKEN, env.KBL_TRACKER_TOKEN], ["f==", "t="]);
+});

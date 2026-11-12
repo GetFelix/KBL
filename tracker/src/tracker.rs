@@ -37,6 +37,9 @@ mod ingest;
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
 const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
 
+/// The reply to `work_next` while the agent's own stale claim is being released.
+const LOOP_RETRY: &str = "Call work_next again in a few seconds. If it keeps saying this, stop.";
+
 /// The reply to `work_next` when there is nothing to start.
 const LOOP_WHEN_EMPTY: &str = "Nothing is ready for you. End your session; do not poll in a loop.";
 
@@ -354,6 +357,7 @@ impl<B: Broker> Tracker<B> {
                     return Ok(json!({
                         "claimed": false,
                         "note": format!("you have no current claim on {item}; it is being released"),
+                        "loop": LOOP_RETRY,
                     }));
                 }
                 self.sync_ready().await;

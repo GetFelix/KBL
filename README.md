@@ -277,6 +277,7 @@ which puts tokens in the process list. Minting them with one command is not buil
 | `--sessions N` | Starts the first N agents in the file |
 | `--host CMD` | Runs `CMD [--host-arg ...] <prompt>` instead of `claude -p <prompt> --mcp-config ...`. The `.mcp.json` path is in `KBL_MCP_CONFIG` and the directory is the working directory. Write an argument that starts with a dash as `--host-arg=-x` |
 | `--restart-delay S` | Waits before starting a session that exited without saying the queue was empty (5) |
+| `--max-restarts N` | Gives up on a session after N early exits in a row (10), so a missing host or a bad token does not loop forever; the launcher then exits 1 |
 | `--idle-delay S` | Waits before a session that found nothing asks again while another session is still going (15) |
 
 A session that exits without printing `KBL_QUEUE_EMPTY` (a crash, a killed process, a host that ran out of context) is

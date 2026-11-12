@@ -25,7 +25,7 @@ import {
 
 const RUN = newRunId("agents");
 const NAMES = ["w1", "w2", "w3"];
-const ITEMS = Array.from({ length: 15 }, (_, n) => `loop-${n + 1}`);
+const ITEMS = Array.from({ length: 30 }, (_, n) => `loop-${n + 1}`);
 const CRASH = "loop-4";
 const CLAIM_TIMEOUT_MS = 8000;
 // The crashed session is started again only after the others had time to take its item.
@@ -43,10 +43,13 @@ writeFileSync(
   { mode: 0o600 },
 );
 
-const tracker = await startTracker({
-  agents: Object.fromEntries(NAMES.map((n) => [`tok-${n}`, n])),
-  people: { "tok-gab": "gab" },
-});
+const tracker = await startTracker(
+  {
+    agents: Object.fromEntries(NAMES.map((n) => [`tok-${n}`, n])),
+    people: { "tok-gab": "gab" },
+  },
+  { KBL_CLAIM_VISIBILITY_MS: String(CLAIM_TIMEOUT_MS) },
+);
 let launcher;
 try {
   for (const id of ITEMS) {
