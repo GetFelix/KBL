@@ -415,6 +415,29 @@ async fn findings_become_children_and_proposals_and_a_verdict_ends_the_final_rev
 }
 
 #[tokio::test]
+async fn deferred_findings_count_toward_the_proposals_waiting_for_a_person() {
+    let (_fake, t) = opened().await;
+    let got = t
+        .next_for(&agent("w2"), Duration::ZERO, &fast())
+        .await
+        .unwrap();
+    let first = item(got["item"]["id"].as_str().unwrap());
+    for _ in 0..8 {
+        t.finding(&agent("w2"), &first, finding(FindingVerdict::Defer))
+            .await
+            .unwrap();
+    }
+    let r = t
+        .finding(&agent("w2"), &first, finding(FindingVerdict::Defer))
+        .await;
+    assert!(matches!(r, Err(Error::Refused { ref why }) if why == "limit_reached"));
+    // A finding that is not a proposal still goes through.
+    t.finding(&agent("w2"), &first, finding(FindingVerdict::Fix))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn findings_and_verdicts_are_bounded_before_they_reach_the_log() {
     let (fake, t) = opened().await;
     let got = t
