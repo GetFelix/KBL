@@ -112,7 +112,9 @@ that does not have the change fold any log to a different state?
   optional, and a record without it folds exactly as before.
 
 The fold of an old log must never change. A build folds a format 1 record the
-way the first build did, forever.
+way the first build did, forever. The one exception is an item's reported
+cost total, which saturates at the largest number where the first build
+overflowed.
 
 A new kind cannot be missed: `WorkRecord::format` names every kind, so the
 build fails until the new one has a format, and `core/tests/format.rs` holds

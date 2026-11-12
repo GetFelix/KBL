@@ -32,7 +32,7 @@ do.</sub>
 [felix-blocks](https://github.com/GetFelix/felix-blocks) is keyed state with many writers. Kibble puts them to
 work on a backlog that never ends:
 
-- **Each piece of work is claimed once, even when agents die.** A consumer group hands an item to one agent and gives it to another when the first stops answering. An item that keeps failing is dead-lettered instead of retried forever.
+- **Each piece of work is claimed once, even when agents die.** A consumer group hands an item to one agent and gives it to another when the first stops answering. An item that keeps failing is dead-lettered instead of retried forever. The tracker publishes a Ready item's record again if Felix dead-lettered it, so the item is not lost.
 - **People and agents don't overwrite each other.** Items are keys written with `cache_put_if` at the version read, so a stale write is refused.
 - **One log is the record.** `work.events` holds every import, claim, decision and refusal in order, with the broker's record of who wrote it. The queue, an item's history and the replay are folds of it.
 - **Budgets hold under a race.** A root's budget only decreases, and a create over it is refused.

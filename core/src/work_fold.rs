@@ -312,6 +312,10 @@ pub struct Item {
     pub first_claim_ms: Option<u64>,
     pub cost_micros: u64,
     pub context: BTreeMap<Key, u64>,
+    /// The agent that last wrote each entry an agent wrote. The fold accepts any replacement
+    /// (old logs hold some); the tracker reads this to refuse one before it is logged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub context_agents: BTreeMap<Key, Key>,
     pub paths: Vec<Path>,
     /// Human inputs that name no attempt, and so steer every path.
     pub human_inputs: Vec<u64>,
@@ -832,6 +836,7 @@ impl State {
             first_claim_ms: None,
             cost_micros: 0,
             context: BTreeMap::new(),
+            context_agents: BTreeMap::new(),
             paths: Vec::new(),
             human_inputs: Vec::new(),
             pending_fork: None,
@@ -1038,7 +1043,13 @@ impl State {
                     }
                     p.context_writes += 1;
                 }
-                self.item_mut(item)?.context.insert(entry.clone(), offset);
+                let it = self.item_mut(item)?;
+                it.context.insert(entry.clone(), offset);
+                if rec.actor == Actor::Agent {
+                    it.context_agents.insert(entry.clone(), rec.by.clone());
+                } else {
+                    it.context_agents.remove(entry);
+                }
             }
             WorkRecord::Claimed {
                 item,
@@ -1194,7 +1205,7 @@ impl State {
                 let it = self.item_mut(item)?;
                 it.paths[idx].done = true;
                 it.hold = None;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 // A fix waits for its merge; other work is finished when its attempt is.
                 // A fix a review asked for lands in the request it came from.
                 if it.work != WorkKind::Fix || it.finding.is_some() {
@@ -1215,7 +1226,7 @@ impl State {
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
                 it.hold = None;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 self.draw_cost(&root, *cost_micros);
             }
             WorkRecord::GaveUp {
@@ -1231,7 +1242,7 @@ impl State {
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
                 it.hold = None;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 self.draw_cost(&root, *cost_micros);
             }
             WorkRecord::Question {
@@ -1252,7 +1263,7 @@ impl State {
                 let root = self.item(item)?.root.clone();
                 self.draw_cost(&root, *cost_micros);
                 let it = self.item_mut(item)?;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 it.open_question = Some(offset);
                 it.ask = Some(Ask {
                     options: options.clone(),
@@ -2131,7 +2142,7 @@ impl State {
         self.draw_cost(&root, cost_micros);
         let it = self.item_mut(item)?;
         it.hold = None;
-        it.cost_micros += cost_micros;
+        it.cost_micros = it.cost_micros.saturating_add(cost_micros);
         if let Some(p) = it.paths.iter_mut().find(|p| p.attempt == attempt) {
             // Waiting on another repo is not a failed try.
             p.tries = p.tries.saturating_sub(1);

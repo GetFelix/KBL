@@ -43,6 +43,13 @@ const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
 /// Records between the snapshots the startup fold keeps.
 const SNAPSHOT_EVERY: usize = 1000;
 const DEFAULT_TIER: u8 = 2;
+/// An item to publish: its tier, the record it had, and whether that record lapsed.
+type Want = (ItemId, u8, Option<(u8, u64)>, bool);
+/// Records one poll of a lane looks at before it gives up for this call.
+const MAX_LOOKED_AT: u32 = 64;
+/// Visibility periods after which a ready record is published again. Felix dead-letters
+/// at five handouts, and a handout cannot come sooner than one period after the last.
+const RECORD_LAPSE_PERIODS: u32 = 6;
 /// How long a tracker without the writer lease keeps running before it exits.
 const FENCE_GRACE: Duration = Duration::from_secs(10);
 /// How long an agent's broker connection stays open with no call from it.
@@ -159,6 +166,10 @@ struct Core {
     state: State,
     /// The ready record each item is waiting on: tier and stamp.
     live: HashMap<ItemId, (u8, u64)>,
+    /// Since when each Ready item's `live` record has stood, and how often it was
+    /// published again for lapsing. The entry starts when the item becomes Ready
+    /// and is dropped when it is claimed or settled.
+    published: HashMap<ItemId, (Instant, u32)>,
     owner: HashMap<ItemId, Owner>,
     /// Items whose claim the fold refused, with the log position of the refusal.
     /// They are published again only after the log moves, or every poll would
@@ -698,10 +709,24 @@ impl<B: Broker> Tracker<B> {
                 continue;
             }
             let mut passed = false;
+            // Taken before the polls: an item published after the last empty poll
+            // must not look like part of what the agent saw.
+            let before = if tier >= TIERS {
+                Some(self.lane_snapshot(agent, tier).await)
+            } else {
+                None
+            };
             // A review of the agent's own work is for another reviewer. It is acked and
             // published again, not nacked: Felix counts every handout as an attempt and
             // dead-letters a record at its bound, so a nacking author would eat the review.
+            let mut looked = 0;
             loop {
+                // Stale and passed-over records are acked one by one; a lane full of
+                // them must not hold the caller.
+                looked += 1;
+                if looked > MAX_LOOKED_AT {
+                    break;
+                }
                 let polled = self
                     .io(
                         Some(agent.as_str()),
@@ -712,8 +737,8 @@ impl<B: Broker> Tracker<B> {
                     .await
                     .map_err(Error::Felix)?;
                 let Some(record) = polled else {
-                    if passed {
-                        self.mark_emptied(agent, tier).await;
+                    if let (true, Some((at, others))) = (passed, before) {
+                        self.mark_emptied(agent, tier, at, others).await;
                     }
                     break;
                 };
@@ -782,12 +807,24 @@ impl<B: Broker> Tracker<B> {
         ids
     }
 
+    /// The log position and the other agents' published items in the lane.
+    async fn lane_snapshot(&self, agent: &AgentName, tier: u8) -> (Option<u64>, Vec<ItemId>) {
+        let core = self.0.core.lock().await;
+        (core.state.at, Self::lane_others(&core, agent, tier))
+    }
+
     /// Remembers that the agent passed over its own reviews here and found nothing else.
-    async fn mark_emptied(&self, agent: &AgentName, tier: u8) {
+    async fn mark_emptied(
+        &self,
+        agent: &AgentName,
+        tier: u8,
+        at: Option<u64>,
+        others: Vec<ItemId>,
+    ) {
         let mut core = self.0.core.lock().await;
         let mark = Emptied {
-            at: core.state.at,
-            others: Self::lane_others(&core, agent, tier),
+            at,
+            others,
             until: Instant::now() + self.0.settings.visibility,
         };
         core.emptied.insert((agent.as_str().to_owned(), tier), mark);
@@ -916,6 +953,7 @@ impl<B: Broker> Tracker<B> {
             .await
         {
             Ok(_) => {
+                core.published.remove(&item);
                 let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
                 // Whoever held the item before no longer owns its delivery, so
                 // nothing it does later can settle this one.
@@ -993,6 +1031,7 @@ impl<B: Broker> Tracker<B> {
         {
             let mut core = self.0.core.lock().await;
             let attempt = holding(&core, delivery.as_ref(), agent, item)?;
+            core.published.remove(item);
             self.append(&mut core, Actor::Agent, agent_key(agent), record(attempt))
                 .await?;
             let ready = core.state.stage(item) == Some(Stage::Ready);
@@ -1104,6 +1143,7 @@ impl<B: Broker> Tracker<B> {
                         let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
                         let mut core = self.0.core.lock().await;
                         core.live.insert(item.clone(), (ready.tier, ready.stamp));
+                        core.published.remove(&item);
                         core.owner.insert(
                             item.clone(),
                             Owner {
@@ -1129,21 +1169,56 @@ impl<B: Broker> Tracker<B> {
 
     // ---- ready records ----
 
-    /// Publishes a ready record for every Ready item that has none for its tier.
+    /// Whether an item's ready record has stood so long that Felix has likely
+    /// dead-lettered it. The tracker cannot see a dead letter, and a Ready item
+    /// whose record is gone would never be claimed.
+    fn record_lapsed(&self, core: &Core, id: &ItemId) -> bool {
+        core.published.get(id).is_some_and(|(at, n)| {
+            // Backs off with each republish, so an idle lane does not fill up.
+            let periods = RECORD_LAPSE_PERIODS << (*n).min(4);
+            at.elapsed() >= self.0.settings.visibility * periods
+        })
+    }
+
+    /// Publishes a ready record for every Ready item that has none for its tier,
+    /// or whose record has lapsed. The old record, if it survives, is stale by
+    /// stamp and is acked when polled.
     async fn sync_ready(&self) {
         let _one_at_a_time = self.0.sync.lock().await;
-        let want: Vec<(ItemId, u8)> = {
-            let core = self.0.core.lock().await;
+        let want: Vec<Want> = {
+            let mut core = self.0.core.lock().await;
+            // The clock of a record runs only while its item is Ready: a long hold
+            // does not make the record look old once the item is released.
+            let ready: Vec<ItemId> = core
+                .state
+                .items
+                .keys()
+                .filter(|id| core.state.stage(id) == Some(Stage::Ready))
+                .cloned()
+                .collect();
+            core.published.retain(|id, _| ready.iter().any(|r| r == id));
+            for id in &ready {
+                core.published
+                    .entry(id.clone())
+                    .or_insert((Instant::now(), 0));
+            }
             core.state
                 .items
                 .iter()
                 .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
                 .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
                 .filter_map(|(id, it)| Some((id.clone(), self.0.settings.lane(it)?)))
-                .filter(|(id, tier)| core.live.get(id).is_none_or(|(t, _)| t != tier))
+                .filter_map(|(id, tier)| {
+                    let missing = core.live.get(&id).is_none_or(|(t, _)| *t != tier);
+                    let lapsed = !missing && self.record_lapsed(&core, &id);
+                    (missing || lapsed).then(|| {
+                        let prior = core.live.get(&id).copied();
+                        (id, tier, prior, lapsed)
+                    })
+                })
                 .collect()
         };
-        for (item, tier) in want {
+        for (item, tier, prior, lapsed) in want {
             let stamp = self.0.stamp.fetch_add(1, Ordering::Relaxed);
             let record = ReadyRecord {
                 item: item.clone(),
@@ -1158,7 +1233,20 @@ impl<B: Broker> Tracker<B> {
                 .await
             {
                 Ok(_) => {
-                    self.0.core.lock().await.live.insert(item, (tier, stamp));
+                    let mut core = self.0.core.lock().await;
+                    // A claim or another sync may have landed while the lock was off.
+                    // The new record is then left unrecorded and acked as stale when
+                    // it is delivered; recording it would name a Held item's record.
+                    if core.state.stage(&item) == Some(Stage::Ready)
+                        && core.live.get(&item).copied() == prior
+                    {
+                        let n = core.published.get(&item).map_or(0, |(_, n)| *n);
+                        core.published.insert(
+                            item.clone(),
+                            (Instant::now(), if lapsed { n + 1 } else { 0 }),
+                        );
+                        core.live.insert(item, (tier, stamp));
+                    }
                 }
                 // The next sync tries again.
                 Err(e) => eprintln!("agents-tracker: could not publish {item} as ready: {e:#}"),
@@ -1184,6 +1272,8 @@ impl<B: Broker> Tracker<B> {
         if record == WorkRecord::Unknown {
             return Err(Error::Invalid("unknown kind of record".into()));
         }
+        // Every route (agent, person, ingest) ends here, so one check bounds them all.
+        tools::check_sizes(&record)?;
         let logged = WorkLogged::new(now_ms(), by, actor, record);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied. It can skip (generation starts), which the check below catches.

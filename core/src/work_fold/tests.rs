@@ -2809,6 +2809,45 @@ fn chained_answers_stop_at_the_depth_cap() {
 
 mod review;
 
+/// The tracker refuses such a replacement before it is logged, but a log that holds
+/// one must keep folding as it always has.
+#[test]
+fn a_logged_replacement_of_another_writers_context_entry_still_folds() {
+    let mut l = held_root();
+    let ctx = |e: &str, t: &str| WorkRecord::Context {
+        item: id("r1"),
+        entry: key(e),
+        text: text(t),
+    };
+    l.tracker(ctx("issue", "upstream text"));
+    l.person(ctx("note", "from a person"));
+    l.agent("w1", ctx("issue", "replaced"));
+    let replaced = l.0.len() as u64 - 1;
+    l.agent("w1", ctx("note", "replaced"));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.items[&id("r1")].context[&key("issue")], replaced);
+    assert_eq!(s.items[&id("r1")].context[&key("note")], replaced + 1);
+}
+
+#[test]
+fn reported_costs_saturate_instead_of_overflowing() {
+    let mut l = held_root();
+    let ask = |cost_micros: u64| WorkRecord::Question {
+        item: id("r1"),
+        attempt: 1,
+        text: text("which?"),
+        options: vec![],
+        default: None,
+        cost_micros,
+    };
+    l.agent("w1", ask(u64::MAX));
+    l.agent("w1", ask(1));
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("r1")].cost_micros, u64::MAX);
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, 0);
+}
+
 fn stamped(v: u32, actor: Actor, record: WorkRecord) -> WorkLogged {
     let mut rec = WorkLogged::new(0, key("gab"), actor, record);
     rec.v = v;

@@ -186,7 +186,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree. The edge is refused with `cycle` if `to` already waits on `item`, directly or through other items |
 | `POST /v1/work/rules/read` `{item}` | Reads the rules in effect for the held item |
 | `POST /v1/work/context` `{item}` | Reads an item's context entries and the notes people left for the attempt |
-| `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds |
+| `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds. An agent replaces only entries it wrote itself: upstream text, the fold's entries and a person's notes stay as written |
 | `POST /v1/work/progress` `{item, note, branch, pr}` | Records progress on the held item |
 | `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` |
 | `POST /v1/work/step` `{item, command, exit_code, output}` | A command the agent ran |
@@ -225,6 +225,10 @@ attempt, or another agent took it, the agent's next `extend`, `complete` or
 still stands behind that exact delivery for that agent, because a group ack
 names an offset, not a delivery: a stale holder's late call cannot ack the next
 holder's.
+
+Felix dead-letters a ready record after five handouts, and the tracker is not told. So a Ready item
+whose record has stood for six visibility periods gets a new record with a new stamp; the old one,
+if it is still in the lane, is acked when it is delivered.
 
 A sweep (every few seconds) writes `released` with the reason `lapsed` for a
 hold whose delivery the tracker no longer has, or that has not been extended
