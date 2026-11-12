@@ -331,6 +331,17 @@ impl<B: Broker> Tracker<B> {
         check_content("text", &text)?;
         self.begin().await?;
         let mut core = self.0.core.lock().await;
+        // Refused here, not in the fold: a log that holds such a replacement must
+        // keep folding as it always has. Upstream text, the fold's own entries and
+        // other people's notes stay as written.
+        if let Some(it) = core.state.items.get(item)
+            && it.context.contains_key(&entry)
+            && it.context_agents.get(&entry) != Some(&agent_key(agent))
+        {
+            return Err(Error::Refused {
+                why: "not_your_entry".into(),
+            });
+        }
         let record = WorkRecord::Context {
             item: item.clone(),
             entry: entry.clone(),
@@ -944,7 +955,9 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             }
             Ok(())
         }
-        WorkRecord::RulesSet { text, .. } => {
+        WorkRecord::RulesSet { text, target, .. } => {
+            field("target source", &target.source)?;
+            field("target repo", &target.repo)?;
             if let Some(text) = text
                 && text.len() > agents_core::work::MAX_RULES_TEXT
             {
@@ -956,12 +969,40 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             }
             Ok(())
         }
-        WorkRecord::Progress { note, .. } => check_content("note", note),
+        WorkRecord::Progress {
+            note, branch, pr, ..
+        } => {
+            check_content("note", note)?;
+            if let Some(b) = branch {
+                field("branch", b)?;
+            }
+            if let Some(p) = pr {
+                field("pr", p)?;
+            }
+            Ok(())
+        }
         WorkRecord::Step { output, .. } => check_content("output", output),
         WorkRecord::Edit { hunk, .. } => check_content("hunk", hunk),
-        WorkRecord::Proposed { title, .. } | WorkRecord::Imported { title, .. } => {
+        WorkRecord::Proposed { title, .. } => field("title", title),
+        WorkRecord::Imported {
+            source,
+            upstream_id,
+            title,
+            ..
+        } => {
+            field("source", source)?;
+            field("upstream_id", upstream_id)?;
             field("title", title)
         }
+        WorkRecord::Updated {
+            title: Some(title), ..
+        } => field("title", title),
+        WorkRecord::Released {
+            reason: Some(reason),
+            ..
+        }
+        | WorkRecord::GaveUp { reason, .. } => field("reason", reason),
+        WorkRecord::Triaged { why, .. } => field("why", why),
         // Only a holding agent writes these, through the tools, but a person's
         // record is held to the same bounds.
         WorkRecord::Finding {

@@ -1,9 +1,9 @@
-# Kibble
+# KBL
 
 **Big bugs, bite-sized fixes.**
 
-Kibble is agent work orchestration. Bugs come in from GitHub, Azure DevOps
-and Jira, agents break them into pieces an agent can finish through Kibble, coding agents
+KBL (Kanban By Log, pronounced Kibble) is agent work orchestration. Bugs come in from GitHub, Azure DevOps
+and Jira, agents break them into pieces an agent can finish through KBL, coding agents
 take them on, people review what comes back, and every fix arrives with the
 reasons it was made.
 
@@ -14,11 +14,11 @@ says "group state is lost sometimes". Hand that to an agent and you get a
 guess, a sprawling diff, or a confident fix for the wrong thing. Meanwhile the
 backlog grows by a few a day and nobody can say which bug is waiting on what.
 
-Kibble turns the backlog into something agents can eat.
+KBL turns the backlog into something agents can eat.
 
-- **It gathers the work.** Kibble watches your trackers and brings every new
+- **It gathers the work.** KBL watches your trackers and brings every new
   bug into one queue, once, however many places it was filed.
-- **Agents break it down.** Triage is work an agent picks up through Kibble: it proposes a
+- **Agents break it down.** Triage is work an agent picks up through KBL: it proposes a
   priority, spots duplicates, links what each bug depends on and splits big
   ones into pieces an agent can finish and a person can review in one
   sitting. You accept the proposal with one key or change it.
@@ -33,15 +33,15 @@ Kibble turns the backlog into something agents can eat.
 - **It leaves pawprints.** Every decision an agent made is recorded with the
   evidence behind it. Open any line of the diff and follow the trail back:
   why this file, why this approach, which test proved it. Where the agent's
-  account and what it actually did disagree, Kibble shows you.
+  account and what it actually did disagree, KBL shows you.
 
 ## What it is not
 
-Not another agent. Kibble runs no models itself: it works with the coding
+Not another agent. KBL runs no models itself: it works with the coding
 agents you already use and gives them a queue, a claim and a record. Every
 judgement it shows, from triage to a fix, is work an agent or a person did.
 Not a tracker that waits for people either: work moves without anyone dragging cards. And not a scoreboard.
-Kibble measures the flow of work, never the people doing it.
+KBL measures the flow of work, never the people doing it.
 
 ## Words we use
 
@@ -64,18 +64,18 @@ the story to use the tool.
 - Feed your agents real work.
 - Bugs in. Reviewed fixes out.
 - Every fix with its why.
-- Others orchestrate agents. Kibble orchestrates the work.
+- Others orchestrate agents. KBL orchestrates the work.
 
 ## The family
 
-Kibble runs on [Felix](https://github.com/GetFelix/felix), the log that keeps
+KBL runs on [Felix](https://github.com/GetFelix/felix), the log that keeps
 every claim exactly once and every pawprint in order. Felix remembers
-everything; Kibble makes sure the work gets eaten.
+everything; KBL makes sure the work gets eaten.
 
 ## Before launch
 
-"Kibble" alone searches as pet food, so the name travels with its descriptor
-("Kibble, agent work orchestration") and a variant domain. No software mark
+"Kibble" alone searches as pet food, so the name is written KBL and travels with its descriptor
+("KBL, agent work orchestration") and a variant domain. No software mark
 for KIBBLE turned up in a first search (nearest: KWIBBLE in classes 35 and 42,
 KRADLE pending for AI agent testing); a trademark review in classes 9 and 42
 comes before any public launch.

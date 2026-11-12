@@ -22,7 +22,7 @@ participant saying they are done.
 ## Who
 
 Five people who use Linear or Jira every working day and who review pull
-requests. None of them has seen Kibble. Aim for at least two from each tool,
+requests. None of them has seen KBL (Kanban By Log, pronounced Kibble). Aim for at least two from each tool,
 and at least one who works mostly from the keyboard and one who mostly uses the
 mouse.
 
@@ -30,7 +30,7 @@ Screening questions:
 
 1. Which tracker did you use yesterday? (Linear or Jira, else stop.)
 2. How many pull requests did you review last week? (One or more.)
-3. Have you seen Kibble or its dashboard before? (No.)
+3. Have you seen KBL or its dashboard before? (No.)
 
 ## Setup
 
@@ -73,7 +73,7 @@ finish so the later tasks still make sense.
 | 1 | "An agent is stuck on a question about a duplicate delivery. It cannot tell which repo the fix belongs in. You know it is the gateway. Tell it." | An `answered` record on AB#4377 with `chosen=felix-gateway` | 2 min |
 | 2 | "An agent has suggested priorities for new bugs. Accept the suggestion for the put_if bug." | A `triaged` record on #808 | 2 min |
 | 3 | "One of the new bugs looks like one you already have. Deal with it." | A `rejected` record on AB#4408 with `dup` | 2 min |
-| 4 | "A pull request is waiting for your review: the heartbeat interval one. Assume you read it and it is fine. Approve it. You then merge it on GitHub. Make Kibble show that." | An `approved` and then a `done` record on #789 | 3 min |
+| 4 | "A pull request is waiting for your review: the heartbeat interval one. Assume you read it and it is fine. Approve it. You then merge it on GitHub. Make KBL show that." | An `approved` and then a `done` record on #789 | 3 min |
 | 5 | "An agent gave up on a flaky cache test. Send it round again, and tell the next agent to pin the clock." | A `retried` record on #774 with a note | 2 min |
 | 6 | "You did not mean to do that last one. Take it back." | The `retried` record is gone and #774 is in the queue again | 1 min |
 | 7 | "Three of the new bugs can wait until this afternoon. Put all three off in one go." | Three `snoozed` records from one action | 2 min |

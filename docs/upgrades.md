@@ -1,6 +1,6 @@
-# Upgrading Kibble
+# Upgrading KBL
 
-How to move a running Kibble to a newer build without losing work, how to go
+How to move a running KBL (Kanban By Log, pronounced Kibble) to a newer build without losing work, how to go
 back, and the record rules that make both safe.
 
 ## Upgrade
@@ -112,7 +112,9 @@ that does not have the change fold any log to a different state?
   optional, and a record without it folds exactly as before.
 
 The fold of an old log must never change. A build folds a format 1 record the
-way the first build did, forever.
+way the first build did, forever. The one exception is an item's reported
+cost total, which saturates at the largest number where the first build
+overflowed.
 
 A new kind cannot be missed: `WorkRecord::format` names every kind, so the
 build fails until the new one has a format, and `core/tests/format.rs` holds
@@ -149,7 +151,7 @@ tracker does not have yet.
   survive each switch and each item is claimed and done once. Both builds
   write format 1 only, so this run does not show a reader stopping at a newer
   format; the unit tests of `core`, the tracker and the page do. "Previous" is
-  the commit a change is based on until Kibble has releases; then it is the
+  the commit a change is based on until KBL has releases; then it is the
   last release.
 
 ## Not covered yet

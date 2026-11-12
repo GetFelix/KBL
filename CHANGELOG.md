@@ -6,7 +6,20 @@
   agent that stalled past the visibility and then released nacked a record
   Felix had already handed to the next poller, so that agent was claimed, lost
   its delivery and was lapsed while it worked. A delivery polled before the
-  last holder's hand-back ended is no longer turned into a claim.
+  last holder's hand-back ended is no longer turned into a claim. The hand-back
+  ends even when the caller's request is dropped, and only the call that
+  started it ends it.
+- Tracker hardening. An agent can no longer replace a context entry that
+  ingest, the fold or a person wrote (`not_your_entry`), and a later holder
+  can no longer update an entry a previous agent wrote. The tracker refuses it
+  before it is logged; the fold is unchanged, so an old log that holds such a
+  replacement folds as it always did. A reported cost saturates an item's total instead of
+  overflowing it. The strings a record carries (reasons, imported fields,
+  titles, progress branch and pull request, triage notes, a rules target) are
+  held to 4 KiB on every route. A ready record that Felix dead-lettered is
+  published again after six visibility periods (with growing back-off), so its
+  item is claimed again. The empty-lane mark for reviewers is taken before the
+  polls, not after.
 
 - Records on `work.events` carry a format, and a running Kibble can be upgraded
   and rolled back without losing work ([docs/upgrades.md](docs/upgrades.md)).

@@ -1,6 +1,6 @@
-# Kibble design
+# KBL design
 
-Kibble is a work tracker for coding agents with [Felix](https://github.com/GetFelix/felix) as its only backend.
+KBL (Kanban By Log, pronounced Kibble) is a work tracker for coding agents with [Felix](https://github.com/GetFelix/felix) as its only backend.
 [work-tracker.md](work-tracker.md) describes the tracker and
 [decision-replay.md](decision-replay.md) how a fix's decisions are recorded and read back. This page holds what
 they share: the scope, the terms, the components, the data model, the Felix gaps and the build order.
@@ -8,12 +8,12 @@ they share: the scope, the terms, the components, the data model, the Felix gaps
 [felix-arena](https://github.com/GetFelix/felix-arena) uses a log as a live
 feed and a replay. [felix-metro](https://github.com/GetFelix/felix-metro)
 seeks back through a long history. [felix-blocks](https://github.com/GetFelix/felix-blocks)
-is keyed state that many writers change at once. Kibble puts those
+is keyed state that many writers change at once. KBL puts those
 together for work handed out exactly once to processes that die, state shared
 between writers that guess, and a record of the whole thing you can trust
 after something went wrong.
 
-**The tracker is the product.** Kibble stores, orders, hands out and displays
+**The tracker is the product.** KBL stores, orders, hands out and displays
 work, and makes no model calls. A run is one optional way an attempt is
 worked: a goal, a team and a budget, with its own log. The scripted planner
 and workers in `dev/` make the same tool calls a model would, and drive the
@@ -270,7 +270,7 @@ and merge. The demonstrations are numbered in
 | 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each, and people and agents never overwrite each other (demonstration 3) |
 | 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
 | 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
-| 5 | Shared state (closed, superseded by Kibble: the swarm demo was removed) | Nothing |
+| 5 | Shared state (closed, superseded by KBL: the swarm demo was removed) | Nothing |
 | 6 | The reference worker (`agents-run`): a model API, artifacts, spend and rate limits | Agent-created work stays inside its budget (demonstration 4) |
 | 7 | Decision replay, live: the fold, the dashboard on felix-gateway, scrub and follow | The log is a complete record that replays, and a fix's decisions read back with no hindsight (demonstrations 5 and 6) |
 | 8 | A hostile agent stays bounded: grants and an injected agent held to its budget | A prompt-injected agent cannot escape its budget or grants (demonstration 8) |

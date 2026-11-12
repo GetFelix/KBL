@@ -5,7 +5,7 @@ It applies the Felix pieces in
 tracker, agents pick up the triage, and coding agents ask for the next piece
 of work, fix it and hand it back.
 
-**The tracker is not agentic.** It is a Felix-backed work tracker. It stores,
+**The tracker is not agentic.** KBL (Kanban By Log, pronounced Kibble) is a Felix-backed work tracker. It stores,
 orders, hands out and displays work, and it makes no model calls and writes no
 text. Every kind of judgement it shows (triage, augmentation, splits, answers,
 fixes, redos) is a work item that an agent or a person completes. Agents from
@@ -78,7 +78,7 @@ flowchart LR
         A1[Agent + felix-mcp]
         A2[Agent + felix-mcp]
     end
-    subgraph Kibble
+    subgraph KBL
         T[Tracker]
     end
     subgraph Felix
@@ -186,7 +186,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree. The edge is refused with `cycle` if `to` already waits on `item`, directly or through other items |
 | `POST /v1/work/rules/read` `{item}` | Reads the rules in effect for the held item |
 | `POST /v1/work/context` `{item}` | Reads an item's context entries and the notes people left for the attempt |
-| `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds |
+| `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds. An agent replaces only entries it wrote itself: upstream text, the fold's entries and a person's notes stay as written |
 | `POST /v1/work/progress` `{item, note, branch, pr}` | Records progress on the held item |
 | `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` |
 | `POST /v1/work/step` `{item, command, exit_code, output}` | A command the agent ran |
@@ -232,6 +232,12 @@ then takes that poller's lease as well. So a delivery that was polled before the
 last holder's hand-back ended is not turned into a claim. The record is free
 again, or lapses, and the next poll claims it. Without this the new holder
 would be claimed, lose its delivery at once and be lapsed while it worked.
+The hand-back runs to its end even when the caller's request is dropped, and
+no other call ends it early.
+
+Felix dead-letters a ready record after five handouts, and the tracker is not told. So a Ready item
+whose record has stood for six visibility periods gets a new record with a new stamp; the old one,
+if it is still in the lane, is acked when it is delivered.
 
 A sweep (every few seconds) writes `released` with the reason `lapsed` for a
 hold whose delivery the tracker no longer has, or that has not been extended
@@ -544,7 +550,7 @@ for example the one crate a fix touches, without repeating the rest.
 
 ### Review as work
 
-A review is claimable work with a reviewer tier. Kibble never runs a model:
+A review is claimable work with a reviewer tier. KBL never runs a model:
 the tier is a name such as `fast` or `deep` that says which kind of reviewer
 should claim it, and the agents decide what each name means.
 
@@ -711,7 +717,7 @@ matches two rules belongs to the first one listed.
 
 ### When the upstream issue changes
 
-| Upstream | Kibble |
+| Upstream | KBL |
 |---|---|
 | Title, body or labels edited | An `updated` record. The item shows "changed upstream since triage". Triaging again is a person's action, so edits never create work |
 | A new comment | A `context` record credited to the upstream author. Agents see it on their next read |
@@ -721,11 +727,11 @@ matches two rules belongs to the first one listed.
 | Reopened | Back to Triage as the same root, with its history and its remaining budget |
 | Moved or transferred | The same item under its new upstream id, with a link record |
 
-Ingest skips upstream events written by Kibble's own credential, so its
+Ingest skips upstream events written by KBL's own credential, so its
 comments, pull request links and state changes do not come back as edits.
 
 **Issue text is untrusted.** Anyone who can file or edit an issue can write
-instructions for the agent that reads it. Kibble runs no model, so it cannot
+instructions for the agent that reads it. KBL runs no model, so it cannot
 be steered, but agents can. Intake rules decide whose issues get in; budgets,
 grants and review bound what a misled agent can do; and "changed upstream
 since triage" keeps an edit made after a person looked at the item from
@@ -861,7 +867,7 @@ GitHub and Jira. `?` shows the map in the page.
 
 On a Mac, `Ctrl` is `Cmd`.
 
-What only Kibble has is not on a letter. Each card shows its own choices as
+What only KBL has is not on a letter. Each card shows its own choices as
 numbers, so they need no memorising. `Ctrl+Enter` takes the card's main choice: the
 first, except on a question, where it sends the default (below). It works from
 the note box, not from search or other text fields:

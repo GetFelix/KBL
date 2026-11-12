@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Kibble dashboard</title>
+<title>KBL dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -751,7 +751,7 @@
 <body class="loading">
 <div id="app">
 <aside id="sidebar" aria-label="Navigation">
-  <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt=""><span>Kibble</span><button class="ic" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar"></button></div>
+  <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt=""><span>KBL</span><button class="ic" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar"></button></div>
   <button id="palbtn" aria-label="Search or run a command"><span>Search or run a command</span><kbd id="palkey">Ctrl K</kbd></button>
   <nav id="snav" aria-label="Views"><div class="skn"><i style="width:70%"></i></div><div class="skn"><i style="width:55%"></i></div><div class="skn"><i style="width:62%"></i></div><div class="sh">&nbsp;</div><div class="skn"><i style="width:78%"></i></div><div class="skn"><i style="width:66%"></i></div><div class="skn"><i style="width:48%"></i></div></nav>
   <div class="sfoot"><span class="me" id="me"></span><button class="ic" id="help" title="Keyboard shortcuts ( ? )" aria-label="Keyboard shortcuts"></button><button class="ic" id="theme" title="Switch theme" aria-label="Switch theme"></button></div>
@@ -759,7 +759,7 @@
 <div id="page">
 <header>
   <button class="ic" id="menu" aria-label="Open navigation"></button>
-  <h1 id="vtitle">Kibble</h1>
+  <h1 id="vtitle">KBL</h1>
   <div class="seg" id="layout" role="tablist" aria-label="Layout"><button role="tab" data-layout="list">List</button><button role="tab" data-layout="board">Board</button></div>
   <span class="grow"></span>
   <label id="qbox" class="workonly"><input id="q" type="search" placeholder="Search" aria-label="Search this view" autocomplete="off"><kbd>/</kbd></label>
@@ -1166,7 +1166,7 @@ function renderNow() {
   $('v-replay').style.display = view === 'replay' ? 'block' : 'none';
   document.body.classList.toggle('replaying', view === 'replay');
   $('nav').classList.toggle('on', view === 'board');
-  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}Kibble: ${{ queue: 'My queue', list: 'All work', board: 'Board', metrics: 'Metrics', replay: 'Story' }[view]}`;
+  document.title = `${queue.rows.length ? `(${queue.rows.length}) ` : ''}KBL: ${{ queue: 'My queue', list: 'All work', board: 'Board', metrics: 'Metrics', replay: 'Story' }[view]}`;
 
   renderSidebar();
   renderTop();
