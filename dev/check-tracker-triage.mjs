@@ -136,7 +136,7 @@ try {
   check(triaged.length === 4 && triaged.every((r) => r.by === "w1" && r.actor === "agent"), "four answers, each the agent's");
   const of = (id) => triaged.find((r) => r.item === id);
   check(of("tri-plain").tier === 1 && of("tri-plain").depends_on === undefined, "a plain answer carries a tier and nothing else");
-  check(of("tri-needs").depends_on?.join() === "plain", "the dependency is on the record");
+  check(of("tri-needs").depends_on?.join() === "tri-plain", "the dependency is on the record");
   check(of("tri-big").split?.length === 2, "the split titles are on the record");
   check(of("tri-vague").unclear === "acceptance", "an unclear answer says what is unclear");
 
