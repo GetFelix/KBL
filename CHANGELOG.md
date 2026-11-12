@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Changed: KBL has its own mark, a big square with one bite-sized piece lifted out, in `docs/brand/`. The dashboard frame uses it and switches its accent from Felix cyan to KBL amber. `scripts/render-mark.mjs` replaces `scripts/make-mark.py`.
 - Changed: the pull request branch prefix is `kbl/<item>` instead of `kibble/<item>`, and the bot login in docs and fixtures is `kbl[bot]`. An item claimed under the old prefix will not link its pull request after the upgrade.
 - Changed: the crates and binaries are renamed. `felix-mcp` is `kbl-mcp`, and
   `agents-core`, `agents-ingest`, `agents-tool`, `agents-tracker` and

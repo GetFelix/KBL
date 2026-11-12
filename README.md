@@ -1,4 +1,9 @@
-<p align="center"><img src="docs/brand/kbl-mark.png" alt="KBL" width="200"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/kbl-mark-dark.png">
+    <img src="docs/brand/kbl-mark.png" alt="KBL" width="200">
+  </picture>
+</p>
 
 # KBL
 
