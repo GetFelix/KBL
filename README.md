@@ -75,7 +75,7 @@ member named after the agent and logs the claim in the same step. `kbl-mcp` exte
 seconds while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead agent stops
 extending, so its claim lapses and the item goes to another agent. An item has one holder at a time: a release
 that lands while the item is being handed on does not cost the next agent its claim. An agent adds children only under an item it holds (`split`, `augment`,
-`question` or `test`), within a budget per root. Anything else it finds is a proposal a person accepts.
+`question` or `test`), within a budget per root. Anything else it finds is a proposal a person accepts. An agent can have at most 16 proposals waiting at once, 8 from one root.
 
 While it works, the agent records `decide` (what it chose and why, with the phase, a running summary and the
 steps it rests on), `record_step` and `edit`. The dashboard folds these into the story of a fix and its replay.

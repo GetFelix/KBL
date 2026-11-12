@@ -2295,8 +2295,10 @@ fn prerequisite_evidence_cannot_cite_the_future() {
 fn a_state_with_a_release_edge_encodes() {
     let mut l = held_root();
     l.agent("w1", needs("g1", true, DoneWhen::Released));
-    let s = fold(&l.0);
+    let mut s = fold(&l.0);
     assert_eq!(s.release_edges.len(), 1);
+    // Where a proposal came from is not in the wire form.
+    s.items.values_mut().for_each(|i| i.proposed_from = None);
     let json = serde_json::to_string(&s).unwrap();
     assert_eq!(serde_json::from_str::<State>(&json).unwrap(), s);
 }
@@ -2930,5 +2932,99 @@ fn a_refused_raise_is_a_rejection_on_replay_and_leaves_the_format() {
             offset: at,
             why: Reject::Format
         }]
+    );
+}
+
+fn release(item: &str, attempt: u32) -> WorkRecord {
+    WorkRecord::Released {
+        item: id(item),
+        attempt,
+        reason: None,
+        cost_micros: 0,
+    }
+}
+
+fn propose_n(l: &mut Log, by: &str, tag: &str, n: usize) {
+    for i in 0..n {
+        let (item, k) = (format!("{tag}{i}"), format!("{tag}k{i}"));
+        l.agent(by, proposed(&item, None, &k, WorkKind::Fix));
+    }
+}
+
+// The fold never refuses on these counts, so an old log folds as it always did;
+// the tracker asks `proposals_full` and `triage_full` before it appends.
+#[test]
+fn pending_proposals_are_counted_per_root_and_a_decision_frees_a_slot() {
+    let mut l = held_root();
+    propose_n(&mut l, "w1", "a", MAX_PENDING_PER_ROOT);
+    let s = fold(&l.0);
+    assert!(s.proposals_full(&key("w1"), &id("r1")));
+    assert!(!s.proposals_full(&key("w1"), &id("other")));
+    assert_eq!(
+        s.items[&id("a0")].proposed_from,
+        Some((key("w1"), id("r1")))
+    );
+    l.person(accept("a0"));
+    l.person(WorkRecord::Rejected { item: id("a1") });
+    assert!(!fold(&l.0).proposals_full(&key("w1"), &id("r1")));
+    propose_n(&mut l, "w1", "b", 2);
+    assert!(fold(&l.0).proposals_full(&key("w1"), &id("r1")));
+    assert!(fold(&l.0).rejections.is_empty());
+}
+
+#[test]
+fn pending_proposals_are_counted_per_agent_across_roots_and_attempts() {
+    let mut l = held_root();
+    for r in ["r2", "r3"] {
+        l.tracker(imported(r));
+        l.person(accept(r));
+    }
+    propose_n(&mut l, "w1", "a", MAX_PENDING_PER_ROOT);
+    l.agent("w1", release("r1", 1));
+    l.agent("w1", claimed("r2", 1));
+    propose_n(&mut l, "w1", "b", MAX_PENDING_PER_ROOT);
+    let s = fold(&l.0);
+    assert!(s.proposals_full(&key("w1"), &id("r3")));
+    assert!(!s.proposals_full(&key("w2"), &id("r3")));
+}
+
+#[test]
+fn a_prerequisite_in_another_repo_and_a_deferred_finding_count_as_pending_proposals() {
+    let mut l = held_root();
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.items[&id("g1")].proposed_from,
+        Some((key("w1"), id("r1")))
+    );
+}
+
+#[test]
+fn triage_answers_are_counted_unless_they_repeat_the_one_on_record() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.agent("w1", claimed("t1", 1));
+    let triaged = |tier: u8, why: &str| WorkRecord::Triaged {
+        item: id("r1"),
+        tier,
+        why: why.into(),
+        duplicate_of: None,
+        unclear: None,
+    };
+    l.agent("w1", triaged(1, "a"));
+    l.agent("w1", triaged(1, "a"));
+    assert!(!fold(&l.0).triage_full(&id("t1"), 1));
+    for i in 0..MAX_TRIAGES {
+        l.agent("w1", triaged(2, &format!("why {i}")));
+    }
+    let s = fold(&l.0);
+    assert!(s.triage_full(&id("t1"), 1));
+    assert!(s.rejections.is_empty());
+    // A person is never counted.
+    l.person(triaged(1, "person"));
+    assert_eq!(
+        fold(&l.0).items[&id("r1")].proposal.as_ref().unwrap().tier,
+        1
     );
 }

@@ -1165,8 +1165,20 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
 async fn prerequisites_share_the_per_attempt_post_cap() {
     let (_fake, t) = granted().await;
     let (w1, a1) = (agent("w1"), item("a1"));
+    t.person_record(
+        key("gab"),
+        WorkRecord::BudgetSet {
+            root: a1.clone(),
+            items_left: 100,
+            max_depth: 3,
+            cost_left_micros: 1_000_000,
+            redos_per_item: 3,
+        },
+    )
+    .await
+    .unwrap();
     for n in 0..24 {
-        post(&t, "w1", "a1", &format!("p{n}"), "proposal")
+        post(&t, "w1", "a1", &format!("p{n}"), "test")
             .await
             .unwrap();
     }
@@ -1784,4 +1796,76 @@ async fn triage_after_the_hold_is_gone_is_not_held() {
         .await;
     assert_eq!(why(r), "not_held");
     assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn a_triage_holder_that_varies_its_answer_is_stopped_and_refused_once() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    let answer = |n: usize| {
+        let t = t.clone();
+        async move {
+            t.triage(
+                &agent("w1"),
+                &item("a1-t"),
+                1,
+                format!("why {n}"),
+                None,
+                None,
+            )
+            .await
+        }
+    };
+    for n in 0..4 {
+        answer(n).await.unwrap();
+    }
+    let before = fake.log().len();
+    assert_eq!(why(answer(4).await), "limit_reached");
+    assert_eq!(why(answer(5).await), "limit_reached");
+    // One refusal on the log for the attempt, and no answer past the cap.
+    assert_eq!(fake.log().len(), before + 1);
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "triaged").count(), 4);
+}
+
+#[tokio::test]
+async fn proposals_waiting_for_a_person_are_capped_per_root_and_a_decision_frees_a_slot() {
+    let (fake, t) = granted().await;
+    let mut first = String::new();
+    for n in 0..8 {
+        let r = post(&t, "w1", "a1", &format!("p{n}"), "proposal")
+            .await
+            .unwrap();
+        if n == 0 {
+            first = r["item"].as_str().unwrap().to_owned();
+        }
+    }
+    let before = fake.log().len();
+    assert_eq!(
+        why(post(&t, "w1", "a1", "over", "proposal").await),
+        "limit_reached"
+    );
+    assert_eq!(
+        why(t
+            .prerequisite(
+                &agent("w1"),
+                &item("a1"),
+                key("cas"),
+                gateway(),
+                DoneWhen::Merged,
+                0
+            )
+            .await),
+        "limit_reached"
+    );
+    // One refusal on the log for the attempt, and the same key still answers.
+    assert_eq!(fake.log().len(), before + 1);
+    assert_eq!(
+        post(&t, "w1", "a1", "p0", "proposal").await.unwrap()["created"],
+        false
+    );
+    t.person_record(key("gab"), WorkRecord::Rejected { item: item(&first) })
+        .await
+        .unwrap();
+    post(&t, "w1", "a1", "again", "proposal").await.unwrap();
 }
