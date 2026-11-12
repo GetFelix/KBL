@@ -320,6 +320,7 @@ impl OrgState {
                             Changed
                         })
                     }
+                    (Some(_), Role::Admin) if !repos.is_empty() => Err(OrgRefusal::RoleScope),
                     (Some(team), role) if *role != Role::OrgAdmin => {
                         self.need_team(team)?;
                         if !self.owns_all(team, repos) {

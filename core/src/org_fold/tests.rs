@@ -416,7 +416,7 @@ fn replay_skips_a_refused_record_and_matches_the_live_state() {
 }
 
 #[test]
-fn the_last_admin_cannot_be_narrowed_to_some_repos() {
+fn an_admin_cannot_be_narrowed_to_some_repos() {
     let mut s = base();
     run(
         &mut s,
@@ -432,7 +432,7 @@ fn the_last_admin_cannot_be_narrowed_to_some_repos() {
         role: Role::Admin,
         repos: vec!["github:a/c".into()],
     };
-    assert_eq!(run(&mut s, narrow), Err(OrgRefusal::LastAdmin));
+    assert_eq!(run(&mut s, narrow), Err(OrgRefusal::RoleScope));
 }
 
 #[test]

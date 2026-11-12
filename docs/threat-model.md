@@ -317,7 +317,7 @@ each token and never a token. A format above the build's stops the reader.
 |---|---|---|
 | `team_created` | Org admin (route check, later) | Name follows the key rule and is not `kbl`; repeating a team changes nothing |
 | `person_added` | Org admin, team admin (route check, later) | Name and OIDC subject unique, token hash not used by any person, agent or ingest worker |
-| `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last unscoped admin of a team cannot be demoted or narrowed |
+| `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last unscoped admin of a team cannot be demoted; an admin role covers the whole team, so a scoped one is refused |
 | `role_revoked` | Team admin, org admin (route check, later) | The last admin of a team and the last org admin stay |
 | `agent_added` | Triager and above (route check, later) | Team exists; name unique in the team and a revoked name stays taken; token hash unused; 256 per team |
 | `agent_revoked` | Whoever added it, team admin (route check, later) | Team and agent exist; revoking twice changes nothing |
