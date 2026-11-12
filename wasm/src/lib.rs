@@ -4,8 +4,7 @@
 //! it returns. It adds no rules of its own: the state is the same fold the
 //! tracker runs, so the two cannot disagree about an item's stage.
 
-use agents_core::codec::Codec;
-use agents_core::work::WorkLogged;
+use agents_core::work::{ReadError, read};
 use agents_core::work_fold::State;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -15,6 +14,8 @@ use wasm_bindgen::prelude::*;
 #[derive(Default)]
 pub struct Folder {
     state: State,
+    /// The format of the first record that was newer than this build reads.
+    newer: Option<u32>,
 }
 
 #[wasm_bindgen]
@@ -26,19 +27,31 @@ impl Folder {
 
     /// Applies the record at `offset`. Returns false when the payload is not a
     /// record this build reads, or `offset` is not past the last one applied;
-    /// the state is then unchanged.
+    /// the state is then unchanged. After a record of a newer format nothing
+    /// more is applied: see [`Folder::newer`].
     pub fn apply(&mut self, offset: f64, payload: &[u8]) -> bool {
         let offset = offset as u64;
-        if self.state.at.is_some_and(|at| offset <= at) {
+        if self.newer.is_some() || self.state.at.is_some_and(|at| offset <= at) {
             return false;
         }
-        match WorkLogged::decode(payload) {
+        match read(payload) {
             Ok(rec) => {
                 self.state.apply(offset, &rec);
                 true
             }
-            Err(_) => false,
+            Err(ReadError::Newer { v }) => {
+                self.newer = Some(v);
+                false
+            }
+            Err(ReadError::Malformed(_)) => false,
         }
+    }
+
+    /// The format of the record that stopped the fold because this build is
+    /// too old to read it, or 0. The page must stop and ask for a reload:
+    /// the state no longer follows the log.
+    pub fn newer(&self) -> u32 {
+        self.newer.unwrap_or(0)
     }
 
     /// The last offset applied, or -1 before the first.

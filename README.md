@@ -106,7 +106,8 @@ have the details.
 M0 and M1 are done. [`core`](core/) has the record formats and names, [`dashboard/`](dashboard/) follows `work.events` through felix-gateway and folds it with `core` as WebAssembly, `agents-tool` [creates a run](#creating-a-run),
 and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The dashboard
 is described in [docs/work-tracker.md](docs/work-tracker.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
-progress. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
+progress. Records on `work.events` carry a format, so a newer build can take over a running log, and an older build
+(from this one on) stops at a record it cannot read instead of misreading it: [docs/upgrades.md](docs/upgrades.md) has the upgrade order. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
 [milestones](https://github.com/GetFelix/felix-agents/milestones).
 
 ## Running Felix locally
@@ -304,6 +305,10 @@ node scripts/check-intake.mjs
 # Build and test the Rust crates
 cargo test --workspace
 
+# Run the previous build of the tracker and this one over the same log (needs the dev stack, below, and a
+# checkout of the previous commit built into its own target directory)
+AGENTS_TRACKER_OLD=<previous>/agents-tracker FELIX_MCP_OLD=<previous>/felix-mcp node dev/check-upgrade.mjs
+
 # Build and test the dashboard (see dashboard/README.md for the one-time setup)
 cd dashboard && npm ci && npm run wasm && npm test && cd ..
 
@@ -326,6 +331,7 @@ CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Ru
 - [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
 - [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
 - [docs/threat-model.md](docs/threat-model.md): who can reach what, and the check behind every route and record kind
+- [docs/upgrades.md](docs/upgrades.md): upgrading a running Kibble and going back, and the record format rules behind it
 - [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
 - [docs/brand/story.md](docs/brand/story.md): the story of the product
 - [docs/design.md](docs/design.md): the design, data model and build order

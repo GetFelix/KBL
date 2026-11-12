@@ -42,6 +42,7 @@ async function main() {
   const fold = new Folder();
   const sink: Fold = {
     apply: (o, p) => fold.apply(o, p),
+    newer: () => fold.newer(),
     at: () => fold.at(),
     stateJson: () => fold.state_json(),
     itemsJson: () => fold.items_json(),

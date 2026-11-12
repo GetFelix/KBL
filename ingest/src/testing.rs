@@ -139,12 +139,12 @@ impl Fake {
     fn push(&self, by: &str, actor: Actor, record: WorkRecord) -> Result<(), String> {
         let mut i = self.0.lock().unwrap();
         let offset = i.log.len() as u64;
-        let logged = WorkLogged {
-            at_ms: CLOCK_START_MS + offset,
-            by: Key::new(by).unwrap(),
+        let logged = WorkLogged::new(
+            CLOCK_START_MS + offset,
+            Key::new(by).unwrap(),
             actor,
             record,
-        };
+        );
         i.state.try_apply(offset, &logged).map_err(|r| {
             serde_json::to_value(r)
                 .unwrap()

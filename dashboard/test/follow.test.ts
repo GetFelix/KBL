@@ -184,6 +184,17 @@ test('records the sink refuses are counted and skipped', async () => {
   assert.equal(await done, 4);
 });
 
+test('a record of a newer format ends the follow instead of being skipped', async () => {
+  const gw = gatewayWith(4);
+  const applied: number[] = [];
+  const sink: Sink = {
+    apply: (offset) => offset < 2 && applied.push(offset) > 0,
+    newer: () => (applied.length === 2 ? 2 : 0),
+  };
+  await assert.rejects(follow(gw, sink, { stream: 'events' }), /record 2 has format 2.*Reload/);
+  assert.deepEqual(applied, [0, 1]);
+});
+
 test('a payload that is not base64 ends the follow', async () => {
   const gw = gatewayWith(1);
   gw.log.push('***not base64***');

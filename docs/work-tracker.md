@@ -133,6 +133,11 @@ they are not there, and folds `work.events` from the start (with seek snapshots)
 serves. It appends a record only when the fold accepts it, so a refused call
 leaves no trace in the log.
 
+Each record carries a format. A tracker that finds a record of a newer format
+than it reads does not serve, instead of skipping the record.
+[upgrades.md](upgrades.md) has the upgrade order, how to go back, and the
+rules for changing a record.
+
 Felix cannot yet tell the tracker which principal a token belongs to, so the
 tracker reads a token map from a JSON file (`--tokens-file`, or
 `AGENTS_TRACKER_TOKENS_FILE`). The file must be mode 600 or 400, a token may be listed

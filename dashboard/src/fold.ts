@@ -2,6 +2,8 @@
 export interface Fold {
   /** False when the payload or offset was refused; the state is then unchanged. */
   apply(offset: number, payload: Uint8Array): boolean;
+  /** The format of the record that stopped the fold because it is newer than this build reads, else 0. */
+  newer(): number;
   at(): number;
   stateJson(): string;
   itemsJson(): string;

@@ -55,8 +55,8 @@ export function newRunId(prefix) {
 
 // One felix-mcp process for `name`. `tool` returns the tool's JSON reply or
 // throws the text the model would have seen.
-export async function agent(token, run, name, extraEnv = {}) {
-  const child = spawn(MCP, [], {
+export async function agent(token, run, name, extraEnv = {}, bin = MCP) {
+  const child = spawn(bin, [], {
     env: { ...process.env, AGENTS_RUN: run, AGENTS_AGENT: name, AGENTS_FELIX_TOKEN: token, ...extraEnv },
     stdio: ["pipe", "pipe", "inherit"],
   });
@@ -105,11 +105,12 @@ export function killAll() {
 
 // The work tracker as a process on the host, against the dev stack. `tokens` is
 // {agents: {token: name}, people: {token: name}}. `exited` settles when it ends.
-export async function startTracker(tokens, extraEnv = {}) {
+// `bin` runs another build of the tracker, as the upgrade check does.
+export async function startTracker(tokens, extraEnv = {}, bin = TRACKER) {
   const dir = mkdtempSync(join(tmpdir(), "tracker-"));
   const tokensFile = join(dir, "tokens.json");
   writeFileSync(tokensFile, JSON.stringify(tokens), { mode: 0o600 });
-  const child = spawn(TRACKER, [], {
+  const child = spawn(bin, [], {
     env: {
       ...process.env,
       AGENTS_TRACKER_TOKENS_FILE: tokensFile,
