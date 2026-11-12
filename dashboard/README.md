@@ -52,7 +52,8 @@ since `ws://` sends the token in the clear; and treat a `?gateway=` link from so
 the page sends the token to whatever address it names.
 
 An expired or rejected token (`signed_out`, `forbidden`) or an error a retry cannot fix (`trimmed`, `bad_request`,
-`past_end`) stops the page with a message. `subscription_ended` (a broker failover) subscribes again at once from
+`past_end`) stops the page with a message. So does a record of a newer format than the page's fold reads: the
+page asks for a reload instead of skipping it ([docs/upgrades.md](../docs/upgrades.md)). `subscription_ended` (a broker failover) subscribes again at once from
 the cursor. Any other failure reconnects from the cursor, which is past records the fold refused, with a growing
 delay up to 30 s.
 

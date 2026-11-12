@@ -5,13 +5,24 @@
 //! agent editing one item cannot overwrite each other. No record here is
 //! written by a model call, and the fold makes none.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
 
+use serde::{Deserialize, Deserializer, Serialize};
+
+use crate::codec::{Codec, DecodeError};
 use crate::content::Content;
 use crate::names::{InvalidName, ItemId, Key};
 
 /// The one stream every change to work goes on.
 pub const WORK_EVENTS: &str = "work.events";
+
+/// The format every record had before records carried a version. A record
+/// with no `v` field is this format. Frozen: a change an older reader would
+/// fold differently gets a higher format instead. See `docs/upgrades.md`.
+pub const FORMAT_V1: u32 = 1;
+
+/// The highest record format this build reads and writes.
+pub const FORMAT: u32 = FORMAT_V1;
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer
@@ -699,6 +710,10 @@ pub enum WorkRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checks: Option<Vec<String>>,
     },
+    /// Raises the log's format: records of formats up to `to` may follow.
+    /// Only a person may, once every reader of the log is a build that reads
+    /// `to`. It never goes down.
+    FormatRaised { to: u32 },
     /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -706,7 +721,9 @@ pub enum WorkRecord {
         op: String,
         reason: RefusalReason,
     },
-    /// A kind this version does not know. A fold skips it.
+    /// A kind this build does not know, in a format it reads. A fold skips
+    /// it. A new kind raises the format, so only a log from before records
+    /// had a version can hold one.
     #[serde(other)]
     Unknown,
 }
@@ -750,20 +767,110 @@ impl WorkRecord {
             WorkRecord::PrStatus { .. } => "pr_status",
             WorkRecord::SourceStalled { .. } => "source_stalled",
             WorkRecord::RulesSet { .. } => "rules_set",
+            WorkRecord::FormatRaised { .. } => "format_raised",
             WorkRecord::Refused { .. } => "refused",
             WorkRecord::Unknown => "unknown",
         }
     }
+
+    /// The lowest format whose readers fold this record as this build does.
+    /// A kind, or a use of a field, that an older fold would skip or ignore
+    /// answers with the format that introduced it.
+    pub fn format(&self) -> u32 {
+        match self {
+            WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V1 + 1),
+            _ => FORMAT_V1,
+        }
+    }
 }
 
-/// A record as it sits on `work.events`: when, which principal, and in what role.
+/// A record as it sits on `work.events`: its format, when, which principal,
+/// and in what role.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkLogged {
+    /// The record's format. Left out at [`FORMAT_V1`], so a record of the
+    /// first format is the bytes it always was. Decoding fails above
+    /// [`FORMAT`]: use [`read`] to tell that from a malformed record.
+    #[serde(
+        default = "format_v1",
+        skip_serializing_if = "is_format_v1",
+        deserialize_with = "readable_format"
+    )]
+    pub v: u32,
     pub at_ms: u64,
     pub by: Key,
     pub actor: Actor,
     #[serde(flatten)]
     pub record: WorkRecord,
+}
+
+impl WorkLogged {
+    /// A record to append, stamped with the lowest format that reads it.
+    pub fn new(at_ms: u64, by: Key, actor: Actor, record: WorkRecord) -> Self {
+        Self {
+            v: record.format(),
+            at_ms,
+            by,
+            actor,
+            record,
+        }
+    }
+}
+
+/// Why a payload on `work.events` was not read.
+#[derive(Debug)]
+pub enum ReadError {
+    /// The record is of a format above [`FORMAT`]. The reader must stop here:
+    /// skipping it would fold a state its writer did not mean.
+    Newer { v: u32 },
+    /// Not a record of any format this build reads.
+    Malformed(DecodeError),
+}
+
+impl fmt::Display for ReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReadError::Newer { v } => write!(
+                f,
+                "the record has format {v} and this build reads up to {FORMAT}: upgrade this reader"
+            ),
+            ReadError::Malformed(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ReadError {}
+
+/// Decodes a payload of `work.events`, and says when it failed because the
+/// record is newer than this build.
+pub fn read(payload: &[u8]) -> Result<WorkLogged, ReadError> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        v: u32,
+    }
+    WorkLogged::decode(payload).map_err(|e| match serde_json::from_slice::<Envelope>(payload) {
+        Ok(Envelope { v }) if v > FORMAT => ReadError::Newer { v },
+        _ => ReadError::Malformed(e),
+    })
+}
+
+fn format_v1() -> u32 {
+    FORMAT_V1
+}
+
+fn is_format_v1(v: &u32) -> bool {
+    *v == FORMAT_V1
+}
+
+fn readable_format<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = u32::deserialize(d)?;
+    if (FORMAT_V1..=FORMAT).contains(&v) {
+        Ok(v)
+    } else {
+        Err(serde::de::Error::custom(format_args!(
+            "record format {v} is not one this build reads ({FORMAT_V1} to {FORMAT})"
+        )))
+    }
 }
 
 fn is_zero(n: &u64) -> bool {

@@ -462,16 +462,16 @@ fn every_kind_round_trips_and_is_covered() {
 
 #[test]
 fn a_logged_record_carries_the_principal_and_role() {
-    let line = WorkLogged {
-        at_ms: 1_800_000_000_000,
-        by: key("w3"),
-        actor: Actor::Agent,
-        record: WorkRecord::Done {
+    let line = WorkLogged::new(
+        1_800_000_000_000,
+        key("w3"),
+        Actor::Agent,
+        WorkRecord::Done {
             item: item("r1"),
             attempt: 1,
             cost_micros: 0,
         },
-    };
+    );
     assert_eq!(
         String::from_utf8(line.encode()).unwrap(),
         r#"{"at_ms":1800000000000,"by":"w3","actor":"agent","kind":"done","item":"r1","attempt":1,"cost_micros":0}"#

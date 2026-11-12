@@ -100,3 +100,21 @@ fn a_repeat_or_a_bad_payload_changes_nothing() {
     assert_eq!(f.state_json(), before);
     assert_eq!(f.at(), 3.0);
 }
+
+#[test]
+fn a_record_of_a_newer_format_stops_the_fold() {
+    let mut f = Folder::new();
+    let rec = br#"{"at_ms":1,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"a#1","title":"t"}"#;
+    assert!(f.apply(0.0, rec));
+    assert_eq!(f.newer(), 0);
+    let newer =
+        br#"{"v":999,"at_ms":2,"by":"gabriel","actor":"person","kind":"accepted","item":"r1"}"#;
+    assert!(!f.apply(1.0, newer));
+    assert_eq!(f.newer(), 999);
+    // Nothing after it is applied either: the state would skip a record.
+    let before = f.state_json();
+    let next = br#"{"at_ms":3,"by":"gabriel","actor":"person","kind":"accepted","item":"r1"}"#;
+    assert!(!f.apply(2.0, next));
+    assert_eq!(f.state_json(), before);
+    assert_eq!(f.at(), 0.0);
+}

@@ -233,6 +233,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `source_stalled` | Tracker | 200-byte names, 64 repos (`core/src/work_fold.rs:1484`) |
 | `rules_set` | Person | `core/src/work_fold.rs:1357` |
 | `refused` | Tracker | `core/src/work_fold.rs:1445` |
+| `format_raised` | Person | Only upward, only to a format the tracker's build reads, and stamped with that format (`core/src/work_fold.rs:446`). An older reader stops at it ([upgrades.md](upgrades.md)) |
 
 ## Records on the run log
 
