@@ -1870,6 +1870,127 @@ async fn proposals_waiting_for_a_person_are_capped_per_root_and_a_decision_frees
     post(&t, "w1", "a1", "again", "proposal").await.unwrap();
 }
 
+#[tokio::test]
+async fn a_triage_answer_can_carry_dependencies_and_a_split() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    seed(&t, "a2", 2).await;
+    let w1 = agent("w1");
+    let mut answer = ans(1, "needs a2 first".into(), None, None);
+    answer.depends_on = vec![item("a2")];
+    answer.split = vec!["reader".into(), "writer".into()];
+    let reply = t.triage(&w1, &item("a1-t"), answer.clone()).await.unwrap();
+    let last = fake.log().pop().unwrap();
+    assert_eq!(
+        last.record,
+        WorkRecord::Triaged {
+            item: item("a1"),
+            tier: 1,
+            why: "needs a2 first".into(),
+            duplicate_of: None,
+            unclear: None,
+            depends_on: vec![item("a2")],
+            split: vec!["reader".into(), "writer".into()],
+        }
+    );
+    // The same answer again is a retry; changing only the split is a new answer.
+    assert_eq!(
+        t.triage(&w1, &item("a1-t"), answer.clone()).await.unwrap(),
+        reply
+    );
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "triaged").count(), 1);
+    let mut changed = answer;
+    changed.split = vec!["whole".into()];
+    t.triage(&w1, &item("a1-t"), changed).await.unwrap();
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "triaged").count(), 2);
+    // It is advice: no link and no child exists.
+    let core = t.0.core.lock().await;
+    assert!(core.state.edges.is_empty());
+    assert!(!core.state.items.values().any(|i| i.title == "whole"));
+}
+
+#[tokio::test]
+async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    seed(&t, "a2", 2).await;
+    let before = fake.log().len();
+    let try_with = |depends_on: Vec<&'static str>, split: Vec<String>| {
+        let t = t.clone();
+        async move {
+            let mut a = ans(1, "w".into(), None, None);
+            a.depends_on = depends_on.into_iter().map(item).collect();
+            a.split = split;
+            t.triage(&agent("w1"), &item("a1-t"), a).await
+        }
+    };
+    // Unknown, the item itself, its own triage item, a repeat.
+    for deps in [vec!["nope"], vec!["a1"], vec!["a1-t"], vec!["a2", "a2"]] {
+        assert_eq!(
+            why(try_with(deps.clone(), vec![]).await),
+            "invalid",
+            "{deps:?}"
+        );
+    }
+    let many: Vec<String> = (0..9).map(|n| format!("part {n}")).collect();
+    assert_eq!(why(try_with(vec![], many.clone()).await), "invalid");
+    assert_eq!(why(try_with(vec![], vec![String::new()]).await), "invalid");
+    assert_eq!(
+        why(try_with(vec![], vec!["x".repeat(300)]).await),
+        "invalid"
+    );
+    assert_eq!(fake.log().len(), before);
+    // A person's record is held to the same bounds.
+    let err = t
+        .person_record(
+            key("gab"),
+            WorkRecord::Triaged {
+                item: item("a1"),
+                tier: 1,
+                why: "w".into(),
+                duplicate_of: None,
+                unclear: None,
+                depends_on: vec![],
+                split: many,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err}");
+    assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn triage_cannot_name_a_dependency_the_agent_may_not_see() {
+    let (fake, t) = granted().await;
+    person(
+        &t,
+        WorkRecord::Proposed {
+            item: item("a1-t"),
+            parent: Some(item("a1")),
+            key: key("triage"),
+            work: WorkKind::Triage,
+            title: "Triage: fix a1".into(),
+            review: None,
+        },
+    )
+    .await;
+    claim_item(&t, "w1", &item("a1-t")).await;
+    import(&t, "f1", "other/secret#4").await;
+    let before = fake.log().len();
+    let mut refusals = Vec::new();
+    for dep in ["f1", "nope"] {
+        let mut a = ans(1, "w".into(), None, None);
+        a.depends_on = vec![item(dep)];
+        let r = t.triage(&agent("w1"), &item("a1-t"), a).await;
+        refusals.push(format!("{:?}", r.unwrap_err()).replace(dep, "X"));
+    }
+    assert_eq!(refusals[0], refusals[1]);
+    assert_eq!(fake.log().len(), before);
+}
+
 fn ans(
     tier: u8,
     why: String,
