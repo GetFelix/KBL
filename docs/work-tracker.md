@@ -377,7 +377,7 @@ has no matching record to clear it, so a person decides.
 
 The fold caps what one attempt may write: 200 decisions, 500 steps, 500
 edits, 100 progress records, 100 context entries, 20 questions, 10
-answers, 100 links, and 24 children and proposals together. A call over a cap is refused, and the first refusal in an
+answers, 100 links, 4 different triage answers, and 24 children and proposals together. A call over a cap is refused, and the first refusal in an
 attempt is logged as refused, so a looping agent cannot fill the stream with
 records or with refusals. Each field is also limited in size: text over 4 KiB
 must be an artifact, and a title, command or reason is at most 4 KiB. A
@@ -769,8 +769,13 @@ slipping by.
 - **Creation is idempotent.** The child's key is the parent plus an
   agent-supplied key, written with `cache_put_if` absent, so a retry never
   duplicates.
-- **Proposals are capped per attempt.** They share the 24-post limit with
-  children and prerequisites.
+- **Proposals are capped per attempt and per agent.** They share the 24-post
+  limit with children and prerequisites. An agent may also have 16 proposals
+  waiting for a person at once, and 8 from work under one root, over all its
+  attempts. A proposal leaves the count when a person accepts or rejects it.
+  A prerequisite that files work in another repo and a deferred review
+  finding count the same way. The tracker checks this before it appends, so
+  the fold of an existing log does not change.
 - **Attempts.** A claim that ends in a release, a lapse or a give-up may be
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most

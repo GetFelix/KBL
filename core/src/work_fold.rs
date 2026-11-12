@@ -48,6 +48,12 @@ const MAX_LINKS: u32 = 100;
 const MAX_STALLS: usize = 64;
 /// Children and proposals together.
 const MAX_POSTS: u32 = 24;
+/// Proposals an agent has waiting for a person, over all its attempts.
+const MAX_PENDING_PER_AGENT: usize = 16;
+/// Proposals waiting for a person that came from work under one root.
+const MAX_PENDING_PER_ROOT: usize = 8;
+/// Different triage answers one attempt may log. A repeat of the answer on record is not counted.
+const MAX_TRIAGES: u32 = 4;
 /// Distinct agents remembered as having worked an item, for the self-review rule.
 const MAX_WORKERS: usize = 32;
 
@@ -244,6 +250,9 @@ pub struct Path {
     /// Children and proposals the attempt created.
     #[serde(default)]
     pub posts: u32,
+    /// Triage answers the attempt logged, as the holder of a triage item.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub triages: u32,
     /// Questions the attempt asked.
     #[serde(default)]
     pub questions: u32,
@@ -291,6 +300,10 @@ pub struct Item {
     pub depth: u8,
     pub children: Vec<ItemId>,
     pub proposed_by_agent: bool,
+    /// The agent and root an agent's proposal came from, for the pending caps.
+    /// Left out of the state's wire form; a replay of the log sets it again.
+    #[serde(skip)]
+    pub proposed_from: Option<(Key, ItemId)>,
     /// The upstream issue changed after the last triage answer.
     pub changed_upstream: bool,
     /// The upstream issue no longer matches the rule that admitted it.
@@ -823,6 +836,7 @@ impl State {
             depth: 0,
             children: Vec::new(),
             proposed_by_agent: false,
+            proposed_from: None,
             changed_upstream: false,
             left_scope: false,
             accepted: false,
@@ -922,7 +936,18 @@ impl State {
                 if *tier >= TIERS {
                     return Err(Reject::BadTier);
                 }
-                self.may_triage(item, rec)?;
+                let held = self.may_triage(item, rec)?;
+                if let Some((triage, attempt)) = held {
+                    let same = self.item(item)?.proposal.as_ref().is_some_and(|p| {
+                        p.tier == *tier
+                            && p.why == *why
+                            && p.duplicate_of == *duplicate_of
+                            && p.unclear == *unclear
+                    });
+                    if !same && let Ok(path) = self.path_mut(&triage, attempt) {
+                        path.triages = path.triages.saturating_add(1);
+                    }
+                }
                 self.item_mut(item)?.proposal = Some(Proposal {
                     tier: *tier,
                     why: why.clone(),
@@ -1118,6 +1143,7 @@ impl State {
                         progress: 0,
                         context_writes: 0,
                         posts: 0,
+                        triages: 0,
                         questions: 0,
                         answers: 0,
                         links: 0,
@@ -1953,6 +1979,7 @@ impl State {
                 let target = self.item(&root)?.target.clone();
                 let mut p = Self::blank(&child("defer"), WorkKind::Fix, &shorten("Deferred: "));
                 p.proposed_by_agent = true;
+                p.proposed_from = Some((rec.by.clone(), root.clone()));
                 p.target = target;
                 p.finding = Some(offset);
                 p.context.insert(finding_entry(), offset);
@@ -2027,8 +2054,10 @@ impl State {
                 if p.posts >= MAX_POSTS {
                     return Err(Reject::LimitReached);
                 }
-                p.posts += 1;
+                let root = self.item(&held)?.root.clone();
+                self.path_mut(&held, attempt)?.posts += 1;
                 item.proposed_by_agent = true;
+                item.proposed_from = Some((rec.by.clone(), root));
             }
             (Actor::Agent, Some(p)) if work.is_live_child() => {
                 let par = self.item(p)?;
@@ -2093,6 +2122,33 @@ impl State {
         Ok(())
     }
 
+    /// Whether `by` already has as many proposals waiting for a person as it
+    /// may, in all or from `root`. The tracker checks this before it appends a
+    /// proposal; the fold only records where each came from, so an old log
+    /// folds the same.
+    pub fn proposals_full(&self, by: &Key, root: &ItemId) -> bool {
+        let (mut mine, mut under_root) = (0, 0);
+        for from in self
+            .items
+            .values()
+            .filter(|i| !i.accepted && i.closed.is_none())
+            .filter_map(|i| i.proposed_from.as_ref())
+        {
+            mine += usize::from(from.0 == *by);
+            under_root += usize::from(from.1 == *root);
+        }
+        mine >= MAX_PENDING_PER_AGENT || under_root >= MAX_PENDING_PER_ROOT
+    }
+
+    /// Whether the attempt on a triage item has logged as many different
+    /// answers as it may.
+    pub fn triage_full(&self, triage: &ItemId, attempt: u32) -> bool {
+        self.items
+            .get(triage)
+            .and_then(|i| i.paths.iter().find(|p| p.attempt == attempt))
+            .is_some_and(|p| p.triages >= MAX_TRIAGES)
+    }
+
     /// The held item waits on a prerequisite, possibly one this record creates.
     /// Every check runs before the first change, so a refusal leaves no trace.
     #[allow(clippy::too_many_arguments)]
@@ -2134,6 +2190,10 @@ impl State {
         }
         if let Some(n) = new {
             self.new_prerequisite_item(offset, prerequisite, &n.target, &n.title);
+            let root = self.item(item)?.root.clone();
+            if let Some(p) = self.items.get_mut(prerequisite) {
+                p.proposed_from = Some((rec.by.clone(), root));
+            }
             self.child_keys.insert(scope);
         }
         self.edges.insert((item.clone(), prerequisite.clone()));
@@ -2291,21 +2351,25 @@ impl State {
     }
 
     /// Triage answers come from the agent holding the triage item for that target.
-    fn may_triage(&self, target: &ItemId, rec: &WorkLogged) -> Result<(), Reject> {
+    /// With an agent, the triage item it holds and the open attempt.
+    fn may_triage(
+        &self,
+        target: &ItemId,
+        rec: &WorkLogged,
+    ) -> Result<Option<(ItemId, u32)>, Reject> {
         self.item(target)?;
         if rec.actor != Actor::Agent {
-            return Ok(());
+            return Ok(None);
         }
-        let holds = self.items.values().any(|t| {
-            t.work == WorkKind::Triage
-                && t.parent.as_ref() == Some(target)
-                && t.hold.as_ref().is_some_and(|h| h.by == rec.by)
-        });
-        if holds {
-            Ok(())
-        } else {
-            Err(Reject::NotHolder)
-        }
+        self.items
+            .values()
+            .filter(|t| t.work == WorkKind::Triage && t.parent.as_ref() == Some(target))
+            .find_map(|t| {
+                let h = t.hold.as_ref().filter(|h| h.by == rec.by)?;
+                Some((t.id.clone(), h.attempt))
+            })
+            .map(Some)
+            .ok_or(Reject::NotHolder)
     }
 
     /// The item `by` holds that lets it act on `id`: `id` itself or one of its
