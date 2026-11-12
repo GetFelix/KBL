@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed: proposals were limited only per attempt, so an agent that kept claiming
+  could keep filling Triage. An agent may now have 16 proposals waiting for a
+  person at once and 8 from one root; a prerequisite filed in another repo
+  counts too. A triage holder that kept changing its answer is stopped after 4
+  different answers in an attempt; repeating the same answer is still a no-op.
+  Each proposal now records the agent and root it came from.
 - Changed: the crates and binaries are renamed. `felix-mcp` is `kbl-mcp`, and
   `agents-core`, `agents-ingest`, `agents-tool`, `agents-tracker` and
   `agents-wasm` are `kbl-core`, `kbl-ingest`, `kbl-tool`, `kbl-tracker` and

@@ -2214,7 +2214,7 @@ fn prerequisites_count_toward_the_post_cap() {
     let mut l = held_root();
     for i in 0..MAX_POSTS {
         let (item, k) = (format!("p{i}"), format!("k{i}"));
-        l.agent("w1", proposed(&item, None, &k, WorkKind::Fix));
+        l.agent("w1", proposed(&item, Some("r1"), &k, WorkKind::Test));
     }
     assert!(fold(&l.0).rejections.is_empty());
     l.agent("w1", needs("g1", true, DoneWhen::Merged));
@@ -2930,5 +2930,114 @@ fn a_refused_raise_is_a_rejection_on_replay_and_leaves_the_format() {
             offset: at,
             why: Reject::Format
         }]
+    );
+}
+
+fn release(item: &str, attempt: u32) -> WorkRecord {
+    WorkRecord::Released {
+        item: id(item),
+        attempt,
+        reason: None,
+        cost_micros: 0,
+    }
+}
+
+fn propose_n(l: &mut Log, by: &str, tag: &str, n: usize) {
+    for i in 0..n {
+        let (item, k) = (format!("{tag}{i}"), format!("{tag}k{i}"));
+        l.agent(by, proposed(&item, None, &k, WorkKind::Fix));
+    }
+}
+
+#[test]
+fn pending_proposals_are_capped_per_root_and_a_decision_frees_a_slot() {
+    let mut l = held_root();
+    propose_n(&mut l, "w1", "a", MAX_PENDING_PER_ROOT);
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", proposed("over", None, "over", WorkKind::Fix));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    assert!(!fold(&l.0).items.contains_key(&id("over")));
+    // Accepting one and rejecting another each free a slot.
+    l.person(accept("a0"));
+    l.person(WorkRecord::Rejected { item: id("a1") });
+    l.agent("w1", proposed("b0", None, "b0", WorkKind::Fix));
+    l.agent("w1", proposed("b1", None, "b1", WorkKind::Fix));
+    assert!(fold(&l.0).items.contains_key(&id("b1")));
+    l.agent("w1", proposed("b2", None, "b2", WorkKind::Fix));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.items[&id("b0")].proposed_from,
+        Some((key("w1"), id("r1")))
+    );
+}
+
+#[test]
+fn pending_proposals_are_capped_per_agent_across_roots_and_attempts() {
+    let mut l = held_root();
+    for r in ["r2", "r3", "r4"] {
+        l.tracker(imported(r));
+        l.person(accept(r));
+    }
+    propose_n(&mut l, "w1", "a", MAX_PENDING_PER_ROOT);
+    l.agent("w1", release("r1", 1));
+    l.agent("w1", claimed("r2", 1));
+    propose_n(&mut l, "w1", "b", MAX_PENDING_PER_ROOT);
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", release("r2", 1));
+    l.agent("w1", claimed("r3", 1));
+    l.agent("w1", proposed("over", None, "over", WorkKind::Fix));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    // Another agent has its own allowance.
+    l.agent("w2", claimed("r4", 1));
+    l.agent("w2", proposed("theirs", None, "theirs", WorkKind::Fix));
+    assert!(fold(&l.0).items.contains_key(&id("theirs")));
+}
+
+#[test]
+fn a_prerequisite_in_another_repo_counts_as_a_pending_proposal() {
+    let mut l = held_root();
+    propose_n(&mut l, "w1", "a", MAX_PENDING_PER_ROOT);
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    assert!(!fold(&l.0).items.contains_key(&id("g1")));
+    l.person(WorkRecord::Rejected { item: id("a0") });
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    assert_eq!(
+        fold(&l.0).items[&id("g1")].proposed_from,
+        Some((key("w1"), id("r1")))
+    );
+}
+
+#[test]
+fn a_triage_holder_that_varies_its_answer_is_capped_and_a_repeat_is_not() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.agent("w1", claimed("t1", 1));
+    let triaged = |tier: u8, why: &str| WorkRecord::Triaged {
+        item: id("r1"),
+        tier,
+        why: why.into(),
+        duplicate_of: None,
+        unclear: None,
+    };
+    for i in 0..MAX_TRIAGES as u8 {
+        l.agent("w1", triaged(i % 4, "w"));
+    }
+    assert_eq!(last_rejection(&l), None);
+    l.agent("w1", triaged(3, "changed my mind"));
+    assert_eq!(last_rejection(&l), Some(Reject::LimitReached));
+    let kept = fold(&l.0).items[&id("r1")].proposal.clone().unwrap();
+    assert_eq!(kept.why, "w");
+    // The answer it already gave is still accepted, and a person is not capped.
+    let same = triaged((MAX_TRIAGES as u8 - 1) % 4, "w");
+    let before = fold(&l.0).rejections.len();
+    l.agent("w1", same);
+    assert_eq!(fold(&l.0).rejections.len(), before);
+    l.person(triaged(1, "person"));
+    assert_eq!(
+        fold(&l.0).items[&id("r1")].proposal.as_ref().unwrap().tier,
+        1
     );
 }
