@@ -66,8 +66,7 @@ fn team_names_follow_the_key_rule_and_keep_the_org_namespace() {
     assert!(TeamName::new("").is_err());
     assert!(TeamName::new("a b").is_err());
     assert!(TeamName::new("a".repeat(65)).is_err());
-    let bad: Result<OrgRecord, _> =
-        serde_json::from_str(r#"{"kind":"team_created","team":"kbl"}"#);
+    let bad: Result<OrgRecord, _> = serde_json::from_str(r#"{"kind":"team_created","team":"kbl"}"#);
     assert!(bad.is_err());
 }
 
@@ -97,12 +96,24 @@ fn creating_a_team_twice_changes_nothing() {
 #[test]
 fn a_person_name_and_a_token_are_each_used_once() {
     let mut s = base();
-    assert_eq!(run(&mut s, person("ana", "other")), Err(OrgRefusal::NameTaken));
+    assert_eq!(
+        run(&mut s, person("ana", "other")),
+        Err(OrgRefusal::NameTaken)
+    );
     assert_eq!(run(&mut s, person("ana", "t-ana")), Ok(Applied::Unchanged));
-    assert_eq!(run(&mut s, person("cy", "t-bo")), Err(OrgRefusal::TokenInUse));
+    assert_eq!(
+        run(&mut s, person("cy", "t-bo")),
+        Err(OrgRefusal::TokenInUse)
+    );
     run(&mut s, agent("web", "w1", "t-w1")).unwrap();
-    assert_eq!(run(&mut s, person("cy", "t-w1")), Err(OrgRefusal::TokenInUse));
-    assert_eq!(run(&mut s, agent("web", "w2", "t-bo")), Err(OrgRefusal::TokenInUse));
+    assert_eq!(
+        run(&mut s, person("cy", "t-w1")),
+        Err(OrgRefusal::TokenInUse)
+    );
+    assert_eq!(
+        run(&mut s, agent("web", "w2", "t-bo")),
+        Err(OrgRefusal::TokenInUse)
+    );
 }
 
 #[test]
@@ -114,7 +125,10 @@ fn an_oidc_subject_belongs_to_one_person() {
         subject: Some("sub-1".into()),
     };
     run(&mut s, with("cy", "t-cy")).unwrap();
-    assert_eq!(run(&mut s, with("di", "t-di")), Err(OrgRefusal::SubjectTaken));
+    assert_eq!(
+        run(&mut s, with("di", "t-di")),
+        Err(OrgRefusal::SubjectTaken)
+    );
 }
 
 #[test]
@@ -138,7 +152,10 @@ fn a_role_needs_a_person_and_a_team_and_the_right_scope() {
         role,
         repos: vec![],
     };
-    assert_eq!(run(&mut s, no_team(Role::Admin)), Err(OrgRefusal::RoleScope));
+    assert_eq!(
+        run(&mut s, no_team(Role::Admin)),
+        Err(OrgRefusal::RoleScope)
+    );
     assert_eq!(run(&mut s, no_team(Role::OrgAdmin)), Ok(Applied::Changed));
     assert!(s.is_org_admin(&key("bo")));
     assert_eq!(s.role_in(&team("web"), &key("bo")), Some(Role::OrgAdmin));
@@ -229,9 +246,18 @@ fn the_last_org_admin_stays_and_revoking_a_non_member_is_a_no_op() {
 #[test]
 fn an_agent_name_is_unique_in_its_team_and_a_revoked_name_stays_taken() {
     let mut s = base();
-    assert_eq!(run(&mut s, agent("payments", "w1", "t1")), Ok(Applied::Changed));
-    assert_eq!(run(&mut s, agent("payments", "w1", "t1")), Ok(Applied::Unchanged));
-    assert_eq!(run(&mut s, agent("payments", "w1", "t2")), Err(OrgRefusal::NameTaken));
+    assert_eq!(
+        run(&mut s, agent("payments", "w1", "t1")),
+        Ok(Applied::Changed)
+    );
+    assert_eq!(
+        run(&mut s, agent("payments", "w1", "t1")),
+        Ok(Applied::Unchanged)
+    );
+    assert_eq!(
+        run(&mut s, agent("payments", "w1", "t2")),
+        Err(OrgRefusal::NameTaken)
+    );
     assert_eq!(run(&mut s, agent("web", "w1", "t3")), Ok(Applied::Changed));
     let revoke = OrgRecord::AgentRevoked {
         team: team("payments"),
@@ -239,8 +265,14 @@ fn an_agent_name_is_unique_in_its_team_and_a_revoked_name_stays_taken() {
     };
     assert_eq!(run(&mut s, revoke.clone()), Ok(Applied::Changed));
     assert_eq!(run(&mut s, revoke), Ok(Applied::Unchanged));
-    assert_eq!(run(&mut s, agent("payments", "w1", "t4")), Err(OrgRefusal::NameTaken));
-    assert_eq!(run(&mut s, agent("payments", "w1", "t1")), Err(OrgRefusal::NameTaken));
+    assert_eq!(
+        run(&mut s, agent("payments", "w1", "t4")),
+        Err(OrgRefusal::NameTaken)
+    );
+    assert_eq!(
+        run(&mut s, agent("payments", "w1", "t1")),
+        Err(OrgRefusal::NameTaken)
+    );
     assert_eq!(
         run(
             &mut s,
@@ -259,8 +291,14 @@ fn a_team_has_a_cap_on_agents() {
     for i in 0..crate::org::MAX_AGENTS_PER_TEAM {
         run(&mut s, agent("web", &format!("a{i}"), &format!("t{i}"))).unwrap();
     }
-    assert_eq!(run(&mut s, agent("web", "extra", "tx")), Err(OrgRefusal::TooMany));
-    assert_eq!(run(&mut s, agent("payments", "extra", "tx")), Ok(Applied::Changed));
+    assert_eq!(
+        run(&mut s, agent("web", "extra", "tx")),
+        Err(OrgRefusal::TooMany)
+    );
+    assert_eq!(
+        run(&mut s, agent("payments", "extra", "tx")),
+        Ok(Applied::Changed)
+    );
 }
 
 #[test]
@@ -313,7 +351,10 @@ fn a_source_has_one_owner() {
     assert_eq!(run(&mut s, add("payments")), Ok(Applied::Changed));
     assert_eq!(run(&mut s, add("payments")), Ok(Applied::Unchanged));
     assert_eq!(run(&mut s, add("web")), Err(OrgRefusal::SourceOwned));
-    assert_eq!(s.source_owner("github:GetFelix/felix"), Some(&team("payments")));
+    assert_eq!(
+        s.source_owner("github:GetFelix/felix"),
+        Some(&team("payments"))
+    );
     let bad = OrgRecord::SourceAdded {
         team: team("web"),
         source: "x\ny".into(),
@@ -343,8 +384,14 @@ fn a_grant_needs_two_teams_and_the_receivers_sources() {
         run(&mut s, grant("payments", "web", vec!["github:x/y".into()])),
         Err(OrgRefusal::UnknownSource)
     );
-    assert_eq!(run(&mut s, grant("payments", "web", vec![])), Ok(Applied::Changed));
-    assert_eq!(run(&mut s, grant("payments", "web", vec![])), Ok(Applied::Unchanged));
+    assert_eq!(
+        run(&mut s, grant("payments", "web", vec![])),
+        Ok(Applied::Changed)
+    );
+    assert_eq!(
+        run(&mut s, grant("payments", "web", vec![])),
+        Ok(Applied::Unchanged)
+    );
     assert_eq!(s.grants().len(), 1);
 }
 
@@ -362,5 +409,39 @@ fn replay_skips_a_refused_record_and_matches_the_live_state() {
     assert_eq!(state.person(&key("ana")).unwrap().token, tok("t-ana"));
     assert!(state.person(&key("ghost")).is_none());
     assert_eq!(state.role_in(&team("web"), &key("ana")), Some(Role::Admin));
-    assert_eq!(state.teams_of(&key("ana")), vec![(team("web"), Role::Admin)]);
+    assert_eq!(
+        state.teams_of(&key("ana")),
+        vec![(team("web"), Role::Admin)]
+    );
+}
+
+#[test]
+fn the_last_admin_cannot_be_narrowed_to_some_repos() {
+    let mut s = base();
+    run(
+        &mut s,
+        OrgRecord::SourceAdded {
+            team: team("payments"),
+            source: "github:a/c".into(),
+        },
+    )
+    .unwrap();
+    let narrow = OrgRecord::RoleGranted {
+        team: Some(team("payments")),
+        person: key("ana"),
+        role: Role::Admin,
+        repos: vec!["github:a/c".into()],
+    };
+    assert_eq!(run(&mut s, narrow), Err(OrgRefusal::LastAdmin));
+}
+
+#[test]
+fn a_team_repeated_with_other_fields_is_not_the_same_team() {
+    let mut s = base();
+    let again = OrgRecord::TeamCreated {
+        team: team("web"),
+        display_name: None,
+        adopted: true,
+    };
+    assert_eq!(run(&mut s, again), Err(OrgRefusal::NameTaken));
 }

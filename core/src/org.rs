@@ -306,7 +306,9 @@ impl OrgLogged {
 pub enum OrgReadError {
     /// The record is of a format above [`ORG_FORMAT`]. The reader must stop:
     /// skipping it would fold a state its writer did not mean.
-    Newer { v: u32 },
+    Newer {
+        v: u32,
+    },
     Malformed(DecodeError),
 }
 
@@ -329,10 +331,12 @@ impl std::error::Error for OrgReadError {}
 pub fn read(payload: &[u8]) -> Result<OrgLogged, OrgReadError> {
     #[derive(Deserialize)]
     struct Envelope {
-        v: u32,
+        v: u64,
     }
     OrgLogged::decode(payload).map_err(|e| match serde_json::from_slice::<Envelope>(payload) {
-        Ok(Envelope { v }) if v > ORG_FORMAT => OrgReadError::Newer { v },
+        Ok(Envelope { v }) if v > u64::from(ORG_FORMAT) => OrgReadError::Newer {
+            v: u32::try_from(v).unwrap_or(u32::MAX),
+        },
         _ => OrgReadError::Malformed(e),
     })
 }

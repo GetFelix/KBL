@@ -317,11 +317,11 @@ each token and never a token. A format above the build's stops the reader.
 |---|---|---|
 | `team_created` | Org admin (route check, later) | Name follows the key rule and is not `kbl`; repeating a team changes nothing |
 | `person_added` | Org admin, team admin (route check, later) | Name and OIDC subject unique, token hash not used by any person, agent or ingest worker |
-| `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last admin of a team cannot be demoted |
+| `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last unscoped admin of a team cannot be demoted or narrowed |
 | `role_revoked` | Team admin, org admin (route check, later) | The last admin of a team and the last org admin stay |
 | `agent_added` | Triager and above (route check, later) | Team exists; name unique in the team and a revoked name stays taken; token hash unused; 256 per team |
 | `agent_revoked` | Whoever added it, team admin (route check, later) | Team and agent exist; revoking twice changes nothing |
-| `source_added` | Team admin (route check, later) | One owning team per source; a label of 1 to 256 bytes with no control characters |
+| `source_added` | Team admin (route check, later) | One owning team per source, compared exactly (case counts); a label of 1 to 256 bytes with no control characters |
 | `ingest_added` | Team admin (route check, later) | Name unique in the team, token hash unused, 32 per team |
 | `grant_added` | Admin of the receiving team (route check, later) | Both teams exist and differ; `repos` are the receiver's sources; 256 per receiving team |
 
@@ -347,6 +347,7 @@ each token and never a token. A format above the build's stops the reader.
 | [#157](https://github.com/GetFelix/KBL/issues/157) | Evidence can cite any record |
 | [#158](https://github.com/GetFelix/KBL/issues/158) | The tracker and the webhook serve plain HTTP |
 | [#109](https://github.com/GetFelix/KBL/issues/109) | Proposals draw no budget; post keys can be reused across claims |
+| [#185](https://github.com/GetFelix/KBL/issues/185) | `org.events` has no record to remove a person, rotate a person's token or revoke an ingest token yet; counts of teams, people and members are not capped |
 | [#120](https://github.com/GetFelix/KBL/issues/120) | No roles: every person can do everything, every agent can claim any repo's work |
 | [#121](https://github.com/GetFelix/KBL/issues/121) | Tokens are long-lived |
 | [#148](https://github.com/GetFelix/KBL/issues/148) | Request names are not canonical; check runs are not filtered by author |

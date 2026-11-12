@@ -20,8 +20,14 @@ fn the_golden_log_folds_to_its_tables() {
     let s = fold(&log);
 
     assert_eq!(s.teams().count(), 2);
-    assert!(s.teams().any(|(t, v)| t.as_str() == "payments" && v.adopted));
-    assert_eq!(s.role_in(&team("payments"), &key("ana")), Some(Role::OrgAdmin));
+    assert!(
+        s.teams()
+            .any(|(t, v)| t.as_str() == "payments" && v.adopted)
+    );
+    assert_eq!(
+        s.role_in(&team("payments"), &key("ana")),
+        Some(Role::OrgAdmin)
+    );
     assert_eq!(s.role_in(&team("web"), &key("ana")), Some(Role::OrgAdmin));
     // bo was removed from payments by the last record.
     assert_eq!(s.role_in(&team("payments"), &key("bo")), None);
@@ -41,6 +47,9 @@ fn the_golden_log_folds_to_its_tables() {
             name: key("github")
         })
     );
-    assert_eq!(s.source_owner("github:GetFelix/felix"), Some(&team("payments")));
+    assert_eq!(
+        s.source_owner("github:GetFelix/felix"),
+        Some(&team("payments"))
+    );
     assert_eq!(s.grants().len(), 1);
 }

@@ -161,8 +161,9 @@ fn every_kind_round_trips_and_is_covered() {
 
 #[test]
 fn a_log_holds_hashes_never_tokens() {
-    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/org_wire.jsonl"))
-        .unwrap();
+    let text =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/org_wire.jsonl"))
+            .unwrap();
     for token in ["ana-token", "bo-token", "w1-token", "gh-token"] {
         assert!(!text.contains(token));
         assert!(text.contains(TokenHash::of(token).as_str()));
@@ -177,6 +178,8 @@ fn a_newer_format_is_refused_not_skipped() {
     assert!(matches!(read(unknown), Err(OrgReadError::Malformed(_))));
     let bad_hash = br#"{"at_ms":1,"by":"ana","kind":"agent_added","team":"web","agent":"w1","token_sha256":"abc"}"#;
     assert!(matches!(read(bad_hash), Err(OrgReadError::Malformed(_))));
+    let far = br#"{"v":4294967296,"at_ms":1,"by":"ana","kind":"mystery"}"#;
+    assert!(matches!(read(far), Err(OrgReadError::Newer { .. })));
     let v1 = br#"{"v":1,"at_ms":1,"by":"ana","kind":"team_created","team":"web"}"#;
     assert!(read(v1).is_ok());
 }

@@ -240,7 +240,7 @@ impl OrgState {
     fn admins_in(&self, team: &TeamName) -> usize {
         self.members
             .iter()
-            .filter(|((t, _), m)| t == team && m.role == Role::Admin)
+            .filter(|((t, _), m)| t == team && m.role == Role::Admin && m.repos.is_empty())
             .count()
     }
 
@@ -266,9 +266,17 @@ impl OrgState {
             {
                 Err(OrgRefusal::BadLabel)
             }
-            OrgRecord::TeamCreated { team, .. } => {
-                Ok(if self.has_team(team) { Unchanged } else { Changed })
-            }
+            OrgRecord::TeamCreated {
+                team,
+                display_name,
+                adopted,
+            } => match self.teams.get(team) {
+                None => Ok(Changed),
+                Some(t) if t.display_name == *display_name && t.adopted == *adopted => {
+                    Ok(Unchanged)
+                }
+                Some(_) => Err(OrgRefusal::NameTaken),
+            },
             OrgRecord::PersonAdded {
                 person,
                 token_sha256,
@@ -305,11 +313,13 @@ impl OrgState {
                     return Err(OrgRefusal::TooMany);
                 }
                 match (team, role) {
-                    (None, Role::OrgAdmin) if repos.is_empty() => Ok(if self.is_org_admin(person) {
-                        Unchanged
-                    } else {
-                        Changed
-                    }),
+                    (None, Role::OrgAdmin) if repos.is_empty() => {
+                        Ok(if self.is_org_admin(person) {
+                            Unchanged
+                        } else {
+                            Changed
+                        })
+                    }
                     (Some(team), role) if *role != Role::OrgAdmin => {
                         self.need_team(team)?;
                         if !self.owns_all(team, repos) {
@@ -319,7 +329,8 @@ impl OrgState {
                             Some(m) if m.role == *role && m.repos == *repos => Ok(Unchanged),
                             Some(m)
                                 if m.role == Role::Admin
-                                    && *role != Role::Admin
+                                    && m.repos.is_empty()
+                                    && (*role != Role::Admin || !repos.is_empty())
                                     && self.admins_in(team) == 1 =>
                             {
                                 Err(OrgRefusal::LastAdmin)
@@ -346,7 +357,11 @@ impl OrgState {
                 self.need_team(team)?;
                 match self.member(team, person) {
                     None => Ok(Unchanged),
-                    Some(m) if m.role == Role::Admin && self.admins_in(team) == 1 => {
+                    Some(m)
+                        if m.role == Role::Admin
+                            && m.repos.is_empty()
+                            && self.admins_in(team) == 1 =>
+                    {
                         Err(OrgRefusal::LastAdmin)
                     }
                     Some(_) => Ok(Changed),
