@@ -615,7 +615,7 @@ async fn a_dead_agents_item_goes_to_another_after_visibility() {
     assert_eq!(claimed_id(&reply).as_deref(), Some("a1"));
     assert_eq!(reply["attempt"], 1);
     // The reply says which branch links a pull request to the item.
-    assert_eq!(reply["item"]["pr_branch"], "kibble/a1");
+    assert_eq!(reply["item"]["pr_branch"], "kbl/a1");
     let log = fake.log();
     let tail: Vec<_> = log[log.len() - 2..]
         .iter()

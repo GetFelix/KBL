@@ -129,9 +129,14 @@ jobs:
             exit 0
           fi
           git worktree add ../previous "$PREVIOUS"
-          # The previous commit still has the old package names.
-          cargo build --manifest-path ../previous/Cargo.toml --target-dir target/previous -p agents-tracker -p felix-mcp
-          KBL_TRACKER_OLD=target/previous/debug/agents-tracker KBL_MCP_OLD=target/previous/debug/felix-mcp \
+          # Builds from before the rename have agents-tracker and felix-mcp.
+          if grep -q '^name = "kbl-tracker"' ../previous/tracker/Cargo.toml; then
+            TRACKER=kbl-tracker; MCP=kbl-mcp
+          else
+            TRACKER=agents-tracker; MCP=felix-mcp
+          fi
+          cargo build --manifest-path ../previous/Cargo.toml --target-dir target/previous -p "$TRACKER" -p "$MCP"
+          KBL_TRACKER_OLD="target/previous/debug/$TRACKER" KBL_MCP_OLD="target/previous/debug/$MCP" \
             node dev/check-upgrade.mjs
       - name: Run a scripted job twice from one seed
         run: node dev/check-scripted.mjs

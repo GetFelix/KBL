@@ -40,7 +40,7 @@ actions = ["subscribe"]
 Open the page with the gateway, the scope's value and an ID token in the query string:
 
 ```
-http://localhost:5173/?gateway=ws://127.0.0.1:8787/ws&room=kibble&token=<ID token>
+http://localhost:5173/?gateway=ws://127.0.0.1:8787/ws&room=kbl&token=<ID token>
 ```
 
 `stream=<alias>` names a different alias than `events`.
