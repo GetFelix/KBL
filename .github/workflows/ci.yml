@@ -24,7 +24,7 @@ jobs:
       - run: node scripts/lint.mjs
       # Every route, tool and record kind has a row in docs/threat-model.md.
       - run: node scripts/check-threat-model.mjs
-      - run: node --test dev/lib/script.test.mjs
+      - run: node --test dev/lib/script.test.mjs dev/lib/agents.test.mjs
       # Malformed changelog fragments, and the assembler's own tests.
       - run: python3 scripts/changelog_assemble.py --check
       - run: python3 -m unittest scripts/test_changelog_assemble.py
@@ -120,6 +120,8 @@ jobs:
         run: node dev/check-tracker-review.mjs
       - name: Run triage as work against Felix
         run: node dev/check-tracker-triage.mjs
+      - name: Run three agent sessions from the launcher until the queue is empty
+        run: node dev/check-agents.mjs
       - name: Upgrade from the previous build and back, over one log
         env:
           # The previous build is the commit this change is based on, until there are releases.

@@ -411,7 +411,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time."
+        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time. Keep taking items: call work_next again after each one, and stop when it says nothing is ready or you are asked to stop."
     )]
     async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
         self.work()?

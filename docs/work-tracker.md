@@ -36,7 +36,7 @@ operations as MCP tools in `kbl-mcp` for agents:
 
 | Tool | Does |
 |---|---|
-| `work_next` | Claims the highest-priority ready item the agent can take. The reply carries the [standing rules](#standing-rules) in effect. With `review_tiers` it also takes [reviews](#review-as-work) of those tiers |
+| `work_next` | Claims the highest-priority ready item the agent can take. The reply carries the [standing rules](#standing-rules) in effect and a `loop` line telling the host to call `work_next` again after each item and to stop when nothing is ready. With `review_tiers` it also takes [reviews](#review-as-work) of those tiers |
 | `work_extend` | Keeps the claim while the agent works (sent by `kbl-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency between items in one tree |

@@ -34,6 +34,15 @@ use crate::felix::{Broker, ExtendError};
 
 mod ingest;
 
+/// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
+const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
+
+/// The reply to `work_next` while the agent's own stale claim is being released.
+const LOOP_RETRY: &str = "Call work_next again in a few seconds. If it keeps saying this, stop.";
+
+/// The reply to `work_next` when there is nothing to start.
+const LOOP_WHEN_EMPTY: &str = "Nothing is ready for you. End your session; do not poll in a loop.";
+
 /// How often `work_next` looks again while it waits for work.
 const POLL_EVERY: Duration = Duration::from_millis(200);
 /// Longest a single `work_next` waits, so a host's tool timeout is not hit.
@@ -348,6 +357,7 @@ impl<B: Broker> Tracker<B> {
                     return Ok(json!({
                         "claimed": false,
                         "note": format!("you have no current claim on {item}; it is being released"),
+                        "loop": LOOP_RETRY,
                     }));
                 }
                 self.sync_ready().await;
@@ -359,7 +369,7 @@ impl<B: Broker> Tracker<B> {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Ok(json!({ "claimed": false }));
+                return Ok(json!({ "claimed": false, "loop": LOOP_WHEN_EMPTY }));
             }
             tokio::time::sleep(left.min(POLL_EVERY)).await;
         }
@@ -1601,6 +1611,7 @@ fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
         "deadline_ms": item.and_then(|i| i.hold.as_ref()).map(|h| h.deadline_ms),
         // Read-only for the agent: only a person's `rules_set` changes it.
         "rules": state.rules_for(&delivery.item),
+        "loop": LOOP_AFTER_CLAIM,
     })
 }
 
