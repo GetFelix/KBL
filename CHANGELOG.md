@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added: `work_triage`, the tool an agent answers a triage item with
+  (`POST /v1/work/triage`). It writes the `triaged` proposal for the item under
+  triage: a tier with why, a duplicate, or `unclear`. A person still accepts
+  it. Before, an agent could claim a triage item and had no way to answer it.
 - Fixed: a release that raced the next claim could evict the new holder. An
   agent that stalled past the visibility and then released nacked a record
   Felix had already handed to the next poller, so that agent was claimed, lost

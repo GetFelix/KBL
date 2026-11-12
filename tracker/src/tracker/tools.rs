@@ -15,7 +15,7 @@ use agents_core::work::{
     Actor, DoneWhen, Evidence, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
     MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO, MAX_VERDICT_WHY,
     MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity, Target, Then,
-    WorkKind, WorkRecord,
+    Unclear, WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -218,15 +218,7 @@ impl<B: Broker> Tracker<B> {
             let allowed = self.visible_repos(&core, agent, item);
             let seen = match &new {
                 Some(n) => allowed.contains(n.target.repo.as_str()),
-                None => core.state.items.get(&prerequisite).is_some_and(|p| {
-                    let own = core.state.items.get(item).map(|i| &i.root) == Some(&p.root);
-                    let repo = core
-                        .state
-                        .items
-                        .get(&p.root)
-                        .and_then(|r| r.target.as_ref());
-                    own || repo.is_some_and(|t| allowed.contains(t.repo.as_str()))
-                }),
+                None => visible(&core, &allowed, item, &prerequisite),
             };
             if !seen {
                 // The same answer for an item that is missing and one the agent may not see.
@@ -596,6 +588,70 @@ impl<B: Broker> Tracker<B> {
         .await
     }
 
+    /// Records the answer of the triage item the agent holds: a proposal for
+    /// the item it triages. A person accepts or edits it; nothing is accepted here.
+    pub(crate) async fn triage(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        tier: u8,
+        why: String,
+        duplicate_of: Option<ItemId>,
+        unclear: Option<Unclear>,
+    ) -> Result<Value, Error> {
+        bounded("why", &why, MAX_FIELD)?;
+        self.begin().await?;
+        let reply = {
+            let mut core = self.0.core.lock().await;
+            let attempt = held(&core, agent, item)?;
+            let target = core
+                .state
+                .items
+                .get(item)
+                .filter(|i| i.work == WorkKind::Triage)
+                .and_then(|i| i.parent.clone())
+                .ok_or_else(|| Error::Invalid(format!("{item} is not a triage item")))?;
+            // A missing item and one outside the agent's grants get the same refusal.
+            let allowed = self.visible_repos(&core, agent, item);
+            if let Some(d) = &duplicate_of
+                && (d == &target || !visible(&core, &allowed, item, d))
+            {
+                return Err(Error::Invalid(format!(
+                    "duplicate_of names {d}, which is not another item"
+                )));
+            }
+            // The same answer again is a retry, not a new record.
+            let standing = core
+                .state
+                .items
+                .get(&target)
+                .and_then(|i| i.proposal.as_ref());
+            if let Some(p) = standing
+                && p.by.as_ref() == Some(&agent_key(agent))
+                && (p.tier, &p.why, &p.duplicate_of, p.unclear)
+                    == (tier, &why, &duplicate_of, unclear)
+            {
+                return Ok(
+                    json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),
+                );
+            }
+            let record = WorkRecord::Triaged {
+                item: target.clone(),
+                tier,
+                why,
+                duplicate_of,
+                unclear,
+            };
+            let offset = self
+                .agent_append(&mut core, agent, item, "triage", record)
+                .await?;
+            json!({ "item": item, "attempt": attempt, "triaged": target, "offset": offset })
+        };
+        // An unclear answer takes its item out of Ready.
+        self.sync_ready().await;
+        Ok(reply)
+    }
+
     /// Records a command the agent ran: what it was, its exit code, its output.
     pub(crate) async fn record_step(
         &self,
@@ -793,6 +849,19 @@ impl<B: Broker> Tracker<B> {
             _ => {}
         }
     }
+}
+
+/// Whether `other` is in `item`'s tree or in a repo the agent may reach.
+fn visible(core: &Core, allowed: &BTreeSet<&str>, item: &ItemId, other: &ItemId) -> bool {
+    core.state.items.get(other).is_some_and(|p| {
+        let own = core.state.items.get(item).map(|i| &i.root) == Some(&p.root);
+        let repo = core
+            .state
+            .items
+            .get(&p.root)
+            .and_then(|r| r.target.as_ref());
+        own || repo.is_some_and(|t| allowed.contains(t.repo.as_str()))
+    })
 }
 
 /// The attempt `agent` holds `item` on, from the log.

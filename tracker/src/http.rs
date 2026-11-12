@@ -9,7 +9,7 @@ use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
 use agents_core::work::{
     CloseWhy, DoneWhen, Evidence, FindingVerdict, MergeVerdict, Phase, RevertCheck, Severity,
-    Target, WorkRecord,
+    Target, Unclear, WorkRecord,
 };
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
@@ -51,6 +51,7 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
         .route("/v1/work/decide", post(decide::<B>))
         .route("/v1/work/finding", post(finding::<B>))
         .route("/v1/work/verdict", post(review_verdict::<B>))
+        .route("/v1/work/triage", post(triage::<B>))
         .route("/v1/work/step", post(step::<B>))
         .route("/v1/work/edit", post(edit::<B>))
         .route("/v1/work/ask", post(ask::<B>))
@@ -498,6 +499,32 @@ async fn review_verdict<B: Broker>(
         Ok(a) => reply(
             app.tracker
                 .review_verdict(&a, &b.item, b.verdict, b.why)
+                .await,
+        ),
+        Err(d) => denied(d),
+    }
+}
+
+#[derive(Deserialize)]
+struct TriageBody {
+    item: ItemId,
+    tier: u8,
+    why: String,
+    #[serde(default)]
+    duplicate_of: Option<ItemId>,
+    #[serde(default)]
+    unclear: Option<Unclear>,
+}
+
+async fn triage<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    headers: HeaderMap,
+    Json(b): Json<TriageBody>,
+) -> Response {
+    match agent(&app, &headers) {
+        Ok(a) => reply(
+            app.tracker
+                .triage(&a, &b.item, b.tier, b.why, b.duplicate_of, b.unclear)
                 .await,
         ),
         Err(d) => denied(d),

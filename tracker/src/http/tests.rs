@@ -205,6 +205,10 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
             json!({ "item": "a1", "note": { "text": "x" } }),
         ),
         (
+            "/v1/work/triage",
+            json!({ "item": "a1", "tier": 1, "why": "w" }),
+        ),
+        (
             "/v1/work/step",
             json!({ "item": "a1", "command": "c", "exit_code": 0, "output": { "text": "x" } }),
         ),

@@ -207,6 +207,10 @@ pub struct Proposal {
     #[serde(default)]
     pub unclear: Option<Unclear>,
     pub at: u64,
+    /// Who wrote it, so a retry by the same writer can be told from a new holder's answer.
+    /// Left out of the state's wire form; a replay of the log sets it again.
+    #[serde(skip)]
+    pub by: Option<Key>,
 }
 
 /// Where an attempt branched from.
@@ -925,6 +929,7 @@ impl State {
                     duplicate_of: duplicate_of.clone(),
                     unclear: *unclear,
                     at: offset,
+                    by: Some(rec.by.clone()),
                 });
                 let it = self.item_mut(item)?;
                 it.changed_upstream = false;

@@ -98,6 +98,20 @@ struct WorkFindingArgs {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct WorkTriageArgs {
+    /// Defaults to the triage item you hold.
+    item: Option<String>,
+    /// The tier you propose, 0 (most urgent) to 3.
+    tier: u8,
+    /// One line on why that tier, or what is unclear.
+    why: String,
+    /// The id of an item this one repeats, if you found one.
+    duplicate_of: Option<String>,
+    /// Set when you cannot settle the item: `scope`, `repo` or `acceptance`. It goes to a person as a question.
+    unclear: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct WorkVerdictArgs {
     /// Defaults to the review you hold.
     item: Option<String>,
@@ -430,6 +444,33 @@ impl Server {
                     "title": a.title,
                     "scenario": a.scenario,
                     "verdict": a.verdict,
+                }),
+            )
+            .await?;
+        Ok(reply.to_string())
+    }
+
+    #[tool(
+        description = "Answer the triage item you hold: propose a tier for the item it triages and say why in one line. Name `duplicate_of` if it repeats another item. If you cannot settle it, set `unclear` to `scope`, `repo` or `acceptance` and it goes to a person as a question. This is a proposal; a person accepts or edits it. Complete the triage item after."
+    )]
+    async fn work_triage(
+        &self,
+        Parameters(a): Parameters<WorkTriageArgs>,
+    ) -> Result<String, String> {
+        if let Some(u) = &a.unclear {
+            check_one_of("unclear", u, &["scope", "repo", "acceptance"])?;
+        }
+        let item = self.item_or_held(a.item).await?;
+        let reply = self
+            .work()?
+            .tool(
+                "/v1/work/triage",
+                json!({
+                    "item": item,
+                    "tier": a.tier,
+                    "why": a.why,
+                    "duplicate_of": a.duplicate_of,
+                    "unclear": a.unclear,
                 }),
             )
             .await?;

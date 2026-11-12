@@ -46,6 +46,7 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
+| `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, or `unclear`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
 
 Every `felix-mcp` work tool, claiming included, calls the tracker over REST
@@ -624,7 +625,7 @@ the operator's job.
 | Kind | Claimed by | The answer comes back as |
 |---|---|---|
 | `fix` | A coding agent | Progress records, a branch, a PR |
-| `triage` | Any agent | A proposal: tier with one line of why, dependencies, possible duplicates, a split of the root, context. A person accepts, edits or rejects it |
+| `triage` | Any agent | A proposal written with `work_triage`: a tier with one line of why, a possible duplicate, or `unclear`. A person accepts, edits or rejects it. Dependencies and a split are not part of the proposal yet |
 | `augment` | Any agent | Context records on the item: repro steps, related code, logs, linked issues, affected areas |
 | `split` | The agent holding the item | Live child items, within the budget below |
 | `question` | Any agent | An answer record that cites stream and offset |
@@ -634,6 +635,16 @@ the operator's job.
 
 Root-shaping changes (a tier, or a split of a root at triage) and out-of-scope
 work are proposals that a person accepts. Children under a held item are live.
+
+An agent answers a triage item with `work_triage`, naming the triage item it
+holds (or nothing, for the item it holds). The tracker writes `triaged` on the
+item under triage and refuses the call from anyone else, for an item that is
+not triage work, and for a `duplicate_of` that is not another item the agent can see. The same
+answer sent twice by the same agent is written once. The agent then completes the triage item.
+
+```json
+{ "tier": 1, "why": "data loss on restart, no workaround", "duplicate_of": "gh-792" }
+```
 
 Triage and augmentation are claimed, extended, completed and given up like
 any other work. A dead agent's triage goes back to the queue. Nothing waits on
