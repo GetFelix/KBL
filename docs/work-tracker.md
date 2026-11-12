@@ -373,6 +373,94 @@ has no matching record to clear it, so a person decides.
 | A person | Use the dashboard and REST. Their actions reach `work.events` through the tracker |
 | The viewer | Read only |
 
+With [teams](#teams), each row holds per team: the tracker publishes to a team's streams only through a Felix token narrowed to that team's namespace, and a viewer reads only the teams they belong to.
+
+### Teams
+
+Not built yet: this is the sketch for [Teams in design.md](design.md#teams)
+([#185](https://github.com/GetFelix/KBL/issues/185)). One tracker serves
+several teams, each in its own Felix namespace with its own `work.events`.
+
+**Settings.** One new setting turns teams on. Without it the tracker runs as
+it does today.
+
+| Variable | Default | What |
+|---|---|---|
+| `KBL_ORG_NAMESPACE` | unset | The namespace that holds `org.events`. Set, the tracker serves every team the org log lists |
+| `KBL_NAMESPACE` | `default` | The first team. With teams on, it is adopted as a team the first time the tracker finds `org.events` empty |
+| `KBL_TRACKER_TOKENS_FILE` | required today, optional with teams | Read as today. Its entries belong to the first team, and its people are org admins |
+| `KBL_TEAM_INFLIGHT` | 64 | Calls in flight per team, so one busy team cannot starve the others |
+
+Teams, people, roles, agents, sources, ingest workers and grants come from
+`org.events`, not from a file, so they change without a restart. Each holds a
+token's SHA-256, never the token. A record on `org.events` looks like this:
+
+```json
+{"kind": "agent_added", "team": "payments", "agent": "w1",
+ "token_sha256": "<hex>", "by": "ana", "at_ms": 1762900000000}
+```
+
+**Which team a call is for.** An agent or ingest token is bound to one team,
+so its calls go to that team and `kbl-mcp` and `kbl-ingest` need no change.
+A person can be in several teams, so person calls name the team in the path:
+
+| Path | Team |
+|---|---|
+| `/v1/teams/{team}/work/...` | `{team}`. Every route under `/v1/work/` and `/v1/ingest/` has this form too |
+| `/v1/work/...`, `/v1/ingest/...` | The token's team. A person in more than one team gets `400` with `why: team_required` |
+
+A team the caller does not belong to answers `404` with `why: unknown_team`,
+the same as a team that does not exist. An agent or ingest token used with
+another team's path gets the same answer.
+
+**Org and team routes.** All take a person token. The tracker checks the
+role, appends to `org.events` if the org fold accepts the record, and answers
+with the record's offset.
+
+| Call | Role | Records |
+|---|---|---|
+| `GET /v1/me` | Any person | Nothing. Answers the person's teams and role in each |
+| `POST /v1/org/teams` `{team, display_name?}` | `org_admin` | `team_created`. The tracker then creates the team's streams and group if they are missing, takes its lease and serves it |
+| `POST /v1/teams/{team}/members` `{person, role, repos?, subject?}` | Team `admin` | `person_added` for a new person, with a new token answered once; then `role_granted`. `repos` narrows the role to some of the team's repos |
+| `DELETE /v1/teams/{team}/members/{person}` | Team `admin` | `role_revoked` |
+| `POST /v1/teams/{team}/agents` `{agent}` | Team `triager` | `agent_added`, with a new token answered once |
+| `GET /v1/teams/{team}/agents` | Team `viewer` | Nothing. Names, who added each, and what each holds |
+| `DELETE /v1/teams/{team}/agents/{agent}` | Whoever added it, or team `admin` | `agent_revoked`, then a `released` with the reason `revoked` on the team's log for each hold |
+| `POST /v1/teams/{team}/sources` `{source, repo}` | Team `admin` | `source_added`. `409` with `why: source_owned` when another team owns it |
+| `POST /v1/teams/{team}/ingest` `{name}` | Team `admin` | `ingest_added`, with a new token answered once |
+| `POST /v1/teams/{team}/grants` `{from_team, agents?, repos?, max_pending?}` | Team `admin` of the receiving team | `grant_added`: agents of `from_team` may file prerequisites here |
+| `DELETE /v1/teams/{team}/grants/{from_team}` | Team `admin` | `grant_removed`. Proposals already filed stay |
+
+`org_admin` passes every team role check. `kbl-tool team create`,
+`member add`, `agent add` and the rest call these routes; `team create` and
+`member add --subject` also write the Felix side
+([Adding a team with no restart](design.md#adding-a-team-with-no-restart)).
+
+**Ingest.** A config names its team, and only sources the team owns are
+read. One process may hold several blocks:
+
+```json
+{
+  "teams": [
+    {
+      "team": "payments",
+      "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN_PAYMENTS" },
+      "github": { "token_file": "/run/secrets/github-token", "own_logins": ["kbl[bot]"] },
+      "rules": [ { "name": "agent-ok", "repo": "acme/payments", "mode": "admit", "labels_all": ["agent-ok"] } ]
+    }
+  ]
+}
+```
+
+Today's single-team config, with `tracker`, `github` and `rules` at the top,
+stays valid and means the first team.
+
+**Prerequisites in another team.** `work_post` with `work: "prerequisite"`
+takes an optional `target_team`. Without it the target is the agent's own
+team, as today. With it, the receiving team must have a grant for the agent's
+team, and the rest works as in
+[Prerequisites in another repo](#prerequisites-in-another-repo).
+
 ### Limits per attempt
 
 The fold caps what one attempt may write: 200 decisions, 500 steps, 500
