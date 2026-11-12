@@ -1475,4 +1475,5 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
     assert_eq!(read["rules"], claimed["rules"]);
 }
 
+mod races;
 mod review;

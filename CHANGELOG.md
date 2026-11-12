@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed: a release that raced the next claim could evict the new holder. An
+  agent that stalled past the visibility and then released nacked a record
+  Felix had already handed to the next poller, so that agent was claimed, lost
+  its delivery and was lapsed while it worked. A delivery polled before the
+  last holder's hand-back ended is no longer turned into a claim.
+
 - Review is claimable work. When an item's pull request opens, the tracker adds
   a first-pass and a final `review` item, each for a reviewer tier
   (`AGENTS_REVIEW_TIERS`, default `fast,deep`, one `work.review.rN` stream

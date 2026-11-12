@@ -74,7 +74,8 @@ Each agent runs `felix-mcp` with its own token, and every work tool calls the tr
 tracker for the highest-priority ready item: the tracker claims it from the ready streams' consumer group as a
 member named after the agent and logs the claim in the same step. `felix-mcp` extends the claim every 30
 seconds while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead agent stops
-extending, so its claim lapses and the item goes to another agent. An agent adds children only under an item it holds (`split`, `augment`,
+extending, so its claim lapses and the item goes to another agent. An item has one holder at a time: a release
+that lands while the item is being handed on does not cost the next agent its claim. An agent adds children only under an item it holds (`split`, `augment`,
 `question` or `test`), within a budget per root. Anything else it finds is a proposal a person accepts.
 
 While it works, the agent records `decide` (what it chose and why, with the phase, a running summary and the

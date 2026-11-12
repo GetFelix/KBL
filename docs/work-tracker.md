@@ -221,6 +221,13 @@ still stands behind that exact delivery for that agent, because a group ack
 names an offset, not a delivery: a stale holder's late call cannot ack the next
 holder's.
 
+A nack names an offset too. An agent that stalled past the visibility can
+release at the moment Felix hands its record to the next poller, and its nack
+then takes that poller's lease as well. So a delivery that was polled before the
+last holder's hand-back ended is not turned into a claim. The record is free
+again, or lapses, and the next poll claims it. Without this the new holder
+would be claimed, lose its delivery at once and be lapsed while it worked.
+
 A sweep (every few seconds) writes `released` with the reason `lapsed` for a
 hold whose delivery the tracker no longer has, or that has not been extended
 for the visibility period, so the item is Ready without another agent having to

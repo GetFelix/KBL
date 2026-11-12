@@ -173,6 +173,11 @@ struct Core {
     lease: Option<LeaseHeld>,
     /// Another tracker took the writer lease.
     fenced: bool,
+    /// Items whose delivery a finished holder is handing back, with the settle
+    /// count when the nack ended (`u64::MAX` while it runs). A group nack names
+    /// an offset, not a delivery, so it also takes the lease of anyone Felix
+    /// handed the record to before it landed (felix#2207).
+    handed_back: HashMap<ItemId, u64>,
     /// The text of context, note, question, answer, decision and triage records by offset, so a read does
     /// not scan the log.
     texts: HashMap<u64, Content>,
@@ -239,6 +244,8 @@ struct Inner<B> {
     holder: String,
     stamp: AtomicU64,
     next_delivery: AtomicU64,
+    /// Counts the hand-backs that have ended. See `Core::handed_back`.
+    settles: AtomicU64,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -266,6 +273,7 @@ impl<B: Broker> Tracker<B> {
             holder: format!("tracker-{}-{}", std::process::id(), now_micros()),
             stamp: AtomicU64::new(now_micros()),
             next_delivery: AtomicU64::new(1),
+            settles: AtomicU64::new(0),
         }));
         tracker.acquire_lease().await?;
         let (state, texts) = tracker.read_state().await?;
@@ -699,6 +707,7 @@ impl<B: Broker> Tracker<B> {
             // published again, not nacked: Felix counts every handout as an attempt and
             // dead-letters a record at its bound, so a nacking author would eat the review.
             loop {
+                let polled_at = self.0.settles.load(Ordering::SeqCst);
                 let polled = self
                     .io(
                         Some(agent.as_str()),
@@ -728,7 +737,7 @@ impl<B: Broker> Tracker<B> {
                 let mut ops = Vec::new();
                 let taken = {
                     let mut core = self.0.core.lock().await;
-                    self.claim_from(&mut core, agent, tier, record, &mut ops)
+                    self.claim_from(&mut core, agent, tier, record, polled_at, &mut ops)
                         .await
                 };
                 self.run(ops).await.ok();
@@ -839,6 +848,7 @@ impl<B: Broker> Tracker<B> {
         agent: &AgentName,
         tier: u8,
         record: GroupRecord,
+        polled_at: u64,
         ops: &mut Vec<Op>,
     ) -> Result<Option<Delivery>, Error> {
         let stream = ready_stream(tier);
@@ -870,6 +880,11 @@ impl<B: Broker> Tracker<B> {
         }
         if ready.tier != tier {
             ack(ops, record.offset);
+            return Ok(None);
+        }
+        // Polled before the last holder's nack ended, so that nack takes this
+        // delivery too. It is no claim; the record comes round again.
+        if core.handed_back.get(&item).is_some_and(|t| *t > polled_at) {
             return Ok(None);
         }
         match core.state.stage(&item) {
@@ -913,6 +928,7 @@ impl<B: Broker> Tracker<B> {
             .await
         {
             Ok(_) => {
+                core.handed_back.remove(&item);
                 let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
                 // Whoever held the item before no longer owns its delivery, so
                 // nothing it does later can settle this one.
@@ -1002,6 +1018,7 @@ impl<B: Broker> Tracker<B> {
                 core.owner.remove(item);
                 let stream = ready_stream(d.tier);
                 ops.push(if ready {
+                    core.handed_back.insert(item.clone(), u64::MAX);
                     Op::Nack(stream, agent.clone(), d.record)
                 } else {
                     Op::Ack(stream, agent.clone(), d.record.offset)
@@ -1009,9 +1026,9 @@ impl<B: Broker> Tracker<B> {
             }
         }
         drop(delivery);
-        let warning = self
-            .run(ops)
-            .await
+        let settled = self.run(ops).await;
+        self.handed_back(item).await;
+        let warning = settled
             .err()
             .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"));
         self.sync_ready().await;
@@ -1052,6 +1069,7 @@ impl<B: Broker> Tracker<B> {
                 }
                 let stream = ready_stream(d.tier);
                 ops.push(if ready {
+                    core.handed_back.insert(d.item.clone(), u64::MAX);
                     Op::Nack(stream, agent.clone(), d.record.clone())
                 } else {
                     Op::Ack(stream, agent.clone(), d.record.offset)
@@ -1059,7 +1077,19 @@ impl<B: Broker> Tracker<B> {
             }
         }
         self.run(ops).await.ok();
+        self.handed_back(&d.item).await;
         delivery.take().map(|d| d.item)
+    }
+
+    /// Marks the hand-back of `item` as ended, whether or not the nack landed:
+    /// a delivery polled from now on is a lease of its own.
+    async fn handed_back(&self, item: &ItemId) {
+        let mut core = self.0.core.lock().await;
+        if let Some(t) = core.handed_back.get_mut(item)
+            && *t == u64::MAX
+        {
+            *t = self.0.settles.fetch_add(1, Ordering::SeqCst) + 1;
+        }
     }
 
     /// Takes back the delivery Felix still holds for `agent`, whose first poll on
