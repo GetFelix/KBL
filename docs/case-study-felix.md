@@ -1,9 +1,9 @@
 # Case study: building Felix with agents
 
 Felix and its companion projects (felix-gateway, the client SDKs, felix-canvas,
-felix-metro, Kibble itself) are built by one person directing many agents. This
-page describes how that work runs today, what hurts, and how Kibble should
-change it. It is the design target for Kibble: if Kibble cannot run this
+felix-metro, KBL (Kanban By Log, pronounced Kibble) itself) are built by one person directing many agents. This
+page describes how that work runs today, what hurts, and how KBL should
+change it. It is the design target for KBL: if KBL cannot run this
 project well, it is not ready for anyone else's.
 
 ## How the work runs today
@@ -26,7 +26,7 @@ its own git worktree. A typical change goes like this:
 7. Everything above is written into a handoff file so the next session can
    resume.
 
-On one morning (11/11), two Kibble PRs took this path. #108 went through
+On one morning (11/11), two KBL PRs took this path. #108 went through
 two review rounds and #107 through three. Together they produced seven
 follow-up issues and two maintainer questions. The process works: both reviews
 found real defects, including an ingest token that could write anywhere and
@@ -47,9 +47,9 @@ coordination around them is manual.
 | Spend is a guess | Usage is checked by hand ("6% left"), and the choice between a cheap and a strong reviewer is made per call. |
 | The maintainer is the queue | Nobody measures how long a PR or a question waits for the one person who can unblock it. |
 
-## How it works with Kibble
+## How it works with KBL
 
-Kibble does not run models. It is the tracker the agents and the maintainer
+KBL does not run models. It is the tracker the agents and the maintainer
 share, and every step above becomes a record in `work.events`.
 
 - **The board replaces the handoff file.** Ingest imports the issues of every
@@ -86,7 +86,7 @@ share, and every step above becomes a record in `work.events`.
 
 Felix work often starts in a companion. A gateway gap found while building
 felix-blocks becomes a felix-gateway issue and a tracking issue in the
-Felix milestone. With Kibble, one root can link items in several repos, and
+Felix milestone. With KBL, one root can link items in several repos, and
 the companion's item is Blocked on the Felix item until it closes. The board
 for one person covers every repo they own.
 
@@ -98,7 +98,7 @@ merged or released, since a companion usually needs the Felix release, not just
 the merge. When the prerequisite is done, the original item is Ready again, and
 the next claim resumes from the recorded decisions (#140).
 
-## What Kibble needs for this
+## What KBL needs for this
 
 Already planned: dependencies (#67), budgets and lineage (#96), decision
 records (#84), redo from a decision (#94), review limit (#90), time to first
@@ -121,9 +121,9 @@ New, from this case study:
 1. **Shadow.** Ingest the Felix and companion repos and keep the board next
    to the current process. Compare it with the handoff file each day.
 2. **Reviews and follow-ups.** Run review rounds and follow-ups through
-   Kibble. The handoff file stops tracking PRs.
-3. **All lanes.** Agents claim from Kibble, and the coordinator plans by
+   KBL. The handoff file stops tracking PRs.
+3. **All lanes.** Agents claim from KBL, and the coordinator plans by
    accepting triage and setting tiers. The handoff file is retired.
 
-Done when a new session can resume all Felix work from Kibble alone, and the
+Done when a new session can resume all Felix work from KBL alone, and the
 maintainer's median wait on My queue is measured and falling.

@@ -1,6 +1,6 @@
 # Dashboard
 
-The Kibble dashboard in the browser. It reads `work.events` through
+The KBL (Kanban By Log) dashboard in the browser. It reads `work.events` through
 [felix-gateway](https://github.com/GetFelix/felix-gateway), folds it with the `core` crate compiled to
 WebAssembly, and lists every item with its stage. The page is plain TypeScript built with Vite. The fold already
 holds the state, so there is no UI framework and no second state layer.
