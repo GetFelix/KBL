@@ -1,7 +1,7 @@
-//! `agents-tool`: sets up what a Felix Agents run needs on Felix.
+//! `kbl-tool`: sets up what a Felix Agents run needs on Felix.
 //!
 //! ```text
-//! agents-tool run create demo --goal "Review PR 12" --budget-usd 5 --workers 4
+//! kbl-tool run create demo --goal "Review PR 12" --budget-usd 5 --workers 4
 //! ```
 
 mod felix;
@@ -9,11 +9,11 @@ mod run;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use agents_core::codec::Codec;
-use agents_core::names::{Resources, RunId, WORKERS_GROUP};
-use agents_core::work::WORK_EVENTS;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
+use kbl_core::codec::Codec;
+use kbl_core::names::{Resources, RunId, WORKERS_GROUP};
+use kbl_core::work::WORK_EVENTS;
 
 use felix::{Outcome, Session, Target};
 use run::NewRun;
@@ -30,34 +30,34 @@ struct Cli {
 /// Where Felix is. The defaults match the development stack in `dev/`.
 #[derive(Args)]
 struct TargetArgs {
-    #[arg(long, env = "AGENTS_TENANT", default_value = "agents")]
+    #[arg(long, env = "KBL_TENANT", default_value = "agents")]
     tenant: String,
-    #[arg(long, env = "AGENTS_NAMESPACE", default_value = "default")]
+    #[arg(long, env = "KBL_NAMESPACE", default_value = "default")]
     namespace: String,
     #[arg(
         long,
-        env = "AGENTS_FELIX_CONTROL_PLANE",
+        env = "KBL_FELIX_CONTROL_PLANE",
         default_value = "http://127.0.0.1:8443"
     )]
     control_plane: String,
     /// The development IdP, which signs `agents-admin` in.
-    #[arg(long, env = "AGENTS_IDP", default_value = "http://127.0.0.1:9400")]
+    #[arg(long, env = "KBL_IDP", default_value = "http://127.0.0.1:9400")]
     idp: String,
     /// An ID token for the tenant, used instead of asking the development IdP.
-    #[arg(long, env = "AGENTS_ID_TOKEN", hide_env_values = true)]
+    #[arg(long, env = "KBL_ID_TOKEN", hide_env_values = true)]
     id_token: Option<String>,
     /// The broker's QUIC address.
-    #[arg(long, env = "AGENTS_FELIX_BROKER", default_value = "127.0.0.1:5000")]
+    #[arg(long, env = "KBL_FELIX_BROKER", default_value = "127.0.0.1:5000")]
     broker: String,
     /// The PEM file the broker's certificate is trusted from.
     #[arg(
         long,
-        env = "AGENTS_FELIX_CA_FILE",
+        env = "KBL_FELIX_CA_FILE",
         default_value = "dev/state/broker-cert.pem"
     )]
     broker_ca: String,
     /// The name in the broker's certificate.
-    #[arg(long, env = "AGENTS_FELIX_BROKER_NAME", default_value = "localhost")]
+    #[arg(long, env = "KBL_FELIX_BROKER_NAME", default_value = "localhost")]
     broker_name: String,
 }
 
@@ -102,8 +102,15 @@ struct CreateArgs {
     workers: u32,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    kbl_core::legacy_env::adopt();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> Result<()> {
     let cli = Cli::parse();
     let target = Target {
         tenant: cli.target.tenant,

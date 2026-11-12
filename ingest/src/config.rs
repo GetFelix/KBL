@@ -122,10 +122,10 @@ impl Config {
                 r.name
             );
             ensure!(
-                r.default_tier < agents_core::work::TIERS
+                r.default_tier < kbl_core::work::TIERS
                     && r.priority_labels
                         .values()
-                        .all(|t| *t < agents_core::work::TIERS),
+                        .all(|t| *t < kbl_core::work::TIERS),
                 "rule {:?}: a tier is 0 to 3",
                 r.name
             );

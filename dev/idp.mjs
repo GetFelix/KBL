@@ -3,7 +3,7 @@
 // provider, but signs in anyone who picks a name: never expose it.
 //
 // GET /token?sub=<subject>&aud=<audience> also mints an ID token directly,
-// for the seed script, `agents-tool` and the checks.
+// for the seed script, `kbl-tool` and the checks.
 import { createServer } from "node:http";
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
 

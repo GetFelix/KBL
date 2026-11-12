@@ -1,5 +1,5 @@
 [package]
-name = "agents-core"
+name = "kbl-core"
 version = "0.0.0"
 description = "Record formats, resource names and rules shared by every Felix Agents program"
 edition.workspace = true

@@ -4,10 +4,10 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use agents_core::names::{ItemId, Key};
-use agents_core::work::{Actor, WorkLogged, WorkRecord};
-use agents_core::work_fold::State;
 use anyhow::Result;
+use kbl_core::names::{ItemId, Key};
+use kbl_core::work::{Actor, WorkLogged, WorkRecord};
+use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 
 use crate::github::{Req, Res, Transport};

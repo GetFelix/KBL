@@ -12,7 +12,7 @@ use felix_client::{
 };
 use serde_json::{Value, json};
 
-/// Where Felix is and who `agents-tool` is.
+/// Where Felix is and who `kbl-tool` is.
 #[derive(Debug, Clone)]
 pub(crate) struct Target {
     pub(crate) tenant: String,

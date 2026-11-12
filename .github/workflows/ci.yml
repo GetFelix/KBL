@@ -94,22 +94,22 @@ jobs:
       - run: node dev/check.mjs
       - name: Create a run, then refuse the same id again
         run: |
-          cargo build -p agents-tool
-          tool=target/debug/agents-tool
+          cargo build -p kbl-tool
+          tool=target/debug/kbl-tool
           "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2
           if "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2; then
             echo "a second create of the same run succeeded" >&2
             exit 1
           fi
-      - name: Start felix-mcp and list its tools
+      - name: Start kbl-mcp and list its tools
         run: |
-          cargo build -p felix-mcp
+          cargo build -p kbl-mcp
           node dev/check-mcp.mjs
       - name: Run the task tools against Felix
         run: node dev/check-tasks.mjs
       - name: Run the tracker's claim path against Felix
         run: |
-          cargo build -p agents-tool -p felix-mcp -p agents-tracker
+          cargo build -p kbl-tool -p kbl-mcp -p kbl-tracker
           node dev/check-tracker-claims.mjs
       - name: Run the work tools against Felix
         run: node dev/check-tracker-work.mjs
@@ -122,8 +122,9 @@ jobs:
         run: |
           git fetch --depth=1 origin "$PREVIOUS"
           git worktree add ../previous "$PREVIOUS"
+          # The previous commit still has the old package names.
           cargo build --manifest-path ../previous/Cargo.toml --target-dir target/previous -p agents-tracker -p felix-mcp
-          AGENTS_TRACKER_OLD=target/previous/debug/agents-tracker FELIX_MCP_OLD=target/previous/debug/felix-mcp \
+          KBL_TRACKER_OLD=target/previous/debug/agents-tracker KBL_MCP_OLD=target/previous/debug/felix-mcp \
             node dev/check-upgrade.mjs
       - name: Run a scripted job twice from one seed
         run: node dev/check-scripted.mjs

@@ -1,6 +1,6 @@
 // Runs the previous build of the tracker and this one over the same
 // work.events, in the order docs/upgrades.md gives, with agents that stay on
-// the previous felix-mcp throughout (clients upgrade after the tracker):
+// the previous kbl-mcp throughout (clients upgrade after the tracker):
 //   1. the previous tracker takes work in and hands an item to w1;
 //   2. this build takes over: w1 still holds its item and finishes it, and w2
 //      claims the next one;
@@ -12,8 +12,8 @@
 // Both builds write format 1 only, so this does not show a reader stopping at
 // a newer format: the unit tests of core, the tracker and the page do.
 //
-//   AGENTS_TRACKER_OLD and FELIX_MCP_OLD name the previous build's binaries.
-//   cargo build -p felix-mcp -p agents-tool -p agents-tracker && node dev/check-upgrade.mjs
+//   KBL_TRACKER_OLD and KBL_MCP_OLD name the previous build's binaries.
+//   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-upgrade.mjs
 import {
   agent as spawnAgent,
   check,
@@ -28,17 +28,17 @@ import {
   workLog,
 } from "./lib/stack.mjs";
 
-const OLD_TRACKER = process.env.AGENTS_TRACKER_OLD;
-const OLD_MCP = process.env.FELIX_MCP_OLD;
+const OLD_TRACKER = process.env.KBL_TRACKER_OLD;
+const OLD_MCP = process.env.KBL_MCP_OLD;
 if (!OLD_TRACKER || !OLD_MCP) {
-  console.error("set AGENTS_TRACKER_OLD and FELIX_MCP_OLD to the previous build's agents-tracker and felix-mcp");
+  console.error("set KBL_TRACKER_OLD and KBL_MCP_OLD to the previous build's kbl-tracker and kbl-mcp");
   process.exit(2);
 }
 
 const RUN = newRunId("upgrade");
 const tokens = { agents: { "tok-w1": "w1", "tok-w2": "w2" }, people: { "tok-gab": "gab" } };
 // Long enough that a claim outlives the seconds no tracker is up.
-const timing = { AGENTS_CLAIM_VISIBILITY_MS: "60000", AGENTS_EXTEND_EVERY_MS: "1000" };
+const timing = { KBL_CLAIM_VISIBILITY_MS: "60000", KBL_EXTEND_EVERY_MS: "1000" };
 // Other checks share the log, so these items are named for this run.
 const tag = Date.now().toString(36);
 const [a, b, c] = [`up-${tag}-a`, `up-${tag}-b`, `up-${tag}-c`];
@@ -48,7 +48,7 @@ giveUpAfter(240, "the upgrade check");
 const felix = await felixToken();
 createRun(RUN, "upgrade check");
 const agent = (name) =>
-  spawnAgent(felix, RUN, name, { ...timing, AGENTS_TRACKER_URL: TRACKER_URL, AGENTS_TRACKER_TOKEN: `tok-${name}` }, OLD_MCP);
+  spawnAgent(felix, RUN, name, { ...timing, KBL_TRACKER_URL: TRACKER_URL, KBL_TRACKER_TOKEN: `tok-${name}` }, OLD_MCP);
 
 async function seed(id) {
   await personRecord("tok-gab", { kind: "imported", item: id, source: "check", upstream_id: id, title: `item ${id}` });

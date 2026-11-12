@@ -685,7 +685,7 @@ async fn a_stale_ready_record_is_acked_and_skipped() {
         key("gab"),
         WorkRecord::Closed {
             item: item("gone"),
-            why: agents_core::work::CloseWhy::Dismissed,
+            why: kbl_core::work::CloseWhy::Dismissed,
         },
     )
     .await
@@ -1084,7 +1084,7 @@ async fn a_person_closing_a_held_item_ends_the_agents_claim_and_settles_the_deli
         key("gab"),
         WorkRecord::Closed {
             item: item("a1"),
-            why: agents_core::work::CloseWhy::Dismissed,
+            why: kbl_core::work::CloseWhy::Dismissed,
         },
     )
     .await
@@ -1216,7 +1216,7 @@ async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
         WorkRecord::Rejected { item: item("r1") },
         WorkRecord::Closed {
             item: item("r1"),
-            why: agents_core::work::CloseWhy::Dismissed,
+            why: kbl_core::work::CloseWhy::Dismissed,
         },
     ] {
         let err = t.ingest_record(key("ingest-gh"), record).await.unwrap_err();
@@ -1248,7 +1248,7 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
             item: item("theirs"),
             parent: None,
             key: key("fix"),
-            work: agents_core::work::WorkKind::Fix,
+            work: kbl_core::work::WorkKind::Fix,
             title: "mine to run".into(),
             review: None,
         },
@@ -1263,18 +1263,18 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
         },
         WorkRecord::Closed {
             item: item("theirs"),
-            why: agents_core::work::CloseWhy::Upstream,
+            why: kbl_core::work::CloseWhy::Upstream,
         },
         WorkRecord::Reopened {
             item: item("theirs"),
         },
         WorkRecord::PrStatus {
             item: item("theirs"),
-            status: agents_core::work::PrSnapshot {
+            status: kbl_core::work::PrSnapshot {
                 pr: "o/r#2".into(),
-                phase: agents_core::work::PrPhase::Merged,
-                review: agents_core::work::PrReview::Approved,
-                checks: agents_core::work::PrChecks::Green,
+                phase: kbl_core::work::PrPhase::Merged,
+                review: kbl_core::work::PrReview::Approved,
+                checks: kbl_core::work::PrChecks::Green,
                 failing: None,
             },
         },
@@ -1289,13 +1289,13 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
         WorkRecord::Context {
             item: item("theirs"),
             entry: key("note"),
-            text: agents_core::content::Content::Text("hi".into()),
+            text: kbl_core::content::Content::Text("hi".into()),
         },
         WorkRecord::Proposed {
             item: item("x"),
             parent: Some(item("theirs")),
             key: key("triage"),
-            work: agents_core::work::WorkKind::Triage,
+            work: kbl_core::work::WorkKind::Triage,
             title: "t".into(),
             review: None,
         },
@@ -1311,14 +1311,14 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
     ingest(WorkRecord::Context {
         item: item("mine"),
         entry: key("note"),
-        text: agents_core::content::Content::Text("ok".into()),
+        text: kbl_core::content::Content::Text("ok".into()),
     })
     .await
     .unwrap();
     let err = ingest(WorkRecord::Context {
         item: item("mine"),
         entry: key("big"),
-        text: agents_core::content::Content::Text("x".repeat(5000)),
+        text: kbl_core::content::Content::Text("x".repeat(5000)),
     })
     .await
     .unwrap_err();
@@ -1374,7 +1374,7 @@ async fn ingest_cannot_close_as_merged_without_a_merged_status() {
             key("ingest-gh"),
             WorkRecord::Closed {
                 item: item("mine"),
-                why: agents_core::work::CloseWhy::Merged,
+                why: kbl_core::work::CloseWhy::Merged,
             },
         )
         .await
@@ -1411,7 +1411,7 @@ pub(super) async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
 
 fn felix_rules(root: Option<&str>, text: Option<&str>, checks: Option<&[&str]>) -> WorkRecord {
     WorkRecord::RulesSet {
-        target: agents_core::work::Target {
+        target: kbl_core::work::Target {
             source: "github".into(),
             repo: "GetFelix/felix".into(),
         },
@@ -1479,13 +1479,13 @@ async fn rules_over_the_size_bounds_are_refused() {
     let fake = Fake::default();
     let t = start(&fake).await;
     seed_in_felix(&t, "a1").await;
-    let big = "x".repeat(agents_core::work::MAX_RULES_TEXT + 1);
+    let big = "x".repeat(kbl_core::work::MAX_RULES_TEXT + 1);
     let err = t
         .person_record(key("gab"), felix_rules(None, Some(&big), None))
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)));
-    let many = vec!["c"; agents_core::work::MAX_RULE_CHECKS + 1];
+    let many = vec!["c"; kbl_core::work::MAX_RULE_CHECKS + 1];
     let err = t
         .person_record(key("gab"), felix_rules(None, None, Some(&many)))
         .await
@@ -1571,7 +1571,7 @@ async fn no_route_writes_an_oversized_string() {
             unclear: None,
         },
         WorkRecord::RulesSet {
-            target: agents_core::work::Target {
+            target: kbl_core::work::Target {
                 source: "github".into(),
                 repo: big.clone(),
             },
@@ -1586,7 +1586,7 @@ async fn no_route_writes_an_oversized_string() {
     let progress = |branch: Option<String>, pr: Option<String>| WorkRecord::Progress {
         item: item("big"),
         attempt: 1,
-        note: agents_core::content::Content::Text("ok".into()),
+        note: kbl_core::content::Content::Text("ok".into()),
         branch,
         pr,
     };
@@ -1655,7 +1655,7 @@ async fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    let text = |s: &str| agents_core::content::Content::Text(s.into());
+    let text = |s: &str| kbl_core::content::Content::Text(s.into());
     t.person_record(
         key("gab"),
         WorkRecord::Context {

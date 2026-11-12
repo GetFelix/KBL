@@ -1,5 +1,5 @@
 # What the gateway lets a browser session reach in one run: the run log and
-# the artifacts behind its steps, read only. `agents-tool` creates these
+# the artifacts behind its steps, read only. `kbl-tool` creates these
 # resources and grants the viewer access when it creates a run.
 
 [scope]

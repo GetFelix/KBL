@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 
 // Built by `npm run wasm`.
-const { Folder } = createRequire(import.meta.url)('../.wasm-node/agents_wasm.js');
+const { Folder } = createRequire(import.meta.url)('../.wasm-node/kbl_wasm.js');
 const golden = new URL('../../wasm/golden/', import.meta.url);
 
 for (const name of ['every_record', 'pre_prerequisite', 'pre_questions']) {

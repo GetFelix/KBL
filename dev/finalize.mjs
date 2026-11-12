@@ -7,8 +7,8 @@
 // manage nodes.
 import { readFile, writeFile } from "node:fs/promises";
 
-const CONTROL_PLANE = process.env.AGENTS_FELIX_CONTROL_PLANE ?? "http://controlplane:8443";
-const STATE = process.env.AGENTS_STATE_DIR ?? "/state";
+const CONTROL_PLANE = process.env.KBL_FELIX_CONTROL_PLANE ?? "http://controlplane:8443";
+const STATE = process.env.KBL_STATE_DIR ?? "/state";
 const FEATURES = ["atomic_commit", "publisher_principal"];
 
 const token = (await readFile(`${STATE}/node.token`, "utf8")).trim();

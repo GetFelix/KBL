@@ -8,7 +8,7 @@
 //   3. the final review waits for the fixes the first pass asked for, and
 //      its verdict is a record while the root stays open for a person.
 //
-//   cargo build -p felix-mcp -p agents-tool -p agents-tracker && node dev/check-tracker-review.mjs
+//   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-tracker-review.mjs
 import {
   agent as spawnAgent,
   check,
@@ -30,7 +30,7 @@ const tokens = {
   people: { "tok-gab": "gab" },
   ingest: { "tok-ing": "ingest" },
 };
-const timing = { AGENTS_CLAIM_VISIBILITY_MS: "8000", AGENTS_EXTEND_EVERY_MS: "1000" };
+const timing = { KBL_CLAIM_VISIBILITY_MS: "8000", KBL_EXTEND_EVERY_MS: "1000" };
 
 giveUpAfter(240, "the tracker review check");
 
@@ -39,8 +39,8 @@ createRun(RUN, "review check");
 const agent = (name) =>
   spawnAgent(felix, RUN, name, {
     ...timing,
-    AGENTS_TRACKER_URL: TRACKER_URL,
-    AGENTS_TRACKER_TOKEN: `tok-${name}`,
+    KBL_TRACKER_URL: TRACKER_URL,
+    KBL_TRACKER_TOKEN: `tok-${name}`,
   });
 
 async function takeNext(who, seconds, args = {}) {

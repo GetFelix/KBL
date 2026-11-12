@@ -1,4 +1,4 @@
-use agents_core::codec::Codec;
+use kbl_core::codec::Codec;
 
 use super::*;
 
@@ -61,7 +61,7 @@ fn the_streams_are_durable_and_single_shard() {
 fn run_started_carries_the_goal_budget_and_agents() {
     let logged = new_run(2).started(1_700_000_000_000).unwrap();
     let decoded = Logged::decode(&logged.encode()).unwrap();
-    assert_eq!(decoded.by.as_str(), "agents-tool");
+    assert_eq!(decoded.by.as_str(), "kbl-tool");
     assert_eq!(decoded.at_ms, 1_700_000_000_000);
     let Record::RunStarted {
         goal,

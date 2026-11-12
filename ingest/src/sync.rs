@@ -11,10 +11,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use agents_core::content::Content;
-use agents_core::names::{ItemId, Key};
-use agents_core::work::{CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord};
 use anyhow::Context;
+use kbl_core::content::Content;
+use kbl_core::names::{ItemId, Key};
+use kbl_core::work::{CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Mode, Rule};
@@ -109,7 +109,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .await;
         match (done, saved) {
             (Err(run), Err(save)) => {
-                eprintln!("agents-ingest: the state was not saved either: {save:#}");
+                eprintln!("kbl-ingest: the state was not saved either: {save:#}");
                 Err(run)
             }
             (Err(run), Ok(_)) => Err(run),
@@ -246,7 +246,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             // Someone else's root has this id: it is imported, so leave it.
             Appended::Refused(why) if why == "duplicate" => {}
             Appended::Refused(why) => {
-                eprintln!("agents-ingest: {key} was not imported: {why}");
+                eprintln!("kbl-ingest: {key} was not imported: {why}");
                 return Ok(());
             }
         }
@@ -319,7 +319,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     async fn follow(&self, p: &mut Poll, issue: &Issue, mut t: Tracked) -> Result<(), SourceError> {
         let key = issue.id.to_string();
         let Some(root) = p.roots.get(&key).cloned() else {
-            eprintln!("agents-ingest: {key} is tracked but the tracker has no root for it");
+            eprintln!("kbl-ingest: {key} is tracked but the tracker has no root for it");
             return Ok(());
         };
         match (t.closed, issue.closed) {
@@ -468,13 +468,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 Err(e @ SourceError::RateLimited { .. }) => return Err(e),
                 // The name comes from an agent; one bad request must not stop the poll.
                 Err(e) => {
-                    eprintln!("agents-ingest: could not read {pr} for {key}: {e}");
+                    eprintln!("kbl-ingest: could not read {pr} for {key}: {e}");
                     continue;
                 }
             };
             let ours = self.own.contains(&pull.author.to_ascii_lowercase());
             let Some(status) = pull.status.filter(|_| ours) else {
-                eprintln!("agents-ingest: {pr} was not opened by us; not reading its state");
+                eprintln!("kbl-ingest: {pr} was not opened by us; not reading its state");
                 continue;
             };
             // The agent names the request, so it must be tied to this item by
@@ -490,14 +490,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 Some(at) => {
                     pull.created_ms.is_some_and(|c| c >= at)
                         && (closes
-                            || item
-                                .is_some_and(|i| pull.head_ref == agents_core::work::pr_branch(&i)))
+                            || item.is_some_and(|i| pull.head_ref == kbl_core::work::pr_branch(&i)))
                 }
                 None => closes,
             };
             if !linked {
                 eprintln!(
-                    "agents-ingest: {pr} is not linked to {key} (branch, reference or age); not reading its state"
+                    "kbl-ingest: {pr} is not linked to {key} (branch, reference or age); not reading its state"
                 );
                 continue;
             }
@@ -527,7 +526,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 Appended::Refused(why) if why == "duplicate" => {}
                 Appended::Refused(why) => {
                     eprintln!(
-                        "agents-ingest: the state of the pull request for {key} was refused: {why}"
+                        "kbl-ingest: the state of the pull request for {key} was refused: {why}"
                     );
                     return Ok(());
                 }
@@ -665,7 +664,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 {
                     Appended::Written => {}
                     Appended::Refused(why) => {
-                        eprintln!("agents-ingest: link {key} -> {to} refused: {why}");
+                        eprintln!("kbl-ingest: link {key} -> {to} refused: {why}");
                     }
                 }
                 if let Some(t) = p.state.items.get_mut(&key) {
@@ -711,7 +710,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     Err(e @ SourceError::RateLimited { .. }) => return Err(e),
                     // An agent names the pull request, so a refusal must not hold the cursor.
                     Err(e) => {
-                        eprintln!("agents-ingest: write-back for {key} failed: {e}");
+                        eprintln!("kbl-ingest: write-back for {key} failed: {e}");
                         if let Some(t) = p.state.items.get_mut(&key) {
                             t.write_back_tries += 1;
                             if t.write_back_tries < MAX_WRITE_BACK_TRIES {
@@ -742,7 +741,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .any(|r| r.repo.eq_ignore_ascii_case(&issue.repo));
         let allowed = named && pr.repo.eq_ignore_ascii_case(&issue.repo);
         if !allowed {
-            eprintln!("agents-ingest: ignoring the pull request {pr} for {key}: not in its repo");
+            eprintln!("kbl-ingest: ignoring the pull request {pr} for {key}: not in its repo");
         }
         allowed
     }
@@ -756,10 +755,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             Appended::Written => {}
             Appended::Refused(why) if why == "duplicate" => {}
             Appended::Refused(why) => {
-                eprintln!(
-                    "agents-ingest: a {} record was refused: {why}",
-                    record.kind()
-                );
+                eprintln!("kbl-ingest: a {} record was refused: {why}", record.kind());
             }
         }
         Ok(())

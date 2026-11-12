@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agents_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use felix_client::{
     AckMode, BrokerError, CacheCondition, Client, ClientConfig, ErrorCode, GroupMember,
     GroupPollOptions, GroupRecord, StartPosition, quic_client_config, root_store_from_pem_file,
 };
+use kbl_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
 use serde_json::{Value, json};
 
 /// The cache and key that hold the tracker's writer lease.

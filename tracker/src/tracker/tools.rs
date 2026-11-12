@@ -8,10 +8,10 @@
 //! per-attempt cap the refusal is logged, so a looping agent cannot fill the
 //! stream with refusals either.
 
-use agents_core::artifact::{ArtifactId, INLINE_LIMIT};
-use agents_core::content::Content;
-use agents_core::names::{AgentName, ItemId, Key};
-use agents_core::work::{
+use kbl_core::artifact::{ArtifactId, INLINE_LIMIT};
+use kbl_core::content::Content;
+use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::work::{
     Actor, DoneWhen, Evidence, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
     MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO, MAX_VERDICT_WHY,
     MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity, Target, Then,
@@ -1028,12 +1028,12 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             field("target source", &target.source)?;
             field("target repo", &target.repo)?;
             if let Some(text) = text
-                && text.len() > agents_core::work::MAX_RULES_TEXT
+                && text.len() > kbl_core::work::MAX_RULES_TEXT
             {
                 return Err(Error::Invalid(format!(
                     "rules text is {} bytes; at most {}",
                     text.len(),
-                    agents_core::work::MAX_RULES_TEXT
+                    kbl_core::work::MAX_RULES_TEXT
                 )));
             }
             Ok(())

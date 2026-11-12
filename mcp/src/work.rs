@@ -278,11 +278,11 @@ impl<T: TrackerApi> Claim for WorkClaim<T> {
     async fn extended(&self, _visible: Duration) {}
 
     async fn failed(&self, error: &anyhow::Error) {
-        eprintln!("felix-mcp: extending {} failed: {error:#}", self.item);
+        eprintln!("kbl-mcp: extending {} failed: {error:#}", self.item);
     }
 
     async fn lost(&self) {
-        eprintln!("felix-mcp: the claim on {} is lost", self.item);
+        eprintln!("kbl-mcp: the claim on {} is lost", self.item);
     }
 }
 

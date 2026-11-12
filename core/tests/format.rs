@@ -2,9 +2,9 @@
 //! read and fold as they always did, and a reader refuses a record of a newer
 //! format instead of skipping it.
 
-use agents_core::codec::Codec;
-use agents_core::work::{Actor, FORMAT, FORMAT_V1, ReadError, WorkLogged, WorkRecord, read};
-use agents_core::work_fold::{State, fold};
+use kbl_core::codec::Codec;
+use kbl_core::work::{Actor, FORMAT, FORMAT_V1, ReadError, WorkLogged, WorkRecord, read};
+use kbl_core::work_fold::{State, fold};
 
 /// Logs written before records carried a version.
 const LOGS: [(&str, &str); 4] = [
@@ -100,7 +100,7 @@ fn a_record_without_a_version_is_the_first_format_and_is_written_without_one() {
 /// the envelope the tracker always wrote in front of those same bytes.
 #[test]
 fn a_first_format_record_is_logged_with_the_bytes_it_always_had() {
-    let by = agents_core::names::Key::new("w3").unwrap();
+    let by = kbl_core::names::Key::new("w3").unwrap();
     for (i, line) in include_str!("work_wire.jsonl").lines().enumerate() {
         let record = WorkRecord::decode(line.as_bytes()).unwrap();
         let logged = WorkLogged::new(1_800_000_000_000, by.clone(), Actor::Agent, record);
@@ -213,7 +213,7 @@ fn an_unknown_field_in_a_readable_format_is_ignored() {
 
 #[test]
 fn a_raise_is_written_with_the_format_it_raises_to() {
-    let by = agents_core::names::Key::new("gab").unwrap();
+    let by = kbl_core::names::Key::new("gab").unwrap();
     let raise = WorkLogged::new(7, by, Actor::Person, WorkRecord::FormatRaised { to: 2 });
     assert_eq!(
         String::from_utf8(raise.encode()).unwrap(),
@@ -225,7 +225,7 @@ fn a_raise_is_written_with_the_format_it_raises_to() {
 /// record is refused and the log stays at the first format.
 #[test]
 fn a_raise_past_what_this_build_reads_is_refused() {
-    let by = agents_core::names::Key::new("gab").unwrap();
+    let by = kbl_core::names::Key::new("gab").unwrap();
     let raise = WorkLogged::new(
         7,
         by,
@@ -236,7 +236,7 @@ fn a_raise_past_what_this_build_reads_is_refused() {
     let before = state.clone();
     assert_eq!(
         state.try_apply(100, &raise),
-        Err(agents_core::work_fold::Reject::Format)
+        Err(kbl_core::work_fold::Reject::Format)
     );
     assert_eq!(state, before);
     assert_eq!(state.format(), FORMAT);

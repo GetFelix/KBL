@@ -1,5 +1,5 @@
 [package]
-name = "agents-tool"
+name = "kbl-tool"
 version = "0.0.0"
 description = "Creates a Felix Agents run's resources on a Felix tenant"
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-agents-core = { path = "../core" }
+kbl-core = { path = "../core" }
 anyhow = "=1.0.100"
 clap = { version = "=4.5.51", features = ["derive", "env"] }
 felix-client = "=0.6.2"

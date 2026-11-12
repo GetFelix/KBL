@@ -1,12 +1,12 @@
 use std::collections::BTreeSet;
 
-use agents_core::artifact::ArtifactId;
-use agents_core::codec::Codec;
-use agents_core::content::Content;
-use agents_core::names::{AgentName, Key, TaskId};
-use agents_core::record::{AgentSpec, Logged, Record};
-use agents_core::stored::{Presence, TaskResult, lease_holder, lease_value};
-use agents_core::task::Task;
+use kbl_core::artifact::ArtifactId;
+use kbl_core::codec::Codec;
+use kbl_core::content::Content;
+use kbl_core::names::{AgentName, Key, TaskId};
+use kbl_core::record::{AgentSpec, Logged, Record};
+use kbl_core::stored::{Presence, TaskResult, lease_holder, lease_value};
+use kbl_core::task::Task;
 
 fn agent(s: &str) -> AgentName {
     AgentName::new(s).unwrap()
@@ -368,7 +368,7 @@ fn stored_values_round_trip() {
 
 /// Every sample's exact bytes, one per line, in `every_record` order. A renamed
 /// or retyped field changes a line, and a reader written against the old form breaks.
-/// To change the format on purpose, regenerate with `WRITE_WIRE=1 cargo test -p agents-core wire_form`.
+/// To change the format on purpose, regenerate with `WRITE_WIRE=1 cargo test -p kbl-core wire_form`.
 #[test]
 fn wire_form_matches_the_golden_file() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/wire.jsonl");
@@ -399,7 +399,7 @@ fn a_log_line_carries_the_time_and_the_writer() {
     assert_eq!(Logged::decode(&line.encode()).unwrap(), line);
     let program = Logged {
         at_ms: 1,
-        by: key("agents-run"),
+        by: key("kbl-run"),
         record: Record::RunEnded {
             outcome: "ok".into(),
         },

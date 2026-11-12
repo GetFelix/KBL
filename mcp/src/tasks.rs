@@ -8,14 +8,14 @@
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use agents_core::artifact::{ArtifactId, PART_SIZE};
-use agents_core::codec::Codec;
-use agents_core::content::Content;
-use agents_core::names::{AgentName, Key, Resources, TaskId, WORKERS_GROUP};
-use agents_core::record::{Logged, Record};
-use agents_core::stored::TaskResult;
-use agents_core::task::Task;
 use felix_client::{GroupMember, GroupRecord};
+use kbl_core::artifact::{ArtifactId, PART_SIZE};
+use kbl_core::codec::Codec;
+use kbl_core::content::Content;
+use kbl_core::names::{AgentName, Key, Resources, TaskId, WORKERS_GROUP};
+use kbl_core::record::{Logged, Record};
+use kbl_core::stored::TaskResult;
+use kbl_core::task::Task;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -576,7 +576,7 @@ impl<B: Backend> Tasks<B> {
         };
         let stream = self.0.resources.log();
         if let Err(e) = self.0.backend.publish(&stream, logged.encode()).await {
-            eprintln!("felix-mcp: could not write to the run log: {e:#}");
+            eprintln!("kbl-mcp: could not write to the run log: {e:#}");
         }
     }
 }

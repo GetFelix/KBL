@@ -86,7 +86,7 @@ impl Reqwest {
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .timeout(Duration::from_secs(30))
-                .user_agent("agents-ingest")
+                .user_agent("kbl-ingest")
                 .build()?,
             token,
         })

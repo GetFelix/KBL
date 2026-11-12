@@ -1,14 +1,14 @@
-// Starts felix-mcp the way an MCP host would, over stdio with a token in the
+// Starts kbl-mcp the way an MCP host would, over stdio with a token in the
 // environment, and checks that it lists its tools and answers one.
 //
-//   cargo build -p felix-mcp && node dev/check-mcp.mjs
+//   cargo build -p kbl-mcp && node dev/check-mcp.mjs
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
 const env = (name, fallback) => process.env[name] || fallback;
-const CONTROL_PLANE = env("AGENTS_FELIX_CONTROL_PLANE", "http://127.0.0.1:8443");
-const IDP = env("AGENTS_IDP", "http://127.0.0.1:9400");
-const BINARY = env("FELIX_MCP", "target/debug/felix-mcp");
+const CONTROL_PLANE = env("KBL_FELIX_CONTROL_PLANE", "http://127.0.0.1:8443");
+const IDP = env("KBL_IDP", "http://127.0.0.1:9400");
+const BINARY = env("KBL_MCP", "target/debug/kbl-mcp");
 const TENANT = "agents";
 
 async function json(url, init) {
@@ -28,7 +28,7 @@ const token = (
 ).felix_token;
 
 const child = spawn(BINARY, [], {
-  env: { ...process.env, AGENTS_RUN: "check", AGENTS_AGENT: "w1", AGENTS_FELIX_TOKEN: token },
+  env: { ...process.env, KBL_RUN: "check", KBL_AGENT: "w1", KBL_FELIX_TOKEN: token },
   stdio: ["pipe", "pipe", "inherit"],
 });
 child.on("error", (error) => {
@@ -37,12 +37,12 @@ child.on("error", (error) => {
 });
 child.stdin.on("error", () => {}); // the exit handler reports why it closed
 setTimeout(() => {
-  console.error("felix-mcp did not finish the check in 30 seconds");
+  console.error("kbl-mcp did not finish the check in 30 seconds");
   child.kill();
   process.exit(1);
 }, 30_000).unref();
 const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
-const exited = new Promise((resolve) => child.on("exit", (code) => resolve(`felix-mcp exited with ${code}`)));
+const exited = new Promise((resolve) => child.on("exit", (code) => resolve(`kbl-mcp exited with ${code}`)));
 
 let nextId = 1;
 const send = (message) => child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
@@ -51,7 +51,7 @@ async function call(method, params) {
   send({ id, method, params });
   for (;;) {
     const next = await Promise.race([lines.next(), exited.then((why) => Promise.reject(new Error(why)))]);
-    if (next.done) throw new Error("felix-mcp closed its output");
+    if (next.done) throw new Error("kbl-mcp closed its output");
     const reply = JSON.parse(next.value);
     if (reply.id !== id) continue;
     if (reply.error) throw new Error(`${method}: ${reply.error.message}`);

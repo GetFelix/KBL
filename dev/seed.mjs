@@ -1,18 +1,18 @@
 // Seeds a Felix for local work: a tenant that trusts idp.mjs, a namespace, and
 // the broker's credential. Runs and their agents are created later by
-// `agents-tool`, which signs in as `agents-admin`. Safe to run again.
+// `kbl-tool`, which signs in as `agents-admin`. Safe to run again.
 import { createHash } from "node:crypto";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 
 const env = (name, fallback) => process.env[name] || fallback;
 
-const CONTROL_PLANE = env("AGENTS_FELIX_CONTROL_PLANE", "http://controlplane:8443");
-const BOOTSTRAP = env("AGENTS_FELIX_BOOTSTRAP", "http://controlplane:9095");
-const BOOTSTRAP_TOKEN = env("AGENTS_FELIX_BOOTSTRAP_TOKEN", "dev-bootstrap");
-const IDP = env("AGENTS_IDP", "http://idp:9400");
-const STATE = env("AGENTS_STATE_DIR", "/state");
-const TENANT = env("AGENTS_TENANT", "agents");
-const NAMESPACE = env("AGENTS_NAMESPACE", "default");
+const CONTROL_PLANE = env("KBL_FELIX_CONTROL_PLANE", "http://controlplane:8443");
+const BOOTSTRAP = env("KBL_FELIX_BOOTSTRAP", "http://controlplane:9095");
+const BOOTSTRAP_TOKEN = env("KBL_FELIX_BOOTSTRAP_TOKEN", "dev-bootstrap");
+const IDP = env("KBL_IDP", "http://idp:9400");
+const STATE = env("KBL_STATE_DIR", "/state");
+const TENANT = env("KBL_TENANT", "agents");
+const NAMESPACE = env("KBL_NAMESPACE", "default");
 // The viewer's OIDC client id, and the audience of every ID token.
 const AUDIENCE = "felix-agents";
 

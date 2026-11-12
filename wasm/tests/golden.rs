@@ -2,12 +2,12 @@
 //! logs the core tests already pin. The page's WebAssembly build is checked
 //! against the same `.state.json` files by `dashboard/test/fold.test.ts`, so a
 //! change to the fold shows up in both until the files are regenerated:
-//! `WRITE_GOLDEN=1 cargo test -p agents-wasm --test golden`.
+//! `WRITE_GOLDEN=1 cargo test -p kbl-wasm --test golden`.
 
-use agents_core::codec::Codec;
-use agents_core::work::{WorkLogged, WorkRecord};
-use agents_core::work_fold::fold;
-use agents_wasm::Folder;
+use kbl_core::codec::Codec;
+use kbl_core::work::{WorkLogged, WorkRecord};
+use kbl_core::work_fold::fold;
+use kbl_wasm::Folder;
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/golden");
 

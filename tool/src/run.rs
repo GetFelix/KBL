@@ -1,14 +1,14 @@
 //! What a new run is: its agents, its resources, and the `run_started` record.
 
-use agents_core::names::{AgentName, InvalidName, Key, Resources, RunId};
-use agents_core::record::{AgentSpec, Logged, Record};
+use kbl_core::names::{AgentName, InvalidName, Key, Resources, RunId};
+use kbl_core::record::{AgentSpec, Logged, Record};
 use serde_json::{Value, json};
 
 /// The most workers a run can ask for. The viewer's ring is built for 64.
 pub(crate) const MAX_WORKERS: u32 = 64;
 
 /// The name `run_started` is written under.
-pub(crate) const WRITER: &str = "agents-tool";
+pub(crate) const WRITER: &str = "kbl-tool";
 
 /// What the user asked for.
 #[derive(Debug, Clone)]

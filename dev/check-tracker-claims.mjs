@@ -1,5 +1,5 @@
 // Runs the tracker's claim path against the dev stack, with each agent a
-// felix-mcp process that calls the tracker over REST:
+// kbl-mcp process that calls the tracker over REST:
 //   1. two agents race work_next for six items: each item is claimed once;
 //   2. an agent is killed holding an item: it goes to another agent after the
 //      visibility, with a lapse record in between;
@@ -8,7 +8,7 @@
 // An item is done only after its done record is written, so a finished item is
 // never handed out again.
 //
-//   cargo build -p felix-mcp -p agents-tool -p agents-tracker && node dev/check-tracker-claims.mjs
+//   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-tracker-claims.mjs
 import {
   agent as spawnAgent,
   check,
@@ -28,7 +28,7 @@ const tokens = {
   people: { "tok-gab": "gab" },
 };
 // Claims lapse after 4 s here; the agents extend every second.
-const timing = { AGENTS_CLAIM_VISIBILITY_MS: "4000", AGENTS_EXTEND_EVERY_MS: "1000" };
+const timing = { KBL_CLAIM_VISIBILITY_MS: "4000", KBL_EXTEND_EVERY_MS: "1000" };
 
 giveUpAfter(240, "the tracker claim check");
 
@@ -36,8 +36,8 @@ const felix = await felixToken();
 const agent = (name) =>
   spawnAgent(felix, RUN, name, {
     ...timing,
-    AGENTS_TRACKER_URL: TRACKER_URL,
-    AGENTS_TRACKER_TOKEN: `tok-${name}`,
+    KBL_TRACKER_URL: TRACKER_URL,
+    KBL_TRACKER_TOKEN: `tok-${name}`,
   });
 
 async function seed(id, tier) {
@@ -104,7 +104,7 @@ try {
 
   // 3. The tracker dies between the poll and the log.
   tracker.kill();
-  tracker = await startTracker(tokens, { AGENTS_TRACKER_CRASH_AFTER_POLL: "true" });
+  tracker = await startTracker(tokens, { KBL_TRACKER_CRASH_AFTER_POLL: "true" });
   await seed("crash1", 0);
   let died = false;
   await w1.tool("work_next", { wait_seconds: 5 }).catch(() => (died = true));

@@ -5,9 +5,9 @@
 ## Code
 
 - Write the simplest thing that meets the design. Don't add abstractions a milestone doesn't need yet.
-- Write the rules once. The record formats, the resource and key names, the task and lease rules and the fold that rebuilds a run at an offset live in `core/`. `felix-mcp`, `agents-run` and `agents-tool` link it and the viewer uses it as WebAssembly. Never copy that logic into TypeScript.
+- Write the rules once. The record formats, the resource and key names, the task and lease rules and the fold that rebuilds a run at an offset live in `core/`. `kbl-mcp`, `kbl-run` and `kbl-tool` link it and the viewer uses it as WebAssembly. Never copy that logic into TypeScript.
 - Felix is the only backend. A feature that needs a database, a queue or a coordinator process of ours is out of scope.
-- The model is untrusted. Anything an agent must not be able to do is enforced by a Felix grant on that agent's token, never only by a check in `felix-mcp`.
+- The model is untrusted. Anything an agent must not be able to do is enforced by a Felix grant on that agent's token, never only by a check in `kbl-mcp`.
 - Every coordination step goes on the run log, refusals included. If the viewer cannot replay it, it did not happen.
 - Tests must run without a model. Every agent role has a scripted stand-in, and CI uses it.
 - Plain TypeScript in `viewer/`, no UI framework.

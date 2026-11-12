@@ -1,5 +1,5 @@
 [package]
-name = "felix-mcp"
+name = "kbl-mcp"
 version = "0.0.0"
 description = "An MCP server that gives an agent its Felix Agents tools"
 edition.workspace = true
@@ -8,7 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
-agents-core = { path = "../core" }
+kbl-core = { path = "../core" }
 anyhow = "=1.0.100"
 bytes = "=1.12.1"
 clap = { version = "=4.5.51", features = ["derive", "env"] }

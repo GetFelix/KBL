@@ -1,9 +1,9 @@
 // Runs the task tools against the development stack: a planner posts tasks and
 // four workers finish them, a task that is handed back twice is not handed out
 // a third time, and a worker that restarts under its name gets its task back
-// at once. Each agent is its own felix-mcp process, as under an MCP host.
+// at once. Each agent is its own kbl-mcp process, as under an MCP host.
 //
-//   cargo build -p felix-mcp -p agents-tool && node dev/check-tasks.mjs
+//   cargo build -p kbl-mcp -p kbl-tool && node dev/check-tasks.mjs
 import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, killAll, sleep } from "./lib/stack.mjs";
 
 const RUN = `tasks-${Date.now().toString(36)}`;
@@ -77,8 +77,8 @@ try {
   second.kill();
 
   // A claim that lapses while its worker still holds the task. Felix answers the
-  // worker's extension with stale_claim, which felix-mcp must read as a lost claim.
-  const slowpoke = await agent("w7", { AGENTS_CLAIM_VISIBILITY_MS: "2000", AGENTS_EXTEND_EVERY_MS: "6000" });
+  // worker's extension with stale_claim, which kbl-mcp must read as a lost claim.
+  const slowpoke = await agent("w7", { KBL_CLAIM_VISIBILITY_MS: "2000", KBL_EXTEND_EVERY_MS: "6000" });
   await planner.tool("task_post", { title: "lapse", body: "lapses", id: "lapse" });
   const lapsing = await slowpoke.tool("task_claim", { wait_seconds: 5 });
   check(lapsing.claimed && lapsing.attempt === 1, "w7 claimed a task with a 2 second visibility");

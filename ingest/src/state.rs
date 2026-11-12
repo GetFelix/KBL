@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use agents_core::names::ItemId;
+use kbl_core::names::ItemId;
 use serde::{Deserialize, Serialize};
 
 use crate::source::{Closed, Cursor};

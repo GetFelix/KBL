@@ -14,8 +14,8 @@ the end.
 | Actor | What it is | Credential | Trust |
 |---|---|---|---|
 | Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/KBL/issues/120)) |
-| Agent | A model acting through `felix-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
-| Ingest | The `agents-ingest` worker that mirrors GitHub | An ingest token, and a GitHub credential | Trusted code that carries untrusted text |
+| Agent | A model acting through `kbl-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
+| Ingest | The `kbl-ingest` worker that mirrors GitHub | An ingest token, and a GitHub credential | Trusted code that carries untrusted text |
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
 | Webhook sender | Whoever posts to ingest's `/webhook` | The shared webhook secret | Not trusted without a valid signature |
 
@@ -58,8 +58,8 @@ Two more parties are outside KBL and can still steer it:
 4. **GitHub to ingest.** Issue text is data. The pull request an item reports
    is named by an agent, so ingest ties it to the item before it reads it
    (see [What ingest believes](#what-ingest-believes)).
-5. **Agent to Felix.** `felix-mcp` runs beside the model with the agent's
-   Felix token. Nothing in `felix-mcp` is a security check: an agent with its
+5. **Agent to Felix.** `kbl-mcp` runs beside the model with the agent's
+   Felix token. Nothing in `kbl-mcp` is a security check: an agent with its
    token and a raw client skips it. Felix grants are the check.
 6. **Browser to gateway.** Read only, one run.
 
@@ -161,7 +161,7 @@ Still open: canonical request names and a filter on who created a check run
 
 ## MCP tools
 
-`felix-mcp` runs on the agent's side. The work tools call the tracker with the
+`kbl-mcp` runs on the agent's side. The work tools call the tracker with the
 agent's token, so the tracker row is the check. The task tools write to Felix
 with the agent's Felix token, so Felix grants are the check.
 
@@ -186,9 +186,9 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_rules` | `/v1/work/rules/read` | Tracker row |
 | `run_info` | Nothing | Reads its own settings |
 | `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/KBL/issues/29)) |
-| `task_claim` | The run's `workers` group | Felix hands a task to one member. The two-attempt limit is in `felix-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/KBL/issues/39)) |
+| `task_claim` | The run's `workers` group | Felix hands a task to one member. The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/KBL/issues/39)) |
 | `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Task bodies are not hash-checked ([#150](https://github.com/GetFelix/KBL/issues/150)) |
-| `task_release` | The `workers` group and run log | `felix-mcp` only releases the task it holds (`mcp/src/tasks.rs:584`). In Felix: **None** (#29) |
+| `task_release` | The `workers` group and run log | `kbl-mcp` only releases the task it holds (`mcp/src/tasks.rs:584`). In Felix: **None** (#29) |
 | `task_give_up` | The `workers` group and run log | Same |
 
 ## Records on work.events
@@ -239,8 +239,8 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 
 ## Records on the run log
 
-A run log (`agents.log.<run>`) is written straight to Felix by `felix-mcp`,
-`agents-run` and `agents-tool`, each with its own Felix token. Nothing
+A run log (`agents.log.<run>`) is written straight to Felix by `kbl-mcp`,
+`kbl-run` and `kbl-tool`, each with its own Felix token. Nothing
 validates a record before it lands, and `by` is what the writer says. So a
 run log is a set of claims, and the dashboard marks it unverified. Who may
 write which kind: **None**, tracked by
@@ -251,11 +251,11 @@ grants test with a raw client).
 
 | Kinds | Meant to be written by |
 |---|---|
-| `run_started` | `agents-tool` |
-| `run_ended`, `agent_up`, `model_started`, `model_call`, `budget_exhausted`, `refund_unconfirmed` | `agents-run`, with the runtime token the model cannot reach |
-| `agent_gone` | The planner's `felix-mcp` |
-| `task_posted`, `task_claimed`, `task_extended`, `task_released`, `task_done`, `task_duplicate`, `task_dead`, `task_claim_lost` | An agent's `felix-mcp` |
-| `board_put`, `board_conflict`, `lease_taken`, `lease_renewed`, `lease_released`, `lease_lost`, `message`, `refused` | An agent's `felix-mcp` |
+| `run_started` | `kbl-tool` |
+| `run_ended`, `agent_up`, `model_started`, `model_call`, `budget_exhausted`, `refund_unconfirmed` | `kbl-run`, with the runtime token the model cannot reach |
+| `agent_gone` | The planner's `kbl-mcp` |
+| `task_posted`, `task_claimed`, `task_extended`, `task_released`, `task_done`, `task_duplicate`, `task_dead`, `task_claim_lost` | An agent's `kbl-mcp` |
+| `board_put`, `board_conflict`, `lease_taken`, `lease_renewed`, `lease_released`, `lease_lost`, `message`, `refused` | An agent's `kbl-mcp` |
 
 ## Attack classes found in review
 

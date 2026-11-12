@@ -2,11 +2,11 @@
 //! records upstream sync needs, as the tracker's role under its own name, and
 //! keeps its cursor in Felix so a restart does not import again.
 
-use agents_core::artifact::INLINE_LIMIT;
-use agents_core::content::Content;
-use agents_core::names::{ItemId, Key};
-use agents_core::work::{Actor, CloseWhy, PrPhase, ReviewPass, ReviewSpec, WorkKind, WorkRecord};
-use agents_core::work_fold::State;
+use kbl_core::artifact::INLINE_LIMIT;
+use kbl_core::content::Content;
+use kbl_core::names::{ItemId, Key};
+use kbl_core::work::{Actor, CloseWhy, PrPhase, ReviewPass, ReviewSpec, WorkKind, WorkRecord};
+use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 
 use super::{Error, Tracker};
@@ -61,12 +61,12 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
 /// The id of a root's review of a request: the same on every retry.
 fn review_id(root: &ItemId, pr: &str, pass: &str) -> ItemId {
     let hash =
-        agents_core::artifact::ArtifactId::of(format!("review\n{root}\n{pr}\n{pass}").as_bytes());
+        kbl_core::artifact::ArtifactId::of(format!("review\n{root}\n{pr}\n{pass}").as_bytes());
     ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
 }
 
 fn review_key(pr: &str, pass: ReviewPass) -> Key {
-    let hash = agents_core::artifact::ArtifactId::of(format!("{pr}\n{pass:?}").as_bytes());
+    let hash = kbl_core::artifact::ArtifactId::of(format!("{pr}\n{pass:?}").as_bytes());
     Key::new(format!("review-{}", &hash.as_str()[2..18])).expect("hash characters are valid")
 }
 
@@ -163,7 +163,7 @@ impl<B: Broker> Tracker<B> {
                 .append(core, Actor::Tracker, self.0.me.clone(), record)
                 .await
             {
-                eprintln!("agents-tracker: could not open the {title} for {pr}: {e}");
+                eprintln!("kbl-tracker: could not open the {title} for {pr}: {e}");
                 return;
             }
         }
@@ -178,7 +178,7 @@ impl<B: Broker> Tracker<B> {
             .append(core, Actor::Tracker, self.0.me.clone(), wait)
             .await
         {
-            eprintln!("agents-tracker: could not order the reviews of {pr}: {e}");
+            eprintln!("kbl-tracker: could not order the reviews of {pr}: {e}");
         }
     }
 

@@ -1,5 +1,5 @@
 [package]
-name = "agents-tracker"
+name = "kbl-tracker"
 version = "0.0.0"
 description = "The work tracker: the only writer of work.events and the ready streams, and the claim path for agents"
 edition.workspace = true
@@ -8,11 +8,11 @@ license.workspace = true
 publish = false
 
 [[bin]]
-name = "agents-tracker"
+name = "kbl-tracker"
 path = "src/main.rs"
 
 [dependencies]
-agents-core = { path = "../core" }
+kbl-core = { path = "../core" }
 anyhow = "=1.0.100"
 axum = { version = "=0.8.8", default-features = false, features = ["http1", "json", "tokio"] }
 bytes = "=1.12.1"

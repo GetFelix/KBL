@@ -3,9 +3,9 @@
 
 use std::future::Future;
 
-use agents_core::names::ItemId;
-use agents_core::work::WorkRecord;
 use anyhow::{Context, Result, bail};
+use kbl_core::names::ItemId;
+use kbl_core::work::WorkRecord;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -25,7 +25,7 @@ pub(crate) struct Root {
     /// What the fold holds for `pr`, which differs from what ingest last
     /// wrote when the agent changed `pr` in between.
     #[serde(default)]
-    pub(crate) pr_status: Option<agents_core::work::PrSnapshot>,
+    pub(crate) pr_status: Option<kbl_core::work::PrSnapshot>,
 }
 
 /// What the tracker did with a record.

@@ -18,8 +18,8 @@ if (locked !== have) {
   process.exit(1);
 }
 
-run('cargo', ['build', '-p', 'agents-wasm', '--lib', '--release', '--target', 'wasm32-unknown-unknown', '--locked']);
-const wasm = `${target}/wasm32-unknown-unknown/release/agents_wasm.wasm`;
+run('cargo', ['build', '-p', 'kbl-wasm', '--lib', '--release', '--target', 'wasm32-unknown-unknown', '--locked']);
+const wasm = `${target}/wasm32-unknown-unknown/release/kbl_wasm.wasm`;
 run(bindgen, ['--target', 'web', '--out-dir', `${dashboard}/src/wasm`, wasm]);
 run(bindgen, ['--target', 'nodejs', '--out-dir', `${dashboard}/.wasm-node`, wasm]);
 // This package is ESM; the nodejs build is CommonJS.

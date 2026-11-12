@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Changed: the crates and binaries are renamed. `felix-mcp` is `kbl-mcp`, and
+  `agents-core`, `agents-ingest`, `agents-tool`, `agents-tracker` and
+  `agents-wasm` are `kbl-core`, `kbl-ingest`, `kbl-tool`, `kbl-tracker` and
+  `kbl-wasm`. The planned reference worker is `kbl-run`. Every `AGENTS_`
+  environment variable is now `KBL_` (`AGENTS_TRACKER_URL` is
+  `KBL_TRACKER_URL`). For this release the binaries still read an `AGENTS_`
+  name when its `KBL_` twin is unset; the fallback goes next release. The OIDC
+  audience `felix-agents` is unchanged.
 - Added: `work_triage`, the tool an agent answers a triage item with
   (`POST /v1/work/triage`). It writes the `triaged` proposal for the item under
   triage: a tier with why, a duplicate, or `unclear`. A person still accepts

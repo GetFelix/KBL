@@ -1,4 +1,4 @@
-// What the dev-stack checks share: a token, a run, and agents that are felix-mcp
+// What the dev-stack checks share: a token, a run, and agents that are kbl-mcp
 // processes spoken to over stdio, as under an MCP host.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -7,15 +7,25 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 const env = (name, fallback) => process.env[name] || fallback;
-const CONTROL_PLANE = env("AGENTS_FELIX_CONTROL_PLANE", "http://127.0.0.1:8443");
-const IDP = env("AGENTS_IDP", "http://127.0.0.1:9400");
-const MCP = env("FELIX_MCP", "target/debug/felix-mcp");
-const TOOL = env("AGENTS_TOOL", "target/debug/agents-tool");
-const TRACKER = env("AGENTS_TRACKER", "target/debug/agents-tracker");
-const TRACKER_ADDR = env("AGENTS_TRACKER_LISTEN", "127.0.0.1:8790");
+const CONTROL_PLANE = env("KBL_FELIX_CONTROL_PLANE", "http://127.0.0.1:8443");
+const IDP = env("KBL_IDP", "http://127.0.0.1:9400");
+const MCP = env("KBL_MCP", "target/debug/kbl-mcp");
+const TOOL = env("KBL_TOOL", "target/debug/kbl-tool");
+const TRACKER = env("KBL_TRACKER", "target/debug/kbl-tracker");
+const TRACKER_ADDR = env("KBL_TRACKER_LISTEN", "127.0.0.1:8790");
 const TENANT = "agents";
 
 const running = new Set();
+
+// Each KBL_ name also under its old AGENTS_ name, which the build the upgrade
+// check starts from still reads.
+export function withLegacyNames(env) {
+  const out = { ...env };
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith("KBL_")) out[`AGENTS_${key.slice(4)}`] ??= value;
+  }
+  return out;
+}
 
 async function json(url, init) {
   const response = await fetch(url, init);
@@ -53,11 +63,11 @@ export function newRunId(prefix) {
   return `${prefix}-${Date.now().toString(36)}`;
 }
 
-// One felix-mcp process for `name`. `tool` returns the tool's JSON reply or
+// One kbl-mcp process for `name`. `tool` returns the tool's JSON reply or
 // throws the text the model would have seen.
 export async function agent(token, run, name, extraEnv = {}, bin = MCP) {
   const child = spawn(bin, [], {
-    env: { ...process.env, AGENTS_RUN: run, AGENTS_AGENT: name, AGENTS_FELIX_TOKEN: token, ...extraEnv },
+    env: withLegacyNames({ ...process.env, KBL_RUN: run, KBL_AGENT: name, KBL_FELIX_TOKEN: token, ...extraEnv }),
     stdio: ["pipe", "pipe", "inherit"],
   });
   running.add(child);
@@ -111,14 +121,14 @@ export async function startTracker(tokens, extraEnv = {}, bin = TRACKER) {
   const tokensFile = join(dir, "tokens.json");
   writeFileSync(tokensFile, JSON.stringify(tokens), { mode: 0o600 });
   const child = spawn(bin, [], {
-    env: {
+    env: withLegacyNames({
       ...process.env,
-      AGENTS_TRACKER_TOKENS_FILE: tokensFile,
-      AGENTS_TRACKER_LISTEN: TRACKER_ADDR,
-      AGENTS_CLAIM_VISIBILITY_MS: "4000",
-      AGENTS_TRACKER_LEASE_TTL_MS: "3000",
+      KBL_TRACKER_TOKENS_FILE: tokensFile,
+      KBL_TRACKER_LISTEN: TRACKER_ADDR,
+      KBL_CLAIM_VISIBILITY_MS: "4000",
+      KBL_TRACKER_LEASE_TTL_MS: "3000",
       ...extraEnv,
-    },
+    }),
     stdio: ["ignore", "inherit", "inherit"],
   });
   running.add(child);
