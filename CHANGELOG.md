@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Added: a triage answer can carry `depends_on` (items the root should wait on)
+  and `split` (titles it should be cut into), on `work_triage`, `POST
+  /v1/work/triage` and the `triaged` record. Both are advice for a person: the
+  tracker links nothing and creates no item. Each list holds at most 8
+  entries, and a dependency must be another item the agent can see. A
+  changed list counts as a different answer toward the 4 per attempt. Records
+  without the fields read as before. The tier an admitted root already has is
+  documented as untouched by the answer; a person adopts it with a tier
+  change. `dev/check-tracker-triage.mjs` runs a scripted triage agent against
+  the dev stack in CI.
 - Changed: KBL has its own mark, a big square with one bite-sized piece lifted out, in `docs/brand/`. The dashboard frame uses it and switches its accent from Felix cyan to KBL amber. `scripts/render-mark.mjs` replaces `scripts/make-mark.py`.
 - Fixed: proposals were limited only per attempt, so an agent that kept claiming
   could keep filling the Triage column. The tracker now refuses a proposal when

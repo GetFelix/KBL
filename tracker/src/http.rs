@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use crate::config::{Caller, Tokens};
 use crate::felix::Broker;
-use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker};
+use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer};
 
 mod ingest;
 
@@ -514,6 +514,10 @@ struct TriageBody {
     duplicate_of: Option<ItemId>,
     #[serde(default)]
     unclear: Option<Unclear>,
+    #[serde(default)]
+    depends_on: Vec<ItemId>,
+    #[serde(default)]
+    split: Vec<String>,
 }
 
 async fn triage<B: Broker>(
@@ -524,7 +528,18 @@ async fn triage<B: Broker>(
     match agent(&app, &headers) {
         Ok(a) => reply(
             app.tracker
-                .triage(&a, &b.item, b.tier, b.why, b.duplicate_of, b.unclear)
+                .triage(
+                    &a,
+                    &b.item,
+                    TriageAnswer {
+                        tier: b.tier,
+                        why: b.why,
+                        duplicate_of: b.duplicate_of,
+                        unclear: b.unclear,
+                        depends_on: b.depends_on,
+                        split: b.split,
+                    },
+                )
                 .await,
         ),
         Err(d) => denied(d),
