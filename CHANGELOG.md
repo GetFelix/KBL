@@ -13,6 +13,7 @@
   change. `dev/check-tracker-triage.mjs` runs a scripted triage agent against
   the dev stack in CI.
 
+- Changed: KBL has its own mark, a big square with one bite-sized piece lifted out, in `docs/brand/`. The dashboard frame uses it and switches its accent from Felix cyan to KBL amber. `scripts/render-mark.mjs` replaces `scripts/make-mark.py`.
 - Fixed: proposals were limited only per attempt, so an agent that kept claiming
   could keep filling the Triage column. The tracker now refuses a proposal when
   the agent already has 16 waiting for a person, or 8 from work under one
