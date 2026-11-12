@@ -116,7 +116,7 @@ try {
 
   const first = await takeNext(w2, 20, { review_tiers: ["fast"] });
   check(first.claimed && first.item.work === "review" && first.item.review.pass === "first", "w2 was handed the first-pass review");
-  check(first.item.pr === PR && first.item.pr_branch === "kibble/rvroot", "the review names the request and the author's branch");
+  check(first.item.pr === PR && first.item.pr_branch === "kbl/rvroot", "the review names the request and the author's branch");
 
   // 2. Findings.
   const f = (verdict, title) => ({
@@ -141,7 +141,7 @@ try {
   // The fix is work in the author's tree, and the deferred one waits for a person.
   const fix = await takeNext(w3, 20);
   check(fix.claimed && fix.item.work === "fix" && fix.item.parent === "rvroot", "w3 was handed the fix as a child of rvroot");
-  check(fix.item.pr_branch === "kibble/rvroot", "the fix goes on the request's branch");
+  check(fix.item.pr_branch === "kbl/rvroot", "the fix goes on the request's branch");
   const none = await w4.tool("work_next", { wait_seconds: 1 });
   check(!none.claimed, "the deferred finding is not claimable until a person accepts it");
 

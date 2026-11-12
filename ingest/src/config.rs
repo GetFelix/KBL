@@ -47,7 +47,7 @@ pub(crate) struct GithubConfig {
     /// installation token can be refreshed beside the worker.
     pub(crate) token_file: Option<std::path::PathBuf>,
     pub(crate) token_env: Option<String>,
-    /// Logins the credential writes as, such as `kibble[bot]`.
+    /// Logins the credential writes as, such as `kbl[bot]`.
     #[serde(default)]
     pub(crate) own_logins: Vec<String>,
 }

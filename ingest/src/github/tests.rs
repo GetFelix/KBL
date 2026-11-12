@@ -368,7 +368,7 @@ async fn a_pull_request_by_someone_else_is_left_alone() {
     let g = Github::new(
         "https://api.github.com",
         gh.clone(),
-        vec!["Kibble[bot]".into()],
+        vec!["KBL[bot]".into()],
     );
     g.write_back(&WriteBack::DraftPullRequest {
         pr: IssueRef::new("GetFelix/felix", 2210),
@@ -470,9 +470,9 @@ fn github_times_parse_to_epoch_milliseconds() {
 fn a_status_written_by_our_own_credential_is_ignored() {
     let ok = runs(&[("unit", "success")]);
     let forged = json!({ "statuses": [
-        { "context": "ci/legacy", "state": "success", "target_url": "u", "creator": { "login": "Kibble[bot]" } },
+        { "context": "ci/legacy", "state": "success", "target_url": "u", "creator": { "login": "KBL[bot]" } },
     ] });
-    let own = ["kibble[bot]".to_owned()];
+    let own = ["kbl[bot]".to_owned()];
     // Required, and only satisfied by our own forged status: still outstanding.
     let r = req(&["unit", "ci/legacy"]);
     let (checks, _) = check_state(Some(&ok), Some(&forged), &own, Some(&r));

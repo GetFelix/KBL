@@ -61,7 +61,7 @@ pub struct ReadyRecord {
 /// links a request to an item by this name (or a closing reference), so the
 /// claim reply hands it to the agent.
 pub fn pr_branch(item: &ItemId) -> String {
-    format!("kibble/{item}")
+    format!("kbl/{item}")
 }
 
 /// The cache key of an item's fields.
@@ -163,7 +163,7 @@ pub const MAX_VERDICT_WHY: usize = 2048;
 pub const MAX_REVERT_TEST: usize = 400;
 
 /// Whether `tier` is a name a reviewer tier may have: lowercase letters,
-/// digits and dashes. Kibble never runs a model, so the tier only says which
+/// digits and dashes. KBL never runs a model, so the tier only says which
 /// kind of reviewer should claim the review.
 pub fn valid_review_tier(tier: &str) -> bool {
     !tier.is_empty()
