@@ -9,6 +9,8 @@
 //   4. this build comes back and finishes the log's story.
 // Every record either build wrote is of the first format, each item was
 // claimed and done once, and neither build refused a record of the other.
+// Both builds write format 1 only, so this does not show a reader stopping at
+// a newer format: the unit tests of core, the tracker and the page do.
 //
 //   AGENTS_TRACKER_OLD and FELIX_MCP_OLD name the previous build's binaries.
 //   cargo build -p felix-mcp -p agents-tool -p agents-tracker && node dev/check-upgrade.mjs
@@ -80,7 +82,7 @@ try {
   for (const id of [a, b, c]) await seed(id);
   await take(w1, a);
   await w1.tool("work_progress", { item: a, note: "started on the previous build" });
-  check(true, "the previous tracker handed w1 its item");
+  check(kindsOf(a).endsWith("claimed:w1 progress:w1"), "the previous tracker handed w1 its item and logged its progress");
 
   // 2. This build takes over the same log.
   await swap(undefined);
@@ -88,13 +90,14 @@ try {
   await w1.tool("work_complete", { item: a });
   check(kindsOf(a).endsWith(`done:w1`), "w1 kept its claim across the upgrade and finished on this build");
   await take(w2, b);
-  check(true, "this build handed out work the previous build took in");
+  check(kindsOf(b).endsWith("accepted:gab claimed:w2"), "this build handed out work the previous build took in");
 
   // 3. Back to the previous build: nothing this build wrote is beyond it.
   await swap(OLD_TRACKER);
   await w2.tool("work_complete", { item: b });
   check(kindsOf(b).endsWith(`done:w2`), "w2 finished on the previous build what it claimed on this one");
   await take(w1, c);
+  check(kindsOf(c).endsWith("accepted:gab claimed:w1"), "the previous build handed out the last item after the rollback");
 
   // 4. Forward again.
   await swap(undefined);

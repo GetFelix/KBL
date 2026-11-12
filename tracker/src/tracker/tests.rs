@@ -151,6 +151,10 @@ impl Fake {
         self.net.lock().unwrap().lease = None;
     }
 
+    fn lease_is_held(&self) -> bool {
+        self.net.lock().unwrap().lease.is_some()
+    }
+
     fn extends_are_stale(&self, stale: bool) {
         self.net.lock().unwrap().extend_stale = stale;
     }
@@ -1495,6 +1499,8 @@ async fn a_tracker_does_not_serve_a_log_that_holds_a_record_of_a_newer_format() 
         why.contains("offset 2") && why.contains("format 999"),
         "{why}"
     );
+    // It never took the lease, so a build that reads the log can start at once.
+    assert!(!fake.lease_is_held());
 
     // A payload that is no record of any format is still skipped, as before.
     let fake = Fake::default();
@@ -1516,5 +1522,15 @@ async fn a_raise_past_what_the_tracker_reads_is_refused_and_not_logged() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Refused { why } if why == "format"));
+    assert!(fake.log().is_empty());
+}
+
+#[tokio::test]
+async fn a_record_of_an_unknown_kind_is_refused_and_not_logged() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let unknown: WorkRecord = serde_json::from_str(r#"{"kind":"teleported","item":"a1"}"#).unwrap();
+    let err = t.person_record(key("gab"), unknown).await.unwrap_err();
+    assert!(matches!(err, Error::Invalid(_)), "{err}");
     assert!(fake.log().is_empty());
 }

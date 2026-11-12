@@ -1,6 +1,6 @@
 # Upgrading Kibble
 
-How to move a running Kibble to a newer build without stopping work, how to go
+How to move a running Kibble to a newer build without losing work, how to go
 back, and the record rules that make both safe.
 
 ## Upgrade
@@ -33,15 +33,26 @@ Upgrade in this order. No work is lost at any step.
 
 You may skip releases: any older build can be upgraded to any newer one.
 
+**Before the first raise, check for builds from before formats.** A build
+older than the one that added formats does not know `v`. It ignores the
+field, reads a newer record as format 1 and carries on with a wrong state. It
+does not stop. The tracker cannot see which builds are reading the log, so
+this is on you: before raising the format for the first time, make sure no
+such tracker is running or set to restart, and that every open dashboard page
+has been reloaded since the upgrade. Every build from this one on stops by
+itself.
+
 ## Go back
 
 Until step 4 you can go back to the old build at any time, in the reverse
 order. Nothing the new build wrote is beyond the old one.
 
 After the format is raised you cannot go below a build that reads it. An older
-tracker refuses to start on that log and says which offset stopped it. An
-older dashboard page stops and asks for a reload. Neither one skips the record
-and carries on.
+tracker refuses to start on that log and says which offset stopped it, without
+taking the writer lease, so it does not keep a newer tracker out. An older
+dashboard page stops and asks for a reload. Neither one skips the record and
+carries on. This holds for builds that have formats; a build from before
+them misreads the log instead, as the warning above says.
 
 The format never goes down. To undo a raise, restore a backup taken before it.
 
@@ -68,7 +79,7 @@ page.
 |---|---|
 | Format the build reads, known kind | Folds it |
 | Format the build reads, with a field the build does not know | Folds it and ignores the field |
-| Format the build reads, with a kind the build does not know | Skips it. Only logs from before formats can hold one |
+| Format the build reads, with a kind the build does not know | Skips it. Only logs from before formats can hold one: the tracker now refuses to log a kind it does not know |
 | Not JSON, or `v` is not a whole number from 1 up | Skips it, with a line in the tracker's output |
 | Format above what the build reads | **Stops.** The tracker does not serve. The page asks for a reload |
 
@@ -103,8 +114,15 @@ that does not have the change fold any log to a different state?
 The fold of an old log must never change. A build folds a format 1 record the
 way the first build did, forever.
 
-`core/tests/format.rs` holds the list of format 1 kinds. It is frozen: a new
-kind goes in `WorkRecord::format`, not in that list.
+A new kind cannot be missed: `WorkRecord::format` names every kind, so the
+build fails until the new one has a format, and `core/tests/format.rs` holds
+the frozen list of format 1 kinds.
+
+A new field is different. Nothing in the build can tell that the fold now
+reads a field it did not read before. So this is a review rule: a pull
+request that makes the fold read a new field of an existing kind must raise
+`FORMAT` and return the new number from `WorkRecord::format` when the field
+is set. Reviewers check it.
 
 ## The tracker's routes
 
@@ -128,7 +146,9 @@ tracker does not have yet.
 - **Old and new builds on one log.** `dev/check-upgrade.mjs` runs the previous
   tracker build and the new one in turn over the same `work.events`, forward,
   back and forward again, with agents on the previous `felix-mcp`. Claims
-  survive each switch and each item is claimed and done once. "Previous" is
+  survive each switch and each item is claimed and done once. Both builds
+  write format 1 only, so this run does not show a reader stopping at a newer
+  format; the unit tests of `core`, the tracker and the page do. "Previous" is
   the commit a change is based on until Kibble has releases; then it is the
   last release.
 

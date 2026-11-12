@@ -138,27 +138,33 @@ fn naming_the_first_format_changes_nothing() {
     }
 }
 
+/// The two first-format kinds no stored log holds.
+const MORE: [&str; 2] = [
+    r#"{"at_ms":5,"by":"gab","actor":"person","kind":"tier_changed","item":"r1","tier":2}"#,
+    r#"{"at_ms":5,"by":"gab","actor":"person","kind":"edited","item":"r1","title":"t"}"#,
+];
+
 #[test]
 fn every_kind_of_the_first_format_still_needs_only_the_first_format() {
     let mut seen = Vec::new();
-    for (_, log) in LOGS {
-        for (_, rec) in entries(log) {
-            let kind = rec.record.kind();
-            assert!(
-                V1_KINDS.contains(&kind),
-                "{kind} is not a first-format kind"
-            );
-            assert_eq!(rec.record.format(), FORMAT_V1, "{kind}");
-            seen.push(kind);
-        }
+    let stored = LOGS.iter().flat_map(|(_, log)| log.lines());
+    for line in stored.chain(MORE) {
+        let rec = read(line.as_bytes()).unwrap();
+        let kind = rec.record.kind();
+        assert_ne!(kind, "unknown", "{line}");
+        assert_eq!(rec.record.format(), FORMAT_V1, "{kind}");
+        seen.push(kind);
     }
-    // A kind added later must say which format introduced it.
+    seen.sort_unstable();
+    seen.dedup();
+    let mut frozen = V1_KINDS.to_vec();
+    frozen.sort_unstable();
+    // Every first-format kind is read from a stored record, and nothing else is.
+    assert_eq!(seen, frozen);
+    // A kind added later says which format introduced it.
     let raise = WorkRecord::FormatRaised { to: 2 };
     assert!(!V1_KINDS.contains(&raise.kind()));
     assert!(raise.format() > FORMAT_V1);
-    seen.sort_unstable();
-    seen.dedup();
-    assert!(seen.len() >= 34, "the logs cover {} kinds", seen.len());
 }
 
 const NEWER: &str =

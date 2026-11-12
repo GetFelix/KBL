@@ -111,7 +111,7 @@ in `check_sizes` (`tracker/src/tracker/tools.rs:804`).
 
 | Route | Record | Check beyond the token |
 |---|---|---|
-| `/v1/work/records` | Any kind a person may write | The fold refuses the kinds a person may not write: see [Records on work.events](#records-on-workevents). Sizes of `triaged.why`, `imported` fields and a rules target: **None** (#154) |
+| `/v1/work/records` | Any kind a person may write. A kind the tracker does not know is refused | The fold refuses the kinds a person may not write: see [Records on work.events](#records-on-workevents). Sizes of `triaged.why`, `imported` fields and a rules target: **None** (#154) |
 | `/v1/work/proposals/accept` | `accepted` | Tier 0 to 3 (`core/src/work_fold.rs:823`) |
 | `/v1/work/proposals/edit` | `edited` | Only before acceptance (`core/src/work_fold.rs:1431`) |
 | `/v1/work/proposals/reject` | `rejected` | Only a proposal never accepted (`core/src/work_fold.rs:1286`) |

@@ -105,8 +105,8 @@ have the details.
 M0 and M1 are done. [`core`](core/) has the record formats and names, [`dashboard/`](dashboard/) follows `work.events` through felix-gateway and folds it with `core` as WebAssembly, `agents-tool` [creates a run](#creating-a-run),
 and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The dashboard
 is described in [docs/work-tracker.md](docs/work-tracker.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
-progress. Records on `work.events` carry a format, so a newer build can take over a running log and an older one
-never misreads it: [docs/upgrades.md](docs/upgrades.md) has the upgrade order. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
+progress. Records on `work.events` carry a format, so a newer build can take over a running log, and an older build
+(from this one on) stops at a record it cannot read instead of misreading it: [docs/upgrades.md](docs/upgrades.md) has the upgrade order. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
 [milestones](https://github.com/GetFelix/felix-agents/milestones).
 
 ## Running Felix locally

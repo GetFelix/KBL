@@ -777,9 +777,48 @@ impl WorkRecord {
     /// A kind, or a use of a field, that an older fold would skip or ignore
     /// answers with the format that introduced it.
     pub fn format(&self) -> u32 {
+        // No wildcard: a new kind does not compile until it names its format.
+        // A new field the fold reads on a kind below needs a guard here too,
+        // which only review catches (docs/upgrades.md).
         match self {
             WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V1 + 1),
-            _ => FORMAT_V1,
+            WorkRecord::Imported { .. }
+            | WorkRecord::Proposed { .. }
+            | WorkRecord::Triaged { .. }
+            | WorkRecord::Accepted { .. }
+            | WorkRecord::Prerequisite { .. }
+            | WorkRecord::Shipped { .. }
+            | WorkRecord::Linked { .. }
+            | WorkRecord::Unlinked { .. }
+            | WorkRecord::Context { .. }
+            | WorkRecord::Claimed { .. }
+            | WorkRecord::Progress { .. }
+            | WorkRecord::Done { .. }
+            | WorkRecord::Released { .. }
+            | WorkRecord::GaveUp { .. }
+            | WorkRecord::Question { .. }
+            | WorkRecord::Answer { .. }
+            | WorkRecord::Decision { .. }
+            | WorkRecord::Finding { .. }
+            | WorkRecord::ReviewVerdict { .. }
+            | WorkRecord::Step { .. }
+            | WorkRecord::Edit { .. }
+            | WorkRecord::HumanInput { .. }
+            | WorkRecord::ForkedFrom { .. }
+            | WorkRecord::Closed { .. }
+            | WorkRecord::Rejected { .. }
+            | WorkRecord::Updated { .. }
+            | WorkRecord::LeftScope { .. }
+            | WorkRecord::Reopened { .. }
+            | WorkRecord::AttemptClosed { .. }
+            | WorkRecord::TierChanged { .. }
+            | WorkRecord::Edited { .. }
+            | WorkRecord::BudgetSet { .. }
+            | WorkRecord::PrStatus { .. }
+            | WorkRecord::SourceStalled { .. }
+            | WorkRecord::RulesSet { .. }
+            | WorkRecord::Refused { .. }
+            | WorkRecord::Unknown => FORMAT_V1,
         }
     }
 }

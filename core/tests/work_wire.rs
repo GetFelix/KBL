@@ -456,7 +456,8 @@ fn every_kind_round_trips_and_is_covered() {
     let mut kinds: Vec<_> = all.iter().map(|r| r.kind()).collect();
     kinds.sort_unstable();
     kinds.dedup();
-    // Every variant but `unknown`.
+    // Every first-format kind but `tier_changed` and `edited`, which
+    // `tests/format.rs` covers along with `format_raised`.
     assert_eq!(kinds.len(), 34);
 }
 

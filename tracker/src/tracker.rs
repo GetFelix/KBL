@@ -267,6 +267,9 @@ impl<B: Broker> Tracker<B> {
             stamp: AtomicU64::new(now_micros()),
             next_delivery: AtomicU64::new(1),
         }));
+        // Read once before taking the lease: a build that cannot read the log
+        // must not hold the lease and keep a build that can from starting.
+        tracker.read_state().await?;
         tracker.acquire_lease().await?;
         let (state, texts) = tracker.read_state().await?;
         {
@@ -1175,6 +1178,11 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<u64, Error> {
         if let Some(why) = unavailable(core, self.lease_margin()) {
             return Err(Error::Unavailable(why));
+        }
+        // A kind this build does not know decodes to `unknown`. Logging it
+        // would put a record on the log that says nothing.
+        if record == WorkRecord::Unknown {
+            return Err(Error::Invalid("unknown kind of record".into()));
         }
         let logged = WorkLogged::new(now_ms(), by, actor, record);
         // The tracker is the only writer, so the next offset is the one after the
