@@ -43,6 +43,8 @@ const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
 /// Records between the snapshots the startup fold keeps.
 const SNAPSHOT_EVERY: usize = 1000;
 const DEFAULT_TIER: u8 = 2;
+/// An item to publish: its tier, the record it had, and whether that record lapsed.
+type Want = (ItemId, u8, Option<(u8, u64)>, bool);
 /// Records one poll of a lane looks at before it gives up for this call.
 const MAX_LOOKED_AT: u32 = 64;
 /// Visibility periods after which a ready record is published again. Felix dead-letters
@@ -1183,7 +1185,7 @@ impl<B: Broker> Tracker<B> {
     /// stamp and is acked when polled.
     async fn sync_ready(&self) {
         let _one_at_a_time = self.0.sync.lock().await;
-        let want: Vec<(ItemId, u8, Option<(u8, u64)>, bool)> = {
+        let want: Vec<Want> = {
             let mut core = self.0.core.lock().await;
             // The clock of a record runs only while its item is Ready: a long hold
             // does not make the record look old once the item is released.
