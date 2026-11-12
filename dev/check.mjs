@@ -11,7 +11,7 @@ const CONTROL_PLANE = env("CONTROL_PLANE_URL", "http://127.0.0.1:8443");
 const GATEWAY = env("GATEWAY_URL", "ws://127.0.0.1:8787/ws");
 const IDP = env("IDP_URL", "http://127.0.0.1:9400");
 const TENANT = "agents";
-const AUDIENCE = "kbl";
+const AUDIENCE = "felix-agents";
 const RUN = "check";
 
 const principal = (subject) => createHash("sha256").update(`${IDP}|${subject}`).digest("hex");

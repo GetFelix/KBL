@@ -14,7 +14,7 @@ const STATE = env("AGENTS_STATE_DIR", "/state");
 const TENANT = env("AGENTS_TENANT", "agents");
 const NAMESPACE = env("AGENTS_NAMESPACE", "default");
 // The viewer's OIDC client id, and the audience of every ID token.
-const AUDIENCE = "kbl";
+const AUDIENCE = "felix-agents";
 
 async function request(method, url, { token, headers = {}, body } = {}) {
   const response = await fetch(url, {
