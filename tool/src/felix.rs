@@ -28,6 +28,8 @@ pub(crate) struct Target {
 }
 
 /// The audience every ID token from the development IdP is issued for.
+// The repo's old name, kept on purpose: deployed binaries and the upgrade check
+// send it. Changing it needs the gateway to accept both values for a release.
 const ID_TOKEN_AUDIENCE: &str = "felix-agents";
 /// How long one request to Felix may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);

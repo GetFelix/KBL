@@ -6,7 +6,7 @@ WebAssembly, and lists every item with its stage. The page is plain TypeScript b
 holds the state, so there is no UI framework and no second state layer.
 
 This is the data path only. The page is a list; the real views come from the UX work in
-[#132](https://github.com/GetFelix/felix-agents/issues/132). It cannot write: a person's actions will go to the
+[#132](https://github.com/GetFelix/KBL/issues/132). It cannot write: a person's actions will go to the
 tracker's REST routes.
 
 ## Run it

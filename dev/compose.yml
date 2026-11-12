@@ -1,7 +1,7 @@
 # The development stack: a control plane, one broker, a stand-in IdP, a
 # one-shot seed that creates the tenant, and the gateway. `dev/up.sh` starts
 # it and waits until it is ready.
-name: felix-agents
+name: kbl
 
 services:
   idp:

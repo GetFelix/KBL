@@ -2,7 +2,7 @@
 
 The bar for the dashboard is that someone who uses Linear, Jira, GitHub
 Projects or Sentry feels at home within minutes
-([#132](https://github.com/GetFelix/felix-agents/issues/132)). This is the
+([#132](https://github.com/GetFelix/KBL/issues/132)). This is the
 script for checking that with five people, before the live dashboard is built
 from the style frame.
 

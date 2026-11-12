@@ -13,7 +13,7 @@ Upgrade in this order. No work is lost at any step.
    that handover. A claim stands for 90 seconds without an extension, so
    agents keep the work they hold. Running more than one tracker, which
    removes the pause, is
-   [#124](https://github.com/GetFelix/felix-agents/issues/124).
+   [#124](https://github.com/GetFelix/KBL/issues/124).
 2. **Ingest and `felix-mcp`.** Any order, any pace. They only call the
    tracker's routes, and a newer tracker serves every older caller.
 3. **Dashboard.** Publish the new page. Open pages keep working until they
@@ -140,7 +140,7 @@ tracker does not have yet.
   existed and checks that they are format 1, are written back without `v`,
   and fold to the same state with or without `"v":1`. The stored states in `wasm/golden`
   did not change when formats were added.
-- **The replay corpus** ([#117](https://github.com/GetFelix/felix-agents/issues/117))
+- **The replay corpus** ([#117](https://github.com/GetFelix/KBL/issues/117))
   will keep a log from every release with its folded state. Each record in a
   stored log carries the format its release wrote, so the corpus pins every
   format ever shipped: CI folds each log with the current core and compares.
@@ -158,7 +158,7 @@ tracker does not have yet.
 
 Run logs (`agents.log.<run>`) and task records have no format. Readers ignore
 unknown fields and skip unknown kinds there. Tracked in
-[#166](https://github.com/GetFelix/felix-agents/issues/166).
+[#166](https://github.com/GetFelix/KBL/issues/166).
 
 The ready streams are derived from `work.events`: a tracker publishes every
 ready item again when it starts, and drops a ready record it cannot read.
