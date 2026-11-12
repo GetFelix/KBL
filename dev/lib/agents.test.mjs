@@ -1,10 +1,12 @@
 // The launcher with a shell script for a host: no Felix, no model.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
+
+import { idleWait } from "../agents.mjs";
 
 const LAUNCHER = resolve("dev/agents.mjs");
 
@@ -86,4 +88,34 @@ test("a marker inside other words does not count, and a token may hold =", () =>
   assert.match(run.stdout, /giving up on a after 2 early exits/);
   const env = JSON.parse(readFileSync(join(dir, "cfg"), "utf8")).mcpServers.kbl.env;
   assert.deepEqual([env.KBL_FELIX_TOKEN, env.KBL_TRACKER_TOKEN], ["f==", "t="]);
+});
+
+test("the idle wait doubles up to the cap", () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map((n) => idleWait(n, 15_000, 300_000)), [15_000, 30_000, 60_000, 120_000, 240_000, 300_000]);
+  assert.equal(idleWait(1000, 15_000, 300_000), 300_000);
+  assert.equal(idleWait(3, 20_000, 10_000), 20_000);
+});
+
+test("a session that keeps finding nothing is asked again less and less often", () => {
+  const { dir, tokens } = setup({ a: { felix: "f1", tracker: "ta" }, b: { felix: "f2", tracker: "tb" } });
+  // a holds on for a while; b is empty at once and must wait out a.
+  const script = `if [ "$(grep -o '"KBL_AGENT": "[a-z]"' "$KBL_MCP_CONFIG")" = '"KBL_AGENT": "a"' ]; then sleep 2; fi; echo KBL_QUEUE_EMPTY`;
+  const args = common(tokens, script).slice(0, -2).concat(["--idle-delay", "0.1", "--idle-max", "0.4"]);
+  const run = spawnSync("node", args, { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  const waits = [...run.stdout.matchAll(/b found nothing ready; asking again in ([\d.]+)s/g)].map((m) => Number(m[1]));
+  assert.deepEqual(waits.slice(0, 4), [0.1, 0.2, 0.4, 0.4]);
+});
+
+test("a config dir left by a killed launcher is removed on the next start", () => {
+  const { tokens } = setup({ a: { felix: "f1", tracker: "ta" } });
+  const stale = mkdtempSync(join(tmpdir(), "kbl-agents-"));
+  writeFileSync(join(stale, "pid"), "999999999");
+  const live = mkdtempSync(join(tmpdir(), "kbl-agents-"));
+  writeFileSync(join(live, "pid"), String(process.pid));
+  const run = spawnSync("node", common(tokens, "echo KBL_QUEUE_EMPTY"), { encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+  assert.equal(existsSync(stale), false);
+  assert.equal(existsSync(live), true);
+  rmSync(live, { recursive: true, force: true });
 });
