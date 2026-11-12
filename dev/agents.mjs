@@ -102,6 +102,7 @@ function readOptions(argv) {
 
 // The server name the host sees; Claude Code names its tools mcp__kbl__<tool>.
 const SERVER = "kbl";
+const LONG_RUN_MS = 60_000;
 
 // The settings kbl-mcp may be given from the launcher's environment. Tokens are never copied.
 const PASSED_ENV = [
@@ -182,8 +183,10 @@ export async function runAgents(argv, log = console.log) {
         log(`${agent.name}: could not start ${command}: ${e.message}`);
         hosts.delete(child);
         done({ code: 127, empty: false });
+        child.removeAllListeners("close");
       });
-      child.on("exit", (code, signal) => {
+      // `close` comes after the output streams end, so the marker line is never missed.
+      child.on("close", (code, signal) => {
         hosts.delete(child);
         done({ code: code ?? signal, empty });
       });
@@ -199,7 +202,10 @@ export async function runAgents(argv, log = console.log) {
     while (!stopping) {
       state.set(agent.name, "running");
       log(`starting ${agent.name}`);
+      const startedAt = Date.now();
       const { code, empty } = await runHost(agent, dir, config);
+      // A host that ran for a while did work; only quick failures in a row count.
+      if (Date.now() - startedAt > LONG_RUN_MS) early = 0;
       if (stopping) break;
       if (empty) {
         early = 0;
@@ -239,7 +245,7 @@ export async function runAgents(argv, log = console.log) {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
-  log(stopping ? "stopped" : "the queue is empty; every session is done");
+  log(stopping ? "stopped" : failed ? "stopped with a session given up on" : "the queue is empty; every session is done");
   return stopping ? 130 : failed ? 1 : 0;
 }
 
