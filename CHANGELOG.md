@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Tracker hardening. An agent can no longer replace a context entry that
+  ingest, the fold or a person wrote (`not_your_entry`). A reported cost
+  saturates an item's total instead of overflowing it. Every string a record
+  carries (release and give-up reasons, imported fields, titles, triage notes,
+  a rules target) is held to 4 KiB on every route. A ready record that Felix
+  dead-lettered is published again after six visibility periods, so its item is
+  claimed again. The empty-lane mark for reviewers is taken before the polls,
+  not after. Older logs fold as they did.
+
 - Review is claimable work. When an item's pull request opens, the tracker adds
   a first-pass and a final `review` item, each for a reviewer tier
   (`AGENTS_REVIEW_TIERS`, default `fast,deep`, one `work.review.rN` stream

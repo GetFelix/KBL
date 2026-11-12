@@ -944,7 +944,9 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             }
             Ok(())
         }
-        WorkRecord::RulesSet { text, .. } => {
+        WorkRecord::RulesSet { text, target, .. } => {
+            field("target source", &target.source)?;
+            field("target repo", &target.repo)?;
             if let Some(text) = text
                 && text.len() > agents_core::work::MAX_RULES_TEXT
             {
@@ -959,9 +961,26 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
         WorkRecord::Progress { note, .. } => check_content("note", note),
         WorkRecord::Step { output, .. } => check_content("output", output),
         WorkRecord::Edit { hunk, .. } => check_content("hunk", hunk),
-        WorkRecord::Proposed { title, .. } | WorkRecord::Imported { title, .. } => {
+        WorkRecord::Proposed { title, .. } => field("title", title),
+        WorkRecord::Imported {
+            source,
+            upstream_id,
+            title,
+            ..
+        } => {
+            field("source", source)?;
+            field("upstream_id", upstream_id)?;
             field("title", title)
         }
+        WorkRecord::Updated {
+            title: Some(title), ..
+        } => field("title", title),
+        WorkRecord::Released {
+            reason: Some(reason),
+            ..
+        }
+        | WorkRecord::GaveUp { reason, .. } => field("reason", reason),
+        WorkRecord::Triaged { why, .. } => field("why", why),
         // Only a holding agent writes these, through the tools, but a person's
         // record is held to the same bounds.
         WorkRecord::Finding {

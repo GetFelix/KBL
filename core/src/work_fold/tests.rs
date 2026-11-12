@@ -2820,3 +2820,51 @@ fn chained_answers_stop_at_the_depth_cap() {
 }
 
 mod review;
+
+#[test]
+fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
+    let mut l = held_root();
+    let ctx = |e: &str, t: &str| WorkRecord::Context {
+        item: id("r1"),
+        entry: key(e),
+        text: text(t),
+    };
+    // Ingest wrote `issue`; a person wrote `note`.
+    l.tracker(ctx("issue", "upstream text"));
+    l.person(ctx("note", "from a person"));
+    let issue = l.0.len() as u64 - 2;
+    l.agent("w1", ctx("issue", "forged"));
+    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
+    l.agent("w1", ctx("note", "forged"));
+    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
+    // Its own entry can be replaced, by itself only.
+    l.agent("w1", ctx("mine", "one"));
+    l.agent("w1", ctx("mine", "two"));
+    let two = l.0.len() as u64 - 1;
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.len(), 2);
+    assert_eq!(s.items[&id("r1")].context[&key("issue")], issue);
+    assert_eq!(s.items[&id("r1")].context[&key("mine")], two);
+    // A person takes the entry over; the agent cannot take it back.
+    l.person(ctx("mine", "person"));
+    l.agent("w1", ctx("mine", "back"));
+    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
+}
+
+#[test]
+fn reported_costs_saturate_instead_of_overflowing() {
+    let mut l = held_root();
+    let ask = |cost_micros: u64| WorkRecord::Question {
+        item: id("r1"),
+        attempt: 1,
+        text: text("which?"),
+        options: vec![],
+        default: None,
+        cost_micros,
+    };
+    l.agent("w1", ask(u64::MAX));
+    l.agent("w1", ask(1));
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("r1")].cost_micros, u64::MAX);
+    assert_eq!(s.budgets[&id("r1")].cost_left_micros, 0);
+}

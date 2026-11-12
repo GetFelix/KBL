@@ -312,6 +312,9 @@ pub struct Item {
     pub first_claim_ms: Option<u64>,
     pub cost_micros: u64,
     pub context: BTreeMap<Key, u64>,
+    /// The agent that last wrote each entry an agent wrote. Any other entry is not an agent's to replace.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub context_agents: BTreeMap<Key, Key>,
     pub paths: Vec<Path>,
     /// Human inputs that name no attempt, and so steer every path.
     pub human_inputs: Vec<u64>,
@@ -399,6 +402,8 @@ pub enum Reject {
     SelfReview,
     /// The record is about a review and the item is not the right one.
     NotReview,
+    /// An agent replaced a context entry that someone else wrote.
+    NotYourEntry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -801,6 +806,7 @@ impl State {
             first_claim_ms: None,
             cost_micros: 0,
             context: BTreeMap::new(),
+            context_agents: BTreeMap::new(),
             paths: Vec::new(),
             human_inputs: Vec::new(),
             pending_fork: None,
@@ -991,13 +997,26 @@ impl State {
                     let (worker, attempt) = self
                         .agent_scope(item, &rec.by, false)
                         .ok_or(Reject::NotHolder)?;
+                    // Upstream text, fold-set entries and other people's notes stay as written.
+                    let it = self.item(item)?;
+                    if it.context.contains_key(entry)
+                        && it.context_agents.get(entry) != Some(&rec.by)
+                    {
+                        return Err(Reject::NotYourEntry);
+                    }
                     let p = self.path_mut(&worker, attempt)?;
                     if p.context_writes >= MAX_CONTEXT {
                         return Err(Reject::LimitReached);
                     }
                     p.context_writes += 1;
                 }
-                self.item_mut(item)?.context.insert(entry.clone(), offset);
+                let it = self.item_mut(item)?;
+                it.context.insert(entry.clone(), offset);
+                if rec.actor == Actor::Agent {
+                    it.context_agents.insert(entry.clone(), rec.by.clone());
+                } else {
+                    it.context_agents.remove(entry);
+                }
             }
             WorkRecord::Claimed {
                 item,
@@ -1153,7 +1172,7 @@ impl State {
                 let it = self.item_mut(item)?;
                 it.paths[idx].done = true;
                 it.hold = None;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 // A fix waits for its merge; other work is finished when its attempt is.
                 // A fix a review asked for lands in the request it came from.
                 if it.work != WorkKind::Fix || it.finding.is_some() {
@@ -1174,7 +1193,7 @@ impl State {
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
                 it.hold = None;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 self.draw_cost(&root, *cost_micros);
             }
             WorkRecord::GaveUp {
@@ -1190,7 +1209,7 @@ impl State {
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
                 it.hold = None;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 self.draw_cost(&root, *cost_micros);
             }
             WorkRecord::Question {
@@ -1211,7 +1230,7 @@ impl State {
                 let root = self.item(item)?.root.clone();
                 self.draw_cost(&root, *cost_micros);
                 let it = self.item_mut(item)?;
-                it.cost_micros += cost_micros;
+                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 it.open_question = Some(offset);
                 it.ask = Some(Ask {
                     options: options.clone(),
@@ -2089,7 +2108,7 @@ impl State {
         self.draw_cost(&root, cost_micros);
         let it = self.item_mut(item)?;
         it.hold = None;
-        it.cost_micros += cost_micros;
+        it.cost_micros = it.cost_micros.saturating_add(cost_micros);
         if let Some(p) = it.paths.iter_mut().find(|p| p.attempt == attempt) {
             // Waiting on another repo is not a failed try.
             p.tries = p.tries.saturating_sub(1);
