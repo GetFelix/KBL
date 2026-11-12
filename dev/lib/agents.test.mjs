@@ -42,7 +42,8 @@ test("each session gets its own agent name and tracker token", () => {
   const script = `grep -o '"KBL_TRACKER_TOKEN": "[a-z]*"' "$KBL_MCP_CONFIG" >> ${dir}/seen; echo KBL_QUEUE_EMPTY`;
   const run = spawnSync("node", common(tokens, script), { encoding: "utf8" });
   assert.equal(run.status, 0, run.stderr);
-  assert.deepEqual(readFileSync(join(dir, "seen"), "utf8").trim().split("\n").sort(), [
+  // A session that finds nothing may be asked again while another is still going.
+  assert.deepEqual([...new Set(readFileSync(join(dir, "seen"), "utf8").trim().split("\n"))].sort(), [
     '"KBL_TRACKER_TOKEN": "ta"',
     '"KBL_TRACKER_TOKEN": "tb"',
   ]);
