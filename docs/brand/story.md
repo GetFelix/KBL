@@ -43,6 +43,26 @@ judgement it shows, from triage to a fix, is work an agent or a person did.
 Not a tracker that waits for people either: work moves without anyone dragging cards. And not a scoreboard.
 KBL measures the flow of work, never the people doing it.
 
+## Mark
+
+A big bug with one bite-sized piece lifted out of its corner: the piece an
+agent can take away and finish. Two shapes on a 64 grid with four-unit gaps,
+so every edge lands on a whole pixel at 16 px.
+
+| Colour | Hex | Use |
+|---|---|---|
+| Amber | `#C86A1E` | the bite, accents, graphics and large text on either background |
+| Dark amber | `#A4520F` | amber text on white (amber itself is 3.8:1 there) |
+| Graphite | `#14171C` | the body on light backgrounds |
+| Paper | `#ECEAE6` | the body on dark backgrounds |
+
+The files are in this folder. `kbl-mark.svg` and `kbl-lockup.svg` draw the
+body in `currentColor`; the `-light` (graphite) and `-dark` (paper) variants
+are for places that cannot set it. `scripts/render-mark.mjs` renders the PNGs.
+
+Keep the mark at 16 px or larger and the lockup at 24 px tall or larger. The
+bite is always amber; do not recolour, outline or rotate it.
+
 ## Words we use
 
 | Say | Instead of |
