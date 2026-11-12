@@ -8,7 +8,7 @@ use agents_core::work_fold::{NeedsYou, Stage};
 use serde_json::{Value, json};
 
 use super::super::tests::{
-    Fake, agent, claim, claimed_id, item, key, seed, settings, start, start_with,
+    Fake, agent, claim, claimed_id, item, key, seed, seed_in_felix, settings, start, start_with,
 };
 use super::{Decide, Post, Prereq};
 use crate::tracker::{Error, Reply, Tracker};
@@ -1576,9 +1576,17 @@ async fn held_triage(t: &Tracker<Fake>, who: &str) {
 #[tokio::test]
 async fn an_agent_answers_the_triage_item_it_holds() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let grants = [("w1".to_owned(), vec!["GetFelix/felix".to_owned()])].into();
+    let t = start_with(
+        &fake,
+        crate::tracker::Settings {
+            grants,
+            ..settings()
+        },
+    )
+    .await;
     held_triage(&t, "w1").await;
-    seed(&t, "a2", 2).await;
+    seed_in_felix(&t, "a2").await;
     let reply = t
         .triage(
             &agent("w1"),
@@ -1699,4 +1707,81 @@ async fn triage_is_refused_without_the_triage_item_or_with_a_bad_answer() {
         .triage(&agent("w2"), &item(&other), 1, "w".into(), None, None)
         .await;
     assert_eq!(why(got), "invalid");
+}
+
+#[tokio::test]
+async fn triage_cannot_name_a_duplicate_the_agent_may_not_see() {
+    let (fake, t) = granted().await;
+    let w1 = agent("w1");
+    // w1 holds a1-t, a triage item in GetFelix/felix; other/secret is not granted.
+    person(
+        &t,
+        WorkRecord::Proposed {
+            item: item("a1-t"),
+            parent: Some(item("a1")),
+            key: key("triage"),
+            work: WorkKind::Triage,
+            title: "Triage: fix a1".into(),
+            review: None,
+        },
+    )
+    .await;
+    claim_item(&t, "w1", &item("a1-t")).await;
+    import(&t, "f1", "other/secret#4").await;
+    let before = fake.log().len();
+    let mut refusals = Vec::new();
+    for dup in ["f1", "nope"] {
+        let r = t
+            .triage(&w1, &item("a1-t"), 1, "w".into(), Some(item(dup)), None)
+            .await;
+        refusals.push(format!("{:?}", r.unwrap_err()).replace(dup, "X"));
+    }
+    assert_eq!(refusals[0], refusals[1]);
+    assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn a_new_holders_identical_answer_is_recorded_under_its_own_hold() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    let answer = |who: &'static str| {
+        let t = t.clone();
+        async move {
+            t.triage(&agent(who), &item("a1-t"), 1, "same".into(), None, None)
+                .await
+                .unwrap()
+        }
+    };
+    answer("w1").await;
+    t.release(&agent("w1"), &item("a1-t"), None, 0)
+        .await
+        .unwrap();
+    claim_item(&t, "w2", &item("a1-t")).await;
+    let second = answer("w2").await;
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "triaged").count(), 2);
+    let core = t.0.core.lock().await;
+    assert_eq!(
+        core.state.items[&item("a1")]
+            .proposal
+            .as_ref()
+            .map(|p| p.at),
+        second["offset"].as_u64()
+    );
+}
+
+#[tokio::test]
+async fn triage_after_the_hold_is_gone_is_not_held() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    t.release(&agent("w1"), &item("a1-t"), None, 0)
+        .await
+        .unwrap();
+    let before = fake.log().len();
+    let r = t
+        .triage(&agent("w1"), &item("a1-t"), 1, "w".into(), None, None)
+        .await;
+    assert_eq!(why(r), "not_held");
+    assert_eq!(fake.log().len(), before);
 }

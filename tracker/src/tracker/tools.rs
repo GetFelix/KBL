@@ -218,15 +218,7 @@ impl<B: Broker> Tracker<B> {
             let allowed = self.visible_repos(&core, agent, item);
             let seen = match &new {
                 Some(n) => allowed.contains(n.target.repo.as_str()),
-                None => core.state.items.get(&prerequisite).is_some_and(|p| {
-                    let own = core.state.items.get(item).map(|i| &i.root) == Some(&p.root);
-                    let repo = core
-                        .state
-                        .items
-                        .get(&p.root)
-                        .and_then(|r| r.target.as_ref());
-                    own || repo.is_some_and(|t| allowed.contains(t.repo.as_str()))
-                }),
+                None => visible(&core, &allowed, item, &prerequisite),
             };
             if !seen {
                 // The same answer for an item that is missing and one the agent may not see.
@@ -619,8 +611,10 @@ impl<B: Broker> Tracker<B> {
                 .filter(|i| i.work == WorkKind::Triage)
                 .and_then(|i| i.parent.clone())
                 .ok_or_else(|| Error::Invalid(format!("{item} is not a triage item")))?;
+            // A missing item and one outside the agent's grants get the same refusal.
+            let allowed = self.visible_repos(&core, agent, item);
             if let Some(d) = &duplicate_of
-                && (d == &target || !core.state.items.contains_key(d))
+                && (d == &target || !visible(&core, &allowed, item, d))
             {
                 return Err(Error::Invalid(format!(
                     "duplicate_of names {d}, which is not another item"
@@ -633,6 +627,7 @@ impl<B: Broker> Tracker<B> {
                 .get(&target)
                 .and_then(|i| i.proposal.as_ref());
             if let Some(p) = standing
+                && p.by.as_ref() == Some(&agent_key(agent))
                 && (p.tier, &p.why, &p.duplicate_of, p.unclear)
                     == (tier, &why, &duplicate_of, unclear)
             {
@@ -857,6 +852,19 @@ impl<B: Broker> Tracker<B> {
 }
 
 /// The attempt `agent` holds `item` on, from the log.
+/// Whether `other` is in `item`'s tree or in a repo the agent may reach.
+fn visible(core: &Core, allowed: &BTreeSet<&str>, item: &ItemId, other: &ItemId) -> bool {
+    core.state.items.get(other).is_some_and(|p| {
+        let own = core.state.items.get(item).map(|i| &i.root) == Some(&p.root);
+        let repo = core
+            .state
+            .items
+            .get(&p.root)
+            .and_then(|r| r.target.as_ref());
+        own || repo.is_some_and(|t| allowed.contains(t.repo.as_str()))
+    })
+}
+
 fn held(core: &Core, agent: &AgentName, item: &ItemId) -> Result<u32, Error> {
     core.state
         .items

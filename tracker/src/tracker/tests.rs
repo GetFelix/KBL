@@ -39,6 +39,8 @@ struct Net {
     gate_extend: bool,
     /// The next publish waits for `open_gate` after the record is on the stream.
     gate_publish: bool,
+    /// The next nack waits for `open_gate` before it lands.
+    gate_nack: bool,
     /// Ingest's saved state by name, with versions.
     cursors: HashMap<String, (Vec<u8>, u64)>,
 }
@@ -167,6 +169,10 @@ impl Fake {
 
     fn hold_next_publish(&self) {
         self.net.lock().unwrap().gate_publish = true;
+    }
+
+    fn hold_next_nack(&self) {
+        self.net.lock().unwrap().gate_nack = true;
     }
 
     fn open_gate(&self) {
@@ -331,6 +337,10 @@ impl Broker for Fake {
     }
 
     async fn nack(&self, stream: &str, member: &str, record: &GroupRecord) -> anyhow::Result<()> {
+        let gated = std::mem::take(&mut self.net.lock().unwrap().gate_nack);
+        if gated {
+            self.gate.notified().await;
+        }
         let mut net = self.net.lock().unwrap();
         if net.dead.contains(member) {
             anyhow::bail!("the connection dropped");
@@ -1502,6 +1512,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
     assert_eq!(read["rules"], claimed["rules"]);
 }
 
+mod races;
 mod review;
 
 #[tokio::test(start_paused = true)]
