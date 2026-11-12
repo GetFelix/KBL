@@ -3,11 +3,13 @@
 ## Unreleased
 
 - Fixed: proposals were limited only per attempt, so an agent that kept claiming
-  could keep filling Triage. An agent may now have 16 proposals waiting for a
-  person at once and 8 from one root; a prerequisite filed in another repo
-  counts too. A triage holder that kept changing its answer is stopped after 4
-  different answers in an attempt; repeating the same answer is still a no-op.
-  Each proposal now records the agent and root it came from.
+  could keep filling the Triage column. The tracker now refuses a proposal when
+  the agent already has 16 waiting for a person, or 8 from work under one
+  root. Posted proposals, prerequisites that file work in another repo, and
+  deferred review findings all count, and accepting or rejecting one frees its
+  slot. A triage holder that kept changing its answer is stopped after 4
+  different answers in an attempt; repeating the answer on record is still a
+  no-op. The fold itself is unchanged, so old logs replay as before.
 - Changed: the crates and binaries are renamed. `felix-mcp` is `kbl-mcp`, and
   `agents-core`, `agents-ingest`, `agents-tool`, `agents-tracker` and
   `agents-wasm` are `kbl-core`, `kbl-ingest`, `kbl-tool`, `kbl-tracker` and

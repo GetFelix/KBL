@@ -773,8 +773,9 @@ slipping by.
   limit with children and prerequisites. An agent may also have 16 proposals
   waiting for a person at once, and 8 from work under one root, over all its
   attempts. A proposal leaves the count when a person accepts or rejects it.
-  A prerequisite that files work in another repo counts the same way. Each
-  proposal records the agent and root it came from.
+  A prerequisite that files work in another repo and a deferred review
+  finding count the same way. The tracker checks this before it appends, so
+  the fold of an existing log does not change.
 - **Attempts.** A claim that ends in a release, a lapse or a give-up may be
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most
