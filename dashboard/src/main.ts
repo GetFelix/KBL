@@ -1,6 +1,6 @@
 // Connect to felix-gateway, fold work.events with the core crate as WebAssembly,
 // and list the items with their stage. Settings come from the query string:
-// ?gateway=ws://127.0.0.1:8787/ws&room=kibble&token=<ID token>&stream=events
+// ?gateway=ws://127.0.0.1:8787/ws&room=kbl&token=<ID token>&stream=events
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { items, type Fold } from './fold.ts';
 import { follow, FollowError } from './follow.ts';

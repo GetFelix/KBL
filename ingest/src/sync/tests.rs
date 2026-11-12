@@ -52,7 +52,7 @@ impl Rig {
             Github::new(
                 "https://api.github.com",
                 self.gh.clone(),
-                vec!["Kibble[bot]".into()],
+                vec!["KBL[bot]".into()],
             ),
             self.tracker.clone(),
             Settings {
@@ -456,7 +456,7 @@ async fn a_comment_becomes_context_once_and_our_own_comments_are_not_imported() 
     let bob = fixture("comment");
     let mut own = fixture("comment");
     own["id"] = json!(9002);
-    own["user"]["login"] = json!("kibble[bot]");
+    own["user"]["login"] = json!("kbl[bot]");
     own["body"] = json!("The pull request is up.");
     rig.comments(vec![bob.clone(), own]);
     ingest.poll(false).await.unwrap();
@@ -1193,7 +1193,7 @@ async fn a_merge_into_another_branch_or_by_our_own_login_does_not_close_the_root
         pull(|p| {
             p["state"] = json!("closed");
             p["merged"] = json!(true);
-            p["merged_by"] = json!({ "login": "kibble[bot]" });
+            p["merged_by"] = json!({ "login": "kbl[bot]" });
         }),
         vec![],
         vec![],

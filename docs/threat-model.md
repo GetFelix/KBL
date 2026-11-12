@@ -149,7 +149,7 @@ request only when all of these hold, so the name alone steers nothing.
 |---|---|
 | Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:733`) |
 | Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:474`, `ingest/src/github.rs:335`) |
-| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kibble/<item>` or a closing reference (`ingest/src/sync.rs:488`) |
+| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:488`) |
 | Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs:346`) |
 | Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:516`) |
 | Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:559`) |

@@ -191,7 +191,7 @@ async fn reviews_are_claimed_only_by_naming_their_tier() {
     assert_eq!(got["item"]["review"]["tier"], "fast");
     // The review reads the root's request, which its author opened.
     assert_eq!(got["item"]["pr"], PR);
-    assert_eq!(got["item"]["pr_branch"], "kibble/a1");
+    assert_eq!(got["item"]["pr_branch"], "kbl/a1");
 }
 
 #[tokio::test]

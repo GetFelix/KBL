@@ -289,7 +289,7 @@ dismissed stays closed when its issue is reopened.
 ```json
 {
   "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN" },
-  "github": { "token_file": "/run/secrets/github-token", "own_logins": ["kibble[bot]"] },
+  "github": { "token_file": "/run/secrets/github-token", "own_logins": ["kbl[bot]"] },
   "rules": [
     {
       "name": "agent-ok", "repo": "GetFelix/felix", "mode": "admit",
@@ -342,7 +342,7 @@ What it does with GitHub:
   hold: it is in the issue's repo and a rule names that repo; one of
   `own_logins` opened it; it was created after the item's first claim; and it
   is tied to the item, either by a closing reference to the issue in its body
-  (`Fixes #812`) or by its head branch, which is `kibble/<item id>`. The claim
+  (`Fixes #812`) or by its head branch, which is `kbl/<item id>`. The claim
   reply gives the agent that name as `item.pr_branch`. The branch the agent
   reported in `work_progress` is not a link, and the fold refuses a `pr` that
   another open item already reports.

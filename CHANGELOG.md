@@ -10,6 +10,7 @@
   slot. A triage holder that kept changing its answer is stopped after 4
   different answers in an attempt; repeating the answer on record is still a
   no-op. The fold itself is unchanged, so old logs replay as before.
+- Changed: the pull request branch prefix is `kbl/<item>` instead of `kibble/<item>`, and the bot login in docs and fixtures is `kbl[bot]`. An item claimed under the old prefix will not link its pull request after the upgrade.
 - Changed: the crates and binaries are renamed. `felix-mcp` is `kbl-mcp`, and
   `agents-core`, `agents-ingest`, `agents-tool`, `agents-tracker` and
   `agents-wasm` are `kbl-core`, `kbl-ingest`, `kbl-tool`, `kbl-tracker` and

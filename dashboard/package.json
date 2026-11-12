@@ -1,9 +1,9 @@
 {
-  "name": "kibble-dashboard",
+  "name": "kbl-dashboard",
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "The Kibble dashboard: follows work.events through felix-gateway and folds it with the core crate as WebAssembly",
+  "description": "The KBL dashboard: follows work.events through felix-gateway and folds it with the core crate as WebAssembly",
   "scripts": {
     "wasm": "node scripts/build-wasm.mjs",
     "typecheck": "tsc --noEmit",

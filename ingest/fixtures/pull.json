@@ -5,6 +5,6 @@
   "state": "open",
   "draft": false,
   "title": "Fix the stale read",
-  "user": { "login": "kibble[bot]", "type": "Bot" },
+  "user": { "login": "kbl[bot]", "type": "Bot" },
   "merged": false
 }
