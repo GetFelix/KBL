@@ -32,6 +32,8 @@ export interface GatewayMessage {
 
 export interface Sink {
   apply(offset: number, payload: Uint8Array): boolean;
+  /** The format of a refused record that is newer than the fold reads, else 0. The follow then ends. */
+  newer?(): number;
 }
 
 export interface FollowOptions {
@@ -89,8 +91,16 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
         fail(`record ${offset} is not base64`);
         return;
       }
-      // A record the fold does not read is counted and skipped; the cursor moves past it.
-      if (!sink.apply(offset, bytes)) opts.onRefused?.(++refused);
+      if (!sink.apply(offset, bytes)) {
+        // Skipping a record of a newer format would show a state the log does not hold.
+        const newer = sink.newer?.() ?? 0;
+        if (newer) {
+          fail(`record ${offset} has format ${newer}, which this page is too old to read. Reload the page`);
+          return;
+        }
+        // Any other record the fold does not read is counted and skipped; the cursor moves past it.
+        opts.onRefused?.(++refused);
+      }
       cursor = offset + 1;
       opts.onApplied?.(offset);
     };

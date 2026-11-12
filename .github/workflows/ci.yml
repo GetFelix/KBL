@@ -84,7 +84,7 @@ jobs:
   stack:
     name: dev stack
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -115,6 +115,16 @@ jobs:
         run: node dev/check-tracker-work.mjs
       - name: Run review as work against Felix
         run: node dev/check-tracker-review.mjs
+      - name: Upgrade from the previous build and back, over one log
+        env:
+          # The previous build is the commit this change is based on, until there are releases.
+          PREVIOUS: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          git fetch --depth=1 origin "$PREVIOUS"
+          git worktree add ../previous "$PREVIOUS"
+          cargo build --manifest-path ../previous/Cargo.toml --target-dir target/previous -p agents-tracker -p felix-mcp
+          AGENTS_TRACKER_OLD=target/previous/debug/agents-tracker FELIX_MCP_OLD=target/previous/debug/felix-mcp \
+            node dev/check-upgrade.mjs
       - name: Run a scripted job twice from one seed
         run: node dev/check-scripted.mjs
       - name: Kill workers holding tasks

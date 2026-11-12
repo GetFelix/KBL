@@ -111,7 +111,7 @@ in `check_sizes` (`tracker/src/tracker/tools.rs:895`).
 
 | Route | Record | Check beyond the token |
 |---|---|---|
-| `/v1/work/records` | Any kind a person may write | The fold refuses the kinds a person may not write: see [Records on work.events](#records-on-workevents). The strings are held to 4 KiB when the record is appended, including progress `branch` and `pr`, `triaged.why`, `imported` fields and a rules target (`tracker/src/tracker.rs:1266`) |
+| `/v1/work/records` | Any kind a person may write. A kind the tracker does not know is refused | The fold refuses the kinds a person may not write: see [Records on work.events](#records-on-workevents). The strings are held to 4 KiB when the record is appended, including progress `branch` and `pr`, `triaged.why`, `imported` fields and a rules target (`tracker/src/tracker.rs:1266`) |
 | `/v1/work/proposals/accept` | `accepted` | Tier 0 to 3 (`core/src/work_fold.rs:823`) |
 | `/v1/work/proposals/edit` | `edited` | Only before acceptance (`core/src/work_fold.rs:1431`) |
 | `/v1/work/proposals/reject` | `rejected` | Only a proposal never accepted (`core/src/work_fold.rs:1286`) |
@@ -233,6 +233,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `source_stalled` | Tracker | 200-byte names, 64 repos (`core/src/work_fold.rs:1484`) |
 | `rules_set` | Person | `core/src/work_fold.rs:1357` |
 | `refused` | Tracker | `core/src/work_fold.rs:1445` |
+| `format_raised` | Person | Only upward, only to a format the tracker's build reads, and stamped with that format (`core/src/work_fold.rs:446`). An older reader stops at it ([upgrades.md](upgrades.md)) |
 
 ## Records on the run log
 

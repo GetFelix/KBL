@@ -20,15 +20,8 @@ struct Log(Vec<(u64, WorkLogged)>);
 impl Log {
     fn push(&mut self, by: &str, actor: Actor, record: WorkRecord) -> u64 {
         let offset = self.0.len() as u64;
-        self.0.push((
-            offset,
-            WorkLogged {
-                at_ms: offset * 10,
-                by: key(by),
-                actor,
-                record,
-            },
-        ));
+        self.0
+            .push((offset, WorkLogged::new(offset * 10, key(by), actor, record)));
         offset
     }
     fn agent(&mut self, by: &str, record: WorkRecord) -> u64 {
@@ -1284,12 +1277,7 @@ fn try_apply_leaves_no_trace_when_it_refuses() {
     let mut s = fold(&l.0);
     let before = s.clone();
     // No cost left: the claim is refused, and the root must not be flagged over budget.
-    let claim = WorkLogged {
-        at_ms: 0,
-        by: key("w1"),
-        actor: Actor::Agent,
-        record: claimed("r1", 1),
-    };
+    let claim = WorkLogged::new(0, key("w1"), Actor::Agent, claimed("r1", 1));
     assert_eq!(s.try_apply(3, &claim), Err(Reject::OverBudget));
     assert_eq!(s, before);
     // The same record through apply flags the root, as a replay of a logged one would.
@@ -2881,4 +2869,89 @@ fn reported_costs_saturate_instead_of_overflowing() {
     let s = fold(&l.0);
     assert_eq!(s.items[&id("r1")].cost_micros, u64::MAX);
     assert_eq!(s.budgets[&id("r1")].cost_left_micros, 0);
+}
+
+fn stamped(v: u32, actor: Actor, record: WorkRecord) -> WorkLogged {
+    let mut rec = WorkLogged::new(0, key("gab"), actor, record);
+    rec.v = v;
+    rec
+}
+
+/// The gate as a build that reads formats 1 to 3 would run it.
+#[test]
+fn a_person_raises_the_format_once_and_only_upward() {
+    let raise = |to| WorkRecord::FormatRaised { to };
+    assert_eq!(
+        format_gate(3, 1, &stamped(2, Actor::Person, raise(2))),
+        Ok(Some(2))
+    );
+    // Formats may be skipped.
+    assert_eq!(
+        format_gate(3, 1, &stamped(3, Actor::Person, raise(3))),
+        Ok(Some(3))
+    );
+    for actor in [Actor::Agent, Actor::Tracker] {
+        assert_eq!(
+            format_gate(3, 1, &stamped(2, actor, raise(2))),
+            Err(Reject::ActorNotAllowed)
+        );
+    }
+    // Not upward, past what the build reads, or stamped with another format.
+    assert_eq!(
+        format_gate(3, 2, &stamped(2, Actor::Person, raise(2))),
+        Err(Reject::Format)
+    );
+    assert_eq!(
+        format_gate(3, 1, &stamped(4, Actor::Person, raise(4))),
+        Err(Reject::Format)
+    );
+    assert_eq!(
+        format_gate(3, 1, &stamped(3, Actor::Person, raise(2))),
+        Err(Reject::Format)
+    );
+    assert_eq!(
+        format_gate(3, 1, &stamped(1, Actor::Person, raise(1))),
+        Err(Reject::Format)
+    );
+}
+
+#[test]
+fn a_record_above_the_log_format_waits_for_the_raise() {
+    let accepted = || WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    };
+    // The build could read it, and an older reader still on the log could not.
+    assert_eq!(
+        format_gate(3, 1, &stamped(2, Actor::Person, accepted())),
+        Err(Reject::Format)
+    );
+    assert_eq!(
+        format_gate(3, 2, &stamped(2, Actor::Person, accepted())),
+        Ok(None)
+    );
+    assert_eq!(
+        format_gate(3, 2, &stamped(1, Actor::Person, accepted())),
+        Ok(None)
+    );
+}
+
+#[test]
+fn a_refused_raise_is_a_rejection_on_replay_and_leaves_the_format() {
+    let mut l = Log::default();
+    l.push("gab", Actor::Person, imported("r1"));
+    let at = l.push(
+        "gab",
+        Actor::Person,
+        WorkRecord::FormatRaised { to: FORMAT + 1 },
+    );
+    let s = fold(&l.0);
+    assert_eq!(s.format(), FORMAT);
+    assert_eq!(
+        s.rejections,
+        vec![Rejection {
+            offset: at,
+            why: Reject::Format
+        }]
+    );
 }
