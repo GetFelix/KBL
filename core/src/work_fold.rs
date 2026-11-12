@@ -212,6 +212,10 @@ pub struct Proposal {
     pub duplicate_of: Option<ItemId>,
     #[serde(default)]
     pub unclear: Option<Unclear>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<ItemId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub split: Vec<String>,
     pub at: u64,
     /// Who wrote it, so a retry by the same writer can be told from a new holder's answer.
     /// Left out of the state's wire form; a replay of the log sets it again.
@@ -932,6 +936,8 @@ impl State {
                 why,
                 duplicate_of,
                 unclear,
+                depends_on,
+                split,
             } => {
                 if *tier >= TIERS {
                     return Err(Reject::BadTier);
@@ -943,6 +949,8 @@ impl State {
                             && p.why == *why
                             && p.duplicate_of == *duplicate_of
                             && p.unclear == *unclear
+                            && p.depends_on == *depends_on
+                            && p.split == *split
                     });
                     if !same && let Ok(path) = self.path_mut(&triage, attempt) {
                         path.triages = path.triages.saturating_add(1);
@@ -953,6 +961,8 @@ impl State {
                     why: why.clone(),
                     duplicate_of: duplicate_of.clone(),
                     unclear: *unclear,
+                    depends_on: depends_on.clone(),
+                    split: split.clone(),
                     at: offset,
                     by: Some(rec.by.clone()),
                 });

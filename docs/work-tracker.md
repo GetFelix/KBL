@@ -46,7 +46,7 @@ operations as MCP tools in `kbl-mcp` for agents:
 | `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
-| `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, or `unclear`. See [Kinds of work](#kinds-of-work) |
+| `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on` and `split`, or `unclear`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
 
 Every `kbl-mcp` work tool, claiming included, calls the tracker over REST
@@ -377,7 +377,7 @@ has no matching record to clear it, so a person decides.
 
 The fold caps what one attempt may write: 200 decisions, 500 steps, 500
 edits, 100 progress records, 100 context entries, 20 questions, 10
-answers, 100 links, 4 different triage answers, and 24 children and proposals together. A call over a cap is refused, and the first refusal in an
+answers, 100 links, 4 different triage answers (a changed dependency list or split counts as a different answer), and 24 children and proposals together. A call over a cap is refused, and the first refusal in an
 attempt is logged as refused, so a looping agent cannot fill the stream with
 records or with refusals. Each field is also limited in size: text over 4 KiB
 must be an artifact, and a title, command or reason is at most 4 KiB. A
@@ -625,7 +625,7 @@ the operator's job.
 | Kind | Claimed by | The answer comes back as |
 |---|---|---|
 | `fix` | A coding agent | Progress records, a branch, a PR |
-| `triage` | Any agent | A proposal written with `work_triage`: a tier with one line of why, a possible duplicate, or `unclear`. A person accepts, edits or rejects it. Dependencies and a split are not part of the proposal yet |
+| `triage` | Any agent | A proposal written with `work_triage`: a tier with one line of why, a possible duplicate, `depends_on` (items it should wait on), `split` (titles it should be cut into), or `unclear`. A person accepts, edits or rejects it, and decides about the dependencies and the split |
 | `augment` | Any agent | Context records on the item: repro steps, related code, logs, linked issues, affected areas |
 | `split` | The agent holding the item | Live child items, within the budget below |
 | `question` | Any agent | An answer record that cites stream and offset |
@@ -643,8 +643,29 @@ not triage work, and for a `duplicate_of` that is not another item the agent can
 answer sent twice by the same agent is written once. The agent then completes the triage item.
 
 ```json
-{ "tier": 1, "why": "data loss on restart, no workaround", "duplicate_of": "gh-792" }
+{
+  "tier": 1,
+  "why": "data loss on restart, no workaround",
+  "duplicate_of": "gh-792",
+  "depends_on": ["gh-801"],
+  "split": ["fix the reader", "fix the writer"]
+}
 ```
+
+`depends_on` and `split` are advice. They are shown with the proposal, and the
+tracker links nothing and creates no item from them. A person who agrees links
+the dependencies (`linked`) and posts the pieces. Each list holds at most 8
+entries, a dependency must be another item the agent can see (the same rule as
+`duplicate_of`), and a split title is at most 256 bytes. Changing either list
+counts as a different answer toward the 4 an attempt may log.
+
+**What triage does to a root's tier.** Ingest admits a root at the tier its
+rule gives, so a root in `admit` mode is accepted before anyone triages it.
+The tier in the triage answer is advice there too: it never changes the
+admitted tier, and accepting again without a tier keeps it. A person who takes
+the advice sets it with `tier_changed` (`POST /v1/work/tier`). A
+root held in Triage by `propose` mode has no tier yet, and accepting it uses
+the proposal's tier, as before.
 
 Triage and augmentation are claimed, extended, completed and given up like
 any other work. A dead agent's triage goes back to the queue. Nothing waits on

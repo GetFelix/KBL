@@ -1569,6 +1569,8 @@ async fn no_route_writes_an_oversized_string() {
             why: big.clone(),
             duplicate_of: None,
             unclear: None,
+            depends_on: Vec::new(),
+            split: Vec::new(),
         },
         WorkRecord::RulesSet {
             target: kbl_core::work::Target {

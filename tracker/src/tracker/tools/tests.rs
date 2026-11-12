@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::super::tests::{
     Fake, agent, claim, claimed_id, item, key, seed, seed_in_felix, settings, start, start_with,
 };
-use super::{Decide, Post, Prereq};
+use super::{Decide, Post, Prereq, TriageAnswer};
 use crate::tracker::{Error, Reply, Tracker};
 
 fn text(s: &str) -> Content {
@@ -1375,6 +1375,8 @@ async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
             why: "which repo?".into(),
             duplicate_of: None,
             unclear: Some(Unclear::Repo),
+            depends_on: Vec::new(),
+            split: Vec::new(),
         },
     )
     .await
@@ -1603,10 +1605,7 @@ async fn an_agent_answers_the_triage_item_it_holds() {
         .triage(
             &agent("w1"),
             &item("a1-t"),
-            1,
-            "blocks the release".into(),
-            Some(item("a2")),
-            None,
+            ans(1, "blocks the release".into(), Some(item("a2")), None),
         )
         .await
         .unwrap();
@@ -1621,6 +1620,8 @@ async fn an_agent_answers_the_triage_item_it_holds() {
             why: "blocks the release".into(),
             duplicate_of: Some(item("a2")),
             unclear: None,
+            depends_on: Vec::new(),
+            split: Vec::new(),
         }
     );
     // A retry of the same answer writes nothing.
@@ -1628,10 +1629,7 @@ async fn an_agent_answers_the_triage_item_it_holds() {
         .triage(
             &agent("w1"),
             &item("a1-t"),
-            1,
-            "blocks the release".into(),
-            Some(item("a2")),
-            None,
+            ans(1, "blocks the release".into(), Some(item("a2")), None),
         )
         .await
         .unwrap();
@@ -1660,10 +1658,7 @@ async fn an_unclear_triage_from_an_agent_goes_to_a_person() {
     t.triage(
         &agent("w1"),
         &item("a1-t"),
-        2,
-        "which repo?".into(),
-        None,
-        Some(Unclear::Repo),
+        ans(2, "which repo?".into(), None, Some(Unclear::Repo)),
     )
     .await
     .unwrap();
@@ -1681,7 +1676,7 @@ async fn triage_is_refused_without_the_triage_item_or_with_a_bad_answer() {
         |who: &'static str, id: &'static str, tier: u8, why: String, dup: Option<&'static str>| {
             let t = t.clone();
             async move {
-                t.triage(&agent(who), &item(id), tier, why, dup.map(item), None)
+                t.triage(&agent(who), &item(id), ans(tier, why, dup.map(item), None))
                     .await
             }
         };
@@ -1716,7 +1711,7 @@ async fn triage_is_refused_without_the_triage_item_or_with_a_bad_answer() {
     seed(&t, "b1", 2).await;
     let other = claimed_id(&claim(&t, "w2").await).unwrap();
     let got = t
-        .triage(&agent("w2"), &item(&other), 1, "w".into(), None, None)
+        .triage(&agent("w2"), &item(&other), ans(1, "w".into(), None, None))
         .await;
     assert_eq!(why(got), "invalid");
 }
@@ -1744,7 +1739,11 @@ async fn triage_cannot_name_a_duplicate_the_agent_may_not_see() {
     let mut refusals = Vec::new();
     for dup in ["f1", "nope"] {
         let r = t
-            .triage(&w1, &item("a1-t"), 1, "w".into(), Some(item(dup)), None)
+            .triage(
+                &w1,
+                &item("a1-t"),
+                ans(1, "w".into(), Some(item(dup)), None),
+            )
             .await;
         refusals.push(format!("{:?}", r.unwrap_err()).replace(dup, "X"));
     }
@@ -1760,9 +1759,13 @@ async fn a_new_holders_identical_answer_is_recorded_under_its_own_hold() {
     let answer = |who: &'static str| {
         let t = t.clone();
         async move {
-            t.triage(&agent(who), &item("a1-t"), 1, "same".into(), None, None)
-                .await
-                .unwrap()
+            t.triage(
+                &agent(who),
+                &item("a1-t"),
+                ans(1, "same".into(), None, None),
+            )
+            .await
+            .unwrap()
         }
     };
     answer("w1").await;
@@ -1792,7 +1795,7 @@ async fn triage_after_the_hold_is_gone_is_not_held() {
         .unwrap();
     let before = fake.log().len();
     let r = t
-        .triage(&agent("w1"), &item("a1-t"), 1, "w".into(), None, None)
+        .triage(&agent("w1"), &item("a1-t"), ans(1, "w".into(), None, None))
         .await;
     assert_eq!(why(r), "not_held");
     assert_eq!(fake.log().len(), before);
@@ -1809,10 +1812,7 @@ async fn a_triage_holder_that_varies_its_answer_is_stopped_and_refused_once() {
             t.triage(
                 &agent("w1"),
                 &item("a1-t"),
-                1,
-                format!("why {n}"),
-                None,
-                None,
+                ans(1, format!("why {n}"), None, None),
             )
             .await
         }
@@ -1868,4 +1868,20 @@ async fn proposals_waiting_for_a_person_are_capped_per_root_and_a_decision_frees
         .await
         .unwrap();
     post(&t, "w1", "a1", "again", "proposal").await.unwrap();
+}
+
+fn ans(
+    tier: u8,
+    why: String,
+    duplicate_of: Option<ItemId>,
+    unclear: Option<Unclear>,
+) -> TriageAnswer {
+    TriageAnswer {
+        tier,
+        why,
+        duplicate_of,
+        unclear,
+        depends_on: Vec::new(),
+        split: Vec::new(),
+    }
 }

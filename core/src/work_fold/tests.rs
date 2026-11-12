@@ -839,6 +839,8 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
         why: "w".into(),
         duplicate_of: None,
         unclear: None,
+        depends_on: Vec::new(),
+        split: Vec::new(),
     };
     l.agent("w2", triaged(3)); // 3: holds nothing
     l.agent("w1", claimed("t1", 1));
@@ -1316,6 +1318,8 @@ fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
         why: "again".into(),
         duplicate_of: None,
         unclear: None,
+        depends_on: Vec::new(),
+        split: Vec::new(),
     });
     assert!(!fold(&l.0).items[&id("r1")].changed_upstream);
 
@@ -2438,6 +2442,8 @@ fn triaged_unclear(item: &str) -> WorkRecord {
         why: "the issue names two repos".into(),
         duplicate_of: None,
         unclear: Some(Unclear::Repo),
+        depends_on: Vec::new(),
+        split: Vec::new(),
     }
 }
 
@@ -3011,6 +3017,8 @@ fn triage_answers_are_counted_unless_they_repeat_the_one_on_record() {
         why: why.into(),
         duplicate_of: None,
         unclear: None,
+        depends_on: Vec::new(),
+        split: Vec::new(),
     };
     l.agent("w1", triaged(1, "a"));
     l.agent("w1", triaged(1, "a"));
@@ -3027,4 +3035,81 @@ fn triage_answers_are_counted_unless_they_repeat_the_one_on_record() {
         fold(&l.0).items[&id("r1")].proposal.as_ref().unwrap().tier,
         1
     );
+}
+
+#[test]
+fn a_changed_dependency_or_split_is_a_different_triage_answer() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.agent("w1", claimed("t1", 1));
+    let triaged = |depends_on: Vec<&str>, split: Vec<&str>| WorkRecord::Triaged {
+        item: id("r1"),
+        tier: 1,
+        why: "w".into(),
+        duplicate_of: None,
+        unclear: None,
+        depends_on: depends_on.into_iter().map(id).collect(),
+        split: split.into_iter().map(String::from).collect(),
+    };
+    l.tracker(imported("r0"));
+    l.agent("w1", triaged(vec!["r0"], vec!["a"]));
+    l.agent("w1", triaged(vec!["r0"], vec!["a"]));
+    let s = fold(&l.0);
+    let p = s.items[&id("r1")].proposal.as_ref().unwrap();
+    assert_eq!(
+        (p.depends_on.clone(), p.split.clone()),
+        (vec![id("r0")], vec!["a".to_owned()])
+    );
+    let counted = |s: &State| s.items[&id("t1")].paths[0].triages;
+    assert_eq!(counted(&s), 1);
+    l.agent("w1", triaged(vec!["r0"], vec!["a", "b"]));
+    l.agent("w1", triaged(vec![], vec!["a", "b"]));
+    assert_eq!(counted(&fold(&l.0)), 3);
+}
+
+#[test]
+fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(2),
+    });
+    l.agent("w1", claimed("t1", 1));
+    l.agent(
+        "w1",
+        WorkRecord::Triaged {
+            item: id("r1"),
+            tier: 0,
+            why: "w".into(),
+            duplicate_of: None,
+            unclear: None,
+            depends_on: Vec::new(),
+            split: Vec::new(),
+        },
+    );
+    // Accepting again without a tier keeps the admitted tier too.
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("r1")].tier, Some(2));
+    assert_eq!(s.items[&id("r1")].proposal.as_ref().unwrap().tier, 0);
+    // Only a person's tier change adopts it; an agent's is refused.
+    l.agent(
+        "w1",
+        WorkRecord::TierChanged {
+            item: id("r1"),
+            tier: 0,
+        },
+    );
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(2));
+    l.person(WorkRecord::TierChanged {
+        item: id("r1"),
+        tier: 0,
+    });
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(0));
 }

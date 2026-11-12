@@ -65,8 +65,8 @@ it under "Felix gaps", and each one has an issue labelled
 
 Bugs come in as roots from GitHub, Azure DevOps or Jira, and from people. An ingest worker writes each upstream
 id once and posts one triage item and one augment item for it. The agent that claims the triage item answers
-it with `work_triage` (a tier and why, a duplicate, or what is unclear), and a person accepts or edits that
-proposal. An item becomes claimable when its last
+it with `work_triage` (a tier and why, a duplicate, dependencies, a split, or what is unclear), and a person accepts or edits that
+proposal; the dependencies and split are advice a person acts on. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
 Each agent runs `kbl-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
@@ -248,6 +248,7 @@ node dev/check-scripted.mjs                  # runs one seed twice with differen
 node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
 node dev/check-death.mjs                     # kills workers holding tasks, restarts one, and finishes a task twice
 node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
+node dev/check-tracker-triage.mjs            # a scripted agent answers four triage items; a person acts on two (needs the tracker built too)
 kbl-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
 

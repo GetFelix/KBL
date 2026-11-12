@@ -109,6 +109,10 @@ struct WorkTriageArgs {
     duplicate_of: Option<String>,
     /// Set when you cannot settle the item: `scope`, `repo` or `acceptance`. It goes to a person as a question.
     unclear: Option<String>,
+    /// Ids of items this one should wait on. A person decides whether to link them.
+    depends_on: Option<Vec<String>>,
+    /// Titles this item should be split into, if it is too big for one change. A person decides; nothing is created.
+    split: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -451,7 +455,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Answer the triage item you hold: propose a tier for the item it triages and say why in one line. Name `duplicate_of` if it repeats another item. If you cannot settle it, set `unclear` to `scope`, `repo` or `acceptance` and it goes to a person as a question. This is a proposal; a person accepts or edits it. Complete the triage item after."
+        description = "Answer the triage item you hold: propose a tier for the item it triages and say why in one line. Name `duplicate_of` if it repeats another item, `depends_on` for items it should wait on, and `split` for the titles it should be cut into. If you cannot settle it, set `unclear` to `scope`, `repo` or `acceptance` and it goes to a person as a question. This is a proposal; a person accepts or edits it. Complete the triage item after."
     )]
     async fn work_triage(
         &self,
@@ -471,6 +475,8 @@ impl Server {
                     "why": a.why,
                     "duplicate_of": a.duplicate_of,
                     "unclear": a.unclear,
+                    "depends_on": a.depends_on.unwrap_or_default(),
+                    "split": a.split.unwrap_or_default(),
                 }),
             )
             .await?;

@@ -44,6 +44,8 @@ fn every_record() -> Vec<WorkRecord> {
             why: "data loss on restart".into(),
             duplicate_of: Some(item("r0")),
             unclear: None,
+            depends_on: Vec::new(),
+            split: Vec::new(),
         },
         WorkRecord::Accepted {
             item: item("r1"),
@@ -277,6 +279,8 @@ fn every_record() -> Vec<WorkRecord> {
             why: "which repo does this belong in".into(),
             duplicate_of: None,
             unclear: Some(Unclear::Repo),
+            depends_on: Vec::new(),
+            split: Vec::new(),
         },
         WorkRecord::Question {
             item: item("r1"),
@@ -459,6 +463,34 @@ fn every_kind_round_trips_and_is_covered() {
     // Every first-format kind but `tier_changed` and `edited`, which
     // `tests/format.rs` covers along with `format_raised`.
     assert_eq!(kinds.len(), 34);
+}
+
+/// A triage answer from before dependencies and splits has neither field and
+/// reads back with none; one with them round trips.
+#[test]
+fn a_triage_answer_carries_dependencies_and_a_split_only_when_it_has_them() {
+    let old = br#"{"kind":"triaged","item":"r1","tier":1,"why":"w"}"#;
+    let WorkRecord::Triaged {
+        depends_on, split, ..
+    } = WorkRecord::decode(old).unwrap()
+    else {
+        panic!("not a triaged record");
+    };
+    assert!(depends_on.is_empty() && split.is_empty());
+    let with = WorkRecord::Triaged {
+        item: item("r1"),
+        tier: 1,
+        why: "w".into(),
+        duplicate_of: None,
+        unclear: None,
+        depends_on: vec![item("r0")],
+        split: vec!["reader".into(), "writer".into()],
+    };
+    let line = String::from_utf8(with.encode()).unwrap();
+    assert!(
+        line.contains(r#""depends_on":["r0"]"#) && line.contains(r#""split":["reader","writer"]"#)
+    );
+    assert_eq!(WorkRecord::decode(line.as_bytes()).unwrap(), with);
 }
 
 #[test]

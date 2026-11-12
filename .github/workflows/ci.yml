@@ -115,6 +115,8 @@ jobs:
         run: node dev/check-tracker-work.mjs
       - name: Run review as work against Felix
         run: node dev/check-tracker-review.mjs
+      - name: Run triage as work against Felix
+        run: node dev/check-tracker-triage.mjs
       - name: Upgrade from the previous build and back, over one log
         env:
           # The previous build is the commit this change is based on, until there are releases.

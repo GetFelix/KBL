@@ -1630,7 +1630,7 @@ pub(crate) fn now_ms() -> u64 {
 
 mod tools;
 
-pub(crate) use tools::{Decide, NewFinding, Post, Prereq, Reply};
+pub(crate) use tools::{Decide, NewFinding, Post, Prereq, Reply, TriageAnswer};
 
 #[cfg(test)]
 mod tests;

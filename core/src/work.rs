@@ -468,6 +468,12 @@ pub enum WorkRecord {
         /// Triage could not settle the item. It goes to a person as a question.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         unclear: Option<Unclear>,
+        /// Items this one should wait on, as advice: a person links them.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        depends_on: Vec<ItemId>,
+        /// Titles this one should be split into, as advice: nothing is created.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        split: Vec<String>,
     },
     /// The holder cannot go on until `prerequisite` is done. With `new`, the
     /// record also creates that prerequisite as a proposal in the target

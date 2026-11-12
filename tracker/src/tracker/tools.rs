@@ -27,6 +27,9 @@ use crate::felix::Broker;
 const MAX_FIELD: usize = 4096;
 const MAX_OPTIONS: usize = 16;
 const MAX_EVIDENCE: usize = 32;
+/// Dependencies and split titles one triage answer may carry.
+const MAX_TRIAGE_LIST: usize = 8;
+const MAX_SPLIT_TITLE: usize = 256;
 
 /// What `work_post` creates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -607,12 +610,18 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
-        tier: u8,
-        why: String,
-        duplicate_of: Option<ItemId>,
-        unclear: Option<Unclear>,
+        answer: TriageAnswer,
     ) -> Result<Value, Error> {
+        let TriageAnswer {
+            tier,
+            why,
+            duplicate_of,
+            unclear,
+            depends_on,
+            split,
+        } = answer;
         bounded("why", &why, MAX_FIELD)?;
+        triage_lists(&depends_on, &split)?;
         self.begin().await?;
         let reply = {
             let mut core = self.0.core.lock().await;
@@ -633,6 +642,13 @@ impl<B: Broker> Tracker<B> {
                     "duplicate_of names {d}, which is not another item"
                 )));
             }
+            for d in &depends_on {
+                if d == &target || d == item || !visible(&core, &allowed, item, d) {
+                    return Err(Error::Invalid(format!(
+                        "depends_on names {d}, which is not another item"
+                    )));
+                }
+            }
             // The same answer again is a retry, not a new record.
             let standing = core
                 .state
@@ -643,6 +659,7 @@ impl<B: Broker> Tracker<B> {
                 && p.by.as_ref() == Some(&agent_key(agent))
                 && (p.tier, &p.why, &p.duplicate_of, p.unclear)
                     == (tier, &why, &duplicate_of, unclear)
+                && (&p.depends_on, &p.split) == (&depends_on, &split)
             {
                 return Ok(
                     json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),
@@ -660,6 +677,8 @@ impl<B: Broker> Tracker<B> {
                 why,
                 duplicate_of,
                 unclear,
+                depends_on,
+                split,
             };
             let offset = self
                 .agent_append(&mut core, agent, item, "triage", record)
@@ -974,6 +993,34 @@ fn check_evidence(evidence: &[Evidence]) -> Result<(), Error> {
     Ok(())
 }
 
+/// What an agent proposes for the item under triage.
+#[derive(Clone)]
+pub(crate) struct TriageAnswer {
+    pub(crate) tier: u8,
+    pub(crate) why: String,
+    pub(crate) duplicate_of: Option<ItemId>,
+    pub(crate) unclear: Option<Unclear>,
+    pub(crate) depends_on: Vec<ItemId>,
+    pub(crate) split: Vec<String>,
+}
+
+/// The dependencies and split titles of a triage answer: few, distinct, short.
+fn triage_lists(depends_on: &[ItemId], split: &[String]) -> Result<(), Error> {
+    if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {
+        return Err(Error::Invalid(format!(
+            "at most {MAX_TRIAGE_LIST} dependencies and {MAX_TRIAGE_LIST} split titles"
+        )));
+    }
+    let distinct: BTreeSet<_> = depends_on.iter().collect();
+    if distinct.len() != depends_on.len() {
+        return Err(Error::Invalid("depends_on repeats an item".into()));
+    }
+    for title in split {
+        bounded("split title", title, MAX_SPLIT_TITLE)?;
+    }
+    Ok(())
+}
+
 /// A required text no longer than `max` bytes.
 fn bounded(name: &str, value: &str, max: usize) -> Result<(), Error> {
     if value.is_empty() {
@@ -1110,7 +1157,15 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             ..
         }
         | WorkRecord::GaveUp { reason, .. } => field("reason", reason),
-        WorkRecord::Triaged { why, .. } => field("why", why),
+        WorkRecord::Triaged {
+            why,
+            depends_on,
+            split,
+            ..
+        } => {
+            field("why", why)?;
+            triage_lists(depends_on, split)
+        }
         // Only a holding agent writes these, through the tools, but a person's
         // record is held to the same bounds.
         WorkRecord::Finding {
