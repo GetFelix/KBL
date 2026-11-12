@@ -1,7 +1,7 @@
 // The launcher with a shell script for a host: no Felix, no model.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -117,4 +117,5 @@ test("a config dir left by a killed launcher is removed on the next start", () =
   assert.equal(run.status, 0, run.stderr);
   assert.equal(existsSync(stale), false);
   assert.equal(existsSync(live), true);
+  rmSync(live, { recursive: true, force: true });
 });

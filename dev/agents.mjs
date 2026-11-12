@@ -89,6 +89,8 @@ function readOptions(argv) {
   if (new Set(names.map((n) => agents[n].felix)).size !== names.length) {
     console.error("warning: sessions share a Felix token; per-agent tokens are not issued yet, so this is only right for a dev stack");
   }
+  const idleMax = Number(values["idle-max"]);
+  if (!(idleMax >= 0)) throw new Error("--idle-max wants a number of seconds");
   return {
     run: values.run,
     agents: names.map((name) => ({ name, ...agents[name] })),
@@ -99,7 +101,7 @@ function readOptions(argv) {
     hostArgs: values["host-arg"] ?? [],
     restartMs: Number(values["restart-delay"]) * 1000,
     idleMs: Number(values["idle-delay"]) * 1000,
-    idleMaxMs: Number(values["idle-max"]) * 1000,
+    idleMaxMs: idleMax * 1000,
     maxRestarts: Number(values["max-restarts"]),
   };
 }
@@ -123,13 +125,12 @@ function removeStaleRoots() {
     const dir = join(tmpdir(), name);
     try {
       const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
-      if (Number.isInteger(pid) && pid > 0) {
-        try {
-          process.kill(pid, 0);
-          continue;
-        } catch (e) {
-          if (e.code === "EPERM") continue;
-        }
+      if (!Number.isInteger(pid) || pid < 1) continue;
+      try {
+        process.kill(pid, 0);
+        continue;
+      } catch (e) {
+        if (e.code !== "ESRCH") continue;
       }
       rmSync(dir, { recursive: true, force: true });
     } catch {
