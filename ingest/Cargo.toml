@@ -1,5 +1,5 @@
 [package]
-name = "agents-ingest"
+name = "kbl-ingest"
 version = "0.0.0"
 description = "The ingest worker: pulls issues from upstream trackers into the work tracker and keeps them in step"
 edition.workspace = true
@@ -8,11 +8,11 @@ license.workspace = true
 publish = false
 
 [[bin]]
-name = "agents-ingest"
+name = "kbl-ingest"
 path = "src/main.rs"
 
 [dependencies]
-agents-core = { path = "../core" }
+kbl-core = { path = "../core" }
 anyhow = "=1.0.100"
 axum = { version = "=0.8.8", default-features = false, features = ["http1", "json", "tokio"] }
 clap = { version = "=4.5.51", features = ["derive", "env"] }

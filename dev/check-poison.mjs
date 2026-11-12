@@ -1,7 +1,7 @@
 // A task that always fails is dead-lettered after the worker's attempt limit,
 // and one a worker gives up is dead-lettered at once. Both show as task_dead.
 //
-//   cargo build -p felix-mcp -p agents-tool && node dev/check-poison.mjs
+//   cargo build -p kbl-mcp -p kbl-tool && node dev/check-poison.mjs
 import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, killAll, newRunId, runLog } from "./lib/stack.mjs";
 import { scriptedPlanner, scriptedWorker } from "./scripted.mjs";
 

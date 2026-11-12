@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex as StdMutex;
 
-use agents_core::names::RunId;
 use bytes::Bytes;
+use kbl_core::names::RunId;
 
 use super::*;
 

@@ -5,9 +5,9 @@
 KBL (Kanban By Log, pronounced Kibble) is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix). It pulls bugs
 in from GitHub, Azure DevOps or Jira, hands each piece of work to one agent, keeps dependencies and priorities,
 and shows the queue in a dashboard. Agents from any vendor take work from it through an MCP server,
-`felix-mcp`. People guide it from the dashboard.
+`kbl-mcp`. People guide it from the dashboard.
 
-KBL is not agentic. The tracker, `felix-mcp` and the dashboard make no model calls and generate no text.
+KBL is not agentic. The tracker, `kbl-mcp` and the dashboard make no model calls and generate no text.
 Triage, gathering context, splitting, answering questions and fixing are all work items that an agent or a
 person completes.
 
@@ -39,7 +39,7 @@ work on a backlog that never ends:
 
 - Bring bugs in from GitHub, Azure DevOps or Jira once each, and add your own work
 - See the queue: what needs you, what agents hold, what waits on what
-- Let any MCP host (Claude Code, the Claude Agent SDK, another vendor's) ask for the next item it can start, through `felix-mcp`
+- Let any MCP host (Claude Code, the Claude Agent SDK, another vendor's) ask for the next item it can start, through `kbl-mcp`
 - Let agents triage, split and add context as work they claim, with children bounded by a budget per root
 - Accept, edit or reject an agent's proposal, or answer its question, from the dashboard
 - Open a fix's decision replay: scrub through what the agent decided, with the fields it recorded and the steps behind them
@@ -69,9 +69,9 @@ it with `work_triage` (a tier and why, a duplicate, or what is unclear), and a p
 proposal. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
-Each agent runs `felix-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
+Each agent runs `kbl-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
 tracker for the highest-priority ready item: the tracker claims it from the ready streams' consumer group as a
-member named after the agent and logs the claim in the same step. `felix-mcp` extends the claim every 30
+member named after the agent and logs the claim in the same step. `kbl-mcp` extends the claim every 30
 seconds while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead agent stops
 extending, so its claim lapses and the item goes to another agent. An item has one holder at a time: a release
 that lands while the item is being handed on does not cost the next agent its claim. An agent adds children only under an item it holds (`split`, `augment`,
@@ -91,19 +91,19 @@ have the details.
 | M | Milestone | Proves |
 |---|---|---|
 | 0 | The dashboard and the decision replay, locked: style frames drawn from hand-written fixtures | They read well before Felix is involved |
-| 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
+| 1 | Tasks through Felix: `core`, the dev stack, `kbl-tool`, `kbl-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
 | 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each, and people and agents never overwrite each other (demonstration 3) |
-| 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
+| 3 | Real work: Claude Code claims `agent-ok` issues through `kbl-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
 | 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
 | 5 | Shared state (closed, superseded by KBL: the swarm demo was removed) | Nothing |
-| 6 | The reference worker (`agents-run`): a model API, artifacts, spend and rate limits | Agent-created work stays inside its budget (demonstration 4) |
+| 6 | The reference worker (`kbl-run`): a model API, artifacts, spend and rate limits | Agent-created work stays inside its budget (demonstration 4) |
 | 7 | Decision replay, live: the fold, the dashboard on felix-gateway, scrub and follow | The log is a complete record that replays, and a fix's decisions read back with no hindsight (demonstrations 5 and 6) |
 | 8 | A hostile agent stays bounded: grants and an injected agent held to its budget | A prompt-injected agent cannot escape its budget or grants (demonstration 8) |
 | 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Any MCP host can take work (demonstration 7), and it holds under loss |
-| 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
+| 10 | Self-hosting: `kbl-mcp` releases, compose, a quick start | Anyone can run it |
 
-M0 and M1 are done. [`core`](core/) has the record formats and names, [`dashboard/`](dashboard/) follows `work.events` through felix-gateway and folds it with `core` as WebAssembly, `agents-tool` [creates a run](#creating-a-run),
-and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The dashboard
+M0 and M1 are done. [`core`](core/) has the record formats and names, [`dashboard/`](dashboard/) follows `work.events` through felix-gateway and folds it with `core` as WebAssembly, `kbl-tool` [creates a run](#creating-a-run),
+and [`kbl-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The dashboard
 is described in [docs/work-tracker.md](docs/work-tracker.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
 progress. Records on `work.events` carry a format, so a newer build can take over a running log, and an older build
 (from this one on) stops at a record it cannot read instead of misreading it: [docs/upgrades.md](docs/upgrades.md) has the upgrade order. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
@@ -131,19 +131,19 @@ begins with a new tenant and an empty log.
 | Control plane (REST) | `http://127.0.0.1:8443`, tenant `agents`, namespace `default` |
 | Broker (QUIC) | `127.0.0.1:5000`, certificate written to `dev/state/broker-cert.pem` |
 | Gateway (WebSocket) | `ws://127.0.0.1:8787/ws`, configured by [dev/scope.toml](dev/scope.toml) |
-| Identity provider | `http://127.0.0.1:9400`; `/token?sub=<name>&aud=felix-agents` mints an ID token for anyone |
+| Identity provider | `http://127.0.0.1:9400`; `/token?sub=<name>&aud=kbl` mints an ID token for anyone |
 
 A Felix principal comes from an ID token the tenant trusts, and the stand-in provider signs one for any name, so a
 script can be a different agent per name. Exchange the token at the control plane
 (`POST /v1/tenants/agents/token/exchange`) for a Felix token. The seed script makes `agents-admin` the tenant's
-administrator: `agents-tool` (see [Creating a run](#creating-a-run)) signs in as that name to create a run's streams and caches. The stack creates no runs itself.
+administrator: `kbl-tool` (see [Creating a run](#creating-a-run)) signs in as that name to create a run's streams and caches. The stack creates no runs itself.
 The gateway's scope gives a viewer read-only access to `agents.log.<run>` and `agents.blobs.<run>` for one run at a time, and only for a run it was granted.
 
 The stand-in provider signs in anyone, so never expose these ports beyond localhost.
 
 ## Creating a run
 
-A run is one job: a goal, a budget and a team of agents, with its own set of Felix resources. `agents-tool run create`
+A run is one job: a goal, a budget and a team of agents, with its own set of Felix resources. `kbl-tool run create`
 makes those resources: the run log, the tasks stream with its `workers` consumer group, the messages stream, and the
 board, leases, presence, results, artifacts and spend caches (the nine in [docs/design.md](docs/design.md#resources-per-run);
 spend is a cache used as counters). It then writes `run_started` to the log with the goal, the budget and the agents.
@@ -152,7 +152,7 @@ The run's id must be new, and creating one that exists is refused.
 With the [dev stack](#running-felix-locally) running:
 
 ```bash
-cargo run -p agents-tool -- run create demo --goal "Review PR 12" --budget-usd 5 --workers 4
+cargo run -p kbl-tool -- run create demo --goal "Review PR 12" --budget-usd 5 --workers 4
 ```
 
 ```text
@@ -165,17 +165,17 @@ The run lists a `planner` and the workers `w1` to `w4`. `--budget-usd` is in dol
 list 1 to 64 workers.
 
 The defaults match the dev stack. Point the tool at another Felix with these, as flags or environment variables
-(`agents-tool --help` has the flag names):
+(`kbl-tool --help` has the flag names):
 
 | Variable | Default | What |
 |---|---|---|
-| `AGENTS_TENANT`, `AGENTS_NAMESPACE` | `agents`, `default` | Where the run lives |
-| `AGENTS_FELIX_CONTROL_PLANE` | `http://127.0.0.1:8443` | Creates the resources |
-| `AGENTS_FELIX_BROKER` | `127.0.0.1:5000` | Writes `run_started` and creates the group |
-| `AGENTS_FELIX_CA_FILE` | `dev/state/broker-cert.pem` | The certificate the broker is trusted by, relative to where you run the tool |
-| `AGENTS_FELIX_BROKER_NAME` | `localhost` | The name in the broker's certificate |
-| `AGENTS_IDP` | `http://127.0.0.1:9400` | The stand-in identity provider that signs in `agents-admin` |
-| `AGENTS_ID_TOKEN` | none | An ID token for the tenant, used instead of the stand-in provider |
+| `KBL_TENANT`, `KBL_NAMESPACE` | `agents`, `default` | Where the run lives |
+| `KBL_FELIX_CONTROL_PLANE` | `http://127.0.0.1:8443` | Creates the resources |
+| `KBL_FELIX_BROKER` | `127.0.0.1:5000` | Writes `run_started` and creates the group |
+| `KBL_FELIX_CA_FILE` | `dev/state/broker-cert.pem` | The certificate the broker is trusted by, relative to where you run the tool |
+| `KBL_FELIX_BROKER_NAME` | `localhost` | The name in the broker's certificate |
+| `KBL_IDP` | `http://127.0.0.1:9400` | The stand-in identity provider that signs in `agents-admin` |
+| `KBL_ID_TOKEN` | none | An ID token for the tenant, used instead of the stand-in provider |
 
 The tool connects to the broker before it creates anything, so a wrong certificate path or a broker that is down fails
 without using up the id. If it stops after that (the broker went away, say), the run is left without `run_started` and
@@ -183,8 +183,8 @@ the id cannot be used again, so use a new one.
 
 ## Giving an agent its tools
 
-`felix-mcp` is the server an agent reaches Felix through. It speaks [MCP](https://modelcontextprotocol.io) over stdio, so
-any MCP host can start it: Claude Code, the Claude Agent SDK, or a host from another vendor. One `felix-mcp` process
+`kbl-mcp` is the server an agent reaches Felix through. It speaks [MCP](https://modelcontextprotocol.io) over stdio, so
+any MCP host can start it: Claude Code, the Claude Agent SDK, or a host from another vendor. One `kbl-mcp` process
 serves one agent and holds that agent's Felix token, so the agent can do on Felix only what its token allows.
 
 `run_info` reports the run, the agent's name and the tenant, and the [task tools](#the-task-tools) post and work tasks.
@@ -195,7 +195,7 @@ With the [dev stack](#running-felix-locally) running, build it and run the check
 lists its tools and calls one:
 
 ```bash
-cargo build -p felix-mcp
+cargo build -p kbl-mcp
 node dev/check-mcp.mjs
 ```
 
@@ -212,9 +212,9 @@ and to another if that worker goes quiet, so a task can be tried more than once 
 | `task_release` | Hands the task back to the group now (`task_released`) |
 | `task_give_up` | Dead-letters the task so it is not handed out again (`task_dead`) |
 
-While a worker holds a task, `felix-mcp` extends the claim every 30 seconds (it stands for 90), so a model call that
+While a worker holds a task, `kbl-mcp` extends the claim every 30 seconds (it stands for 90), so a model call that
 takes minutes keeps its task and a worker that dies loses it within 90 seconds. If Felix answers `stale_claim`, or
-extensions fail for a full 90 seconds, `felix-mcp` logs `task_claim_lost` and the agent's next task tool call says the
+extensions fail for a full 90 seconds, `kbl-mcp` logs `task_claim_lost` and the agent's next task tool call says the
 claim lapsed and drops the task, except `task_complete`, which still writes the result (only the first write to a task's key lands, so it is safe), never acknowledges the task, and warns that the claim had lapsed. After two failed extensions in a row the next call warns that the claim is at risk.
 
 A worker restarted under the same name gets back the tasks its predecessor held, one per `task_claim` and ahead of new
@@ -230,7 +230,7 @@ A body or result over 1 MiB (1,048,576 bytes) is refused, because the format for
 With the dev stack running, this starts a planner and five workers and runs a job, a poison task and a restart:
 
 ```bash
-cargo build -p felix-mcp -p agents-tool
+cargo build -p kbl-mcp -p kbl-tool
 node dev/check-tasks.mjs
 ```
 
@@ -242,13 +242,13 @@ every time and dead-lettered, and some are given up at once. Which worker takes 
 always ends every task the same way.
 
 ```bash
-cargo build -p felix-mcp -p agents-tool
+cargo build -p kbl-mcp -p kbl-tool
 node dev/scripted.mjs --seed 2 --workers 3   # runs a job and checks each task ended as the seed says
 node dev/check-scripted.mjs                  # runs one seed twice with different crews and compares
 node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
 node dev/check-death.mjs                     # kills workers holding tasks, restarts one, and finishes a task twice
 node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
-agents-tool run log <run>                    # prints a run's log, one JSON record per line
+kbl-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
 
 The death check kills a worker and lets a stalled claim lapse with a 2 second claim visibility so it finishes quickly, and restarts a worker under the default 90 seconds to show it does not wait for the claim to lapse.
@@ -259,12 +259,12 @@ To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mc
 {
   "mcpServers": {
     "felix": {
-      "command": "/path/to/target/debug/felix-mcp",
+      "command": "/path/to/target/debug/kbl-mcp",
       "env": {
-        "AGENTS_RUN": "demo",
-        "AGENTS_AGENT": "w1",
-        "AGENTS_FELIX_TOKEN": "<the agent's Felix token>",
-        "AGENTS_FELIX_CA_FILE": "/path/to/dev/state/broker-cert.pem"
+        "KBL_RUN": "demo",
+        "KBL_AGENT": "w1",
+        "KBL_FELIX_TOKEN": "<the agent's Felix token>",
+        "KBL_FELIX_CA_FILE": "/path/to/dev/state/broker-cert.pem"
       }
     }
   }
@@ -275,12 +275,12 @@ Three variables are required:
 
 | Variable | What |
 |---|---|
-| `AGENTS_RUN` | The run the agent works in |
-| `AGENTS_AGENT` | The agent's name in that run, such as `w1` |
-| `AGENTS_FELIX_TOKEN` | The agent's Felix token for the broker. It is read from the environment only, never from a flag, so it stays out of the process list |
+| `KBL_RUN` | The run the agent works in |
+| `KBL_AGENT` | The agent's name in that run, such as `w1` |
+| `KBL_FELIX_TOKEN` | The agent's Felix token for the broker. It is read from the environment only, never from a flag, so it stays out of the process list |
 
-The rest are the variables [`agents-tool`](#creating-a-run) uses, with the same defaults: `AGENTS_TENANT`,
-`AGENTS_NAMESPACE`, `AGENTS_FELIX_BROKER`, `AGENTS_FELIX_BROKER_NAME` and `AGENTS_FELIX_CA_FILE`. The default for the
+The rest are the variables [`kbl-tool`](#creating-a-run) uses, with the same defaults: `KBL_TENANT`,
+`KBL_NAMESPACE`, `KBL_FELIX_BROKER`, `KBL_FELIX_BROKER_NAME` and `KBL_FELIX_CA_FILE`. The default for the
 certificate file is relative to the host's working directory, so give an absolute path when a host starts the server.
 
 Issuing a token per agent is not built yet, so for now `dev/check-mcp.mjs` asks the stand-in identity provider for the
@@ -306,7 +306,7 @@ cargo test --workspace
 
 # Run the previous build of the tracker and this one over the same log (needs the dev stack, below, and a
 # checkout of the previous commit built into its own target directory)
-AGENTS_TRACKER_OLD=<previous>/agents-tracker FELIX_MCP_OLD=<previous>/felix-mcp node dev/check-upgrade.mjs
+KBL_TRACKER_OLD=<previous>/kbl-tracker KBL_MCP_OLD=<previous>/kbl-mcp node dev/check-upgrade.mjs
 
 # Build and test the dashboard (see dashboard/README.md for the one-time setup)
 cd dashboard && npm ci && npm run wasm && npm test && cd ..
@@ -323,7 +323,7 @@ includes its exit code and stderr. The launcher is `scripts/lib/browser.mjs`; ne
 Press `?` in the frame for its keys, or `Ctrl+K` for the command palette. [docs/usability-test.md](docs/usability-test.md) is the script for testing it with people.
 `prototype/intake-frame.html?demo=1` (add `&theme=light` for the light theme) plays a 30-second scripted story from `prototype/fixture-work-demo.json`: records only, nothing generated. `scripts/record-demo.mjs` records it frame by frame to mp4 and webp; the page owns its clock, so no frame is dropped.
 
-CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Rust checks (format, clippy, tests), the dashboard build (WebAssembly fold, TypeScript checks, tests, Vite build) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `felix-mcp` to list its tools), and requires the `CI ok` check.
+CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Rust checks (format, clippy, tests), the dashboard build (WebAssembly fold, TypeScript checks, tests, Vite build) and the dev stack (which also creates a run, checks that creating it again is refused, and starts `kbl-mcp` to list its tools), and requires the `CI ok` check.
 
 ## Documentation
 

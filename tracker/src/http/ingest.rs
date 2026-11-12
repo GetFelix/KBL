@@ -4,13 +4,13 @@
 
 use std::sync::Arc;
 
-use agents_core::names::Key;
-use agents_core::work::WorkRecord;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use kbl_core::names::Key;
+use kbl_core::work::WorkRecord;
 use serde::Deserialize;
 
 use super::{App, Caller, StatusCode, caller, denied, reply};

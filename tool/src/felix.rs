@@ -12,7 +12,7 @@ use felix_client::{
 };
 use serde_json::{Value, json};
 
-/// Where Felix is and who `agents-tool` is.
+/// Where Felix is and who `kbl-tool` is.
 #[derive(Debug, Clone)]
 pub(crate) struct Target {
     pub(crate) tenant: String,
@@ -28,9 +28,7 @@ pub(crate) struct Target {
 }
 
 /// The audience every ID token from the development IdP is issued for.
-// The repo's old name, kept on purpose: deployed binaries and the upgrade check
-// send it. Changing it needs the gateway to accept both values for a release.
-const ID_TOKEN_AUDIENCE: &str = "felix-agents";
+const ID_TOKEN_AUDIENCE: &str = "kbl";
 /// How long one request to Felix may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.

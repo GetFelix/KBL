@@ -7,7 +7,7 @@ use std::fmt;
 use std::future::Future;
 use std::time::Duration;
 
-use agents_core::work::PrSnapshot;
+use kbl_core::work::PrSnapshot;
 use serde::{Deserialize, Serialize};
 
 /// An issue in an upstream tracker: `GetFelix/felix#812` on GitHub.

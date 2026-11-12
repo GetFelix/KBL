@@ -238,7 +238,7 @@ pub mod spend {
     }
 
     /// An agent's rate-limit window, `rl-<agent>-<minute>`. Counters have no
-    /// TTL, so `agents-tool export` deletes these at the end of a run.
+    /// TTL, so `kbl-tool export` deletes these at the end of a run.
     pub fn rate_window(agent: &AgentName, minute: u64) -> Result<Key, super::InvalidName> {
         Key::new(format!("rl-{agent}-{minute}"))
     }

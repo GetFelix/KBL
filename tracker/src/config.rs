@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use agents_core::names::{AgentName, Key};
 use anyhow::{Context, Result};
+use kbl_core::names::{AgentName, Key};
 use serde::Deserialize;
 
 /// A JSON object read as pairs, so a token listed twice is seen instead of overwritten.

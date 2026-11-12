@@ -5,7 +5,7 @@ use super::*;
 fn parse(args: &[&str]) -> Result<Cli, clap::Error> {
     Cli::try_parse_from(
         [
-            "agents-tool",
+            "kbl-tool",
             "run",
             "create",
             "demo",
@@ -32,12 +32,12 @@ fn workers_default_to_four_and_stay_between_one_and_sixty_four() {
 
 #[test]
 fn log_takes_a_run_id() {
-    let cli = Cli::try_parse_from(["agents-tool", "run", "log", "demo"]).unwrap();
+    let cli = Cli::try_parse_from(["kbl-tool", "run", "log", "demo"]).unwrap();
     assert!(matches!(cli.command, Command::Run(RunCommand::Log { run }) if run == "demo"));
 }
 
 #[test]
 fn work_log_prints_the_trackers_log() {
-    let cli = Cli::try_parse_from(["agents-tool", "work", "log"]).unwrap();
+    let cli = Cli::try_parse_from(["kbl-tool", "work", "log"]).unwrap();
     assert!(matches!(cli.command, Command::Work(WorkCommand::Log)));
 }

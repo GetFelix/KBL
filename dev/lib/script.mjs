@@ -45,7 +45,7 @@ export function action(fate, attempt) {
 }
 
 // How each task ends, given the worker's attempt limit.
-// Deliveries of a task a worker takes on; felix-mcp's MAX_ATTEMPTS.
+// Deliveries of a task a worker takes on; kbl-mcp's MAX_ATTEMPTS.
 export const ATTEMPTS_ALLOWED = 2;
 
 export function expected(tasks, attemptsAllowed = ATTEMPTS_ALLOWED) {

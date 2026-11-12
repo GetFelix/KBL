@@ -208,7 +208,7 @@ async fn a_hand_back_mark_does_not_outlive_its_item() {
         key("gab"),
         WorkRecord::Closed {
             item: item("a1"),
-            why: agents_core::work::CloseWhy::Dismissed,
+            why: kbl_core::work::CloseWhy::Dismissed,
         },
     )
     .await

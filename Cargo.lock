@@ -3,72 +3,6 @@
 version = 4
 
 [[package]]
-name = "agents-core"
-version = "0.0.0"
-dependencies = [
- "base64 0.22.1",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "agents-ingest"
-version = "0.0.0"
-dependencies = [
- "agents-core",
- "anyhow",
- "axum",
- "clap",
- "reqwest",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "agents-tool"
-version = "0.0.0"
-dependencies = [
- "agents-core",
- "anyhow",
- "clap",
- "felix-client",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "agents-tracker"
-version = "0.0.0"
-dependencies = [
- "agents-core",
- "anyhow",
- "axum",
- "bytes",
- "clap",
- "felix-client",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tower",
-]
-
-[[package]]
-name = "agents-wasm"
-version = "0.0.0"
-dependencies = [
- "agents-core",
- "serde_json",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -604,23 +538,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
-]
-
-[[package]]
-name = "felix-mcp"
-version = "0.0.0"
-dependencies = [
- "agents-core",
- "anyhow",
- "bytes",
- "clap",
- "felix-client",
- "reqwest",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1180,6 +1097,89 @@ checksum = "8dc09d2154098bbf4ef54eab6b117a3c24cbbffe94046b16ee6d6d4510584d3a"
 dependencies = [
  "cfg-if",
  "futures-util",
+ "wasm-bindgen",
+]
+
+[[package]]
+name = "kbl-core"
+version = "0.0.0"
+dependencies = [
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "kbl-ingest"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "kbl-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "kbl-mcp"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "clap",
+ "felix-client",
+ "kbl-core",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "kbl-tool"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "felix-client",
+ "kbl-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "kbl-tracker"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bytes",
+ "clap",
+ "felix-client",
+ "kbl-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "kbl-wasm"
+version = "0.0.0"
+dependencies = [
+ "kbl-core",
+ "serde_json",
  "wasm-bindgen",
 ]
 

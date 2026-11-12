@@ -13,7 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, anyhow};
 use serde_json::{Value, json};
 
-use agents_core::work::{
+use kbl_core::work::{
     FailedCheck, MAX_CHECK_NAME, MAX_CHECK_URL, PrChecks, PrPhase, PrReview, PrSnapshot,
 };
 
@@ -250,7 +250,7 @@ impl<T: Transport> Source for Github<T> {
             }
             let listing = self.pages(url, &old.etags, &mut etags).await?;
             if let Some(code) = listing.denied {
-                eprintln!("agents-ingest: {repo} answered {code}; skipping it this poll");
+                eprintln!("kbl-ingest: {repo} answered {code}; skipping it this poll");
                 out.denied.insert(repo.clone(), code);
                 continue;
             }
@@ -267,7 +267,7 @@ impl<T: Transport> Source for Github<T> {
                 }
                 match parse_issue(repo, raw) {
                     Ok(issue) => out.issues.push(issue),
-                    Err(e) => eprintln!("agents-ingest: skipped an item of {repo}: {e:#}"),
+                    Err(e) => eprintln!("kbl-ingest: skipped an item of {repo}: {e:#}"),
                 }
             }
             let issues_since = last.or_else(|| old.issues_since.clone());
@@ -280,7 +280,7 @@ impl<T: Transport> Source for Github<T> {
                 );
                 let listing = self.pages(url, &old.etags, &mut etags).await?;
                 if let Some(code) = listing.denied {
-                    eprintln!("agents-ingest: comments of {repo} answered {code}; skipping them");
+                    eprintln!("kbl-ingest: comments of {repo} answered {code}; skipping them");
                     out.denied.insert(repo.clone(), code);
                     continue;
                 }
@@ -290,7 +290,7 @@ impl<T: Transport> Source for Github<T> {
                     }
                     match parse_comment(repo, raw) {
                         Ok(c) => out.comments.push(c),
-                        Err(e) => eprintln!("agents-ingest: skipped a comment of {repo}: {e:#}"),
+                        Err(e) => eprintln!("kbl-ingest: skipped a comment of {repo}: {e:#}"),
                     }
                 }
             }
@@ -479,7 +479,7 @@ impl<T: Transport> Source for Github<T> {
         // identities opened may be touched.
         let author = res.body["user"]["login"].as_str().unwrap_or_default();
         if !self.own.iter().any(|o| o.eq_ignore_ascii_case(author)) {
-            eprintln!("agents-ingest: {pr} was not opened by us; leaving it alone");
+            eprintln!("kbl-ingest: {pr} was not opened by us; leaving it alone");
             return Ok(());
         }
         if res.body["draft"] != true {

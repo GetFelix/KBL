@@ -25,13 +25,13 @@ tracker in tests.
 - **Attempt:** one agent's go at an item, from claim to completion or give-up. A redo is a new attempt.
 - **Run:** the optional resources for an attempt (log, tasks, board, leases, spend). Not every attempt has one.
 - **Task:** one unit the scripted planner hands to the scripted workers inside a run.
-- **Tracker mode:** `felix-mcp` without `AGENTS_RUN` talks to the tracker only, with no run.
+- **Tracker mode:** `kbl-mcp` without `KBL_RUN` talks to the tracker only, with no run.
 
 **In scope**
 
-- An MCP server, `felix-mcp`, that gives any MCP host (Claude Code, the Claude Agent SDK, other vendors' hosts) Felix-backed tools: the tracker's work tools (`work_next`, `decide`, `record_step`, `edit` and the rest), and, inside a run, the task tools
-- An optional reference worker, `agents-run`, outside the system boundary: it drives an agent against a model API, records spend and heartbeats, and has a scripted stand-in so tests need no model. The tracker, `felix-mcp` and the dashboard make no model calls and generate no text; models run only in workers that come from outside (any vendor) or in `agents-run`
-- A tool, `agents-tool`, that creates a run's resources, the agents' identities and their grants, and exports a finished run
+- An MCP server, `kbl-mcp`, that gives any MCP host (Claude Code, the Claude Agent SDK, other vendors' hosts) Felix-backed tools: the tracker's work tools (`work_next`, `decide`, `record_step`, `edit` and the rest), and, inside a run, the task tools
+- An optional reference worker, `kbl-run`, outside the system boundary: it drives an agent against a model API, records spend and heartbeats, and has a scripted stand-in so tests need no model. The tracker, `kbl-mcp` and the dashboard make no model calls and generate no text; models run only in workers that come from outside (any vendor) or in `kbl-run`
+- A tool, `kbl-tool`, that creates a run's resources, the agents' identities and their grants, and exports a finished run
 - A dashboard in the browser through felix-gateway: My queue, the board, metrics and the decision replay
 
 **Out of scope**
@@ -39,7 +39,7 @@ tracker in tests.
 - Being an agent framework. There is no planning library, prompt library or memory system
 - Rerunning a past attempt as it was. Model calls are not deterministic, so the replay shows what happened. A redo from a past decision is a new attempt that branches from there ([decision-replay.md](decision-replay.md#redo-from-here)), never a rerun
 - Long-term agent memory or vector search
-- Hosting models or holding model keys for anyone but the person running `agents-run`
+- Hosting models or holding model keys for anyone but the person running `kbl-run`
 - Anything that needs a database, a queue or a coordinator process of ours, except exactly one tracker process whose state is a fold rebuildable from `work.events`. If it cannot be expressed in Felix streams, consumer groups, caches and counters, it is out
 
 ## What it has to demonstrate
@@ -50,7 +50,7 @@ tracker in tests.
 4. **Agent-created work stays inside its budget.** Children an agent adds under an item never exceed the root's budget, however many agents race for it.
 5. **The log is a complete record that replays.** From any point `work.events` shows the queue, the items and who held them as they were, in under a second, and following live from there has no gap.
 6. **A fix's decisions read back with no hindsight.** Each step of the replay shows what the agent knew then and nothing recorded after it.
-7. **Any MCP host can take work.** An agent in Claude Code takes work by adding `felix-mcp` to its config, with no Felix code of its own.
+7. **Any MCP host can take work.** An agent in Claude Code takes work by adding `kbl-mcp` to its config, with no Felix code of its own.
 8. **A prompt-injected agent cannot escape its budget or grants.** Felix refuses what its token does not allow, whatever the model asks for, and every refused attempt is in the record under the agent's verified identity.
 
 ## Architecture
@@ -58,26 +58,26 @@ tracker in tests.
 ```mermaid
 flowchart LR
     subgraph Agent["One agent"]
-        RT["agents-run<br/>model loop, spend, heartbeat"]
-        MCP["felix-mcp<br/>tools, agent token"]
+        RT["kbl-run<br/>model loop, spend, heartbeat"]
+        MCP["kbl-mcp<br/>tools, agent token"]
         RT -->|MCP over stdio| MCP
     end
-    H["Any MCP host<br/>e.g. Claude Code"] -->|MCP over stdio| MCP2["felix-mcp"]
+    H["Any MCP host<br/>e.g. Claude Code"] -->|MCP over stdio| MCP2["kbl-mcp"]
     MCP -->|QUIC| BR["Felix brokers<br/>run log, tasks, board, leases, spend"]
     MCP2 -->|QUIC| BR
     RT -->|QUIC, runtime token| BR
     V["Dashboard browser<br/>follow + replay"] --> GW["felix-gateway<br/>WebSocket to QUIC"]
     GW -->|QUIC| BR
     GW -->|token exchange| CP["Control plane<br/>OIDC, RBAC"]
-    T["agents-tool<br/>runs, identities, grants"] -->|REST| CP
+    T["kbl-tool<br/>runs, identities, grants"] -->|REST| CP
 ```
 
 | Component | Language | Holds state? | Responsibility |
 |---|---|---|---|
 | `core` | Rust, no I/O | No | Record formats, resource and key names, task and lease rules, the fold that rebuilds state at an offset |
-| `felix-mcp` | Rust, `core` + `felix-client` | No | The MCP server. One process per agent, holding that agent's token. Every tool call is a Felix operation and a run log record |
-| `agents-run` | Rust, `core` + `felix-client` | No | Calls the model, feeds it the tools `felix-mcp` offers, reserves and records spend, heartbeats, a scripted stand-in |
-| `agents-tool` | Rust, `core` + control plane REST | No | Create a run, issue agent identities, grant roles, export a run |
+| `kbl-mcp` | Rust, `core` + `felix-client` | No | The MCP server. One process per agent, holding that agent's token. Every tool call is a Felix operation and a run log record |
+| `kbl-run` | Rust, `core` + `felix-client` | No | Calls the model, feeds it the tools `kbl-mcp` offers, reserves and records spend, heartbeats, a scripted stand-in |
+| `kbl-tool` | Rust, `core` + control plane REST | No | Create a run, issue agent identities, grant roles, export a run |
 | Dashboard | TypeScript, `core` as WebAssembly | `work.events` folded to one offset | My queue, the board, metrics and the decision replay |
 | Gateway | [felix-gateway](https://github.com/GetFelix/felix-gateway) | No | Browser transport, read-only scope per run |
 | Brokers | Felix | Yes, authoritative | Every resource below |
@@ -85,7 +85,7 @@ flowchart LR
 
 ### Why Rust for everything but the dashboard
 
-`felix-mcp` needs conditional cache writes, extending a claim, choosing a
+`kbl-mcp` needs conditional cache writes, extending a claim, choosing a
 claim's visibility per poll, range reads, time lookups and the publisher
 recorded with each event. Only the Rust client has all of them. The Node and
 Python bindings have no `cache_put_if`, `cache_delete_if`, `group_extend`,
@@ -97,16 +97,16 @@ does not help a Python agent here either: Felix refuses Kafka consumer groups
 
 That choice costs agent authors nothing, because they never link a Felix
 client. MCP is the interface, so a Python or TypeScript agent reaches Felix
-through `felix-mcp` like any other.
+through `kbl-mcp` like any other.
 
 ### The model is not trusted, the processes are
 
 A prompt injection controls what the model asks for, not the code around it.
 So the design draws the line there:
 
-- The model acts only through `felix-mcp`'s tools. `felix-mcp` holds the **agent token**, which carries exactly that agent's grants.
-- `agents-run` holds a separate **runtime token** for spend and heartbeats. The model has no tool that reaches it.
-- Grants are the enforcement. `felix-mcp` checks nothing an agent could get around with its token and a raw client: anything it refuses, the broker refuses too.
+- The model acts only through `kbl-mcp`'s tools. `kbl-mcp` holds the **agent token**, which carries exactly that agent's grants.
+- `kbl-run` holds a separate **runtime token** for spend and heartbeats. The model has no tool that reaches it.
+- Grants are the enforcement. `kbl-mcp` checks nothing an agent could get around with its token and a raw client: anything it refuses, the broker refuses too.
 
 ## Data model
 
@@ -118,7 +118,7 @@ So the design draws the line there:
 
 ### Resources per run
 
-`agents-tool run create` makes all nine in one request, so they are created together or not at all. It then creates the `workers` group and writes `run_started`; if it stops between the two, the run is left unusable and its id is spent.
+`kbl-tool run create` makes all nine in one request, so they are created together or not at all. It then creates the `workers` group and writes `run_started`; if it stops between the two, the run is left unusable and its id is spent.
 
 | Resource | Felix kind | Name | Notes |
 |---|---|---|---|
@@ -161,21 +161,21 @@ only speak for the agent that wrote it.
 
 | Kind | Written by | Details |
 |---|---|---|
-| `run_started`, `run_ended` | `agents-tool`, `agents-run` | Goal, budget, agents, outcome |
-| `agent_up` | `agents-run` | Role, model, presence version |
-| `agent_gone` | `felix-mcp` (planner) | Which agent, the presence version that expired |
-| `task_posted` | `felix-mcp` (planner) | Task id, parent, title, tasks stream offset |
-| `task_claimed`, `task_extended`, `task_released` | `felix-mcp` | Task id, tasks stream offset, attempt, deadline |
-| `task_claim_lost` | `felix-mcp` | Task id, offset, attempt: the claim lapsed or was handed out again while the worker held the task |
-| `task_done`, `task_duplicate` | `felix-mcp` | Task id, offset, attempt, result artifact; `task_done` is the result that won |
-| `task_dead` | `felix-mcp` | Task id, offset, reason (attempts used up, or given up) |
-| `board_put`, `board_conflict` | `felix-mcp` | Key, version written (and the version it was conditioned on) or version found, value (short text or artifact) |
-| `lease_taken`, `lease_renewed`, `lease_released`, `lease_lost` | `felix-mcp` | Key, version, TTL |
-| `message` | `felix-mcp` | To, correlation id, offset in the messages stream, text |
-| `model_started` | `agents-run` | Task id, the reservation taken |
-| `model_call` | `agents-run` | Prompt and response artifacts, tokens, cost |
-| `budget_exhausted`, `refund_unconfirmed` | `agents-run` | The reservation that went over its limit and was added back; a refund that could not be confirmed |
-| `refused` | `felix-mcp` | The operation, the resource, Felix's error |
+| `run_started`, `run_ended` | `kbl-tool`, `kbl-run` | Goal, budget, agents, outcome |
+| `agent_up` | `kbl-run` | Role, model, presence version |
+| `agent_gone` | `kbl-mcp` (planner) | Which agent, the presence version that expired |
+| `task_posted` | `kbl-mcp` (planner) | Task id, parent, title, tasks stream offset |
+| `task_claimed`, `task_extended`, `task_released` | `kbl-mcp` | Task id, tasks stream offset, attempt, deadline |
+| `task_claim_lost` | `kbl-mcp` | Task id, offset, attempt: the claim lapsed or was handed out again while the worker held the task |
+| `task_done`, `task_duplicate` | `kbl-mcp` | Task id, offset, attempt, result artifact; `task_done` is the result that won |
+| `task_dead` | `kbl-mcp` | Task id, offset, reason (attempts used up, or given up) |
+| `board_put`, `board_conflict` | `kbl-mcp` | Key, version written (and the version it was conditioned on) or version found, value (short text or artifact) |
+| `lease_taken`, `lease_renewed`, `lease_released`, `lease_lost` | `kbl-mcp` | Key, version, TTL |
+| `message` | `kbl-mcp` | To, correlation id, offset in the messages stream, text |
+| `model_started` | `kbl-run` | Task id, the reservation taken |
+| `model_call` | `kbl-run` | Prompt and response artifacts, tokens, cost |
+| `budget_exhausted`, `refund_unconfirmed` | `kbl-run` | The reservation that went over its limit and was added back; a refund that could not be confirmed |
+| `refused` | `kbl-mcp` | The operation, the resource, Felix's error |
 
 `core` (`core/src/record.rs`) holds the exact fields. Each line on the log is a JSON object with the writer's time (`at_ms`) and name (`by`) beside the record, whose `kind` is one of the names
 above. A kind this version does not know decodes as `unknown` and a fold skips it. Money is in millionths of a dollar, times are milliseconds since the Unix epoch on the writer's clock, and
@@ -193,9 +193,9 @@ consumer group on it. Felix acknowledges each record separately and hands an
 unanswered one to someone else when its visibility timeout lapses
 (`docs-site/src/content/docs/features/queues.md` in Felix).
 
-1. The planner calls `task_post`. `felix-mcp` publishes the task and a `task_posted` record.
-2. A worker calls `task_claim`. `felix-mcp` polls the group as a named member (the agent's name, with `reclaim` on its first poll) with a visibility of 90 seconds.
-3. While the worker holds the task, `felix-mcp` extends the claim every 30 seconds (`group_extend`). A model call that takes five minutes keeps its task; a worker that dies stops extending and loses it within 90 seconds.
+1. The planner calls `task_post`. `kbl-mcp` publishes the task and a `task_posted` record.
+2. A worker calls `task_claim`. `kbl-mcp` polls the group as a named member (the agent's name, with `reclaim` on its first poll) with a visibility of 90 seconds.
+3. While the worker holds the task, `kbl-mcp` extends the claim every 30 seconds (`group_extend`). A model call that takes five minutes keeps its task; a worker that dies stops extending and loses it within 90 seconds.
 4. `task_complete` writes the result with `cache_put_if` absent on the task's results key, acks the record and logs `task_done`. If the key is already there, a redelivered copy was finished first; this result is kept as an artifact and logged `task_duplicate`.
 5. `task_release` hands the task back with a nack. `task_give_up` dead-letters it at once.
 
@@ -240,15 +240,15 @@ task, replace the plan, post a hundred items, give yourself more budget") may
 be followed by the model, but each attempt reaches Felix and is refused: no
 grant on the prefix, no publish on the stream, no tool or grant for spend, and
 a message sent as someone else is recorded under the sender's own name.
-`felix-mcp` logs each refusal as a `refused` record. The same attempts made
+`kbl-mcp` logs each refusal as a `refused` record. The same attempts made
 with a raw `felix-client` and the agent's token are refused the same way,
-which is the test that proves the grants, not `felix-mcp`, are doing the work.
+which is the test that proves the grants, not `kbl-mcp`, are doing the work.
 
 ### Identities
 
 Grants need one principal per agent, and a Felix principal comes from an OIDC
 token the tenant trusts (`services/felix-controlplane-service/src/auth/exchange.rs:1-7`
-in Felix). `agents-tool` runs a small issuer for the run, as felix-gateway's
+in Felix). `kbl-tool` runs a small issuer for the run, as felix-gateway's
 dev stack does (`dev/idp.mjs` in felix-gateway): it signs one ID token per
 agent, the control plane exchanges it, and RBAC assigns the run's roles.
 Delegation does not help, because a delegated token keeps the delegating
@@ -266,16 +266,16 @@ and merge. The demonstrations are numbered in
 | M | Milestone | Proves |
 |---|---|---|
 | 0 | The dashboard and the decision replay, locked: style frames drawn from hand-written fixtures | They read well before Felix is involved |
-| 1 | Tasks through Felix: `core`, the dev stack, `agents-tool`, `felix-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
+| 1 | Tasks through Felix: `core`, the dev stack, `kbl-tool`, `kbl-mcp` task tools, scripted planner and workers | Demonstrations 1 and 2 |
 | 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each, and people and agents never overwrite each other (demonstration 3) |
-| 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
+| 3 | Real work: Claude Code claims `agent-ok` issues through `kbl-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
 | 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
 | 5 | Shared state (closed, superseded by KBL: the swarm demo was removed) | Nothing |
-| 6 | The reference worker (`agents-run`): a model API, artifacts, spend and rate limits | Agent-created work stays inside its budget (demonstration 4) |
+| 6 | The reference worker (`kbl-run`): a model API, artifacts, spend and rate limits | Agent-created work stays inside its budget (demonstration 4) |
 | 7 | Decision replay, live: the fold, the dashboard on felix-gateway, scrub and follow | The log is a complete record that replays, and a fix's decisions read back with no hindsight (demonstrations 5 and 6) |
 | 8 | A hostile agent stays bounded: grants and an injected agent held to its budget | A prompt-injected agent cannot escape its budget or grants (demonstration 8) |
 | 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Any MCP host can take work (demonstration 7), and it holds under loss |
-| 10 | Self-hosting: `felix-mcp` releases, compose, a quick start | Anyone can run it |
+| 10 | Self-hosting: `kbl-mcp` releases, compose, a quick start | Anyone can run it |
 
 **Why it was done this way.** [decision-replay.md](decision-replay.md) records an
 agent's decisions with their evidence and reads them back as a story for
@@ -288,7 +288,7 @@ before anything was built behind it.
 ## Risks, and what this surfaces in Felix
 
 - **Cost of tests.** Agents on a real model cost money. The scripted planner and workers run the same flows for CI and for anyone without a key.
-- **Visibility vs. long calls.** A claim lives 90 seconds without an extension. A `felix-mcp` that stalls longer than that (a paused laptop) loses its task. That is the intended behaviour, and the duplicate check handles the result.
+- **Visibility vs. long calls.** A claim lives 90 seconds without an extension. A `kbl-mcp` that stalls longer than that (a paused laptop) loses its task. That is the intended behaviour, and the duplicate check handles the result.
 - **Scope.** No feature that does not serve one of the eight demonstrations or the dashboard.
 
 **Felix gaps this design runs into**
@@ -296,19 +296,19 @@ before anything was built behind it.
 Checked against Felix at `97ef3827` (paths in Felix unless marked) and felix-gateway 0.6.0 (`84dfa11`).
 
 1. **Max attempts is broker-wide.** `FELIX_GROUP_MAX_ATTEMPTS` (default 5, `services/felix-broker-service/src/config/defaults.rs:48`) applies to every group; `GroupPoll` has no attempts setting (`crates/protocol/felix-wire/src/client/message.rs:898-936`). Expensive tasks want two. Workers count attempts themselves until a group can say so.
-2. **No agent identities without an outside issuer.** A principal comes from an upstream OIDC token (`services/felix-controlplane-service/src/auth/exchange.rs:1-7`), and delegation keeps the delegating subject (`auth/delegate.rs:8-11`). A run's agents need their own subjects, so `agents-tool` has to run an issuer. A way to mint narrower tokens for named sub-principals would remove it.
+2. **No agent identities without an outside issuer.** A principal comes from an upstream OIDC token (`services/felix-controlplane-service/src/auth/exchange.rs:1-7`), and delegation keeps the delegating subject (`auth/delegate.rs:8-11`). A run's agents need their own subjects, so `kbl-tool` has to run an issuer. A way to mint narrower tokens for named sub-principals would remove it.
 3. **No request/reply.** Not needed: asking is question work in the tracker ([decision-replay.md](decision-replay.md)), which needs no reply routing.
 4. **No bounded counter add.** `CounterAdd` is an unconditional signed delta (`message.rs:814-820`), and a retried add counts twice (`docs/projections.md:164-170`). A budget needs reserve, check and refund, and a refund that is retried undercounts. An add that applies only below a limit, with a dedupe id, would make it one safe call. Counters with a TTL would retire rate-limit windows.
 5. **felix-gateway's client cannot read a range.** The gateway relays `read` (`crates/felix-gateway/src/protocol.rs:122-137`), but `felix-gateway-client` has no method for it and ignores `records` (`packages/gateway-client/src/index.ts:195`). The dashboard needs it to scrub.
 6. **No time lookup through felix-gateway.** Felix has `offset_for_time` (`crates/sdk/felix-client/src/client/subscribe.rs:248`); the gateway's `ClientMessage` does not (`crates/felix-gateway/src/protocol.rs:74-158`). "Go to 14:05" has to bisect by reads.
 7. **felix-gateway drops the recorded publisher.** Felix records who published each event (`what-felix-is-for.md:164`), but the gateway's `event` and `records` carry only offset and payload (`crates/felix-gateway/src/protocol.rs:195-203, 230-238`). `stamp_sender` covers writes made through the gateway, not the agents' writes over QUIC (`crates/felix-gateway/src/scope.rs:64`). Without it the dashboard cannot show verified authorship.
-8. **The Node and Python bindings lag the Rust client.** No `cache_put_if`, `cache_delete_if`, `group_extend`, per-poll visibility, `read`, `offset_for_time` or publisher identity (`crates/sdk/felix-typescript/src/client.rs:282-616`, `group_poll` at `:491-504`). `felix-mcp` is Rust because of it. An agent written against the bindings directly could not take a lease.
+8. **The Node and Python bindings lag the Rust client.** No `cache_put_if`, `cache_delete_if`, `group_extend`, per-poll visibility, `read`, `offset_for_time` or publisher identity (`crates/sdk/felix-typescript/src/client.rs:282-616`, `group_poll` at `:491-504`). `kbl-mcp` is Rust because of it. An agent written against the bindings directly could not take a lease.
 
 9. **felix-gateway drops the broker's append time.** Felix (at `d40db2e4`) stamps every record with its append time by the shard leader's clock: range-read records always carry it (`crates/protocol/felix-wire/src/client/message/fields.rs:192-193`), and subscribed events do when the client asks (`ClientConfig::timestamps`, `crates/sdk/felix-client/src/config.rs:122-126`; `Event::timestamp_micros`, `crates/sdk/felix-client/src/subscribe.rs:235-239`). felix-gateway's `event` and `records` carry only offset and payload (`crates/felix-gateway/src/protocol.rs:195-206, 325-331` in felix-gateway). Records written by agents on different machines then have only their writers' clocks, which skew, so a claim can be drawn before the post it claims. The dashboard orders by offset and clamps writer times to rise with it until the gateway passes the broker's time on.
 
 **Decisions on the earlier open questions**
 
-- **`felix-mcp` speaks MCP over HTTP as well as stdio, but never holds tokens for callers.** stdio comes first and stays the default. HTTP is added for hosts that cannot start a local process. Each HTTP caller sends its own bearer token, and `felix-mcp` uses that token for that caller's requests and nothing else, so grants still decide what each agent can write. A shared server that kept tokens on behalf of its callers would turn one compromised server into every agent's credentials.
-- **A claim lasts 90 seconds, extended every 30 seconds, whatever the task.** This is the usual visibility timeout plus heartbeat, as in SQS or a lease with renewal. It does not try to predict model latency: a call that takes five minutes keeps its task because `felix-mcp` keeps extending, and a worker that dies loses it within 90 seconds. Tying the timeout to the expected latency would only make recovery slower for long tasks, and the task's own deadline already bounds how long anything can run.
+- **`kbl-mcp` speaks MCP over HTTP as well as stdio, but never holds tokens for callers.** stdio comes first and stays the default. HTTP is added for hosts that cannot start a local process. Each HTTP caller sends its own bearer token, and `kbl-mcp` uses that token for that caller's requests and nothing else, so grants still decide what each agent can write. A shared server that kept tokens on behalf of its callers would turn one compromised server into every agent's credentials.
+- **A claim lasts 90 seconds, extended every 30 seconds, whatever the task.** This is the usual visibility timeout plus heartbeat, as in SQS or a lease with renewal. It does not try to predict model latency: a call that takes five minutes keeps its task because `kbl-mcp` keeps extending, and a worker that dies loses it within 90 seconds. Tying the timeout to the expected latency would only make recovery slower for long tasks, and the task's own deadline already bounds how long anything can run.
 - **Runs share a namespace, with the run id in each resource name.** A namespace is a team's or a project's, which is how namespaces in Felix and most multi-tenant systems are meant to be used. A run is cheap and short-lived, and its resources (`agents.tasks.<run>` and the rest) are created when it starts and deleted when it is no longer needed. Grants name the run's resources, so one run's agents cannot reach another's. A namespace per run would make starting a run an operator step and spread one team's runs across many namespaces.
 

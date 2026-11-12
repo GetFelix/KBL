@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agents_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use felix_client::{
     AckMode, BrokerError, CacheCondition, Client, ClientConfig, ErrorCode, GroupMember,
     GroupPollOptions, GroupRecord, StartPosition, quic_client_config, root_store_from_pem_file,
 };
+use kbl_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
 use serde_json::{Value, json};
 
 /// The cache and key that hold the tracker's writer lease.
@@ -27,9 +27,7 @@ fn cursor_key(name: &str) -> String {
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
 const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
-// The repo's old name, kept on purpose: deployed binaries and the upgrade check
-// send it. Changing it needs the gateway to accept both values for a release.
-const ID_TOKEN_AUDIENCE: &str = "felix-agents";
+const ID_TOKEN_AUDIENCE: &str = "kbl";
 /// The tenant administrator stands in for the tracker's principal in the dev stack.
 const TRACKER_SUBJECT: &str = "agents-admin";
 

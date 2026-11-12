@@ -5,17 +5,17 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use agents_core::content::Content;
-use agents_core::names::{AgentName, ItemId, Key};
-use agents_core::work::{
-    CloseWhy, DoneWhen, Evidence, FindingVerdict, MergeVerdict, Phase, RevertCheck, Severity,
-    Target, Unclear, WorkRecord,
-};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use kbl_core::content::Content;
+use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::work::{
+    CloseWhy, DoneWhen, Evidence, FindingVerdict, MergeVerdict, Phase, RevertCheck, Severity,
+    Target, Unclear, WorkRecord,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 

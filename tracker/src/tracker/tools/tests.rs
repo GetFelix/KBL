@@ -1,10 +1,10 @@
-use agents_core::content::Content;
-use agents_core::names::ItemId;
-use agents_core::work::{
+use kbl_core::content::Content;
+use kbl_core::names::ItemId;
+use kbl_core::work::{
     Actor, CloseWhy, DoneWhen, Evidence, Phase, RefusalReason, Target, Then, Unclear, WORK_EVENTS,
     WorkKind, WorkRecord,
 };
-use agents_core::work_fold::{NeedsYou, Stage};
+use kbl_core::work_fold::{NeedsYou, Stage};
 use serde_json::{Value, json};
 
 use super::super::tests::{
@@ -381,7 +381,7 @@ async fn context_is_written_by_a_holder_and_read_back_even_after_a_restart() {
         WorkRecord::HumanInput {
             item: item("a1"),
             attempt: None,
-            input: agents_core::work::HumanKind::Note,
+            input: kbl_core::work::HumanKind::Note,
             text: text("it only fails on arm64"),
         },
     )
@@ -416,7 +416,7 @@ async fn context_is_written_by_a_holder_and_read_back_even_after_a_restart() {
 #[tokio::test]
 async fn text_over_the_inline_limit_must_be_an_artifact() {
     let (fake, t) = held().await;
-    let big = "x".repeat(agents_core::artifact::INLINE_LIMIT + 1);
+    let big = "x".repeat(kbl_core::artifact::INLINE_LIMIT + 1);
     let before = fake.log().len();
     assert_eq!(
         why(t
@@ -438,7 +438,7 @@ async fn text_over_the_inline_limit_must_be_an_artifact() {
     );
     assert_eq!(fake.log().len(), before);
     // The same bytes by hash are fine.
-    let id = agents_core::artifact::ArtifactId::of(big.as_bytes());
+    let id = kbl_core::artifact::ArtifactId::of(big.as_bytes());
     t.record_step(
         &agent("w1"),
         &item("a1"),
@@ -455,7 +455,7 @@ async fn text_over_the_inline_limit_must_be_an_artifact() {
             WorkRecord::HumanInput {
                 item: item("a1"),
                 attempt: None,
-                input: agents_core::work::HumanKind::Note,
+                input: kbl_core::work::HumanKind::Note,
                 text: text(&big),
             },
         )
@@ -777,7 +777,7 @@ async fn the_whole_flow_leaves_only_records_the_fold_accepts() {
         .enumerate()
         .map(|(i, l)| (i as u64, l))
         .collect();
-    let replay = agents_core::work_fold::fold(&entries);
+    let replay = kbl_core::work_fold::fold(&entries);
     assert!(replay.rejections.is_empty(), "{:?}", replay.rejections);
 }
 
@@ -1537,11 +1537,11 @@ async fn options_are_bounded_when_asking() {
     let ask = |options: Vec<String>, default: Option<String>| {
         t.ask(&w1, &a1, text("which?"), options, default, 0)
     };
-    let many = (0..=agents_core::work::MAX_ASK_OPTIONS)
+    let many = (0..=kbl_core::work::MAX_ASK_OPTIONS)
         .map(|i| format!("o{i}"))
         .collect();
     assert_eq!(why(ask(many, None).await), "invalid");
-    let long = "x".repeat(agents_core::work::MAX_ASK_OPTION_LEN + 1);
+    let long = "x".repeat(kbl_core::work::MAX_ASK_OPTION_LEN + 1);
     assert_eq!(why(ask(vec![long], None).await), "invalid");
     assert_eq!(
         why(ask(vec!["a".into(), "a".into()], None).await),

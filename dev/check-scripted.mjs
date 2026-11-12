@@ -2,7 +2,7 @@
 // different workers in a different order, ends every task the same way, and
 // that way is the one the seed promises.
 //
-//   cargo build -p felix-mcp -p agents-tool && node dev/check-scripted.mjs
+//   cargo build -p kbl-mcp -p kbl-tool && node dev/check-scripted.mjs
 import { expected, plan, sameEnds } from "./lib/script.mjs";
 import { check, felixToken, giveUpAfter, killAll } from "./lib/stack.mjs";
 import { scriptedRun } from "./scripted.mjs";

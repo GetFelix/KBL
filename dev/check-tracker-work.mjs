@@ -1,4 +1,4 @@
-// Runs the work tools against the dev stack, each agent a felix-mcp process
+// Runs the work tools against the dev stack, each agent a kbl-mcp process
 // that calls the tracker over REST, each person a REST call:
 //   1. w1 claims an item, reads its context, posts two children and orders
 //      them, records a decision, a step and an edit, and posts a proposal;
@@ -10,7 +10,7 @@
 //   4. refused calls (an item the agent does not hold, a decision without its
 //      commit) leave nothing on the log.
 //
-//   cargo build -p felix-mcp -p agents-tool -p agents-tracker && node dev/check-tracker-work.mjs
+//   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-tracker-work.mjs
 import {
   agent as spawnAgent,
   check,
@@ -31,7 +31,7 @@ const tokens = {
   agents: { "tok-w1": "w1", "tok-w2": "w2", "tok-w3": "w3" },
   people: { "tok-gab": "gab" },
 };
-const timing = { AGENTS_CLAIM_VISIBILITY_MS: "8000", AGENTS_EXTEND_EVERY_MS: "1000" };
+const timing = { KBL_CLAIM_VISIBILITY_MS: "8000", KBL_EXTEND_EVERY_MS: "1000" };
 
 giveUpAfter(240, "the tracker work check");
 
@@ -41,8 +41,8 @@ createRun(RUN, "work tools check");
 const agent = (name) =>
   spawnAgent(felix, RUN, name, {
     ...timing,
-    AGENTS_TRACKER_URL: TRACKER_URL,
-    AGENTS_TRACKER_TOKEN: `tok-${name}`,
+    KBL_TRACKER_URL: TRACKER_URL,
+    KBL_TRACKER_TOKEN: `tok-${name}`,
   });
 
 async function seed(id, tier) {

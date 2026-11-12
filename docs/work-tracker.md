@@ -9,10 +9,10 @@ of work, fix it and hand it back.
 orders, hands out and displays work, and it makes no model calls and writes no
 text. Every kind of judgement it shows (triage, augmentation, splits, answers,
 fixes, redos) is a work item that an agent or a person completes. Agents from
-any vendor take that work through `felix-mcp`, and people guide it from the
+any vendor take that work through `kbl-mcp`, and people guide it from the
 dashboard. Anything a person adds (a redo, a note, a split, a question, a
 priority change) becomes regular work or a record the tracker already keeps.
-`felix-mcp` and the dashboard make no model calls either.
+`kbl-mcp` and the dashboard make no model calls either.
 
 ## The problem
 
@@ -31,13 +31,13 @@ it before they start.
 
 ## What it is
 
-A service, `agents-tracker`, with a REST API for people and tools and the same
-operations as MCP tools in `felix-mcp` for agents:
+A service, `kbl-tracker`, with a REST API for people and tools and the same
+operations as MCP tools in `kbl-mcp` for agents:
 
 | Tool | Does |
 |---|---|
 | `work_next` | Claims the highest-priority ready item the agent can take. The reply carries the [standing rules](#standing-rules) in effect. With `review_tiers` it also takes [reviews](#review-as-work) of those tiers |
-| `work_extend` | Keeps the claim while the agent works (sent by `felix-mcp` every 30 seconds) |
+| `work_extend` | Keeps the claim while the agent works (sent by `kbl-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency between items in one tree |
 | `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal, except `prerequisite`, which is work another repo must do first |
@@ -49,7 +49,7 @@ operations as MCP tools in `felix-mcp` for agents:
 | `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, or `unclear`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
 
-Every `felix-mcp` work tool, claiming included, calls the tracker over REST
+Every `kbl-mcp` work tool, claiming included, calls the tracker over REST
 with the agent's own token. The tracker checks the token, does the Felix work
 itself and logs it in the same step, so an agent never touches the work
 streams or keys. `work_next` polls the ready streams' consumer group as a
@@ -76,8 +76,8 @@ flowchart LR
         P[People, in the dashboard]
     end
     subgraph Agents
-        A1[Agent + felix-mcp]
-        A2[Agent + felix-mcp]
+        A1[Agent + kbl-mcp]
+        A2[Agent + kbl-mcp]
     end
     subgraph KBL
         T[Tracker]
@@ -107,7 +107,7 @@ keys, and the dashboard is a fold of `work.events`.
 
 ```mermaid
 sequenceDiagram
-    participant A as Agent (felix-mcp)
+    participant A as Agent (kbl-mcp)
     participant T as Tracker
     participant G as Ready streams (consumer group)
     participant L as work.events
@@ -128,7 +128,7 @@ sequenceDiagram
 
 ### Running the tracker
 
-`agents-tracker` signs in to Felix as its own principal, creates `work.events`,
+`kbl-tracker` signs in to Felix as its own principal, creates `work.events`,
 `work.ready.p0` to `p3`, `work.review.r0` to `r3` and the consumer group on each if
 they are not there, and folds `work.events` from the start (with seek snapshots) before it
 serves. It appends a record only when the fold accepts it, so a refused call
@@ -141,7 +141,7 @@ rules for changing a record.
 
 Felix cannot yet tell the tracker which principal a token belongs to, so the
 tracker reads a token map from a JSON file (`--tokens-file`, or
-`AGENTS_TRACKER_TOKENS_FILE`). The file must be mode 600 or 400, a token may be listed
+`KBL_TRACKER_TOKENS_FILE`). The file must be mode 600 or 400, a token may be listed
 once only, and tokens are compared in constant time:
 
 ```json
@@ -157,8 +157,8 @@ repository of the tree it is working in. An agent with no grant can reach only
 its own tree's repository.
 
 An agent's token maps to its name, which goes on every record it causes and is
-the consumer-group member name. `felix-mcp` reads `AGENTS_TRACKER_URL` and
-`AGENTS_TRACKER_TOKEN`; without them the work tools say they are not set up.
+the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
+`KBL_TRACKER_TOKEN`; without them the work tools say they are not set up.
 
 | Call | Token | Does |
 |---|---|---|
@@ -195,7 +195,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | `POST /v1/work/ask` `{item, text, options?, default?}` / `POST /v1/work/answer` `{item, question, text?, chosen?, evidence}` | Asks a person, or answers as the holder of a `question` item. An answer starts resume work; see [Questions with choices](#questions-with-choices) |
 
 Text in a record stays inline up to 4 KiB. Longer text is an artifact the
-caller stored first and names by its hash; `felix-mcp` does that for the
+caller stored first and names by its hash; `kbl-mcp` does that for the
 agent, and the tracker refuses long inline text.
 
 The dashboard's actions are routes with a person's token. Each appends one
@@ -269,9 +269,9 @@ call.
 
 ### Running the ingest worker
 
-`agents-ingest` is a separate binary. It never writes to Felix: it reads
+`kbl-ingest` is a separate binary. It never writes to Felix: it reads
 GitHub, then writes through the three `ingest` calls above under its own token,
-and it makes no model calls. `agents-ingest --config ingest.json` polls every
+and it makes no model calls. `kbl-ingest --config ingest.json` polls every
 `poll_seconds` (default 60); `--once` polls once. `--webhook-listen` adds an
 endpoint whose only effect is to wake the poll (a `check_suite`,
 `pull_request` or `pull_request_review` event makes the next poll read the
@@ -288,7 +288,7 @@ dismissed stays closed when its issue is reopened.
 
 ```json
 {
-  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "AGENTS_INGEST_TOKEN" },
+  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN" },
   "github": { "token_file": "/run/secrets/github-token", "own_logins": ["kibble[bot]"] },
   "rules": [
     {
@@ -576,7 +576,7 @@ flowchart LR
   the tree with the fixes in. Each request gets them once, and a root has at
   most 8 review items, fresh final reviews included. A person or an agent
   cannot create one.
-- **Claimed by tier.** The tiers are `AGENTS_REVIEW_TIERS` (default
+- **Claimed by tier.** The tiers are `KBL_REVIEW_TIERS` (default
   `fast,deep`, at most four), one ready stream each (`work.review.r0` to
   `r3`). `work_next` gives a review only to an agent that names its tier in
   `review_tiers`, so ordinary work never blocks behind a review and a review
@@ -790,7 +790,7 @@ not by counters, because Felix has no bounded add (gap 42).
 
 **Cost.** Agents from outside report cost on `work_complete` as a cost record
 the tracker cannot verify. The per-root cost cap is hard only for attempts
-under `agents-run`, which measures spend. The Metrics tab labels each figure
+under `kbl-run`, which measures spend. The Metrics tab labels each figure
 reported or measured.
 
 ## The dashboard
@@ -1063,7 +1063,7 @@ a board, and a panel.
   the board but loses nothing.
 - **Gaps it hits.** Gap 1 (max attempts is broker-wide) matters more here: an
   item that keeps failing should go to a person after two attempts. Gap 8
-  means the tracker, like `felix-mcp`, is Rust. Gaps 5 to 7 limit the viewer
+  means the tracker, like `kbl-mcp`, is Rust. Gaps 5 to 7 limit the viewer
   as they do for runs.
 
 ## Order

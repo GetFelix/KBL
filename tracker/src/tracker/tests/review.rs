@@ -1,12 +1,12 @@
 //! Reviews through the tracker: opened with the pull request, claimed by tier,
 //! never by the author, and ended with findings and a verdict.
 
-use agents_core::content::Content;
-use agents_core::work::{
+use kbl_core::content::Content;
+use kbl_core::work::{
     FindingVerdict, MAX_FINDING_FILE, MAX_REVERT_TEST, MergeVerdict, Phase, PrChecks, PrPhase,
     PrReview, PrSnapshot, RevertCheck, Severity,
 };
-use agents_core::work_fold::Stage;
+use kbl_core::work_fold::Stage;
 
 use super::*;
 use crate::tracker::{Decide, NewFinding};

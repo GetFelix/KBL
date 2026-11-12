@@ -1,5 +1,5 @@
-use agents_core::work::{PrChecks, PrReview, WorkRecord, pr_branch};
-use agents_core::work_fold::{Closure, NeedsYou, PrWaits, Stage};
+use kbl_core::work::{PrChecks, PrReview, WorkRecord, pr_branch};
+use kbl_core::work_fold::{Closure, NeedsYou, PrWaits, Stage};
 use serde_json::{Value, json};
 
 use super::*;
@@ -72,12 +72,12 @@ impl Rig {
             .on("GET", "/issues/comments?", ok(Value::Array(comments)));
     }
 
-    fn root(&self, up: &str) -> agents_core::names::ItemId {
+    fn root(&self, up: &str) -> kbl_core::names::ItemId {
         self.tracker.item_of(up)
     }
 
     /// An agent claims the root and reports a pull request.
-    fn hold(&self, up: &str, pr: Option<&str>) -> agents_core::names::ItemId {
+    fn hold(&self, up: &str, pr: Option<&str>) -> kbl_core::names::ItemId {
         let item = self.root(up);
         self.tracker.agent(
             "w1",
@@ -93,7 +93,7 @@ impl Rig {
                 WorkRecord::Progress {
                     item: item.clone(),
                     attempt: 1,
-                    note: agents_core::content::Content::Text("fixing".into()),
+                    note: kbl_core::content::Content::Text("fixing".into()),
                     branch: Some("fix/stale-read".into()),
                     pr: Some(pr.into()),
                 },
@@ -821,7 +821,7 @@ fn review(user: &str, state: &str, assoc: &str) -> Value {
 
 impl Rig {
     /// An imported root whose agent reported the pull request.
-    async fn with_pr(&self) -> (Ingest<Github<Script>, Fake>, agents_core::names::ItemId) {
+    async fn with_pr(&self) -> (Ingest<Github<Script>, Fake>, kbl_core::names::ItemId) {
         let ingest = self.ingest(json!([admit_rule()]));
         self.list(vec![issue(812, |_| {})]);
         ingest.poll(false).await.unwrap();
@@ -830,11 +830,11 @@ impl Rig {
     }
 
     /// The agent finishes its attempt, with the root's own items closed first.
-    fn finish(&self, item: &agents_core::names::ItemId) {
+    fn finish(&self, item: &kbl_core::names::ItemId) {
         for child in self.tracker.state().items[item].children.clone() {
             self.tracker.person(WorkRecord::Closed {
                 item: child,
-                why: agents_core::work::CloseWhy::Dismissed,
+                why: kbl_core::work::CloseWhy::Dismissed,
             });
         }
         self.tracker.agent(
@@ -1133,7 +1133,7 @@ async fn flipping_the_reported_request_away_and_back_restores_a_red_status() {
         rig.tracker.person(WorkRecord::Progress {
             item: item.clone(),
             attempt: 1,
-            note: agents_core::content::Content::Text("pr".into()),
+            note: kbl_core::content::Content::Text("pr".into()),
             branch: None,
             pr: Some(pr.into()),
         });
@@ -1185,7 +1185,7 @@ async fn a_merge_into_another_branch_or_by_our_own_login_does_not_close_the_root
     assert_eq!(s.items[&item].closed, None);
     assert_eq!(
         s.items[&item].pr_status.as_ref().unwrap().phase,
-        agents_core::work::PrPhase::Closed
+        kbl_core::work::PrPhase::Closed
     );
 
     // Merged into the default branch, but by the credential's own login.

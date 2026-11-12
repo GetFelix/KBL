@@ -2,14 +2,14 @@
 // same name takes it back at once, and two results for one task are recorded
 // once as the task's result and once as a duplicate.
 //
-//   cargo build -p felix-mcp -p agents-tool && node dev/check-death.mjs
+//   cargo build -p kbl-mcp -p kbl-tool && node dev/check-death.mjs
 import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, killAll, newRunId, runLog } from "./lib/stack.mjs";
 
 const RUN = newRunId("death");
 const token = await felixToken();
 createRun(RUN, "worker death check");
 // A short claim and no extensions, so a dead or stalled worker's task comes back in seconds.
-const quick = { AGENTS_CLAIM_VISIBILITY_MS: "2000", AGENTS_EXTEND_EVERY_MS: "60000" };
+const quick = { KBL_CLAIM_VISIBILITY_MS: "2000", KBL_EXTEND_EVERY_MS: "60000" };
 const agent = (name, extraEnv) => spawnAgent(token, RUN, name, extraEnv);
 const kinds = (task) => runLog(RUN).filter((r) => r.task === task);
 

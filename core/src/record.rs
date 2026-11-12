@@ -20,7 +20,7 @@ pub struct AgentSpec {
     pub role: String,
 }
 
-/// What `felix-mcp` and `agents-run` write to the run log: a record, when the
+/// What `kbl-mcp` and `kbl-run` write to the run log: a record, when the
 /// writer wrote it and who it says wrote it. Until felix-gateway passes the
 /// broker's append time and recorded publisher on (gaps 9 and 7), these two
 /// fields are all a viewer has, and it marks them unverified; the fold prefers
@@ -29,7 +29,7 @@ pub struct AgentSpec {
 pub struct Logged {
     /// Milliseconds since the Unix epoch on the writer's clock.
     pub at_ms: u64,
-    /// An agent's name, or `agents-tool` or `agents-run` for the two programs that write for the run.
+    /// An agent's name, or `kbl-tool` or `kbl-run` for the two programs that write for the run.
     pub by: Key,
     #[serde(flatten)]
     pub record: Record,
@@ -39,24 +39,24 @@ pub struct Logged {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Record {
-    /// Written by `agents-tool`.
+    /// Written by `kbl-tool`.
     RunStarted {
         goal: String,
         budget_micros: u64,
         agents: Vec<AgentSpec>,
     },
-    /// Written by `agents-run`.
+    /// Written by `kbl-run`.
     RunEnded {
         outcome: String,
     },
-    /// Written by `agents-run`; `presence` is the version of the agent's presence key.
+    /// Written by `kbl-run`; `presence` is the version of the agent's presence key.
     AgentUp {
         agent: AgentName,
         role: String,
         model: String,
         presence: u64,
     },
-    /// Written by the planner's `felix-mcp` when a presence key expires or is
+    /// Written by the planner's `kbl-mcp` when a presence key expires or is
     /// deleted; `presence` is the version that expired.
     AgentGone {
         agent: AgentName,
@@ -157,7 +157,7 @@ pub enum Record {
         offset: u64,
         text: Content,
     },
-    /// Written by `agents-run` before a model call; `reserve_micros` is the worst case taken from the budget.
+    /// Written by `kbl-run` before a model call; `reserve_micros` is the worst case taken from the budget.
     ModelStarted {
         agent: AgentName,
         task: TaskId,
@@ -178,7 +178,7 @@ pub enum Record {
         task: TaskId,
         reserve_micros: u64,
     },
-    /// A refund `agents-run` could not confirm and did not retry, since a
+    /// A refund `kbl-run` could not confirm and did not retry, since a
     /// retried add can count twice.
     RefundUnconfirmed {
         agent: AgentName,

@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use agents_core::content::Content;
-use agents_core::names::{AgentName, Resources, RunId};
+use kbl_core::content::Content;
+use kbl_core::names::{AgentName, Resources, RunId};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
@@ -787,7 +787,7 @@ impl Server {
 
     fn work(&self) -> Result<&Work<Http>, String> {
         self.work.as_ref().ok_or_else(|| {
-            "the work tools are not set up: start felix-mcp with AGENTS_TRACKER_URL and AGENTS_TRACKER_TOKEN"
+            "the work tools are not set up: start kbl-mcp with KBL_TRACKER_URL and KBL_TRACKER_TOKEN"
                 .to_owned()
         })
     }
@@ -849,7 +849,7 @@ fn swap_artifacts(v: &mut Value, texts: &std::collections::HashMap<String, Strin
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("felix-mcp", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("kbl-mcp", env!("CARGO_PKG_VERSION")))
     }
 }
 

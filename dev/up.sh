@@ -24,7 +24,7 @@ for _ in $(seq 1 90); do
     echo "  control plane:  http://127.0.0.1:8443"
     echo "  broker:         127.0.0.1:5000 (QUIC), certificate at dev/state/broker-cert.pem"
     echo "  gateway:        ws://127.0.0.1:8787/ws, scope file dev/scope.toml"
-    echo "  identity:       http://127.0.0.1:9400, mint a token with /token?sub=<name>&aud=felix-agents"
+    echo "  identity:       http://127.0.0.1:9400, mint a token with /token?sub=<name>&aud=kbl"
     echo "  stop:           dev/down.sh"
     exit 0
   fi

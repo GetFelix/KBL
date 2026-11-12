@@ -1,4 +1,4 @@
-//! `agents-ingest`: pulls issues from upstream trackers into the work tracker
+//! `kbl-ingest`: pulls issues from upstream trackers into the work tracker
 //! and keeps them in step. It writes only through the tracker's REST API, under
 //! its own token, and makes no model calls. See docs/work-tracker.md "Sources".
 
@@ -33,32 +33,35 @@ use sync::{Ingest, Settings};
 #[command(version, about = "The upstream issue ingest worker for Felix Agents")]
 struct Cli {
     /// JSON file with the tracker, GitHub and intake rules. See docs/work-tracker.md.
-    #[arg(long, env = "AGENTS_INGEST_CONFIG")]
+    #[arg(long, env = "KBL_INGEST_CONFIG")]
     config: PathBuf,
     /// Where the optional webhook endpoint listens. Webhooks only wake the poll.
     #[arg(
         long,
-        env = "AGENTS_INGEST_WEBHOOK_LISTEN",
+        env = "KBL_INGEST_WEBHOOK_LISTEN",
         requires = "webhook_secret_env"
     )]
     webhook_listen: Option<SocketAddr>,
     /// The environment variable holding the webhook secret.
-    #[arg(long, env = "AGENTS_INGEST_WEBHOOK_SECRET_ENV")]
+    #[arg(long, env = "KBL_INGEST_WEBHOOK_SECRET_ENV")]
     webhook_secret_env: Option<String>,
     /// The least seconds between two webhook wakes of the poll.
-    #[arg(
-        long,
-        env = "AGENTS_INGEST_WEBHOOK_MIN_GAP_SECONDS",
-        default_value_t = 10
-    )]
+    #[arg(long, env = "KBL_INGEST_WEBHOOK_MIN_GAP_SECONDS", default_value_t = 10)]
     webhook_min_gap_seconds: u64,
     /// Poll once and exit.
     #[arg(long)]
     once: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    kbl_core::legacy_env::adopt();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(serve())
+}
+
+async fn serve() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
     let token = std::env::var(&cfg.tracker.token_env)
@@ -101,7 +104,7 @@ async fn main() -> Result<()> {
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .with_context(|| format!("listen on {addr}"))?;
-        eprintln!("agents-ingest: webhook on {}", listener.local_addr()?);
+        eprintln!("kbl-ingest: webhook on {}", listener.local_addr()?);
         let app = webhook::router(
             secret,
             wake.clone(),
@@ -109,7 +112,7 @@ async fn main() -> Result<()> {
         );
         tokio::spawn(async move {
             if let Err(e) = axum::serve(listener, app).await {
-                eprintln!("agents-ingest: the webhook server stopped: {e}");
+                eprintln!("kbl-ingest: the webhook server stopped: {e}");
             }
         });
     }
@@ -133,14 +136,14 @@ async fn run<S: Source, T: tracker_api::Tracker>(
         let wait = match polled {
             Ok(()) => every,
             Err(SourceError::RateLimited { wait }) => {
-                eprintln!("agents-ingest: rate limited; waiting {}s", wait.as_secs());
+                eprintln!("kbl-ingest: rate limited; waiting {}s", wait.as_secs());
                 wait.max(every)
             }
             Err(e) => {
                 if once {
                     anyhow::bail!("{e}");
                 }
-                eprintln!("agents-ingest: poll failed: {e}");
+                eprintln!("kbl-ingest: poll failed: {e}");
                 every
             }
         };

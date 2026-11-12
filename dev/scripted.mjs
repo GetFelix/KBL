@@ -1,7 +1,7 @@
 // Runs a job with scripted agents against the dev stack. The seed decides the
 // tasks and what happens to each, so a seed always gives the same run.
 //
-//   cargo build -p felix-mcp -p agents-tool
+//   cargo build -p kbl-mcp -p kbl-tool
 //   node dev/scripted.mjs --seed 7 --workers 3 [--run name]
 import { action, expected, outcomes, plan, sameEnds } from "./lib/script.mjs";
 import { agent, check, createRun, felixToken, giveUpAfter, killAll, newRunId, runLog } from "./lib/stack.mjs";

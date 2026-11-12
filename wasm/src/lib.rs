@@ -1,11 +1,11 @@
-//! The work fold from `agents-core` as WebAssembly, for the dashboard.
+//! The work fold from `kbl-core` as WebAssembly, for the dashboard.
 //!
 //! The page feeds it the payloads it reads from `work.events` and renders what
 //! it returns. It adds no rules of its own: the state is the same fold the
 //! tracker runs, so the two cannot disagree about an item's stage.
 
-use agents_core::work::{ReadError, read};
-use agents_core::work_fold::State;
+use kbl_core::work::{ReadError, read};
+use kbl_core::work_fold::State;
 use serde_json::json;
 use wasm_bindgen::prelude::*;
 

@@ -1,9 +1,9 @@
 //! A log written before prerequisites existed must fold to the same states.
 
-use agents_core::codec::Codec;
-use agents_core::names::ItemId;
-use agents_core::work::WorkLogged;
-use agents_core::work_fold::{Stage, State};
+use kbl_core::codec::Codec;
+use kbl_core::names::ItemId;
+use kbl_core::work::WorkLogged;
+use kbl_core::work_fold::{Stage, State};
 
 fn log() -> Vec<(u64, WorkLogged)> {
     include_str!("work_pre_prerequisite.jsonl")
@@ -20,13 +20,13 @@ fn stage(s: &State, id: &str) -> Stage {
 #[test]
 fn an_old_log_folds_to_the_states_it_always_did() {
     let log = log();
-    let mid = agents_core::work_fold::fold(&log[..9]);
+    let mid = kbl_core::work_fold::fold(&log[..9]);
     assert_eq!(stage(&mid, "r1"), Stage::Held);
     assert_eq!(stage(&mid, "c1"), Stage::Ready);
     assert_eq!(stage(&mid, "c2"), Stage::Blocked);
     assert_eq!(stage(&mid, "r2"), Stage::Blocked);
 
-    let end = agents_core::work_fold::fold(&log);
+    let end = kbl_core::work_fold::fold(&log);
     // The agent's link of c1 to r2 is refused: r2 is another tree.
     assert_eq!(end.rejections.len(), 1);
     assert_eq!(stage(&end, "r1"), Stage::Done);
@@ -45,14 +45,14 @@ fn an_old_question_and_answer_fold_as_they_always_did() {
         .enumerate()
         .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
         .collect();
-    let asked = agents_core::work_fold::fold(&log[..6]);
+    let asked = kbl_core::work_fold::fold(&log[..6]);
     assert_eq!(stage(&asked, "r1"), Stage::NeedsYou);
     assert_eq!(
         asked.items[&ItemId::new("r1").unwrap()].open_question,
         Some(5)
     );
 
-    let end = agents_core::work_fold::fold(&log);
+    let end = kbl_core::work_fold::fold(&log);
     let r1 = &end.items[&ItemId::new("r1").unwrap()];
     // The answer closed the question and made no work: the item is the root and its one attempt only.
     assert_eq!(r1.open_question, None);
@@ -66,7 +66,7 @@ fn an_old_question_and_answer_fold_as_they_always_did() {
 
 #[test]
 fn an_old_log_has_no_rules_and_serializes_as_before() {
-    let end = agents_core::work_fold::fold(&log());
+    let end = kbl_core::work_fold::fold(&log());
     assert!(end.rules.is_empty());
     for id in end.items.keys() {
         assert!(end.rules_for(id).is_none());
@@ -85,7 +85,7 @@ fn an_old_log_with_an_open_pull_request_makes_no_reviews() {
         .enumerate()
         .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
         .collect();
-    let end = agents_core::work_fold::fold(&log);
+    let end = kbl_core::work_fold::fold(&log);
     assert!(end.rejections.is_empty());
     assert_eq!(end.items.len(), 1);
     let r1 = &end.items[&ItemId::new("r1").unwrap()];

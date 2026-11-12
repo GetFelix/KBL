@@ -17,14 +17,14 @@ view is a fold of `work.events`, built on the tracker (M2), not on a run log.
 `work.events` is the record of an item, so the records below go on it, and an
 item's story is one stream. A run log, when an attempt has one, holds optional
 per-attempt detail such as model calls. Three record kinds are added to
-`work.events`, plus two `felix-mcp` tools for the agent's own steps and the
+`work.events`, plus two `kbl-mcp` tools for the agent's own steps and the
 `question` work kind described under Ask.
 
 | Kind | Written by | Details |
 |---|---|---|
-| `decision` | `felix-mcp` (`decide` tool) | `phase` (understand, reproduce, cause, fix or verify), `so_far` (a short running narrative of the work up to here), the question, the options considered, the one chosen, why, the commit, and the offsets of the steps it rests on. `decide` refuses a call without `phase`, `so_far`, why or the commit |
-| `step` | `felix-mcp` (`record_step` tool) | Command, exit code, and the output as an artifact |
-| `edit` | `felix-mcp` (`edit` tool) | File, hunk, and the offset of the decision it carries out |
+| `decision` | `kbl-mcp` (`decide` tool) | `phase` (understand, reproduce, cause, fix or verify), `so_far` (a short running narrative of the work up to here), the question, the options considered, the one chosen, why, the commit, and the offsets of the steps it rests on. `decide` refuses a call without `phase`, `so_far`, why or the commit |
+| `step` | `kbl-mcp` (`record_step` tool) | Command, exit code, and the output as an artifact |
+| `edit` | `kbl-mcp` (`edit` tool) | File, hunk, and the offset of the decision it carries out |
 | `human_input` | the tracker | An answer, a review comment or a change of priority, with who gave it |
 
 A decision can carry a **revert check**: the name of a test, whether it failed
@@ -169,7 +169,7 @@ which feeds the trust numbers on the metrics tab.
 - Large outputs (test logs, model responses) are artifacts by hash, so a
   story stays small and opens the full output on demand.
 - Retention: an item's records are kept while its issue or pull request is
-  open and for a set time after; the export from `agents-tool` takes them
+  open and for a set time after; the export from `kbl-tool` takes them
   with it.
 
 ## Limits
@@ -177,7 +177,7 @@ which feeds the trust numbers on the metrics tab.
 - An agent can record a reason that is not its real one. The checks above
   catch some of that, not all. The story is evidence for a reviewer, not a
   replacement for reading the diff.
-- Secrets in tool output would end up in the log. `felix-mcp` redacts known
+- Secrets in tool output would end up in the log. `kbl-mcp` redacts known
   secret patterns before writing, and artifacts follow the run's grants.
 
 ## Order

@@ -1,7 +1,7 @@
 //! The tracker: the only writer of `work.events` and the ready streams, and the
 //! claim path for agents. See docs/work-tracker.md.
 //!
-//! State is the fold of `work.events` ([`agents_core::work_fold`]). A record is
+//! State is the fold of `work.events` ([`kbl_core::work_fold`]). A record is
 //! appended only if the fold accepts it, so the log never holds one the dashboard
 //! would have to explain. `work_next` polls the ready tiers as a member named
 //! after the agent and writes `claimed` before it answers: a delivery is never
@@ -17,15 +17,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use agents_core::codec::Codec;
-use agents_core::content::Content;
-use agents_core::names::{AgentName, ItemId, Key};
-use agents_core::work::{
+use felix_client::GroupRecord;
+use kbl_core::codec::Codec;
+use kbl_core::content::Content;
+use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::work::{
     Actor, LANES, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS,
     WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
-use agents_core::work_fold::{Seek, Stage, State};
-use felix_client::GroupRecord;
+use kbl_core::work_fold::{Seek, Stage, State};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -97,7 +97,7 @@ impl Settings {
 
     /// The lane a ready item is published on: its priority tier, or its
     /// reviewer tier's lane. None when a review names a tier that is not configured.
-    fn lane(&self, it: &agents_core::work_fold::Item) -> Option<u8> {
+    fn lane(&self, it: &kbl_core::work_fold::Item) -> Option<u8> {
         match &it.review {
             Some(spec) => {
                 let i = self.review_tiers.iter().position(|t| *t == spec.tier)?;
@@ -598,7 +598,7 @@ impl<B: Broker> Tracker<B> {
             if self.0.core.lock().await.fenced {
                 let since = *fenced_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= FENCE_GRACE {
-                    eprintln!("agents-tracker: another tracker holds the writer lease; exiting");
+                    eprintln!("kbl-tracker: another tracker holds the writer lease; exiting");
                     return;
                 }
             } else {
@@ -668,7 +668,7 @@ impl<B: Broker> Tracker<B> {
                 core.fenced = true;
             }
             // A blip: the lease stands until its own expiry passes.
-            Err(e) => eprintln!("agents-tracker: could not renew the writer lease: {e:#}"),
+            Err(e) => eprintln!("kbl-tracker: could not renew the writer lease: {e:#}"),
         }
     }
 
@@ -876,7 +876,7 @@ impl<B: Broker> Tracker<B> {
         }
         let ops = vec![Op::Ack(stream.to_owned(), agent.clone(), record.offset)];
         if let Err(e) = self.run(ops).await {
-            eprintln!("agents-tracker: could not ack a passed-over review: {e:#}");
+            eprintln!("kbl-tracker: could not ack a passed-over review: {e:#}");
         }
     }
 
@@ -899,7 +899,7 @@ impl<B: Broker> Tracker<B> {
         };
         let Ok(ready) = ReadyRecord::decode(&record.payload) else {
             eprintln!(
-                "agents-tracker: {stream} offset {} is not a ready record; acked",
+                "kbl-tracker: {stream} offset {} is not a ready record; acked",
                 record.offset
             );
             ack(ops, record.offset);
@@ -990,7 +990,7 @@ impl<B: Broker> Tracker<B> {
                 }))
             }
             Err(Error::Refused { why }) => {
-                eprintln!("agents-tracker: {item} not claimable ({why}); skipped");
+                eprintln!("kbl-tracker: {item} not claimable ({why}); skipped");
                 core.live.remove(&item);
                 core.refused.insert(item.clone(), core.state.at);
                 if why == "over_budget" {
@@ -1306,7 +1306,7 @@ impl<B: Broker> Tracker<B> {
                     }
                 }
                 // The next sync tries again.
-                Err(e) => eprintln!("agents-tracker: could not publish {item} as ready: {e:#}"),
+                Err(e) => eprintln!("kbl-tracker: could not publish {item} as ready: {e:#}"),
             }
         }
     }
@@ -1420,7 +1420,7 @@ impl<B: Broker> Tracker<B> {
                 Err(e @ ReadError::Newer { .. }) => {
                     anyhow::bail!("{WORK_EVENTS} offset {offset}: {e}")
                 }
-                Err(e) => eprintln!("agents-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
+                Err(e) => eprintln!("kbl-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
         let mut texts = HashMap::new();
@@ -1491,7 +1491,7 @@ impl<B: Broker> Tracker<B> {
                 }
             }
             if let Err(e) = done {
-                eprintln!("agents-tracker: settling a delivery failed: {e:#}");
+                eprintln!("kbl-tracker: settling a delivery failed: {e:#}");
                 if first.is_ok() {
                     first = Err(e);
                 }
@@ -1526,7 +1526,7 @@ fn unavailable(core: &Core, margin: Duration) -> Option<String> {
     }
 }
 
-fn holds(item: &agents_core::work_fold::Item, agent: &AgentName) -> bool {
+fn holds(item: &kbl_core::work_fold::Item, agent: &AgentName) -> bool {
     item.hold
         .as_ref()
         .is_some_and(|h| h.by.as_str() == agent.as_str())
@@ -1576,8 +1576,8 @@ fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
         .and_then(|i| i.parent.as_ref())
         .and_then(|p| state.items.get(p));
     let pr_branch = match owner {
-        Some(root) => agents_core::work::pr_branch(&root.id),
-        None => agents_core::work::pr_branch(&delivery.item),
+        Some(root) => kbl_core::work::pr_branch(&root.id),
+        None => kbl_core::work::pr_branch(&delivery.item),
     };
     json!({
         "claimed": true,

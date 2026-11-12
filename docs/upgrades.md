@@ -14,7 +14,7 @@ Upgrade in this order. No work is lost at any step.
    agents keep the work they hold. Running more than one tracker, which
    removes the pause, is
    [#124](https://github.com/GetFelix/KBL/issues/124).
-2. **Ingest and `felix-mcp`.** Any order, any pace. They only call the
+2. **Ingest and `kbl-mcp`.** Any order, any pace. They only call the
    tracker's routes, and a newer tracker serves every older caller.
 3. **Dashboard.** Publish the new page. Open pages keep working until they
    reload.
@@ -128,7 +128,7 @@ is set. Reviewers check it.
 
 ## The tracker's routes
 
-Ingest and `felix-mcp` call the tracker over REST. The rule is
+Ingest and `kbl-mcp` call the tracker over REST. The rule is
 the same one Felix uses on its wire: a new request field is optional and its
 absence means the old behaviour, and a caller ignores reply fields it does not
 know. The tracker is upgraded first, so a caller never asks for a route the
@@ -147,12 +147,18 @@ tracker does not have yet.
   A log that holds a `format_raised` pins the raise as well.
 - **Old and new builds on one log.** `dev/check-upgrade.mjs` runs the previous
   tracker build and the new one in turn over the same `work.events`, forward,
-  back and forward again, with agents on the previous `felix-mcp`. Claims
+  back and forward again, with agents on the previous `kbl-mcp`. Claims
   survive each switch and each item is claimed and done once. Both builds
   write format 1 only, so this run does not show a reader stopping at a newer
   format; the unit tests of `core`, the tracker and the page do. "Previous" is
   the commit a change is based on until KBL has releases; then it is the
   last release.
+
+  A deliberate break during development, such as a rename of something both
+  builds must agree on, can be declared with a line starting `Upgrade-Break:`
+  in the message of any commit between the previous build and this one. The CI
+  step then prints that line and skips this check; it never skips for a
+  change that has not declared one.
 
 ## Not covered yet
 

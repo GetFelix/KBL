@@ -1,7 +1,7 @@
-use agents_core::codec::Codec;
-use agents_core::content::Content;
-use agents_core::names::{ItemId, Key};
-use agents_core::work::*;
+use kbl_core::codec::Codec;
+use kbl_core::content::Content;
+use kbl_core::names::{ItemId, Key};
+use kbl_core::work::*;
 
 fn item(s: &str) -> ItemId {
     ItemId::new(s).unwrap()
@@ -431,7 +431,7 @@ fn every_record() -> Vec<WorkRecord> {
     ]
 }
 
-/// To change the format on purpose, regenerate with `WRITE_WIRE=1 cargo test -p agents-core --test work_wire`.
+/// To change the format on purpose, regenerate with `WRITE_WIRE=1 cargo test -p kbl-core --test work_wire`.
 #[test]
 fn wire_form_matches_the_golden_file() {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/work_wire.jsonl");
