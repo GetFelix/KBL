@@ -21,8 +21,8 @@ use agents_core::codec::Codec;
 use agents_core::content::Content;
 use agents_core::names::{AgentName, ItemId, Key};
 use agents_core::work::{
-    Actor, LANES, REVIEW_LANES, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS, WorkLogged,
-    WorkRecord, ready_stream, valid_review_tier,
+    Actor, LANES, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS,
+    WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
 use agents_core::work_fold::{Seek, Stage, State};
 use felix_client::GroupRecord;
@@ -267,6 +267,9 @@ impl<B: Broker> Tracker<B> {
             stamp: AtomicU64::new(now_micros()),
             next_delivery: AtomicU64::new(1),
         }));
+        // Read once before taking the lease: a build that cannot read the log
+        // must not hold the lease and keep a build that can from starting.
+        tracker.read_state().await?;
         tracker.acquire_lease().await?;
         let (state, texts) = tracker.read_state().await?;
         {
@@ -1176,12 +1179,12 @@ impl<B: Broker> Tracker<B> {
         if let Some(why) = unavailable(core, self.lease_margin()) {
             return Err(Error::Unavailable(why));
         }
-        let logged = WorkLogged {
-            at_ms: now_ms(),
-            by,
-            actor,
-            record,
-        };
+        // A kind this build does not know decodes to `unknown`. Logging it
+        // would put a record on the log that says nothing.
+        if record == WorkRecord::Unknown {
+            return Err(Error::Invalid("unknown kind of record".into()));
+        }
+        let logged = WorkLogged::new(now_ms(), by, actor, record);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied. It can skip (generation starts), which the check below catches.
         let guess = core.state.at.map_or(0, |a| a + 1);
@@ -1263,8 +1266,13 @@ impl<B: Broker> Tracker<B> {
             .io(None, self.0.broker.read_from(WORK_EVENTS, 0))
             .await?
         {
-            match WorkLogged::decode(&payload) {
+            match read(&payload) {
                 Ok(rec) => entries.push((offset, rec)),
+                // Folding past a record of a newer format would give a state its
+                // writer did not mean, so the tracker does not serve at all.
+                Err(e @ ReadError::Newer { .. }) => {
+                    anyhow::bail!("{WORK_EVENTS} offset {offset}: {e}")
+                }
                 Err(e) => eprintln!("agents-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
             }
         }

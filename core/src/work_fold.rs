@@ -13,12 +13,12 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
-    MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF,
-    MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT,
-    MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks, PrPhase,
-    PrReview, PrSnapshot, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target, Then, Unclear,
-    WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
+    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FindingVerdict, MAX_ASK_OPTION_LEN,
+    MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS,
+    MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES,
+    MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite,
+    PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target,
+    Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
 #[cfg(test)]
@@ -399,6 +399,9 @@ pub enum Reject {
     SelfReview,
     /// The record is about a review and the item is not the right one.
     NotReview,
+    /// The record's format is above the log's, below what its content needs,
+    /// or above what this build reads; or a raise that does not go up.
+    Format,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -428,9 +431,37 @@ pub struct State {
     /// Keyed `source\0repo`: JSON object keys must be strings.
     source_stalls: BTreeMap<String, u16>,
     child_keys: BTreeSet<(Option<ItemId>, Option<Key>, Key)>,
+    /// The log's format when a `format_raised` record raised it. None is the first format.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<u32>,
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
     #[serde(skip)]
     probing: Option<Vec<ItemId>>,
+}
+
+/// Whether a build that reads formats up to `reads` takes `rec` on a log at
+/// format `log`. A raise answers with the new format. Everything else must
+/// be stamped at or below the log's format, so no record lands that a build
+/// still allowed on the log cannot read.
+fn format_gate(reads: u32, log: u32, rec: &WorkLogged) -> Result<Option<u32>, Reject> {
+    if rec.v > reads || rec.v < rec.record.format() {
+        return Err(Reject::Format);
+    }
+    if let WorkRecord::FormatRaised { to } = rec.record {
+        if rec.actor != Actor::Person {
+            return Err(Reject::ActorNotAllowed);
+        }
+        // Stamped with the format it raises to, so a reader that cannot read
+        // what follows stops at the raise itself.
+        if to <= log || rec.v != to {
+            return Err(Reject::Format);
+        }
+        return Ok(Some(to));
+    }
+    if rec.v > log {
+        return Err(Reject::Format);
+    }
+    Ok(None)
 }
 
 /// Folds every record. Offsets must ascend.
@@ -820,7 +851,17 @@ impl State {
         }
     }
 
+    /// The highest format a record on this log may have. A `format_raised`
+    /// record raises it.
+    pub fn format(&self) -> u32 {
+        self.format.unwrap_or(FORMAT_V1)
+    }
+
     fn step(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
+        if let Some(raised) = format_gate(FORMAT, self.format(), rec)? {
+            self.format = Some(raised);
+            return Ok(());
+        }
         match &rec.record {
             WorkRecord::Imported {
                 item,
@@ -1654,7 +1695,8 @@ impl State {
                     }
                 }
             }
-            WorkRecord::Unknown => {}
+            // Handled by the format gate.
+            WorkRecord::FormatRaised { .. } | WorkRecord::Unknown => {}
         }
         Ok(())
     }

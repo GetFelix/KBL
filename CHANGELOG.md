@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Records on `work.events` carry a format, and a running Kibble can be upgraded
+  and rolled back without losing work ([docs/upgrades.md](docs/upgrades.md)).
+  The tracker pauses for up to 15 seconds while the new one takes the writer
+  lease; claims survive it.
+  A record's `v` field is its format; a record without one is format 1, and
+  format 1 records are written without it, so every existing log reads, writes
+  and folds as before. A tracker that meets a record of a newer format than it
+  reads refuses to serve and names the offset, and the dashboard page stops
+  and asks for a reload; before, both skipped a record they could not decode.
+  A new `format_raised` record, which only a person may write, lets records of
+  a newer format onto the log once every reader is upgraded. Until then a
+  newer tracker writes nothing an older one cannot read. Builds from before
+  this change do not stop at a newer record, they misread it, so none may be
+  running when the format is first raised. A tracker that cannot read the log
+  no longer takes the writer lease, and the tracker refuses to log a record
+  of a kind it does not know. This build reads format 1 only. CI runs the previous tracker build and the new one in turn
+  over one log.
+
 - Review is claimable work. When an item's pull request opens, the tracker adds
   a first-pass and a final `review` item, each for a reviewer tier
   (`AGENTS_REVIEW_TIERS`, default `fast,deep`, one `work.review.rN` stream
