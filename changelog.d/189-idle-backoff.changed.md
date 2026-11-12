@@ -1,0 +1,1 @@
+The agent launcher backs off idle sessions: the wait before asking again doubles from `--idle-delay` up to `--idle-max` (300 s) and starts over once the session works, so an idle session stops spending model tokens every 15 seconds. A launcher killed with SIGKILL no longer leaves its 0600 config directory in tmp; the next one removes it.

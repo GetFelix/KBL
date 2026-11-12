@@ -8,7 +8,7 @@
 //
 // A session that exits without saying the queue is empty is started again.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
@@ -34,7 +34,9 @@ const USAGE = `usage: node dev/agents.mjs --run <run> (--tokens <file> | --agent
   --host-arg <arg>      an argument before the prompt; repeatable. Without --host, the Claude Code defaults are used
   --restart-delay <s>   wait before restarting a session that exited early (default: 5)
   --max-restarts <n>    give up on a session after n early exits in a row (default: 10)
-  --idle-delay <s>      wait before asking again after a session found nothing (default: 15)
+  --idle-delay <s>      wait before asking again after a session found nothing (default: 15); doubles
+                        for each empty answer in a row
+  --idle-max <s>        longest idle wait (default: 300)
 
 The tokens file is JSON: {"w1": {"felix": "...", "tracker": "..."}, ...}. Prefer it to --agent,
 which puts tokens in the process list.`;
@@ -54,6 +56,7 @@ function readOptions(argv) {
       "host-arg": { type: "string", multiple: true },
       "restart-delay": { type: "string", default: "5" },
       "idle-delay": { type: "string", default: "15" },
+      "idle-max": { type: "string", default: "300" },
       "max-restarts": { type: "string", default: "10" },
       help: { type: "boolean", short: "h" },
     },
@@ -96,6 +99,7 @@ function readOptions(argv) {
     hostArgs: values["host-arg"] ?? [],
     restartMs: Number(values["restart-delay"]) * 1000,
     idleMs: Number(values["idle-delay"]) * 1000,
+    idleMaxMs: Number(values["idle-max"]) * 1000,
     maxRestarts: Number(values["max-restarts"]),
   };
 }
@@ -103,6 +107,36 @@ function readOptions(argv) {
 // The server name the host sees; Claude Code names its tools mcp__kbl__<tool>.
 const SERVER = "kbl";
 const LONG_RUN_MS = 60_000;
+const ROOT_PREFIX = "kbl-agents-";
+
+// The wait after the n-th empty answer in a row (n from 0): doubles each time, up to the cap.
+// Each relaunch of a real host spends model tokens to learn nothing is ready.
+export function idleWait(n, baseMs, maxMs) {
+  return Math.min(baseMs * 2 ** Math.min(n, 30), Math.max(maxMs, baseMs));
+}
+
+// A launcher killed with SIGKILL leaves its 0600 config dir behind. Each root records its
+// owner's pid, so one whose owner is gone is stale and one still running is left alone.
+function removeStaleRoots() {
+  for (const name of readdirSync(tmpdir())) {
+    if (!name.startsWith(ROOT_PREFIX)) continue;
+    const dir = join(tmpdir(), name);
+    try {
+      const pid = Number(readFileSync(join(dir, "pid"), "utf8"));
+      if (Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 0);
+          continue;
+        } catch (e) {
+          if (e.code === "EPERM") continue;
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // Not ours, or unreadable: leave it.
+    }
+  }
+}
 
 // The settings kbl-mcp may be given from the launcher's environment. Tokens are never copied.
 const PASSED_ENV = [
@@ -140,7 +174,9 @@ function hostEnv() {
 
 export async function runAgents(argv, log = console.log) {
   const options = readOptions(argv);
-  const root = mkdtempSync(join(tmpdir(), "kbl-agents-"));
+  removeStaleRoots();
+  const root = mkdtempSync(join(tmpdir(), ROOT_PREFIX));
+  writeFileSync(join(root, "pid"), String(process.pid), { mode: 0o600 });
   let stopping = false;
   let failed = false;
   const hosts = new Set();
@@ -199,19 +235,24 @@ export async function runAgents(argv, log = console.log) {
     const config = join(dir, ".mcp.json");
     writeFileSync(config, JSON.stringify(mcpConfig(options, agent), null, 2), { mode: 0o600 });
     let early = 0;
+    let idle = 0;
     while (!stopping) {
       state.set(agent.name, "running");
       log(`starting ${agent.name}`);
       const startedAt = Date.now();
       const { code, empty } = await runHost(agent, dir, config);
       // A host that ran for a while did work; only quick failures in a row count.
-      if (Date.now() - startedAt > LONG_RUN_MS) early = 0;
+      if (Date.now() - startedAt > LONG_RUN_MS) {
+        early = 0;
+        idle = 0;
+      }
       if (stopping) break;
       if (empty) {
         early = 0;
         state.set(agent.name, "idle");
-        log(`${agent.name} found nothing ready`);
-        await sleep(options.idleMs);
+        const wait = idleWait(idle++, options.idleMs, options.idleMaxMs);
+        log(`${agent.name} found nothing ready; asking again in ${wait / 1000}s`);
+        await sleep(wait);
         if (stopping || !active(agent.name)) break;
         continue;
       }
@@ -220,6 +261,7 @@ export async function runAgents(argv, log = console.log) {
         failed = true;
         break;
       }
+      idle = 0;
       state.set(agent.name, "restarting");
       log(`restarting ${agent.name} (exited ${code} without saying the queue was empty)`);
       await sleep(options.restartMs);
