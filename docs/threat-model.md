@@ -257,6 +257,54 @@ grants test with a raw client).
 | `task_posted`, `task_claimed`, `task_extended`, `task_released`, `task_done`, `task_duplicate`, `task_dead`, `task_claim_lost` | An agent's `kbl-mcp` |
 | `board_put`, `board_conflict`, `lease_taken`, `lease_renewed`, `lease_released`, `lease_lost`, `message`, `refused` | An agent's `kbl-mcp` |
 
+## Teams
+
+Planned, not built ([#185](https://github.com/GetFelix/KBL/issues/185),
+[design.md](design.md#teams)). These rows are the checks each pull request in
+the plan has to add. They move into the tables above as the routes ship.
+
+### Actors with teams
+
+| Actor | Credential | Trust |
+|---|---|---|
+| Org admin | A person token with `org_admin` on `org.events`, and a Felix sign-in with `tenant.manage` for `kbl-tool` | Trusted for the whole org |
+| Team member | A person token, and a role in each team they belong to | Trusted to the role's limit, in their own teams only |
+| Team agent | An agent token bound to one team | Not trusted, as any agent |
+| Team ingest | An ingest token bound to one team | Trusted code carrying untrusted text, for the team's own sources |
+
+The new asset is `org.events`: who is in which team, every role and who
+granted it, token hashes, sources and grants. An attacker wants a role,
+a team or a token it was not given.
+
+### Org and team routes
+
+| Route | Fields the caller controls | What they could steer | Check |
+|---|---|---|---|
+| `GET /v1/me` | None | Learn other teams | Answers only the caller's own teams |
+| `POST /v1/org/teams` | `team`, `display_name` | Create a team, or adopt a namespace that already holds another team's data | `org_admin` only. A name already on `org.events` is refused. `kbl` is reserved. Names follow the key rule |
+| `POST /v1/teams/{team}/members` | `team`, `person`, `role`, `repos`, `subject` | Make itself or a friend admin; reach another team; take over a person by naming their OIDC subject | Admin of that team or `org_admin`. `org_admin` is granted only by an `org_admin`. `repos` must be the team's own sources. A `subject` already on another person is refused. The Felix assignment is made with the caller's own Felix credential, so Felix refuses one outside the caller's scope |
+| `DELETE /v1/teams/{team}/members/{person}` | `team`, `person` | Lock out the other admins | Team admin or `org_admin`. The last admin of a team cannot be removed; an `org_admin` can always add one back |
+| `POST /v1/teams/{team}/agents` | `team`, `agent` | Mint tokens without limit; take an existing agent's name and its holds | Triager or above in that team. A name in use in the team is refused, and so is a revoked one, so a new token never inherits holds. A cap on agents per team |
+| `DELETE /v1/teams/{team}/agents/{agent}` | `team`, `agent` | Revoke another team's agent; free work held by others | Whoever added it, or team admin, in that team only. Releases holds only of that agent |
+| `POST /v1/teams/{team}/sources` | `team`, `source`, `repo` | Pull another team's issues into its own queue | Team admin. One team per source: a source another team owns is refused |
+| `POST /v1/teams/{team}/ingest` | `team`, `name` | Write to another team's log | Team admin. The token is bound to the team, and ingest records only for roots from the team's sources |
+| `POST /v1/teams/{team}/grants` | `team`, `from_team`, `agents`, `repos`, `max_pending` | Give itself the right to file into another team | Only an admin of the receiving team (`{team}`) writes a grant. `repos` must be that team's sources |
+| `/v1/teams/{team}/work/...` | `team`, and the route's own fields | Act in a team it is not in | The person must be a member with the route's role, checked before the append. An agent or ingest token with another team's path gets `unknown_team`, the same answer as a team that does not exist |
+
+### Attacks across teams
+
+| Attack | Check |
+|---|---|
+| A team's agent or viewer reads or writes another team's streams with a raw client | Felix: every grant names the team's namespace, and no team principal has anything outside it. Tested with a raw client in `dev/check-teams.mjs` |
+| A tracker bug routes team A's record to team B's log | Each team's fold publishes only with a Felix token narrowed to its own namespace, so the broker refuses it |
+| A revoked agent keeps working | The token table is the fold of `org.events`; the next call after `agent_revoked` is refused, and its holds are released |
+| A removed member keeps reading the dashboard | Removing the Felix assignment revokes the person's broker tokens and ends open streams, within the control plane's sync interval |
+| A cross-team prerequisite floods another team's Triage | A grant from the receiving team is needed, the filing agent's pending-proposal caps apply, and the grant can carry its own cap |
+| A forged "prerequisite done" frees blocked work | `prerequisite_settled` is written only by the tracker, from the other team's fold. No route takes it from a person, agent or ingest |
+| `org.events` leaks | It holds SHA-256 hashes of 32-byte random tokens, not tokens. Only the tracker and org admins can read it |
+| One team's load or a broken log stops the others | A cap on calls in flight per team; a team with a lost lease, a newer format or failing Felix calls answers 503 alone. One process is still one crash for all (#124) |
+| A person in two teams acts in the wrong one | Person routes name the team; a person token in several teams gets `team_required` on a path without one |
+
 ## Attack classes found in review
 
 | Class | Example | Where it is stopped |

@@ -26,6 +26,7 @@ tracker in tests.
 - **Run:** the optional resources for an attempt (log, tasks, board, leases, spend). Not every attempt has one.
 - **Task:** one unit the scripted planner hands to the scripted workers inside a run.
 - **Tracker mode:** `kbl-mcp` without `KBL_RUN` talks to the tracker only, with no run.
+- **Team:** people and agents who share one queue, in one Felix namespace. See [Teams](#teams). The agents listed in a run are not a team.
 
 **In scope**
 
@@ -255,6 +256,298 @@ Delegation does not help, because a delegated token keeps the delegating
 user's subject (`auth/delegate.rs:8-11`), so every agent would be published as
 the same person (gap 2).
 
+## Teams
+
+Status: design, not built. Tracked in [#185](https://github.com/GetFelix/KBL/issues/185).
+
+Today one KBL instance serves one team: one tracker, one `work.events`, one
+Felix namespace and one token file. A second team needs a second deployment.
+This section describes how one instance serves several teams, each isolated
+from the others, and how a running instance gains a team without a restart.
+
+The rules that hold today still hold:
+
+- The tracker is the only writer of each team's `work.events`, ready streams
+  and item keys.
+- A check that refuses a record runs in the tracker before the append, so an
+  old log folds exactly as it did.
+- KBL runs no models.
+- Felix grants are the enforcement. A token for one team gets nothing from
+  another team's resources, even with a raw client.
+
+### The data model
+
+| Thing | What it is | Where it lives |
+|---|---|---|
+| Org | The whole instance. One org is one Felix tenant | `org.events` in the org namespace, `kbl` |
+| Team | A group of people and agents with its own queue. One team is one Felix namespace, and its name is the namespace's name | A `team_created` record on `org.events`. The team's work is in its namespace's `work.events` |
+| Person | Someone who signs in. A person is org-wide and can belong to several teams | `person_added` on `org.events`, with the hash of their tracker token and, optionally, their OIDC subject |
+| Member | A person in one team, with one role there | `role_granted` on `org.events`, naming the team, the person, the role and who granted it |
+| Role | What a member may do in the team: `viewer`, `reviewer`, `triager` or `admin` ([#120](https://github.com/GetFelix/KBL/issues/120)). `org_admin` is the one role outside any team | On `role_granted` |
+| Agent | A name and a token, bound to exactly one team ([#181](https://github.com/GetFelix/KBL/issues/181)) | `agent_added` on `org.events`, with the token's hash and the person who added it |
+| Source | An upstream repo or project (`github:GetFelix/felix`) owned by exactly one team | `source_added` on `org.events` |
+| Ingest worker | A token bound to one team, for that team's sources | `ingest_added` on `org.events` |
+| Grant | Lets one team's agents file prerequisites into another team's Triage | `grant_added` on `org.events`, written by an admin of the receiving team |
+
+Names follow the key rule (1 to 64 characters of `[A-Za-z0-9_-]`). A team's
+name must also be a valid Felix namespace name, and `kbl` is reserved for the
+org. Agent names are unique within a team, so `w1` can exist in two teams.
+People names are unique in the org.
+
+`org.events` is a log like `work.events`: the tracker folds it on start and is
+its only writer, with a lease of its own. The fold gives the tracker its
+tables (which teams exist, who is in which, which token is whose) so nothing
+about membership is kept anywhere else. Tokens are never on the log, only the
+SHA-256 of each one. The tracker compares the hash of the presented token in
+constant time, as it compares tokens today. A token is 32 random bytes, so its
+hash cannot be reversed. `org.events` has its own format, starting at 1, under
+the same rules as `work.events` ([upgrades.md](upgrades.md)).
+
+### Teams in Felix
+
+One org is one tenant. Teams are namespaces in it, and the org's own
+resources are in the namespace `kbl`.
+
+```mermaid
+flowchart TB
+    subgraph T["Tenant (the org)"]
+        subgraph K["namespace kbl"]
+            OE["org.events"]
+            OT["org.tracker<br/>org writer lease"]
+        end
+        subgraph A["namespace payments (a team)"]
+            AE["work.events"]
+            AR["work.ready.p0-p3<br/>work.review.r0-r3"]
+            AT["work.tracker<br/>lease, ingest state"]
+            AX["agents.*.run-id<br/>a run's resources"]
+        end
+        subgraph B["namespace web (a team)"]
+            BE["work.events"]
+            BR["work.ready.*, work.review.*"]
+            BT["work.tracker"]
+        end
+    end
+    TR["kbl-tracker<br/>one process"] -->|"token narrowed to kbl"| K
+    TR -->|"token narrowed to payments"| A
+    TR -->|"token narrowed to web"| B
+```
+
+**Why one tenant per org, not per team.** A Felix token belongs to one tenant
+and RBAC is stored per tenant, so nothing can be granted across tenants
+(security.md, "Multi-tenancy and isolation", in Felix). A person in two teams
+would need two sign-ins, and a cross-team prerequisite would have no grant to
+rest on. Namespaces are what Felix offers as the isolation unit for teams
+inside a tenant, and grants already stop at a namespace. Several orgs in one
+instance is out of scope: run one instance per org.
+
+**Resource names do not change.** Each team's namespace holds the same names a
+single-team instance uses today: `work.events`, `work.ready.p0` to `p3`,
+`work.review.r0` to `r3` with the `agents` group on each, and the
+`work.tracker` cache. A run's resources (`agents.log.<run>` and the rest) are
+created in the namespace of the team that starts the run. The org namespace
+holds `org.events` and the `org.tracker` cache.
+
+**Principals and RBAC.** Every RBAC object names its namespace
+(`stream:{tenant}/{namespace}/{stream}`), so a rule written for one team
+covers nothing in another. `kbl-tool team create` writes these rules:
+
+| Felix role | Policies | Assigned to |
+|---|---|---|
+| `kbl-tracker` | `ns.manage` on `namespace:{t}/{team}`, one policy per team, and on `namespace:{t}/kbl` | The tracker's principal |
+| `kbl-{team}-viewer` | `stream.subscribe` on `stream:{t}/{team}/work.events` | Each member with an OIDC subject, by `member add` |
+| Per run, as today | The run grants in [Grants](#grants), naming resources in the team's namespace | A run's agent principals and viewers, by `run create --team` |
+| `kbl-org-admin` | `tenant.manage` on `tenant:{t}` | The people who run `kbl-tool` for the org |
+
+The tracker signs in once and exchanges its ID token for one Felix token per
+namespace, narrowed with `resources: ["namespace:{t}/{team}"]` (token
+exchange, security.md in Felix). Each team's fold publishes only through its
+own team's token. A bug that routed team A's record to team B's connection
+would be refused by the broker, not just by the tracker's code.
+
+No team principal holds anything on `kbl`. Only the tracker and org admins
+read `org.events`.
+
+### One tracker, many teams
+
+One `kbl-tracker` process serves every team. Inside it each team is what a
+whole tracker is today: its own fold, ready lanes, delivery table, sweep,
+writer lease and Felix connections. The org has one more fold, of
+`org.events`.
+
+- **A lease per team, plus one for the org.** Each team's lease is the
+  `writer` key in its own `work.tracker` cache, the key a single-team tracker
+  holds today, so migration keeps it. The org lease is the `writer` key in
+  `org.tracker`. A lease per team keeps a stray second tracker out of every
+  team, and lets a later change spread teams across trackers
+  ([#124](https://github.com/GetFelix/KBL/issues/124)).
+- **Ingest per team.** An ingest token is bound to one team and writes only to
+  that team's log, on roots from sources that team owns. Its saved state stays
+  in the team's `work.tracker` cache. One `kbl-ingest` per team is the simple
+  layout. One process can also serve several teams with one config block and
+  token each.
+- **Failure stays in its team.** A team whose lease cannot be renewed, whose
+  log has a record of a newer format, or whose Felix calls fail answers 503 on
+  its own routes and is retried in the background. The other teams keep
+  serving. A team that loses its lease drops its fold and rebuilds it from the
+  log when it takes the lease again, as a restarted tracker does today. If the
+  org lease is lost, teams keep serving with the membership they had, and org
+  changes (new teams, members, agents, revocations) answer 503 until it is back.
+  The process exits only when it cannot hold the org lease for 60 seconds,
+  because then revocations would stop taking effect.
+- **What is still shared.** One process means one crash or one out-of-memory
+  takes every team down, and teams share its CPU. Each team gets a cap on
+  calls in flight so one busy team cannot starve the rest. Running several
+  trackers is #124.
+
+### Adding a team with no restart
+
+All three commands call the tracker's org routes with the caller's tracker
+token. The tracker checks the caller's role, appends to `org.events`, folds
+the record, and acts on it at once. `team create` also writes Felix resources
+and grants, using the caller's Felix sign-in (`KBL_ID_TOKEN`).
+
+| Command | Who may run it | What it does |
+|---|---|---|
+| `kbl-tool team create <team>` | Org admin | Creates the namespace and the viewer and runs roles in Felix, adds the namespace to the `kbl-tracker` role, then `POST /v1/org/teams`. The tracker writes `team_created`, creates the team's streams and group as it does on start today, takes the team's lease, and serves it |
+| `kbl-tool member add <person> --team <team> --role <role> [--subject <oidc sub>]` | The team's admins, and org admins | `POST /v1/teams/{team}/members`. A new person gets `person_added` and a tracker token, printed once. Then `role_granted`. With `--subject`, it also assigns the person the team's viewer role in Felix for the dashboard |
+| `kbl-tool agent add <name> --team <team>` | The team's triagers and admins | `POST /v1/teams/{team}/agents`. Writes `agent_added` and prints the token once. The token works on the next call |
+| `kbl-tool agent revoke <name> --team <team>` | The person who added it, and team admins | `agent_revoked`. Every hold of that agent in the team is released with the reason `revoked`, as a lapsed claim is |
+| `kbl-tool member remove <person> --team <team>` | Team admins, org admins | `role_revoked`, then removes the Felix assignment, which ends the person's open dashboard streams (revocation, security.md in Felix) |
+| `kbl-tool source add <source> --team <team>` | Team admins | `source_added`. Refused when another team owns the source |
+| `kbl-tool ingest add <name> --team <team>` | Team admins | `ingest_added`, prints the token once |
+
+Every step can be run again. The control plane answers that an existing
+namespace or resource already exists, and the tracker answers `created: false`
+for a team, member or source it already has. A `team create` that stopped
+part way is finished by running it again.
+
+Membership changes take effect on the next request, because the tracker's
+token table is the fold of `org.events`. There is no reload step.
+
+### Roles inside a team
+
+#120's four roles apply per team. A member has one role in a team; a person
+can be a viewer in one team and an admin in another. A role can also be
+narrowed to some of the team's repos, which is #120's "per repo" case. The
+check runs in the tracker on each person route, before the append, so a
+refused call writes nothing and the fold of `work.events` does not change.
+`org.events` records who granted each role.
+
+| Role | Adds to the role before it |
+|---|---|
+| `viewer` | The dashboard, read only |
+| `reviewer` | Answer questions (`/v1/work/questions/answer`) |
+| `triager` | Accept, edit and reject proposals; change tiers; close and unlink; add agents |
+| `admin` | Budgets, rules, raw records (`/v1/work/records`); members, sources, ingest tokens and grants for the team |
+| `org_admin` | Create teams, and act as admin in every team. Raise a log's format |
+
+### Cross-team prerequisites and grants
+
+Today's `grants` let an agent file a prerequisite into another repo. With
+teams, a repo can belong to another team, and so can the Triage the
+prerequisite lands in. Filing into another team's queue needs a grant from that
+team: `grant_added {to_team, from_team, agents?, repos?}`, written by an admin
+of the receiving team. Without one, the agent gets the same `unknown_item`
+answer it gets for a repo it cannot see.
+
+A prerequisite in one team is one record on one log. Across teams it is two
+logs, so the tracker writes two records in a fixed order:
+
+1. On the receiving team's log, the proposal, with `from: {team, item}` and an
+   id derived from the waiting item and the agent's post key. A retry finds the
+   proposal that is already there and writes nothing.
+2. On the waiting team's log, the `prerequisite`, naming the foreign item
+   `{team, item}`. The held item waits on it and the claim ends as `blocked`,
+   as it does today.
+
+If the tracker stops between the two, the receiving team has a proposal
+nobody waits on, which a person sees in Triage like any other, and the agent's
+call failed, so its retry links to that same proposal. When the foreign item
+closes, the tracker appends `prerequisite_settled {item, foreign, outcome}` to
+the waiting team's log. On start it checks every unsettled foreign link
+against the other team's fold and writes what is missing. The waiting team's
+fold never reads another log, so each team's log still replays on its own.
+
+The foreign link and `prerequisite_settled` are new on `work.events`, so they
+raise the format to 2. A log with no cross-team prerequisite stays format 1.
+
+A cross-team proposal counts toward the filing agent's pending-proposal caps,
+and the receiving team can set its own cap per granting team.
+
+`work_link` stays inside one tree, so it stays inside one team.
+
+### The dashboard
+
+The dashboard asks the tracker `GET /v1/me` for the teams the person belongs
+to and their role in each, and shows a team switcher. The switcher lists only
+those teams. The team is in the URL, so a link opens the same team.
+
+What the page can read is decided by Felix, not by the switcher: the person's
+Felix token carries the viewer role of their own teams only, so asking the
+gateway for another team's `work.events` is refused.
+
+felix-gateway serves one namespace per process (`GATEWAY_NAMESPACE`), so until
+it can take the namespace from the scope, each team needs a gateway of its
+own, and `team create` prints the settings for it. Starting that gateway is
+the one step of adding a team that is not live. This is gap 10 in [Risks](#risks-and-what-this-surfaces-in-felix).
+
+### Moving a single-team instance to teams
+
+The existing namespace becomes the first team. Its `work.events` is not
+touched, rewritten or copied.
+
+1. Upgrade the tracker to a build with teams. Without an org namespace it runs
+   exactly as before: the namespace in `KBL_NAMESPACE` is its only team, and
+   the token file is read as today.
+2. Run `kbl-tool org init` as an org admin. It creates the `kbl` namespace,
+   `org.events` and `org.tracker`, and gives the tracker's role `ns.manage` on
+   `kbl` and on the existing namespace.
+3. Restart the tracker with `KBL_ORG_NAMESPACE=kbl`. This is the only restart.
+   It finds `org.events` empty and appends `team_created` for the namespace in
+   `KBL_NAMESPACE`, marked `adopted`. It keeps that team's existing lease key,
+   streams and group.
+4. The token file keeps working. Its agents and ingest workers belong to the
+   first team, its `grants` are grants inside that team, and its people are
+   org admins, which is what every person can do today. Moving them onto
+   `org.events` with `member add` and `agent add`, then removing them from the
+   file, is up to the operator.
+
+Going back to the previous build works until a second team or a cross-team
+prerequisite exists: the old build reads the same `work.events` and ignores
+`org.events`.
+
+### Out of scope
+
+- Several orgs in one instance. Each org runs its own instance and tenant.
+- Moving an item or a tree from one team to another. A person closes it in one
+  team and files it in the other.
+- Signing people in to the tracker with OIDC. Person tokens stay tracker
+  tokens ([#121](https://github.com/GetFelix/KBL/issues/121) covers their
+  lifetime).
+- Quotas per team on Felix storage or subscriptions, which Felix does not
+  have yet.
+- Running several trackers at once (#124). The per-team leases make it
+  possible later; this design does not do it.
+- Metrics across teams. Each team's metrics come from its own log.
+
+### Pull requests
+
+In order. S is under 300 changed lines, M up to 800, L more.
+
+| # | Change | Size |
+|---|---|---|
+| 1 | `core`: the `org.events` records and fold, token hashes, the team and name rules, golden logs | M |
+| 2 | Tracker: one fold, lease and connection set per team behind a team table; the team comes from the token; `/v1/teams/{team}/work/...` beside today's paths; `GET /v1/me`; per-team failure isolation and in-flight cap. One team only, adopted from `KBL_NAMESPACE` | L |
+| 3 | `kbl-tool org init` and `team create`, the org routes, Felix provisioning and roles, `dev/check-teams.mjs` with two teams and a raw client refused across them | M |
+| 4 | Members and roles in a team (#120): `member add`, `remove`, `role_granted`, the role check on every person route | L |
+| 5 | Agents per team (#181): `agent add`, `list`, `revoke --team`; revoke releases holds | M |
+| 6 | Ingest per team: team-bound ingest tokens, `source add`, one owner per source, team blocks in the ingest config | M |
+| 7 | Cross-team prerequisites and grants: format 2, the foreign link, `prerequisite_settled`, the restart check | L |
+| 8 | Dashboard: `/v1/me`, the team switcher, team in the URL; a gateway per team until gap 10 is closed | M |
+| 9 | Runs per team: `run create --team` and the runs role; the grants test with a raw client per team ([#32](https://github.com/GetFelix/KBL/issues/32)) | S |
+
+Each PR updates [threat-model.md](threat-model.md) for what it adds.
+
 ## Build order
 
 The work tracker in [work-tracker.md](work-tracker.md) comes first: it is the
@@ -305,6 +598,8 @@ Checked against Felix at `97ef3827` (paths in Felix unless marked) and felix-gat
 8. **The Node and Python bindings lag the Rust client.** No `cache_put_if`, `cache_delete_if`, `group_extend`, per-poll visibility, `read`, `offset_for_time` or publisher identity (`crates/sdk/felix-typescript/src/client.rs:282-616`, `group_poll` at `:491-504`). `kbl-mcp` is Rust because of it. An agent written against the bindings directly could not take a lease.
 
 9. **felix-gateway drops the broker's append time.** Felix (at `d40db2e4`) stamps every record with its append time by the shard leader's clock: range-read records always carry it (`crates/protocol/felix-wire/src/client/message/fields.rs:192-193`), and subscribed events do when the client asks (`ClientConfig::timestamps`, `crates/sdk/felix-client/src/config.rs:122-126`; `Event::timestamp_micros`, `crates/sdk/felix-client/src/subscribe.rs:235-239`). felix-gateway's `event` and `records` carry only offset and payload (`crates/felix-gateway/src/protocol.rs:195-206, 325-331` in felix-gateway). Records written by agents on different machines then have only their writers' clocks, which skew, so a claim can be drawn before the post it claims. The dashboard orders by offset and clamps writer times to rise with it until the gateway passes the broker's time on.
+
+10. **felix-gateway serves one namespace.** `GATEWAY_NAMESPACE` is set once per gateway process (`docs/configuration.md` in felix-gateway 0.8.0), and a scope's `{scope}` value fills in resource names, not the namespace. A dashboard for several [teams](#teams) needs one gateway per team until a scope can name the namespace.
 
 **Decisions on the earlier open questions**
 
