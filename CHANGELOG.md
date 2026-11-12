@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added: `work_triage`, the tool an agent answers a triage item with
+  (`POST /v1/work/triage`). It writes the `triaged` proposal for the item under
+  triage: a tier with why, a duplicate, or `unclear`. A person still accepts
+  it. Before, an agent could claim a triage item and had no way to answer it.
 - Tracker hardening. An agent can no longer replace a context entry that
   ingest, the fold or a person wrote (`not_your_entry`), and a later holder
   can no longer update an entry a previous agent wrote. The tracker refuses it

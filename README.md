@@ -67,7 +67,9 @@ it under "Felix gaps", and each one has an issue labelled
 ## How it works
 
 Bugs come in as roots from GitHub, Azure DevOps or Jira, and from people. An ingest worker writes each upstream
-id once and posts one triage item and one augment item for it. An item becomes claimable when its last
+id once and posts one triage item and one augment item for it. The agent that claims the triage item answers
+it with `work_triage` (a tier and why, a duplicate, or what is unclear), and a person accepts or edits that
+proposal. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
 Each agent runs `felix-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the

@@ -15,7 +15,7 @@ use agents_core::work::{
     Actor, DoneWhen, Evidence, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
     MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO, MAX_VERDICT_WHY,
     MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity, Target, Then,
-    WorkKind, WorkRecord,
+    Unclear, WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -594,6 +594,67 @@ impl<B: Broker> Tracker<B> {
             }
         })
         .await
+    }
+
+    /// Records the answer of the triage item the agent holds: a proposal for
+    /// the item it triages. A person accepts or edits it; nothing is accepted here.
+    pub(crate) async fn triage(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        tier: u8,
+        why: String,
+        duplicate_of: Option<ItemId>,
+        unclear: Option<Unclear>,
+    ) -> Result<Value, Error> {
+        bounded("why", &why, MAX_FIELD)?;
+        self.begin().await?;
+        let reply = {
+            let mut core = self.0.core.lock().await;
+            let attempt = held(&core, agent, item)?;
+            let target = core
+                .state
+                .items
+                .get(item)
+                .filter(|i| i.work == WorkKind::Triage)
+                .and_then(|i| i.parent.clone())
+                .ok_or_else(|| Error::Invalid(format!("{item} is not a triage item")))?;
+            if let Some(d) = &duplicate_of
+                && (d == &target || !core.state.items.contains_key(d))
+            {
+                return Err(Error::Invalid(format!(
+                    "duplicate_of names {d}, which is not another item"
+                )));
+            }
+            // The same answer again is a retry, not a new record.
+            let standing = core
+                .state
+                .items
+                .get(&target)
+                .and_then(|i| i.proposal.as_ref());
+            if let Some(p) = standing
+                && (p.tier, &p.why, &p.duplicate_of, p.unclear)
+                    == (tier, &why, &duplicate_of, unclear)
+            {
+                return Ok(
+                    json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),
+                );
+            }
+            let record = WorkRecord::Triaged {
+                item: target.clone(),
+                tier,
+                why,
+                duplicate_of,
+                unclear,
+            };
+            let offset = self
+                .agent_append(&mut core, agent, item, "triage", record)
+                .await?;
+            json!({ "item": item, "attempt": attempt, "triaged": target, "offset": offset })
+        };
+        // An unclear answer takes its item out of Ready.
+        self.sync_ready().await;
+        Ok(reply)
     }
 
     /// Records a command the agent ran: what it was, its exit code, its output.

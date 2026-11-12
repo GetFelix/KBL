@@ -11,7 +11,7 @@ use super::super::tests::{
     Fake, agent, claim, claimed_id, item, key, seed, settings, start, start_with,
 };
 use super::{Decide, Post, Prereq};
-use crate::tracker::{Error, Reply};
+use crate::tracker::{Error, Reply, Tracker};
 
 fn text(s: &str) -> Content {
     Content::Text(s.into())
@@ -1552,4 +1552,151 @@ async fn options_are_bounded_when_asking() {
         "invalid"
     );
     assert_eq!(fake.log().len(), before);
+}
+
+/// A root with the triage item ingest posts for it, claimed by `who`.
+async fn held_triage(t: &Tracker<Fake>, who: &str) {
+    seed(t, "a1", 2).await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::Proposed {
+            item: item("a1-t"),
+            parent: Some(item("a1")),
+            key: key("triage"),
+            work: WorkKind::Triage,
+            title: "Triage: fix a1".into(),
+            review: None,
+        },
+    )
+    .await
+    .unwrap();
+    claim_item(t, who, &item("a1-t")).await;
+}
+
+#[tokio::test]
+async fn an_agent_answers_the_triage_item_it_holds() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    seed(&t, "a2", 2).await;
+    let reply = t
+        .triage(
+            &agent("w1"),
+            &item("a1-t"),
+            1,
+            "blocks the release".into(),
+            Some(item("a2")),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply["triaged"], "a1");
+    let last = fake.log().pop().unwrap();
+    assert_eq!(last.actor, Actor::Agent);
+    assert_eq!(
+        last.record,
+        WorkRecord::Triaged {
+            item: item("a1"),
+            tier: 1,
+            why: "blocks the release".into(),
+            duplicate_of: Some(item("a2")),
+            unclear: None,
+        }
+    );
+    // A retry of the same answer writes nothing.
+    let again = t
+        .triage(
+            &agent("w1"),
+            &item("a1-t"),
+            1,
+            "blocks the release".into(),
+            Some(item("a2")),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(again, reply);
+    assert_eq!(fake.kinds().iter().filter(|k| *k == "triaged").count(), 1);
+    // It is a proposal: the tier a person accepted stands.
+    {
+        let core = t.0.core.lock().await;
+        let root = &core.state.items[&item("a1")];
+        assert_eq!(root.tier, Some(2));
+        assert_eq!(root.proposal.as_ref().map(|p| p.tier), Some(1));
+    }
+    // The triage item can now be finished.
+    t.complete(&agent("w1"), &item("a1-t"), 0).await.unwrap();
+    assert_eq!(
+        t.0.core.lock().await.state.stage(&item("a1-t")),
+        Some(Stage::Done)
+    );
+}
+
+#[tokio::test]
+async fn an_unclear_triage_from_an_agent_goes_to_a_person() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    t.triage(
+        &agent("w1"),
+        &item("a1-t"),
+        2,
+        "which repo?".into(),
+        None,
+        Some(Unclear::Repo),
+    )
+    .await
+    .unwrap();
+    let core = t.0.core.lock().await;
+    assert_eq!(core.state.needs_you(&item("a1")), Some(NeedsYou::Unclear));
+}
+
+#[tokio::test]
+async fn triage_is_refused_without_the_triage_item_or_with_a_bad_answer() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    held_triage(&t, "w1").await;
+    let records = fake.log().len();
+    let triage =
+        |who: &'static str, id: &'static str, tier: u8, why: String, dup: Option<&'static str>| {
+            let t = t.clone();
+            async move {
+                t.triage(&agent(who), &item(id), tier, why, dup.map(item), None)
+                    .await
+            }
+        };
+    // Another agent, and the holder naming the root instead of the triage item.
+    assert_eq!(
+        why(triage("w2", "a1-t", 1, "w".into(), None).await),
+        "not_held"
+    );
+    assert_eq!(
+        why(triage("w1", "a1", 1, "w".into(), None).await),
+        "not_held"
+    );
+    // A duplicate that is no item, or the item itself.
+    assert_eq!(
+        why(triage("w1", "a1-t", 1, "w".into(), Some("nope")).await),
+        "invalid"
+    );
+    assert_eq!(
+        why(triage("w1", "a1-t", 1, "w".into(), Some("a1")).await),
+        "invalid"
+    );
+    assert_eq!(
+        why(triage("w1", "a1-t", 1, "x".repeat(5000), None).await),
+        "invalid"
+    );
+    assert_eq!(fake.log().len(), records);
+    assert_eq!(
+        why(triage("w1", "a1-t", 9, "w".into(), None).await),
+        "bad_tier"
+    );
+    // Holding work of another kind does not let an agent triage.
+    seed(&t, "b1", 2).await;
+    let other = claimed_id(&claim(&t, "w2").await).unwrap();
+    let got = t
+        .triage(&agent("w2"), &item(&other), 1, "w".into(), None, None)
+        .await;
+    assert_eq!(why(got), "invalid");
 }
