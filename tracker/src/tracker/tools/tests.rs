@@ -1873,9 +1873,17 @@ async fn proposals_waiting_for_a_person_are_capped_per_root_and_a_decision_frees
 #[tokio::test]
 async fn a_triage_answer_can_carry_dependencies_and_a_split() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let grants = [("w1".to_owned(), vec!["GetFelix/felix".to_owned()])].into();
+    let t = start_with(
+        &fake,
+        crate::tracker::Settings {
+            grants,
+            ..settings()
+        },
+    )
+    .await;
     held_triage(&t, "w1").await;
-    seed(&t, "a2", 2).await;
+    seed_in_felix(&t, "a2").await;
     let w1 = agent("w1");
     let mut answer = ans(1, "needs a2 first".into(), None, None);
     answer.depends_on = vec![item("a2")];
@@ -1913,9 +1921,17 @@ async fn a_triage_answer_can_carry_dependencies_and_a_split() {
 #[tokio::test]
 async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let grants = [("w1".to_owned(), vec!["GetFelix/felix".to_owned()])].into();
+    let t = start_with(
+        &fake,
+        crate::tracker::Settings {
+            grants,
+            ..settings()
+        },
+    )
+    .await;
     held_triage(&t, "w1").await;
-    seed(&t, "a2", 2).await;
+    seed_in_felix(&t, "a2").await;
     let before = fake.log().len();
     let try_with = |depends_on: Vec<&'static str>, split: Vec<String>| {
         let t = t.clone();
