@@ -652,7 +652,7 @@ answer sent twice by the same agent is written once. The agent then completes th
 }
 ```
 
-`depends_on` and `split` are advice. They are shown with the proposal, and the
+`depends_on` and `split` are advice. They are recorded with the proposal, and the
 tracker links nothing and creates no item from them. A person who agrees links
 the dependencies (`linked`) and posts the pieces. Each list holds at most 8
 entries, a dependency must be another item the agent can see (the same rule as

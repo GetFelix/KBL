@@ -15,9 +15,11 @@
 import {
   agent as spawnAgent,
   check,
+  createRun,
   felixToken,
   giveUpAfter,
   killAll,
+  newRunId,
   personCall,
   personRecord,
   startTracker,
@@ -25,22 +27,29 @@ import {
   workLog,
 } from "./lib/stack.mjs";
 
-const RUN = "tracker-triage-check";
-const tokens = { agents: { "tok-w1": "w1" }, people: { "tok-gab": "gab" } };
+const RUN = newRunId("trackertriage");
+// w1 may see items of the repo the roots belong to, so one root can depend on another.
+const tokens = {
+  agents: { "tok-w1": "w1" },
+  people: { "tok-gab": "gab" },
+  grants: { w1: ["check/repo"] },
+};
 const timing = { KBL_CLAIM_VISIBILITY_MS: "8000", KBL_EXTEND_EVERY_MS: "1000" };
 
 giveUpAfter(240, "the triage check");
 
 // What the scripted agent answers, by the word its root's title starts with.
 const SCRIPT = {
-  plain: { tier: 1, why: "a crash on a common path" },
-  needs: { tier: 2, why: "waits on the plain fix", depends_on: ["plain"] },
-  big: { tier: 1, why: "two changes in one", split: ["fix the reader", "fix the writer"] },
-  vague: { tier: 2, why: "no repro in the issue", unclear: "acceptance" },
+  "tri-plain": { tier: 1, why: "a crash on a common path" },
+  "tri-needs": { tier: 2, why: "waits on the plain fix", depends_on: ["tri-plain"] },
+  "tri-big": { tier: 1, why: "two changes in one", split: ["fix the reader", "fix the writer"] },
+  "tri-vague": { tier: 2, why: "no repro in the issue", unclear: "acceptance" },
 };
 const ADMITTED_TIER = 3;
+const ids = Object.keys(SCRIPT);
 
 const felix = await felixToken();
+createRun(RUN, "triage check");
 const agent = (name) =>
   spawnAgent(felix, RUN, name, {
     ...timing,
@@ -50,7 +59,7 @@ const agent = (name) =>
 
 // A root as ingest admits it: accepted at the rule's tier, with a triage item.
 async function admit(id) {
-  await personRecord("tok-gab", { kind: "imported", item: id, source: "check", upstream_id: id, title: `${id} issue` });
+  await personRecord("tok-gab", { kind: "imported", item: id, source: "check", upstream_id: `check/repo#${ids.indexOf(id) + 1}`, title: `${id} issue` });
   await personRecord("tok-gab", { kind: "accepted", item: id, tier: ADMITTED_TIER });
   await personRecord("tok-gab", {
     kind: "proposed",
@@ -86,7 +95,15 @@ try {
     const claim = await w1.tool("work_next", { wait_seconds: 3 });
     if (!claim.claimed) continue;
     const context = await w1.tool("work_context", {});
-    check(context.work === "triage", `${context.item} is triage work, claimed before any root`);
+    if (context.work !== "triage") {
+      // Work an earlier check left on the shared log is not this agent's job.
+      await w1.tool("work_release", { item: context.item });
+      continue;
+    }
+    if (!(context.parent in SCRIPT)) {
+      await w1.tool("work_release", { item: context.item });
+      continue;
+    }
     const root = context.parent;
 
     if (answered.size === 0) {
@@ -115,31 +132,31 @@ try {
     answered.add(root);
   }
 
-  const triaged = recordsOf("triaged");
+  const triaged = recordsOf("triaged").filter((r) => r.item in SCRIPT);
   check(triaged.length === 4 && triaged.every((r) => r.by === "w1" && r.actor === "agent"), "four answers, each the agent's");
   const of = (id) => triaged.find((r) => r.item === id);
-  check(of("plain").tier === 1 && of("plain").depends_on === undefined, "a plain answer carries a tier and nothing else");
-  check(of("needs").depends_on?.join() === "plain", "the dependency is on the record");
-  check(of("big").split?.length === 2, "the split titles are on the record");
-  check(of("vague").unclear === "acceptance", "an unclear answer says what is unclear");
+  check(of("tri-plain").tier === 1 && of("tri-plain").depends_on === undefined, "a plain answer carries a tier and nothing else");
+  check(of("tri-needs").depends_on?.join() === "plain", "the dependency is on the record");
+  check(of("tri-big").split?.length === 2, "the split titles are on the record");
+  check(of("tri-vague").unclear === "acceptance", "an unclear answer says what is unclear");
 
   // Answers are proposals: tiers stand, nothing is linked, no child appears.
   for (const id of Object.keys(SCRIPT)) {
     const accepted = recordsOf("accepted").filter((r) => r.item === id);
     check(accepted.length === 1 && accepted[0].tier === ADMITTED_TIER, `${id} keeps the tier it was admitted at`);
   }
-  check(recordsOf("linked").length === 0, "no dependency was linked by the answer");
-  check(!workLog().some((r) => r.kind === "proposed" && r.title === "fix the reader"), "the split created no item");
+  check(!recordsOf("linked").some((r) => r.item in SCRIPT), "no dependency was linked by the answer");
+  check(!workLog().some((r) => r.kind === "proposed" && r.title === "fix the reader" && r.parent in SCRIPT), "the split created no item");
 
   // A person acts on two of them.
-  await personCall("tok-gab", "/v1/work/tier", { item: "plain", tier: of("plain").tier });
-  await personRecord("tok-gab", { kind: "linked", item: "needs", to: "plain" });
-  check(recordsOf("tier_changed").some((r) => r.item === "plain" && r.tier === 1), "a person adopted the proposed tier");
-  check(recordsOf("linked").length === 1, "a person linked the dependency");
+  await personCall("tok-gab", "/v1/work/tier", { item: "tri-plain", tier: of("tri-plain").tier });
+  await personRecord("tok-gab", { kind: "linked", item: "tri-needs", to: "tri-plain" });
+  check(recordsOf("tier_changed").some((r) => r.item === "tri-plain" && r.tier === 1), "a person adopted the proposed tier");
+  check(recordsOf("linked").filter((r) => r.item in SCRIPT).length === 1, "a person linked the dependency");
   const asAgent = await fetch(`${TRACKER_URL}/v1/work/tier`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: "Bearer tok-w1" },
-    body: JSON.stringify({ item: "big", tier: 1 }),
+    body: JSON.stringify({ item: "tri-big", tier: 1 }),
   });
   check(asAgent.status === 403, "an agent cannot change a tier");
 } finally {
