@@ -52,7 +52,7 @@ const MAX_POSTS: u32 = 24;
 const MAX_PENDING_PER_AGENT: usize = 16;
 /// Proposals waiting for a person that came from work under one root.
 const MAX_PENDING_PER_ROOT: usize = 8;
-/// Triage answers one attempt may log. A repeat of the same answer is not one of them.
+/// Different triage answers one attempt may log. A repeat of the answer on record is not counted.
 const MAX_TRIAGES: u32 = 4;
 /// Distinct agents remembered as having worked an item, for the self-review rule.
 const MAX_WORKERS: usize = 32;
@@ -301,7 +301,8 @@ pub struct Item {
     pub children: Vec<ItemId>,
     pub proposed_by_agent: bool,
     /// The agent and root an agent's proposal came from, for the pending caps.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Left out of the state's wire form; a replay of the log sets it again.
+    #[serde(skip)]
     pub proposed_from: Option<(Key, ItemId)>,
     /// The upstream issue changed after the last triage answer.
     pub changed_upstream: bool,
@@ -943,11 +944,9 @@ impl State {
                             && p.duplicate_of == *duplicate_of
                             && p.unclear == *unclear
                     });
-                    let path = self.path_mut(&triage, attempt)?;
-                    if path.triages >= MAX_TRIAGES && !same {
-                        return Err(Reject::LimitReached);
+                    if !same && let Ok(path) = self.path_mut(&triage, attempt) {
+                        path.triages = path.triages.saturating_add(1);
                     }
-                    path.triages += 1;
                 }
                 self.item_mut(item)?.proposal = Some(Proposal {
                     tier: *tier,
@@ -1980,6 +1979,7 @@ impl State {
                 let target = self.item(&root)?.target.clone();
                 let mut p = Self::blank(&child("defer"), WorkKind::Fix, &shorten("Deferred: "));
                 p.proposed_by_agent = true;
+                p.proposed_from = Some((rec.by.clone(), root.clone()));
                 p.target = target;
                 p.finding = Some(offset);
                 p.context.insert(finding_entry(), offset);
@@ -2055,7 +2055,6 @@ impl State {
                     return Err(Reject::LimitReached);
                 }
                 let root = self.item(&held)?.root.clone();
-                self.check_pending_proposals(&rec.by, &root)?;
                 self.path_mut(&held, attempt)?.posts += 1;
                 item.proposed_by_agent = true;
                 item.proposed_from = Some((rec.by.clone(), root));
@@ -2123,9 +2122,11 @@ impl State {
         Ok(())
     }
 
-    /// Agent proposals still waiting for a person are capped per agent and per
-    /// root, so an agent that keeps claiming cannot keep filling Triage.
-    fn check_pending_proposals(&self, by: &Key, root: &ItemId) -> Result<(), Reject> {
+    /// Whether `by` already has as many proposals waiting for a person as it
+    /// may, in all or from `root`. The tracker checks this before it appends a
+    /// proposal; the fold only records where each came from, so an old log
+    /// folds the same.
+    pub fn proposals_full(&self, by: &Key, root: &ItemId) -> bool {
         let (mut mine, mut under_root) = (0, 0);
         for from in self
             .items
@@ -2136,10 +2137,16 @@ impl State {
             mine += usize::from(from.0 == *by);
             under_root += usize::from(from.1 == *root);
         }
-        if mine >= MAX_PENDING_PER_AGENT || under_root >= MAX_PENDING_PER_ROOT {
-            return Err(Reject::LimitReached);
-        }
-        Ok(())
+        mine >= MAX_PENDING_PER_AGENT || under_root >= MAX_PENDING_PER_ROOT
+    }
+
+    /// Whether the attempt on a triage item has logged as many different
+    /// answers as it may.
+    pub fn triage_full(&self, triage: &ItemId, attempt: u32) -> bool {
+        self.items
+            .get(triage)
+            .and_then(|i| i.paths.iter().find(|p| p.attempt == attempt))
+            .is_some_and(|p| p.triages >= MAX_TRIAGES)
     }
 
     /// The held item waits on a prerequisite, possibly one this record creates.
@@ -2171,8 +2178,6 @@ impl State {
                 if self.items.contains_key(prerequisite) || self.child_keys.contains(&scope) {
                     return Err(Reject::Duplicate);
                 }
-                let root = self.item(item)?.root.clone();
-                self.check_pending_proposals(&rec.by, &root)?;
             }
             None => {
                 if self.item(prerequisite)?.closed.is_some() {

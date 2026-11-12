@@ -1827,3 +1827,45 @@ async fn a_triage_holder_that_varies_its_answer_is_stopped_and_refused_once() {
     assert_eq!(fake.log().len(), before + 1);
     assert_eq!(fake.kinds().iter().filter(|k| *k == "triaged").count(), 4);
 }
+
+#[tokio::test]
+async fn proposals_waiting_for_a_person_are_capped_per_root_and_a_decision_frees_a_slot() {
+    let (fake, t) = granted().await;
+    let mut first = String::new();
+    for n in 0..8 {
+        let r = post(&t, "w1", "a1", &format!("p{n}"), "proposal")
+            .await
+            .unwrap();
+        if n == 0 {
+            first = r["item"].as_str().unwrap().to_owned();
+        }
+    }
+    let before = fake.log().len();
+    assert_eq!(
+        why(post(&t, "w1", "a1", "over", "proposal").await),
+        "limit_reached"
+    );
+    assert_eq!(
+        why(t
+            .prerequisite(
+                &agent("w1"),
+                &item("a1"),
+                key("cas"),
+                gateway(),
+                DoneWhen::Merged,
+                0
+            )
+            .await),
+        "limit_reached"
+    );
+    // One refusal on the log for the attempt, and the same key still answers.
+    assert_eq!(fake.log().len(), before + 1);
+    assert_eq!(
+        post(&t, "w1", "a1", "p0", "proposal").await.unwrap()["created"],
+        false
+    );
+    t.person_record(key("gab"), WorkRecord::Rejected { item: item(&first) })
+        .await
+        .unwrap();
+    post(&t, "w1", "a1", "again", "proposal").await.unwrap();
+}

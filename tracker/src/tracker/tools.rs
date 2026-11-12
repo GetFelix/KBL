@@ -133,6 +133,9 @@ impl<B: Broker> Tracker<B> {
                 }
                 return Ok(json!({ "item": id, "created": false, "work": work }));
             }
+            if work == WorkKind::Fix && parent_of.is_none() {
+                self.proposal_room(&mut core, agent, parent, "post").await?;
+            }
             let record = WorkRecord::Proposed {
                 item: id.clone(),
                 parent: parent_of,
@@ -193,7 +196,7 @@ impl<B: Broker> Tracker<B> {
         };
         self.begin().await?;
         {
-            let core = self.0.core.lock().await;
+            let mut core = self.0.core.lock().await;
             if let Some(n) = &new {
                 // A retry after the claim ended answers with what the first call made.
                 if let Some(old) = core.state.items.get(&prerequisite) {
@@ -230,6 +233,10 @@ impl<B: Broker> Tracker<B> {
                     }
                     .into(),
                 });
+            }
+            if new.is_some() {
+                self.proposal_room(&mut core, agent, item, "prerequisite")
+                    .await?;
             }
         }
         let created = new.is_some();
@@ -551,6 +558,12 @@ impl<B: Broker> Tracker<B> {
         if f.line == 0 {
             return Err(Error::Invalid("a finding names a line, from 1".into()));
         }
+        if f.verdict == FindingVerdict::Defer {
+            let mut core = self.0.core.lock().await;
+            held(&core, agent, item)?;
+            self.proposal_room(&mut core, agent, item, "finding")
+                .await?;
+        }
         let reply = self
             .held_write(agent, item, "finding", |attempt| WorkRecord::Finding {
                 item: item.clone(),
@@ -634,6 +647,12 @@ impl<B: Broker> Tracker<B> {
                 return Ok(
                     json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),
                 );
+            }
+            if core.state.triage_full(item, attempt) {
+                let why = "limit_reached".to_owned();
+                self.note_refusal(&mut core, agent, item, "triage", &why)
+                    .await;
+                return Err(Error::Refused { why });
             }
             let record = WorkRecord::Triaged {
                 item: target.clone(),
@@ -812,6 +831,26 @@ impl<B: Broker> Tracker<B> {
             self.note_refusal(core, agent, item, op, why).await;
         }
         result
+    }
+
+    /// Refuses a proposal when the agent has as many waiting for a person as
+    /// it may, from `held`'s root or in all.
+    async fn proposal_room(
+        &self,
+        core: &mut Core,
+        agent: &AgentName,
+        held: &ItemId,
+        op: &str,
+    ) -> Result<(), Error> {
+        let Some(root) = core.state.items.get(held).map(|i| i.root.clone()) else {
+            return Ok(());
+        };
+        if !core.state.proposals_full(&agent_key(agent), &root) {
+            return Ok(());
+        }
+        let why = "limit_reached".to_owned();
+        self.note_refusal(core, agent, held, op, &why).await;
+        Err(Error::Refused { why })
     }
 
     /// Logs the refusals the stream should show: a root out of budget, and the
