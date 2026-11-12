@@ -1,0 +1,1 @@
+The warn colour is now a yellow that stays apart from the KBL amber accent: `#786700` in the light theme (5.6:1 on white) and `#FFD04D` in the dark theme. Screenshots that show warn states are re-shot.
