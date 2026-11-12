@@ -851,7 +851,6 @@ impl<B: Broker> Tracker<B> {
     }
 }
 
-/// The attempt `agent` holds `item` on, from the log.
 /// Whether `other` is in `item`'s tree or in a repo the agent may reach.
 fn visible(core: &Core, allowed: &BTreeSet<&str>, item: &ItemId, other: &ItemId) -> bool {
     core.state.items.get(other).is_some_and(|p| {
@@ -865,6 +864,7 @@ fn visible(core: &Core, allowed: &BTreeSet<&str>, item: &ItemId, other: &ItemId)
     })
 }
 
+/// The attempt `agent` holds `item` on, from the log.
 fn held(core: &Core, agent: &AgentName, item: &ItemId) -> Result<u32, Error> {
     core.state
         .items
