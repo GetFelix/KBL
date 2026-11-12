@@ -312,7 +312,8 @@ pub struct Item {
     pub first_claim_ms: Option<u64>,
     pub cost_micros: u64,
     pub context: BTreeMap<Key, u64>,
-    /// The agent that last wrote each entry an agent wrote. Any other entry is not an agent's to replace.
+    /// The agent that last wrote each entry an agent wrote. The fold accepts any replacement
+    /// (old logs hold some); the tracker reads this to refuse one before it is logged.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub context_agents: BTreeMap<Key, Key>,
     pub paths: Vec<Path>,
@@ -402,8 +403,6 @@ pub enum Reject {
     SelfReview,
     /// The record is about a review and the item is not the right one.
     NotReview,
-    /// An agent replaced a context entry that someone else wrote.
-    NotYourEntry,
     /// The record's format is above the log's, below what its content needs,
     /// or above what this build reads; or a raise that does not go up.
     Format,
@@ -1038,13 +1037,6 @@ impl State {
                     let (worker, attempt) = self
                         .agent_scope(item, &rec.by, false)
                         .ok_or(Reject::NotHolder)?;
-                    // Upstream text, fold-set entries and other people's notes stay as written.
-                    let it = self.item(item)?;
-                    if it.context.contains_key(entry)
-                        && it.context_agents.get(entry) != Some(&rec.by)
-                    {
-                        return Err(Reject::NotYourEntry);
-                    }
                     let p = self.path_mut(&worker, attempt)?;
                     if p.context_writes >= MAX_CONTEXT {
                         return Err(Reject::LimitReached);

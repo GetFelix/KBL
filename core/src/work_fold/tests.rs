@@ -2809,48 +2809,25 @@ fn chained_answers_stop_at_the_depth_cap() {
 
 mod review;
 
+/// The tracker refuses such a replacement before it is logged, but a log that holds
+/// one must keep folding as it always has.
 #[test]
-fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
+fn a_logged_replacement_of_another_writers_context_entry_still_folds() {
     let mut l = held_root();
     let ctx = |e: &str, t: &str| WorkRecord::Context {
         item: id("r1"),
         entry: key(e),
         text: text(t),
     };
-    // Ingest wrote `issue`; a person wrote `note`.
     l.tracker(ctx("issue", "upstream text"));
     l.person(ctx("note", "from a person"));
-    let issue = l.0.len() as u64 - 2;
-    l.agent("w1", ctx("issue", "forged"));
-    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
-    l.agent("w1", ctx("note", "forged"));
-    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
-    // Its own entry can be replaced, by itself only.
-    l.agent("w1", ctx("mine", "one"));
-    l.agent("w1", ctx("mine", "two"));
-    let two = l.0.len() as u64 - 1;
+    l.agent("w1", ctx("issue", "replaced"));
+    let replaced = l.0.len() as u64 - 1;
+    l.agent("w1", ctx("note", "replaced"));
     let s = fold(&l.0);
-    assert_eq!(s.rejections.len(), 2);
-    assert_eq!(s.items[&id("r1")].context[&key("issue")], issue);
-    assert_eq!(s.items[&id("r1")].context[&key("mine")], two);
-    // A person takes the entry over; the agent cannot take it back.
-    l.person(ctx("mine", "person"));
-    l.agent("w1", ctx("mine", "back"));
-    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
-    // Another agent that holds the item later cannot update w1's entry either.
-    l.agent("w1", ctx("w1-note", "x"));
-    l.agent(
-        "w1",
-        WorkRecord::Released {
-            item: id("r1"),
-            attempt: 1,
-            reason: None,
-            cost_micros: 0,
-        },
-    );
-    l.agent("w2", claimed("r1", 1));
-    l.agent("w2", ctx("w1-note", "taken"));
-    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.items[&id("r1")].context[&key("issue")], replaced);
+    assert_eq!(s.items[&id("r1")].context[&key("note")], replaced + 1);
 }
 
 #[test]

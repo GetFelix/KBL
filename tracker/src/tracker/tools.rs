@@ -331,6 +331,17 @@ impl<B: Broker> Tracker<B> {
         check_content("text", &text)?;
         self.begin().await?;
         let mut core = self.0.core.lock().await;
+        // Refused here, not in the fold: a log that holds such a replacement must
+        // keep folding as it always has. Upstream text, the fold's own entries and
+        // other people's notes stay as written.
+        if let Some(it) = core.state.items.get(item)
+            && it.context.contains_key(&entry)
+            && it.context_agents.get(&entry) != Some(&agent_key(agent))
+        {
+            return Err(Error::Refused {
+                why: "not_your_entry".into(),
+            });
+        }
         let record = WorkRecord::Context {
             item: item.clone(),
             entry: entry.clone(),

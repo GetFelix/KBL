@@ -1638,13 +1638,79 @@ async fn a_republish_that_loses_a_race_with_a_claim_is_not_recorded() {
     assert!(!fake.kinds().contains(&"released".to_owned()));
 }
 
+#[tokio::test]
+async fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    let text = |s: &str| agents_core::content::Content::Text(s.into());
+    t.person_record(
+        key("gab"),
+        WorkRecord::Context {
+            item: item("a1"),
+            entry: key("note"),
+            text: text("from a person"),
+        },
+    )
+    .await
+    .unwrap();
+    let before = fake.log().len();
+    let refused = |r: Result<serde_json::Value, Error>| {
+        assert!(
+            matches!(r, Err(Error::Refused { ref why }) if why == "not_your_entry"),
+            "{r:?}"
+        );
+    };
+    refused(
+        t.context_add(&agent("w1"), &item("a1"), key("note"), text("forged"))
+            .await,
+    );
+    // The record never reached the log.
+    assert_eq!(fake.log().len(), before);
+    // Its own entry can be replaced, by itself.
+    t.context_add(&agent("w1"), &item("a1"), key("mine"), text("one"))
+        .await
+        .unwrap();
+    t.context_add(&agent("w1"), &item("a1"), key("mine"), text("two"))
+        .await
+        .unwrap();
+    // A person takes it over; the agent cannot take it back.
+    t.person_record(
+        key("gab"),
+        WorkRecord::Context {
+            item: item("a1"),
+            entry: key("mine"),
+            text: text("person"),
+        },
+    )
+    .await
+    .unwrap();
+    refused(
+        t.context_add(&agent("w1"), &item("a1"), key("mine"), text("back"))
+            .await,
+    );
+    // A later holder cannot update a previous agent's entry.
+    t.context_add(&agent("w1"), &item("a1"), key("w1-note"), text("x"))
+        .await
+        .unwrap();
+    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    claim(&t, "w2").await;
+    refused(
+        t.context_add(&agent("w2"), &item("a1"), key("w1-note"), text("taken"))
+            .await,
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_long_hold_does_not_make_the_record_look_old_after_a_release() {
     let fake = Fake::default();
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    for _ in 0..7 {
+    // Longer than the lapse (six periods), so only a clock that stops while the
+    // item is held keeps the release from looking overdue.
+    for _ in 0..15 {
         pass(&t, VIS / 2).await;
         t.extend(&agent("w1"), &item("a1")).await.unwrap();
     }
