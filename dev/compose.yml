@@ -1,7 +1,7 @@
 # The development stack: a control plane, one broker, a stand-in IdP, a
 # one-shot seed that creates the tenant, and the gateway. `dev/up.sh` starts
 # it and waits until it is ready.
-name: felix-agents
+name: kbl
 
 services:
   idp:
@@ -105,7 +105,7 @@ services:
       GATEWAY_FELIX_CONTROL_PLANE: http://controlplane:8443
       GATEWAY_TENANT: agents
       GATEWAY_OIDC_ISSUER: http://127.0.0.1:9400
-      GATEWAY_OIDC_CLIENT_ID: felix-agents
+      GATEWAY_OIDC_CLIENT_ID: kbl
       RUST_LOG: info
     ports:
       - "127.0.0.1:8787:8787"

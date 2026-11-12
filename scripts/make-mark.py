@@ -1,6 +1,6 @@
-"""Draws docs/brand/felix-agents-mark.png from the main Felix logo.
+"""Draws docs/brand/kbl-mark.png from the main Felix logo.
 
-    python3 scripts/make-mark.py <felix>/docs/assets/logo.PNG docs/brand/felix-agents-mark.png
+    python3 scripts/make-mark.py <felix>/docs/assets/logo.PNG docs/brand/kbl-mark.png
 
 Needs Pillow.
 """

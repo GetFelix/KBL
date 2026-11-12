@@ -13,7 +13,7 @@ the end.
 
 | Actor | What it is | Credential | Trust |
 |---|---|---|---|
-| Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/felix-agents/issues/120)) |
+| Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/KBL/issues/120)) |
 | Agent | A model acting through `felix-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
 | Ingest | The `agents-ingest` worker that mirrors GitHub | An ingest token, and a GitHub credential | Trusted code that carries untrusted text |
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
@@ -67,8 +67,8 @@ The token file must be mode 600 or 400 (`tracker/src/config.rs:90`), a token
 may be listed once (`tracker/src/config.rs:113`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs:142`).
 The tracker and the webhook serve plain HTTP: **None**
-([#158](https://github.com/GetFelix/felix-agents/issues/158)). Tokens are
-long-lived ([#121](https://github.com/GetFelix/felix-agents/issues/121)).
+([#158](https://github.com/GetFelix/KBL/issues/158)). Tokens are
+long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
 There is no request rate limit; a refused call writes nothing, and the first
 cap an attempt hits is logged once (`tracker/src/tracker/tools.rs:685`).
 
@@ -83,13 +83,13 @@ All of them need an agent token (`tracker/src/http.rs:685`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs:40`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs:1016`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/felix-agents/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs:647`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs:681`, `tracker/src/tracker.rs:743`) and the fold refuses the claim too (`core/src/work_fold.rs:1032`) |
+| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs:40`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs:1016`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs:647`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs:681`, `tracker/src/tracker.rs:743`) and the fold refuses the claim too (`core/src/work_fold.rs:1032`) |
 | `/v1/work/extend` | `item` | Keep another agent's claim alive, or its own after losing it | Must own the delivery and the hold (`tracker/src/tracker.rs:289`, `tracker/src/tracker.rs:307`) |
-| `/v1/work/complete` | `item`, `cost_micros` | Finish work it does not hold; finish over open children; report no cost | Holder only (`tracker/src/tracker.rs:1480`, `core/src/work_fold.rs:1177`). Open children refuse it (`core/src/work_fold.rs:1182`). A fix is not closed by `done`; a merge or a person closes it. Cost: **None** ([#155](https://github.com/GetFelix/felix-agents/issues/155)); the item total saturates (`core/src/work_fold.rs:1208`) |
+| `/v1/work/complete` | `item`, `cost_micros` | Finish work it does not hold; finish over open children; report no cost | Holder only (`tracker/src/tracker.rs:1480`, `core/src/work_fold.rs:1177`). Open children refuse it (`core/src/work_fold.rs:1182`). A fix is not closed by `done`; a merge or a person closes it. Cost: **None** ([#155](https://github.com/GetFelix/KBL/issues/155)); the item total saturates (`core/src/work_fold.rs:1208`) |
 | `/v1/work/release` | `item`, `reason`, `cost_micros` | Release another's work; write a huge record | Holder only (`core/src/work_fold.rs:1222`). Two claims per attempt (`core/src/work_fold.rs:1068`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1004`). Cost: **None** (#155) |
 | `/v1/work/give_up` | `item`, `reason`, `cost_micros` | Same as release | Holder only (`core/src/work_fold.rs:1238`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1004`). Cost: **None** (#155) |
-| `/v1/work/post` (child or proposal) | `item`, `key`, `work`, `title` | Create work outside its tree, without limit, or of a kind it may not | Must hold `item` (`tracker/src/tracker/tools.rs:114`). Only split, augment, question, test or a proposal (`tracker/src/tracker/tools.rs:39`). Children draw from the root's items and depth (`core/src/work_fold.rs:1566`). 24 posts per attempt (`core/src/work_fold.rs:1560`). A proposal waits for a person. Proposals draw no budget and a key can be reused across claims ([#109](https://github.com/GetFelix/felix-agents/issues/109)) |
-| `/v1/work/post` (`work: "prerequisite"`) | `target_source`, `target_repo`, `title`, `why`, `evidence`, `existing`, `done_when`, `cost_micros` | File work in another repo's Triage; link to another tree | Only a repo in the agent's grants or its own tree's repo, and a missing item answers the same as a hidden one (`tracker/src/tracker/tools.rs:204`). Holder, no cycle, not closed (`core/src/work_fold.rs:1644`). Sizes (`tracker/src/tracker/tools.rs:159`). `target_source`: **None** ([#156](https://github.com/GetFelix/felix-agents/issues/156)). Evidence target: **None** ([#157](https://github.com/GetFelix/felix-agents/issues/157)). Cost: **None** (#155). `title` and `why` are read by a person before accepting |
+| `/v1/work/post` (child or proposal) | `item`, `key`, `work`, `title` | Create work outside its tree, without limit, or of a kind it may not | Must hold `item` (`tracker/src/tracker/tools.rs:114`). Only split, augment, question, test or a proposal (`tracker/src/tracker/tools.rs:39`). Children draw from the root's items and depth (`core/src/work_fold.rs:1566`). 24 posts per attempt (`core/src/work_fold.rs:1560`). A proposal waits for a person. Proposals draw no budget and a key can be reused across claims ([#109](https://github.com/GetFelix/KBL/issues/109)) |
+| `/v1/work/post` (`work: "prerequisite"`) | `target_source`, `target_repo`, `title`, `why`, `evidence`, `existing`, `done_when`, `cost_micros` | File work in another repo's Triage; link to another tree | Only a repo in the agent's grants or its own tree's repo, and a missing item answers the same as a hidden one (`tracker/src/tracker/tools.rs:204`). Holder, no cycle, not closed (`core/src/work_fold.rs:1644`). Sizes (`tracker/src/tracker/tools.rs:159`). `target_source`: **None** ([#156](https://github.com/GetFelix/KBL/issues/156)). Evidence target: **None** ([#157](https://github.com/GetFelix/KBL/issues/157)). Cost: **None** (#155). `title` and `why` are read by a person before accepting |
 | `/v1/work/link` | `item`, `to` | Link across trees; block work it does not hold | Same tree only (`core/src/work_fold.rs:1880`). Must hold `item`, a child of it or its parent (`core/src/work_fold.rs:1883`). No cycle (`core/src/work_fold.rs:891`). 100 links per attempt (`core/src/work_fold.rs:896`). A repeat is refused (`tracker/src/tracker/tools.rs:293`) |
 | `/v1/work/context` | `item` | Read context of work it does not hold | Must hold the item or its parent (`tracker/src/tracker/tools.rs:349`) |
 | `/v1/work/context/add` | `item`, `entry`, `text` | Write on work it does not hold; replace what ingest or a person wrote | Must hold the item or a child of it (`core/src/work_fold.rs:1037`). Text inline up to 4 KiB (`tracker/src/tracker/tools.rs:331`). 100 writes per attempt (`core/src/work_fold.rs:1041`). An agent replaces only an entry it wrote itself; ingest's, a person's and the fold's stay, refused as `not_your_entry` before the record is logged (`tracker/src/tracker/tools.rs:337`). The fold takes such a record from an old log as it always did |
@@ -97,7 +97,7 @@ All of them need an agent token (`tracker/src/http.rs:685`).
 | `/v1/work/decide` | `phase`, `so_far`, `question`, `options`, `chosen`, `why`, `commit`, `evidence`, `revert_check` | Fill the log; cite evidence that is not there; claim a test guards a fix | Holder only (`core/src/work_fold.rs:1263`). Sizes and counts (`tracker/src/tracker/tools.rs:503`, `tracker/src/tracker/tools.rs:516`). 200 per attempt (`core/src/work_fold.rs:1277`). Evidence is before the record (`core/src/work_fold.rs:1267`). Test name 400 bytes (`core/src/work_fold.rs:1272`). A revert check is the agent's word; only one that failed without and passed with the fix is listed as proven. Evidence target: **None** (#157) |
 | `/v1/work/finding` | `item`, `severity`, `file`, `line`, `title`, `scenario`, `verdict` | Fill the log; make fix work without limit; write on a review it does not hold or for an older request | Holder of a review item only (`core/src/work_fold.rs:1781`, `core/src/work_fold.rs:1742`). Sizes: file 400, title 200, scenario 4096 bytes, line from 1 (`tracker/src/tracker/tools.rs:545`, `core/src/work_fold.rs:1786`). 40 per attempt (`core/src/work_fold.rs:1794`). The request must still be the root's (`core/src/work_fold.rs:1762`). A `fix` draws one item from the root's budget; a `defer` is a proposal a person accepts |
 | `/v1/work/verdict` | `item`, `verdict`, `why` | Recommend a merge with fixes open; give a verdict from a first pass; skip the verdict | Holder of a final review only (`core/src/work_fold.rs:1303`, `core/src/work_fold.rs:1750`). `why` at most 2048 bytes (`tracker/src/tracker/tools.rs:576`). `merge` is refused while a fix a review asked for is open (`core/src/work_fold.rs:1313`). A final review cannot finish without one (`core/src/work_fold.rs:1134`). It is advice: nothing here merges or closes |
-| `/v1/work/triage` | `item`, `tier`, `why`, `duplicate_of`, `unclear` | Triage an item it holds no triage for; raise its own work's tier; park an item in Needs you; point a duplicate at nothing; fill the log | Holder of the triage item only, and the record names that item's parent, never an item the agent picks (`tracker/src/tracker/tools.rs:614`, `core/src/work_fold.rs:2289`). It is a proposal: a tier a person set stands (`core/src/work_fold.rs:950`). `why` at most 4096 bytes (`tracker/src/tracker/tools.rs:610`). `duplicate_of` must be another item the agent can see; a missing item and one outside its grants get the same refusal (`tracker/src/tracker/tools.rs:623`). `unclear` only sends the item to a person as a question. The same answer again from the same holder is not logged; a holder that varies its answer is not rate limited yet ([#96](https://github.com/GetFelix/felix-agents/issues/96)) |
+| `/v1/work/triage` | `item`, `tier`, `why`, `duplicate_of`, `unclear` | Triage an item it holds no triage for; raise its own work's tier; park an item in Needs you; point a duplicate at nothing; fill the log | Holder of the triage item only, and the record names that item's parent, never an item the agent picks (`tracker/src/tracker/tools.rs:614`, `core/src/work_fold.rs:2289`). It is a proposal: a tier a person set stands (`core/src/work_fold.rs:950`). `why` at most 4096 bytes (`tracker/src/tracker/tools.rs:610`). `duplicate_of` must be another item the agent can see; a missing item and one outside its grants get the same refusal (`tracker/src/tracker/tools.rs:623`). `unclear` only sends the item to a person as a question. The same answer again from the same holder is not logged; a holder that varies its answer is not rate limited yet ([#96](https://github.com/GetFelix/KBL/issues/96)) |
 | `/v1/work/step` | `command`, `exit_code`, `output` | Claim a command passed | Holder only (`core/src/work_fold.rs:1176`). Sizes (`tracker/src/tracker/tools.rs:520`). 500 per attempt (`core/src/work_fold.rs:1178`). A step is the agent's word. Check results come from ingest, never from steps |
 | `/v1/work/edit` | `file`, `hunk`, `decision` | Tie an edit to another attempt's decision | Holder only (`core/src/work_fold.rs:1189`). The decision is one of this attempt's (`core/src/work_fold.rs:1191`). Sizes (`tracker/src/tracker/tools.rs:541`). 500 per attempt (`core/src/work_fold.rs:1194`) |
 | `/v1/work/ask` | `text`, `options`, `default`, `cost_micros` | Flood Needs you; report no cost | Holder only (`core/src/work_fold.rs:1256`). At most 8 options of 200 bytes (`tracker/src/tracker/tools.rs:821`). 20 per attempt (`core/src/work_fold.rs:1259`). Cost: **None** (#155); the item total saturates (`core/src/work_fold.rs:1266`) |
@@ -157,7 +157,7 @@ request only when all of these hold, so the name alone steers nothing.
 | Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:899`), our own comments are skipped (`ingest/src/sync.rs:404`), and an edit after triage shows as "changed upstream" |
 
 Still open: canonical request names and a filter on who created a check run
-([#148](https://github.com/GetFelix/felix-agents/issues/148)).
+([#148](https://github.com/GetFelix/KBL/issues/148)).
 
 ## MCP tools
 
@@ -185,9 +185,9 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_answer` | `/v1/work/answer` | Tracker row |
 | `work_rules` | `/v1/work/rules/read` | Tracker row |
 | `run_info` | Nothing | Reads its own settings |
-| `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/felix-agents/issues/29)) |
-| `task_claim` | The run's `workers` group | Felix hands a task to one member. The two-attempt limit is in `felix-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/felix-agents/issues/39)) |
-| `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Task bodies are not hash-checked ([#150](https://github.com/GetFelix/felix-agents/issues/150)) |
+| `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/KBL/issues/29)) |
+| `task_claim` | The run's `workers` group | Felix hands a task to one member. The two-attempt limit is in `felix-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/KBL/issues/39)) |
+| `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Task bodies are not hash-checked ([#150](https://github.com/GetFelix/KBL/issues/150)) |
 | `task_release` | The `workers` group and run log | `felix-mcp` only releases the task it holds (`mcp/src/tasks.rs:584`). In Felix: **None** (#29) |
 | `task_give_up` | The `workers` group and run log | Same |
 
@@ -244,9 +244,9 @@ A run log (`agents.log.<run>`) is written straight to Felix by `felix-mcp`,
 validates a record before it lands, and `by` is what the writer says. So a
 run log is a set of claims, and the dashboard marks it unverified. Who may
 write which kind: **None**, tracked by
-[#29](https://github.com/GetFelix/felix-agents/issues/29) (roles per run),
-[#45](https://github.com/GetFelix/felix-agents/issues/45) (the publisher Felix
-recorded) and [#32](https://github.com/GetFelix/felix-agents/issues/32) (a
+[#29](https://github.com/GetFelix/KBL/issues/29) (roles per run),
+[#45](https://github.com/GetFelix/KBL/issues/45) (the publisher Felix
+recorded) and [#32](https://github.com/GetFelix/KBL/issues/32) (a
 grants test with a raw client).
 
 | Kinds | Meant to be written by |
@@ -274,13 +274,13 @@ grants test with a raw client).
 
 | Issue | Gap |
 |---|---|
-| [#155](https://github.com/GetFelix/felix-agents/issues/155) | The cost budget rests on what the agent reports |
-| [#156](https://github.com/GetFelix/felix-agents/issues/156) | A prerequisite's source is not checked against grants |
-| [#157](https://github.com/GetFelix/felix-agents/issues/157) | Evidence can cite any record |
-| [#158](https://github.com/GetFelix/felix-agents/issues/158) | The tracker and the webhook serve plain HTTP |
-| [#109](https://github.com/GetFelix/felix-agents/issues/109) | Proposals draw no budget; post keys can be reused across claims |
-| [#120](https://github.com/GetFelix/felix-agents/issues/120) | No roles: every person can do everything, every agent can claim any repo's work |
-| [#121](https://github.com/GetFelix/felix-agents/issues/121) | Tokens are long-lived |
-| [#148](https://github.com/GetFelix/felix-agents/issues/148) | Request names are not canonical; check runs are not filtered by author |
-| [#150](https://github.com/GetFelix/felix-agents/issues/150) | Task bodies are shown without a hash check |
-| [#29](https://github.com/GetFelix/felix-agents/issues/29), [#32](https://github.com/GetFelix/felix-agents/issues/32), [#45](https://github.com/GetFelix/felix-agents/issues/45) | Any writer in a run can write any run log record under any name |
+| [#155](https://github.com/GetFelix/KBL/issues/155) | The cost budget rests on what the agent reports |
+| [#156](https://github.com/GetFelix/KBL/issues/156) | A prerequisite's source is not checked against grants |
+| [#157](https://github.com/GetFelix/KBL/issues/157) | Evidence can cite any record |
+| [#158](https://github.com/GetFelix/KBL/issues/158) | The tracker and the webhook serve plain HTTP |
+| [#109](https://github.com/GetFelix/KBL/issues/109) | Proposals draw no budget; post keys can be reused across claims |
+| [#120](https://github.com/GetFelix/KBL/issues/120) | No roles: every person can do everything, every agent can claim any repo's work |
+| [#121](https://github.com/GetFelix/KBL/issues/121) | Tokens are long-lived |
+| [#148](https://github.com/GetFelix/KBL/issues/148) | Request names are not canonical; check runs are not filtered by author |
+| [#150](https://github.com/GetFelix/KBL/issues/150) | Task bodies are shown without a hash check |
+| [#29](https://github.com/GetFelix/KBL/issues/29), [#32](https://github.com/GetFelix/KBL/issues/32), [#45](https://github.com/GetFelix/KBL/issues/45) | Any writer in a run can write any run log record under any name |

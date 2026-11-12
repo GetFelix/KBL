@@ -1,14 +1,11 @@
-<p align="center"><img src="docs/brand/felix-agents-mark.png" alt="KBL" width="200"></p>
+<p align="center"><img src="docs/brand/kbl-mark.png" alt="KBL" width="200"></p>
 
 # KBL
-
-(repository: felix-agents)
 
 KBL (Kanban By Log, pronounced Kibble) is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix). It pulls bugs
 in from GitHub, Azure DevOps or Jira, hands each piece of work to one agent, keeps dependencies and priorities,
 and shows the queue in a dashboard. Agents from any vendor take work from it through an MCP server,
-`felix-mcp`. People guide it from the dashboard. The repository is still named felix-agents; the rename is
-tracked in [#92](https://github.com/GetFelix/felix-agents/issues/92).
+`felix-mcp`. People guide it from the dashboard.
 
 KBL is not agentic. The tracker, `felix-mcp` and the dashboard make no model calls and generate no text.
 Triage, gathering context, splitting, answering questions and fixing are all work items that an agent or a
@@ -62,7 +59,7 @@ work on a backlog that never ends:
 
 Some of this is not yet reachable the way the design wants. The design lists
 it under "Felix gaps", and each one has an issue labelled
-[`felix-gap`](https://github.com/GetFelix/felix-agents/labels/felix-gap).
+[`felix-gap`](https://github.com/GetFelix/KBL/labels/felix-gap).
 
 ## How it works
 
@@ -110,7 +107,7 @@ and [`felix-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools]
 is described in [docs/work-tracker.md](docs/work-tracker.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
 progress. Records on `work.events` carry a format, so a newer build can take over a running log, and an older build
 (from this one on) stops at a record it cannot read instead of misreading it: [docs/upgrades.md](docs/upgrades.md) has the upgrade order. The plan is in [docs/design.md](docs/design.md) and the work is tracked in
-[milestones](https://github.com/GetFelix/felix-agents/milestones).
+[milestones](https://github.com/GetFelix/KBL/milestones).
 
 ## Running Felix locally
 
@@ -134,7 +131,7 @@ begins with a new tenant and an empty log.
 | Control plane (REST) | `http://127.0.0.1:8443`, tenant `agents`, namespace `default` |
 | Broker (QUIC) | `127.0.0.1:5000`, certificate written to `dev/state/broker-cert.pem` |
 | Gateway (WebSocket) | `ws://127.0.0.1:8787/ws`, configured by [dev/scope.toml](dev/scope.toml) |
-| Identity provider | `http://127.0.0.1:9400`; `/token?sub=<name>&aud=felix-agents` mints an ID token for anyone |
+| Identity provider | `http://127.0.0.1:9400`; `/token?sub=<name>&aud=kbl` mints an ID token for anyone |
 
 A Felix principal comes from an ID token the tenant trusts, and the stand-in provider signs one for any name, so a
 script can be a different agent per name. Exchange the token at the control plane

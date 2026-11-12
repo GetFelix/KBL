@@ -28,7 +28,7 @@ pub(crate) struct Target {
 }
 
 /// The audience every ID token from the development IdP is issued for.
-const ID_TOKEN_AUDIENCE: &str = "felix-agents";
+const ID_TOKEN_AUDIENCE: &str = "kbl";
 /// How long one request to Felix may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.

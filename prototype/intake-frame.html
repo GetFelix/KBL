@@ -751,7 +751,7 @@
 <body class="loading">
 <div id="app">
 <aside id="sidebar" aria-label="Navigation">
-  <div class="brand"><img src="../docs/brand/felix-agents-mark.png" alt=""><span>KBL</span><button class="ic" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar"></button></div>
+  <div class="brand"><img src="../docs/brand/kbl-mark.png" alt=""><span>KBL</span><button class="ic" id="collapse" title="Collapse the sidebar ( [ )" aria-label="Collapse the sidebar"></button></div>
   <button id="palbtn" aria-label="Search or run a command"><span>Search or run a command</span><kbd id="palkey">Ctrl K</kbd></button>
   <nav id="snav" aria-label="Views"><div class="skn"><i style="width:70%"></i></div><div class="skn"><i style="width:55%"></i></div><div class="skn"><i style="width:62%"></i></div><div class="sh">&nbsp;</div><div class="skn"><i style="width:78%"></i></div><div class="skn"><i style="width:66%"></i></div><div class="skn"><i style="width:48%"></i></div></nav>
   <div class="sfoot"><span class="me" id="me"></span><button class="ic" id="help" title="Keyboard shortcuts ( ? )" aria-label="Keyboard shortcuts"></button><button class="ic" id="theme" title="Switch theme" aria-label="Switch theme"></button></div>
@@ -1325,7 +1325,7 @@ function rowHtml(it, stage, chain) {
 function emptyState(kind) {
   if (kind === 'filter') return `<div class="emptyst"><h3>No items match</h3><p>Nothing here fits the filters or the search. Loosen one, or clear them all.</p><div class="acts"><button data-clearf>Clear filters</button></div></div>`;
   const held = by.held.filter((it) => !it.human).length, rev = by.review.length;
-  return `<div class="emptyst"><img src="../docs/brand/felix-agents-mark.png" alt=""><h3>You're all caught up</h3>` +
+  return `<div class="emptyst"><img src="../docs/brand/kbl-mark.png" alt=""><h3>You're all caught up</h3>` +
     `<p>Nothing is waiting on you. Agents hold ${plural(held, 'item')} and ${plural(rev, 'pull request')} ${rev === 1 ? 'is' : 'are'} in review with someone else. New questions, failures and reviews land here.</p>` +
     `<div class="acts"><button data-go="board">Open the board <kbd>g</kbd><kbd>b</kbd></button></div></div>`;
 }

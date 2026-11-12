@@ -18,7 +18,7 @@ async function json(url, init) {
 }
 
 // No agent identities exist yet, so the tenant's administrator stands in for the agent.
-const idToken = (await json(`${IDP}/token?sub=agents-admin&aud=felix-agents`)).id_token;
+const idToken = (await json(`${IDP}/token?sub=agents-admin&aud=kbl`)).id_token;
 const token = (
   await json(`${CONTROL_PLANE}/v1/tenants/${TENANT}/token/exchange`, {
     method: "POST",

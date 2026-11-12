@@ -27,7 +27,7 @@ fn cursor_key(name: &str) -> String {
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
 const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
-const ID_TOKEN_AUDIENCE: &str = "felix-agents";
+const ID_TOKEN_AUDIENCE: &str = "kbl";
 /// The tenant administrator stands in for the tracker's principal in the dev stack.
 const TRACKER_SUBJECT: &str = "agents-admin";
 
