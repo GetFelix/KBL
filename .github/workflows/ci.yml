@@ -120,7 +120,14 @@ jobs:
           # The previous build is the commit this change is based on, until there are releases.
           PREVIOUS: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          git fetch --depth=1 origin "$PREVIOUS"
+          # A commit between the previous build and this one may declare that
+          # the two cannot run together (see docs/upgrades.md).
+          git fetch --unshallow origin 2>/dev/null || git fetch origin
+          git fetch origin "$PREVIOUS"
+          if declared=$(git log "$PREVIOUS..HEAD" --format=%B | grep -m1 '^Upgrade-Break:'); then
+            echo "Skipping the upgrade check. $declared"
+            exit 0
+          fi
           git worktree add ../previous "$PREVIOUS"
           # The previous commit still has the old package names.
           cargo build --manifest-path ../previous/Cargo.toml --target-dir target/previous -p agents-tracker -p felix-mcp

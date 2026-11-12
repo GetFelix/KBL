@@ -154,6 +154,12 @@ tracker does not have yet.
   the commit a change is based on until KBL has releases; then it is the
   last release.
 
+  A deliberate break during development, such as a rename of something both
+  builds must agree on, can be declared with a line starting `Upgrade-Break:`
+  in the message of any commit between the previous build and this one. The CI
+  step then prints that line and skips this check; it never skips for a
+  change that has not declared one.
+
 ## Not covered yet
 
 Run logs (`agents.log.<run>`) and task records have no format. Readers ignore

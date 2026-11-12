@@ -8,8 +8,10 @@
   `kbl-wasm`. The planned reference worker is `kbl-run`. Every `AGENTS_`
   environment variable is now `KBL_` (`AGENTS_TRACKER_URL` is
   `KBL_TRACKER_URL`). For this release the binaries still read an `AGENTS_`
-  name when its `KBL_` twin is unset; the fallback goes next release. The OIDC
-  audience `felix-agents` is unchanged.
+  name when its `KBL_` twin is unset; the fallback goes next release.
+- Changed: the OIDC audience of the development IdP, and the gateway's client
+  id, is `kbl` instead of `felix-agents`. A build from before this change
+  sends the old audience and is refused by the gateway.
 - Added: `work_triage`, the tool an agent answers a triage item with
   (`POST /v1/work/triage`). It writes the `triaged` proposal for the item under
   triage: a tier with why, a duplicate, or `unclear`. A person still accepts

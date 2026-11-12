@@ -131,7 +131,7 @@ begins with a new tenant and an empty log.
 | Control plane (REST) | `http://127.0.0.1:8443`, tenant `agents`, namespace `default` |
 | Broker (QUIC) | `127.0.0.1:5000`, certificate written to `dev/state/broker-cert.pem` |
 | Gateway (WebSocket) | `ws://127.0.0.1:8787/ws`, configured by [dev/scope.toml](dev/scope.toml) |
-| Identity provider | `http://127.0.0.1:9400`; `/token?sub=<name>&aud=felix-agents` mints an ID token for anyone |
+| Identity provider | `http://127.0.0.1:9400`; `/token?sub=<name>&aud=kbl` mints an ID token for anyone |
 
 A Felix principal comes from an ID token the tenant trusts, and the stand-in provider signs one for any name, so a
 script can be a different agent per name. Exchange the token at the control plane

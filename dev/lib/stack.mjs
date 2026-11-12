@@ -35,7 +35,7 @@ async function json(url, init) {
 
 // No agent identities exist yet, so the tenant's administrator stands in for every agent.
 export async function felixToken() {
-  const idToken = (await json(`${IDP}/token?sub=agents-admin&aud=felix-agents`)).id_token;
+  const idToken = (await json(`${IDP}/token?sub=agents-admin&aud=kbl`)).id_token;
   const exchanged = await json(`${CONTROL_PLANE}/v1/tenants/${TENANT}/token/exchange`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${idToken}` },
