@@ -239,6 +239,52 @@ cargo build -p kbl-mcp -p kbl-tool
 node dev/check-tasks.mjs
 ```
 
+### Running agents in a loop
+
+A host such as Claude Code usually stops after one item unless it is told to keep going. This prompt makes it take
+work until there is none:
+
+```text
+Use the kbl tools to take work, and keep going until there is none.
+1. Call work_next. If it says nothing is ready, print KBL_QUEUE_EMPTY on a line of its own and stop.
+2. Work the item the reply gives you until it is done or you have a question for a person: follow the rules in the reply, run its checks, and call work_complete. If you cannot finish it, call work_release with the reason.
+3. Call work_next again.
+Stop when nothing is ready or when you are asked to stop. Do not wait for more work to appear.
+```
+
+The `work_next` reply says the same in its `loop` field, so a host that was given no prompt still learns to call
+`work_next` again after each item and to stop when the reply says nothing is ready. The field is reply text only; the
+standing rules, the records and the log are unchanged.
+
+`dev/agents.mjs` starts N such sessions. It makes no model calls: it runs the host you already have, once per session,
+in a directory with its own `.mcp.json` that points at `kbl-mcp` with that session's tokens.
+
+```bash
+node dev/agents.mjs --run demo --tokens tokens.json --ca-file "$PWD/dev/state/broker-cert.pem" \
+  --tracker-url http://127.0.0.1:8790
+```
+
+The tokens file names each session and its two tokens, one per agent. Prefer it to `--agent name=<felix>,<tracker>`,
+which puts tokens in the process list. Minting them with one command is not built yet.
+
+```json
+{ "w1": { "felix": "<Felix token>", "tracker": "<tracker token>" },
+  "w2": { "felix": "<Felix token>", "tracker": "<tracker token>" } }
+```
+
+| Flag | Does |
+|---|---|
+| `--sessions N` | Starts the first N agents in the file |
+| `--host CMD` | Runs `CMD [--host-arg ...] <prompt>` instead of `claude -p <prompt> --mcp-config ...`. The `.mcp.json` path is in `KBL_MCP_CONFIG` and the directory is the working directory. Write an argument that starts with a dash as `--host-arg=-x` |
+| `--restart-delay S` | Waits before starting a session that exited without saying the queue was empty (5) |
+| `--idle-delay S` | Waits before a session that found nothing asks again while another session is still going (15) |
+
+A session that exits without printing `KBL_QUEUE_EMPTY` (a crash, a killed process, a host that ran out of context) is
+started again, and the item it held goes to another session once its claim lapses (90 seconds by default). A session
+that found nothing ready asks again after `--idle-delay` while any other is going, because that one may hold an item
+that will come back. Ctrl-C stops every host and the launcher. The launcher ends by itself when every session has found
+the queue empty. `node dev/check-agents.mjs` runs three sessions with a scripted stand-in for the host.
+
 ### Scripted agents
 
 A scripted planner and workers make the same tool calls a model would, so a run needs no model key. A seed decides the

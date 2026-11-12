@@ -721,6 +721,23 @@ async fn a_restart_between_poll_and_log_does_not_hold_the_item() {
 }
 
 #[tokio::test]
+async fn the_work_next_reply_carries_the_work_loop() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let got = claim(&t, "w1").await;
+    let text = got["loop"].as_str().unwrap();
+    assert!(
+        text.contains("work_next again") && text.contains("asked to stop"),
+        "{text}"
+    );
+    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    let empty = claim(&t, "w1").await;
+    assert_eq!(empty["claimed"], false);
+    assert!(empty["loop"].as_str().unwrap().contains("End your session"));
+}
+
+#[tokio::test]
 async fn an_agent_that_holds_a_claim_gets_it_back_from_work_next() {
     let fake = Fake::default();
     let t = start(&fake).await;
