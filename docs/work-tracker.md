@@ -1133,8 +1133,8 @@ what waits on the viewer, that actions append records, and that the keys above
 do what the table says.
 
 **Look.** KBL amber (`#C86A1E` dark, `#A4520F` light, with a lighter step for text on dark
-cards) is work in motion and the current selection. A yellower amber (`#FFB547` dark,
-`#B36F00` light) is for trouble the system handled. In charts that colour means a person
+cards) is work in motion and the current selection. A yellower amber (`#FFD04D` dark,
+`#6E5F00` light) is for trouble the system handled. In charts that colour means a person
 and slate blue means agents. Red is only for a refusal, so red always means
 Felix said no. Shapes carry meaning before colour does, so the page reads in greyscale. Inter is for names and labels and
 JetBrains Mono for ids, offsets, versions, counts and money. It is dark by default
