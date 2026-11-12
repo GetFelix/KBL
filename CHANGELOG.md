@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Fixed: a release that raced the next claim could evict the new holder. An
+  agent that stalled past the visibility and then released nacked a record
+  Felix had already handed to the next poller, so that agent was claimed, lost
+  its delivery and was lapsed while it worked. A delivery polled before the
+  last holder's hand-back ended is no longer turned into a claim. The hand-back
+  ends even when the caller's request is dropped, and only the call that
+  started it ends it.
 - Tracker hardening. An agent can no longer replace a context entry that
   ingest, the fold or a person wrote (`not_your_entry`), and a later holder
   can no longer update an entry a previous agent wrote. The tracker refuses it
