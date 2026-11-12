@@ -1,16 +1,16 @@
-<p align="center"><img src="docs/brand/felix-agents-mark.png" alt="Kibble" width="200"></p>
+<p align="center"><img src="docs/brand/felix-agents-mark.png" alt="KBL" width="200"></p>
 
-# Kibble
+# KBL
 
 (repository: felix-agents)
 
-Kibble is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix). It pulls bugs
+KBL (Kanban By Log, pronounced Kibble) is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix). It pulls bugs
 in from GitHub, Azure DevOps or Jira, hands each piece of work to one agent, keeps dependencies and priorities,
 and shows the queue in a dashboard. Agents from any vendor take work from it through an MCP server,
 `felix-mcp`. People guide it from the dashboard. The repository is still named felix-agents; the rename is
 tracked in [#92](https://github.com/GetFelix/felix-agents/issues/92).
 
-Kibble is not agentic. The tracker, `felix-mcp` and the dashboard make no model calls and generate no text.
+KBL is not agentic. The tracker, `felix-mcp` and the dashboard make no model calls and generate no text.
 Triage, gathering context, splitting, answering questions and fixing are all work items that an agent or a
 person completes.
 
@@ -29,7 +29,7 @@ do.</sub>
 
 [felix-arena](https://github.com/GetFelix/felix-arena) uses a log as a live feed and a replay,
 [felix-metro](https://github.com/GetFelix/felix-metro) seeks back through a long history, and
-[felix-blocks](https://github.com/GetFelix/felix-blocks) is keyed state with many writers. Kibble puts them to
+[felix-blocks](https://github.com/GetFelix/felix-blocks) is keyed state with many writers. KBL puts them to
 work on a backlog that never ends:
 
 - **Each piece of work is claimed once, even when agents die.** A consumer group hands an item to one agent and gives it to another when the first stops answering. An item that keeps failing is dead-lettered instead of retried forever. The tracker publishes a Ready item's record again if Felix dead-lettered it, so the item is not lost.
@@ -95,7 +95,7 @@ have the details.
 | 2 | The tracker: GitHub ingest, items and dependencies, ready tiers, `work_next` and the rest of the work tools, triage and augmentation as claimable work | Real issues become claimable work, once each, and people and agents never overwrite each other (demonstration 3) |
 | 3 | Real work: Claude Code claims `agent-ok` issues through `felix-mcp` and opens pull requests | Agents produce reviewed, merged fixes |
 | 4 | The dashboard, live, and more sources (My queue, Board, Metrics) with the review limit, and its results: arrival and completion, time waiting on a human, merge rate, cost and human minutes per fix | Anyone can see the queue and what it delivered |
-| 5 | Shared state (closed, superseded by Kibble: the swarm demo was removed) | Nothing |
+| 5 | Shared state (closed, superseded by KBL: the swarm demo was removed) | Nothing |
 | 6 | The reference worker (`agents-run`): a model API, artifacts, spend and rate limits | Agent-created work stays inside its budget (demonstration 4) |
 | 7 | Decision replay, live: the fold, the dashboard on felix-gateway, scrub and follow | The log is a complete record that replays, and a fix's decisions read back with no hindsight (demonstrations 5 and 6) |
 | 8 | A hostile agent stays bounded: grants and an injected agent held to its budget | A prompt-injected agent cannot escape its budget or grants (demonstration 8) |
@@ -330,7 +330,7 @@ CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Ru
 - [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
 - [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
 - [docs/threat-model.md](docs/threat-model.md): who can reach what, and the check behind every route and record kind
-- [docs/upgrades.md](docs/upgrades.md): upgrading a running Kibble and going back, and the record format rules behind it
+- [docs/upgrades.md](docs/upgrades.md): upgrading a running KBL and going back, and the record format rules behind it
 - [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
 - [docs/brand/story.md](docs/brand/story.md): the story of the product
 - [docs/design.md](docs/design.md): the design, data model and build order

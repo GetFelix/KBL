@@ -1,6 +1,6 @@
 # Threat model
 
-Who can reach Kibble, what they could damage, and the check that stops each
+Who can reach KBL (Kanban By Log, pronounced Kibble), what they could damage, and the check that stops each
 attempt. Every tracker route, ingest route, MCP tool and record kind has a row.
 
 A pull request that adds a route, a tool or a record kind adds its row here.
@@ -19,7 +19,7 @@ the end.
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
 | Webhook sender | Whoever posts to ingest's `/webhook` | The shared webhook secret | Not trusted without a valid signature |
 
-Two more parties are outside Kibble and can still steer it:
+Two more parties are outside KBL and can still steer it:
 
 - **Anyone who can file or edit an issue or comment** in a repo an intake rule
   admits. Their text reaches agents as context.
@@ -34,7 +34,7 @@ Two more parties are outside Kibble and can still steer it:
 | The log | `work.events` in Felix | Records that did not happen, or records under another name |
 | Budgets | Folded from the log, per root | Free work, or more items, depth and redos than allowed |
 | Holds | Folded from the log, plus the tracker's delivery table | To write on work it does not hold, or to keep work from others |
-| Merges | GitHub. Kibble records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
+| Merges | GitHub. KBL records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
 | Rules | `rules_set` records, shown in every claim reply | Instructions injected into every other agent |
 | Artifacts | The artifacts cache, keyed by content hash | Other bytes shown under a trusted id |
 | Credentials | The token file, the webhook secret, the GitHub credential, Felix tokens | Any of them |
