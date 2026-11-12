@@ -377,7 +377,7 @@ With [teams](#teams), each row holds per team: the tracker publishes to a team's
 
 ### Teams
 
-Not built yet: this is the sketch for [Teams in design.md](design.md#teams)
+Partly built: the `org.events` records and fold exist in `kbl-core`; the tracker does not serve teams yet. This is the sketch for [Teams in design.md](design.md#teams)
 ([#185](https://github.com/GetFelix/KBL/issues/185)). One tracker serves
 several teams, each in its own Felix namespace with its own `work.events`.
 

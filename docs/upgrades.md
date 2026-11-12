@@ -67,6 +67,8 @@ Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
 is 1.
 
+`org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
+
 The log has a format too. It starts at 1 and a `format_raised` record moves it
 up. Only a person can write one.
 

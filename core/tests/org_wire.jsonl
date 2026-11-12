@@ -1,0 +1,14 @@
+{"at_ms":1762900000000,"by":"ana","kind":"team_created","team":"payments","display_name":"Payments","adopted":true}
+{"at_ms":1762900000001,"by":"ana","kind":"team_created","team":"web"}
+{"at_ms":1762900000002,"by":"ana","kind":"person_added","person":"ana","token_sha256":"fdb19af2cd8f3f7de8c00cbdd4c4838366cbe4fa2e7ae38ba7f5847e75ad4bb5","subject":"auth0|ana"}
+{"at_ms":1762900000003,"by":"ana","kind":"person_added","person":"bo","token_sha256":"fc45fc0f414b0a9baf9036b20be638112f27c6865d088a3959c8a3b93de3ad90"}
+{"at_ms":1762900000004,"by":"ana","kind":"role_granted","person":"ana","role":"org_admin"}
+{"at_ms":1762900000005,"by":"ana","kind":"role_granted","team":"payments","person":"ana","role":"admin"}
+{"at_ms":1762900000006,"by":"ana","kind":"source_added","team":"payments","source":"github:GetFelix/felix"}
+{"at_ms":1762900000007,"by":"ana","kind":"role_granted","team":"payments","person":"bo","role":"triager","repos":["github:GetFelix/felix"]}
+{"at_ms":1762900000008,"by":"ana","kind":"agent_added","team":"payments","agent":"w1","token_sha256":"8c8a1b94be19bd2d265a48b8bedec53f23b263ed41a8568cf1066f717a13f17c"}
+{"at_ms":1762900000009,"by":"ana","kind":"agent_added","team":"web","agent":"w1","token_sha256":"f6e4c0fd8c07ed4c51d4eecdd85a60e94635a80752ff0c6e1e09c460809d9c53"}
+{"at_ms":1762900000010,"by":"ana","kind":"agent_revoked","team":"web","agent":"w1"}
+{"at_ms":1762900000011,"by":"ana","kind":"ingest_added","team":"payments","name":"github","token_sha256":"5dd6823fdffafb04af60222fa112a20b5a5a1f8db0bd362e937a4614b275e7c8"}
+{"at_ms":1762900000012,"by":"ana","kind":"grant_added","team":"payments","from_team":"web","agents":["w1"],"repos":["github:GetFelix/felix"],"max_pending":4}
+{"at_ms":1762900000013,"by":"ana","kind":"role_revoked","team":"payments","person":"bo"}

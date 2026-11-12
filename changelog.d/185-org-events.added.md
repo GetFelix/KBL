@@ -1,0 +1,1 @@
+The `org.events` records and their fold in `kbl-core`, the first step of teams (#185): teams, people, roles, agents, sources, ingest workers and grants, with token hashes in place of tokens, the team and name rules, and golden logs. Nothing serves teams yet.

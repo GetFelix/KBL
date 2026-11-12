@@ -258,7 +258,7 @@ the same person (gap 2).
 
 ## Teams
 
-Status: design, not built. Tracked in [#185](https://github.com/GetFelix/KBL/issues/185).
+Status: design. The `org.events` records and their fold are built (`core/src/org.rs`, `core/src/org_fold.rs`); the tracker does not serve teams yet. Tracked in [#185](https://github.com/GetFelix/KBL/issues/185).
 
 Today one KBL instance serves one team: one tracker, one `work.events`, one
 Felix namespace and one token file. A second team needs a second deployment.

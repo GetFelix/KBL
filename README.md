@@ -107,7 +107,7 @@ have the details.
 | 9 | Any host, at scale: the Agent SDK as a host, 50 agents, broker restart and failover | Any MCP host can take work (demonstration 7), and it holds under loss |
 | 10 | Self-hosting: `kbl-mcp` releases, compose, a quick start | Anyone can run it |
 
-M0 and M1 are done. [`core`](core/) has the record formats and names, [`dashboard/`](dashboard/) follows `work.events` through felix-gateway and folds it with `core` as WebAssembly, `kbl-tool` [creates a run](#creating-a-run),
+M0 and M1 are done. [`core`](core/) has the record formats and names (including the `org.events` records for [teams](docs/design.md#teams), not served yet), [`dashboard/`](dashboard/) follows `work.events` through felix-gateway and folds it with `core` as WebAssembly, `kbl-tool` [creates a run](#creating-a-run),
 and [`kbl-mcp`](#giving-an-agent-its-tools) gives an MCP host the [task tools](#the-task-tools). The dashboard
 is described in [docs/work-tracker.md](docs/work-tracker.md) and [docs/dashboard-research.md](docs/dashboard-research.md). M2 is in
 progress. Records on `work.events` carry a format, so a newer build can take over a running log, and an older build

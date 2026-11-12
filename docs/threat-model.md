@@ -305,6 +305,26 @@ a team or a token it was not given.
 | One team's load or a broken log stops the others | A cap on calls in flight per team; a team with a lost lease, a newer format or failing Felix calls answers 503 alone. One process is still one crash for all (#124) |
 | A person in two teams acts in the wrong one | Person routes name the team; a person token in several teams gets `team_required` on a path without one |
 
+## Records on org.events
+
+Built in `kbl-core` ([#185](https://github.com/GetFelix/KBL/issues/185)); no route writes them yet. The tracker will be the only appender, and
+it checks the caller's role before it asks the fold. The fold (`OrgState::check`)
+then refuses a record the log cannot take, before the append and again on replay, so a
+refused call writes nothing and an old log folds as it did. The log holds the SHA-256 of
+each token and never a token. A format above the build's stops the reader.
+
+| Kind | Who may write | Check |
+|---|---|---|
+| `team_created` | Org admin (route check, later) | Name follows the key rule and is not `kbl`; repeating a team changes nothing |
+| `person_added` | Org admin, team admin (route check, later) | Name and OIDC subject unique, token hash not used by any person, agent or ingest worker |
+| `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last admin of a team cannot be demoted |
+| `role_revoked` | Team admin, org admin (route check, later) | The last admin of a team and the last org admin stay |
+| `agent_added` | Triager and above (route check, later) | Team exists; name unique in the team and a revoked name stays taken; token hash unused; 256 per team |
+| `agent_revoked` | Whoever added it, team admin (route check, later) | Team and agent exist; revoking twice changes nothing |
+| `source_added` | Team admin (route check, later) | One owning team per source; a label of 1 to 256 bytes with no control characters |
+| `ingest_added` | Team admin (route check, later) | Name unique in the team, token hash unused, 32 per team |
+| `grant_added` | Admin of the receiving team (route check, later) | Both teams exist and differ; `repos` are the receiver's sources; 256 per receiving team |
+
 ## Attack classes found in review
 
 | Class | Example | Where it is stopped |

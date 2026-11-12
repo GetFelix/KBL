@@ -42,6 +42,7 @@ const wanted = {
   'Ingest': routes('ingest/src/webhook.rs'),
   'MCP tools': tools('mcp/src/server.rs'),
   'Records on work.events': kinds('core/src/work.rs'),
+  'Records on org.events': kinds('core/src/org.rs'),
   'Records on the run log': kinds('core/src/record.rs'),
 };
 
