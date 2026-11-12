@@ -2849,6 +2849,20 @@ fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
     l.person(ctx("mine", "person"));
     l.agent("w1", ctx("mine", "back"));
     assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
+    // Another agent that holds the item later cannot update w1's entry either.
+    l.agent("w1", ctx("w1-note", "x"));
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 0,
+        },
+    );
+    l.agent("w2", claimed("r1", 1));
+    l.agent("w2", ctx("w1-note", "taken"));
+    assert_eq!(last_rejection(&l), Some(Reject::NotYourEntry));
 }
 
 #[test]

@@ -37,6 +37,8 @@ struct Net {
     forgets: Vec<Option<String>>,
     fail_lease: bool,
     gate_extend: bool,
+    /// The next publish waits for `open_gate` after the record is on the stream.
+    gate_publish: bool,
     /// Ingest's saved state by name, with versions.
     cursors: HashMap<String, (Vec<u8>, u64)>,
 }
@@ -113,6 +115,26 @@ impl Fake {
             .insert((stream.to_owned(), offset), Slot::Acked);
     }
 
+    fn publish_now(&self, stream: &str, payload: Vec<u8>) -> anyhow::Result<(u64, bool)> {
+        let mut net = self.net.lock().unwrap();
+        if net.fail_publish_on.as_deref() == Some(stream) {
+            anyhow::bail!("the broker is down");
+        }
+        if let Some((s, left)) = net.publish_budget.as_mut()
+            && s == stream
+        {
+            if *left == 0 {
+                anyhow::bail!("the broker is down");
+            }
+            *left -= 1;
+        }
+        let log = net.streams.entry(stream.to_owned()).or_default();
+        let offset = log.len() as u64;
+        log.push((offset, payload));
+        net.calls.push(format!("publish {stream}"));
+        Ok((offset, std::mem::take(&mut net.gate_publish)))
+    }
+
     fn lift_publish_budget(&self) {
         self.net.lock().unwrap().publish_budget = None;
     }
@@ -141,6 +163,10 @@ impl Fake {
     /// The next extend waits for `open_gate`.
     fn hold_extends(&self) {
         self.net.lock().unwrap().gate_extend = true;
+    }
+
+    fn hold_next_publish(&self) {
+        self.net.lock().unwrap().gate_publish = true;
     }
 
     fn open_gate(&self) {
@@ -248,22 +274,10 @@ impl Fake {
 
 impl Broker for Fake {
     async fn publish(&self, stream: &str, payload: Vec<u8>) -> anyhow::Result<u64> {
-        let mut net = self.net.lock().unwrap();
-        if net.fail_publish_on.as_deref() == Some(stream) {
-            anyhow::bail!("the broker is down");
+        let (offset, gated) = self.publish_now(stream, payload)?;
+        if gated {
+            self.gate.notified().await;
         }
-        if let Some((s, left)) = net.publish_budget.as_mut()
-            && s == stream
-        {
-            if *left == 0 {
-                anyhow::bail!("the broker is down");
-            }
-            *left -= 1;
-        }
-        let log = net.streams.entry(stream.to_owned()).or_default();
-        let offset = log.len() as u64;
-        log.push((offset, payload));
-        net.calls.push(format!("publish {stream}"));
         Ok(offset)
     }
 
@@ -1554,6 +1568,20 @@ async fn no_route_writes_an_oversized_string() {
         let err = t.person_record(key("gab"), r).await.unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{err}");
     }
+    let progress = |branch: Option<String>, pr: Option<String>| WorkRecord::Progress {
+        item: item("big"),
+        attempt: 1,
+        note: agents_core::content::Content::Text("ok".into()),
+        branch,
+        pr,
+    };
+    for r in [
+        progress(Some(big.clone()), None),
+        progress(None, Some(big.clone())),
+    ] {
+        let err = t.person_record(key("gab"), r).await.unwrap_err();
+        assert!(matches!(err, Error::Invalid(_)), "{err}");
+    }
     // An agent's release and give-up reasons.
     t.person_record(
         key("gab"),
@@ -1579,4 +1607,60 @@ async fn no_route_writes_an_oversized_string() {
     t.release(&agent("w1"), &item("big"), Some("short".into()), 0)
         .await
         .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_republish_that_loses_a_race_with_a_claim_is_not_recorded() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    pass(&t, VIS * 7).await;
+    // The sync publishes a second record and stops before it takes the lock again.
+    fake.hold_next_publish();
+    let sync = tokio::spawn({
+        let t = t.clone();
+        async move { t.sync_ready().await }
+    });
+    while fake.ready_count("work.ready.p2") < 2 {
+        tokio::task::yield_now().await;
+    }
+    // Meanwhile w1 claims through the first record.
+    assert!(t.try_claim(&agent("w1"), &[]).await.unwrap().is_some());
+    fake.open_gate();
+    sync.await.unwrap();
+    // The second record is stale: w2's poll acks it and does not take w1's item.
+    assert!(t.try_claim(&agent("w2"), &[]).await.unwrap().is_none());
+    assert!(t.0.core.lock().await.state.held_by("w1").is_some());
+    assert!(!fake.kinds().contains(&"released".to_owned()));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_long_hold_does_not_make_the_record_look_old_after_a_release() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    for _ in 0..7 {
+        pass(&t, VIS / 2).await;
+        t.extend(&agent("w1"), &item("a1")).await.unwrap();
+    }
+    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    assert_eq!(fake.ready_count("work.ready.p2"), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_record_adopted_after_a_restart_is_published_again_once_dead_lettered() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    fake.lapse_all();
+    // The new tracker has no live entry: it adopts the record it is handed.
+    let t = start(&fake).await;
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+    t.release(&agent("w2"), &item("a1"), None, 0).await.unwrap();
+    fake.dead_letter("work.ready.p2", 0);
+    assert_eq!(claimed_id(&claim(&t, "w3").await), None);
+    pass(&t, VIS * 7).await;
+    assert_eq!(claimed_id(&claim(&t, "w3").await).as_deref(), Some("a1"));
 }

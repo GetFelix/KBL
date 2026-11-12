@@ -958,7 +958,18 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             }
             Ok(())
         }
-        WorkRecord::Progress { note, .. } => check_content("note", note),
+        WorkRecord::Progress {
+            note, branch, pr, ..
+        } => {
+            check_content("note", note)?;
+            if let Some(b) = branch {
+                field("branch", b)?;
+            }
+            if let Some(p) = pr {
+                field("pr", p)?;
+            }
+            Ok(())
+        }
         WorkRecord::Step { output, .. } => check_content("output", output),
         WorkRecord::Edit { hunk, .. } => check_content("hunk", hunk),
         WorkRecord::Proposed { title, .. } => field("title", title),

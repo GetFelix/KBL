@@ -3,13 +3,16 @@
 ## Unreleased
 
 - Tracker hardening. An agent can no longer replace a context entry that
-  ingest, the fold or a person wrote (`not_your_entry`). A reported cost
-  saturates an item's total instead of overflowing it. Every string a record
-  carries (release and give-up reasons, imported fields, titles, triage notes,
-  a rules target) is held to 4 KiB on every route. A ready record that Felix
-  dead-lettered is published again after six visibility periods, so its item is
-  claimed again. The empty-lane mark for reviewers is taken before the polls,
-  not after. Older logs fold as they did.
+  ingest, the fold or a person wrote (`not_your_entry`), and a later holder
+  can no longer update an entry a previous agent wrote. The rule applies when a
+  log is replayed, so an old log with such a replacement now keeps the first
+  writer's entry. A reported cost saturates an item's total instead of
+  overflowing it. The strings a record carries (reasons, imported fields,
+  titles, progress branch and pull request, triage notes, a rules target) are
+  held to 4 KiB on every route. A ready record that Felix dead-lettered is
+  published again after six visibility periods (with growing back-off), so its
+  item is claimed again. The empty-lane mark for reviewers is taken before the
+  polls, not after.
 
 - Review is claimable work. When an item's pull request opens, the tracker adds
   a first-pass and a final `review` item, each for a reviewer tier
