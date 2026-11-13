@@ -171,6 +171,13 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, and its pull request |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
+| `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
+
+Every work and ingest route is also served under `/v1/teams/{team}/`, for
+example `/v1/teams/default/work/next`. See [Which team a call is for](#teams).
+A team takes at most `KBL_TEAM_INFLIGHT` calls at once (64 by default). A call
+over that answers `503` with `why: team_busy` and `Retry-After: 1`. A waiting
+`work_next` counts, so set it above the number of agents in the team.
 
 The other work tools are one route each, all with an agent's token. Every one
 writes a single record attributed to that agent and answers with the record's
@@ -250,8 +257,10 @@ current claim.
 
 The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third
-of it. A tracker that cannot renew answers 503 to everything, exits after ten
-seconds, and checks the lease before each append. This narrows the window in
+of it. A team whose tracker cannot renew answers 503 on its routes, stops
+renewing after ten seconds, and checks the lease before each append. The
+process exits when no team holds its lease; with one team, that is ten
+seconds after it lost it. This narrows the window in
 which a second tracker could write but does not close it: that needs an append
 conditioned on the lease key's version, which Felix does not offer yet
 (felix#1051).
@@ -377,7 +386,7 @@ With [teams](#teams), each row holds per team: the tracker publishes to a team's
 
 ### Teams
 
-Partly built: the `org.events` records and fold exist in `kbl-core`; the tracker does not serve teams yet. This is the sketch for [Teams in design.md](design.md#teams)
+Partly built: the `org.events` records and fold exist in `kbl-core`. The tracker keeps a team table and serves the `/v1/teams/{team}/` paths and `GET /v1/me`, with one team, `KBL_NAMESPACE`, whose callers come from the token file. It does not read `org.events` yet. This is the sketch for [Teams in design.md](design.md#teams)
 ([#185](https://github.com/GetFelix/KBL/issues/185)). One tracker serves
 several teams, each in its own Felix namespace with its own `work.events`.
 
@@ -389,7 +398,7 @@ it does today.
 | `KBL_ORG_NAMESPACE` | unset | The namespace that holds `org.events`. Set, the tracker serves every team the org log lists |
 | `KBL_NAMESPACE` | `default` | The first team. With teams on, it is adopted as a team the first time the tracker finds `org.events` empty |
 | `KBL_TRACKER_TOKENS_FILE` | required today, optional with teams | Read as today. Its entries belong to the first team, and its people are org admins |
-| `KBL_TEAM_INFLIGHT` | 64 | Calls in flight per team, so one busy team cannot starve the others |
+| `KBL_TEAM_INFLIGHT` | 64 | Calls in flight per team, so one busy team cannot starve the others. Built |
 
 Teams, people, roles, agents, sources, ingest workers and grants come from
 `org.events`, not from a file, so they change without a restart. Each holds a
