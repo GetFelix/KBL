@@ -220,13 +220,10 @@ async fn a_root_a_person_dismissed_is_not_reopened_with_the_issue() {
     rig.list(vec![issue(812, |_| {})]);
     ingest.poll(false).await.unwrap();
     let item = rig.root(UP);
-    rig.tracker
-        .append(&WorkRecord::Closed {
-            item: item.clone(),
-            why: CloseWhy::Dismissed,
-        })
-        .await
-        .unwrap();
+    rig.tracker.person(WorkRecord::Closed {
+        item: item.clone(),
+        why: CloseWhy::Dismissed,
+    });
     rig.list(vec![closed(
         issue(812, |_| {}),
         "completed",
@@ -802,7 +799,8 @@ async fn a_refused_write_back_does_not_hold_the_cursor_and_is_given_up_on() {
     ingest.poll(false).await.unwrap();
     ingest.poll(false).await.unwrap();
     let saved = rig.tracker.saved_state();
-    assert!(saved.items[UP].written_back);
+    // Given up on, so it is settled and forgotten.
+    assert!(!saved.items.contains_key(UP));
     let comments = |gh: &Script| {
         gh.writes()
             .iter()
