@@ -23,6 +23,10 @@ pub(crate) struct Team<B> {
     tracker: Tracker<B>,
     tokens: Tokens,
     inflight: Arc<Semaphore>,
+    /// `work_next` waits for work while it holds a slot, so it has a pool of its
+    /// own: agents waiting for work cannot take the slots a holder needs to
+    /// extend or finish.
+    waiting: Arc<Semaphore>,
 }
 
 impl<B: Broker> Team<B> {
@@ -37,6 +41,7 @@ impl<B: Broker> Team<B> {
             tracker,
             tokens,
             inflight: Arc::new(Semaphore::new(inflight.max(1))),
+            waiting: Arc::new(Semaphore::new(inflight.max(1))),
         }
     }
 }
@@ -53,8 +58,9 @@ impl<B> Team<B> {
     /// A slot for one call, or none when the team is at its cap. It does not
     /// wait: a team at its cap answers busy at once rather than queueing work
     /// that holds a connection open.
-    pub(crate) fn admit(&self) -> Option<OwnedSemaphorePermit> {
-        self.inflight.clone().try_acquire_owned().ok()
+    pub(crate) fn admit(&self, waits: bool) -> Option<OwnedSemaphorePermit> {
+        let pool = if waits { &self.waiting } else { &self.inflight };
+        pool.clone().try_acquire_owned().ok()
     }
 }
 
@@ -112,7 +118,8 @@ impl<B: Broker> Teams<B> {
 
     /// Runs each team's lease renewal and sweep. A team that loses its lease
     /// for good stops here and answers 503 from then on; the others keep
-    /// serving. Returns when no team holds its lease.
+    /// serving. Returns when no team holds its lease, or at once when a team's
+    /// maintenance panicked: that team would go on writing with no sweep.
     pub(crate) async fn maintain(&self) {
         let mut running = JoinSet::new();
         for team in self.0.values() {
@@ -125,7 +132,10 @@ impl<B: Broker> Teams<B> {
         while let Some(done) = running.join_next().await {
             match done {
                 Ok(name) => eprintln!("kbl-tracker: team {name} lost its writer lease"),
-                Err(e) => eprintln!("kbl-tracker: a team's maintenance failed: {e}"),
+                Err(e) => {
+                    eprintln!("kbl-tracker: a team's maintenance failed: {e}");
+                    return;
+                }
             }
         }
     }

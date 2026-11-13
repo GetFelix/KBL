@@ -575,7 +575,7 @@ async fn me_lists_the_persons_own_teams() {
 #[tokio::test]
 async fn a_busy_team_does_not_hold_up_another() {
     let two = two(1).await;
-    let busy = two.teams.get("a").unwrap().admit().unwrap();
+    let busy = two.teams.get("a").unwrap().admit(false).unwrap();
     let (status, reply) = call(
         &two.app,
         "/v1/work/records",
@@ -605,6 +605,46 @@ async fn a_busy_team_does_not_hold_up_another() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_waiting_work_next_keeps_its_slot_and_not_the_others() {
+    let two = two(1).await;
+    let app = two.app.clone();
+    let waiting = tokio::spawn(async move {
+        call(
+            &app,
+            "/v1/work/next",
+            Some("tok-a-w1"),
+            json!({ "wait_seconds": 5 }),
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (status, reply) = call(
+        &two.app,
+        "/v1/work/next",
+        Some("tok-a-w1"),
+        json!({ "wait_seconds": 0 }),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("team_busy"))
+    );
+    // A holder's calls are not behind the waiting poll.
+    let (status, reply) = call(
+        &two.app,
+        "/v1/work/extend",
+        Some("tok-a-w1"),
+        json!({ "item": "a1" }),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("lost"))
+    );
+    assert_eq!(waiting.await.unwrap().0, StatusCode::OK);
 }
 
 #[tokio::test(start_paused = true)]

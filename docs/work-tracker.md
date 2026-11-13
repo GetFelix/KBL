@@ -176,8 +176,9 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 Every work and ingest route is also served under `/v1/teams/{team}/`, for
 example `/v1/teams/default/work/next`. See [Which team a call is for](#teams).
 A team takes at most `KBL_TEAM_INFLIGHT` calls at once (64 by default). A call
-over that answers `503` with `why: team_busy` and `Retry-After: 1`. A waiting
-`work_next` counts, so set it above the number of agents in the team.
+over that answers `503` with `why: team_busy` and `Retry-After: 1`. Waiting
+`work_next` calls have a pool of the same size of their own, so agents waiting
+for work never hold up a holder's `extend` or `complete`.
 
 The other work tools are one route each, all with an agent's token. Every one
 writes a single record attributed to that agent and answers with the record's

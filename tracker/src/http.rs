@@ -161,7 +161,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
             }
             None => found.remove(0),
         };
-        let Some(slot) = team.admit() else {
+        let Some(slot) = team.admit(parts.uri.path() == "/v1/work/next") else {
             let mut res = refused(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "the team has too many calls in flight",

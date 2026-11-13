@@ -150,7 +150,7 @@ async fn serve() -> Result<()> {
     tokio::select! {
         served = axum::serve(listener, http::router(teams)) => served.context("serve"),
         () = async move { maintain.maintain().await } => {
-            anyhow::bail!("every team lost its writer lease")
+            anyhow::bail!("no team holds its writer lease, or a team's maintenance failed")
         }
     }
 }

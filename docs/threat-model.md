@@ -149,10 +149,12 @@ and the token file's callers belong to it.
 
 A person token in more than one team gets `400` with `team_required` on a path
 without a team. A team takes at most `KBL_TEAM_INFLIGHT` calls at once and
-answers `503` with `team_busy` over that (`tracker/src/teams.rs:56`), so one
-team's load does not hold the others' calls. A team that loses its lease
-answers `503` alone; the process exits only when every team has lost its
-lease (`tracker/src/teams.rs:125`).
+answers `503` with `team_busy` over that (`tracker/src/teams.rs:61`), so one
+team's load does not hold the others' calls; waiting `work_next` calls have
+their own pool, so they cannot starve a holder's `extend`. A slot is taken
+before the body is read, so a slow upload holds one of its own team's slots
+only. A team that loses its lease answers `503` alone; the process exits when
+every team has lost its lease, or at once if a team's maintenance panics (`tracker/src/teams.rs:132`).
 
 ## Ingest
 
