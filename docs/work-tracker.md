@@ -147,14 +147,16 @@ once only, and tokens are compared in constant time:
 ```json
 {
   "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" }, "ingest": { "<token>": "ingest-gh" },
-  "grants": { "w1": ["GetFelix/felix-gateway"] }
+  "grants": { "w1": ["github:GetFelix/felix-gateway"] }
 }
 ```
 
 `grants` is optional. It lists, per agent, the repositories it may file a
 [prerequisite](#prerequisites-in-another-repo) in or link to, beyond the
-repository of the tree it is working in. An agent with no grant can reach only
-its own tree's repository.
+repository of the tree it is working in. Each entry is `source:owner/repo`, so a
+grant for `github:GetFelix/felix-gateway` does not reach a repository with the
+same name in another source. An agent with no grant can reach only its own
+tree's repository.
 
 An agent's token maps to its name, which goes on every record it causes and is
 the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
@@ -514,10 +516,10 @@ that is done; ingest does not write it yet. If a person rejects or dismisses
 the prerequisite, the held item goes to Needs you as "dependency dropped".
 
 This is the only cross-tree link an agent can make, and the tracker checks it
-before the fold sees the record. A new prerequisite must target a repository
-the agent's [grants](#running-the-tracker) name or the one its own tree works
-in. An `existing` item must be in its own tree or in a repository its grants
-name, and an item it cannot see is refused as `unknown_item`, the same answer
+before the fold sees the record. A new prerequisite must target a source and
+repository the agent's [grants](#running-the-tracker) name, or those its own
+tree works in. An `existing` item must be in its own tree or in a source and
+repository its grants name, and an item it cannot see is refused as `unknown_item`, the same answer
 as one that does not exist. The plain `work_link` call still refuses another
 tree (`cross_root`). Cycles are refused across trees too.
 
