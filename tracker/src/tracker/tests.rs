@@ -41,6 +41,8 @@ struct Net {
     gate_publish: bool,
     /// The next nack waits for `open_gate` before it lands.
     gate_nack: bool,
+    /// The next nack panics.
+    panic_nack: bool,
     /// Ingest's saved state by name, with versions.
     cursors: HashMap<String, (Vec<u8>, u64)>,
 }
@@ -173,6 +175,10 @@ impl Fake {
 
     fn hold_next_nack(&self) {
         self.net.lock().unwrap().gate_nack = true;
+    }
+
+    fn panic_on_next_nack(&self) {
+        self.net.lock().unwrap().panic_nack = true;
     }
 
     fn open_gate(&self) {
@@ -337,6 +343,9 @@ impl Broker for Fake {
     }
 
     async fn nack(&self, stream: &str, member: &str, record: &GroupRecord) -> anyhow::Result<()> {
+        // Taken before the panic so the net's lock is not poisoned.
+        let panics = std::mem::take(&mut self.net.lock().unwrap().panic_nack);
+        assert!(!panics, "the nack panicked");
         let gated = std::mem::take(&mut self.net.lock().unwrap().gate_nack);
         if gated {
             self.gate.notified().await;

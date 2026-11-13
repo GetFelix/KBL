@@ -251,6 +251,21 @@ enum Op {
 
 type Slot = Arc<Mutex<Option<Delivery>>>;
 
+/// Ends a hand-back mark if the settle task unwinds before it does, so a panic
+/// cannot leave the item unclaimable until the tracker restarts.
+struct HandBack<B: Broker>(Option<(Tracker<B>, ItemId)>);
+
+impl<B: Broker> Drop for HandBack<B> {
+    fn drop(&mut self) {
+        // Drop cannot await the core lock, so the end runs on a task of its own.
+        if let Some((me, item)) = self.0.take()
+            && let Ok(rt) = tokio::runtime::Handle::try_current()
+        {
+            rt.spawn(async move { me.handed_back(&item).await });
+        }
+    }
+}
+
 struct Inner<B> {
     broker: B,
     core: Mutex<Core>,
@@ -1146,8 +1161,9 @@ impl<B: Broker> Tracker<B> {
         }
         let (me, item) = (self.clone(), item.clone());
         tokio::spawn(async move {
+            let mut mark = HandBack(marked.then(|| (me.clone(), item)));
             let settled = me.run(ops).await;
-            if marked {
+            if let Some((me, item)) = mark.0.take() {
                 me.handed_back(&item).await;
             }
             settled

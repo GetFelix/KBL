@@ -215,3 +215,18 @@ async fn a_hand_back_mark_does_not_outlive_its_item() {
     .unwrap();
     assert!(t.0.core.lock().await.handed_back.is_empty());
 }
+
+#[tokio::test]
+async fn a_settle_that_panics_still_ends_the_hand_back() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    fake.panic_on_next_nack();
+    let done = t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    assert!(done.to_string().contains("not settled"), "{done}");
+    settled(&t).await;
+    // The nack never landed, so the record comes round once its lease lapses.
+    fake.lapse(READY, 0);
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
