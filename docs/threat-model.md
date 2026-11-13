@@ -63,9 +63,9 @@ Two more parties are outside KBL and can still steer it:
    token and a raw client skips it. Felix grants are the check.
 6. **Browser to gateway.** Read only, one run.
 
-The token file must be mode 600 or 400 (`tracker/src/config.rs:90`), a token
-may be listed once (`tracker/src/config.rs:113`), and the lookup takes the
-same time for a wrong token as for a right one (`tracker/src/config.rs:142`).
+The token file must be mode 600 or 400 (`tracker/src/config.rs:91`), a token
+may be listed once (`tracker/src/config.rs:114`), and the lookup takes the
+same time for a wrong token as for a right one (`tracker/src/config.rs:149`).
 The tracker and the webhook serve plain HTTP: **None**
 ([#158](https://github.com/GetFelix/KBL/issues/158)). Tokens are
 long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).

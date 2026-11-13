@@ -122,15 +122,14 @@ impl Tokens {
                 file.agents.0.iter().any(|(_, a)| a.as_str() == agent),
                 "grants name {agent:?}, which is not an agent"
             );
-            let targets = entries
-                .iter()
-                .map(|e| grant_target(e))
-                .collect::<Option<Vec<_>>>()
-                .with_context(|| {
+            let mut targets = Vec::new();
+            for e in &entries {
+                targets.push(grant_target(e).with_context(|| {
                     format!(
-                        "a grant for {agent:?} is not source:owner/repo, such as github:GetFelix/felix"
+                        "the grant {e:?} for {agent:?} is not source:owner/repo; a grant names its source, such as github:GetFelix/felix"
                     )
-                })?;
+                })?);
+            }
             grants.insert(agent, targets);
         }
         Ok(Self {
@@ -178,17 +177,17 @@ fn same(a: &str, b: &str) -> bool {
     diff == 0
 }
 
-#[cfg(test)]
-mod tests;
-
 /// Reads a grant entry. The source is part of it, so a grant for a GitHub repo
 /// does not also reach a repo of the same name in another source.
 fn grant_target(entry: &str) -> Option<Target> {
     let (source, repo) = entry.split_once(':')?;
-    let named = |s: &str| !s.is_empty() && !s.contains(char::is_whitespace);
+    let named = |s: &str| !s.is_empty() && !s.contains(|c: char| c.is_whitespace() || c == ':');
     let (owner, name) = repo.split_once('/')?;
     (named(source) && named(owner) && named(name) && !name.contains('/')).then(|| Target {
         source: source.to_owned(),
         repo: repo.to_owned(),
     })
 }
+
+#[cfg(test)]
+mod tests;

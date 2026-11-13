@@ -71,6 +71,7 @@ fn grants_name_agents_and_source_repo_pairs() {
         "github:a/b/c",
         "github:/b",
         "git hub:a/b",
+        "github:a/b:c",
     ] {
         let text = format!(r#"{{"agents":{{"t":"w1"}},"grants":{{"w1":["{bad}"]}}}}"#);
         assert!(Tokens::parse(&text).is_err(), "{bad}");

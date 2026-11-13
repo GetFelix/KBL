@@ -155,7 +155,8 @@ once only, and tokens are compared in constant time:
 [prerequisite](#prerequisites-in-another-repo) in or link to, beyond the
 repository of the tree it is working in. Each entry is `source:owner/repo`, so a
 grant for `github:GetFelix/felix-gateway` does not reach a repository with the
-same name in another source. An agent with no grant can reach only its own
+same name in another source. The source is the name ingest records, such as
+`github`, and is compared exactly. An agent with no grant can reach only its own
 tree's repository.
 
 An agent's token maps to its name, which goes on every record it causes and is
@@ -519,9 +520,9 @@ This is the only cross-tree link an agent can make, and the tracker checks it
 before the fold sees the record. A new prerequisite must target a source and
 repository the agent's [grants](#running-the-tracker) name, or those its own
 tree works in. An `existing` item must be in its own tree or in a source and
-repository its grants name, and an item it cannot see is refused as `unknown_item`, the same answer
-as one that does not exist. The plain `work_link` call still refuses another
-tree (`cross_root`). Cycles are refused across trees too.
+repository its grants name, and an item it cannot see is refused as
+`unknown_item`, the same answer as one that does not exist. The plain
+`work_link` call still refuses another tree (`cross_root`). Cycles are refused across trees too.
 
 ### Questions with choices
 
