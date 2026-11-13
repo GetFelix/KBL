@@ -202,6 +202,14 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     t.closed = Some(Closed::Dropped);
                     self.follow(p, issue, t).await
                 }
+                // A person reopened the root of an issue that is still closed.
+                Some(root) if !root.closed && issue.closed.is_some() => {
+                    let rule = first_match(&self.settings.rules, issue).map_or("", |r| &r.name);
+                    let mut t = tracked_as(&root.item, rule, issue);
+                    t.closed = issue.closed;
+                    p.state.items.insert(key, t);
+                    Ok(())
+                }
                 _ => self.consider(p, issue).await,
             },
             Some(t) if t.moved_to.is_some() => Ok(()),
@@ -235,8 +243,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             self.context(&item, "intake", intake_text(&rule, issue))
                 .await?;
             if rule.mode == Mode::Admit && !root.closed {
-                self.admit(&item, &rule, issue, root.stage == "triage")
-                    .await?;
+                self.admit(
+                    &item,
+                    &rule,
+                    issue,
+                    root.stage == "triage" && !root.has_children,
+                )
+                .await?;
             }
             if was_waiting {
                 self.import_comments(p, issue).await?;
@@ -287,6 +300,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 closed_by_sync: false,
+                has_children: rule.mode == Mode::Admit,
                 pr: None,
                 claimed_at_ms: None,
                 pr_status: None,
@@ -868,12 +882,21 @@ fn open_roots(p: &Poll, rule: &str) -> usize {
 /// needed to handle one that is reopened: see `on_issue`. A dropped issue is
 /// kept until its pull request has been dealt with.
 fn prune(p: &mut Poll) {
+    // The new id of a transfer is the only entry that keeps the move from
+    // importing the issue a second time under it.
+    let targets: HashSet<String> = p
+        .state
+        .items
+        .values()
+        .filter_map(|t| t.moved_to.clone())
+        .collect();
     let done: Vec<String> = p
         .state
         .items
         .iter()
         .filter(|(k, t)| {
-            t.moved_to.is_none()
+            !targets.contains(*k)
+                && t.moved_to.is_none()
                 && t.closed.is_some()
                 && (t.closed == Some(Closed::Completed) || t.written_back)
                 && p.roots.get(*k).is_some_and(|r| r.closed)

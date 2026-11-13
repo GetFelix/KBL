@@ -21,6 +21,10 @@ pub(crate) struct Root {
     /// reopened when its issue is.
     #[serde(default)]
     pub(crate) closed_by_sync: bool,
+    /// It has its triage and augment items. A root back in Triage that has
+    /// them was reopened, so a person, not ingest, accepts it again.
+    #[serde(default)]
+    pub(crate) has_children: bool,
     /// The agent's pull request, `owner/repo#number`.
     pub(crate) pr: Option<String>,
     /// When the item was first claimed, in milliseconds since the epoch.

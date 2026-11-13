@@ -288,7 +288,8 @@ dismissed stays closed when its issue is reopened. Whether a close was
 ingest's is read from the log (`GET /v1/ingest/roots`), not from saved state, so
 a poll that stopped between the close and its save does not lose it.
 
-Ingest's saved state keeps one entry per open issue. An issue that is closed
+Ingest's saved state keeps an entry for each open issue, each transferred
+issue, and each closed issue still waiting on its pull request. An issue that is closed
 and settled (its root is closed, and a dropped issue's pull request has been
 dealt with) is forgotten, so the state does not grow toward the 4 MiB limit.
 Reopening such an issue still reopens its root, because the root says whether
