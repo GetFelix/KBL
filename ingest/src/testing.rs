@@ -215,6 +215,11 @@ impl Fake {
         self.0.lock().unwrap().save_fails = true;
     }
 
+    /// Saves work again after `fail_saves`.
+    pub(crate) fn allow_saves(&self) {
+        self.0.lock().unwrap().save_fails = false;
+    }
+
     /// Ingest's saved state is lost, as if the cache entry expired.
     pub(crate) fn forget_saved(&self) {
         self.0.lock().unwrap().saved = None;
@@ -238,6 +243,7 @@ impl Tracker for Fake {
                         .unwrap()
                         .to_owned(),
                     closed: it.closed.is_some(),
+                    closed_by_sync: it.closed_by_sync,
                     pr: it.pr.clone(),
                     claimed_at_ms: it.first_claim_ms,
                     pr_status: it.pr_status.clone(),

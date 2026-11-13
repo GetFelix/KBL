@@ -17,6 +17,10 @@ pub(crate) struct Root {
     pub(crate) upstream_id: String,
     pub(crate) stage: String,
     pub(crate) closed: bool,
+    /// Upstream sync wrote the close, not a person. Only such a root is
+    /// reopened when its issue is.
+    #[serde(default)]
+    pub(crate) closed_by_sync: bool,
     /// The agent's pull request, `owner/repo#number`.
     pub(crate) pr: Option<String>,
     /// When the item was first claimed, in milliseconds since the epoch.

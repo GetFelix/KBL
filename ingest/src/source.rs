@@ -207,6 +207,12 @@ pub(crate) trait Source: Send + Sync {
 
     fn fetch(&self, id: &IssueRef) -> impl Future<Output = Result<Fetched, SourceError>> + Send;
 
+    /// Every comment on one issue, oldest first.
+    fn issue_comments(
+        &self,
+        id: &IssueRef,
+    ) -> impl Future<Output = Result<Vec<Comment>, SourceError>> + Send;
+
     fn links(&self, id: &IssueRef) -> impl Future<Output = Result<Links, SourceError>> + Send;
 
     fn write_back(&self, what: &WriteBack) -> impl Future<Output = Result<(), SourceError>> + Send;

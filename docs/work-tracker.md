@@ -169,7 +169,7 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
-| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, and its pull request |
+| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed and whether upstream sync (not a person) closed it, and its pull request |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 
 The other work tools are one route each, all with an agent's token. Every one
@@ -284,7 +284,15 @@ against the secret named by `--webhook-secret-env`, and a `transferred` or
 The ingest token can act only on roots ingest imported. A pull request an agent
 reports is written to (made a draft) only when it is in the same repository as
 the upstream issue, and that repository is one a rule names. A root a person
-dismissed stays closed when its issue is reopened.
+dismissed stays closed when its issue is reopened. Whether a close was
+ingest's is read from the log (`GET /v1/ingest/roots`), not from saved state, so
+a poll that stopped between the close and its save does not lose it.
+
+Ingest's saved state keeps one entry per open issue. An issue that is closed
+and settled (its root is closed, and a dropped issue's pull request has been
+dealt with) is forgotten, so the state does not grow toward the 4 MiB limit.
+Reopening such an issue still reopens its root, because the root says whether
+ingest closed it.
 
 ```json
 {
@@ -329,7 +337,8 @@ What it does with GitHub:
   on later polls, oldest first, as roots close.
 - **Comments** become `context` entries (`gh-c<id>`) that name the author.
   Comments by ingest's own logins are skipped, and an edited comment replaces
-  its entry.
+  its entry. Comments made while an issue waited over its rule's cap are read
+  from the issue when it is admitted.
 - **Transfers and deletions** show in no listing, so every `reconcile_every`
   polls (default 20) each open imported issue is fetched. A redirect is a move
   (`context` entry `moved`, new id, same item); a missing issue is dropped.
@@ -361,8 +370,10 @@ What it does with GitHub:
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 
-An issue that leaves its rule and later returns stays in Needs you: `left_scope`
-has no matching record to clear it, so a person decides.
+An issue that leaves its rule and later returns stays in Needs you on purpose:
+`left_scope` has no matching record to clear it, so a person confirms the item
+still belongs. A record that clears it would be a new record kind and so a new
+format (see [upgrades](upgrades.md)).
 
 ### Grants
 
@@ -842,7 +853,7 @@ matches two rules belongs to the first one listed.
 | Title, body or labels edited | An `updated` record. The item shows "changed upstream since triage". Triaging again is a person's action, so edits never create work |
 | A new comment | A `context` record credited to the upstream author. Agents see it on their next read |
 | No longer matches its rule (label removed, milestone moved) | `left_scope`. Withdrawn from Ready if nobody holds it. If an agent holds it, the attempt finishes or is released and the item then stops. Shown in Needs you |
-| Closed as completed or fixed | `closed` with reason completed: the item is done and its dependents unblock |
+| Closed as completed or fixed, or closed with no reason (issues closed before GitHub kept one) | `closed` with reason completed: the item is done and its dependents unblock |
 | Closed as not planned, duplicate or won't fix | `closed` with reason dropped: open children and attempts are cancelled, dependents go to Needs you ("dependency dropped"), and an agent's open pull request becomes a draft with a comment |
 | Reopened | Back to Triage as the same root, with its history and its remaining budget |
 | Moved or transferred | The same item under its new upstream id, with a link record |

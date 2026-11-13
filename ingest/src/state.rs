@@ -32,10 +32,6 @@ pub(crate) struct Tracked {
     /// Issues it waits on that already have an edge.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) linked: BTreeSet<String>,
-    /// Ingest itself closed the root, as opposed to a person. Only such a
-    /// root is reopened when the issue is.
-    #[serde(default)]
-    pub(crate) closed_by_us: bool,
     /// The pull request already made a draft after a drop.
     #[serde(default)]
     pub(crate) written_back: bool,
