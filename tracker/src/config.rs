@@ -61,6 +61,7 @@ impl<T> Pairs<T> {
     }
 }
 
+#[derive(Clone)]
 pub(crate) enum Caller {
     Agent(AgentName),
     Person(Key),
@@ -131,6 +132,23 @@ impl Tokens {
             ingest: file.ingest.0,
             grants: file.grants,
         })
+    }
+
+    /// Every token with who it names.
+    pub(crate) fn entries(&self) -> impl Iterator<Item = (&str, Caller)> {
+        let agents = self
+            .agents
+            .iter()
+            .map(|(t, a)| (t.as_str(), Caller::Agent(a.clone())));
+        let people = self
+            .people
+            .iter()
+            .map(|(t, p)| (t.as_str(), Caller::Person(p.clone())));
+        let ingest = self
+            .ingest
+            .iter()
+            .map(|(t, w)| (t.as_str(), Caller::Ingest(w.clone())));
+        agents.chain(people).chain(ingest)
     }
 
     pub(crate) fn grants(&self) -> Grants {

@@ -1,14 +1,20 @@
-//! The REST API. Every call carries a bearer token that the token file maps to
-//! an agent or a person; the name on each record comes from there, never from
-//! the body.
+//! The REST API. Every call carries a bearer token that a team's token list
+//! maps to an agent, a person or an ingest worker; the name on each record
+//! comes from there, never from the body.
+//!
+//! The team a call acts in comes from the token. A path under
+//! `/v1/teams/{team}/` names it too, and must name one of the token's teams.
+//! Every handler gets its team and caller from [`Call`], so no handler can
+//! reach a tracker the token was not given.
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::extract::{FromRequestParts, Request, State};
+use axum::http::request::Parts;
+use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
@@ -18,9 +24,12 @@ use kbl_core::work::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::OwnedSemaphorePermit;
+use tower::ServiceExt;
 
-use crate::config::{Caller, Tokens};
+use crate::config::Caller;
 use crate::felix::Broker;
+use crate::teams::{Team, Teams};
 use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer};
 
 mod ingest;
@@ -29,13 +38,32 @@ mod ingest;
 type Denied = (StatusCode, &'static str);
 
 struct App<B> {
-    tracker: Tracker<B>,
-    tokens: Tokens,
+    teams: Arc<Teams<B>>,
 }
 
-pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
+/// The team named by a `/v1/teams/{team}/` path, set by [`in_team`] only.
+#[derive(Clone)]
+struct TeamPath(String);
+
+pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
+    let app = Arc::new(App { teams });
+    let work = work_routes::<B>().with_state(app.clone());
+    let scoped = work.clone();
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        .route("/v1/me", get(me::<B>))
+        .route(
+            "/v1/teams/{team}/{*rest}",
+            any(move |req: Request| in_team(scoped.clone(), req)),
+        )
+        .with_state(app)
+        .merge(work)
+}
+
+/// The routes that act in one team. They are served at `/v1/...`, for the
+/// token's only team, and at `/v1/teams/{team}/...`.
+fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
+    Router::new()
         .route("/v1/work/next", post(next::<B>))
         .route("/v1/work/extend", post(extend::<B>))
         .route("/v1/work/complete", post(complete::<B>))
@@ -66,7 +94,132 @@ pub(crate) fn router<B: Broker>(tracker: Tracker<B>, tokens: Tokens) -> Router {
         .route("/v1/work/budget", post(budget::<B>))
         .route("/v1/work/rules", post(rules::<B>))
         .route("/v1/work/rules/read", post(rules_read::<B>))
-        .with_state(Arc::new(App { tracker, tokens }))
+}
+
+/// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
+/// work and ingest routes have a team form.
+async fn in_team(work: Router, mut req: Request) -> Response {
+    // The raw path, so a percent-encoded segment reaches the inner route as sent.
+    let path = req.uri().path().to_owned();
+    let Some((team, rest)) = path
+        .strip_prefix("/v1/teams/")
+        .and_then(|p| p.split_once('/'))
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if !(rest.starts_with("work/") || rest.starts_with("ingest/")) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let target = match req.uri().query() {
+        Some(q) => format!("/v1/{rest}?{q}"),
+        None => format!("/v1/{rest}"),
+    };
+    let Ok(uri) = target.parse::<Uri>() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    req.extensions_mut().insert(TeamPath(team.to_owned()));
+    *req.uri_mut() = uri;
+    match work.oneshot(req).await {
+        Ok(res) => res,
+        Err(never) => match never {},
+    }
+}
+
+/// Who is calling and in which team, with the team's slot for the call. Taken
+/// before the body is read, so an unknown token is refused first.
+struct Call<B> {
+    team: Arc<Team<B>>,
+    caller: Caller,
+    _slot: OwnedSemaphorePermit,
+}
+
+impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {
+        let mut found = bearer(&parts.headers)
+            .map(|t| app.teams.who(t))
+            .unwrap_or_default();
+        if found.is_empty() {
+            return Err(denied((
+                StatusCode::UNAUTHORIZED,
+                "unknown or missing token",
+            )));
+        }
+        let (team, caller) = match parts.extensions.get::<TeamPath>() {
+            // A team the token is not in answers as one that does not exist.
+            Some(TeamPath(named)) => found
+                .into_iter()
+                .find(|(t, _)| t.name().as_str() == named)
+                .ok_or_else(|| refused(StatusCode::NOT_FOUND, "no such team", "unknown_team"))?,
+            None if found.len() > 1 => {
+                return Err(refused(
+                    StatusCode::BAD_REQUEST,
+                    "this token is in more than one team; name the team in the path",
+                    "team_required",
+                ));
+            }
+            None => found.remove(0),
+        };
+        let Some(slot) = team.admit() else {
+            let mut res = refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the team has too many calls in flight",
+                "team_busy",
+            );
+            res.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+            return Err(res);
+        };
+        Ok(Self {
+            team,
+            caller,
+            _slot: slot,
+        })
+    }
+}
+
+impl<B> Call<B> {
+    fn tracker(&self) -> &Tracker<B> {
+        self.team.tracker()
+    }
+
+    fn agent(&self) -> Result<AgentName, Denied> {
+        match &self.caller {
+            Caller::Agent(a) => Ok(a.clone()),
+            Caller::Person(_) | Caller::Ingest(_) => {
+                Err((StatusCode::FORBIDDEN, "this call is for an agent's token"))
+            }
+        }
+    }
+
+    fn person(&self) -> Result<Key, Denied> {
+        match &self.caller {
+            Caller::Person(p) => Ok(p.clone()),
+            Caller::Agent(_) | Caller::Ingest(_) => {
+                Err((StatusCode::FORBIDDEN, "this call is for a person's token"))
+            }
+        }
+    }
+}
+
+/// The person's teams and their role in each. A person in the token file is
+/// an org admin, so is an admin in every team that file belongs to.
+async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {
+    let found = bearer(&headers)
+        .map(|t| app.teams.who(t))
+        .unwrap_or_default();
+    let Some((_, first)) = found.first() else {
+        return denied((StatusCode::UNAUTHORIZED, "unknown or missing token"));
+    };
+    let Caller::Person(person) = first else {
+        return denied((StatusCode::FORBIDDEN, "this call is for a person's token"));
+    };
+    let teams: Vec<Value> = found
+        .iter()
+        .map(|(t, _)| json!({ "team": t.name(), "role": "admin" }))
+        .collect();
+    Json(json!({ "person": person, "org_admin": true, "teams": teams })).into_response()
 }
 
 #[derive(Deserialize)]
@@ -284,51 +437,43 @@ struct RulesBody {
     checks: Option<Vec<String>>,
 }
 
-async fn next<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(body): Json<NextBody>,
-) -> Response {
-    let agent = match agent(&app, &headers) {
+async fn next<B: Broker>(call: Call<B>, Json(body): Json<NextBody>) -> Response {
+    let agent = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
     };
     let wait = body
         .wait_seconds
         .map_or(Duration::from_secs(10), Duration::from_secs);
-    reply(app.tracker.next_for(&agent, wait, &body.review_tiers).await)
+    reply(
+        call.tracker()
+            .next_for(&agent, wait, &body.review_tiers)
+            .await,
+    )
 }
 
-async fn extend<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(body): Json<ItemBody>,
-) -> Response {
-    match agent(&app, &headers) {
-        Ok(a) => reply(app.tracker.extend(&a, &body.item).await),
+async fn extend<B: Broker>(call: Call<B>, Json(body): Json<ItemBody>) -> Response {
+    match call.agent() {
+        Ok(a) => reply(call.tracker().extend(&a, &body.item).await),
         Err(d) => denied(d),
     }
 }
 
-async fn complete<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(body): Json<CompleteBody>,
-) -> Response {
-    match agent(&app, &headers) {
-        Ok(a) => reply(app.tracker.complete(&a, &body.item, body.cost_micros).await),
-        Err(d) => denied(d),
-    }
-}
-
-async fn release<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(body): Json<ReleaseBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn complete<B: Broker>(call: Call<B>, Json(body): Json<CompleteBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
+                .complete(&a, &body.item, body.cost_micros)
+                .await,
+        ),
+        Err(d) => denied(d),
+    }
+}
+
+async fn release<B: Broker>(call: Call<B>, Json(body): Json<ReleaseBody>) -> Response {
+    match call.agent() {
+        Ok(a) => reply(
+            call.tracker()
                 .release(&a, &body.item, body.reason, body.cost_micros)
                 .await,
         ),
@@ -336,14 +481,10 @@ async fn release<B: Broker>(
     }
 }
 
-async fn give_up<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(body): Json<GiveUpBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn give_up<B: Broker>(call: Call<B>, Json(body): Json<GiveUpBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
                 .give_up(&a, &body.item, body.reason, body.cost_micros)
                 .await,
         ),
@@ -351,23 +492,15 @@ async fn give_up<B: Broker>(
     }
 }
 
-async fn records<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(body): Json<RecordBody>,
-) -> Response {
-    match person(&app, &headers) {
-        Ok(p) => reply(app.tracker.person_record(p, body.record).await),
+async fn records<B: Broker>(call: Call<B>, Json(body): Json<RecordBody>) -> Response {
+    match call.person() {
+        Ok(p) => reply(call.tracker().person_record(p, body.record).await),
         Err(d) => denied(d),
     }
 }
 
-async fn work_post<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<PostBody>,
-) -> Response {
-    let a = match agent(&app, &headers) {
+async fn work_post<B: Broker>(call: Call<B>, Json(b): Json<PostBody>) -> Response {
+    let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
     };
@@ -387,7 +520,7 @@ async fn work_post<B: Broker>(
             }
         };
         return reply(
-            app.tracker
+            call.tracker()
                 .prerequisite(&a, &b.item, b.key, which, b.done_when, b.cost_micros)
                 .await,
         );
@@ -396,50 +529,38 @@ async fn work_post<B: Broker>(
         Ok(k) => k,
         Err(e) => return reply(Err(e)),
     };
-    reply(app.tracker.post(&a, &b.item, b.key, kind, b.title).await)
+    reply(call.tracker().post(&a, &b.item, b.key, kind, b.title).await)
 }
 
-async fn link<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<LinkBody>,
-) -> Response {
-    match agent(&app, &headers) {
-        Ok(a) => reply(app.tracker.link(&a, &b.item, &b.to).await),
+async fn link<B: Broker>(call: Call<B>, Json(b): Json<LinkBody>) -> Response {
+    match call.agent() {
+        Ok(a) => reply(call.tracker().link(&a, &b.item, &b.to).await),
         Err(d) => denied(d),
     }
 }
 
-async fn context_read<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<ItemBody>,
-) -> Response {
-    match agent(&app, &headers) {
-        Ok(a) => reply(app.tracker.context_read(&a, &b.item).await),
+async fn context_read<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
+    match call.agent() {
+        Ok(a) => reply(call.tracker().context_read(&a, &b.item).await),
         Err(d) => denied(d),
     }
 }
 
-async fn context_add<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<ContextAddBody>,
-) -> Response {
-    match agent(&app, &headers) {
-        Ok(a) => reply(app.tracker.context_add(&a, &b.item, b.entry, b.text).await),
-        Err(d) => denied(d),
-    }
-}
-
-async fn progress<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<ProgressBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn context_add<B: Broker>(call: Call<B>, Json(b): Json<ContextAddBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
+                .context_add(&a, &b.item, b.entry, b.text)
+                .await,
+        ),
+        Err(d) => denied(d),
+    }
+}
+
+async fn progress<B: Broker>(call: Call<B>, Json(b): Json<ProgressBody>) -> Response {
+    match call.agent() {
+        Ok(a) => reply(
+            call.tracker()
                 .progress(&a, &b.item, b.note, b.branch, b.pr)
                 .await,
         ),
@@ -447,12 +568,8 @@ async fn progress<B: Broker>(
     }
 }
 
-async fn decide<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<DecideBody>,
-) -> Response {
-    let a = match agent(&app, &headers) {
+async fn decide<B: Broker>(call: Call<B>, Json(b): Json<DecideBody>) -> Response {
+    let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
     };
@@ -467,15 +584,11 @@ async fn decide<B: Broker>(
         evidence: b.evidence,
         revert_check: b.revert_check,
     };
-    reply(app.tracker.decide(&a, &b.item, d).await)
+    reply(call.tracker().decide(&a, &b.item, d).await)
 }
 
-async fn finding<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<FindingBody>,
-) -> Response {
-    let a = match agent(&app, &headers) {
+async fn finding<B: Broker>(call: Call<B>, Json(b): Json<FindingBody>) -> Response {
+    let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
     };
@@ -487,17 +600,13 @@ async fn finding<B: Broker>(
         scenario: b.scenario,
         verdict: b.verdict,
     };
-    reply(app.tracker.finding(&a, &b.item, f).await)
+    reply(call.tracker().finding(&a, &b.item, f).await)
 }
 
-async fn review_verdict<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<VerdictBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn review_verdict<B: Broker>(call: Call<B>, Json(b): Json<VerdictBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
                 .review_verdict(&a, &b.item, b.verdict, b.why)
                 .await,
         ),
@@ -520,14 +629,10 @@ struct TriageBody {
     split: Vec<String>,
 }
 
-async fn triage<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<TriageBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn triage<B: Broker>(call: Call<B>, Json(b): Json<TriageBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
                 .triage(
                     &a,
                     &b.item,
@@ -546,14 +651,10 @@ async fn triage<B: Broker>(
     }
 }
 
-async fn step<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<StepBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn step<B: Broker>(call: Call<B>, Json(b): Json<StepBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
                 .record_step(&a, &b.item, b.command, b.exit_code, b.output)
                 .await,
         ),
@@ -561,14 +662,10 @@ async fn step<B: Broker>(
     }
 }
 
-async fn edit<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<EditBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn edit<B: Broker>(call: Call<B>, Json(b): Json<EditBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
                 .edit(&a, &b.item, b.file, b.hunk, b.decision)
                 .await,
         ),
@@ -588,14 +685,10 @@ struct AskBody {
     cost_micros: u64,
 }
 
-async fn ask<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<AskBody>,
-) -> Response {
-    match agent(&app, &headers) {
+async fn ask<B: Broker>(call: Call<B>, Json(b): Json<AskBody>) -> Response {
+    match call.agent() {
         Ok(a) => reply(
-            app.tracker
+            call.tracker()
                 .ask(&a, &b.item, b.text, b.options, b.default, b.cost_micros)
                 .await,
         ),
@@ -603,12 +696,8 @@ async fn ask<B: Broker>(
     }
 }
 
-async fn answer<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<AnswerBody>,
-) -> Response {
-    let a = match agent(&app, &headers) {
+async fn answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> Response {
+    let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
     };
@@ -625,58 +714,42 @@ async fn answer<B: Broker>(
         ));
     };
     reply(
-        app.tracker
+        call.tracker()
             .answer(&a, &b.item, question, b.text, b.evidence, b.chosen)
             .await,
     )
 }
 
 /// A person's action that is one record.
-async fn as_person<B: Broker>(app: &App<B>, headers: &HeaderMap, record: WorkRecord) -> Response {
-    match person(app, headers) {
-        Ok(p) => reply(app.tracker.person_record(p, record).await),
+async fn as_person<B: Broker>(call: &Call<B>, record: WorkRecord) -> Response {
+    match call.person() {
+        Ok(p) => reply(call.tracker().person_record(p, record).await),
         Err(d) => denied(d),
     }
 }
 
-async fn accept<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<AcceptBody>,
-) -> Response {
+async fn accept<B: Broker>(call: Call<B>, Json(b): Json<AcceptBody>) -> Response {
     let record = WorkRecord::Accepted {
         item: b.item,
         tier: b.tier,
     };
-    as_person(&app, &headers, record).await
+    as_person(&call, record).await
 }
 
-async fn edit_proposal<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<EditProposalBody>,
-) -> Response {
+async fn edit_proposal<B: Broker>(call: Call<B>, Json(b): Json<EditProposalBody>) -> Response {
     let record = WorkRecord::Edited {
         item: b.item,
         title: b.title,
         tier: b.tier,
     };
-    as_person(&app, &headers, record).await
+    as_person(&call, record).await
 }
 
-async fn reject<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<ItemBody>,
-) -> Response {
-    as_person(&app, &headers, WorkRecord::Rejected { item: b.item }).await
+async fn reject<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
+    as_person(&call, WorkRecord::Rejected { item: b.item }).await
 }
 
-async fn person_answer<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<AnswerBody>,
-) -> Response {
+async fn person_answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> Response {
     let how = Reply {
         chosen: b.chosen,
         moves_to: b.moves_to.map(|m| {
@@ -689,9 +762,9 @@ async fn person_answer<B: Broker>(
             )
         }),
     };
-    match person(&app, &headers) {
+    match call.person() {
         Ok(p) => reply(
-            app.tracker
+            call.tracker()
                 .person_answer(p, &b.item, b.question, b.text, b.evidence, how)
                 .await,
         ),
@@ -699,47 +772,31 @@ async fn person_answer<B: Broker>(
     }
 }
 
-async fn tier<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<TierBody>,
-) -> Response {
+async fn tier<B: Broker>(call: Call<B>, Json(b): Json<TierBody>) -> Response {
     let record = WorkRecord::TierChanged {
         item: b.item,
         tier: b.tier,
     };
-    as_person(&app, &headers, record).await
+    as_person(&call, record).await
 }
 
-async fn close<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<CloseBody>,
-) -> Response {
+async fn close<B: Broker>(call: Call<B>, Json(b): Json<CloseBody>) -> Response {
     let record = WorkRecord::Closed {
         item: b.item,
         why: b.why,
     };
-    as_person(&app, &headers, record).await
+    as_person(&call, record).await
 }
 
-async fn unlink<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<LinkBody>,
-) -> Response {
+async fn unlink<B: Broker>(call: Call<B>, Json(b): Json<LinkBody>) -> Response {
     let record = WorkRecord::Unlinked {
         item: b.item,
         to: b.to,
     };
-    as_person(&app, &headers, record).await
+    as_person(&call, record).await
 }
 
-async fn budget<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<BudgetBody>,
-) -> Response {
+async fn budget<B: Broker>(call: Call<B>, Json(b): Json<BudgetBody>) -> Response {
     let record = WorkRecord::BudgetSet {
         root: b.root,
         items_left: b.items_left,
@@ -747,14 +804,10 @@ async fn budget<B: Broker>(
         cost_left_micros: b.cost_left_micros,
         redos_per_item: b.redos_per_item,
     };
-    as_person(&app, &headers, record).await
+    as_person(&call, record).await
 }
 
-async fn rules<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<RulesBody>,
-) -> Response {
+async fn rules<B: Broker>(call: Call<B>, Json(b): Json<RulesBody>) -> Response {
     let record = WorkRecord::RulesSet {
         target: Target {
             source: b.source,
@@ -764,46 +817,21 @@ async fn rules<B: Broker>(
         text: b.text,
         checks: b.checks,
     };
-    as_person(&app, &headers, record).await
+    as_person(&call, record).await
 }
 
-async fn rules_read<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(b): Json<ItemBody>,
-) -> Response {
-    match agent(&app, &headers) {
-        Ok(a) => reply(app.tracker.rules_read(&a, &b.item).await),
+async fn rules_read<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
+    match call.agent() {
+        Ok(a) => reply(call.tracker().rules_read(&a, &b.item).await),
         Err(d) => denied(d),
     }
 }
 
-fn caller<B>(app: &App<B>, headers: &HeaderMap) -> Result<Caller, Denied> {
-    let token = headers
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    token
-        .and_then(|t| app.tokens.who(t))
-        .ok_or((StatusCode::UNAUTHORIZED, "unknown or missing token"))
-}
-
-fn agent<B>(app: &App<B>, headers: &HeaderMap) -> Result<AgentName, Denied> {
-    match caller(app, headers)? {
-        Caller::Agent(a) => Ok(a),
-        Caller::Person(_) | Caller::Ingest(_) => {
-            Err((StatusCode::FORBIDDEN, "this call is for an agent's token"))
-        }
-    }
-}
-
-fn person<B>(app: &App<B>, headers: &HeaderMap) -> Result<Key, Denied> {
-    match caller(app, headers)? {
-        Caller::Person(p) => Ok(p),
-        Caller::Agent(_) | Caller::Ingest(_) => {
-            Err((StatusCode::FORBIDDEN, "this call is for a person's token"))
-        }
-    }
+        .and_then(|v| v.strip_prefix("Bearer "))
 }
 
 fn reply(result: Result<Value, Error>) -> Response {
@@ -829,6 +857,10 @@ fn reply(result: Result<Value, Error>) -> Response {
 
 fn denied((status, message): Denied) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+fn refused(status: StatusCode, message: &str, why: &str) -> Response {
+    (status, Json(json!({ "error": message, "why": why }))).into_response()
 }
 
 #[cfg(test)]
