@@ -235,7 +235,8 @@ again, or lapses, and the next poll claims it. Without this the new holder
 would be claimed, lose its delivery at once and be lapsed while it worked.
 The hand-back runs to its end even when the caller's request is dropped, and
 no other call ends it early. If the task sending the nack panics, the hand-back
-still ends, so the item can be claimed again once Felix hands its record out.
+still ends, so the item can be claimed again once the old lease lapses and Felix
+hands the record out.
 
 Felix dead-letters a ready record after five handouts, and the tracker is not told. So a Ready item
 whose record has stood for six visibility periods gets a new record with a new stamp; the old one,
