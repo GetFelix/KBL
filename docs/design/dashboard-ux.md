@@ -11,6 +11,10 @@ the rest (issue [#132](https://github.com/GetFelix/KBL/issues/132)).
 | ![The first page: one flat list](img/before-list.png) | ![Items grouped by stage](img/list-dark.png) |
 | ![The first page with no token](img/before-setup.png) | ![Setup state with the next step](img/setup-dark.png) |
 
+Phase 2: [board](img/board-dark-comfortable.png), [board, compact, light](img/board-light-compact.png),
+[filters](img/filters-dark.png), [saved view](img/saved-view-dark.png), [save dialog](img/save-view-dark.png),
+[board with the panel](img/board-panel-dark.png), [phone menu](img/phone-menu-dark.png).
+
 More shots: [palette](img/palette-dark.png), [shortcuts](img/shortcuts-light.png), [panel](img/panel-dark.png),
 [loading](img/loading-dark.png), [no match](img/empty-search-dark.png), [stopped](img/error-dark.png), [cannot reach the gateway](img/unreachable-dark.png),
 [phone](img/phone-dark.png), [light list](img/list-light.png). `node dashboard/check/browser.mjs <dir>`
@@ -44,6 +48,24 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   the side panel and in the address (`?item=`), so a link opens the same view. Opening moves focus into the
   panel and `Esc` puts it back on the row. Rows are kept per item and only redrawn when the list changes, so a
   live record never takes the focus off the row you are on.
+- **Board.** Columns are the list's stage groups in the same order, so switching with `V` never reorders
+  anything, and the selection and focus stay on the same item. Keyboard pattern: one `Tab` stop per column
+  (roving `tabindex` on the selected card, else the column's first), `J`/`K` and up/down inside a column, `H`/`L`
+  and left/right across, keeping the row or landing on a shorter column's last card. We picked this over an ARIA
+  grid because cards are plain links in a headed list, which every screen reader reads without a mode switch,
+  and `Tab` still walks the board column by column. Movement is `moveBoard` in `src/list.ts`.
+- **Filters.** Source, tier and repo come from what the log recorded: `tier` from triage or acceptance, `repo`
+  from an `owner/repo#n` upstream id (or a target), `source` from the target or the import. A child item shows
+  its root's. Values with no items are never offered, and a facet nobody recorded is hidden. Each filter is a
+  native `<select>`, which owns its own keys; `Esc` and `Mod` chords still work there. The bar says
+  "Showing N of M" with the active filters in words, and no match inside filters offers Clear filters.
+- **Saved views.** Layout, search and filters are the address (`view`, `q`, `source`, `tier`, `repo`), so a view
+  is a link. Save view stores it by name in local storage, per viewer, and puts it in the sidebar, where the
+  current one is `aria-current` and names the page. Edit renames or deletes; a name already in use is refused
+  next to the field rather than overwriting a view. Storage is read in `try`/`catch`: blocked or broken storage
+  leaves an empty sidebar, never a broken page.
+- **Density.** Comfortable or compact, from the palette, remembered per viewer. Only tokens change
+  (`--row-height`, card padding and gap, column width); compact rows stay above the 24 px target size.
 - **States.** Each has a heading, one sentence and the next step: setup (how to connect), loading (placeholder
   rows, `aria-busy`), cannot reach the gateway (nothing read yet, when the next try is), empty, no match
   (Clear search), no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,
@@ -59,11 +81,11 @@ page does and checks a message gets through, and CI runs the page itself in Chro
 | --- | --- |
 | Visibility of system status | Met: live status line (Reading history, Live, Disconnected and retrying in N s, Stopped), counts per stage, skeleton rows while loading. |
 | Match with the real world | Met: stage names from the tracker, upstream ids as written upstream. |
-| User control and freedom | Partly: `Esc` closes or clears everywhere, the address restores views. Undo waits for writes (phase 3). |
+| User control and freedom | Partly: `Esc` closes or clears everywhere, the address restores views, Clear filters and All work reset the view. Undo waits for writes (phase 3). |
 | Consistency and standards | Met: Linear/GitHub keys, native `<dialog>`, one shortcut map. |
-| Error prevention | Not applicable until the page writes. |
+| Error prevention | Met for saved views: a taken name is refused instead of overwriting, and Delete sits apart from Save in its dialog. |
 | Recognition rather than recall | Met: palette lists every command with its key; `?` lists all keys. |
-| Flexibility and efficiency | Met for reading: keys for every action, palette search by id or title. |
+| Flexibility and efficiency | Met for reading: keys for every action, palette search by id or title, filters by value from the palette, saved views. |
 | Aesthetic and minimalist design | Met: one list, one panel, no chrome beyond the nav. |
 | Help users recover from errors | Met: stopped state names the cause, and the next step where the cause backs one (a new sign-in link, or Reload); no-match offers Clear. |
 | Help and documentation | Met: `?` overlay, README Keys table. |
@@ -71,7 +93,8 @@ page does and checks a message gets through, and CI runs the page itself in Chro
 ## WCAG 2.2 AA
 
 `npm run check` runs axe-core (WCAG 2.0 to 2.2 A/AA rules and best practice) on the list, palette, shortcuts,
-no-match, setup, stopped and phone views, in both themes. It reports no violations of any impact, and fails CI
+no-match, setup, stopped and phone views, in both themes, and on the board in both themes and both densities,
+the filtered list, the save dialog and the phone menu. It reports no violations of any impact, and fails CI
 on serious or critical.
 
 | Criterion | Status |
@@ -80,24 +103,25 @@ on serious or critical.
 | 1.3.1 Info and relationships | Met: nav/main/aside landmarks, headed stage groups, listbox roles in the palette. |
 | 1.4.1 Use of colour | Met: stage is a heading, never colour alone. |
 | 1.4.3 / 1.4.11 Contrast | Met: axe passes both themes; focus ring and borders are at least 3:1. |
-| 1.4.10 Reflow | Met: one column at 390 px with no horizontal scroll. |
+| 1.4.10 Reflow | Met: one column at 390 px with no horizontal scroll; board columns stack. On wide screens the board scrolls sideways inside its own area, as two-dimensional content may. |
 | 1.4.12 Text spacing | Met: no fixed-height text boxes. |
 | 2.1.1 Keyboard, 2.1.2 No trap | Met: everything by keyboard; dialogs close on `Esc` and give focus back. |
 | 2.1.4 Character key shortcuts | Met: single-letter keys only act when focus is not in a field. Remapping is deferred to settings (phase 4). |
 | 2.4.1 Bypass blocks | Met: skip link is the first Tab stop. |
-| 2.4.3 Focus order | Met: focus stays on its row when records arrive; opening an item moves focus into the panel and `Esc` returns it to the row; dialogs return focus to where it was. The browser check covers each. |
+| 2.4.3 Focus order | Met: focus stays on its row or card when records arrive and when `V` switches layout; opening an item moves focus into the panel and `Esc` returns it to the row; dialogs return focus to where it was. The browser check covers each. |
 | 2.4.7 Focus visible | Met: visible amber focus ring on every control. |
 | 2.4.11 Focus not obscured | Met: the panel sits beside the list, never over the focused row. Below 720 px it sits under the list, and opening an item scrolls it into view. |
 | 2.5.8 Target size | Met: controls at least 24 px (`--target-min`). |
-| 3.2.6 Consistent help | Met on wide screens: Shortcuts and Commands sit in the sidebar on every view. Below 720 px the sidebar is hidden; a menu button is phase 2. |
-| 3.3.x Input and errors | Deferred: the page has no forms until it writes (phase 3). |
+| 3.2.6 Consistent help | Met: Shortcuts and Commands sit in the sidebar on every view; below 720 px the sidebar opens from the Menu button, in the same place on every view. |
+| 3.3.1 Error identification | Met: a missing or taken view name is named in text next to the field, which is `aria-invalid`. |
+| 3.3.x Other input criteria | Deferred: the only form is the view name; the rest arrive with writes (phase 3). |
 | 4.1.2 Name, role, value | Met: combobox with `aria-activedescendant`, `aria-current` on nav. |
 | 4.1.3 Status messages | Met: status line is a polite live region; stopped is `role=alert`. |
 
 ## Code organization
 
 - `src/main.ts` is the only place that talks to the gateway; it dispatches to the store in `src/state.ts`.
-- Pure logic (`keys.ts`, `palette.ts`, `list.ts`, `state.ts`) has no DOM and is unit tested in `test/`.
+- Pure logic (`keys.ts`, `palette.ts`, `list.ts`, `state.ts`, `views.ts`) has no DOM and is unit tested in `test/`.
 - Views in `src/ui/` render from a state snapshot and send actions back. `dom.ts` builds elements and never
   parses HTML, since titles come from upstream issues.
 - `check/browser.mjs` is the end-to-end check; `check/fixture.mjs` is the log it serves.
@@ -106,10 +130,10 @@ on serious or critical.
 
 Each phase is one PR.
 
-1. **Shell and reading** (this one): tokens, shell, stage-grouped list, panel, palette, `?`, states, the browser
+1. **Shell and reading** (done): tokens, shell, stage-grouped list, panel, palette, `?`, states, the browser
    check in CI, and the bundling fix.
-2. **Board and views**: board view with `V` to switch, filters by source, tier and repo, saved views in the
-   address and sidebar, density setting.
+2. **Board and views** (done): board view with `V` to switch, filters by source, tier and repo, saved views in
+   the address and sidebar, density setting, and the Menu button below 720 px.
 3. **Writes**: claim, accept, close and answer through the tracker's REST routes, multi-select with bulk actions
    and undo, the inbox of Needs you items.
 4. **Spend and settings**: spend per root, tier and repo ([#219](https://github.com/GetFelix/KBL/issues/219)),

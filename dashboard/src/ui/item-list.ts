@@ -1,8 +1,9 @@
 // The list view: items grouped by stage, one link per row, or the state that
 // explains why there are none. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
-import { group } from '../list.ts';
-import { toAddress, type ViewState } from '../state.ts';
+import { visible, type Group } from '../list.ts';
+import { toAddress, type AddressState, type ViewState } from '../state.ts';
+import { activeCount } from '../views.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
@@ -10,6 +11,7 @@ export interface ListHandlers {
   /** Focus landed on a row: it becomes the selection, so keys act on what has focus. */
   select(id: string): void;
   clearSearch(): void;
+  clearFilters(): void;
 }
 
 const SKELETON_ROWS = 6;
@@ -28,13 +30,16 @@ const ADVICE = {
 } as const;
 
 // Built from the store's query, not the address bar, which lags the store by up to 250 ms.
-export function itemHref(id: string, query: string): string {
-  return toAddress(location.search, { query, open: id }) || '?';
+export function itemHref(id: string, s: AddressState): string {
+  return toAddress(location.search, { ...s, open: id }) || '?';
 }
 
 // Rows are kept by item id and reused, and the list is only rebuilt when what it shows
 // changes. A live record must not take the focus off the row a keyboard user is on.
-export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewState): void; focusSelected(): void } {
+export function itemList(
+  on: ListHandlers,
+  board: { el: HTMLElement; render(s: ViewState, columns: Group[]): void; focusSelected(): void },
+): { el: HTMLElement; render(s: ViewState): void; focusSelected(): void } {
   const el = h('div', { class: 'list' });
   const rows = new Map<string, HTMLAnchorElement>();
   let shown = '';
@@ -70,6 +75,15 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
     return a;
   };
 
+  // The board keeps its own cards; the list only decides that it is the board's turn.
+  const showBoard = (s: ViewState, columns: Group[]) => {
+    if (shown !== 'board') {
+      shown = 'board';
+      rows.clear();
+      el.replaceChildren(board.el);
+    }
+    board.render(s, columns);
+  };
   const view = {
     el,
     render(s: ViewState) {
@@ -111,13 +125,19 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
         );
       }
       if (s.items.length === 0) return show('empty', emptyState('No work yet', 'Items appear here as the tracker imports issues from its sources.'));
-      const groups = group(s.items, s.query);
+      const groups = visible(s.items, s.query, s.filters);
       if (groups.length === 0) {
-        return show(`nomatch|${s.query}`,
-          emptyState(`Nothing matches “${s.query}”`, 'Search looks at item ids and titles.',
-            h('button', { type: 'button', class: 'button', onclick: on.clearSearch }, 'Clear search')),
+        const filtered = activeCount(s.filters) > 0;
+        const what = s.query ? `“${s.query}”` : 'these filters';
+        return show(`nomatch|${s.query}|${JSON.stringify(s.filters)}`,
+          emptyState(`Nothing matches ${what}`, filtered ? 'Search looks at item ids and titles, inside the filters.' : 'Search looks at item ids and titles.',
+            h('span', { class: 'actions' },
+              s.query ? h('button', { type: 'button', class: 'button', onclick: on.clearSearch }, 'Clear search') : null,
+              filtered ? h('button', { type: 'button', class: 'button', onclick: on.clearFilters }, 'Clear filters') : null,
+            )),
         );
       }
+      if (s.layout === 'board') return showBoard(s, groups);
       const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title])]))}`;
       if (key !== shown) {
         const active = document.activeElement;
@@ -147,7 +167,7 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
         }
       }
       for (const [id, a] of rows) {
-        const href = itemHref(id, s.query);
+        const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
         if (id === s.open) a.setAttribute('aria-current', 'true');
@@ -155,6 +175,7 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
       }
     },
     focusSelected() {
+      if (shown === 'board') return board.focusSelected();
       const selected = el.querySelector<HTMLElement>('[data-selected]');
       selected?.focus();
       selected?.scrollIntoView({ block: 'nearest' });

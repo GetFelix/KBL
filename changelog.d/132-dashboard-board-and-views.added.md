@@ -1,0 +1,1 @@
+The dashboard has a board (`V` switches list and board; `H`/`J`/`K`/`L` move), filters by source, tier and repo from what the log recorded, views in the address that can be saved by name to the sidebar, a compact density, and a Menu button on small screens. The WebAssembly fold's item list now carries each item's recorded tier, source and repo.

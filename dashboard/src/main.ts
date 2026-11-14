@@ -10,11 +10,13 @@ import { items, type Fold } from './fold.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
-import { flatten, group, move } from './list.ts';
-import { adviceFor, createStore, fromAddress, toAddress, type ViewState } from './state.ts';
+import { flatten, move, moveBoard, visible } from './list.ts';
+import { adviceFor, createStore, fromAddress, toAddress, type Density, type ViewState } from './state.ts';
+import { deleteView, parseSaved, renameView, saveView, type SavedView } from './views.ts';
 import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
+import { viewDialog } from './ui/view-dialog.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -24,6 +26,24 @@ if (token) {
   q.delete('token');
   history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}${location.hash}`);
 }
+// Saved views and density are per viewer, so they live in this browser. Storage can
+// be missing or throw (private windows, blocked site data); the page works without it.
+const VIEWS_KEY = 'kbl.dashboard.views';
+const DENSITY_KEY = 'kbl.dashboard.density';
+const stored = (key: string): string | null => {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const store_ = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Not remembered past this page; nothing else depends on it.
+  }
+};
 const themeParam = q.get('theme');
 const address = fromAddress(location.search);
 const initial: ViewState = {
@@ -32,6 +52,8 @@ const initial: ViewState = {
   items: [],
   ...address,
   selected: address.open,
+  density: stored(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable',
+  saved: parseSaved(stored(VIEWS_KEY)),
   theme: themeParam === 'light' || themeParam === 'dark' ? themeParam : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
 };
 const store = createStore(initial);
@@ -44,7 +66,7 @@ const closeItem = () => {
   const before = store.get();
   store.dispatch({ type: 'open', id: null });
   // The open item may have no visible row (filtered out, or not in the log): keep the focus somewhere real.
-  const rows = flatten(group(before.items, before.query));
+  const rows = flatten(visible(before.items, before.query, before.filters));
   if (before.open && rows.some((r) => r.id === before.open)) return ui.list.focusSelected();
   const first = rows[0]?.id;
   if (first) {
@@ -65,24 +87,58 @@ const run = (id: CommandId): void => {
       return ui.search.select();
     case 'next':
     case 'previous':
+    case 'left':
+    case 'right':
     case 'first':
     case 'last': {
-      const rows = flatten(group(s.items, s.query));
+      const groups = visible(s.items, s.query, s.filters);
+      const rows = flatten(groups);
+      const board = s.layout === 'board';
+      if (!board && (id === 'left' || id === 'right')) return;
+      const dir = ({ next: 'down', previous: 'up', left: 'left', right: 'right' } as const)[id as 'next'];
       const target =
-        id === 'first' ? (rows[0]?.id ?? null) : id === 'last' ? (rows.at(-1)?.id ?? null) : move(rows, s.selected, id === 'next' ? 1 : -1);
+        id === 'first'
+          ? (rows[0]?.id ?? null)
+          : id === 'last'
+            ? (rows.at(-1)?.id ?? null)
+            : board
+              ? moveBoard(groups, s.selected, dir)
+              : move(rows, s.selected, id === 'next' ? 1 : -1);
       store.dispatch({ type: 'select', id: target });
       return ui.list.focusSelected();
     }
     case 'open':
-      if (s.selected && flatten(group(s.items, s.query)).some((r) => r.id === s.selected)) openItem(s.selected);
+      if (s.selected && flatten(visible(s.items, s.query, s.filters)).some((r) => r.id === s.selected)) openItem(s.selected);
       return;
     case 'close':
+      if (ui.menuOpen()) return ui.closeMenu();
       if (document.activeElement === ui.search) ui.search.blur();
       if (s.open) closeItem();
       else if (s.query) store.dispatch({ type: 'query', query: '' });
       return;
     case 'theme':
       return store.dispatch({ type: 'theme', theme: s.theme === 'dark' ? 'light' : 'dark' });
+    case 'layout': {
+      // Keep the keyboard where it was: on the selected item in the new layout.
+      const onItem = ui.list.el.contains(document.activeElement);
+      store.dispatch({ type: 'layout', layout: s.layout === 'board' ? 'list' : 'board' });
+      if (onItem) ui.list.focusSelected();
+      return;
+    }
+    case 'filter': {
+      const first = ui.filters.first();
+      // Nothing recorded a facet yet: the palette says so rather than the key doing nothing.
+      return first ? first.focus() : palette.open('filter');
+    }
+    case 'clearFilters':
+      return store.dispatch({ type: 'clearFilters' });
+    case 'saveView':
+      return views.open(null, ui.suggestName(s));
+    case 'density': {
+      const density: Density = s.density === 'compact' ? 'comfortable' : 'compact';
+      store_(DENSITY_KEY, density);
+      return store.dispatch({ type: 'density', density });
+    }
   }
 };
 
@@ -98,15 +154,44 @@ const ui = shell(
       store.dispatch({ type: 'query', query: '' });
       ui.search.focus();
     },
+    clearFilters: () => {
+      store.dispatch({ type: 'clearFilters' });
+      ui.search.focus();
+    },
+    layout: (layout) => store.dispatch({ type: 'layout', layout }),
+    filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }),
+    saveView: () => run('saveView'),
+    openView: (search) => store.dispatch({ type: 'view', search }),
+    editView: (name) => views.open(name),
     query: (text) => store.dispatch({ type: 'query', query: text }),
     palette: () => run('palette'),
     help: () => run('help'),
   },
   mac,
 );
-const palette = paletteView(store.get, { run, openItem }, mac);
+const palette = paletteView(
+  store.get,
+  { run, openItem, filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }), openView: (search) => store.dispatch({ type: 'view', search }) },
+  mac,
+);
 const help = helpView(mac);
-document.body.append(palette.el, help.el);
+const setSaved = (saved: SavedView[]) => {
+  store_(VIEWS_KEY, JSON.stringify(saved));
+  store.dispatch({ type: 'saved', saved });
+};
+const views = viewDialog({
+  submit(name, editing) {
+    const { saved } = store.get();
+    const taken = (n: string) => saved.some((v) => v.name !== editing && v.name.toLowerCase() === n.trim().toLowerCase());
+    if (taken(name)) return `A view is already called “${name.trim()}”. Pick another name, or edit that view.`;
+    const next = editing === null ? saveView(saved, name, store.get()) : renameView(saved, editing, name);
+    if (!next) return 'Give the view a name.';
+    setSaved(next);
+    return null;
+  },
+  remove: (name) => setSaved(deleteView(store.get().saved, name)),
+});
+document.body.append(palette.el, help.el, views.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -121,6 +206,7 @@ const writeAddress = () => {
 };
 const paint = (s: ViewState) => {
   document.documentElement.dataset.theme = s.theme;
+  document.documentElement.dataset.density = s.density;
   ui.render(s);
   if (addressTimer !== undefined) return;
   const wait = addressAt + ADDRESS_MS - performance.now();
@@ -132,8 +218,10 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || views.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
+  // A select owns its arrows and letters; Escape and Mod chords still work there.
+  if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;
   const inText = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable;
   const id = commandFor({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, inText }, mac);
   if (!id) return;

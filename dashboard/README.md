@@ -90,13 +90,30 @@ in the status line.
 | `Ctrl+K` (`Cmd+K` on a Mac) | Command palette: every command, plus items by id or title |
 | `?` | Keyboard shortcuts |
 | `/` | Search |
-| `J` / `K`, arrows | Next and previous item |
+| `J` / `K`, `↓` / `↑` | Next and previous item (on the board, within the column) |
+| `H` / `L`, `←` / `→` | Previous and next column on the board |
+| `V` | Switch list and board |
+| `F` | Go to the filters |
 | `Home` / `End` | First and last item |
 | `Enter` | Open the selected item in the panel |
 | `Esc` | Close the panel or dialog, or clear the search |
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
-palette and the `?` overlay all read it. The theme switch is in the palette only.
+palette and the `?` overlay all read it. Theme, density, Clear all filters and Save this view are in the palette
+only; the palette also has one entry per filter value and per saved view.
+
+## Views
+
+- **Board.** One column per stage, in the list's order. Each column is one `Tab` stop; the arrows or `H` `J` `K`
+  `L` move inside the board. Below 720 px the columns stack.
+- **Filters.** Source, tier and repo, each offering only values the log recorded, with counts. A facet no item
+  recorded is not shown. The bar says how many items the filters hide, with Clear filters.
+- **The address.** `view=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the address, so a link
+  opens the same view.
+- **Saved views.** Save view names the current layout, search and filters and puts it in the sidebar; Edit
+  renames or deletes it. Saved views and the density are kept in this browser's local storage, per viewer, and
+  the page works without them when storage is blocked.
+- **Phones.** Below 720 px the sidebar sits behind the Menu button.
 
 ## Files
 
@@ -104,10 +121,11 @@ palette and the `?` overlay all read it. The theme switch is in the palette only
 - `src/gateway.ts`: the WebSocket transport and the `join` handshake.
 - `src/fold.ts`: the shape of the WebAssembly fold.
 - `src/main.ts`: starts the page, runs the gateway loop and dispatches keys.
-- `src/state.ts`: the view state, its reducer and the address round-trip (`?item=`, `?q=`).
+- `src/state.ts`: the view state, its reducer and the address round-trip.
+- `src/views.ts`: filters, the view in the address, and saved views.
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.
-- `src/ui/`: the views (shell, list, panel, palette, shortcuts, status line), `tokens.css` for colour, space and
+- `src/ui/`: the views (shell, filter bar, list, board, panel, palette, shortcuts, saved-view dialog, status line), `tokens.css` for colour, space and
   type, and `app.css`.
 - `check/`: the headless Chrome check and its fixture log.
 - `../wasm`: the Rust crate that wraps `core`'s fold for the page.

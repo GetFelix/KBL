@@ -4,12 +4,15 @@ import { COMMANDS, displayChord, type CommandId } from '../keys.ts';
 import { rank, type Entry } from '../palette.ts';
 import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
+import { facets, type Facet } from '../views.ts';
 import { modal } from './dialog.ts';
 import { h, kbd } from './dom.ts';
 
 export interface PaletteHandlers {
   run(id: CommandId): void;
   openItem(id: string): void;
+  filter(facet: Facet, value: string | null): void;
+  openView(search: string): void;
 }
 
 const MAX_ROWS = 50;
@@ -17,6 +20,16 @@ const MAX_ROWS = 50;
 export function entries(s: ViewState): Entry[] {
   return [
     ...COMMANDS.filter((c) => c.id !== 'palette').map((c) => ({ key: `cmd:${c.id}`, label: c.label, section: 'Commands' })),
+    // One entry per recorded filter value, so "tier 1" or a repo name is a few keystrokes away.
+    ...facets(s.items).flatMap(({ facet, label, values }) =>
+      values.map(([v, n]) => ({
+        key: `filter:${facet}:${v}`,
+        label: s.filters[facet] === v ? `Remove filter ${label.toLowerCase()} ${v}` : `Filter by ${label.toLowerCase()}: ${v}`,
+        hint: `${n} ${n === 1 ? 'item' : 'items'}`,
+        section: 'Commands',
+      })),
+    ),
+    ...s.saved.map((v) => ({ key: `view:${v.search}`, label: `Open view: ${v.name}`, section: 'Commands' })),
     ...s.items.map((i) => ({ key: `item:${i.id}`, label: i.title, hint: `${i.id} · ${stageLabel(i.stage)}`, section: 'Items' })),
   ];
 }
@@ -46,7 +59,12 @@ export function paletteView(getState: () => ViewState, on: PaletteHandlers, mac:
     m.close();
     const [kind, id] = [e.key.slice(0, e.key.indexOf(':')), e.key.slice(e.key.indexOf(':') + 1)];
     if (kind === 'cmd') on.run(id as CommandId);
-    else on.openItem(id);
+    else if (kind === 'view') on.openView(id);
+    else if (kind === 'filter') {
+      const facet = id.slice(0, id.indexOf(':')) as Facet;
+      const value = id.slice(id.indexOf(':') + 1);
+      on.filter(facet, getState().filters[facet] === value ? null : value);
+    } else on.openItem(id);
   };
 
   const paint = () => {

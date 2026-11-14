@@ -1,6 +1,7 @@
 // The side panel for the open item. It shows what the fold recorded, nothing inferred.
 import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
+import { FACETS, valueOf } from '../views.ts';
 import { h } from './dom.ts';
 
 const WHY = {
@@ -24,7 +25,7 @@ export function itemPanel(onClose: () => void): { el: HTMLElement; render(s: Vie
       else if (c.kind !== 'loading' || c.linked) failed = false;
       const item = s.items.find((i) => i.id === s.open);
       const why = item ? '' : s.synced ? 'missing' : s.connection.kind === 'stopped' ? 'stopped' : failed ? 'unreachable' : 'reading';
-      const key = s.open === null ? '' : `${s.open}|${item?.title}|${item?.stage}|${why}`;
+      const key = s.open === null ? '' : `${s.open}|${JSON.stringify(item)}|${why}`;
       if (key === shown) return;
       shown = key;
       el.hidden = s.open === null;
@@ -37,7 +38,14 @@ export function itemPanel(onClose: () => void): { el: HTMLElement; render(s: Vie
         item
           ? h('div', {},
               h('h2', { id: 'panel-title', class: 'panel-title' }, item.title),
-              h('dl', { class: 'fields' }, h('dt', {}, 'Stage'), h('dd', {}, stageLabel(item.stage))))
+              h('dl', { class: 'fields' },
+                h('dt', {}, 'Stage'), h('dd', {}, stageLabel(item.stage)),
+                // Only what the log recorded: a field with no value is left out, not shown as "none".
+                ...FACETS.flatMap(([f, label]) => {
+                  const v = valueOf(item, f);
+                  return v === null ? [] : [h('dt', {}, label), h('dd', {}, v)];
+                }),
+              ))
           : h('div', {},
               h('h2', { id: 'panel-title', class: 'panel-title' }, 'No such item'),
               h('p', { class: 'muted' }, WHY[why as keyof typeof WHY](s.open))),

@@ -44,6 +44,9 @@
   --radius-lg: 10px;
 
   --row-height: 36px;
+  --card-pad: var(--space-3);
+  --card-gap: var(--space-2);
+  --column-width: 272px;
   --target-min: 24px;
   --sidebar-width: 224px;
   --palette-width: 560px;
@@ -71,6 +74,14 @@
   --focus: #8f470c;
   --scrim: rgba(14, 26, 36, 0.35);
   --shadow: 0 12px 40px rgba(14, 26, 36, 0.18);
+}
+
+/* Compact density: tighter rows and cards, never under the 24 px target size. */
+:root[data-density='compact'] {
+  --row-height: 28px;
+  --card-pad: var(--space-2);
+  --card-gap: var(--space-1);
+  --column-width: 240px;
 }
 
 @media (prefers-reduced-motion: reduce) {
