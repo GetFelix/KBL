@@ -2,7 +2,8 @@
 // what the last write did. The line is a status region that stays until the next write
 // or Dismiss, so nobody has to read a refusal before a timer hides it (WCAG 2.2.1).
 import type { ViewState } from '../state.ts';
-import { CAN, summary } from '../writes.ts';
+import { markedShown } from '../list.ts';
+import { CAN, canUndo, summary } from '../writes.ts';
 import { h } from './dom.ts';
 import { tierSelect, type WriteHandlers } from './item-actions.ts';
 
@@ -34,7 +35,7 @@ export function bulkBar(on: WriteHandlers) {
       dismissed = batch;
     },
     render(s: ViewState) {
-      const marked = s.items.filter((i) => s.marked.includes(i.id));
+      const marked = markedShown(s);
       bar.hidden = marked.length === 0;
       const signedIn = s.tracker.kind === 'signed-in';
       ids = {
@@ -59,7 +60,8 @@ export function bulkBar(on: WriteHandlers) {
       const t = line?.text ?? '';
       if (text.textContent !== t) text.textContent = t;
       activity.dataset.tone = line?.tone ?? '';
-      undo.hidden = !line?.undoable;
+      // Hidden until the change is back on the log, so Undo never answers that it cannot yet.
+      undo.hidden = !line?.undoable || !canUndo(batch, s.items);
     },
   };
 }

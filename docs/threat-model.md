@@ -149,8 +149,8 @@ The page has no authority of its own; the tracker's checks are the only checks.
 | A token left behind in the browser | Typed into a password field, kept in memory for the tab, never in the address, local storage or the view state (`dashboard/src/main.ts`) |
 | Another site makes writes as the person (CSRF) | The token goes in an `Authorization` header the page sets, not a cookie, so a request from another origin carries nothing |
 | An upstream title runs as script in the page | Views build elements with `dashboard/src/ui/dom.ts`, which never parses HTML |
-| A bulk action does more than the person could | Each item is its own call through the same route and checks, one at a time, so it also takes one of the team's in-flight slots at a time |
-| An undo overwrites someone else's change | Only a tier change has an undo, a new `tier_changed`, and the page offers it only while the item still has the tier it set |
+| A bulk action does more than the person could | Each item is its own call through the same route and checks, one after another within the action, and only on marked items the view shows (`dashboard/src/list.ts`) |
+| An undo overwrites someone else's change | Only a tier change has an undo, a new `tier_changed`, and the page offers it only while its own view of the log shows the tier it set. The tier route itself is unconditional, so a change that lands between that look and the undo is overwritten; the log keeps both |
 
 ### Ingest routes and health
 

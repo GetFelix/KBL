@@ -70,6 +70,7 @@ const fakeGateway = (log, mode) => `(() => {
     if (t.refuse[body?.item]) return res(409, t.refuse[body.item]);
     // The real tracker reads an answer's text as content ({ text }) and refuses a bare string.
     if (body && 'text' in body && typeof body.text?.text !== 'string') return res(422, { error: 'text: expected content' });
+    if (url.endsWith('/questions/answer') && !body.text === !body.chosen) return res(400, { error: 'answer with one of the options or with text, not both', why: 'invalid' });
     const make = ROUTES[url];
     if (!make) return res(404, { error: 'no such route' });
     window.__push({ actor: 'person', by: 'maintainer', at_ms: Date.now(), ...make(body) });
@@ -593,7 +594,10 @@ try {
   check((await focused('#answer-text')) && (await page.eval(`document.querySelector('#answer-text').value === 'half typed'`)), 'a live record keeps a half-typed answer and the focus in it');
   await axe('answer form');
   await shoot('answer-dark');
+  const sent = await page.eval(`window.__tracker.calls.length`);
   await page.eval(`document.querySelector('.answer input[value="Python client"]').click(); document.querySelector('.answer').requestSubmit(); true`);
+  check((await page.eval(`document.querySelector('#answer-error').textContent.includes('not both')`)) && (await page.eval(`window.__tracker.calls.length`)) === sent, 'an option and text together are named before sending, since the tracker takes one');
+  await page.eval(`document.querySelector('#answer-text').value = ''; document.querySelector('.answer').requestSubmit(); true`);
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Answered gh-2204.'`);
   const answered = await page.eval(`JSON.stringify(window.__tracker.calls.at(-1))`);
   check(answered.includes('"url":"/v1/work/questions/answer"') && answered.includes('"auth":"Bearer person-token"') && answered.includes('"chosen":"Python client"'), `the answer goes to the person route with the viewer’s token (${answered})`);
@@ -648,7 +652,11 @@ try {
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Accepted 2 items.'`);
   check(await page.eval(`['ado-4377', 'ado-4380'].every((id) => document.querySelector('#group-ready').closest('section').querySelector('[data-id=' + id + ']'))`), 'bulk accept writes one record per item and both move to Ready');
   check(await page.eval(`document.querySelector('.activity button').hidden`), 'an accept offers no Undo, since no record takes it back');
+  check(await page.eval(`window.__tracker.calls.slice(-2).every((c) => c.url.endsWith('/proposals/accept') && !('tier' in c.body))`), 'a bulk accept keeps each item’s own tier by default');
+  check(await page.eval(`document.querySelector('.bulk').hidden && document.querySelectorAll('.mark:checked').length === 0`), 'the marks clear once their action is sent');
   await page.eval(`document.querySelector('.row[data-id=ado-4377]').focus(); true`);
+  await press(page, 'x');
+  check(await page.eval(`!document.querySelector('.bulk').hidden`), 'X marks again after a bulk action');
   await press(page, 'Escape');
   check(await page.eval(`document.querySelector('.bulk').hidden && document.querySelectorAll('.mark:checked').length === 0`), 'Esc clears the selection');
   await page.eval(`document.querySelector('.mark[data-mark=gh-2210]').click(); [...document.querySelectorAll('.bulk button')].find((b) => b.textContent.startsWith('Close')).click(); true`);

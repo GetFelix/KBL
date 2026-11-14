@@ -80,6 +80,8 @@ export function request(item: string, a: WriteArgs): Request {
 /** What an answer form would send, or what is wrong with it (WCAG 3.3.1, 3.3.3). */
 export function checkAnswer(options: readonly string[], text: string, chosen: string | null): string | null {
   if (options.length > 0 && chosen === null && !text.trim()) return 'Pick an option, or write an answer.';
+  // The tracker takes one or the other, never both.
+  if (chosen !== null && text.trim()) return 'Pick an option or write an answer, not both. Clear the text to send the option.';
   if (options.length === 0 && !text.trim()) return 'Write an answer.';
   if (chosen !== null && !options.includes(chosen)) return 'That option is no longer offered.';
   // The tracker refuses inline text over 4 KiB; say so before sending.
@@ -89,7 +91,7 @@ export function checkAnswer(options: readonly string[], text: string, chosen: st
 
 export type Outcome =
   | { status: 'ok'; offset: number | null }
-  | { status: 'refused'; why: string; reason: string }
+  | { status: 'refused'; why: string; reason: string; signedOut?: true }
   | { status: 'failed'; reason: string };
 
 /**
@@ -103,8 +105,9 @@ export function outcome(status: number | null, body: unknown, network = ''): Out
   const why = typeof b.why === 'string' ? b.why : '';
   if (status === null) return { status: 'failed', reason: `Cannot reach the tracker${network ? `: ${network}` : ''}.` };
   if (status >= 200 && status < 300) return { status: 'ok', offset: typeof b.offset === 'number' ? b.offset : null };
-  if (status === 401) return { status: 'refused', why: why || 'signed_out', reason: error || 'The tracker does not know this token. Sign in again.' };
-  if (status === 403) return { status: 'refused', why: why || 'forbidden', reason: error || 'This token may not make that write.' };
+  // Only the status says the token itself was refused; a `why` in a 409 is the fold's.
+  if (status === 401) return { status: 'refused', why: why || 'signed_out', reason: error || 'The tracker does not know this token. Sign in again.', signedOut: true };
+  if (status === 403) return { status: 'refused', why: why || 'forbidden', reason: error || 'This token may not make that write.', signedOut: true };
   if (status === 400 || status === 404 || status === 409 || status === 422) {
     return { status: 'refused', why: why || String(status), reason: error || `The tracker refused it (${status}).` };
   }
@@ -145,6 +148,7 @@ export function undoRequest(u: Undo, items: readonly ItemRow[]): Request | strin
   const now = items.find((i) => i.id === u.item);
   if (!now) return `${u.item} is no longer in the log.`;
   if (!OPEN(now)) return `${u.item} is closed now.`;
+  if (now.tier === u.tier) return `${u.item}'s tier change has not come back on the log yet; try again in a moment.`;
   if (now.tier !== u.set) return `${u.item}'s tier changed again since; undo would overwrite that.`;
   return request(u.item, { kind: 'tier', tier: u.tier });
 }
@@ -176,7 +180,8 @@ const KEEP = 50;
 export function putWrite(w: Writes, write: Write): Writes {
   const at = w.list.findIndex((x) => x.id === write.id);
   const list = at < 0 ? [...w.list, write] : w.list.map((x, i) => (i === at ? write : x));
-  return { list: list.slice(-KEEP), last: write.batch };
+  // Batches can finish out of order; the activity line stays on the newest.
+  return { list: list.slice(-KEEP), last: Math.max(w.last ?? 0, write.batch) };
 }
 
 /** The newest write for an item, which the panel shows next to its actions. */
@@ -199,6 +204,12 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
 };
 
 const items = (ids: string[]) => (ids.length === 1 ? ids[0] : `${ids.length} items`);
+
+/** Whether Undo applies now: every undoable write's tier is on the log and nobody changed it since. */
+export function canUndo(batch: readonly Write[], items: readonly ItemRow[]): boolean {
+  const undos = batch.filter((x) => x.status === 'ok' && x.undo);
+  return undos.length > 0 && undos.every((x) => typeof undoRequest(x.undo!, items) !== 'string');
+}
 
 /** One line for the activity area: what is pending, what was written, and each refusal with its reason. */
 export function summary(batch: readonly Write[]): { text: string; tone: 'busy' | 'ok' | 'error'; undoable: boolean } {

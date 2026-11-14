@@ -102,14 +102,16 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   token the tracker stops taking signs the page out with its reason.
 - **Undo.** Only a tier change can be undone (`Mod+Z` or Undo): the undo is a new `tier_changed` record
   setting the old tier back, never a delete, and it is offered only while the item still has the tier the
-  write set, so it cannot overwrite someone else's change. The rest cannot be, and the confirm step says
+  write set, and only once that change is back on the log, so it does not undo someone else's later change. The rest cannot be, and the confirm step says
   why: no record takes back an acceptance, a rejected proposal stays rejected, a close cancels the item's
   open children (a reopened root goes back to Triage with them still cancelled), and an answer starts the
   work that resumes from it.
 - **Multi-select.** `X` marks the focused item, as in Linear and GitHub; each list row also has a checkbox for the mouse, kept out of the Tab order so Tab still moves row to row,
   beside its link, and board cards say Selected in text. The bulk bar counts the marks and offers only what
-  some of them allow, with the count it applies to ("Accept 2…"). A bulk action is one call per item, in
-  order, and the activity line reports each refusal. `Esc` clears the marks once nothing else is open.
+  some of them allow, with the count it applies to ("Accept 2…"). It acts only on marks the view shows,
+  so a search never hides what it changes. A bulk accept keeps each item's own tier unless one is picked.
+  A bulk action is one call per item, in order, the activity line reports each refusal, and the marks
+  clear once it is sent, as in GitHub. `Esc` clears the marks once nothing else is open.
 - **Needs you.** A sidebar view (`?view=inbox`) of the items waiting on a person, each saying why from the
   fold's `needs` ("An agent asked a question", "A check failed"). The panel shows the same as a field, and an
   open question's text, options and default come from the question record.

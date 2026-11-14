@@ -28,6 +28,12 @@ export function confirmDialog(send: (ids: string[], args: WriteArgs) => void) {
       const c = COPY[kind];
       const name = list.length === 1 ? list[0].id : `${list.length} items`;
       const tier = kind === 'accept' ? tierSelect('confirm-tier', list.length === 1 ? list[0].tier : null) : null;
+      // Several proposals may carry different tiers; by default each keeps its own.
+      if (tier && list.length > 1) {
+        const keep = h('option', { value: '' }, 'Keep each item’s tier');
+        tier.prepend(keep);
+        keep.selected = true;
+      }
       const why = kind === 'close' ? h('select', { id: 'confirm-why', class: 'field select' }, ...CLOSE_WHY.map(([v, label]) => h('option', { value: v }, label))) : null;
       const go = h('button', { type: 'submit', class: c.cls }, c.send);
       const cancel = h('button', { type: 'button', class: 'button ghost', onclick: () => m.close() }, 'Cancel');
@@ -53,7 +59,7 @@ export function confirmDialog(send: (ids: string[], args: WriteArgs) => void) {
         e.preventDefault();
         m.close();
         const ids = list.map((i) => i.id);
-        if (kind === 'accept') send(ids, { kind, tier: Number(tier!.value) });
+        if (kind === 'accept') send(ids, { kind, tier: tier!.value === '' ? null : Number(tier!.value) });
         else if (kind === 'close') send(ids, { kind, why: why!.value as CloseWhy });
         else send(ids, { kind });
       });

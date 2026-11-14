@@ -46,6 +46,7 @@ const PENDING: Record<WriteKind, string> = {
 export function itemActions(on: WriteHandlers) {
   const el = h('section', { class: 'actions', 'aria-labelledby': 'actions-title' });
   let built = '';
+  let auth = '';
   let tier: HTMLSelectElement | null = null;
   let status: HTMLElement = h('p');
   const guard = (s: () => ViewState, item: string, run: () => void) => () => {
@@ -70,7 +71,7 @@ export function itemActions(on: WriteHandlers) {
       h('h4', { id: 'answer-title' }, 'Answer the question'),
       h('p', { class: 'question' }, asked ?? 'The question’s text is stored as an artifact, outside the log.'),
       radios.length ? h('fieldset', {}, h('legend', { class: 'field-label' }, 'Options'), ...radios) : null,
-      h('label', { for: 'answer-text', class: 'field-label' }, radios.length ? 'Answer in words (optional with an option)' : 'Answer'),
+      h('label', { for: 'answer-text', class: 'field-label' }, radios.length ? 'Or answer in words instead' : 'Answer'),
       text,
       h('p', { id: 'answer-help', class: 'muted small' }, 'Sending cannot be undone: the answer starts the work that resumes from it.'),
       error,
@@ -98,10 +99,13 @@ export function itemActions(on: WriteHandlers) {
     render(item: ItemRow, s: ViewState): HTMLElement {
       current = () => s;
       const kinds = (Object.keys(CAN) as (keyof typeof CAN)[]).filter((k) => CAN[k](item));
-      const key = `${item.id}|${kinds.join(',')}|${s.tracker.kind}|${item.question}|${(item.options ?? []).join('\u0000')}|${item.question == null ? '' : s.questions.get(item.question)}`;
+      // `checking` keeps the last sign-in state, so checking a token does not rebuild the form.
+      if (s.tracker.kind !== 'checking') auth = s.tracker.kind === 'refused' ? `refused:${s.tracker.reason}` : s.tracker.kind;
+      const key = `${item.id}|${kinds.join(',')}|${auth}|${item.question}|${(item.options ?? []).join('\u0000')}|${item.question == null ? '' : s.questions.get(item.question)}`;
       if (key !== built) {
         built = key;
-        const head = h('h3', { id: 'actions-title', class: 'actions-title' }, 'Actions');
+        const hadFocus = el.contains(document.activeElement) ? ((document.activeElement as HTMLElement).dataset.focus ?? '') : null;
+        const head = h('h3', { id: 'actions-title', class: 'actions-title', tabindex: '-1' }, 'Actions');
         status = h('p', { class: 'write-status' });
         tier = null;
         if (kinds.length === 0) {
@@ -126,6 +130,11 @@ export function itemActions(on: WriteHandlers) {
             kinds.includes('answer') ? answerForm(item, s) : null,
             status];
           el.replaceChildren(...parts.filter((p): p is HTMLElement => p !== null));
+        }
+        // The control that had the focus is gone (the item moved stage, say); keep it in the actions.
+        if (hadFocus !== null && !el.contains(document.activeElement)) {
+          const same = hadFocus ? el.querySelector<HTMLElement>(`[data-focus="${hadFocus}"]`) : null;
+          (same ?? head).focus({ preventScroll: true });
         }
       }
       // In place: what the last write on this item did, and whether one is in flight.

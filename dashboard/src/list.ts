@@ -77,6 +77,12 @@ export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'que
   return flatten(visible(s));
 }
 
+/** The marked items the view shows now. A bulk action never reaches an item a search or filter hides. */
+export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'>): ItemRow[] {
+  const marked = new Set(s.marked);
+  return shownRows(s).filter((i) => marked.has(i.id));
+}
+
 export type Direction = 'up' | 'down' | 'left' | 'right';
 
 /**

@@ -70,7 +70,7 @@ delay up to 30 s.
 
 ## Writes
 
-Writes go to the tracker's person routes ([the dashboard's actions](../docs/work-tracker.md)) with your own
+Writes go to the tracker's person routes ([the dashboard's actions](../docs/work-tracker.md#running-the-tracker)) with your own
 person token, so the page can do exactly what that token can and nothing more. Sign in (in the panel, the bulk
 bar or the palette) asks for the token, checks it with `GET /v1/me`, and keeps it in memory for this tab only:
 not in the address or local storage, so a reload asks again.
@@ -84,16 +84,17 @@ to the tracker. A person token in several teams needs `&team=<team>` in the addr
 | --- | --- | --- | --- |
 | Accept | Triage, Proposed | `POST /v1/work/proposals/accept` | No: nothing takes an acceptance back. Asks to confirm |
 | Reject | Proposed | `POST /v1/work/proposals/reject` | No. Asks to confirm |
-| Set tier | Open work | `POST /v1/work/tier` | Yes, while the tier is still the one set: a new `tier_changed` back |
+| Set tier | Open work | `POST /v1/work/tier` | Yes, once the change is on the log and while the tier is still the one set: a new `tier_changed` back |
 | Close | Open work | `POST /v1/work/close` (`dismissed` or `completed`) | No: open children are cancelled. Asks to confirm |
-| Answer | An open question | `POST /v1/work/questions/answer` | No: the answer starts the resumed work |
+| Answer | An open question | `POST /v1/work/questions/answer` | No: the answer starts the resumed work. Pick an option or write an answer, not both |
 
 Claiming is not offered: it is an agent's, and the fold refuses `claimed` from a person.
 
 Each write shows as pending on the item and in the activity line above the work, then as written or refused.
 A refusal shows the tracker's reason and its code (`closed`, `not_open_question`, ...). The list itself changes
 only when the record arrives on the log. `X` marks the focused item (each list row also has a checkbox for the mouse), and the
-bulk bar acts on the marked items, one call per item; `Esc` clears the marks. The Needs you view
+bulk bar acts on the marked items the view shows, one call per item, then clears the marks; `Esc` clears them
+too. A bulk accept keeps each item's own tier unless you pick one. The Needs you view
 (`?view=inbox`) lists what waits on a person and why.
 
 ## How it follows the log

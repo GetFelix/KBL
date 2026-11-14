@@ -11,7 +11,7 @@ import { overlapNotes } from './overlap.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
-import { boardEdge, flatten, move, moveBoard, shownRows, visible } from './list.ts';
+import { boardEdge, flatten, markedShown, move, moveBoard, shownRows, visible } from './list.ts';
 import { adviceFor, createStore, fromAddress, toAddress, type Density, type View, type ViewState } from './state.ts';
 import { deleteView, parseSaved, renameView, saveView, type SavedView } from './views.ts';
 import { helpView } from './ui/help-view.ts';
@@ -20,7 +20,7 @@ import { shell } from './ui/shell.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { Tracker } from './tracker.ts';
-import { CAN, NO_WRITES, request, undoFor, undoRequest, type Request, type Undo, type WriteArgs, type WriteKind } from './writes.ts';
+import { CAN, canUndo, NO_WRITES, pending, request, undoFor, undoRequest, type Request, type Undo, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -78,7 +78,8 @@ let writeIds = 0;
 /** What an action applies to: the marked items, else the selected one. */
 const targets = (): string[] => {
   const s = store.get();
-  if (s.marked.length) return s.marked;
+  const marked = markedShown(s);
+  if (marked.length) return marked.map((i) => i.id);
   return s.selected && s.items.some((i) => i.id === s.selected) ? [s.selected] : [];
 };
 
@@ -101,7 +102,7 @@ async function send(kind: WriteKind, jobs: { item: string; req: Request | string
     if (o.status === 'ok') store.dispatch({ type: 'write', write: { ...w, status: 'ok' } });
     else {
       store.dispatch({ type: 'write', write: { ...w, status: o.status, reason: o.reason, why: o.status === 'refused' ? o.why : undefined, undo: undefined } });
-      if (o.status === 'refused' && (o.why === 'signed_out' || o.why === 'forbidden') && t === tracker) {
+      if (o.status === 'refused' && o.signedOut && t === tracker) {
         tracker = null;
         store.dispatch({ type: 'tracker', tracker: { kind: 'refused', reason: o.reason } });
       }
@@ -111,18 +112,23 @@ async function send(kind: WriteKind, jobs: { item: string; req: Request | string
 
 const write = (ids: string[], args: WriteArgs) => {
   const s = store.get();
-  const jobs = ids.map((item) => {
+  // A second click while the first is in flight would send the same record twice.
+  const jobs = ids.filter((item) => !pending(s.writes, item)).map((item) => {
     const before = s.items.find((i) => i.id === item);
     const undo = args.kind === 'tier' && before ? undoFor(before, args.tier) : undefined;
     return { item, req: request(item, args), undo: typeof undo === 'object' ? undo : undefined };
   });
+  if (!jobs.length) return;
+  // Marks are done with once their action is sent, as in GitHub.
+  if (s.marked.length && ids.every((id) => s.marked.includes(id)) && ids.length > 0) store.dispatch({ type: 'marks', ids: [] });
   void send(args.kind, jobs);
 };
 
 const undoLast = () => {
   const s = store.get();
-  const done = s.writes.list.filter((w) => w.batch === s.writes.last && w.status === 'ok' && w.undo);
-  if (!done.length) return;
+  const batch = s.writes.list.filter((w) => w.batch === s.writes.last);
+  if (!canUndo(batch, s.items)) return;
+  const done = batch.filter((w) => w.status === 'ok' && w.undo);
   void send('undo', done.map((w) => ({ item: w.item, req: undoRequest(w.undo!, s.items) })));
 };
 
@@ -132,9 +138,14 @@ const signIn = async (token: string): Promise<string | null> => {
   const t = new Tracker((url, init) => fetch(url, init), token, team);
   const me = await t.me();
   if ('person' in me) {
-    if (!team && me.teams.length > 1) {
-      const reason = `You are in ${me.teams.length} teams; open the page with ?team= naming one (${me.teams.join(', ')}).`;
-      store.dispatch({ type: 'tracker', tracker: { kind: 'refused', reason } });
+    const reason =
+      !team && me.teams.length > 1
+        ? `You are in ${me.teams.length} teams; open the page with ?team= naming one (${me.teams.join(', ')}).`
+        : team && !me.teams.includes(team)
+          ? `You are not in the team ${team}; open the page with ?team= naming one of yours (${me.teams.join(', ')}).`
+          : null;
+    if (reason) {
+      store.dispatch({ type: 'tracker', tracker: tracker && before.kind === 'signed-in' ? before : { kind: 'refused', reason } });
       return reason;
     }
     tracker = t;

@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { CAN, checkAnswer, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, summary, undoFor, undoRequest, type Write } from '../src/writes.ts';
+import { CAN, canUndo, checkAnswer, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, summary, undoFor, undoRequest, type Write } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, ...o });
 
@@ -40,6 +40,8 @@ test('an answer form names what is missing before anything is sent', () => {
   assert.equal(checkAnswer(['a', 'b'], '', null), 'Pick an option, or write an answer.');
   assert.equal(checkAnswer(['a'], '', 'a'), null);
   assert.equal(checkAnswer(['a'], '', 'gone'), 'That option is no longer offered.');
+  // The tracker refuses an answer with both an option and text.
+  assert.match(checkAnswer(['a'], 'and also', 'a')!, /not both/);
   assert.match(checkAnswer([], 'x'.repeat(5000), null)!, /4 KiB/);
 });
 
@@ -51,6 +53,9 @@ test('a refusal keeps the tracker’s own reason and code', () => {
     reason: 'the fold refused the record: not a proposal',
   });
   assert.equal((outcome(401, null) as { why: string }).why, 'signed_out');
+  // Only a 401 or 403 signs the page out, never a fold refusal that happens to say so.
+  assert.equal((outcome(401, null) as { signedOut?: true }).signedOut, true);
+  assert.equal((outcome(409, { error: 'x', why: 'forbidden' }) as { signedOut?: true }).signedOut, undefined);
   assert.equal(outcome(503, { error: 'team busy' }).status, 'failed');
   assert.match((outcome(null, null, 'Failed to fetch') as { reason: string }).reason, /Cannot reach the tracker: Failed to fetch/);
 });
@@ -66,6 +71,10 @@ test('only a tier change can be undone, and only while nobody changed it again',
   assert.match(undoRequest(u, [item({ id: 'a', tier: 0 })]) as string, /changed again since/);
   assert.match(undoRequest(u, [item({ id: 'a', tier: 3, stage: 'closed' })]) as string, /closed now/);
   assert.match(undoRequest(u, []) as string, /no longer in the log/);
+  // Until the change comes back on the log there is nothing to undo yet.
+  assert.match(undoRequest(u, [item({ id: 'a', tier: 1 })]) as string, /not come back/);
+  const ok = { id: 1, batch: 1, kind: 'tier' as const, item: 'a', status: 'ok' as const, undo: u };
+  assert.deepEqual([canUndo([ok], [item({ id: 'a', tier: 1 })]), canUndo([ok], [item({ id: 'a', tier: 3 })])], [false, true]);
 });
 
 test('the write list moves from pending to a result and says so in one line', () => {
@@ -80,6 +89,9 @@ test('the write list moves from pending to a result and says so in one line', ()
   assert.equal(latestFor(ws, 'b')?.status, 'refused');
   assert.deepEqual(summary(ws.list), { text: 'Set the tier of a. b: refused, the item is closed (closed)', tone: 'error', undoable: true });
   assert.equal(ws.last, 1);
+  // A slower, older batch finishing late does not take the activity line back.
+  const later = putWrite(putWrite(ws, w({ id: 3, item: 'c', batch: 2 })), { ...ws.list[0], batch: 1, status: 'failed', reason: 'x' });
+  assert.equal(later.last, 2);
 });
 
 test('marks toggle, and a mark on an item the log no longer has is dropped', () => {
@@ -116,4 +128,8 @@ test('the Needs you inbox is a view in the address that holds only items waiting
   assert.equal(encodeView('', { view: 'inbox', layout: 'list', query: '', filters: {} }), 'view=inbox');
   const items = [item({ id: 'a', stage: 'needs_you', needs: 'question' }), item({ id: 'b' })];
   assert.deepEqual(inScope({ items, blocked: [], view: 'inbox' }).map((i) => i.id), ['a']);
+  // A bulk action reaches only the marks the view shows.
+  const { markedShown } = await import('../src/list.ts');
+  const marks = { items, blocked: [], view: 'all' as const, query: 'b', filters: {}, marked: ['a', 'b'] };
+  assert.deepEqual(markedShown(marks).map((i) => i.id), ['b']);
 });
