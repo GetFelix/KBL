@@ -41,6 +41,7 @@ export interface BlockedRow {
   id: string;
   title: string;
   repo: Repo | null;
+  source: string | null;
   waits_on: Blocker[];
 }
 
@@ -51,7 +52,7 @@ export function blocked(fold: Fold): BlockedRow[] {
 
 /**
  * How a blocker reads on the row it holds: its id, then where it lives when that
- * differs from the row's repo (its repo, else its source), then "release" when
+ * differs from the row's repo (its repo, else its source when the row's is another), then "release" when
  * only the release is awaited.
  */
 export function waitsOn(row: BlockedRow): string {
@@ -62,7 +63,7 @@ export function waitsOn(row: BlockedRow): string {
         ? own && b.repo.source === own.source && b.repo.repo === own.repo
           ? ''
           : ` (${b.repo.source}:${b.repo.repo})`
-        : b.source
+        : b.source && b.source !== row.source
           ? ` (${b.source})`
           : '';
       return `${b.id}${where}${b.awaiting_release ? ' release' : ''}`;

@@ -76,22 +76,26 @@ impl Folder {
         serde_json::to_string(&items).expect("plain data serializes")
     }
 
-    /// Every item in the Blocked stage, as `{id, title, repo, waits_on}`, in
+    /// Every item in the Blocked stage, as `{id, title, repo, source, waits_on}`, in
     /// id order. `waits_on` lists the items holding it, each with its own
     /// `repo`, stage, `source` and `awaiting_release` (merged, but the link
     /// waits for the release), so a blocker in another repo or source shows
     /// where it lives. `repo` is `{source, repo}`, or null when the fold knows none.
     pub fn blocked_json(&self) -> String {
         let s = &self.state;
+        let source_of = |id: &ItemId| {
+            let root = &s.items.get(id)?.root;
+            s.imported()
+                .find(|(_, _, r)| *r == root)
+                .map(|(src, _, _)| src)
+        };
         let blocker = |id: &ItemId| {
             json!({
                 "id": id,
                 "title": s.items.get(id).map(|i| i.title.as_str()),
                 "repo": s.repo_of(id),
                 "stage": s.stage(id),
-                "source": s.items.get(id).and_then(|i| {
-                    s.imported().find(|(_, _, r)| **r == i.root).map(|(src, _, _)| src)
-                }),
+                "source": source_of(id),
                 "awaiting_release": s.items.get(id).is_some_and(|i| i.closed.is_some()),
             })
         };
@@ -106,6 +110,7 @@ impl Folder {
                         "id": i.id,
                         "title": i.title,
                         "repo": s.repo_of(&i.id),
+                        "source": source_of(&i.id),
                         "waits_on": by.into_iter().map(blocker).collect::<Vec<_>>(),
                     })
                 })

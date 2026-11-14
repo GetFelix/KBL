@@ -3455,3 +3455,32 @@ fn a_dismissed_or_upstream_closed_blocker_drops_out_and_asks_a_person() {
         assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
     }
 }
+
+#[test]
+fn an_ado_roots_target_still_drives_rules_but_is_not_shown_as_a_repo() {
+    let mut l = Log::default();
+    l.tracker(WorkRecord::Imported {
+        item: id("ado"),
+        source: "ado".into(),
+        upstream_id: "org/project#4410".into(),
+        title: "ado".into(),
+    });
+    let ado = Target {
+        source: "ado".into(),
+        repo: "org/project".into(),
+    };
+    l.person(WorkRecord::RulesSet {
+        target: ado.clone(),
+        root: None,
+        text: Some("ado rules".into()),
+        checks: None,
+    });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.items[&id("ado")].target.as_ref(), Some(&ado));
+    assert_eq!(
+        s.rules_for(&id("ado")).and_then(|r| r.text).as_deref(),
+        Some("ado rules")
+    );
+    assert_eq!(s.repo_of(&id("ado")), None);
+}

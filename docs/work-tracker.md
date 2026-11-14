@@ -631,10 +631,11 @@ Azure DevOps work item. People link items of different trees freely; an
 agent links across trees only through a prerequisite (below). The waiting
 item is Blocked until the other one is done, the same as inside one tree.
 
-The fold records a repo only where the upstream id names one: a GitHub id
-(`org/repo#n`) gives an imported root its repo, a prerequisite has its
-target, and any other item takes its root's. Jira ids name none, and an ADO id
-names a project, not a repo, so those items have no repo. The Blocked view
+The fold records a target for every imported root: a GitHub id (`org/repo#n`)
+gives its repo, and an ADO id gives its `org/project`, which still selects
+rules and spend. Only a GitHub target is shown as a repo. A prerequisite has
+its target, and any other item takes its root's. Jira ids name none, so
+those items have no target. The Blocked view
 names each blocker with its own repo when it has one and differs from the
 card's, else its source, so the board shows "waits on gw
 (github:GetFelix/felix-gateway)" on the felix-blocks card and "waits on
