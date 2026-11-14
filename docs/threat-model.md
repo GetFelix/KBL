@@ -76,9 +76,12 @@ Two more parties are outside KBL and can still steer it:
 The token file must be mode 600 or 400 (`tracker/src/config.rs:93`), a token
 may be listed once (`tracker/src/config.rs:114`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs:149`).
-The tracker and the webhook serve plain HTTP: **None**
-([#158](https://github.com/GetFelix/KBL/issues/158)). Tokens are
-long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
+The tracker and the webhook serve plain HTTP, so each refuses to listen on
+an address other than loopback unless a flag says a TLS proxy is in front
+(`tracker/src/main.rs:123`, `ingest/src/main.rs:69`). The flag is a promise
+the process cannot check: set it without a proxy and tokens cross the network
+in the clear. Callers are not checked either: `kbl-mcp` and ingest send their
+token to whatever tracker URL they are given, `http://` included. Tokens are long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
 There is no request rate limit; a refused call writes nothing, and the first
 cap an attempt hits is logged once (`tracker/src/tracker/tools.rs:902`).
 
@@ -139,7 +142,7 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 
 | Route | What ingest controls | Check |
 |---|---|---|
-| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:102`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:108`, `core/src/work_fold.rs:1544`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:89`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1425`); ingest cuts titles itself (`ingest/src/sync.rs:1001`) |
+| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:102`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:108`, `core/src/work_fold.rs:1544`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:89`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1425`); ingest cuts titles itself (`ingest/src/sync.rs:1020`) |
 | `/v1/ingest/roots` | Nothing | Read only |
 | `GET /v1/ingest/state/{source}`, `PUT /v1/ingest/state/{source}` | The saved cursor for a source | The name is a key (`tracker/src/tracker/ingest.rs:237`). 4 MB at most (`tracker/src/tracker/ingest.rs:239`). Saved only if nobody saved since the version read (`tracker/src/tracker/ingest.rs:242`). Any ingest token reaches any source's state, which is fine with one worker |
 | `/healthz` | Nothing | No token. Answers `ok` and nothing else |
@@ -180,7 +183,7 @@ sent on the wrong team's connection is refused by the broker.
 
 | Route | Who can call it | What it could steer | Check |
 |---|---|---|---|
-| `/webhook` | Anyone who can reach the port | Make ingest spend GitHub requests; inject data | A webhook carries no data into the tracker, it only wakes the poll. HMAC signature, and an empty secret refuses everything (`ingest/src/webhook.rs:83`). A repeated delivery id is dropped (`ingest/src/webhook.rs:90`), which stops GitHub's own redeliveries and nothing else: the signature covers the body, not the delivery id, so a captured body can be sent again under a new id. Over plain HTTP anyone on the path can capture one (#158). What bounds a replay is that wakes are spaced (`ingest/src/webhook.rs:103`) and a wake only starts a poll |
+| `/webhook` | Anyone who can reach the port | Make ingest spend GitHub requests; inject data | A webhook carries no data into the tracker, it only wakes the poll. HMAC signature, and an empty secret refuses everything (`ingest/src/webhook.rs:83`). A repeated delivery id is dropped (`ingest/src/webhook.rs:90`), which stops GitHub's own redeliveries and nothing else: the signature covers the body, not the delivery id, so a captured body can be sent again under a new id. Without TLS in front, anyone on the path can capture one; ingest listens only on loopback unless a TLS proxy is declared. What bounds a replay is that wakes are spaced (`ingest/src/webhook.rs:103`) and a wake only starts a poll |
 
 ### What ingest believes
 
@@ -189,14 +192,14 @@ request only when all of these hold, so the name alone steers nothing.
 
 | Attack | Check |
 |---|---|
-| Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:815`) |
-| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:548`, `ingest/src/github.rs:335`) |
-| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:562`) |
+| Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:816`) |
+| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:549`, `ingest/src/github.rs:335`) |
+| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:563`) |
 | Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs:346`) |
 | Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:540`) |
 | Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:617`) |
-| Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:770`) |
-| Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:1010`), our own comments are skipped (`ingest/src/sync.rs:478`), and an edit after triage shows as "changed upstream" |
+| Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:771`) |
+| Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:1029`), our own comments are skipped (`ingest/src/sync.rs:479`), and an edit after triage shows as "changed upstream" |
 
 Still open: canonical request names and a filter on who created a check run
 ([#148](https://github.com/GetFelix/KBL/issues/148)).
@@ -385,7 +388,6 @@ each token and never a token. A format above the build's stops the reader.
 
 | Issue | Gap |
 |---|---|
-| [#158](https://github.com/GetFelix/KBL/issues/158) | The tracker and the webhook serve plain HTTP |
 | [#109](https://github.com/GetFelix/KBL/issues/109) | Proposals draw no budget; post keys can be reused across claims |
 | [#185](https://github.com/GetFelix/KBL/issues/185) | `org.events` has no record to remove a person, rotate a person's token or revoke an ingest token yet; counts of teams, people and members are not capped |
 | [#120](https://github.com/GetFelix/KBL/issues/120) | No roles: every person can do everything, every agent can claim any repo's work |
