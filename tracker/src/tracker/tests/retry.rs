@@ -164,6 +164,65 @@ async fn a_redo_of_a_red_item_is_handed_out_once_the_format_is_raised() {
     assert_eq!(got["attempt"], 2, "{got}");
 }
 
+/// A redo on a red item that is released goes back to Ready, and its retry is
+/// handed out again instead of the item falling back to Needs you.
+#[tokio::test]
+async fn a_released_redo_of_a_red_item_can_be_claimed_again() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let at = finished(&t).await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::FormatRaised {
+            to: kbl_core::work::FORMAT_V4,
+        },
+    )
+    .await
+    .unwrap();
+    t.ingest_record(key("ingest-gh"), status(PrChecks::Red))
+        .await
+        .unwrap();
+    let late = note(&t).await;
+    redo(&t, at, Some(late)).await.unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+    t.release(&agent("w2"), &item("a1"), None, 0).await.unwrap();
+
+    let got = claim(&t, "w3").await;
+    assert_eq!(claimed_id(&got).as_deref(), Some("a1"));
+    assert_eq!(got["attempt"], 2, "{got}");
+}
+
+/// A redo made while the checks were still running names no note about the
+/// failure that came after, so it waits for green even at format 4.
+#[tokio::test]
+async fn a_redo_from_before_the_failure_waits_for_green() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let at = finished(&t).await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::FormatRaised {
+            to: kbl_core::work::FORMAT_V4,
+        },
+    )
+    .await
+    .unwrap();
+    let ingest = key("ingest-gh");
+    t.ingest_record(ingest.clone(), status(PrChecks::Pending))
+        .await
+        .unwrap();
+    redo(&t, at, None).await.unwrap();
+    t.ingest_record(ingest.clone(), status(PrChecks::Red))
+        .await
+        .unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+
+    t.ingest_record(ingest, status(PrChecks::Green))
+        .await
+        .unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
+
 #[tokio::test]
 async fn a_closed_item_gets_the_folds_refusal_not_a_request_for_a_note() {
     let fake = Fake::default();

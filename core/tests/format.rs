@@ -397,10 +397,30 @@ fn a_redo_of_a_red_item_is_handed_out_once_the_log_is_at_format_4() {
             why: Reject::NotReady
         }]
     );
+    // w2's claim was released and w3 retried the same attempt.
     let it = &s.items[&r1];
     assert_eq!(
         it.hold.as_ref().map(|h| (h.by.as_str(), h.attempt)),
-        Some(("w2", 2))
+        Some(("w3", 2))
     );
+    assert_eq!(it.paths[1].tries, 2);
     assert!(it.paths[1].forked_from.is_some());
+}
+
+/// A raise to format 3 is not enough: the redo still waits for green.
+#[test]
+fn a_redo_of_a_red_item_waits_at_format_3() {
+    let raise4 =
+        r#"{"v":4,"at_ms":1100,"by":"gabriel","actor":"person","kind":"format_raised","to":4}"#;
+    let raise3 =
+        r#"{"v":3,"at_ms":1100,"by":"gabriel","actor":"person","kind":"format_raised","to":3}"#;
+    assert!(FORMAT_4_LOG.contains(raise4));
+    let log = entries(&FORMAT_4_LOG.replace(raise4, raise3));
+    let s = fold(&log[..12]);
+    assert_eq!(s.format(), FORMAT_V3);
+    let r1 = kbl_core::names::ItemId::new("r1").unwrap();
+    assert_eq!(s.needs_you(&r1), Some(NeedsYou::CheckFailed));
+    assert!(s.items[&r1].hold.is_none());
+    assert_eq!(s.rejections.len(), 2);
+    assert!(s.rejections.iter().all(|r| r.why == Reject::NotReady));
 }

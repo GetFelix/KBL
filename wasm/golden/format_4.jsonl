@@ -10,3 +10,5 @@
 {"at_ms":1090,"by":"w2","actor":"agent","kind":"claimed","item":"r1","attempt":2,"deadline_ms":1800000090000}
 {"v":4,"at_ms":1100,"by":"gabriel","actor":"person","kind":"format_raised","to":4}
 {"at_ms":1110,"by":"w2","actor":"agent","kind":"claimed","item":"r1","attempt":2,"deadline_ms":1800000090000}
+{"at_ms":1120,"by":"w2","actor":"agent","kind":"released","item":"r1","attempt":2,"reason":"claim lapsed","cost_micros":0}
+{"at_ms":1130,"by":"w3","actor":"agent","kind":"claimed","item":"r1","attempt":2,"deadline_ms":1800000090000}

@@ -346,6 +346,10 @@ pub struct Item {
     /// Upstream's view of `pr`, as the last `pr_status` said.
     #[serde(default)]
     pub pr_status: Option<PrSnapshot>,
+    /// The offset of the `pr_status` that turned the checks red, while they
+    /// stays red. A redo whose note is newer was written after the failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_since: Option<u64>,
     /// When the first claim on the item was logged, in the tracker's clock.
     #[serde(default)]
     pub first_claim_ms: Option<u64>,
@@ -638,11 +642,19 @@ impl State {
         if it.left_scope && it.hold.is_none() {
             return Some(NeedsYou::LeftScope);
         }
-        // From format 4 a waiting redo is what the person asked for, so it is
-        // handed out instead of waiting for the checks to turn green.
-        let redo_waits = it.pending_fork.is_some() && self.format() >= FORMAT_V4;
+        // From format 4 a redo is what the person asked for, so it is handed
+        // out instead of waiting for green, until its attempt is done. Its claim
+        // may be released and retried. A redo whose note predates the failure
+        // was not written for it, so it still waits.
+        let redo = it.pending_fork.as_ref().or_else(|| {
+            it.open_path()
+                .filter(|p| !p.done)
+                .and_then(|p| p.forked_from.as_ref())
+        });
+        let redo_runs = self.format() >= FORMAT_V4
+            && redo.is_some_and(|f| f.note.is_some_and(|n| Some(n) > it.red_since));
         if it.hold.is_none()
-            && !redo_waits
+            && !redo_runs
             && it
                 .pr_status
                 .as_ref()
@@ -921,6 +933,7 @@ impl State {
             branch: None,
             pr: None,
             pr_status: None,
+            red_since: None,
             first_claim_ms: None,
             cost_micros: 0,
             context: BTreeMap::new(),
@@ -1274,6 +1287,7 @@ impl State {
                     // A status describes one request; a new one starts blank.
                     if it.pr != *pr {
                         it.pr_status = None;
+                        it.red_since = None;
                     }
                     it.pr = pr.clone();
                 }
@@ -1800,6 +1814,12 @@ impl State {
                 }
                 if !status.consistent() {
                     return Err(Reject::MissingField);
+                }
+                let red = |s: &PrSnapshot| s.phase == PrPhase::Open && s.checks == PrChecks::Red;
+                if !red(status) {
+                    it.red_since = None;
+                } else if !it.pr_status.as_ref().is_some_and(red) {
+                    it.red_since = Some(offset);
                 }
                 it.pr_status = Some(status.clone());
             }

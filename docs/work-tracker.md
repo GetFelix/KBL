@@ -236,10 +236,16 @@ reported the failure. Without one, or with an older note, the tracker answers
 `note_required`. The note is what the next attempt starts from, and it shows
 that someone read the failure before running the work again. A new pull
 request on the item starts a new failure, and green checks end it. This check
-also runs before the append. Today a redo that passes
-still waits in Needs you until the checks are green, because the failed check
-keeps the item there. [#213](https://github.com/GetFelix/KBL/issues/213) is
-the fix.
+also runs before the append, so it only sees a failure already reported: a
+redo made while the checks are still running needs no note.
+
+What happens to the redo next depends on the log's format
+([upgrades](upgrades.md#formats)). Below format 4 the failed check keeps the
+item in Needs you, so the redo waits until the checks are green. From format
+4 the redo is handed out while the check is still red, as long as its note is
+newer than the failure. If its claim is released or lapses, the same attempt
+is handed out again until it is done. A redo with no note, or an older one,
+still waits for green.
 
 Text in a record stays inline up to 4 KiB. Longer text is an artifact the
 caller stored first and names by its hash; `kbl-mcp` does that for the
@@ -1222,7 +1228,8 @@ The stages, left to right. An item sits in exactly one and moves right as
   to Needs you with the check's name and a link, unless an agent holds it. A
   redo from there needs a note written since the failure, and from format 4
   ([upgrades](upgrades.md#formats)) it is handed out while the check is
-  still red; before that it waits for green. The tracker
+  still red if its note is newer than the failure; otherwise it waits for
+  green. The tracker
   never merges. It records the merge it sees. A PR also carries the agent's
   handoff: what it changed, what it checked, what it is unsure of. The
   reviewer can mark the summary accurate or not.
