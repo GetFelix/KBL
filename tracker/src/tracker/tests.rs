@@ -665,6 +665,17 @@ async fn a_claim_is_charged_at_least_the_floor() {
     assert_eq!(left("a2") + 500, left("a4"));
 }
 
+#[tokio::test]
+async fn a_claim_found_lapsed_by_the_next_poll_is_charged_the_floor() {
+    let fake = Fake::default();
+    let t = start_with(&fake, floor(500)).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    fake.lapse_all();
+    claim(&t, "w2").await;
+    assert_eq!(costs(&fake, "released"), [500]);
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_lapsed_claim_is_charged_the_floor() {
     let fake = Fake::default();

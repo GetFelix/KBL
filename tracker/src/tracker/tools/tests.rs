@@ -600,6 +600,43 @@ async fn asking_is_charged_at_least_the_floor() {
 }
 
 #[tokio::test]
+async fn a_prerequisite_is_charged_at_least_the_floor() {
+    let fake = Fake::default();
+    let grants = [("w1".to_owned(), vec!["GetFelix/felix-gateway".to_owned()])].into();
+    let floor = crate::tracker::Settings {
+        grants,
+        cost_floor_micros: 500,
+        ..settings()
+    };
+    let t = start_with(&fake, floor).await;
+    import(&t, "a1", "GetFelix/felix#1").await;
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: item("a1"),
+            tier: Some(2),
+        },
+    )
+    .await;
+    claim(&t, "w1").await;
+    t.prerequisite(
+        &agent("w1"),
+        &item("a1"),
+        key("cas"),
+        gateway(),
+        DoneWhen::Merged,
+        0,
+    )
+    .await
+    .unwrap();
+    let log = fake.log();
+    let Some(WorkRecord::Prerequisite { cost_micros, .. }) = log.last().map(|l| &l.record) else {
+        panic!("the last record is not a prerequisite");
+    };
+    assert_eq!(*cost_micros, 500);
+}
+
+#[tokio::test]
 async fn asking_and_answering_a_question() {
     let (_fake, t) = held().await;
     let a = agent("w1");
