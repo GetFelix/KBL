@@ -45,7 +45,7 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .list ul { list-style: none; margin: 0; padding: 0; }
 .row { display: flex; gap: var(--space-4); align-items: center; min-height: var(--row-height); padding: 0 var(--space-2); border-bottom: 1px solid var(--line); color: var(--text); text-decoration: none; }
 .row:hover { background: var(--hover); }
-.row[data-selected='true'] { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
+.row[data-selected] { background: var(--hover); box-shadow: inset 2px 0 0 var(--accent); }
 .row[aria-current='true'] { background: var(--accent-soft); }
 .row-id { color: var(--muted); min-width: 4.5rem; }
 .row-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

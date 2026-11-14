@@ -15,27 +15,38 @@ const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/
 
 // Replaces WebSocket before the page's code runs: answers `join`, pages `read`s of the
 // fixture log, and `subscribe`s from the cursor. `mode` picks the gateway's behaviour.
+// `window.__push(record)` delivers one more record as a live event. A throw in the page's
+// handler is left to surface as a page exception, which fails the check.
+const encode = (r) => btoa(unescape(encodeURIComponent(JSON.stringify(r))));
 const fakeGateway = (log, mode) => `(() => {
-  const log = ${JSON.stringify(log.map((r) => btoa(unescape(encodeURIComponent(JSON.stringify(r))))))};
+  const encode = ${encode};
+  const log = ${JSON.stringify(log.map(encode))};
   const mode = ${JSON.stringify(mode)};
   window.WebSocket = class {
-    constructor() { setTimeout(() => this.onopen && this.onopen(), 0); }
-    reply(m, ms = 0) { (window.__sent ??= []).push('reply:' + m.type + ':' + (m.records?.length ?? '')); setTimeout(() => { try { window.__sent.push('deliver ' + typeof this.onmessage); this.onmessage && this.onmessage({ data: JSON.stringify(m) }); window.__sent.push('delivered'); } catch (e) { (window.__sent ??= []).push('threw ' + e); } }, ms); }
+    constructor() {
+      window.__ws = this;
+      setTimeout(() => (mode === 'down' ? this.onclose && this.onclose() : this.onopen && this.onopen()), 0);
+    }
+    reply(m, ms = 0) { setTimeout(() => this.onmessage && this.onmessage({ data: JSON.stringify(m) }), ms); }
     send(text) {
       const m = JSON.parse(text);
-      (window.__sent ??= []).push(m.type + ':' + (m.from ?? ''));
       if (m.type === 'join') return mode === 'forbidden'
         ? this.reply({ type: 'error', code: 'signed_out', message: 'the ID token expired' })
         : this.reply({ type: 'hello', features: ['read'] });
       if (m.type === 'read') {
         if (mode === 'loading') return;
+        if (mode === 'trimmed') return this.reply({ type: 'error', code: 'trimmed', message: 'the log no longer holds offset 0' });
         const records = log.slice(m.from, m.from + 20).map((payload, i) => ({ offset: m.from + i, payload }));
         return this.reply({ type: 'records', id: m.id, records, next_offset: m.from + records.length });
       }
-      if (m.type === 'subscribe') this.reply({ type: 'subscribed', start_offset: m.from, live_offset: m.from });
+      if (m.type === 'subscribe') {
+        this.liveAt = m.from;
+        this.reply({ type: 'subscribed', start_offset: m.from, live_offset: m.from });
+      }
     }
     close() {}
   };
+  window.__push = (record) => window.__ws.reply({ type: 'event', offset: window.__ws.liveAt++, payload: encode(record) });
 })();`;
 
 const failures = [];
@@ -44,10 +55,14 @@ const check = (ok, what) => {
   if (!ok) failures.push(what);
 };
 
+// CDP modifier bits: Ctrl is 2, Meta is 4. The page reads Cmd as Mod on a Mac.
+const MOD = process.platform === 'darwin' ? 4 : 2;
+const MOD_NAME = process.platform === 'darwin' ? 'Cmd' : 'Ctrl';
 const KEYS = { Escape: 27, Enter: 13, Tab: 9, ArrowDown: 40, ArrowUp: 38, Home: 36, End: 35 };
 async function press(page, key, modifiers = 0) {
   const code = KEYS[key];
-  const text = code ? undefined : key;
+  // Enter carries text, as on a real keyboard, so a focused link activates.
+  const text = key === 'Enter' ? '\r' : code ? undefined : key;
   const base = { key, modifiers, windowsVirtualKeyCode: code ?? key.toUpperCase().charCodeAt(0), code: code ? key : undefined };
   await page.send('Input.dispatchKeyEvent', { type: text && !modifiers ? 'keyDown' : 'rawKeyDown', text: modifiers ? undefined : text, ...base });
   await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
@@ -60,7 +75,14 @@ let script = null;
 async function status() {
   return page.eval(`document.querySelector('.status')?.textContent ?? ''`);
 }
+let loaded = null;
+// Any exception or console error on a page is a failure, whatever the flow checks said.
+function clean() {
+  if (loaded !== null) check(page.problems.length === 0, `${loaded}: no page errors${page.problems.length ? ` (${page.problems.join('; ')})` : ''}`);
+}
 async function open(query, { mode = 'live', theme = 'dark', width = 1280, height = 800 } = {}) {
+  clean();
+  loaded = `page ${mode} ${theme} ${width}px`;
   if (script) await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: script });
   script = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeGateway(fixtureLog(), mode) })).identifier;
   await page.setViewport(width, height, 1);
@@ -96,8 +118,8 @@ try {
     await axe(`list ${theme}`);
     await shoot(`list-${theme}`);
 
-    await press(page, 'k', 2);
-    check(await focused('.palette-input'), `${theme}: Ctrl+K opens the palette with focus in its input`);
+    await press(page, 'k', MOD);
+    check(await focused('.palette-input'), `${theme}: ${MOD_NAME}+K opens the palette with focus in its input`);
     await axe(`palette ${theme}`);
     await shoot(`palette-${theme}`);
     await press(page, 'Escape');
@@ -116,19 +138,37 @@ try {
   await press(page, 'j');
   const second = await page.eval(`document.activeElement?.dataset.id ?? null`);
   check(second === (await page.eval(`document.querySelectorAll('.row')[1].dataset.id`)), 'j moves selection and focus down the list');
-  await press(page, 'k', 2);
+  await press(page, 'k', MOD);
   await press(page, 'Escape');
   check(await page.eval(`document.activeElement?.dataset.id === ${JSON.stringify(second)}`), 'closing the palette gives focus back to the row');
+
+  const rowCount = await page.eval(`document.querySelectorAll('.row').length`);
+  await page.eval(`window.__push({ kind: 'imported', item: 'gh-2230', source: 'github', title: 'A record that lands while you read', upstream_id: 'gh-2230', actor: 'person', by: 'maintainer', at_ms: 1800000000000 })`);
+  await page.waitFor(`document.querySelectorAll('.row').length === ${rowCount + 1}`);
+  check(await page.eval(`document.activeElement?.dataset.id === ${JSON.stringify(second)}`), 'a live record does not move the focus off the row');
+
+  await press(page, 'Tab');
+  const third = await page.eval(`document.activeElement?.dataset.id ?? null`);
+  check(third !== second && (await page.eval(`document.activeElement?.hasAttribute('data-selected') ?? false`)), 'Tab to a row selects it');
   await press(page, 'Enter');
-  check(await page.eval(`!document.querySelector('.panel').hidden && location.search.includes('item=')`), 'Enter opens the row in the panel and the address');
+  await page.waitFor(`location.search.includes('item=${third}')`);
+  check(await page.eval(`!document.querySelector('.panel').hidden && document.querySelector('.panel .row-id').textContent === ${JSON.stringify(third)}`), 'Enter opens the focused row in the panel and the address');
+  check(await focused('.panel'), 'opening an item moves focus into the panel');
   await shoot('panel-dark');
   await press(page, 'Escape');
   check(await page.eval(`document.querySelector('.panel').hidden`), 'Esc closes the panel');
+  check(await page.eval(`document.activeElement?.dataset.id === ${JSON.stringify(third)}`), 'closing the panel gives focus back to the row');
 
-  await press(page, 'k', 2);
+  await press(page, 'k', MOD);
   for (const ch of 'shortcuts') await press(page, ch);
   await press(page, 'Enter');
   check(await page.eval(`document.querySelector('dialog.help').open`), 'the palette runs a command by name');
+  await press(page, 'Escape');
+
+  await press(page, 'k', MOD);
+  for (const ch of 'search') await press(page, ch);
+  await press(page, 'Enter');
+  check(await focused('#search'), 'Search items from the palette leaves focus in the search field');
   await press(page, 'Escape');
 
   await press(page, '/');
@@ -152,21 +192,39 @@ try {
   await shoot('setup-dark');
 
   await open(connected, { mode: 'loading' });
-  check(await page.eval(`document.querySelector('.list').getAttribute('aria-busy') === 'true'`), 'the first read shows placeholder rows');
+  check(await page.eval(`document.querySelector('.list').hasAttribute('aria-busy')`), 'the first read shows placeholder rows');
+  await page.waitFor(`document.querySelector('.status')?.textContent.includes('Reading history')`);
+  check(true, 'the status says it is reading history');
   await shoot('loading-dark');
 
   await open(connected, { mode: 'forbidden' });
   await page.waitFor(`document.querySelector('.status')?.dataset.tone === 'error'`);
-  check(await page.eval(`!!document.querySelector('[role=alert] button')`), 'a rejected token stops with a reason and a Reload button');
+  check(await page.eval(`!!document.querySelector('[role=alert] button') && document.querySelector('[role=alert]').textContent.includes('sign-in link')`), 'a rejected token stops with a reason, the sign-in hint and a Reload button');
   await axe('stopped');
   await shoot('error-dark');
+
+  await open(connected, { mode: 'trimmed' });
+  await page.waitFor(`document.querySelector('.status')?.dataset.tone === 'error'`);
+  check(await page.eval(`!document.querySelector('[role=alert] button') && !document.querySelector('[role=alert]').textContent.includes('sign-in')`), 'a stop that is not about the token gives no sign-in advice');
+
+  await open(connected, { mode: 'down' });
+  await page.waitFor(`document.querySelector('.status')?.textContent.includes('Retrying')`);
+  check(await page.eval(`document.querySelector('.empty h2')?.textContent === 'Cannot reach the gateway'`), 'a gateway that is down at open says nothing has been read, not that there is no work');
+  await axe('unreachable');
 
   await open(connected, { width: 390, height: 844 });
   await page.waitFor(live);
   await axe('phone');
   await shoot('phone-dark');
+  await press(page, 'End');
+  await press(page, 'Enter');
+  check(
+    (await focused('.panel')) && (await page.eval(`(() => { const r = document.querySelector('.panel').getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; })()`)),
+    'on a phone, opening an item moves focus to the panel and scrolls it into view',
+  );
+  clean();
 } catch (e) {
-  console.error('page problems:', page.problems, await page.eval(`JSON.stringify(window.__sent)`).catch(() => '?'));
+  console.error('page problems:', page.problems);
   console.error('status:', await status().catch(() => '?'), '| body:', await page.eval(`document.body.innerText.slice(0, 300)`).catch(() => '?'));
   throw e;
 } finally {

@@ -37,13 +37,17 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   so a key cannot appear in one and act differently in another. Keys copy Linear and GitHub: `Mod+K` palette,
   `?` shortcuts, `/` search, `J`/`K` and arrows to move, `Home`/`End`, `Enter` to open, `Esc` to close or
   clear. Single letters are ignored while typing. Commands with no key (theme) live in the palette.
-- **Palette.** Every command and every item, ranked by prefix, then word start, then substring
-  (`src/palette.ts`). Each command shows its key, so the palette teaches the shortcuts.
+- **Palette.** Every command and every item, ranked by a match at a word start (the earliest first), then
+  anywhere in a word, then the query's letters in order (`src/palette.ts`). Each command shows its key, so the palette teaches the shortcuts.
 - **List.** Items grouped by stage in board order (Needs you first, Done last) with counts. The stage comes from
-  `core`'s fold; the page only orders and labels it. One row is selected; `Enter` opens it in the side panel
-  and in the address (`?item=`), so a link opens the same view.
+  `core`'s fold; the page only orders and labels it. The focused row is the selected row; `Enter` opens it in
+  the side panel and in the address (`?item=`), so a link opens the same view. Opening moves focus into the
+  panel and `Esc` puts it back on the row. Rows are kept per item and only redrawn when the list changes, so a
+  live record never takes the focus off the row you are on.
 - **States.** Each has a heading, one sentence and the next step: setup (how to connect), loading (placeholder
-  rows, `aria-busy`), empty, no match (Clear search), no such item, and stopped (the reason and Reload).
+  rows, `aria-busy`), cannot reach the gateway (nothing read yet, when the next try is), empty, no match
+  (Clear search), no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,
+  Reload for a log newer than the page).
 - **Tokens.** `src/ui/tokens.css` holds every colour, space, type size and radius, for dark and light.
   Accent is KBL amber `#C86A1E` per [brand/story.md](../brand/story.md), with Inter and JetBrains Mono. Views
   use tokens only.
@@ -53,7 +57,7 @@ page does and checks a message gets through, and CI runs the page itself in Chro
 
 | Heuristic | Status |
 | --- | --- |
-| Visibility of system status | Met: live status line (Live, Reconnecting in N s, Stopped), counts per stage, skeleton rows while loading. |
+| Visibility of system status | Met: live status line (Reading history, Live, Disconnected and retrying in N s, Stopped), counts per stage, skeleton rows while loading. |
 | Match with the real world | Met: stage names from the tracker, upstream ids as written upstream. |
 | User control and freedom | Partly: `Esc` closes or clears everywhere, the address restores views. Undo waits for writes (phase 3). |
 | Consistency and standards | Met: Linear/GitHub keys, native `<dialog>`, one shortcut map. |
@@ -61,7 +65,7 @@ page does and checks a message gets through, and CI runs the page itself in Chro
 | Recognition rather than recall | Met: palette lists every command with its key; `?` lists all keys. |
 | Flexibility and efficiency | Met for reading: keys for every action, palette search by id or title. |
 | Aesthetic and minimalist design | Met: one list, one panel, no chrome beyond the nav. |
-| Help users recover from errors | Met: stopped state names the cause and offers Reload; no-match offers Clear. |
+| Help users recover from errors | Met: stopped state names the cause, and the next step where the cause backs one (a new sign-in link, or Reload); no-match offers Clear. |
 | Help and documentation | Met: `?` overlay, README Keys table. |
 
 ## WCAG 2.2 AA
@@ -81,8 +85,9 @@ on serious or critical.
 | 2.1.1 Keyboard, 2.1.2 No trap | Met: everything by keyboard; dialogs close on `Esc` and give focus back. |
 | 2.1.4 Character key shortcuts | Met: single-letter keys only act when focus is not in a field. Remapping is deferred to settings (phase 4). |
 | 2.4.1 Bypass blocks | Met: skip link is the first Tab stop. |
-| 2.4.3 Focus order, 2.4.7 Focus visible | Met: visible amber focus ring on every control. |
-| 2.4.11 Focus not obscured | Met: the panel sits beside the list, never over the focused row. |
+| 2.4.3 Focus order | Met: focus stays on its row when records arrive; opening an item moves focus into the panel and `Esc` returns it to the row; dialogs return focus to where it was. The browser check covers each. |
+| 2.4.7 Focus visible | Met: visible amber focus ring on every control. |
+| 2.4.11 Focus not obscured | Met: the panel sits beside the list, never over the focused row. Below 720 px it sits under the list, and opening an item scrolls it into view. |
 | 2.5.8 Target size | Met: controls at least 24 px (`--target-min`). |
 | 3.2.6 Consistent help | Met on wide screens: Shortcuts and Commands sit in the sidebar on every view. Below 720 px the sidebar is hidden; a menu button is phase 2. |
 | 3.3.x Input and errors | Deferred: the page has no forms until it writes (phase 3). |

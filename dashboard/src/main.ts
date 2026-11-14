@@ -11,7 +11,7 @@ import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
 import { flatten, group, move } from './list.ts';
-import { createStore, fromAddress, toAddress, type ViewState } from './state.ts';
+import { adviceFor, createStore, fromAddress, toAddress, type ViewState } from './state.ts';
 import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
@@ -27,13 +27,23 @@ if (token) {
 const themeParam = q.get('theme');
 const address = fromAddress(location.search);
 const initial: ViewState = {
-  connection: { kind: 'setup' },
+  connection: q.get('room') && token ? { kind: 'loading', what: 'history' } : { kind: 'setup' },
+  synced: false,
   items: [],
   ...address,
   selected: address.open,
   theme: themeParam === 'light' || themeParam === 'dark' ? themeParam : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
 };
 const store = createStore(initial);
+
+const openItem = (id: string) => {
+  store.dispatch({ type: 'open', id });
+  ui.panel.focus();
+};
+const closeItem = () => {
+  store.dispatch({ type: 'open', id: null });
+  ui.list.focusSelected();
+};
 
 const run = (id: CommandId): void => {
   const s = store.get();
@@ -56,12 +66,12 @@ const run = (id: CommandId): void => {
       return ui.list.focusSelected();
     }
     case 'open':
-      if (s.selected) store.dispatch({ type: 'open', id: s.selected });
+      if (s.selected) openItem(s.selected);
       return;
     case 'close':
-      if (s.open) store.dispatch({ type: 'open', id: null });
-      else if (s.query) store.dispatch({ type: 'query', query: '' });
       if (document.activeElement === ui.search) ui.search.blur();
+      if (s.open) closeItem();
+      else if (s.query) store.dispatch({ type: 'query', query: '' });
       return;
     case 'theme':
       return store.dispatch({ type: 'theme', theme: s.theme === 'dark' ? 'light' : 'dark' });
@@ -71,8 +81,11 @@ const run = (id: CommandId): void => {
 const ui = shell(
   document.getElementById('app')!,
   {
-    open: (id) => store.dispatch({ type: 'open', id }),
-    closeItem: () => store.dispatch({ type: 'open', id: null }),
+    open: openItem,
+    select: (id) => {
+      if (store.get().selected !== id) store.dispatch({ type: 'select', id });
+    },
+    closeItem,
     clearSearch: () => {
       store.dispatch({ type: 'query', query: '' });
       ui.search.focus();
@@ -83,15 +96,28 @@ const ui = shell(
   },
   mac,
 );
-const palette = paletteView(store.get, { run, openItem: (id) => store.dispatch({ type: 'open', id }) }, mac);
+const palette = paletteView(store.get, { run, openItem }, mac);
 const help = helpView(mac);
 document.body.append(palette.el, help.el);
 
+// Browsers rate-limit replaceState, and typing a search would hit the limit: write the
+// address at most every 250 ms, always ending on the latest state.
+const ADDRESS_MS = 250;
+let addressAt = 0;
+let addressTimer: ReturnType<typeof setTimeout> | undefined;
+const writeAddress = () => {
+  addressTimer = undefined;
+  addressAt = performance.now();
+  const next = toAddress(location.search, store.get());
+  if (next !== location.search) history.replaceState(null, '', `${location.pathname}${next}${location.hash}`);
+};
 const paint = (s: ViewState) => {
   document.documentElement.dataset.theme = s.theme;
   ui.render(s);
-  const next = toAddress(location.search, s);
-  if (next !== location.search) history.replaceState(null, '', `${location.pathname}${next}${location.hash}`);
+  if (addressTimer !== undefined) return;
+  const wait = addressAt + ADDRESS_MS - performance.now();
+  if (wait <= 0) writeAddress();
+  else addressTimer = setTimeout(writeAddress, wait);
 };
 store.subscribe(paint);
 paint(initial);
@@ -113,7 +139,6 @@ async function main() {
   const url = q.get('gateway') ?? 'ws://127.0.0.1:8787/ws';
   const room = q.get('room');
   if (!room || !token) return;
-  store.dispatch({ type: 'connection', connection: { kind: 'loading', what: 'history' } });
   await init();
   const fold = new Folder();
   const sink: Fold = {
@@ -139,7 +164,7 @@ async function main() {
   let delay = 1000; // grows on failures, resets once a connection goes live
   for (;;) {
     try {
-      if (cursor !== 0) store.dispatch({ type: 'connection', connection: { kind: 'loading', what: 'reconnecting' } });
+      store.dispatch({ type: 'connection', connection: { kind: 'loading', what: cursor === 0 ? 'history' : 'reconnecting' } });
       const transport = await connect(url, room, token);
       refusedBefore = refused;
       cursor = await follow(transport, sink, {
@@ -160,7 +185,7 @@ async function main() {
       const msg = (e as Error).message;
       // A rejected or expired token, or a refused request, will not pass on a retry.
       if (e instanceof FollowError || (e instanceof GatewayError && e.fatal)) {
-        store.dispatch({ type: 'connection', connection: { kind: 'stopped', reason: msg } });
+        store.dispatch({ type: 'connection', connection: { kind: 'stopped', reason: msg, advice: adviceFor(e.code) } });
         return;
       }
       store.dispatch({ type: 'connection', connection: { kind: 'retrying', reason: msg, seconds: Math.round(delay / 1000) } });

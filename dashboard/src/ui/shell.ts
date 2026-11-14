@@ -1,6 +1,6 @@
 // The page layout: skip link, sidebar, top bar with search and status, the list
 // and the side panel. Landmarks (nav, main, aside) let a screen reader jump between them.
-import { displayChord } from '../keys.ts';
+import { chordFor, displayChord } from '../keys.ts';
 import type { ViewState } from '../state.ts';
 import { h, kbd } from './dom.ts';
 import { itemList, type ListHandlers } from './item-list.ts';
@@ -50,14 +50,14 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
         h('div', { class: 'brand' }, mark(), 'KBL'),
         h('ul', { class: 'nav' }, h('li', {}, h('a', { href: '#work', 'aria-current': 'page' }, 'All work', allCount))),
         h('div', { class: 'sidebar-foot' },
-          h('button', { type: 'button', class: 'button ghost', onclick: on.palette }, 'Commands', kbd(displayChord('Mod+K', mac))),
-          h('button', { type: 'button', class: 'button ghost', onclick: on.help }, 'Shortcuts', kbd(['?'])),
+          h('button', { type: 'button', class: 'button ghost', onclick: on.palette }, 'Commands', kbd(displayChord(chordFor('palette'), mac))),
+          h('button', { type: 'button', class: 'button ghost', onclick: on.help }, 'Shortcuts', kbd(displayChord(chordFor('help'), mac))),
         ),
       ),
       h('div', { class: 'main' },
         h('header', { class: 'topbar' },
           h('h1', {}, 'All work'),
-          h('label', { class: 'search' }, search, kbd(['/'])),
+          h('label', { class: 'search' }, search, kbd(displayChord(chordFor('search'), mac))),
           status.el,
         ),
         h('div', { class: 'content' },
@@ -70,6 +70,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   return {
     search,
     list,
+    panel,
     render(s: ViewState) {
       if (search.value !== s.query) search.value = s.query;
       allCount.textContent = s.items.length ? String(s.items.length) : '';

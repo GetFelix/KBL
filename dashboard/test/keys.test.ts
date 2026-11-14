@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { COMMANDS, commandFor, displayChord, type KeyPress } from '../src/keys.ts';
+import { chordFor, COMMANDS, commandFor, displayChord, type KeyPress } from '../src/keys.ts';
 
 const press = (key: string, more: Partial<KeyPress> = {}): KeyPress => ({ key, metaKey: false, ctrlKey: false, altKey: false, inText: false, ...more });
 
@@ -42,4 +42,11 @@ test('Mod reads as the platform modifier', () => {
   assert.deepEqual(displayChord('Mod+K', true), ['⌘', 'K']);
   assert.deepEqual(displayChord('Mod+K', false), ['Ctrl', 'K']);
   assert.deepEqual(displayChord('Escape', false), ['Esc']);
+});
+
+test('labels read their chord from the registry', () => {
+  assert.equal(chordFor('palette'), 'Mod+K');
+  assert.equal(chordFor('help'), '?');
+  assert.equal(chordFor('search'), '/');
+  assert.equal(chordFor('theme'), '');
 });

@@ -8,10 +8,22 @@ export type Connection =
   | { kind: 'loading'; what: 'history' | 'reconnecting' }
   | { kind: 'live'; refused: number }
   | { kind: 'retrying'; reason: string; seconds: number }
-  | { kind: 'stopped'; reason: string };
+  | { kind: 'stopped'; reason: string; advice: Advice };
+
+/** The next step a stop reason backs: a new sign-in link, a reload for a newer page, or nothing to suggest. */
+export type Advice = 'sign-in' | 'reload' | null;
+
+/** The advice for a stop code. Only codes that say why get a hint; the rest show the reason alone. */
+export function adviceFor(code: string): Advice {
+  if (code === 'signed_out' || code === 'forbidden') return 'sign-in';
+  if (code === 'newer_format') return 'reload';
+  return null;
+}
 
 export interface ViewState {
   connection: Connection;
+  /** True once the page has read the whole log and gone live, so an empty list means the log is empty. */
+  synced: boolean;
   items: ItemRow[];
   query: string;
   selected: string | null;
@@ -31,7 +43,7 @@ export type Action =
 export function reduce(s: ViewState, a: Action): ViewState {
   switch (a.type) {
     case 'connection':
-      return { ...s, connection: a.connection };
+      return { ...s, connection: a.connection, synced: s.synced || a.connection.kind === 'live' };
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
       return { ...s, items: a.items };
@@ -58,9 +70,7 @@ export function createStore(initial: ViewState): Store {
   return {
     get: () => state,
     dispatch(a) {
-      const next = reduce(state, a);
-      if (next === state) return;
-      state = next;
+      state = reduce(state, a);
       for (const l of listeners) l(state);
     },
     subscribe: (l) => void listeners.push(l),

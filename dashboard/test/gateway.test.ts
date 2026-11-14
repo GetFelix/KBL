@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { build } from 'vite';
 
-// A WebSocket that answers `join` with `hello` and every other frame with an echo.
+// A WebSocket that answers `join` with `hello` and every other frame with an echo, and reports its close.
 class FakeSocket {
   onopen: (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
@@ -20,13 +20,15 @@ class FakeSocket {
     const reply = m.type === 'join' ? { type: 'hello', features: ['read'] } : { type: 'echo', id: m.id };
     setTimeout(() => this.onmessage?.({ data: JSON.stringify(reply) }), 0);
   }
-  close() {}
+  close() {
+    setTimeout(() => this.onclose?.(), 0);
+  }
 }
 
 // The page runs gateway.ts as Vite bundles it, so the test does too: a bundler that
 // decides the transport's handlers are the empty defaults drops the call that hands
 // messages to follow, and the page never gets past reading history.
-test('the bundled connect hands messages after hello to the handler set later', async () => {
+test('the bundled connect hands messages and the close after hello to the handlers set later', async () => {
   const out = (await build({
     configFile: false,
     logLevel: 'silent',
@@ -46,6 +48,9 @@ test('the bundled connect hands messages after hello to the handler set later', 
     const got = new Promise((ok) => (transport.onMessage = ok));
     transport.send({ type: 'read', id: 7 });
     assert.deepEqual(await got, { type: 'echo', id: 7 });
+    const closed = new Promise((ok) => (transport.onClose = ok));
+    transport.close();
+    assert.equal(await closed, 'closed');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

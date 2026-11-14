@@ -36,6 +36,11 @@ export const COMMANDS: readonly Command[] = [
   { id: 'theme', label: 'Switch light and dark theme', group: 'View', keys: [] },
 ];
 
+/** The first chord bound to a command, for labels outside the palette and the overlay. */
+export function chordFor(id: CommandId): string {
+  return COMMANDS.find((c) => c.id === id)?.keys[0] ?? '';
+}
+
 /** The parts of a KeyboardEvent the matcher reads, so tests need no DOM. */
 export interface KeyPress {
   key: string;
