@@ -1,9 +1,10 @@
-//! A log written before prerequisites existed must fold to the same states.
+//! Stored logs must fold to the states they always did: logs from before
+//! prerequisites, questions and reviews, and one that pins `context_agents`.
 
 use kbl_core::codec::Codec;
-use kbl_core::names::ItemId;
+use kbl_core::names::{ItemId, Key};
 use kbl_core::work::WorkLogged;
-use kbl_core::work_fold::{Stage, State};
+use kbl_core::work_fold::{Reject, Stage, State};
 
 fn log() -> Vec<(u64, WorkLogged)> {
     include_str!("work_pre_prerequisite.jsonl")
@@ -104,4 +105,44 @@ fn an_old_log_with_an_open_pull_request_makes_no_reviews() {
         assert!(!item.contains_key(key), "{key} in {item:?}");
     }
     assert!(!item["paths"][0].as_object().unwrap().contains_key("proven"));
+}
+
+/// The fold keeps which agent last wrote a context entry, and the stored
+/// state carries it. `wasm/golden/agent_context.state.json` pins that state.
+#[test]
+fn a_context_entry_an_agent_wrote_is_kept_with_its_writer() {
+    let log: Vec<_> = include_str!("work_agent_context.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let end = kbl_core::work_fold::fold(&log);
+    let r1 = &end.items[&ItemId::new("r1").unwrap()];
+    let key = |s: &str| Key::new(s).unwrap();
+    // A person replaced `plan`, so it is no agent's. The fold lets w1 replace
+    // the person's `repro` (the tracker refuses that before it is logged, and
+    // a log that holds one must keep folding). w1's entries stay w1's after
+    // it released the item and w2 claimed it.
+    let want = [("handover", "w2"), ("notes", "w1"), ("repro", "w1")];
+    assert_eq!(
+        r1.context_agents,
+        want.into_iter().map(|(e, a)| (key(e), key(a))).collect()
+    );
+    assert_eq!(r1.context[&key("repro")], 9);
+    assert_eq!(r1.context[&key("plan")], 6);
+    assert_eq!(r1.context[&key("notes")], 8);
+    assert_eq!(r1.context[&key("handover")], 12);
+    // Only the write by an agent that does not hold the item is refused.
+    assert_eq!(end.rejections.len(), 1);
+    assert_eq!(end.rejections[0].offset, 7);
+    assert_eq!(end.rejections[0].why, Reject::NotHolder);
+
+    let json = serde_json::to_value(&end).unwrap();
+    assert_eq!(
+        json["items"]["r1"]["context_agents"],
+        serde_json::json!({ "handover": "w2", "notes": "w1", "repro": "w1" })
+    );
+    // The stored state reads back with the map in it.
+    let back: State = serde_json::from_value(json).unwrap();
+    assert_eq!(back, end);
 }
