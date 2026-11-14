@@ -45,7 +45,11 @@ struct Cli {
     /// Allows a webhook address other than loopback. Set it only when a proxy
     /// in front terminates TLS: the endpoint serves plain HTTP, and a delivery
     /// carries the issue's text.
-    #[arg(long, env = "KBL_INGEST_WEBHOOK_BEHIND_TLS_PROXY")]
+    #[arg(
+        long,
+        env = "KBL_INGEST_WEBHOOK_BEHIND_TLS_PROXY",
+        requires = "webhook_listen"
+    )]
     webhook_behind_tls_proxy: bool,
     /// The environment variable holding the webhook secret.
     #[arg(long, env = "KBL_INGEST_WEBHOOK_SECRET_ENV")]

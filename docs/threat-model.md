@@ -70,7 +70,8 @@ The tracker and the webhook serve plain HTTP, so each refuses to listen on
 an address other than loopback unless a flag says a TLS proxy is in front
 (`tracker/src/main.rs:121`, `ingest/src/main.rs:63`). The flag is a promise
 the process cannot check: set it without a proxy and tokens cross the network
-in the clear. Tokens are long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
+in the clear. Callers are not checked either: `kbl-mcp` and ingest send their
+token to whatever tracker URL they are given, `http://` included. Tokens are long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
 There is no request rate limit; a refused call writes nothing, and the first
 cap an attempt hits is logged once (`tracker/src/tracker/tools.rs:687`).
 
