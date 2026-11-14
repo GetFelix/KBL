@@ -330,6 +330,10 @@ pub struct Item {
     /// a person. Derived from the log, so it survives a lost ingest state.
     #[serde(default, skip_serializing_if = "is_false")]
     pub closed_by_sync: bool,
+    /// Who wrote the last reopen: a person, or upstream sync as the tracker.
+    /// Derived from the log, like `closed_by_sync`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopened_by: Option<Actor>,
     pub redos: u8,
     pub over_budget: bool,
     pub open_question: Option<u64>,
@@ -878,6 +882,7 @@ impl State {
             hold: None,
             closed: None,
             closed_by_sync: false,
+            reopened_by: None,
             redos: 0,
             over_budget: false,
             open_question: None,
@@ -1597,6 +1602,7 @@ impl State {
                 }
                 it.closed = None;
                 it.closed_by_sync = false;
+                it.reopened_by = Some(rec.actor);
                 // A new merge needs a new release.
                 it.release = None;
                 // Back to Triage: a person accepts it again.

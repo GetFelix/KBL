@@ -172,7 +172,7 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
-| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed and whether upstream sync (not a person) closed it, whether upstream sync (not a person) took it out of scope (`left_scope_by_sync`), and its pull request |
+| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
 
@@ -209,11 +209,12 @@ does not parse, an unknown kind of work or text over the inline limit is a
 show why, as `{stream, offset}`. A person reads them as support, so the
 tracker holds them to the item's own tree. Each one must be a `work.events`
 record that names an item with the same root, written before the record that
-cites it. An item that another tree's record created, such as a deferred
-finding or a prerequisite proposal, may also cite that record, which its
-context entry points at. A proposal the agent files is its own root, so the
-item it holds cannot cite records about the proposal. Anything else is
-refused: another tree's record answers `evidence_outside_tree`, another stream `evidence_stream`, a later offset
+cites it. When another tree's record created the root, such as a deferred
+finding or a prerequisite proposal, the tree may also cite that record, which
+the root's context entry points at. A proposal is its own root, so the item
+that filed it cannot cite records of the proposal's tree. Anything else is
+refused: another tree's record answers `evidence_outside_tree`, another stream
+`evidence_stream`, a later offset
 `evidence_from_the_future`. A writer who may not make the record gets the
 fold's refusal instead, so it learns nothing about where a record is. The
 check runs before the append, so logs written before it fold as they did.
@@ -314,7 +315,10 @@ reports is written to (made a draft) only when it is in the same repository as
 the upstream issue, and that repository is one a rule names. A root a person
 dismissed stays closed when its issue is reopened. Whether a close was
 ingest's is read from the log (`GET /v1/ingest/roots`), not from saved state, so
-a poll that stopped between the close and its save does not lose it.
+a poll that stopped between the close and its save does not lose it. The same
+goes for a reopen: an open root whose issue is closed stays open only when a
+person reopened it. When ingest imported or reopened it and the issue closed
+before a save landed, the next poll closes the root.
 
 Ingest's saved state keeps an entry for each open issue, each transferred
 issue, and each closed issue still waiting on its pull request. An issue that is closed

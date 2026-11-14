@@ -667,6 +667,99 @@ async fn a_reopen_whose_save_failed_does_not_accept_the_root_again() {
 }
 
 #[tokio::test]
+async fn a_root_ingest_reopened_closes_again_when_the_save_was_lost() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+
+    // Ingest reopens the pruned root, and the save after it fails.
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    assert_eq!(rig.tracker.count("reopened"), 1);
+    // The issue closes again before a save lands.
+    rig.tracker.allow_saves();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T14:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("closed"), 2);
+    assert_eq!(
+        rig.tracker.state().items[&rig.root(UP)].closed,
+        Some(Closure::Completed)
+    );
+}
+
+#[tokio::test]
+async fn a_root_whose_import_was_never_saved_closes_with_its_issue() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    rig.tracker.allow_saves();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("closed"), 1);
+    assert_eq!(
+        rig.tracker.state().items[&rig.root(UP)].closed,
+        Some(Closure::Completed)
+    );
+}
+
+#[tokio::test]
+async fn a_childless_root_ingest_reopened_is_not_accepted_on_a_retry() {
+    let rig = rig();
+    let mut propose = admit_rule();
+    propose["mode"] = json!("propose");
+    let ingest = rig.ingest(json!([propose]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.tracker.person(WorkRecord::Accepted {
+        item: item.clone(),
+        tier: Some(3),
+    });
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+
+    // The rule now admits, and the poll that reopens the root fails to save.
+    let ingest = rig.ingest(json!([admit_rule()]));
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    rig.tracker.allow_saves();
+    ingest.poll(false).await.unwrap();
+    // Only the person's accept: the reopened root waits in Triage for a person.
+    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("proposed"), 0);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Triage));
+}
+
+#[tokio::test]
 async fn a_person_reopening_a_pruned_root_puts_it_back_in_the_saved_state() {
     let rig = rig();
     let ingest = rig.ingest(json!([admit_rule()]));
