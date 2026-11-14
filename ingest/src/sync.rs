@@ -153,6 +153,11 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         let reconciled = reconcile || p.state.polls >= self.settings.reconcile_every;
         if reconciled {
             p.state.polls = 0;
+            // The other writer may have unlinked since, so a reconcile lets
+            // the next touch try once more.
+            for t in p.state.items.values_mut() {
+                t.not_ours.clear();
+            }
             self.reconcile(p).await?;
         }
         self.link(p).await?;
@@ -857,15 +862,25 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 continue;
             };
             let links = self.source.links(&id).await?;
-            if let Some(t) = p.state.items.get_mut(&key) {
-                let found: Vec<String> = links
-                    .blocked_by
-                    .iter()
-                    .chain(&links.sub_issues)
-                    .map(ToString::to_string)
-                    .filter(|l| !t.linked.contains(l))
-                    .collect();
-                t.pending_links.extend(found);
+            let upstream: BTreeSet<String> = links
+                .blocked_by
+                .iter()
+                .chain(&links.sub_issues)
+                .map(ToString::to_string)
+                .collect();
+            let Some(t) = p.state.items.get_mut(&key) else {
+                continue;
+            };
+            let found: Vec<String> = upstream
+                .iter()
+                .filter(|l| !t.linked.contains(*l) && !t.not_ours.contains(*l))
+                .cloned()
+                .collect();
+            t.pending_links.extend(found);
+            if links.complete {
+                t.pending_links.retain(|l| upstream.contains(l));
+                t.not_ours.retain(|l| upstream.contains(l));
+                self.unlink_removed(p, &key, &upstream).await?;
             }
         }
         let waiting: Vec<(String, ItemId, Vec<String>)> = p
@@ -883,16 +898,10 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .collect();
         for (key, item, pending) in waiting {
             for to in pending {
-                // A closed issue may have been pruned from the state; its root remains.
-                let Some(other) = p
-                    .roots
-                    .get(&to)
-                    .map(|r| r.item.clone())
-                    .or_else(|| p.state.items.get(&to).map(|o| o.item.clone()))
-                else {
+                let Some(other) = item_of(p, &to) else {
                     continue;
                 };
-                match self
+                let refused = match self
                     .tracker
                     .append(&WorkRecord::Linked {
                         item: item.clone(),
@@ -900,15 +909,80 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     })
                     .await?
                 {
-                    Appended::Written => {}
+                    Appended::Written => None,
                     Appended::Refused(why) => {
                         eprintln!("kbl-ingest: link {key} -> {to} refused: {why}");
+                        Some(why)
                     }
-                }
+                };
                 if let Some(t) = p.state.items.get_mut(&key) {
                     t.pending_links.remove(&to);
-                    t.linked.insert(to);
+                    match refused.as_deref() {
+                        // Only an edge ingest made is its to unlink later.
+                        None => {
+                            t.linked.insert(to);
+                        }
+                        Some("already_linked") => {
+                            t.not_ours.insert(to);
+                        }
+                        Some(_) => {}
+                    }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the edges ingest made for `key` whose dependency is gone from
+    /// the complete upstream listing `upstream`. The tracker refuses an edge
+    /// ingest's own link did not make, which then stays.
+    async fn unlink_removed(
+        &self,
+        p: &mut Poll,
+        key: &str,
+        upstream: &BTreeSet<String>,
+    ) -> Result<(), SourceError> {
+        let Some(t) = p.state.items.get(key) else {
+            return Ok(());
+        };
+        let item = t.item.clone();
+        let gone: Vec<String> = t.linked.difference(upstream).cloned().collect();
+        // A transferred dependency is listed under its new id, which names the same item.
+        let still: HashSet<ItemId> = upstream.iter().filter_map(|u| item_of(p, u)).collect();
+        // An id that names no item may be a transfer ingest has not seen yet.
+        let unknown = upstream.iter().any(|u| item_of(p, u).is_none());
+        for to in gone {
+            let Some(id) = IssueRef::parse(&to) else {
+                continue;
+            };
+            // A repo ingest cannot read now may simply be hidden from the listing.
+            if p.state.stalled.contains_key(&id.repo) {
+                continue;
+            }
+            let Some(other) = item_of(p, &to).filter(|o| !still.contains(o)) else {
+                if let Some(t) = p.state.items.get_mut(key) {
+                    t.linked.remove(&to);
+                }
+                continue;
+            };
+            if unknown && matches!(self.source.fetch(&id).await?, Fetched::Moved(_)) {
+                continue;
+            }
+            match self
+                .tracker
+                .append(&WorkRecord::Unlinked {
+                    item: item.clone(),
+                    to: other,
+                })
+                .await?
+            {
+                Appended::Written => {}
+                Appended::Refused(why) => {
+                    eprintln!("kbl-ingest: unlink {key} -> {to} refused: {why}");
+                }
+            }
+            if let Some(t) = p.state.items.get_mut(key) {
+                t.linked.remove(&to);
             }
         }
         Ok(())
@@ -1229,6 +1303,7 @@ fn tracked_as(item: &ItemId, rule: &str, issue: &Issue) -> Tracked {
         comments: BTreeMap::new(),
         pending_links: Default::default(),
         linked: Default::default(),
+        not_ours: Default::default(),
         written_back: false,
         write_back_tries: 0,
         moved_to: None,
@@ -1285,6 +1360,15 @@ fn open_roots(p: &Poll, rule: &str) -> usize {
 /// Polls a root sits out after a release lookup that failed or cannot finish,
 /// so one root cannot spend every poll's budget.
 const RELEASE_BACKOFF_POLLS: u32 = 10;
+
+/// The item for an upstream id. A closed issue may have been pruned from the
+/// state; its root remains.
+fn item_of(p: &Poll, key: &str) -> Option<ItemId> {
+    p.roots
+        .get(key)
+        .map(|r| r.item.clone())
+        .or_else(|| p.state.items.get(key).map(|o| o.item.clone()))
+}
 
 fn back_off(p: &mut Poll, key: &str) {
     if let Some(a) = p.state.awaiting.get_mut(key) {

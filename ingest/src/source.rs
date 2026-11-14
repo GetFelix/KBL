@@ -173,6 +173,9 @@ pub(crate) struct Links {
     pub(crate) blocked_by: Vec<IssueRef>,
     /// The issue waits on its sub-issues.
     pub(crate) sub_issues: Vec<IssueRef>,
+    /// Both lists were read in full. Only then may a link missing from them
+    /// be removed: a failed, cut short or redirected read says nothing.
+    pub(crate) complete: bool,
 }
 
 /// A change to make upstream. Always through the ingest worker, which holds the

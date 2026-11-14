@@ -32,6 +32,11 @@ pub(crate) struct Tracked {
     /// Issues it waits on that already have an edge.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) linked: BTreeSet<String>,
+    /// Issues it waits on whose edge the tracker refused as someone else's
+    /// (`already_linked`), so the link is not retried on every touch. Kept
+    /// until upstream drops the dependency or the next reconcile.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) not_ours: BTreeSet<String>,
     /// The pull request already made a draft after a drop.
     #[serde(default)]
     pub(crate) written_back: bool,

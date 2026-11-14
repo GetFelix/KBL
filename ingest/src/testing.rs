@@ -1,7 +1,7 @@
 //! Test doubles: GitHub answers recorded in `fixtures/` and replayed by URL,
 //! and a tracker that runs the real fold. Nothing here reaches the network.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -135,6 +135,10 @@ struct Inner {
     roots_calls: usize,
     race_next_save: bool,
     saves_left: Option<usize>,
+    /// The edges ingest's own `linked` made, as the tracker tracks them.
+    ingest_edges: HashSet<(ItemId, ItemId)>,
+    /// `linked` records ingest sent, written or refused.
+    links_sent: usize,
 }
 
 /// A tracker that folds what it is given, so a record the real fold would refuse is refused here.
@@ -152,6 +156,8 @@ impl Default for Fake {
             roots_calls: 0,
             race_next_save: false,
             saves_left: None,
+            ingest_edges: HashSet::new(),
+            links_sent: 0,
         })))
     }
 }
@@ -166,6 +172,10 @@ impl Fake {
             actor,
             record,
         );
+        let absent = match &logged.record {
+            WorkRecord::Linked { item, to } => !i.state.edges.contains(&(item.clone(), to.clone())),
+            _ => false,
+        };
         i.state.try_apply(offset, &logged).map_err(|r| {
             serde_json::to_value(r)
                 .unwrap()
@@ -173,6 +183,22 @@ impl Fake {
                 .unwrap()
                 .to_owned()
         })?;
+        match &logged.record {
+            WorkRecord::Linked { item, to } if by == "ingest-gh" => {
+                if absent {
+                    i.ingest_edges.insert((item.clone(), to.clone()));
+                }
+            }
+            WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } => {
+                i.ingest_edges.remove(&(item.clone(), to.clone()));
+            }
+            WorkRecord::Prerequisite {
+                item, prerequisite, ..
+            } => {
+                i.ingest_edges.remove(&(item.clone(), prerequisite.clone()));
+            }
+            _ => {}
+        }
         i.log.push((offset, logged));
         Ok(())
     }
@@ -267,6 +293,10 @@ impl Fake {
 
 impl Fake {
     /// How many times ingest listed the roots.
+    pub(crate) fn links_sent(&self) -> usize {
+        self.0.lock().unwrap().links_sent
+    }
+
     pub(crate) fn roots_calls(&self) -> usize {
         self.0.lock().unwrap().roots_calls
     }
@@ -345,6 +375,28 @@ impl Tracker for Fake {
             !self.0.lock().unwrap().append_fails,
             "the tracker is unreachable"
         );
+        // The tracker's ingest gate: ingest links and unlinks only edges its
+        // own link made.
+        if let WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } = record {
+            let mut i = self.0.lock().unwrap();
+            if matches!(record, WorkRecord::Linked { .. }) {
+                i.links_sent += 1;
+            }
+            let edge = (item.clone(), to.clone());
+            let ours = i.ingest_edges.contains(&edge);
+            match (record, i.state.edges.contains(&edge)) {
+                (WorkRecord::Linked { .. }, true) if !ours => {
+                    return Ok(Appended::Refused("already_linked".into()));
+                }
+                (WorkRecord::Unlinked { .. }, false) => {
+                    return Ok(Appended::Refused("not_linked".into()));
+                }
+                (WorkRecord::Unlinked { .. }, true) if !ours => {
+                    return Ok(Appended::Refused("not_ingests".into()));
+                }
+                _ => {}
+            }
+        }
         Ok(
             match self.push("ingest-gh", Actor::Tracker, record.clone()) {
                 Ok(()) => Appended::Written,
