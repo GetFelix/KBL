@@ -13,12 +13,13 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FindingVerdict, MAX_ASK_OPTION_LEN,
-    MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS,
-    MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES,
-    MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite,
-    PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target,
-    Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
+    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FindingVerdict,
+    MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE,
+    MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS,
+    MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict,
+    NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, ReviewPass,
+    ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    valid_review_tier,
 };
 
 #[cfg(test)]
@@ -190,6 +191,12 @@ impl Item {
         }
     }
 
+    /// The offset of the newest note on the item, addressed to an attempt or not.
+    pub fn newest_note(&self) -> Option<u64> {
+        let on_paths = self.paths.iter().flat_map(|p| p.human_inputs.iter());
+        self.human_inputs.iter().chain(on_paths).max().copied()
+    }
+
     /// The newest attempt that is not closed.
     pub fn open_path(&self) -> Option<&Path> {
         self.paths.iter().rev().find(|p| !p.closed)
@@ -345,6 +352,10 @@ pub struct Item {
     /// Upstream's view of `pr`, as the last `pr_status` said.
     #[serde(default)]
     pub pr_status: Option<PrSnapshot>,
+    /// The offset of the `pr_status` that turned the checks red, while they
+    /// stay red. A note newer than this was written after the failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub red_since: Option<u64>,
     /// When the first claim on the item was logged, in the tracker's clock.
     #[serde(default)]
     pub first_claim_ms: Option<u64>,
@@ -637,7 +648,20 @@ impl State {
         if it.left_scope && it.hold.is_none() {
             return Some(NeedsYou::LeftScope);
         }
+        // From format 4 a redo is what the person asked for, so it is handed
+        // out instead of waiting for green, until its attempt is done. Its claim
+        // may be released and retried. Each failure needs a person to read it:
+        // the item waits until it has a note newer than the failure, so a
+        // redo that goes red again is freed by a note, not a new redo.
+        let redo = it.pending_fork.is_some()
+            || it
+                .open_path()
+                .is_some_and(|p| !p.done && p.forked_from.is_some());
+        let redo_runs = self.format() >= FORMAT_V4
+            && redo
+            && it.newest_note().is_some_and(|n| Some(n) > it.red_since);
         if it.hold.is_none()
+            && !redo_runs
             && it
                 .pr_status
                 .as_ref()
@@ -676,7 +700,7 @@ impl State {
     }
 
     /// The wording an open pull request gets on the board, if it has one.
-    /// A red check outranks both: that item is in Needs you.
+    /// A red check outranks both: that item is in Needs you, or Ready with a redo waiting.
     pub fn pr_waits(&self, id: &ItemId) -> Option<PrWaits> {
         let it = self.items.get(id)?;
         let s = it.pr_status.as_ref().filter(|s| s.phase == PrPhase::Open)?;
@@ -916,6 +940,7 @@ impl State {
             branch: None,
             pr: None,
             pr_status: None,
+            red_since: None,
             first_claim_ms: None,
             cost_micros: 0,
             context: BTreeMap::new(),
@@ -1269,6 +1294,7 @@ impl State {
                     // A status describes one request; a new one starts blank.
                     if it.pr != *pr {
                         it.pr_status = None;
+                        it.red_since = None;
                     }
                     it.pr = pr.clone();
                 }
@@ -1795,6 +1821,12 @@ impl State {
                 }
                 if !status.consistent() {
                     return Err(Reject::MissingField);
+                }
+                let red = |s: &PrSnapshot| s.phase == PrPhase::Open && s.checks == PrChecks::Red;
+                if !red(status) {
+                    it.red_since = None;
+                } else if !it.pr_status.as_ref().is_some_and(red) {
+                    it.red_since = Some(offset);
                 }
                 it.pr_status = Some(status.clone());
             }

@@ -4,9 +4,10 @@
 
 use kbl_core::codec::Codec;
 use kbl_core::work::{
-    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, ReadError, WorkLogged, WorkRecord, read,
+    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, ReadError, WorkLogged, WorkRecord,
+    read,
 };
-use kbl_core::work_fold::{State, fold};
+use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
 /// Logs written before records carried a version.
 const LOGS: [(&str, &str); 4] = [
@@ -355,4 +356,107 @@ fn a_third_format_log_folds_after_its_raise() {
     // Both posts were counted on the triage claim, which went on to finish.
     assert_eq!(s.items[&id("t1")].paths[0].posts, 2);
     assert!(!s.items.contains_key(&id("g0")));
+}
+
+/// A log that raises to the fourth format: a redo waits on an item whose
+/// request has a failed check. Its folded state is pinned in
+/// `wasm/golden/format_4.state.json`.
+const FORMAT_4_LOG: &str = include_str!("work_format_4.jsonl");
+
+/// Format 4 adds no record: only the raise is stamped 4.
+#[test]
+fn the_fourth_format_is_four_and_adds_no_record() {
+    assert_eq!(FORMAT_V4, 4);
+    const { assert!(FORMAT >= FORMAT_V4) };
+    for (_, r) in entries(FORMAT_4_LOG) {
+        let raise = r.record.kind() == "format_raised";
+        assert_eq!(r.v, if raise { FORMAT_V4 } else { FORMAT_V1 });
+        assert_eq!(r.record.format(), r.v);
+    }
+}
+
+/// Before the raise the redo waits for green and its claim is refused; after
+/// it the item is Ready and the same claim folds.
+#[test]
+fn a_redo_of_a_red_item_is_handed_out_once_the_log_is_at_format_4() {
+    let log = entries(FORMAT_4_LOG);
+    let r1 = kbl_core::names::ItemId::new("r1").unwrap();
+    let before = fold(&log[..9]);
+    assert_eq!(before.needs_you(&r1), Some(NeedsYou::CheckFailed));
+    assert_eq!(before.stage(&r1), Some(Stage::NeedsYou));
+    let raised = fold(&log[..11]);
+    assert_eq!(raised.format(), FORMAT_V4);
+    assert_eq!(raised.needs_you(&r1), None);
+    assert_eq!(raised.stage(&r1), Some(Stage::Ready));
+
+    let s = fold(&log[..14]);
+    assert_eq!(
+        s.rejections,
+        vec![Rejection {
+            offset: 9,
+            why: Reject::NotReady
+        }]
+    );
+    // w2's claim was released and w3 retried the same attempt.
+    let it = &s.items[&r1];
+    assert_eq!(
+        it.hold.as_ref().map(|h| (h.by.as_str(), h.attempt)),
+        Some(("w3", 2))
+    );
+    assert_eq!(it.paths[1].tries, 2);
+    assert!(it.paths[1].forked_from.is_some());
+}
+
+/// r2's redo pushed, its checks failed again and its claim lapsed. The note
+/// the redo named is older than the new failure, so the retry waits; a new
+/// note on the item frees it without another redo.
+#[test]
+fn a_redo_that_goes_red_again_waits_for_a_new_note() {
+    let log = entries(FORMAT_4_LOG);
+    let r2 = kbl_core::names::ItemId::new("r2").unwrap();
+    let lapsed = fold(&log[..28]);
+    assert_eq!(lapsed.items[&r2].red_since, Some(26));
+    assert_eq!(lapsed.needs_you(&r2), Some(NeedsYou::CheckFailed));
+    let noted = fold(&log[..30]);
+    assert_eq!(noted.needs_you(&r2), None);
+    assert_eq!(noted.stage(&r2), Some(Stage::Ready));
+
+    let s = fold(&log);
+    assert_eq!(
+        s.rejections,
+        vec![
+            Rejection {
+                offset: 9,
+                why: Reject::NotReady
+            },
+            Rejection {
+                offset: 28,
+                why: Reject::NotReady
+            }
+        ]
+    );
+    let it = &s.items[&r2];
+    assert_eq!(
+        it.hold.as_ref().map(|h| (h.by.as_str(), h.attempt)),
+        Some(("w4", 2))
+    );
+    assert_eq!(it.paths[1].tries, 2);
+}
+
+/// A raise to format 3 is not enough: the redo still waits for green.
+#[test]
+fn a_redo_of_a_red_item_waits_at_format_3() {
+    let raise4 =
+        r#"{"v":4,"at_ms":1100,"by":"gabriel","actor":"person","kind":"format_raised","to":4}"#;
+    let raise3 =
+        r#"{"v":3,"at_ms":1100,"by":"gabriel","actor":"person","kind":"format_raised","to":3}"#;
+    assert!(FORMAT_4_LOG.contains(raise4));
+    let log = entries(&FORMAT_4_LOG.replace(raise4, raise3));
+    let s = fold(&log[..12]);
+    assert_eq!(s.format(), FORMAT_V3);
+    let r1 = kbl_core::names::ItemId::new("r1").unwrap();
+    assert_eq!(s.needs_you(&r1), Some(NeedsYou::CheckFailed));
+    assert!(s.items[&r1].hold.is_none());
+    assert_eq!(s.rejections.len(), 2);
+    assert!(s.rejections.iter().all(|r| r.why == Reject::NotReady));
 }
