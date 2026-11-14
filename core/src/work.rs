@@ -27,8 +27,12 @@ pub const FORMAT_V2: u32 = 2;
 /// The format that added a prerequisite posted from triage.
 pub const FORMAT_V3: u32 = 3;
 
+/// The format from which a waiting redo outranks a failed check, so the redo
+/// is handed out while the request is still red. It adds no record or field.
+pub const FORMAT_V4: u32 = 4;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V3;
+pub const FORMAT: u32 = FORMAT_V4;
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer

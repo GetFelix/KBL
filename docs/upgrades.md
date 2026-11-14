@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 3.
+is 4.
 
 ### Formats
 
@@ -76,6 +76,7 @@ is 3.
 | 1 | Every record written before formats existed | Nothing |
 | 2 | `returned_to_scope`: an issue that matches its intake rule again leaves Needs you | Until the raise, an item whose issue comes back into scope stays in Needs you, as it did before. Ingest writes the record at its next reconcile after the raise, or sooner if the issue changes |
 | 3 | `prerequisite` with `triage`: the agent triaging an item posts work another repo must do first, and the item waits on it before anyone builds | Until the raise, a prerequisite posted while holding a triage item is refused with `format`. Agents still find the work while building, as before |
+| 4 | No record or field: a redo waiting on an item whose pull request has a failed check outranks the failed check, so the item is Ready and an agent gets the redo while the checks are still red | Until the raise, such a redo waits in Needs you until the checks turn green, and its claim is refused with `not_ready`. A redo still needs a note written since the failure, before and after the raise |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -157,7 +158,9 @@ tracker does not have yet.
   the fold refuses. Its state is pinned in `wasm/golden/format_2.state.json`
   and folded by the core, the WebAssembly build and the page's tests.
   `core/tests/work_format_3.jsonl` and `wasm/golden/format_3.state.json` do
-  the same for format 3.
+  the same for format 3. Format 4 adds no record, so
+  `core/tests/work_format_4.jsonl` pins the fold rule instead: the same claim
+  of a redo on a red item is refused before the raise and folds after it.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

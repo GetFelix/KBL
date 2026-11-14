@@ -13,12 +13,13 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FindingVerdict, MAX_ASK_OPTION_LEN,
-    MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS,
-    MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES,
-    MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite,
-    PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target,
-    Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
+    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FindingVerdict,
+    MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE,
+    MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS,
+    MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict,
+    NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, ReviewPass,
+    ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    valid_review_tier,
 };
 
 #[cfg(test)]
@@ -637,7 +638,11 @@ impl State {
         if it.left_scope && it.hold.is_none() {
             return Some(NeedsYou::LeftScope);
         }
+        // From format 4 a waiting redo is what the person asked for, so it is
+        // handed out instead of waiting for the checks to turn green.
+        let redo_waits = it.pending_fork.is_some() && self.format() >= FORMAT_V4;
         if it.hold.is_none()
+            && !redo_waits
             && it
                 .pr_status
                 .as_ref()
@@ -676,7 +681,7 @@ impl State {
     }
 
     /// The wording an open pull request gets on the board, if it has one.
-    /// A red check outranks both: that item is in Needs you.
+    /// A red check outranks both: that item is in Needs you, or Ready with a redo waiting.
     pub fn pr_waits(&self, id: &ItemId) -> Option<PrWaits> {
         let it = self.items.get(id)?;
         let s = it.pr_status.as_ref().filter(|s| s.phase == PrPhase::Open)?;

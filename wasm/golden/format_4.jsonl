@@ -1,0 +1,12 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#21","title":"reader drops the last block"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"decision","item":"r1","attempt":1,"phase":"verify","so_far":"fix in","question":"","chosen":"","why":"test added","commit":"9f3c2ab"}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"progress","item":"r1","attempt":1,"note":{"text":"fixed"},"branch":"fix/r1","pr":"GetFelix/felix#9"}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"done","item":"r1","attempt":1,"cost_micros":0}
+{"at_ms":1060,"by":"ingest","actor":"tracker","kind":"pr_status","item":"r1","status":{"pr":"GetFelix/felix#9","phase":"open","review":"unreviewed","checks":"red","failing":{"name":"test","url":"https://github.com/GetFelix/felix/actions/runs/1"}}}
+{"at_ms":1070,"by":"gabriel","actor":"person","kind":"human_input","item":"r1","input":"note","text":{"text":"the reader test times out; raise its bound"}}
+{"at_ms":1080,"by":"gabriel","actor":"person","kind":"forked_from","item":"r1","from_attempt":1,"at":3,"note":7}
+{"at_ms":1090,"by":"w2","actor":"agent","kind":"claimed","item":"r1","attempt":2,"deadline_ms":1800000090000}
+{"v":4,"at_ms":1100,"by":"gabriel","actor":"person","kind":"format_raised","to":4}
+{"at_ms":1110,"by":"w2","actor":"agent","kind":"claimed","item":"r1","attempt":2,"deadline_ms":1800000090000}

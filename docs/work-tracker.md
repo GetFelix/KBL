@@ -1220,7 +1220,9 @@ The stages, left to right. An item sits in exactly one and moves right as
   merge). Both come
   from the `pr_status` ingest records. A failed required check moves the item
   to Needs you with the check's name and a link, unless an agent holds it. A
-  redo from there needs a note written since the failure. The tracker
+  redo from there needs a note written since the failure, and from format 4
+  ([upgrades](upgrades.md#formats)) it is handed out while the check is
+  still red; before that it waits for green. The tracker
   never merges. It records the merge it sees. A PR also carries the agent's
   handoff: what it changed, what it checked, what it is unsure of. The
   reviewer can mark the summary accurate or not.

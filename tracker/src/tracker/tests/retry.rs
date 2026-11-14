@@ -141,6 +141,29 @@ async fn a_redo_needs_no_note_while_no_check_has_failed() {
     redo(&t, at, None).await.unwrap();
 }
 
+/// Before format 4 the redo waits for green. From it, another agent gets it
+/// while the request is still red.
+#[tokio::test]
+async fn a_redo_of_a_red_item_is_handed_out_once_the_format_is_raised() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let at = finished(&t).await;
+    t.ingest_record(key("ingest-gh"), status(PrChecks::Red))
+        .await
+        .unwrap();
+    let late = note(&t).await;
+    redo(&t, at, Some(late)).await.unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+
+    let raise = WorkRecord::FormatRaised {
+        to: kbl_core::work::FORMAT_V4,
+    };
+    t.person_record(key("gab"), raise).await.unwrap();
+    let got = claim(&t, "w2").await;
+    assert_eq!(claimed_id(&got).as_deref(), Some("a1"));
+    assert_eq!(got["attempt"], 2, "{got}");
+}
+
 #[tokio::test]
 async fn a_closed_item_gets_the_folds_refusal_not_a_request_for_a_note() {
     let fake = Fake::default();
