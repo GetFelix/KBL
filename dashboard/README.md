@@ -2,7 +2,10 @@
 
 The KBL (Kanban By Log) dashboard in the browser. It reads `work.events` through
 [felix-gateway](https://github.com/GetFelix/felix-gateway), folds it with the `core` crate compiled to
-WebAssembly, and lists every item grouped by stage, with a detail panel, search and a command palette. The page
+WebAssembly, and lists every item grouped by stage, with a detail panel, search and a command palette. The
+Blocked view (sidebar, palette or `?view=blocked`) lists only the items a link holds back, each with what it waits on
+and, when that blocker is in a different repo or source, where it lives
+([links across repos](../docs/work-tracker.md#links-across-repos-and-sources)). The page
 is plain TypeScript built with Vite. The fold already holds the state, so there is no UI framework; a small store
 in `src/state.ts` holds only what the view adds (selection, search, open dialogs).
 
@@ -105,9 +108,9 @@ palette and the `?` overlay all read it. The theme switch is in the palette only
 
 - `src/follow.ts`: the read-then-subscribe join, written against a small `Transport` so tests can fake the gateway.
 - `src/gateway.ts`: the WebSocket transport and the `join` handshake.
-- `src/fold.ts`: the shape of the WebAssembly fold.
+- `src/fold.ts`: the shape of the WebAssembly fold, and how a blocked row names its blockers.
 - `src/main.ts`: starts the page, runs the gateway loop and dispatches keys.
-- `src/state.ts`: the view state, its reducer and the address round-trip (`?item=`, `?q=`).
+- `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?item=`, `?q=`).
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.
 - `src/ui/`: the views (shell, list, panel, palette, shortcuts, status line), `tokens.css` for colour, space and

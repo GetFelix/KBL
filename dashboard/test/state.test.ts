@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { adviceFor, createStore, describe, fromAddress, reduce, toAddress, type ViewState } from '../src/state.ts';
 
-const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], overlaps: new Map(), query: '', selected: null, open: null, theme: 'dark' };
+const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], blocked: [], overlaps: new Map(), view: 'all', query: '', selected: null, open: null, theme: 'dark' };
 
 test('opening an item selects it, and closing keeps the selection', () => {
   const opened = reduce(base, { type: 'open', id: 'r1' });
@@ -11,13 +11,13 @@ test('opening an item selects it, and closing keeps the selection', () => {
 });
 
 test('an open item missing from the log stays open so the panel can say so', () => {
-  const s = reduce({ ...base, open: 'r9' }, { type: 'items', items: [{ id: 'r1', title: 't', stage: 'ready' }], overlaps: new Map() });
+  const s = reduce({ ...base, open: 'r9' }, { type: 'items', items: [{ id: 'r1', title: 't', stage: 'ready' }], blocked: [], overlaps: new Map() });
   assert.equal(s.open, 'r9');
 });
 
 test('the address round-trips the search and the open item and keeps other parameters', () => {
   const search = toAddress('?room=kbl&gateway=wss%3A%2F%2Fg', { query: 'cache', open: 'r1' });
-  assert.deepEqual(fromAddress(search), { query: 'cache', open: 'r1' });
+  assert.deepEqual(fromAddress(search), { view: 'all', query: 'cache', open: 'r1' });
   assert.ok(search.includes('room=kbl'));
   assert.equal(toAddress('?q=x&item=r1', { query: '', open: null }), '');
 });
@@ -53,9 +53,20 @@ test('a stop suggests a sign-in only for a rejected or expired token, and a relo
   for (const code of ['trimmed', 'bad_request', 'past_end', 'bad_frame', 'no_read']) assert.equal(adviceFor(code), null, code);
 });
 
+test('the address keeps the Blocked view and drops the default one', () => {
+  const search = toAddress('?room=kbl', { view: 'blocked', query: '', open: 'r1' });
+  assert.equal(fromAddress(search).view, 'blocked');
+  assert.equal(toAddress('?view=blocked', { view: 'all', query: '', open: null }), '');
+  assert.equal(fromAddress('?view=board').view, 'all');
+});
+
+test('the view action switches the view', () => {
+  assert.equal(reduce(base, { type: 'view', view: 'blocked' }).view, 'blocked');
+});
+
 test('an items update replaces the overlaps with the ones from the same fold', () => {
   const card = { notes: [{ other: 'r2', files: ['a.rs'], moreFiles: 0, suggest: 'r2 waits on r1' }], more: 0 };
-  const s = reduce(base, { type: 'items', items: [], overlaps: new Map([['r1', card]]) });
+  const s = reduce(base, { type: 'items', items: [], blocked: [], overlaps: new Map([['r1', card]]) });
   assert.equal(s.overlaps.get('r1'), card);
-  assert.equal(reduce(s, { type: 'items', items: [], overlaps: new Map() }).overlaps.size, 0);
+  assert.equal(reduce(s, { type: 'items', items: [], blocked: [], overlaps: new Map() }).overlaps.size, 0);
 });

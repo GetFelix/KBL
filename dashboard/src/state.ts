@@ -1,7 +1,7 @@
 // The page's view state and a small store. Views read a snapshot and send actions;
-// only main.ts talks to the gateway. The item and search are kept in the address so
+// only main.ts talks to the gateway. The view, item and search are kept in the address so
 // a link opens the same view for someone else.
-import type { ItemRow } from './fold.ts';
+import type { BlockedRow, ItemRow } from './fold.ts';
 import type { Overlaps } from './overlap.ts';
 
 export type Connection =
@@ -21,13 +21,19 @@ export function adviceFor(code: string): Advice {
   return null;
 }
 
+/** Which items the list shows: all of them, or only the ones a link holds back. */
+export type View = 'all' | 'blocked';
+
 export interface ViewState {
   connection: Connection;
   /** True once the page has read the whole log and gone live, so an empty list means the log is empty. */
   synced: boolean;
   items: ItemRow[];
+  /** The Blocked items with what each waits on, from the same fold as `items`. */
+  blocked: BlockedRow[];
   /** File overlaps per item, from the same fold as `items`. */
   overlaps: Overlaps;
+  view: View;
   query: string;
   selected: string | null;
   /** The item shown in the side panel. */
@@ -37,7 +43,8 @@ export interface ViewState {
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; overlaps: Overlaps }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps }
+  | { type: 'view'; view: View }
   | { type: 'query'; query: string }
   | { type: 'select'; id: string | null }
   | { type: 'open'; id: string | null }
@@ -49,7 +56,9 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, connection: a.connection, synced: s.synced || a.connection.kind === 'live' };
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
-      return { ...s, items: a.items, overlaps: a.overlaps };
+      return { ...s, items: a.items, blocked: a.blocked, overlaps: a.overlaps };
+    case 'view':
+      return { ...s, view: a.view };
     case 'query':
       return { ...s, query: a.query };
     case 'select':
@@ -80,16 +89,18 @@ export function createStore(initial: ViewState): Store {
   };
 }
 
-/** Reads `q` and `item` from a query string. */
-export function fromAddress(search: string): Pick<ViewState, 'query' | 'open'> {
+export type Address = Pick<ViewState, 'query' | 'open'> & { view?: View };
+
+/** Reads `view`, `q` and `item` from a query string. An unknown view reads as all work. */
+export function fromAddress(search: string): Required<Address> {
   const q = new URLSearchParams(search);
-  return { query: q.get('q') ?? '', open: q.get('item') };
+  return { view: q.get('view') === 'blocked' ? 'blocked' : 'all', query: q.get('q') ?? '', open: q.get('item') };
 }
 
 /** Writes the view into a query string, keeping every other parameter as it was. */
-export function toAddress(search: string, s: Pick<ViewState, 'query' | 'open'>): string {
+export function toAddress(search: string, s: Address): string {
   const q = new URLSearchParams(search);
-  for (const [k, v] of [['q', s.query], ['item', s.open]] as const) {
+  for (const [k, v] of [['view', s.view === 'blocked' ? s.view : null], ['q', s.query], ['item', s.open]] as const) {
     if (v) q.set(k, v);
     else q.delete(k);
   }

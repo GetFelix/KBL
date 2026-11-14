@@ -44,12 +44,17 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   the side panel and in the address (`?item=`), so a link opens the same view. Opening moves focus into the
   panel and `Esc` puts it back on the row. Rows are kept per item and only redrawn when the list changes, so a
   live record never takes the focus off the row you are on.
-- **Panel sections.** Each section of the item panel is its own module under `src/ui/`. "Same files" lists
-  the open items that declare the same paths, with the suggested link, and their rows carry a text flag
+- **Views.** The sidebar lists All work and Blocked, and the palette has a command for each. The view is in the
+  address (`?view=blocked`). Blocked lists only the items a link or prerequisite holds back; on those rows, in
+  either view, the list says what each waits on, with the blocker's repo (or its source when it has no repo) only
+  when that differs from the row's, and `release` when the blocker is merged and the link waits for its release.
+  The panel lists the same blockers with their titles, each a link that opens it.
+- **Panel.** One labelled field per entry in `FIELDS` in `src/ui/item-panel.ts`; a new detail is one function
+  in its own module under `src/ui/`. "Same files" lists the open items that declare the same paths, with the suggested link, and their rows carry a text flag
   ("2 file overlaps") rather than colour alone. The notes come from `core` (`src/overlap.ts` only shapes them).
 - **States.** Each has a heading, one sentence and the next step: setup (how to connect), loading (placeholder
   rows, `aria-busy`), cannot reach the gateway (nothing read yet, when the next try is), empty, no match
-  (Clear search), no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,
+  (Clear search), nothing blocked, no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,
   Reload for a log newer than the page).
 - **Tokens.** `src/ui/tokens.css` holds every colour, space, type size and radius, for dark and light.
   Accent is KBL amber `#C86A1E` per [brand/story.md](../brand/story.md), with Inter and JetBrains Mono. Views

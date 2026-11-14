@@ -34,6 +34,21 @@ export function fixtureLog() {
     agent({ kind: 'done', item, attempt: 1, cost_micros: 1_250_000 });
     if (stage === 'done') rec({ kind: 'closed', item, why: 'merged' });
   }
+  // Blocked work: one item waits on a gateway issue in another repo and on a Jira issue,
+  // another on the release of a merged fix.
+  const imp = (item, source, upstream_id, title) => rec({ kind: 'imported', item, source, upstream_id, title });
+  imp('blk-40', 'github', 'GetFelix/felix-blocks#40', 'Blocks need compare-and-set writes');
+  imp('gw-31', 'github', 'GetFelix/felix-gateway#31', 'Compare-and-set on the gateway');
+  imp('jira-300', 'jira', 'site/FEL-300', 'Agree the write semantics');
+  imp('blk-41', 'github', 'GetFelix/felix-blocks#41', 'Ship the undo button');
+  imp('blk-42', 'github', 'GetFelix/felix-blocks#42', 'Undo needs the history fix');
+  rec({ kind: 'accepted', item: 'blk-40', tier: 1 });
+  rec({ kind: 'linked', item: 'blk-40', to: 'gw-31' });
+  rec({ kind: 'linked', item: 'blk-40', to: 'jira-300' });
+  rec({ kind: 'accepted', item: 'blk-41', tier: 1 });
+  agent({ kind: 'claimed', item: 'blk-41', attempt: 1, deadline_ms: at + 3_600_000 });
+  agent({ kind: 'prerequisite', item: 'blk-41', attempt: 1, prerequisite: 'blk-42', key: 'history', done_when: 'released', cost_micros: 0 });
+  rec({ kind: 'closed', item: 'blk-42', why: 'merged' });
   // Two ready items that name the same files, so the overlap note and row flag show.
   rec({ kind: 'context', item: 'gh-2219', entry: 'files', text: { text: 'core/src/retention.rs\ncore/src/segment/' } });
   rec({ kind: 'context', item: 'gh-2221', entry: 'files', text: { text: 'core/src/segment/reader.rs\ngateway/src/offset.rs' } });

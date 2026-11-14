@@ -8,9 +8,10 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use kbl_core::content::Content;
+use kbl_core::names::ItemId;
 use kbl_core::overlap::{FILES_ENTRY, files_offset, overlaps};
 use kbl_core::work::{ReadError, WorkLogged, WorkRecord, read};
-use kbl_core::work_fold::State;
+use kbl_core::work_fold::{Stage, State};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
 
@@ -87,6 +88,49 @@ impl Folder {
             .map(|i| json!({ "id": i.id, "title": i.title, "stage": self.state.stage(&i.id) }))
             .collect();
         serde_json::to_string(&items).expect("plain data serializes")
+    }
+
+    /// Every item in the Blocked stage, as `{id, title, repo, source, waits_on}`, in
+    /// id order. `waits_on` lists the items holding it, each with its own
+    /// `repo`, stage, `source` and `awaiting_release` (merged, but the link
+    /// waits for the release), so a blocker in another repo or source shows
+    /// where it lives. `repo` is `{source, repo}`, or null when the fold knows none.
+    pub fn blocked_json(&self) -> String {
+        let s = &self.state;
+        let source_of = |id: &ItemId| {
+            let root = &s.items.get(id)?.root;
+            s.imported()
+                .find(|(_, _, r)| *r == root)
+                .map(|(src, _, _)| src)
+        };
+        let blocker = |id: &ItemId| {
+            json!({
+                "id": id,
+                "title": s.items.get(id).map(|i| i.title.as_str()),
+                "repo": s.repo_of(id),
+                "stage": s.stage(id),
+                "source": source_of(id),
+                "awaiting_release": s.items.get(id).is_some_and(|i| i.closed.is_some()),
+            })
+        };
+        let blocked: Vec<_> = s
+            .items
+            .values()
+            .filter(|i| i.closed.is_none() && s.stage(&i.id) == Some(Stage::Blocked))
+            .filter_map(|i| {
+                let by = s.blockers(&i.id);
+                (!by.is_empty()).then(|| {
+                    json!({
+                        "id": i.id,
+                        "title": i.title,
+                        "repo": s.repo_of(&i.id),
+                        "source": source_of(&i.id),
+                        "waits_on": by.into_iter().map(blocker).collect::<Vec<_>>(),
+                    })
+                })
+            })
+            .collect();
+        serde_json::to_string(&blocked).expect("plain data serializes")
     }
 
     /// Open items that expect to touch the same files, as

@@ -6,13 +6,13 @@
 import './ui/tokens.css';
 import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
-import { items, type Fold } from './fold.ts';
+import { blocked, items, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
-import { flatten, group, move } from './list.ts';
-import { adviceFor, createStore, fromAddress, toAddress, type ViewState } from './state.ts';
+import { move, shownRows } from './list.ts';
+import { adviceFor, createStore, fromAddress, toAddress, type View, type ViewState } from './state.ts';
 import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
@@ -31,6 +31,7 @@ const initial: ViewState = {
   connection: q.get('room') && token ? { kind: 'loading', what: 'history' } : { kind: 'setup' },
   synced: false,
   items: [],
+  blocked: [],
   overlaps: new Map(),
   ...address,
   selected: address.open,
@@ -46,13 +47,18 @@ const closeItem = () => {
   const before = store.get();
   store.dispatch({ type: 'open', id: null });
   // The open item may have no visible row (filtered out, or not in the log): keep the focus somewhere real.
-  const rows = flatten(group(before.items, before.query));
+  const rows = shownRows(before);
   if (before.open && rows.some((r) => r.id === before.open)) return ui.list.focusSelected();
   const first = rows[0]?.id;
   if (first) {
     store.dispatch({ type: 'select', id: first });
     ui.list.focusSelected();
   } else ui.search.focus();
+};
+
+const showView = (view: View) => {
+  store.dispatch({ type: 'view', view });
+  ui.main.focus();
 };
 
 const run = (id: CommandId): void => {
@@ -69,14 +75,14 @@ const run = (id: CommandId): void => {
     case 'previous':
     case 'first':
     case 'last': {
-      const rows = flatten(group(s.items, s.query));
+      const rows = shownRows(s);
       const target =
         id === 'first' ? (rows[0]?.id ?? null) : id === 'last' ? (rows.at(-1)?.id ?? null) : move(rows, s.selected, id === 'next' ? 1 : -1);
       store.dispatch({ type: 'select', id: target });
       return ui.list.focusSelected();
     }
     case 'open':
-      if (s.selected && flatten(group(s.items, s.query)).some((r) => r.id === s.selected)) openItem(s.selected);
+      if (s.selected && shownRows(s).some((r) => r.id === s.selected)) openItem(s.selected);
       return;
     case 'close':
       if (document.activeElement === ui.search) ui.search.blur();
@@ -85,6 +91,9 @@ const run = (id: CommandId): void => {
       return;
     case 'theme':
       return store.dispatch({ type: 'theme', theme: s.theme === 'dark' ? 'light' : 'dark' });
+    case 'view-all':
+    case 'view-blocked':
+      return showView(id === 'view-all' ? 'all' : 'blocked');
   }
 };
 
@@ -103,6 +112,7 @@ const ui = shell(
     query: (text) => store.dispatch({ type: 'query', query: text }),
     palette: () => run('palette'),
     help: () => run('help'),
+    view: showView,
   },
   mac,
 );
@@ -157,6 +167,7 @@ async function main() {
     at: () => fold.at(),
     stateJson: () => fold.state_json(),
     itemsJson: () => fold.items_json(),
+    blockedJson: () => fold.blocked_json(),
     overlapsJson: () => fold.overlaps_json(),
   };
   // Redraw once per frame however many records arrive.
@@ -166,7 +177,7 @@ async function main() {
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      store.dispatch({ type: 'items', items: items(sink), overlaps: overlapNotes(sink) });
+      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink) });
     });
   };
   let cursor = 0;
@@ -189,7 +200,7 @@ async function main() {
         },
         onLive: () => {
           delay = 1000;
-          store.dispatch({ type: 'items', items: items(sink), overlaps: overlapNotes(sink) });
+          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
         },
       });

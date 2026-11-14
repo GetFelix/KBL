@@ -144,3 +144,123 @@ fn a_record_of_a_newer_format_stops_the_fold() {
     assert_eq!(f.state_json(), before);
     assert_eq!(f.at(), 0.0);
 }
+
+#[test]
+fn blocked_names_each_blocker_with_its_own_repo() {
+    let mut f = Folder::new();
+    let recs = [
+        r#"{"at_ms":1,"by":"ingest","actor":"tracker","kind":"imported","item":"blk","source":"github","upstream_id":"GetFelix/felix-blocks#40","title":"place blocks"}"#,
+        r#"{"at_ms":2,"by":"ingest","actor":"tracker","kind":"imported","item":"gw","source":"github","upstream_id":"GetFelix/felix-gateway#31","title":"compare and set"}"#,
+        r#"{"at_ms":3,"by":"gabriel","actor":"person","kind":"accepted","item":"blk"}"#,
+        r#"{"at_ms":4,"by":"gabriel","actor":"person","kind":"linked","item":"blk","to":"gw"}"#,
+    ];
+    for (i, r) in recs.iter().enumerate() {
+        assert!(f.apply(i as f64, r.as_bytes()), "{i}");
+    }
+    let blocked: serde_json::Value = serde_json::from_str(&f.blocked_json()).unwrap();
+    assert_eq!(
+        blocked,
+        serde_json::json!([{
+            "id": "blk",
+            "title": "place blocks",
+            "repo": { "source": "github", "repo": "GetFelix/felix-blocks" },
+            "source": "github",
+            "waits_on": [{
+                "id": "gw",
+                "title": "compare and set",
+                "repo": { "source": "github", "repo": "GetFelix/felix-gateway" },
+                "stage": "triage",
+                "source": "github",
+                "awaiting_release": false,
+            }],
+        }])
+    );
+    // A child item reports its root's repo.
+    let child = [
+        r#"{"at_ms":5,"by":"gabriel","actor":"person","kind":"proposed","item":"c1","parent":"blk","key":"k1","work":"split","title":"child"}"#,
+        r#"{"at_ms":6,"by":"gabriel","actor":"person","kind":"linked","item":"c1","to":"gw"}"#,
+    ];
+    for (i, r) in child.iter().enumerate() {
+        assert!(f.apply(10.0 + i as f64, r.as_bytes()), "{i}");
+    }
+    let rows: serde_json::Value = serde_json::from_str(&f.blocked_json()).unwrap();
+    let c1 = rows.as_array().unwrap().iter().find(|r| r["id"] == "c1");
+    assert_eq!(
+        c1.map(|r| r["repo"].clone()),
+        Some(serde_json::json!({ "source": "github", "repo": "GetFelix/felix-blocks" }))
+    );
+    let done = r#"{"at_ms":5,"by":"gabriel","actor":"person","kind":"closed","item":"gw","why":"completed"}"#;
+    assert!(f.apply(20.0, done.as_bytes()));
+    assert_eq!(f.blocked_json(), "[]");
+}
+
+fn feed(f: &mut Folder, at: &mut f64, recs: &[&str]) {
+    for r in recs {
+        assert!(f.apply(*at, r.as_bytes()), "{r}");
+        *at += 1.0;
+    }
+}
+
+fn blocked_ids(f: &Folder) -> Vec<String> {
+    let rows: serde_json::Value = serde_json::from_str(&f.blocked_json()).unwrap();
+    rows.as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn blocked_lists_only_blocked_items() {
+    let mut f = Folder::new();
+    let mut at = 0.0;
+    feed(
+        &mut f,
+        &mut at,
+        &[
+            r#"{"at_ms":1,"by":"ingest","actor":"tracker","kind":"imported","item":"dep","source":"github","upstream_id":"a/b#1","title":"dep"}"#,
+            r#"{"at_ms":2,"by":"ingest","actor":"tracker","kind":"imported","item":"tri","source":"github","upstream_id":"a/b#2","title":"triage"}"#,
+            r#"{"at_ms":3,"by":"ingest","actor":"tracker","kind":"imported","item":"hld","source":"github","upstream_id":"a/b#3","title":"held"}"#,
+            r#"{"at_ms":4,"by":"ingest","actor":"tracker","kind":"imported","item":"blk","source":"github","upstream_id":"a/b#4","title":"blocked"}"#,
+            r#"{"at_ms":5,"by":"gabriel","actor":"person","kind":"accepted","item":"hld"}"#,
+            r#"{"at_ms":6,"by":"gabriel","actor":"person","kind":"accepted","item":"blk"}"#,
+            r#"{"at_ms":7,"by":"w1","actor":"agent","kind":"claimed","item":"hld","attempt":1,"deadline_ms":1800000090000}"#,
+            r#"{"at_ms":8,"by":"gabriel","actor":"person","kind":"linked","item":"tri","to":"dep"}"#,
+            r#"{"at_ms":9,"by":"gabriel","actor":"person","kind":"linked","item":"hld","to":"dep"}"#,
+            r#"{"at_ms":10,"by":"gabriel","actor":"person","kind":"linked","item":"blk","to":"dep"}"#,
+        ],
+    );
+    let state: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let stage = |id: &str| {
+        state
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .map(|i| i["stage"].clone())
+    };
+    assert_eq!(stage("tri"), Some(serde_json::json!("triage")));
+    assert_eq!(stage("hld"), Some(serde_json::json!("held")));
+    assert_eq!(blocked_ids(&f), ["blk"]);
+}
+
+#[test]
+fn a_merged_blocker_awaiting_its_release_says_so() {
+    let mut f = Folder::new();
+    let mut at = 0.0;
+    feed(
+        &mut f,
+        &mut at,
+        &[
+            r#"{"at_ms":1,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"a/b#1","title":"waits"}"#,
+            r#"{"at_ms":2,"by":"ingest","actor":"tracker","kind":"imported","item":"r2","source":"github","upstream_id":"a/b#2","title":"ships"}"#,
+            r#"{"at_ms":3,"by":"gabriel","actor":"person","kind":"accepted","item":"r1"}"#,
+            r#"{"at_ms":4,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}"#,
+            r#"{"at_ms":5,"by":"w1","actor":"agent","kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"r2","key":"need","done_when":"released","cost_micros":0}"#,
+            r#"{"at_ms":6,"by":"gabriel","actor":"person","kind":"closed","item":"r2","why":"merged"}"#,
+        ],
+    );
+    let rows: serde_json::Value = serde_json::from_str(&f.blocked_json()).unwrap();
+    assert_eq!(rows[0]["id"], "r1");
+    assert_eq!(rows[0]["waits_on"][0]["awaiting_release"], true);
+}

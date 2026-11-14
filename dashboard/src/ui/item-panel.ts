@@ -1,8 +1,34 @@
 // The side panel for the open item. It shows what the fold recorded, nothing inferred.
+// Each entry in FIELDS adds one labelled row, so a new kind of detail is one module.
+import type { ItemRow } from '../fold.ts';
 import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { h } from './dom.ts';
+import { itemHref } from './item-list.ts';
 import { overlapField } from './overlap-section.ts';
+import { waitsOnField } from './waits-on-field.ts';
+
+export interface PanelHandlers {
+  closeItem(): void;
+  open(id: string): void;
+}
+
+/**
+ * One field of the open item. `key` is what the field's output depends on beyond the item's
+ * title and stage, so the panel redraws when it changes. `render` returns a label and value, or null.
+ */
+export interface Field {
+  key(item: ItemRow, s: ViewState): string;
+  render(item: ItemRow, s: ViewState, on: PanelHandlers): [string, Node] | null;
+}
+
+const stageField: Field = {
+  key: () => '',
+  render: (item) => ['Stage', document.createTextNode(stageLabel(item.stage))],
+};
+
+// A new field is one module and one entry here.
+const FIELDS: readonly Field[] = [stageField, waitsOnField, overlapField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
@@ -11,7 +37,7 @@ const WHY = {
   unreachable: () => 'The gateway cannot be reached, so the log has not been read. Trying again.',
 };
 
-export function itemPanel(onClose: () => void, onOpen: (id: string) => void): { el: HTMLElement; render(s: ViewState): void; focus(): void } {
+export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewState): void; focus(): void } {
   // Focusable itself, so opening an item can move focus here without landing on Close.
   const el = h('aside', { class: 'panel', 'aria-labelledby': 'panel-title', tabindex: '-1', hidden: true });
   let shown = '';
@@ -25,7 +51,12 @@ export function itemPanel(onClose: () => void, onOpen: (id: string) => void): { 
       else if (c.kind !== 'loading' || c.linked) failed = false;
       const item = s.items.find((i) => i.id === s.open);
       const why = item ? '' : s.synced ? 'missing' : s.connection.kind === 'stopped' ? 'stopped' : failed ? 'unreachable' : 'reading';
-      const key = s.open === null ? '' : `${s.open}|${item?.title}|${item?.stage}|${why}|${item ? overlapField.key(item, s) : ''}`;
+      const key = s.open === null ? '' : `${s.open}|${item?.title}|${item?.stage}|${why}|${item ? FIELDS.map((f) => f.key(item, s)).join('|') : ''}`;
+      // Links follow the view and query without a redraw, so a search keystroke does not rebuild the panel.
+      for (const a of Array.from(el.querySelectorAll<HTMLAnchorElement>('a[data-item]'))) {
+        const href = itemHref(a.dataset.item!, s);
+        if (a.getAttribute('href') !== href) a.setAttribute('href', href);
+      }
       if (key === shown) return;
       shown = key;
       el.hidden = s.open === null;
@@ -34,14 +65,17 @@ export function itemPanel(onClose: () => void, onOpen: (id: string) => void): { 
       const active = document.activeElement;
       const hadFocus = el.contains(active);
       const focusKey = active instanceof HTMLElement ? active.dataset.focus : undefined;
-      const close = h('button', { type: 'button', class: 'button ghost', 'data-focus': 'close', 'aria-label': 'Close the item', onclick: onClose }, 'Close');
+      const close = h('button', { type: 'button', class: 'button ghost', 'data-focus': 'close', 'aria-label': 'Close the item', onclick: on.closeItem }, 'Close');
       el.replaceChildren(
         h('header', { class: 'panel-head' }, h('span', { class: 'row-id' }, s.open), close),
         item
           ? h('div', {},
               h('h2', { id: 'panel-title', class: 'panel-title' }, item.title),
-              h('dl', { class: 'fields' }, h('dt', {}, 'Stage'), h('dd', {}, stageLabel(item.stage))),
-              overlapField.render(item, s, { open: onOpen }))
+              h('dl', { class: 'fields' },
+                ...FIELDS.flatMap((f) => {
+                  const got = f.render(item, s, on);
+                  return got ? [h('dt', {}, got[0]), h('dd', {}, got[1])] : [];
+                })))
           : h('div', {},
               h('h2', { id: 'panel-title', class: 'panel-title' }, 'No such item'),
               h('p', { class: 'muted' }, WHY[why as keyof typeof WHY](s.open))),
