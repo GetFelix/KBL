@@ -167,7 +167,8 @@ struct WorkExtendArgs {
 struct WorkCompleteArgs {
     /// The id of the item you hold.
     item: String,
-    /// What this attempt cost, in millionths of a dollar. The tracker cannot verify it.
+    /// What this attempt cost, in millionths of a dollar. The tracker cannot verify it, so it
+    /// charges at least its cost floor.
     cost_micros: Option<u64>,
 }
 
@@ -177,7 +178,8 @@ struct WorkReleaseArgs {
     item: String,
     /// Why you are handing it back.
     reason: Option<String>,
-    /// What this attempt cost, in millionths of a dollar.
+    /// What this attempt cost, in millionths of a dollar. The tracker charges at least its
+    /// cost floor.
     cost_micros: Option<u64>,
 }
 
@@ -204,7 +206,8 @@ struct WorkPostArgs {
     existing: Option<String>,
     /// `prerequisite` only: `merged` (the default) or `released`, for work you need shipped in a release.
     done_when: Option<String>,
-    /// `prerequisite` only: what this attempt cost so far, in millionths of a dollar.
+    /// `prerequisite` only: what this attempt cost so far, in millionths of a dollar. The
+    /// tracker charges at least its cost floor.
     cost_micros: Option<u64>,
 }
 
@@ -315,6 +318,7 @@ struct WorkAskArgs {
     /// The option taken when the person answers without choosing. Must be one of `options`.
     default: Option<String>,
     /// What this attempt has cost so far, in micro-dollars. Report it here: the answer ends your hold.
+    /// The tracker charges at least its cost floor.
     cost_micros: Option<u64>,
 }
 

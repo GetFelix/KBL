@@ -586,7 +586,9 @@ neither takes the question's `default`. The fold then does two things:
 Asking ends the attempt's hold once answered, so `work_ask` takes the
 attempt's `cost_micros` since its claim or its last ask, and the fold charges
 it then, like a release does. A later release or give-up reports only the cost
-spent after the ask, so nothing is charged twice. A resume item sits one level below the asking item and obeys the root's
+spent after the ask, so nothing is charged twice. The cost floor applies to
+each ask as to each claim end, so a claim that asks and then ends pays the
+floor twice. A resume item sits one level below the asking item and obeys the root's
 depth cap (`too_deep`). If the asking item was never accepted, as with an
 unclear triage, its resume item exists but is not claimable until a person
 accepts the item.
@@ -930,7 +932,8 @@ slipping by.
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most
   three per item, with at most two attempts open at once; a person closes
-  one to open another. Every attempt draws its reported cost from the root.
+  one to open another. Every attempt draws its cost from the root, at least a floor for each
+  claim end and each ask (see Cost below).
   Finishing an attempt of a fix leaves it in review, so it can still be
   redone. It closes when a person or upstream sync records the merge or closes it.
 - **Closure.** A parent cannot complete while its children are open. Closing
@@ -943,10 +946,22 @@ slipping by.
 Budgets are enforced by a compare-and-set on the budget key (`cache_put_if`),
 not by counters, because Felix has no bounded add (gap 42).
 
-**Cost.** Agents from outside report cost on `work_complete` as a cost record
-the tracker cannot verify. The per-root cost cap is hard only for attempts
-under `kbl-run`, which measures spend. The Metrics tab labels each figure
-reported or measured.
+**Cost.** Agents report what a claim cost (`cost_micros`, in millionths of a
+dollar) when they complete, release, give up, ask or file a prerequisite. The
+tracker cannot check that number, so it charges each of those at least a
+floor: `KBL_COST_FLOOR_MICROS`, 100000 ($0.10) by default. A lapsed claim is
+charged the floor too. An agent that reports nothing still spends its root's
+cost budget, so the default $10 budget allows about 100 charges per tree. The
+budget is checked when a claim is made, so claims already in flight can still
+finish and be charged after it reaches 0. A report above the floor is charged
+as reported. Set the floor to 0 to charge only what agents report. The
+setting is one for the whole tracker process; with [teams](#teams) each team's
+tracker charges it against its own trees and budgets.
+
+The floor is applied when the record is written: the record carries the
+charged cost, and the fold reads it as before. Under `kbl-run` the reported
+figure is measured spend, and a measured figure below the floor is raised to
+it like any other.
 
 ## The dashboard
 
