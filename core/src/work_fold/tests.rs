@@ -1410,7 +1410,16 @@ fn a_close_remembers_whether_upstream_sync_wrote_it() {
     assert!(s.items[&id("r1")].closed_by_sync);
     assert!(!s.items[&id("r2")].closed_by_sync);
     l.tracker(WorkRecord::Reopened { item: id("r1") });
-    assert!(!fold(&l.0).items[&id("r1")].closed_by_sync);
+    let s = fold(&l.0);
+    assert!(!s.items[&id("r1")].closed_by_sync);
+    assert_eq!(s.items[&id("r1")].reopened_by, Some(Actor::Tracker));
+    // A person's reopen is a person's, whoever reopened before.
+    l.tracker(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Upstream,
+    });
+    l.person(WorkRecord::Reopened { item: id("r1") });
+    assert_eq!(fold(&l.0).items[&id("r1")].reopened_by, Some(Actor::Person));
 }
 
 #[test]

@@ -244,6 +244,7 @@ impl Tracker for Fake {
                         .to_owned(),
                     closed: it.closed.is_some(),
                     closed_by_sync: it.closed_by_sync,
+                    reopened_by: it.reopened_by,
                     has_children: !it.children.is_empty(),
                     pr: it.pr.clone(),
                     claimed_at_ms: it.first_claim_ms,
