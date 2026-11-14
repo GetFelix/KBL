@@ -1328,6 +1328,61 @@ async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
 }
 
 #[tokio::test]
+async fn ingest_unlinks_only_an_edge_its_own_link_made() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let ingest = |t: &Tracker<Fake>, r| {
+        let t = t.clone();
+        async move { t.ingest_record(key("ingest-gh"), r).await }
+    };
+    for (id, n) in [("r1", 1), ("r2", 2)] {
+        ingest(
+            &t,
+            WorkRecord::Imported {
+                item: item(id),
+                source: "github".into(),
+                upstream_id: format!("o/r#{n}"),
+                title: "a bug".into(),
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let linked = || WorkRecord::Linked {
+        item: item("r2"),
+        to: item("r1"),
+    };
+    let unlinked = || WorkRecord::Unlinked {
+        item: item("r2"),
+        to: item("r1"),
+    };
+    let why = |r: Result<Value, Error>| match r {
+        Err(Error::Refused { why }) => why,
+        other => panic!("{other:?}"),
+    };
+    ingest(&t, linked()).await.unwrap();
+    ingest(&t, unlinked()).await.unwrap();
+    assert_eq!(why(ingest(&t, unlinked()).await), "not_linked");
+    // A person links the same pair: the edge is theirs too, also after a restart.
+    ingest(&t, linked()).await.unwrap();
+    t.person_record(key("gab"), linked()).await.unwrap();
+    assert_eq!(why(ingest(&t, unlinked()).await), "not_ingests");
+    let t = start(&fake).await;
+    assert_eq!(why(ingest(&t, unlinked()).await), "not_ingests");
+    // Ingest's link of an edge it did not make changes nothing, and is not logged.
+    let before = fake.log().len();
+    assert_eq!(why(ingest(&t, linked()).await), "already_linked");
+    assert_eq!(fake.log().len(), before);
+    // Once the person unlinks it, an edge ingest makes again is ingest's.
+    t.person_record(key("gab"), unlinked()).await.unwrap();
+    ingest(&t, linked()).await.unwrap();
+    // A retry of its own link is accepted, and the edge stays ingest's.
+    ingest(&t, linked()).await.unwrap();
+    let t = start(&fake).await;
+    ingest(&t, unlinked()).await.unwrap();
+}
+
+#[tokio::test]
 async fn ingest_cannot_touch_an_item_it_did_not_import() {
     let fake = Fake::default();
     let t = start(&fake).await;

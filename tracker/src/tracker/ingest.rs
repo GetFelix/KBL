@@ -23,6 +23,7 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::Accepted { .. }
         | WorkRecord::Context { .. }
         | WorkRecord::Linked { .. }
+        | WorkRecord::Unlinked { .. }
         | WorkRecord::Updated { .. }
         | WorkRecord::LeftScope { .. }
         | WorkRecord::ReturnedToScope { .. }
@@ -53,7 +54,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::Reopened { item }
         | WorkRecord::Shipped { item, .. }
         | WorkRecord::Closed { item, .. } => vec![item],
-        WorkRecord::Linked { item, to } => vec![item, to],
+        WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } => vec![item, to],
         WorkRecord::Proposed {
             parent: Some(parent),
             ..
@@ -128,6 +129,22 @@ impl<B: Broker> Tracker<B> {
                     .is_some_and(|it| it.release.is_some())
                 {
                     return Err(refused("already_shipped"));
+                }
+            }
+            // Ingest removes only an edge it made, so it may not take over one
+            // that a prerequisite, an answer, a person or an agent made.
+            if let WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } = &record {
+                let edge = (item.clone(), to.clone());
+                let ours = core.recall.ingest_edges.contains(&edge);
+                match (&record, core.state.edges.contains(&edge)) {
+                    (WorkRecord::Linked { .. }, true) if !ours => {
+                        return Err(refused("already_linked"));
+                    }
+                    (WorkRecord::Unlinked { .. }, false) => return Err(refused("not_linked")),
+                    (WorkRecord::Unlinked { .. }, true) if !ours => {
+                        return Err(refused("not_ingests"));
+                    }
+                    _ => {}
                 }
             }
             let opened = match &record {

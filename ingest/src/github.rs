@@ -6,7 +6,7 @@
 //! spending requests on answers that will be refused. Listings are
 //! conditional (`If-None-Match`), and GitHub does not charge a 304.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -40,6 +40,8 @@ pub(crate) struct Github<T> {
     own: Vec<String>,
     /// Until when GitHub told us to hold off, as seconds since the epoch.
     limited_until: Mutex<Option<u64>>,
+    /// `repo list` pairs already reported as not offered, so each is logged once.
+    unoffered: Mutex<BTreeSet<String>>,
 }
 
 impl<T: Transport> Github<T> {
@@ -49,6 +51,7 @@ impl<T: Transport> Github<T> {
             http,
             own,
             limited_until: Mutex::new(None),
+            unoffered: Mutex::new(BTreeSet::new()),
         }
     }
 
@@ -490,7 +493,11 @@ impl<T: Transport> Source for Github<T> {
 
     async fn links(&self, id: &IssueRef) -> Result<Links, SourceError> {
         let base = format!("{}/repos/{}/issues/{}", self.api, id.repo, id.number);
-        let mut links = Links::default();
+        let mut links = Links {
+            complete: true,
+            ..Links::default()
+        };
+        let mut missing = Vec::new();
         for (suffix, into) in [
             ("dependencies/blocked_by", &mut links.blocked_by),
             ("sub_issues", &mut links.sub_issues),
@@ -500,20 +507,46 @@ impl<T: Transport> Source for Github<T> {
                 .await?;
             match res.status {
                 200 => {
-                    for raw in res.body.as_array().into_iter().flatten() {
+                    // A second page is not read, so a listing with one is partial.
+                    if res.headers.get("link").and_then(|l| next_link(l)).is_some() {
+                        links.complete = false;
+                    }
+                    let Some(list) = res.body.as_array() else {
+                        links.complete = false;
+                        continue;
+                    };
+                    for raw in list {
                         let repo = raw["repository_url"]
                             .as_str()
                             .and_then(|u| u.split_once("/repos/"))
                             .map_or(id.repo.as_str(), |(_, r)| r);
-                        if let Some(n) = raw["number"].as_u64() {
-                            into.push(IssueRef::new(repo, n));
+                        match raw["number"].as_u64() {
+                            Some(n) => into.push(IssueRef::new(repo, n)),
+                            None => links.complete = false,
                         }
                     }
                 }
-                // Not offered for this repository, none, or the issue moved.
-                301 | 302 | 307 | 308 | 404 | 410 => {}
+                // A list this repository does not offer is empty, as long as
+                // the other one answers: both missing may mean the issue is.
+                404 => missing.push(suffix),
+                // The issue moved: nothing to link, and nothing known about what to unlink.
+                301 | 302 | 307 | 308 | 410 => links.complete = false,
                 s => return Err(anyhow!("GitHub answered {s} for the links of {id}").into()),
             }
+        }
+        match missing[..] {
+            [suffix] => {
+                if self
+                    .unoffered
+                    .lock()
+                    .expect("unoffered")
+                    .insert(format!("{} {suffix}", id.repo))
+                {
+                    eprintln!("kbl-ingest: {} does not offer {suffix}", id.repo);
+                }
+            }
+            [_, _] => links.complete = false,
+            _ => {}
         }
         Ok(links)
     }
