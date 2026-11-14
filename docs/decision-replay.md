@@ -103,7 +103,9 @@ branches from that point.
 - **What gets recorded.** The note is a `human_input` with who wrote it, and
   the new attempt starts with a `forked_from` record naming the item, the
   attempt and the offset. The timeline shows the attempts as branches, so
-  anyone replaying later sees who steered, where and why.
+  anyone replaying later sees who steered, where and why. When the item's
+  pull request has a failed check, the note is required and must be written
+  after the failure (`note_required` otherwise).
 - **What happens to the first attempt.** Its pull request becomes a draft and
   stays linked. The two attempts sit side by side (diff, checks, cost, time)
   until the reviewer picks one. The other is closed with the reason.

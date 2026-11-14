@@ -22,8 +22,8 @@ use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, LANES, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS, WORK_EVENTS,
-    WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
+    Actor, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS,
+    WORK_EVENTS, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Seek, Stage, State};
 use serde_json::{Value, json};
@@ -250,6 +250,32 @@ fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), E
     Ok(())
 }
 
+/// Refuses a redo of an item whose pull request has a failed check unless it
+/// names a note written since the check failed, so a failure is not rerun
+/// unread. Checked before the append, like evidence, so the fold of an
+/// existing log does not change.
+fn retry_has_note(core: &Core, record: &WorkRecord) -> Result<(), Error> {
+    let WorkRecord::ForkedFrom { item, note, .. } = record else {
+        return Ok(());
+    };
+    let red = core.state.items.get(item).is_some_and(|it| {
+        it.pr_status
+            .as_ref()
+            .is_some_and(|s| s.phase == PrPhase::Open && s.checks == PrChecks::Red)
+    });
+    if !red {
+        return Ok(());
+    }
+    let since = core.recall.red_since.get(item).map_or(0, |(_, at)| *at);
+    // A note the item does not have is the fold's to refuse.
+    if note.is_some_and(|n| n > since) {
+        return Ok(());
+    }
+    Err(Error::Refused {
+        why: "note_required".into(),
+    })
+}
+
 /// What the tracker keeps per record offset, so a call does not scan the log.
 #[derive(Default)]
 struct Recall {
@@ -257,12 +283,29 @@ struct Recall {
     texts: HashMap<u64, Content>,
     /// The item each record names, so evidence can be held to its tree.
     subjects: HashMap<u64, ItemId>,
+    /// The `pr_status` that turned each item's checks red, while they stay red.
+    /// Kept with the request, since a new request starts a new failure.
+    red_since: HashMap<ItemId, (String, u64)>,
 }
 
 impl Recall {
     fn remember(&mut self, offset: u64, record: &WorkRecord) {
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
+        }
+        if let WorkRecord::PrStatus { item, status } = record {
+            if status.phase == PrPhase::Open && status.checks == PrChecks::Red {
+                let same = self
+                    .red_since
+                    .get(item)
+                    .is_some_and(|(pr, _)| *pr == status.pr);
+                if !same {
+                    self.red_since
+                        .insert(item.clone(), (status.pr.clone(), offset));
+                }
+            } else {
+                self.red_since.remove(item);
+            }
         }
         remember(&mut self.texts, offset, record);
     }
@@ -1431,6 +1474,7 @@ impl<B: Broker> Tracker<B> {
         if core.state.may_cite(&logged).is_ok() {
             evidence_in_tree(core, &logged.record, guess)?;
         }
+        retry_has_note(core, &logged.record)?;
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.
         if let Err(why) = core.state.try_apply(guess, &logged) {

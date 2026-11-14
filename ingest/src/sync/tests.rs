@@ -1377,6 +1377,43 @@ impl Rig {
     }
 }
 
+/// The reviews route for one page, which outranks the one `Rig::pr` sets.
+fn reviews_page(n: usize) -> String {
+    format!("/pulls/2210/reviews?per_page=100&page={n}")
+}
+
+#[tokio::test]
+async fn a_review_past_the_first_page_counts() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    rig.pr(pull(|_| {}), vec![], vec![run("unit", Some("success"))]);
+    // bob approves, a hundred reviews go by, then bob asks for changes.
+    let mut first = vec![review("bob", "APPROVED", "MEMBER")];
+    first.resize(100, review("carol", "COMMENTED", "MEMBER"));
+    rig.gh
+        .on("GET", &reviews_page(1), ok(Value::Array(first.clone())));
+    rig.gh.on(
+        "GET",
+        &reviews_page(2),
+        ok(json!([review("bob", "CHANGES_REQUESTED", "MEMBER")])),
+    );
+    ingest.poll(false).await.unwrap();
+    let review = |rig: &Rig| {
+        rig.tracker.state().items[&item]
+            .pr_status
+            .clone()
+            .unwrap()
+            .review
+    };
+    assert_eq!(review(&rig), PrReview::ChangesRequested);
+
+    // A page that cannot be read: the approval on the first is not the answer.
+    rig.gh.on("GET", &reviews_page(2), status(404, &[]));
+    ingest.poll(false).await.unwrap();
+    assert_eq!(review(&rig), PrReview::Unreviewed);
+}
+
 #[tokio::test]
 async fn a_red_check_sends_the_item_to_needs_you_with_its_name_and_url() {
     let rig = rig();
