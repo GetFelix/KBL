@@ -600,3 +600,27 @@ fn spend_sums_claim_costs_per_root_reviewer_tier_and_repo() {
         ])
     );
 }
+
+#[test]
+fn spend_of_a_root_without_a_repo_counts_in_totals_but_not_by_repo() {
+    let mut l = Log::default();
+    l.tracker(WorkRecord::Imported {
+        item: id("r1"),
+        source: "github".into(),
+        upstream_id: "no-repo-id".into(),
+        title: "bug".into(),
+    });
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r1", 1));
+    l.agent("w1", done("r1", 1, 500));
+    let s = state(&l);
+    assert_eq!(s.rejections.len(), 0);
+
+    let spend = s.spend();
+    assert_eq!(spend.total_micros, 500);
+    assert_eq!(spend.by_root, BTreeMap::from([(id("r1"), 500)]));
+    assert!(spend.by_repo.is_empty());
+}

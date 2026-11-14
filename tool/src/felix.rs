@@ -230,7 +230,6 @@ impl Broker {
         Ok(())
     }
 
-    /// Every committed record of a one-shard stream, oldest first.
     /// Every record on `stream` with its offset, oldest first.
     pub(crate) async fn read_all(&self, stream: &str) -> Result<Vec<(u64, Vec<u8>)>> {
         let mut payloads = Vec::new();
