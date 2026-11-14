@@ -54,8 +54,8 @@ export function confirmDialog(send: (ids: string[], args: WriteArgs) => void) {
         e.preventDefault();
         m.close();
         const ids = list.map((i) => i.id);
-        // Left as it started, an accept sends no tier, so the fold keeps the recorded or proposed one.
-        if (kind === 'accept') send(ids, { kind, tier: acceptTier(list.length === 1 ? list[0] : null, tier!.value) });
+        // A tier shown in the confirm is sent as shown; the fold's own pick applies only when none was shown.
+        if (kind === 'accept') send(ids, { kind, tier: acceptTier(tier!.value) });
         else if (kind === 'close') send(ids, { kind, why: why!.value as CloseWhy });
         else send(ids, { kind });
       });

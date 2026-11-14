@@ -122,6 +122,14 @@ test('the client sends the viewer’s token to the page’s own routes, and read
   assert.equal((await down.write(request('a', { kind: 'reject' }))).status, 'failed');
 });
 
+test('a write that gets no answer is abandoned as failed, with its outcome unknown', async () => {
+  const hung: Fetch = (_url, init) => new Promise((_res, rej) => init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
+  const t = new Tracker(hung, 'tok', null, 20);
+  const o = await t.write(request('a', { kind: 'reject' }));
+  assert.equal(o.status, 'failed');
+  assert.match((o as { reason: string }).reason, /No answer from the tracker; it may or may not have been written/);
+});
+
 test('the Needs you inbox is a view in the address that holds only items waiting on a person', async () => {
   const { decodeView, encodeView } = await import('../src/views.ts');
   const { inScope } = await import('../src/list.ts');
@@ -154,16 +162,15 @@ test('a bulk write over many items keeps every write until its batch is old', ()
   assert.equal(pending(ws, 'p'), true);
 });
 
-test('a tier field starts from the recorded or proposed tier, and an accept sends one only when changed', () => {
+test('a tier field starts from the recorded or proposed tier, and an accept sends the tier shown', () => {
   const tri = item({ id: 't', stage: 'triage', tier: null, proposed_tier: 0 });
   assert.equal(shownTier(tri), 0);
   assert.equal(shownTier(item({ id: 'n', stage: 'triage', tier: null })), null);
-  // Left at triage's tier 0, the accept sends none and the fold takes the proposal, not 2.
-  assert.equal(acceptTier(tri, '0'), null);
-  assert.equal(acceptTier(tri, '3'), 3);
-  assert.equal(acceptTier(item({ id: 'n', stage: 'triage', tier: null }), ''), null);
-  assert.equal(acceptTier(null, ''), null);
-  assert.equal(acceptTier(null, '1'), 1);
+  // Submitted untouched at the shown tier 0, it is sent, so a later re-proposal cannot replace it.
+  assert.equal(acceptTier('0'), 0);
+  assert.equal(acceptTier('3'), 3);
+  // Nothing shown, or "keep each item's tier": none sent.
+  assert.equal(acceptTier(''), null);
 });
 
 test('a write is checked against the log when it is sent, not when its dialog opened', () => {

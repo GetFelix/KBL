@@ -91,12 +91,12 @@ to the tracker. A person token in several teams needs `&team=<team>` in the addr
 
 Claiming is not offered: it is an agent's, and the fold refuses `claimed` from a person.
 
-Each write shows as pending on the item and in the activity line above the work, then as written or refused.
+Each write shows as pending on the item and in the activity line above the work, then as written or refused. A request the tracker does not answer within 30 s is given up as failed ("it may or may not have been written"), and the rest of a bulk action still goes.
 A refusal shows the tracker's reason and its code (`closed`, `not_open_question`, ...). The list itself changes
 only when the record arrives on the log. `X` marks the focused item (each list row also has a checkbox for the mouse), and the
 bulk bar acts on the marked items the view shows, one call per item, then clears the marks; `Esc` clears them
-too. An accept starts from the item's tier, or the tier triage proposed, and sends a tier only if you change
-it; a bulk accept keeps each item's own tier unless you pick one. A confirm checks each item again when you send
+too. An accept starts from the item's tier, or the tier triage proposed, and sends the tier the confirm shows (none
+if it showed none); a bulk accept keeps each item's own tier unless you pick one. A confirm checks each item again when you send
 it, so an item someone else changed meanwhile is refused unsent, with the reason. The Needs you view
 (`?view=inbox`) lists what waits on a person and why.
 

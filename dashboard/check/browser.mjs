@@ -665,7 +665,7 @@ try {
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Closed gh-2210.'`);
   await page.waitFor(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`);
   check(await page.eval(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`), 'a checkbox marks a row, and the close lands as completed');
-  // A Triage item keeps triage's tier: the panel and the confirm start from it, and the accept sends none.
+  // A Triage item keeps triage's tier: the panel and the confirm start from it, and the accept sends the tier shown.
   const by = `actor: 'person', by: 'maintainer', at_ms: 1800000000500`;
   await page.eval(`window.__push({ kind: 'imported', item: 'tri-9', source: 'jira', upstream_id: 'FEL-9', title: 'Urgent triage', ${by} }); window.__push({ kind: 'triaged', item: 'tri-9', tier: 0, why: 'urgent', ${by} }); true`);
   await page.waitFor(`!!document.querySelector('.row[data-id=tri-9]')`);
@@ -676,7 +676,7 @@ try {
   check(await page.eval(`document.querySelector('#confirm-tier').value === '0'`), 'accepting a Triage item starts from its proposed tier');
   await page.eval(`document.querySelector('.confirm-dialog form').requestSubmit(); true`);
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Accepted tri-9.'`);
-  check(await page.eval(`JSON.stringify(window.__tracker.calls.at(-1).body) === '{"item":"tri-9"}'`), 'an accept left at the proposed tier sends no tier, so the fold keeps it');
+  check(await page.eval(`window.__tracker.calls.at(-1).body.item === 'tri-9' && window.__tracker.calls.at(-1).body.tier === 0`), 'an accept left at the proposed tier sends that tier, the one the confirm showed');
   await page.waitFor(`${tierOf} === '0'`);
   check((await page.eval(tierOf)) === '0', 'the accepted item has the tier triage proposed');
 

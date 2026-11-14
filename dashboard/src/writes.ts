@@ -38,14 +38,12 @@ export const UNCLEAR: Readonly<Record<string, string>> = {
 export const shownTier = (i: ItemRow): number | null => i.tier ?? i.proposed_tier ?? null;
 
 /**
- * The tier an accept sends. `picked` is the tier field's value ('' for none or "keep
- * each"). Left as it started, it sends none, so the fold keeps the recorded or proposed
- * tier instead of the page's guess.
+ * The tier an accept sends. `picked` is the tier field's value ('' for none shown or "keep
+ * each"). A tier the person saw is always sent, so a proposal triage changes while the
+ * confirm is open cannot apply a tier they never saw; none is sent only when none was shown.
  */
-export function acceptTier(item: ItemRow | null, picked: string): number | null {
-  if (picked === '') return null;
-  if (item && String(shownTier(item)) === picked) return null;
-  return Number(picked);
+export function acceptTier(picked: string): number | null {
+  return picked === '' ? null : Number(picked);
 }
 
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';

@@ -141,7 +141,7 @@ in `check_sizes` (`tracker/src/tracker/tools.rs:1155`).
 The dashboard's writes are the person routes above, called from the page with the
 signed-in person's own token: `proposals/accept`, `proposals/reject`, `tier`, `close`
 and `questions/answer`, plus `GET /v1/me` to check the token (`dashboard/src/tracker.ts`).
-The page has no authority of its own; the tracker's checks are the only checks.
+The page has no authority of its own; the tracker's checks are the only checks. A write the tracker does not answer within 30 s is shown as failed with its outcome unknown, because the record may have been appended.
 
 | Attack | Check |
 |---|---|
