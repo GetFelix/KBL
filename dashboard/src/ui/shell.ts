@@ -37,8 +37,13 @@ function mark(): SVGSVGElement {
 }
 
 export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
-  const board = boardView(on);
-  const list = itemList(on, board);
+  // Polite and separate from the connection status, so a moved or vanished item is said once.
+  const announcer = h('p', { class: 'sr-only announce', 'aria-live': 'polite' });
+  const announce = (text: string) => {
+    announcer.textContent = text;
+  };
+  const board = boardView(on, announce);
+  const list = itemList(on, board, announce);
   const filters = filterBar(on, mac);
   const panel = itemPanel(on.closeItem);
   const status = statusBar();
@@ -71,37 +76,54 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     onclick: () => setMenu(menu.getAttribute('aria-expanded') !== 'true'),
   }, 'Menu');
   const sidebar = h('nav', { id: 'sidebar', class: 'sidebar', 'aria-label': 'Views' });
+  const backdrop = h('div', { class: 'drawer-backdrop', hidden: true });
+  const skip = h('a', { class: 'skip', href: '#work' }, 'Skip to the work list');
+  const page = h('div', { class: 'main' });
+  // While the drawer is open the page behind it is inert, as behind a modal: Tab stays
+  // in the drawer and a screen reader does not wander into the list underneath.
   const setMenu = (open: boolean) => {
     const was = menu.getAttribute('aria-expanded') === 'true';
     if (was === open) return;
     menu.setAttribute('aria-expanded', String(open));
     sidebar.toggleAttribute('data-open', open);
+    backdrop.hidden = !open;
+    page.inert = open;
+    skip.inert = open;
     if (open) sidebar.querySelector<HTMLElement>('a, button')?.focus();
-    else if (sidebar.contains(document.activeElement)) menu.focus();
+    else if (sidebar.contains(document.activeElement) || document.activeElement === document.body) menu.focus();
   };
+  // Tab wraps inside the open drawer instead of leaving for the browser's own controls.
+  sidebar.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab' || !sidebar.hasAttribute('data-open')) return;
+    const stops = Array.from(sidebar.querySelectorAll<HTMLElement>('a[href], button')).filter((x) => x.checkVisibility());
+    const [first, end] = [stops[0], stops.at(-1)];
+    if (e.shiftKey ? document.activeElement === first : document.activeElement === end) {
+      e.preventDefault();
+      (e.shiftKey ? end : first)?.focus();
+    }
+  });
+  // Widening the window turns the drawer back into the sidebar; nothing may stay inert.
+  matchMedia('(max-width: 720px)').addEventListener('change', (e) => {
+    if (!e.matches) setMenu(false);
+  });
   // A click outside the open drawer closes it, as in any app's side menu.
   document.addEventListener('click', (e) => {
     if (menu.getAttribute('aria-expanded') === 'true' && !sidebar.contains(e.target as Node) && e.target !== menu) setMenu(false);
   });
   let savedShown = '';
-  root.replaceChildren(
-    h('a', { class: 'skip', href: '#work' }, 'Skip to the work list'),
-    h('div', { class: 'shell' },
-      sidebar,
-      h('div', { class: 'main' },
-        h('header', { class: 'topbar' },
-          menu,
-          heading,
-          h('label', { class: 'search' }, search, kbd(displayChord(chordFor('search'), mac))),
-          status.el,
-        ),
-        h('div', { class: 'content' },
-          h('main', { id: 'work', tabindex: '-1', 'aria-labelledby': 'work-title' }, h('h2', { id: 'work-title', class: 'sr-only' }, 'Work list'), filters.el, list.el),
-          panel.el,
-        ),
-      ),
+  page.append(
+    h('header', { class: 'topbar' },
+      menu,
+      heading,
+      h('label', { class: 'search' }, search, kbd(displayChord(chordFor('search'), mac))),
+      status.el,
+    ),
+    h('div', { class: 'content' },
+      h('main', { id: 'work', tabindex: '-1', 'aria-labelledby': 'work-title' }, h('h2', { id: 'work-title', class: 'sr-only' }, 'Work list'), filters.el, list.el, announcer),
+      panel.el,
     ),
   );
+  root.replaceChildren(skip, h('div', { class: 'shell' }, sidebar, backdrop, page));
   sidebar.append(
     h('div', { class: 'brand' }, mark(), 'KBL'),
     h('ul', { class: 'nav' }, h('li', {}, allLink)),
@@ -133,7 +155,8 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
                   on.openView(v.search);
                 },
               }, v.name),
-              h('button', { type: 'button', class: 'button ghost small', 'aria-label': `Edit view ${v.name}`, onclick: () => on.editView(v.name) }, 'Edit'),
+              // The drawer closes first, so the dialog is the only thing open and Cancel returns to Menu.
+              h('button', { type: 'button', class: 'button ghost small', 'aria-label': `Edit view ${v.name}`, onclick: () => (setMenu(false), on.editView(v.name)) }, 'Edit'),
             ))
         : [h('li', { class: 'muted nav-empty' }, 'Filter or search, then Save view.')]),
     );
@@ -147,6 +170,17 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     /** A starting name for Save view: the active filters and search in words. */
     suggestName: (s: ViewState) => [summary(s.filters), s.query && `“${s.query}”`, s.layout === 'board' ? 'board' : ''].filter(Boolean).join(', '),
     menuOpen: () => menu.getAttribute('aria-expanded') === 'true',
+    /**
+     * After a saved-view change: focus `name`'s Edit button (`edit`) or its link, else Save
+     * view. In the closed phone drawer the row is not showing, so Menu takes it instead.
+     */
+    focusSaved(name: string | null, edit: boolean) {
+      const row = Array.from(savedList.querySelectorAll<HTMLElement>('.saved-row')).find((r) => r.querySelector('a')?.textContent === name);
+      const target = row?.querySelector<HTMLElement>(edit ? 'button' : 'a');
+      if (!target) return filters.focusSave();
+      if (target.checkVisibility()) return target.focus();
+      menu.focus();
+    },
     closeMenu: () => setMenu(false),
     render(s: ViewState) {
       renderSaved(s.saved);

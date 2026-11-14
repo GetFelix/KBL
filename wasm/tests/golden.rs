@@ -136,3 +136,23 @@ fn a_record_of_a_newer_format_stops_the_fold() {
     assert_eq!(f.state_json(), before);
     assert_eq!(f.at(), 0.0);
 }
+
+#[test]
+fn items_name_the_source_their_import_recorded() {
+    let mut f = Folder::new();
+    let imported = |item: &str, source: &str, upstream: &str| {
+        format!(
+            r#"{{"at_ms":1,"by":"gabriel","actor":"person","kind":"imported","item":"{item}","source":"{source}","upstream_id":"{upstream}","title":"t"}}"#
+        )
+    };
+    assert!(f.apply(0.0, imported("a1", "ado", "4377").as_bytes()));
+    assert!(f.apply(1.0, imported("j1", "jira", "FEL-1").as_bytes()));
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let sources: Vec<_> = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| (i["id"].as_str().unwrap(), i["source"].as_str()))
+        .collect();
+    assert_eq!(sources, [("a1", Some("ado")), ("j1", Some("jira"))]);
+}

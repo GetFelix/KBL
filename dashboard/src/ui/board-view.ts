@@ -5,14 +5,20 @@
 import { visible, type Group } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { h } from './dom.ts';
-import type { ListHandlers } from './item-list.ts';
-import { itemHref } from './item-list.ts';
+import { drawn, itemHref, restoreFocus, type Announce, type Drawn, type ListHandlers } from './item-list.ts';
 
-export function boardView(on: ListHandlers) {
+export function boardView(on: ListHandlers, announce: Announce) {
   const el = h('div', { class: 'board' });
   const cards = new Map<string, HTMLAnchorElement>();
   let shown = '';
   let restoring = false;
+  let last: Drawn = drawn([]);
+  let lastColumns: string[][] = [];
+  const quietly = (target: HTMLElement) => {
+    restoring = true;
+    target.focus({ preventScroll: true });
+    restoring = false;
+  };
   el.addEventListener('focusin', (e) => {
     const id = (e.target as HTMLElement).closest<HTMLElement>('.card')?.dataset.id;
     if (id && !restoring) on.select(id);
@@ -44,6 +50,8 @@ export function boardView(on: ListHandlers) {
       if (key !== shown) {
         const active = document.activeElement;
         const focusedId = active instanceof HTMLElement && el.contains(active) ? active.dataset.id : undefined;
+        const before = last;
+        const column = lastColumns.find((c) => focusedId !== undefined && c.includes(focusedId)) ?? [];
         const kept = new Map(cards);
         shown = key;
         cards.clear();
@@ -60,12 +68,10 @@ export function boardView(on: ListHandlers) {
             );
           }),
         );
-        const back = focusedId ? cards.get(focusedId) : undefined;
-        if (back) {
-          restoring = true;
-          back.focus({ preventScroll: true });
-          restoring = false;
-        }
+        last = drawn(columns);
+        lastColumns = columns.map((g) => g.items.map((i) => i.id));
+        // A card that moved keeps the focus; one that left hands it to a card in its old column first.
+        restoreFocus(focusedId, before, last, cards, el, quietly, { select: on.select, announce }, [column, before.order]);
       }
       // One Tab stop per column: the selected card in its column, else the column's first card.
       for (const g of columns) {

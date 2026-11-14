@@ -94,26 +94,33 @@ in the status line.
 | `H` / `L`, `←` / `→` | Previous and next column on the board |
 | `V` | Switch list and board |
 | `F` | Go to the filters |
-| `Home` / `End` | First and last item |
+| `Home` / `End` | First and last item; on the board, of the current column |
 | `Enter` | Open the selected item in the panel |
 | `Esc` | Close the panel or dialog, or clear the search |
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
-palette and the `?` overlay all read it. Theme, density, Clear all filters and Save this view are in the palette
-only; the palette also has one entry per filter value and per saved view.
+palette and the `?` overlay all read it. Theme and density are in the palette
+only. Clear filters and Save view are buttons above the work as well as palette commands, and the palette also
+has one entry per filter value and per saved view.
 
 ## Views
 
 - **Board.** One column per stage, in the list's order. Each column is one `Tab` stop; the arrows or `H` `J` `K`
-  `L` move inside the board. Below 720 px the columns stack.
-- **Filters.** Source, tier and repo, each offering only values the log recorded, with counts. A facet no item
-  recorded is not shown. The bar says how many items the filters hide, with Clear filters.
+  `L` move inside the board. Below 720 px the columns stack. When a record moves the focused card to another
+  column the focus goes with it; when one takes it out of the view, the next card in its column (else the nearest
+  card, else the work list) takes the focus. Either is announced. The list does the same with its rows.
+- **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
+  it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
+  search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
 - **The address.** `view=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the address, so a link
   opens the same view.
 - **Saved views.** Save view names the current layout, search and filters and puts it in the sidebar; Edit
-  renames or deletes it. Saved views and the density are kept in this browser's local storage, per viewer, and
-  the page works without them when storage is blocked.
-- **Phones.** Below 720 px the sidebar sits behind the Menu button.
+  renames or deletes it, and a name another view has is refused. After a rename the focus is back on that view's
+  Edit; after a delete, on the next saved view or Save view. Saved views and the density are kept in this
+  browser's local storage, per viewer, and the page works without them when storage is blocked. Each change
+  re-reads storage first and the page follows changes from other tabs, so two tabs do not drop each other's views.
+- **Phones.** Below 720 px the sidebar is a drawer behind the Menu button. While it is open the page behind it
+  is inert under a backdrop and `Tab` stays inside it; `Esc`, the backdrop or a choice closes it.
 
 ## Files
 

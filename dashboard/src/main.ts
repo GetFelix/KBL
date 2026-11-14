@@ -10,7 +10,7 @@ import { items, type Fold } from './fold.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
-import { flatten, move, moveBoard, visible } from './list.ts';
+import { boardEdge, flatten, move, moveBoard, visible } from './list.ts';
 import { adviceFor, createStore, fromAddress, toAddress, type Density, type ViewState } from './state.ts';
 import { deleteView, parseSaved, renameView, saveView, type SavedView } from './views.ts';
 import { helpView } from './ui/help-view.ts';
@@ -30,11 +30,12 @@ if (token) {
 // be missing or throw (private windows, blocked site data); the page works without it.
 const VIEWS_KEY = 'kbl.dashboard.views';
 const DENSITY_KEY = 'kbl.dashboard.density';
-const stored = (key: string): string | null => {
+// Undefined when storage cannot be read at all, null when the key is not set.
+const stored = (key: string): string | null | undefined => {
   try {
     return localStorage.getItem(key);
   } catch {
-    return null;
+    return undefined;
   }
 };
 const store_ = (key: string, value: string) => {
@@ -53,7 +54,7 @@ const initial: ViewState = {
   ...address,
   selected: address.open,
   density: stored(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable',
-  saved: parseSaved(stored(VIEWS_KEY)),
+  saved: parseSaved(stored(VIEWS_KEY) ?? null),
   theme: themeParam === 'light' || themeParam === 'dark' ? themeParam : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
 };
 const store = createStore(initial);
@@ -97,11 +98,11 @@ const run = (id: CommandId): void => {
       if (!board && (id === 'left' || id === 'right')) return;
       const dir = ({ next: 'down', previous: 'up', left: 'left', right: 'right' } as const)[id as 'next'];
       const target =
-        id === 'first'
-          ? (rows[0]?.id ?? null)
-          : id === 'last'
-            ? (rows.at(-1)?.id ?? null)
-            : board
+        id === 'first' || id === 'last'
+          ? board
+            ? boardEdge(groups, s.selected, id)
+            : ((id === 'first' ? rows[0] : rows.at(-1))?.id ?? null)
+          : board
               ? moveBoard(groups, s.selected, dir)
               : move(rows, s.selected, id === 'next' ? 1 : -1);
       store.dispatch({ type: 'select', id: target });
@@ -175,21 +176,38 @@ const palette = paletteView(
   mac,
 );
 const help = helpView(mac);
+// Another tab may have changed the views since this one read them: every write starts
+// from what storage holds now, and a change made elsewhere shows up here as it lands.
+const currentSaved = (): SavedView[] => {
+  const raw = stored(VIEWS_KEY);
+  return raw === undefined ? store.get().saved : parseSaved(raw);
+};
 const setSaved = (saved: SavedView[]) => {
   store_(VIEWS_KEY, JSON.stringify(saved));
   store.dispatch({ type: 'saved', saved });
 };
+addEventListener('storage', (e) => {
+  if (e.key === VIEWS_KEY || e.key === null) store.dispatch({ type: 'saved', saved: currentSaved() });
+});
 const views = viewDialog({
   submit(name, editing) {
-    const { saved } = store.get();
-    const taken = (n: string) => saved.some((v) => v.name !== editing && v.name.toLowerCase() === n.trim().toLowerCase());
-    if (taken(name)) return `A view is already called “${name.trim()}”. Pick another name, or edit that view.`;
+    const saved = currentSaved();
     const next = editing === null ? saveView(saved, name, store.get()) : renameView(saved, editing, name);
-    if (!next) return 'Give the view a name.';
+    if (typeof next === 'string') return next;
     setSaved(next);
     return null;
   },
-  remove: (name) => setSaved(deleteView(store.get().saved, name)),
+  // A renamed view keeps the keyboard on its Edit button; a new one leaves it where Save was opened.
+  saved: (name, editing) => {
+    if (editing !== null) ui.focusSaved(name, true);
+  },
+  remove: (name) => {
+    const saved = currentSaved();
+    const at = saved.findIndex((v) => v.name === name);
+    const next = deleteView(saved, name);
+    setSaved(next);
+    ui.focusSaved(next[at]?.name ?? null, false);
+  },
 });
 document.body.append(palette.el, help.el, views.el);
 

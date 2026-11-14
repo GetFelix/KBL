@@ -108,7 +108,7 @@ on serious or critical.
 | 2.1.1 Keyboard, 2.1.2 No trap | Met: everything by keyboard; dialogs close on `Esc` and give focus back. |
 | 2.1.4 Character key shortcuts | Met: single-letter keys only act when focus is not in a field. Remapping is deferred to settings (phase 4). |
 | 2.4.1 Bypass blocks | Met: skip link is the first Tab stop. |
-| 2.4.3 Focus order | Met: focus stays on its row or card when records arrive and when `V` switches layout; opening an item moves focus into the panel and `Esc` returns it to the row; dialogs return focus to where it was. The browser check covers each. |
+| 2.4.3 Focus order | Met: focus stays on its row or card when records arrive, follows a card a record moves to another column, and when a record or filter takes the focused item away, moves to its neighbour (same column first on the board) or to the work list, never the body; each is announced. `V` keeps it on the selected item. Opening an item moves focus into the panel and `Esc` returns it to the row. Dialogs return focus to where it was; after a saved-view rename it is on that view's Edit, after a delete on the next view or Save view. The open phone drawer keeps focus inside it. The browser check covers each. |
 | 2.4.7 Focus visible | Met: visible amber focus ring on every control. |
 | 2.4.11 Focus not obscured | Met: the panel sits beside the list, never over the focused row. Below 720 px it sits under the list, and opening an item scrolls it into view. |
 | 2.5.8 Target size | Met: controls at least 24 px (`--target-min`). |

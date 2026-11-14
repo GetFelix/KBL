@@ -213,6 +213,40 @@ try {
   await shoot('board-panel-dark');
   await press(page, 'Escape');
   check(await page.eval(`document.activeElement?.dataset.id === ${JSON.stringify(card)}`), 'closing the panel gives focus back to the card');
+  await press(page, 'End');
+  const lastInColumn = await page.eval(`(() => { const c = document.activeElement.closest('.column'); return document.activeElement === [...c.querySelectorAll('.card')].at(-1); })()`);
+  check(lastInColumn && (await page.eval(colOf)) === 2, 'End goes to the last card of the column, not of the board');
+
+  // Live records on the board: a card that leaves the filter hands the focus to its column,
+  // a card that moves column keeps it. Both are announced, and the selection follows.
+  await open(`${connected}&view=board&tier=1`);
+  await page.waitFor(live);
+  const announced = () => page.eval(`document.querySelector('.announce')?.textContent ?? ''`);
+  const person = `actor: 'person', by: 'maintainer', at_ms: 1800000000000`;
+  await page.eval(`window.__push({ kind: 'imported', item: 'gh-3001', source: 'github', title: 'A second ready card', upstream_id: 'GetFelix/felix#3001', ${person} })`);
+  await page.eval(`window.__push({ kind: 'accepted', item: 'gh-3001', tier: 1, ${person} })`);
+  await page.waitFor(`!!document.querySelector('.column:has(.card[data-id=gh-2219]) .card[data-id=gh-3001]')`);
+  await page.eval(`document.querySelector('.card[data-id=gh-3001]').focus(); true`);
+  await page.eval(`window.__push({ kind: 'tier_changed', item: 'gh-3001', tier: 2, ${person} })`);
+  await page.waitFor(`!document.querySelector('.card[data-id=gh-3001]')`);
+  await page.waitFor(`document.querySelector('.card[data-selected]')?.dataset.id === 'gh-2219'`);
+  check(await focused('.card[data-id=gh-2219]'), 'a focused card re-triaged out of the filter hands the focus to its column, and the selection follows');
+  check((await announced()) === 'gh-3001 is no longer in this view.', `the card leaving is announced (${await announced()})`);
+  await page.eval(`window.__push({ kind: 'claimed', item: 'gh-2219', attempt: 1, deadline_ms: 1900000000000, actor: 'agent', by: 'agent-1', at_ms: 1800000000001 })`);
+  await page.waitFor(`!!document.querySelector('#column-held + ul .card[data-id=gh-2219]')`);
+  check(await focused('.card[data-id=gh-2219]'), 'a card a record moves to another column keeps the focus');
+  check((await announced()) === 'gh-2219 moved to Held.', `the move is announced (${await announced()})`);
+
+  // A filter that takes the focused row away hands the focus to the next row still shown.
+  await open(connected);
+  await page.waitFor(live);
+  await page.eval(`document.querySelector('.row[data-id=gh-2204]').focus(); true`);
+  await press(page, 'k', MOD);
+  for (const ch of 'tier: 2') await press(page, ch);
+  await press(page, 'Enter');
+  await page.waitFor(`!document.querySelector('.row[data-id=gh-2204]')`);
+  await page.waitFor(`document.querySelector('.row[data-selected]')?.dataset.id === 'gh-2210'`);
+  check(await focused('.row[data-id=gh-2210]'), 'a filter that hides the focused row moves the focus to the next row, not the body');
   for (const theme of ['dark', 'light']) for (const density of ['comfortable', 'compact']) {
     await open(`${connected}&view=board`, { theme, storage: { 'kbl.dashboard.density': density } });
     await page.waitFor(live);
@@ -274,7 +308,7 @@ try {
   await page.eval(`(() => { const i = document.querySelector('#view-name'); i.value = 'Urgent GitHub'; return true; })()`);
   await press(page, 'Enter');
   await page.waitFor(`document.querySelector('.saved-row a')?.textContent === 'Urgent GitHub'`);
-  check(true, 'Edit renames a view');
+  check(await focused('.saved-row button[aria-label="Edit view Urgent GitHub"]'), 'Edit renames a view and the focus is back on its Edit button');
   await page.eval(`document.querySelector('.nav a').click(); true`);
   await page.waitFor(`document.querySelectorAll('.row').length === 9`);
   check(await page.eval(`document.querySelector('.nav a').getAttribute('aria-current') === 'page' && !document.querySelector('.saved-row a').hasAttribute('aria-current')`), 'All work resets the view');
@@ -285,6 +319,18 @@ try {
   await page.eval(`[...document.querySelectorAll('.view-dialog button')].find((b) => b.textContent === 'Delete view').click(); true`);
   await page.waitFor(`!document.querySelector('.saved-row a')`);
   check((await page.eval(`localStorage.getItem('kbl.dashboard.views')`)) === '[]', 'Delete removes the view from the sidebar and storage');
+  check(await page.eval(`document.activeElement?.textContent === 'Save view'`), 'deleting the last view leaves the focus on Save view');
+  await open(connected, { storage: { 'kbl.dashboard.views': '[{"name":"Tier 1","search":"tier=1"},{"name":"Tier 2","search":"tier=2"}]' } });
+  await page.waitFor(live);
+  // Another tab adds a view: this one shows it, and its own next write keeps it.
+  await page.eval(`(() => { const v = '[{"name":"Tier 1","search":"tier=1"},{"name":"Tier 2","search":"tier=2"},{"name":"Other tab","search":"source=jira"}]'; localStorage.setItem('kbl.dashboard.views', v); dispatchEvent(new StorageEvent('storage', { key: 'kbl.dashboard.views', newValue: v })); return true; })()`);
+  await page.waitFor(`document.querySelectorAll('.saved-row').length === 3`);
+  check(true, 'a view saved in another tab shows up');
+  await page.eval(`document.querySelector('.saved-row button').click(); true`);
+  await page.eval(`[...document.querySelectorAll('.view-dialog button')].find((b) => b.textContent === 'Delete view').click(); true`);
+  await page.waitFor(`document.querySelectorAll('.saved-row').length === 2`);
+  check(await focused('.saved-row a') && (await page.eval(`document.activeElement.textContent`)) === 'Tier 2', 'deleting a view moves the focus to the next saved view');
+  check(JSON.parse(await page.eval(`localStorage.getItem('kbl.dashboard.views')`)).map((v) => v.name).join(',') === 'Tier 2,Other tab', 'a write keeps the view the other tab saved');
   await open(connected, { storage: { 'kbl.dashboard.views': '[{"name":"Tier 2","search":"tier=2"}]' } });
   await page.waitFor(live);
   check((await page.eval(`document.querySelector('.saved-row a')?.textContent`)) === 'Tier 2', 'saved views come back on the next visit');
@@ -341,10 +387,23 @@ try {
   await press(page, 'Enter');
   check(await page.eval(`document.querySelector('.menu-button').getAttribute('aria-expanded') === 'true' && document.querySelector('#sidebar').contains(document.activeElement)`), 'Menu opens the sidebar and moves focus into it');
   check(await page.eval(`[...document.querySelectorAll('#sidebar button')].some((b) => b.textContent.startsWith('Shortcuts'))`), 'Shortcuts and Commands are reachable on a phone (WCAG 3.2.6)');
+  check(await page.eval(`document.querySelector('.shell > .main').inert && getComputedStyle(document.querySelector('.drawer-backdrop')).display === 'block'`), 'the open drawer has a backdrop and the page behind it is inert');
+  await press(page, 'Tab', 8);
+  check(await page.eval(`document.querySelector('#sidebar').contains(document.activeElement)`), 'Shift+Tab from the first stop wraps inside the drawer');
+  await press(page, 'Tab');
+  check(await page.eval(`document.querySelector('#sidebar').contains(document.activeElement)`), 'Tab from the last stop wraps inside the drawer');
   await axe('phone menu');
   await shoot('phone-menu-dark');
   await press(page, 'Escape');
-  check(await focused('.menu-button') && (await page.eval(`document.querySelector('.menu-button').getAttribute('aria-expanded') === 'false'`)), 'Esc closes the menu and gives focus back to the button');
+  check(await focused('.menu-button') && (await page.eval(`document.querySelector('.menu-button').getAttribute('aria-expanded') === 'false' && !document.querySelector('.shell > .main').inert`)), 'Esc closes the menu, gives focus back to the button, and the page is live again');
+  await open(connected, { width: 390, height: 844, storage: { 'kbl.dashboard.views': '[{"name":"Tier 2","search":"tier=2"}]' } });
+  await page.waitFor(live);
+  await page.eval(`document.querySelector('.menu-button').click(); true`);
+  await page.eval(`document.querySelector('.saved-row button').focus(); true`);
+  await press(page, 'Enter');
+  check(await page.eval(`document.querySelector('.view-dialog').open && document.querySelector('.menu-button').getAttribute('aria-expanded') === 'false'`), 'on a phone, Edit closes the drawer before its dialog opens');
+  await press(page, 'Escape');
+  check(await focused('.menu-button'), 'cancelling the dialog returns focus to Menu');
   clean();
 } catch (e) {
   console.error('page problems:', page.problems);

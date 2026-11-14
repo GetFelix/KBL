@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { flatten, group, move, moveBoard, stageLabel, visible } from '../src/list.ts';
+import { boardEdge, flatten, group, move, moveBoard, neighbour, stageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -55,4 +55,22 @@ test('visible applies the filters before the search', () => {
   assert.deepEqual(flatten(visible(tiered, '', { tier: '1' })).map((i) => i.id), ['b', 'd']);
   assert.deepEqual(flatten(visible(tiered, 'which', { tier: '1' })).map((i) => i.id), ['b']);
   assert.deepEqual(visible(tiered, '', { source: 'jira' }), []);
+});
+
+test('Home and End on the board stay in the column', () => {
+  const g = group(rows); // needs_you: b e, triage: c, done: a, parked: d
+  assert.equal(boardEdge(g, 'e', 'first'), 'b');
+  assert.equal(boardEdge(g, 'b', 'last'), 'e');
+  assert.equal(boardEdge(g, 'c', 'last'), 'c');
+  assert.equal(boardEdge(g, null, 'last'), 'e', 'no selection uses the first column');
+  assert.equal(boardEdge([], null, 'first'), null);
+});
+
+test('a focused item that leaves hands the focus to the next one, else the previous one', () => {
+  const before = ['a', 'b', 'c', 'd'];
+  assert.equal(neighbour(before, 'b', (id) => id !== 'b'), 'c');
+  assert.equal(neighbour(before, 'b', (id) => id === 'a' || id === 'd'), 'd', 'skips ones that left too');
+  assert.equal(neighbour(before, 'd', (id) => id !== 'd'), 'c', 'the last one falls back to the previous');
+  assert.equal(neighbour(before, 'b', () => false), undefined);
+  assert.equal(neighbour(before, 'x', () => true), undefined);
 });

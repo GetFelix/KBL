@@ -68,6 +68,7 @@ impl Folder {
     /// last three are null unless recorded: `tier` by triage or acceptance,
     /// `source` and `repo` by the item's target, or its root's target or import.
     pub fn items_json(&self) -> String {
+        let imported = self.state.imported_sources();
         let items: Vec<_> = self
             .state
             .items
@@ -77,7 +78,7 @@ impl Folder {
                 let target = i.target.as_ref().or(root.and_then(|r| r.target.as_ref()));
                 let source = target
                     .map(|t| t.source.as_str())
-                    .or_else(|| self.state.imported_source(&i.root));
+                    .or_else(|| imported.get(&i.root).copied());
                 json!({
                     "id": i.id,
                     "title": i.title,

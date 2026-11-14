@@ -103,20 +103,21 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .button.small { min-height: var(--target-min); padding: 0 var(--space-2); font-size: var(--text-xs); }
 .button.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .button.danger { color: var(--danger); }
-.menu-button { display: none; }
+.menu-button, .drawer-backdrop { display: none; }
 
 .filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); padding: var(--space-3) var(--space-5) 0; }
 .segmented { display: inline-flex; align-items: center; gap: var(--space-1); }
-.segment { min-height: 28px; padding: 0 var(--space-3); border: 1px solid var(--line-strong); background: var(--raised); color: var(--text); font: inherit; cursor: pointer; }
+.segment { min-height: var(--control-sm); padding: 0 var(--space-3); border: 1px solid var(--line-strong); background: var(--raised); color: var(--text); font: inherit; cursor: pointer; }
 .segment:first-child { border-radius: var(--radius-md) 0 0 var(--radius-md); }
 .segment + .segment { border-radius: 0 var(--radius-md) var(--radius-md) 0; border-left: 0; }
 .segment[aria-pressed='true'] { background: var(--accent-soft); box-shadow: inset 0 -2px 0 var(--accent); font-weight: var(--weight-medium); }
 .filters, .filter-selects { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .filter { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); }
 .filter-label { color: var(--muted); }
-.filter select { min-height: 28px; max-width: 14rem; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); font: inherit; padding: 0 var(--space-1); }
+.filter select { min-height: var(--control-sm); max-width: var(--filter-max); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); font: inherit; padding: 0 var(--space-1); }
 .filter-summary { margin: 0; font-size: var(--text-sm); flex-basis: 100%; order: 10; }
-.filter-summary:empty { display: none; }
+/* Collapsed, not display: none, so the live region stays in the tree and announces its first text. */
+.filter-summary:empty { flex-basis: 0; }
 .empty .actions { display: inline-flex; gap: var(--space-2); }
 
 .board { display: flex; gap: var(--space-3); align-items: flex-start; overflow-x: auto; padding-bottom: var(--space-3); }
@@ -130,7 +131,7 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .card .row-id { min-width: 0; font-size: var(--text-xs); }
 
 .field-label { display: block; font-size: var(--text-sm); color: var(--muted); margin: var(--space-3) 0 var(--space-1); }
-.field { width: 100%; min-height: 36px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); font: inherit; padding: 0 var(--space-2); }
+.field { width: 100%; min-height: var(--control-md); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); font: inherit; padding: 0 var(--space-2); }
 .field-error { color: var(--danger); font-size: var(--text-sm); min-height: 1.2em; margin: var(--space-1) 0 0; }
 .dialog-actions { display: flex; gap: var(--space-2); margin-top: var(--space-3); }
 .dialog-actions .spacer { flex: 1; }
@@ -138,7 +139,8 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 @media (max-width: 720px) {
   .shell { grid-template-columns: 1fr; }
   .sidebar { display: none; }
-  .sidebar[data-open] { display: flex; position: fixed; inset: 0 auto 0 0; width: min(var(--sidebar-width), 85vw); z-index: 3; box-shadow: var(--shadow); }
+  .sidebar[data-open] { display: flex; position: fixed; inset: 0 auto 0 0; width: min(var(--sidebar-width), 85vw); z-index: 3; box-shadow: var(--shadow); overflow-y: auto; }
+  .drawer-backdrop { display: block; position: fixed; inset: 0; background: var(--scrim); z-index: 2; }
   .menu-button { display: inline-flex; border-color: var(--line-strong); }
   .filter-bar { padding: var(--space-2) var(--space-4); }
   .board { flex-direction: column; align-items: stretch; }

@@ -22,57 +22,85 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   const list = layoutButton('list', 'List');
   const board = layoutButton('board', 'Board');
   const selects = h('div', { class: 'filter-selects' });
-  const text = h('span', {});
   const clear = h('button', { type: 'button', class: 'button ghost', onclick: on.clearFilters, hidden: true }, 'Clear filters');
   const save = h('button', { type: 'button', class: 'button ghost', onclick: on.saveView }, 'Save view');
+  // Polite, so a new filter is announced once it applies, without stealing focus. The
+  // text sits directly in the region so :empty can collapse it.
+  const summaryEl = h('p', { class: 'filter-summary muted', 'aria-live': 'polite' });
   const el = h('div', { class: 'filter-bar' },
     h('div', { class: 'segmented', role: 'group', 'aria-label': 'Layout' }, list, board, kbd(displayChord(chordFor('layout'), mac))),
     h('div', { class: 'filters', role: 'group', 'aria-label': 'Filters' }, selects),
-    // Polite, so a new filter is announced once it applies, without stealing focus.
-    h('p', { class: 'filter-summary muted', 'aria-live': 'polite' }, text),
+    summaryEl,
     clear,
     save,
   );
-  let shown = '';
+  // Selects are kept per facet and their options updated in place: rebuilding a
+  // select under a keyboard or an open picker would close it and lose the place.
+  const kept = new Map<Facet, { label: HTMLLabelElement; select: HTMLSelectElement }>();
+  let last: ViewState | null = null;
+  const control = (facet: Facet, text: string) => {
+    let c = kept.get(facet);
+    if (!c) {
+      const id = `filter-${facet}`;
+      const select = h('select', {
+        id,
+        'data-facet': facet,
+        onchange: (e) => {
+          const v = (e.target as HTMLSelectElement).value;
+          on.filter(facet, v === ANY ? null : v);
+        },
+        // Updates that arrived while it had focus apply once it lets go.
+        onblur: () => last && render(last),
+      });
+      c = { label: h('label', { class: 'filter', for: id }, h('span', { class: 'filter-label' }, text), select), select };
+      kept.set(facet, c);
+    }
+    return c;
+  };
+  const setOptions = (select: HTMLSelectElement, options: [string, string][], value: string) => {
+    options.forEach(([v, text], i) => {
+      const o = select.options[i] ?? select.appendChild(h('option'));
+      if (o.value !== v) o.value = v;
+      if (o.textContent !== text) o.textContent = text;
+    });
+    while (select.options.length > options.length) select.options[select.options.length - 1].remove();
+    if (select.value !== value) select.value = value;
+  };
+  const render = (s: ViewState) => {
+    last = s;
+    for (const b of [list, board]) b.setAttribute('aria-pressed', String(b.dataset.layout === s.layout));
+    const offered = facets(s.items, s.filters);
+    const busy = document.activeElement;
+    for (const [facet, c] of kept) {
+      if (!offered.some((o) => o.facet === facet) && c.select !== busy) {
+        c.label.remove();
+        kept.delete(facet);
+      }
+    }
+    offered.forEach(({ facet, label, values }, i) => {
+      const c = control(facet, label);
+      // Inserting only moves the new node, so a focused select is never detached.
+      if (selects.children[i] !== c.label) selects.insertBefore(c.label, selects.children[i] ?? null);
+      if (c.select === busy) return;
+      const current = s.filters[facet];
+      const options: [string, string][] = [[ANY, 'Any'], ...values.map(([v, n]): [string, string] => [v, `${v} (${n})`])];
+      // A filter from a link may name a value no item has now; keep it visible so it can be cleared.
+      if (current !== undefined && !values.some(([v]) => v === current)) options.push([current, `${current} (0)`]);
+      setOptions(c.select, options, current ?? ANY);
+    });
+    const n = activeCount(s.filters);
+    clear.hidden = n === 0;
+    const shownCount = flatten(visible(s.items, s.query, s.filters)).length;
+    const parts = [s.query.trim() && `search “${s.query.trim()}”`, summary(s.filters)].filter(Boolean);
+    const words = parts.length ? `Showing ${shownCount} of ${s.items.length}: ${parts.join(', ')}` : '';
+    if (summaryEl.textContent !== words) summaryEl.textContent = words;
+  };
   return {
     el,
     /** The first filter, for the F key; null when nothing recorded a facet. */
     first: () => selects.querySelector('select'),
-    render(s: ViewState) {
-      for (const b of [list, board]) b.setAttribute('aria-pressed', String(b.dataset.layout === s.layout));
-      const offered = facets(s.items);
-      const key = JSON.stringify([offered, s.filters]);
-      if (key !== shown) {
-        shown = key;
-        const hadFocus = (document.activeElement as HTMLElement | null)?.dataset.facet;
-        selects.replaceChildren(
-          ...offered.map(({ facet, label, values }) => {
-            const id = `filter-${facet}`;
-            const select = h('select', {
-              id,
-              'data-facet': facet,
-              onchange: (e) => {
-                const v = (e.target as HTMLSelectElement).value;
-                on.filter(facet, v === ANY ? null : v);
-              },
-            },
-              h('option', { value: ANY }, 'Any'),
-              ...values.map(([v, n]) => h('option', { value: v }, `${v} (${n})`)),
-            );
-            // A filter from a link may name a value no item has now; keep it visible so it can be cleared.
-            const current = s.filters[facet];
-            if (current !== undefined && !values.some(([v]) => v === current)) select.append(h('option', { value: current }, `${current} (0)`));
-            select.value = current ?? ANY;
-            return h('label', { class: 'filter', for: id }, h('span', { class: 'filter-label' }, label), select);
-          }),
-        );
-        if (hadFocus) selects.querySelector<HTMLElement>(`[data-facet="${hadFocus}"]`)?.focus();
-      }
-      const n = activeCount(s.filters);
-      clear.hidden = n === 0;
-      const shownCount = flatten(visible(s.items, s.query, s.filters)).length;
-      const words = n ? `Showing ${shownCount} of ${s.items.length}: ${summary(s.filters)}` : '';
-      if (text.textContent !== words) text.textContent = words;
-    },
+    /** Save view, where focus goes when the last saved view is deleted. */
+    focusSave: () => save.focus(),
+    render,
   };
 }

@@ -21,7 +21,7 @@ export function entries(s: ViewState): Entry[] {
   return [
     ...COMMANDS.filter((c) => c.id !== 'palette').map((c) => ({ key: `cmd:${c.id}`, label: c.label, section: 'Commands' })),
     // One entry per recorded filter value, so "tier 1" or a repo name is a few keystrokes away.
-    ...facets(s.items).flatMap(({ facet, label, values }) =>
+    ...facets(s.items, s.filters).flatMap(({ facet, label, values }) =>
       values.map(([v, n]) => ({
         key: `filter:${facet}:${v}`,
         label: s.filters[facet] === v ? `Remove filter ${label.toLowerCase()} ${v}` : `Filter by ${label.toLowerCase()}: ${v}`,

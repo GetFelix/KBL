@@ -14,6 +14,7 @@ import {
   saveView,
   setFilter,
   summary,
+  type SavedView,
 } from '../src/views.ts';
 
 const items: ItemRow[] = [
@@ -52,18 +53,25 @@ test('the view round-trips through the address and keeps other parameters', () =
   assert.ok(sameView(decodeView('tier=1&q=x'), decodeView('q=x&tier=1')));
 });
 
-test('saved views add, replace by name, rename without clobbering, and delete', () => {
+test('saved views add, refuse a taken name, rename without clobbering, and delete', () => {
   const v = { layout: 'list' as const, query: '', filters: { source: 'github' } };
-  let list = saveView([], ' GitHub ', v);
+  let list = saveView([], ' GitHub ', v) as SavedView[];
   assert.deepEqual(list, [{ name: 'GitHub', search: 'source=github' }]);
-  list = saveView(list, 'Tier 1', { ...v, filters: { tier: '1' } });
-  list = saveView(list, 'github', { ...v, layout: 'board' });
-  assert.deepEqual(list.map((x) => [x.name, x.search]), [['github', 'view=board&source=github'], ['Tier 1', 'tier=1']]);
-  assert.equal(renameView(list, 'Tier 1', 'GITHUB'), null, 'a name already taken is refused');
-  assert.equal(renameView(list, 'Tier 1', '  '), null);
-  assert.deepEqual(renameView(list, 'Tier 1', 'Urgent')?.map((x) => x.name), ['github', 'Urgent']);
-  assert.deepEqual(renameView(list, 'github', 'GitHub')?.map((x) => x.name), ['GitHub', 'Tier 1'], 'a view may change its own case');
-  assert.deepEqual(deleteView(list, 'github').map((x) => x.name), ['Tier 1']);
+  list = saveView(list, 'Tier 1', { ...v, filters: { tier: '1' } }) as SavedView[];
+  assert.equal(saveView(list, 'github', { ...v, layout: 'board' }), 'A view is already called “github”. Pick another name, or edit that view.', 'saving under a taken name is refused');
+  assert.equal(saveView(list, '  ', v), 'Give the view a name.');
+  assert.match(renameView(list, 'Tier 1', 'GITHUB') as string, /already called/, 'a name already taken is refused');
+  assert.equal(renameView(list, 'Tier 1', '  '), 'Give the view a name.');
+  assert.match(renameView(list, 'Gone', 'Other') as string, /deleted/, 'a view another tab deleted is not renamed');
+  assert.deepEqual((renameView(list, 'Tier 1', 'Urgent') as SavedView[]).map((x) => x.name), ['GitHub', 'Urgent']);
+  assert.deepEqual((renameView(list, 'GitHub', 'github') as SavedView[]).map((x) => x.name), ['github', 'Tier 1'], 'a view may change its own case');
+  assert.deepEqual(deleteView(list, 'GitHub').map((x) => x.name), ['Tier 1']);
+});
+
+test('option counts follow the other active filters, and every recorded value stays offered', () => {
+  const f = facets(items, { repo: 'GetFelix/KBL' });
+  assert.deepEqual(f[0].values, [['github', 1], ['jira', 0]], 'source counts inside the repo filter');
+  assert.deepEqual(f[2].values, [['GetFelix/felix', 1], ['GetFelix/KBL', 1]], 'a facet ignores its own filter');
 });
 
 test('saved views from storage drop anything malformed', () => {

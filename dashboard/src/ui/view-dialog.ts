@@ -8,6 +8,8 @@ export interface ViewDialogHandlers {
   /** Returns an error to show, or null when the name was taken. */
   submit(name: string, editing: string | null): string | null;
   remove(name: string): void;
+  /** After the dialog closed on a successful save, so focus can move past what close() restored. */
+  saved(name: string, editing: string | null): void;
 }
 
 export function viewDialog(on: ViewDialogHandlers) {
@@ -36,8 +38,9 @@ export function viewDialog(on: ViewDialogHandlers) {
     const problem = input.value.trim() ? on.submit(input.value, editing) : 'Give the view a name.';
     error.textContent = problem ?? '';
     input.toggleAttribute('aria-invalid', problem !== null);
-    if (problem) input.focus();
-    else m.close();
+    if (problem) return input.focus();
+    m.close();
+    on.saved(input.value.trim(), editing);
   });
   remove.addEventListener('click', () => {
     if (editing === null) return;

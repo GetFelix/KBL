@@ -1,7 +1,7 @@
 // The list view: items grouped by stage, one link per row, or the state that
 // explains why there are none. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
-import { visible, type Group } from '../list.ts';
+import { neighbour, visible, type Group } from '../list.ts';
 import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
 import { h } from './dom.ts';
@@ -9,7 +9,7 @@ import { h } from './dom.ts';
 export interface ListHandlers {
   open(id: string): void;
   /** Focus landed on a row: it becomes the selection, so keys act on what has focus. */
-  select(id: string): void;
+  select(id: string | null): void;
   clearSearch(): void;
   clearFilters(): void;
 }
@@ -34,16 +34,72 @@ export function itemHref(id: string, s: AddressState): string {
   return toAddress(location.search, { ...s, open: id }) || '?';
 }
 
+/** Says something to a screen reader without moving the focus. */
+export type Announce = (text: string) => void;
+
+/** What a redraw needs to keep the keyboard in place: the order and stage of what was drawn. */
+export interface Drawn {
+  order: string[];
+  stage: Map<string, string>;
+}
+
+export function drawn(groups: readonly Group[]): Drawn {
+  return { order: groups.flatMap((g) => g.items.map((i) => i.id)), stage: new Map(groups.flatMap((g) => g.items.map((i) => [i.id, g.label] as const))) };
+}
+
+/**
+ * Puts the focus back after a redraw. The focused item keeps it if it is still drawn (and
+ * a move to another stage is announced); otherwise the nearest item in the first of
+ * `orders` that has one takes it, else #work, so focus never falls to the body. The
+ * selection follows, after this render, so the store is not re-entered mid-draw.
+ */
+export function restoreFocus(
+  focusedId: string | undefined,
+  before: Drawn,
+  now: Drawn,
+  nodes: ReadonlyMap<string, HTMLElement>,
+  host: HTMLElement,
+  quietly: (el: HTMLElement) => void,
+  on: { select(id: string | null): void; announce: Announce },
+  orders: readonly (readonly string[])[] = [before.order],
+) {
+  if (!focusedId) return;
+  const back = nodes.get(focusedId);
+  if (back) {
+    quietly(back);
+    const was = before.stage.get(focusedId);
+    const is = now.stage.get(focusedId);
+    if (was && is && was !== is) on.announce(`${focusedId} moved to ${is}.`);
+    return;
+  }
+  const near = orders.map((o) => neighbour(o, focusedId, (id) => nodes.has(id))).find((id) => id !== undefined);
+  const target = near ? nodes.get(near) : host.closest<HTMLElement>('main');
+  if (target) quietly(target);
+  on.announce(`${focusedId} is no longer in this view.`);
+  queueMicrotask(() => on.select(near ?? null));
+}
+
 // Rows are kept by item id and reused, and the list is only rebuilt when what it shows
 // changes. A live record must not take the focus off the row a keyboard user is on.
 export function itemList(
   on: ListHandlers,
   board: { el: HTMLElement; render(s: ViewState, columns: Group[]): void; focusSelected(): void },
+  announce: Announce,
 ): { el: HTMLElement; render(s: ViewState): void; focusSelected(): void } {
   const el = h('div', { class: 'list' });
   const rows = new Map<string, HTMLAnchorElement>();
   let shown = '';
   let restoring = false;
+  let last: Drawn = drawn([]);
+  const quietly = (target: HTMLElement) => {
+    restoring = true;
+    target.focus({ preventScroll: true });
+    restoring = false;
+  };
+  const focusedHere = () => {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && el.contains(active) ? (active.dataset.id ?? active.closest<HTMLElement>('[data-id]')?.dataset.id) : undefined;
+  };
   el.addEventListener('focusin', (e) => {
     const id = (e.target as HTMLElement).closest<HTMLElement>('.row')?.dataset.id;
     if (id && !restoring) on.select(id);
@@ -51,9 +107,13 @@ export function itemList(
 
   const show = (key: string, ...children: HTMLElement[]) => {
     if (key === shown) return;
+    const focusedId = focusedHere();
     shown = key;
     rows.clear();
+    last = drawn([]);
     el.replaceChildren(...children);
+    // A state with no rows: a focused row or card has nowhere to go but #work.
+    restoreFocus(focusedId, last, last, rows, el, quietly, { select: on.select, announce }, []);
   };
   const row = (id: string, title: string): HTMLAnchorElement => {
     let a = rows.get(id);
@@ -80,6 +140,7 @@ export function itemList(
     if (shown !== 'board') {
       shown = 'board';
       rows.clear();
+      last = drawn([]);
       el.replaceChildren(board.el);
     }
     board.render(s, columns);
@@ -140,8 +201,8 @@ export function itemList(
       if (s.layout === 'board') return showBoard(s, groups);
       const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title])]))}`;
       if (key !== shown) {
-        const active = document.activeElement;
-        const focusedId = active instanceof HTMLElement && el.contains(active) ? active.dataset.id : undefined;
+        const focusedId = focusedHere();
+        const before = last;
         const kept = new Map(rows);
         shown = key;
         rows.clear();
@@ -158,13 +219,9 @@ export function itemList(
             );
           }),
         );
+        last = drawn(groups);
         // Moving a focused node blurs it; put the focus back without scrolling or re-selecting.
-        const back = focusedId ? rows.get(focusedId) : undefined;
-        if (back) {
-          restoring = true;
-          back.focus({ preventScroll: true });
-          restoring = false;
-        }
+        restoreFocus(focusedId, before, last, rows, el, quietly, { select: on.select, announce });
       }
       for (const [id, a] of rows) {
         const href = itemHref(id, s);

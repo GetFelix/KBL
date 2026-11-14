@@ -48,6 +48,9 @@
   --card-gap: var(--space-2);
   --column-width: 272px;
   --target-min: 24px;
+  --control-sm: 28px;
+  --control-md: 36px;
+  --filter-max: 14rem;
   --sidebar-width: 224px;
   --palette-width: 560px;
   --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);

@@ -81,3 +81,19 @@ export function moveBoard(columns: readonly Group[], current: string | null, dir
   const next = columns[Math.max(0, Math.min(columns.length - 1, col + (dir === 'right' ? 1 : -1)))];
   return next.items[Math.min(row, next.items.length - 1)].id;
 }
+
+/** The first or last card of `current`'s column, so Home and End stay in the column. No current card uses the first column. */
+export function boardEdge(columns: readonly Group[], current: string | null, edge: 'first' | 'last'): string | null {
+  const items = (columns.find((g) => g.items.some((i) => i.id === current)) ?? columns[0])?.items ?? [];
+  return (edge === 'first' ? items[0] : items.at(-1))?.id ?? null;
+}
+
+/**
+ * Where the focus goes when `gone` leaves the page: the nearest id after it in `before`
+ * that is still `shown`, else the nearest before it. Undefined when none is left.
+ */
+export function neighbour(before: readonly string[], gone: string, shown: (id: string) => boolean): string | undefined {
+  const at = before.indexOf(gone);
+  if (at < 0) return undefined;
+  return [...before.slice(at + 1), ...before.slice(0, at).reverse()].find(shown);
+}

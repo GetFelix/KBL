@@ -644,13 +644,16 @@ impl State {
         })
     }
 
-    /// The source an imported root came from, as its `imported` record named it.
-    pub fn imported_source(&self, root: &ItemId) -> Option<&str> {
-        self.upstream
-            .iter()
-            .find(|(_, id)| *id == root)
-            .and_then(|(k, _)| k.split_once('\n'))
-            .map(|(source, _)| source)
+    /// The source each imported root came from, as its `imported` record named it.
+    /// Built in one pass, so a caller asking for every item does not scan per item.
+    pub fn imported_sources(&self) -> BTreeMap<&ItemId, &str> {
+        let mut sources = BTreeMap::new();
+        for (key, root) in &self.upstream {
+            if let Some((source, _)) = key.split_once('\n') {
+                sources.entry(root).or_insert(source);
+            }
+        }
+        sources
     }
 
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {

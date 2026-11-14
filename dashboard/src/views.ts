@@ -34,11 +34,19 @@ export function valueOf(item: ItemRow, facet: Facet): string | null {
   return v === null || v === undefined || v === '' ? null : String(v);
 }
 
-/** The recorded values of each facet with how many items have them, sorted. Facets with none are left out. */
-export function facets(items: readonly ItemRow[]): { facet: Facet; label: string; values: [string, number][] }[] {
+/**
+ * The recorded values of each facet, sorted, with how many items have them under the
+ * other active filters (so a count is what picking that value would show). Every
+ * recorded value is offered, even at 0. Facets nobody recorded are left out.
+ */
+export function facets(items: readonly ItemRow[], filters: Filters = {}): { facet: Facet; label: string; values: [string, number][] }[] {
   return FACETS.flatMap(([facet, label]) => {
     const counts = new Map<string, number>();
     for (const i of items) {
+      const v = valueOf(i, facet);
+      if (v !== null && !counts.has(v)) counts.set(v, 0);
+    }
+    for (const i of applyFilters(items, setFilter(filters, facet, null))) {
       const v = valueOf(i, facet);
       if (v !== null) counts.set(v, (counts.get(v) ?? 0) + 1);
     }
@@ -113,19 +121,27 @@ export function parseSaved(json: string | null): SavedView[] {
   }
 }
 
-/** Saves `view` as `name`. A view with the same name (ignoring case) is replaced in place. */
-export function saveView(list: readonly SavedView[], name: string, view: ViewSpec): SavedView[] {
-  const entry = { name: name.trim(), search: encodeView('', view) };
-  const at = list.findIndex((v) => v.name.toLowerCase() === entry.name.toLowerCase());
-  return at < 0 ? [...list, entry] : list.map((v, i) => (i === at ? entry : v));
+/** Why `name` cannot name a view in `list`, or null. `editing` is the view being renamed, which may keep its own name. */
+export function nameProblem(list: readonly SavedView[], name: string, editing: string | null = null): string | null {
+  const n = name.trim();
+  if (!n) return 'Give the view a name.';
+  if (list.some((v) => v.name !== editing && v.name.toLowerCase() === n.toLowerCase())) {
+    return `A view is already called “${n}”. Pick another name, or edit that view.`;
+  }
+  return null;
 }
 
-/** Renames a view. A name another view already has is refused (returns null), so nothing is lost silently. */
-export function renameView(list: readonly SavedView[], from: string, to: string): SavedView[] | null {
-  const name = to.trim();
-  if (!name) return null;
-  if (list.some((v) => v.name !== from && v.name.toLowerCase() === name.toLowerCase())) return null;
-  return list.map((v) => (v.name === from ? { ...v, name } : v));
+/** Adds `view` as `name`, or returns why not. A name another view has (ignoring case) is refused, so nothing is lost silently. */
+export function saveView(list: readonly SavedView[], name: string, view: ViewSpec): SavedView[] | string {
+  return nameProblem(list, name) ?? [...list, { name: name.trim(), search: encodeView('', view) }];
+}
+
+/** Renames a view, or returns why not: an empty or taken name, or a view another tab deleted. */
+export function renameView(list: readonly SavedView[], from: string, to: string): SavedView[] | string {
+  if (!list.some((v) => v.name === from)) return `“${from}” was deleted, perhaps in another tab.`;
+  const problem = nameProblem(list, to, from);
+  if (problem) return problem;
+  return list.map((v) => (v.name === from ? { ...v, name: to.trim() } : v));
 }
 
 export function deleteView(list: readonly SavedView[], name: string): SavedView[] {
