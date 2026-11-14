@@ -185,7 +185,8 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Every imported root: what ingest needs to count a rule's open roots and
-    /// to write back to the right pull request.
+    /// to write back to the right pull request. Also the prerequisites ingest
+    /// may open an upstream issue for.
     pub(crate) async fn ingest_roots(&self) -> Result<Value, Error> {
         self.begin().await?;
         let core = self.0.core.lock().await;
@@ -211,7 +212,33 @@ impl<B: Broker> Tracker<B> {
                 }))
             })
             .collect();
-        Ok(json!({ "roots": roots }))
+        let prerequisite = Key::new("prerequisite").expect("a valid key");
+        let prerequisites: Vec<Value> = core
+            .state
+            .unopened_prerequisites()
+            .into_iter()
+            .filter_map(|(it, waiter)| {
+                let target = it.target.as_ref()?;
+                // The `why` of the record that created it, when it is inline text.
+                let why = it
+                    .context
+                    .get(&prerequisite)
+                    .and_then(|at| core.recall.texts.get(at))
+                    .and_then(|c| match c {
+                        Content::Text(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                Some(json!({
+                    "item": it.id,
+                    "title": it.title,
+                    "source": target.source,
+                    "repo": target.repo,
+                    "why": why,
+                    "needed_by": waiter,
+                }))
+            })
+            .collect();
+        Ok(json!({ "roots": roots, "prerequisites": prerequisites }))
     }
 
     pub(crate) async fn ingest_state(&self, source: &str) -> Result<Value, Error> {

@@ -41,6 +41,10 @@ pub(crate) struct Tracked {
     /// Set on the old id of a transferred issue, which is not fetched again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) moved_to: Option<String>,
+    /// An issue ingest opened for a prerequisite. No intake rule scopes it:
+    /// a person already accepted the work.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) prerequisite: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +69,10 @@ pub(crate) struct State {
     /// Polls since the last reconcile.
     #[serde(default)]
     pub(crate) polls: u32,
+    /// Prerequisite item to the issue ingest opened for it, until the
+    /// tracker ties them, so a lost write never opens a second issue.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) opened: BTreeMap<String, String>,
 }
 
 impl State {
@@ -78,6 +86,10 @@ impl State {
             }
         }
     }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_zero(n: &u8) -> bool {

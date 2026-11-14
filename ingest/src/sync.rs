@@ -23,7 +23,7 @@ use crate::source::{
     Changes, Closed, Comment, Fetched, Issue, IssueRef, Source, SourceError, WriteBack,
 };
 use crate::state::{State, Tracked};
-use crate::tracker_api::{Appended, Root, Tracker};
+use crate::tracker_api::{Appended, Prerequisite, Root, Tracker};
 
 /// Longest comment or body kept in a record, in bytes. Longer text is cut
 /// and says so; the upstream issue has the rest.
@@ -145,6 +145,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         self.link(p).await?;
         self.write_back(p).await?;
+        // Last, so a crash after the issue is opened leaves it to the next
+        // listing, which finds it by its marker.
+        self.open_prerequisites(p).await?;
         prune(p);
         p.state.cursors.extend(cursors);
         Ok(())
@@ -191,6 +194,10 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     // ---- issues ----
 
     async fn on_issue(&self, p: &mut Poll, issue: &Issue) -> Result<(), SourceError> {
+        // Before any rule: one of our own prerequisite issues is never a new root.
+        if let Some(item) = self.prerequisite_marker(issue) {
+            return self.on_prerequisite_issue(p, issue, item).await;
+        }
         let key = issue.id.to_string();
         match p.state.items.get(&key).cloned() {
             None => match p.roots.get(&key).cloned() {
@@ -420,6 +427,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             let left_by_sync = root.left_scope_by_sync;
             let rules = &self.settings.rules;
             let in_rule = match rules.iter().find(|r| r.name == t.rule) {
+                _ if t.prerequisite => true,
                 Some(r) => r.filter(issue),
                 // Rebuilt after a prune while no rule took it: the rule that
                 // takes it now is its rule, if that rule has room.
@@ -820,6 +828,135 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         allowed
     }
 
+    // ---- prerequisites ----
+
+    /// The item named by the marker in one of our own issues.
+    fn prerequisite_marker(&self, issue: &Issue) -> Option<ItemId> {
+        if !self.own.contains(&issue.author.to_ascii_lowercase()) {
+            return None;
+        }
+        issue.body.lines().find_map(|l| {
+            let id = l.trim().strip_prefix(MARKER)?;
+            ItemId::new(id.trim()).ok()
+        })
+    }
+
+    /// One of our prerequisite issues in a listing: tie it to its item if
+    /// that write was lost, then follow it like any imported issue.
+    async fn on_prerequisite_issue(
+        &self,
+        p: &mut Poll,
+        issue: &Issue,
+        item: ItemId,
+    ) -> Result<(), SourceError> {
+        let key = issue.id.to_string();
+        if let Some(t) = p.state.items.get(&key).cloned() {
+            if t.moved_to.is_some() {
+                return Ok(());
+            }
+            return self.follow(p, issue, t).await;
+        }
+        let known = p.roots.get(&key).map(|r| r.item.clone());
+        let item = match known {
+            Some(root) => root,
+            None if self.attach(p, &item, &issue.id, &issue.title).await? => item,
+            None => return Ok(()),
+        };
+        let mut t = tracked_as(&item, "", issue);
+        t.prerequisite = true;
+        self.follow(p, issue, t).await
+    }
+
+    /// Opens an issue for each prerequisite a person accepted in a repo whose
+    /// rule opts in, and ties the two. Nothing is sent unless a rule opts in.
+    async fn open_prerequisites(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let rules = &self.settings.rules;
+        if !rules.iter().any(|r| r.open_prerequisites) {
+            return Ok(());
+        }
+        let opts_in = |repo: &str| {
+            rules
+                .iter()
+                .any(|r| r.open_prerequisites && r.repo.eq_ignore_ascii_case(repo))
+        };
+        for pre in self.tracker.prerequisites().await? {
+            if pre.source != self.source.name() || !opts_in(&pre.repo) {
+                continue;
+            }
+            if p.roots.values().any(|r| r.item == pre.item) {
+                continue;
+            }
+            let opened = p
+                .state
+                .opened
+                .get(pre.item.as_str())
+                .and_then(|k| IssueRef::parse(k));
+            let id = match opened {
+                Some(id) => id,
+                None => {
+                    let body = prerequisite_body(&pre);
+                    match self
+                        .source
+                        .open_issue(&pre.repo, &cut_title(&pre.title), &body)
+                        .await
+                    {
+                        Ok(id) => id,
+                        Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                        // A repo we cannot write to must not hold the cursors.
+                        Err(e) => {
+                            eprintln!("kbl-ingest: no issue opened for {}: {e}", pre.item);
+                            continue;
+                        }
+                    }
+                }
+            };
+            p.state.opened.insert(pre.item.to_string(), id.to_string());
+            self.attach(p, &pre.item, &id, &pre.title).await?;
+        }
+        Ok(())
+    }
+
+    /// Ties a prerequisite to its issue. The fold checks that a person
+    /// accepted it and that the issue is in its target repo.
+    async fn attach(
+        &self,
+        p: &mut Poll,
+        item: &ItemId,
+        id: &IssueRef,
+        title: &str,
+    ) -> Result<bool, SourceError> {
+        let key = id.to_string();
+        let record = WorkRecord::Imported {
+            item: item.clone(),
+            source: self.source.name().to_owned(),
+            upstream_id: key.clone(),
+            title: cut_title(title),
+        };
+        if let Appended::Refused(why) = self.tracker.append(&record).await? {
+            eprintln!("kbl-ingest: {key} was not tied to {item}: {why}");
+            return Ok(false);
+        }
+        p.state.opened.remove(item.as_str());
+        p.roots.insert(
+            key.clone(),
+            Root {
+                item: item.clone(),
+                source: self.source.name().to_owned(),
+                upstream_id: key,
+                stage: "ready".to_owned(),
+                closed: false,
+                closed_by_sync: false,
+                left_scope_by_sync: false,
+                reopened_by: None,
+                has_children: false,
+                pr: None,
+                claimed_at_ms: None,
+                pr_status: None,
+            },
+        );
+        Ok(true)
+    }
+
     // ---- writes ----
 
     /// Appends a record and says whether the log has it. A refusal that says
@@ -847,6 +984,22 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     }
 }
 
+/// The line that ties an issue ingest opened to its prerequisite item.
+const MARKER: &str = "kbl-prerequisite:";
+
+fn prerequisite_body(pre: &Prerequisite) -> String {
+    let why = pre
+        .why
+        .as_deref()
+        .unwrap_or("The reason is in the tracker.");
+    let needed = pre
+        .needed_by
+        .as_ref()
+        .map(|up| format!("\n\nNeeded by {up}."))
+        .unwrap_or_default();
+    format!("{}{needed}\n\n{MARKER} {}", cut(why), pre.item)
+}
+
 fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
     tracked_as(item, &rule.name, issue)
 }
@@ -865,6 +1018,7 @@ fn tracked_as(item: &ItemId, rule: &str, issue: &Issue) -> Tracked {
         written_back: false,
         write_back_tries: 0,
         moved_to: None,
+        prerequisite: false,
     }
 }
 

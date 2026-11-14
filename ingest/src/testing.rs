@@ -11,7 +11,7 @@ use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 
 use crate::github::{Req, Res, Transport};
-use crate::tracker_api::{Appended, Root, Saved, Tracker};
+use crate::tracker_api::{Appended, Prerequisite, Root, Saved, Tracker};
 
 /// The Fake tracker's clock at offset zero: 2027-01-15T08:00:00Z.
 pub(crate) const CLOCK_START_MS: u64 = 1_800_000_000_000;
@@ -118,6 +118,8 @@ struct Inner {
     state: State,
     saved: Option<(Value, u64)>,
     save_fails: bool,
+    /// Every append fails, as when the tracker cannot be reached.
+    append_fails: bool,
 }
 
 /// A tracker that folds what it is given, so a record the real fold would refuse is refused here.
@@ -131,6 +133,7 @@ impl Default for Fake {
             state: State::default(),
             saved: None,
             save_fails: false,
+            append_fails: false,
         })))
     }
 }
@@ -220,6 +223,11 @@ impl Fake {
         self.0.lock().unwrap().save_fails = false;
     }
 
+    /// Whether every later append fails, as if the tracker went away.
+    pub(crate) fn fail_appends(&self, fail: bool) {
+        self.0.lock().unwrap().append_fails = fail;
+    }
+
     /// Ingest's saved state is lost, as if the cache entry expired.
     pub(crate) fn forget_saved(&self) {
         self.0.lock().unwrap().saved = None;
@@ -255,7 +263,40 @@ impl Tracker for Fake {
             .collect())
     }
 
+    async fn prerequisites(&self) -> Result<Vec<Prerequisite>> {
+        let i = self.0.lock().unwrap();
+        let entry = Key::new("prerequisite").unwrap();
+        Ok(i.state
+            .unopened_prerequisites()
+            .into_iter()
+            .map(|(it, needed_by)| {
+                let target = it.target.clone().unwrap();
+                let why = it.context.get(&entry).and_then(|at| {
+                    match &i.log.get(*at as usize)?.1.record {
+                        WorkRecord::Prerequisite { new: Some(n), .. } => match &n.why {
+                            kbl_core::content::Content::Text(t) => Some(t.clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                });
+                Prerequisite {
+                    item: it.id.clone(),
+                    title: it.title.clone(),
+                    source: target.source,
+                    repo: target.repo,
+                    why,
+                    needed_by: needed_by.map(str::to_owned),
+                }
+            })
+            .collect())
+    }
+
     async fn append(&self, record: &WorkRecord) -> Result<Appended> {
+        anyhow::ensure!(
+            !self.0.lock().unwrap().append_fails,
+            "the tracker is unreachable"
+        );
         Ok(
             match self.push("ingest-gh", Actor::Tracker, record.clone()) {
                 Ok(()) => Appended::Written,

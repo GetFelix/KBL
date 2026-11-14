@@ -14,13 +14,12 @@ use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
     Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FORMAT_V6,
-    FindingVerdict,
-    MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE,
-    MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS,
-    MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict,
-    NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason, ReviewPass,
-    ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
-    valid_review_tier,
+    FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE,
+    MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT,
+    MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY,
+    MergeVerdict, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason,
+    ReviewPass, ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged,
+    WorkRecord, valid_review_tier,
 };
 
 #[cfg(test)]
@@ -589,6 +588,30 @@ impl State {
             let (source, id) = up.split_once('\n')?;
             Some((source, id, item))
         })
+    }
+
+    /// Open prerequisites a person accepted from format 6 that have no
+    /// upstream issue yet: what ingest may open an issue for. Each comes with
+    /// the upstream id of a root waiting on it, if one is imported.
+    pub fn unopened_prerequisites(&self) -> Vec<(&Item, Option<&str>)> {
+        self.items
+            .values()
+            .filter(|it| {
+                it.parent.is_none()
+                    && it.target.is_some()
+                    && it.closed.is_none()
+                    && it.accepted_by_person
+                    && !self.upstream.values().any(|i| *i == it.id)
+            })
+            .map(|it| {
+                let waiter = self.edges.iter().find_map(|(w, p)| {
+                    let root = &self.items.get(w)?.root;
+                    let up = self.upstream.iter().find(|(_, i)| *i == root)?.0;
+                    (*p == it.id).then(|| up.split_once('\n').map_or(up.as_str(), |(_, id)| id))
+                });
+                (it, waiter)
+            })
+            .collect()
     }
 
     /// Spend per root, reviewer tier and repo. Items that cost nothing are left out.

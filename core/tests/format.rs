@@ -5,8 +5,7 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, ReadError,
-    WorkLogged,
-    WorkRecord, read,
+    WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -743,7 +742,9 @@ fn format_5_refuses_an_issue_for_an_existing_item() {
     let rejected: Vec<(u64, Reject)> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
     assert_eq!(
         rejected,
-        [10, 12, 14, 15, 16].map(|o| (o, Reject::Duplicate)).to_vec()
+        [10, 12, 14, 15, 16]
+            .map(|o| (o, Reject::Duplicate))
+            .to_vec()
     );
 }
 
@@ -762,7 +763,14 @@ fn the_issue_must_match_the_target_on_an_open_item_at_format_6() {
         .iter()
         .map(|r| (r.offset, r.why))
         .collect();
-    assert_eq!(rejected, vec![(19, Reject::Duplicate), (20, Reject::Duplicate), (22, Reject::Duplicate)]);
+    assert_eq!(
+        rejected,
+        vec![
+            (19, Reject::Duplicate),
+            (20, Reject::Duplicate),
+            (22, Reject::Duplicate)
+        ]
+    );
     assert_eq!(imported_as(&s, "g2"), vec!["GetFelix/felix-gateway#43"]);
 
     let closed = r#"{"at_ms":1200,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
@@ -773,4 +781,3 @@ fn the_issue_must_match_the_target_on_an_open_item_at_format_6() {
     assert_eq!(s.rejections.last().map(|r| r.why), Some(Reject::Closed));
     assert!(imported_as(&s, "g2").is_empty());
 }
-

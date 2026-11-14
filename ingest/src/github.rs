@@ -505,6 +505,27 @@ impl<T: Transport> Source for Github<T> {
         Ok(links)
     }
 
+    async fn open_issue(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<IssueRef, SourceError> {
+        // The repo comes from an agent's prerequisite, so it must be a plain name.
+        if IssueRef::parse(&format!("{repo}#1")).is_none() {
+            return Err(anyhow!("{repo:?} is not owner/name").into());
+        }
+        let url = format!("{}/repos/{repo}/issues", self.api);
+        let out = self
+            .call(Req::post(url, json!({ "title": title, "body": body })))
+            .await?;
+        let number = out.body["number"].as_u64();
+        match (out.status, number) {
+            (201, Some(n)) => Ok(IssueRef::new(repo, n)),
+            (s, _) => Err(anyhow!("could not open an issue in {repo}: {s}").into()),
+        }
+    }
+
     async fn write_back(&self, what: &WriteBack) -> Result<(), SourceError> {
         let WriteBack::DraftPullRequest { pr, note } = what;
         let pull = format!("{}/repos/{}/pulls/{}", self.api, pr.repo, pr.number);

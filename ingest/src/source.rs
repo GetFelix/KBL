@@ -216,4 +216,11 @@ pub(crate) trait Source: Send + Sync {
     fn links(&self, id: &IssueRef) -> impl Future<Output = Result<Links, SourceError>> + Send;
 
     fn write_back(&self, what: &WriteBack) -> impl Future<Output = Result<(), SourceError>> + Send;
+    /// Opens an issue in `repo` as our own credential and says which it is.
+    fn open_issue(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+    ) -> impl Future<Output = Result<IssueRef, SourceError>> + Send;
 }
