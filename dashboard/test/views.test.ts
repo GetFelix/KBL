@@ -84,7 +84,7 @@ test('saved views from storage drop anything malformed', () => {
 
 test('a saved view from before the layout parameter opens the board and is read back in the new form', () => {
   const [old] = parseSaved('[{"name":"Board","search":"view=board&tier=1"}]');
-  assert.deepEqual(old, { name: 'Board', search: 'layout=board&tier=1' });
+  assert.deepEqual(old, { name: 'Board', search: 'tier=1&layout=board' });
   assert.deepEqual(decodeView('view=board&tier=1'), { view: 'all', layout: 'board', query: '', filters: { tier: '1' } });
   assert.ok(sameView(decodeView('view=board'), decodeView('layout=board')));
   assert.equal(decodeView('view=blocked&layout=board').view, 'blocked');

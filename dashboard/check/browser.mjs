@@ -372,11 +372,11 @@ try {
   );
   await axe('blocked panel');
   await shoot('blocked-panel-dark');
-  await page.eval(`document.querySelector('.panel .blockers a').focus()`);
+  await page.eval(`document.querySelector('.panel .blockers a[data-item=gw-31]').focus()`);
   await page.eval(`window.__push({ kind: 'linked', item: 'blk-40', to: 'gh-2204', actor: 'person', by: 'maintainer', at_ms: 1800000000040 })`);
   await page.waitFor(`document.querySelector('.panel .blockers')?.textContent.includes('gh-2204')`);
   check(await page.eval(`document.activeElement?.dataset.focus === 'blocker:gw-31'`), 'a live redraw of the panel leaves focus on the same blocker link');
-  await page.eval(`document.querySelector('.panel .blockers a').click()`);
+  await page.eval(`document.querySelector('.panel .blockers a[data-item=gw-31]').click()`);
   await page.waitFor(`location.search.includes('item=gw-31')`);
   check(await page.eval(`document.querySelector('.panel .row-id').textContent === 'gw-31'`), 'a blocker link opens that blocker in the panel');
   await press(page, 'Escape');
@@ -406,17 +406,18 @@ try {
   await page.waitFor(live);
   await page.eval(`window.__push({ kind: 'imported', item: 'blk-43', source: 'github', title: 'Another card waiting on the history fix', upstream_id: 'GetFelix/felix-blocks#43', ${ids(10)} })`);
   await page.eval(`window.__push({ kind: 'accepted', item: 'blk-43', tier: 1, ${ids(11)} })`);
-  await page.eval(`window.__push({ kind: 'linked', item: 'blk-43', to: 'blk-42', ${ids(12)} })`);
+  await page.eval(`window.__push({ kind: 'linked', item: 'blk-43', to: 'gh-2204', ${ids(12)} })`);
   await page.waitFor(`!!document.querySelector('.card[data-id=blk-43]')`);
   const column = (id) => page.eval(`document.querySelector('.card[data-id=${id}]')?.closest('.column')?.getAttribute('aria-labelledby') ?? ''`);
-  check((await column('blk-40')) === (await column('blk-43')), 'two blocked cards share a column');
+  check((await column('blk-40')) === (await column('blk-41')) && (await column('blk-41')) === (await column('blk-43')), 'the blocked cards share a column');
   await page.eval(`document.querySelector('.card[data-id=blk-40]').focus()`);
   for (const item of ['gw-31', 'jira-300']) {
     await page.eval(`window.__push({ kind: 'closed', item: '${item}', why: 'merged', ${ids(20)} })`);
   }
   await page.waitFor(`!document.querySelector('.card[data-id=blk-40]')`);
-  check(await focused('.card[data-id=blk-43]'), 'an unblocked card hands the focus to its neighbour in the column');
-  await page.eval(`window.__push({ kind: 'shipped', item: 'blk-42', release: 'v1', ${ids(30)} })`);
+  check(await focused('.card[data-id=blk-41]'), `an unblocked card hands the focus to the next card in its column (${await page.eval('document.activeElement?.dataset.id')})`);
+  await page.eval(`window.__push({ kind: 'closed', item: 'gh-2204', why: 'merged', ${ids(30)} })`);
+  await page.eval(`window.__push({ kind: 'shipped', item: 'blk-42', release: 'v1', ${ids(31)} })`);
   await page.waitFor(`!document.querySelector('.card')`);
   check((await focused('main')) && (await page.eval(`!!document.querySelector('.empty')`)), 'an emptied Blocked board leaves the focus on main with the empty state');
 
