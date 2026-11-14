@@ -1,0 +1,9 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"first bug"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"context","item":"r1","entry":"repro","text":{"text":"run it twice"}}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":91030}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"context","item":"r1","entry":"notes","text":{"text":"the retry path drops the header"}}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"context","item":"r1","entry":"plan","text":{"text":"fix the retry, then add a test"}}
+{"at_ms":1060,"by":"gabriel","actor":"person","kind":"context","item":"r1","entry":"plan","text":{"text":"add the test first"}}
+{"at_ms":1070,"by":"w2","actor":"agent","kind":"context","item":"r1","entry":"notes","text":{"text":"not the holder"}}
+{"at_ms":1080,"by":"w1","actor":"agent","kind":"context","item":"r1","entry":"notes","text":{"text":"the retry path drops the header on a 503"}}
