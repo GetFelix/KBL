@@ -16,6 +16,8 @@ export function fixtureLog() {
   const log = [];
   let at = 1_700_000_000_000;
   const rec = (r) => log.push({ actor: 'person', by: 'maintainer', at_ms: at++, ...r });
+  // Claims, questions and finished work come from an agent; the fold refuses them from a person.
+  const agent = (r) => rec({ actor: 'agent', by: 'agent-1', ...r });
   for (const [item, title, stage] of ISSUES) {
     const [source] = item.split('-');
     rec({ kind: 'imported', item, source: { gh: 'github', ado: 'ado', jira: 'jira' }[source], title, upstream_id: item });
@@ -23,13 +25,13 @@ export function fixtureLog() {
     rec({ kind: 'triaged', item, tier: 1, why: 'seen in the field' });
     rec({ kind: 'accepted', item, tier: 1 });
     if (stage === 'ready') continue;
-    rec({ kind: 'claimed', item, attempt: 1, deadline_ms: at + 3_600_000 });
+    agent({ kind: 'claimed', item, attempt: 1, deadline_ms: at + 3_600_000 });
     if (stage === 'held') continue;
     if (stage === 'needs_you') {
-      rec({ kind: 'question', item, attempt: 1, text: { text: 'Which client saw it?' } });
+      agent({ kind: 'question', item, attempt: 1, text: { text: 'Which client saw it?' } });
       continue;
     }
-    rec({ kind: 'done', item, attempt: 1, cost_micros: 1_250_000 });
+    agent({ kind: 'done', item, attempt: 1, cost_micros: 1_250_000 });
     if (stage === 'done') rec({ kind: 'closed', item, why: 'merged' });
   }
   return log;

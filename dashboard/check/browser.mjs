@@ -91,6 +91,8 @@ try {
     await page.waitFor(live);
     const line = await status();
     check(/^. ?Live, \d+ items$/.test(line), `${theme}: the fixture folds with nothing refused (${line})`);
+    const groups = await page.eval(`[...document.querySelectorAll('[id^=group-]')].map((g) => g.id.slice(6)).join(' ')`);
+    check(['needs_you', 'held', 'in_review', 'ready', 'triage'].every((s) => groups.includes(s)), `${theme}: the fixture fills the stages (${groups})`);
     await axe(`list ${theme}`);
     await shoot(`list-${theme}`);
 
@@ -138,7 +140,9 @@ try {
   await press(page, 'Escape');
   check(await page.eval(`document.querySelectorAll('.row').length > 0`), 'Esc clears the search');
 
-  await page.eval(`document.activeElement?.blur(), true`);
+  // A fresh page: after a blur, Chrome starts Tab from where focus was, not the top.
+  await open(connected);
+  await page.waitFor(live);
   await press(page, 'Tab');
   check(await focused('.skip'), 'the first Tab reaches the skip link');
 
