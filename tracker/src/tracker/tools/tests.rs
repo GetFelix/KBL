@@ -572,6 +572,69 @@ async fn evidence_must_cite_a_record_of_the_same_tree() {
     t.person_answer(key("gab"), &a1, Some(q), text("x"), own, Reply::default())
         .await
         .unwrap();
+    // A restarted tracker rebuilds what each offset is about from the log.
+    let t2 = start(&fake).await;
+    let _ = claim(&t2, "w1").await;
+    assert_eq!(
+        why(t2.decide(&a, &a1, cite(WORK_EVENTS, a2_import)).await),
+        "evidence_outside_tree"
+    );
+    t2.decide(&a, &a1, cite(WORK_EVENTS, q)).await.unwrap();
+    // A writer the fold would refuse learns nothing about where a record is.
+    let q = t2
+        .ask(&a, &a1, text("and now?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    let foreign = vec![Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: a2_import,
+    }];
+    let r = t2
+        .answer(&agent("w2"), &a1, q, text("x"), foreign, None)
+        .await;
+    assert_eq!(why(r), "not_holder");
+}
+
+#[tokio::test]
+async fn a_new_prerequisite_cites_evidence_of_its_own_tree() {
+    let (fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    import(&t, "a2", "GetFelix/felix#2").await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let a1_import = fake
+        .log()
+        .iter()
+        .position(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let citing = |offset: u64| match gateway() {
+        Prereq::New {
+            target, title, why, ..
+        } => Prereq::New {
+            target,
+            title,
+            why,
+            evidence: vec![Evidence {
+                stream: WORK_EVENTS.into(),
+                offset,
+            }],
+        },
+        other => other,
+    };
+    assert_eq!(
+        why(t
+            .prerequisite(&w1, &a1, key("cas"), citing(a2_import), DoneWhen::Merged, 0)
+            .await),
+        "evidence_outside_tree"
+    );
+    t.prerequisite(&w1, &a1, key("cas"), citing(a1_import), DoneWhen::Merged, 0)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

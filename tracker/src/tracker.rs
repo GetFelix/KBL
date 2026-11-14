@@ -230,7 +230,15 @@ fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), E
         if e.offset >= next {
             continue;
         }
-        if core.recall.subjects.get(&e.offset).and_then(root) != Some(own) {
+        let in_tree = core.recall.subjects.get(&e.offset).and_then(root) == Some(own)
+            // An item made by a record in another tree, such as a deferred
+            // finding, points at that record from its own context.
+            || core
+                .state
+                .items
+                .values()
+                .any(|i| &i.root == own && i.context.values().any(|&o| o == e.offset));
+        if !in_tree {
             return Err(Error::Refused {
                 why: "evidence_outside_tree".into(),
             });
@@ -1405,7 +1413,10 @@ impl<B: Broker> Tracker<B> {
         // The tracker is the only writer, so the next offset is the one after the
         // last applied. It can skip (generation starts), which the check below catches.
         let guess = core.state.at.map_or(0, |a| a + 1);
-        evidence_in_tree(core, &logged.record, guess)?;
+        // Only for a writer the fold lets act, so no one else learns which tree a record is in.
+        if core.state.may_cite(&logged).is_ok() {
+            evidence_in_tree(core, &logged.record, guess)?;
+        }
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.
         if let Err(why) = core.state.try_apply(guess, &logged) {
