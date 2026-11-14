@@ -12,6 +12,13 @@ export type CommandId =
   | 'close'
   | 'first'
   | 'last'
+  | 'left'
+  | 'right'
+  | 'layout'
+  | 'filter'
+  | 'clearFilters'
+  | 'saveView'
+  | 'density'
   | 'theme'
   | 'view-all'
   | 'view-blocked';
@@ -33,10 +40,17 @@ export const COMMANDS: readonly Command[] = [
   { id: 'previous', label: 'Previous item', group: 'Navigation', keys: ['K', 'ArrowUp'] },
   { id: 'first', label: 'First item', group: 'Navigation', keys: ['Home'] },
   { id: 'last', label: 'Last item', group: 'Navigation', keys: ['End'] },
+  { id: 'left', label: 'Previous column on the board', group: 'Navigation', keys: ['H', 'ArrowLeft'] },
+  { id: 'right', label: 'Next column on the board', group: 'Navigation', keys: ['L', 'ArrowRight'] },
   { id: 'open', label: 'Open the selected item', group: 'Navigation', keys: ['Enter'] },
   { id: 'close', label: 'Close, or clear the search', group: 'Navigation', keys: ['Escape'] },
   { id: 'view-all', label: 'Show all work', group: 'View', keys: [] },
   { id: 'view-blocked', label: 'Show blocked work', group: 'View', keys: [] },
+  { id: 'layout', label: 'Switch list and board', group: 'View', keys: ['V'] },
+  { id: 'filter', label: 'Filter items', group: 'View', keys: ['F'] },
+  { id: 'clearFilters', label: 'Clear all filters', group: 'View', keys: [] },
+  { id: 'saveView', label: 'Save this view', group: 'View', keys: [] },
+  { id: 'density', label: 'Switch comfortable and compact density', group: 'View', keys: [] },
   { id: 'theme', label: 'Switch light and dark theme', group: 'View', keys: [] },
 ];
 
@@ -80,6 +94,6 @@ export function commandFor(press: KeyPress, mac: boolean): CommandId | undefined
 
 /** A chord as a person reads it on this platform: `Mod+K` becomes `⌘ K` or `Ctrl K`. */
 export function displayChord(chord: string, mac: boolean): string[] {
-  const names: Record<string, string> = { ArrowDown: '↓', ArrowUp: '↑', Escape: 'Esc', Enter: 'Enter' };
+  const names: Record<string, string> = { ArrowDown: '↓', ArrowUp: '↑', ArrowLeft: '←', ArrowRight: '→', Escape: 'Esc', Enter: 'Enter' };
   return chord.split('+').map((p) => (p === 'Mod' ? (mac ? '⌘' : 'Ctrl') : (names[p] ?? p)));
 }

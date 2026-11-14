@@ -692,6 +692,18 @@ impl State {
         })
     }
 
+    /// The source each imported root came from, as its `imported` record named it.
+    /// Built in one pass, so a caller asking for every item does not scan per item.
+    pub fn imported_sources(&self) -> BTreeMap<&ItemId, &str> {
+        let mut sources = BTreeMap::new();
+        for (key, root) in &self.upstream {
+            if let Some((source, _)) = key.split_once('\n') {
+                sources.entry(root).or_insert(source);
+            }
+        }
+        sources
+    }
+
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
         Some(match it.closed {

@@ -2,16 +2,18 @@
 // explains why there are none. A Blocked row also says what it waits on. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
 import { waitsOn } from '../fold.ts';
-import { group, visible } from '../list.ts';
+import { inScope, neighbour, visible, type Group } from '../list.ts';
 import { flagText } from '../overlap.ts';
-import { toAddress, type Address, type ViewState } from '../state.ts';
+import { toAddress, type AddressState, type ViewState } from '../state.ts';
+import { activeCount } from '../views.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
   open(id: string): void;
   /** Focus landed on a row: it becomes the selection, so keys act on what has focus. */
-  select(id: string): void;
+  select(id: string | null): void;
   clearSearch(): void;
+  clearFilters(): void;
 }
 
 const SKELETON_ROWS = 6;
@@ -30,18 +32,76 @@ const ADVICE = {
 } as const;
 
 // Built from the store's query, not the address bar, which lags the store by up to 250 ms.
-export function itemHref(id: string, s: Omit<Address, 'open'>): string {
+export function itemHref(id: string, s: Omit<AddressState, 'open'>): string {
   return toAddress(location.search, { ...s, open: id }) || '?';
+}
+
+/** Says something to a screen reader without moving the focus. */
+export type Announce = (text: string) => void;
+
+/** What a redraw needs to keep the keyboard in place: the order and stage of what was drawn. */
+export interface Drawn {
+  order: string[];
+  stage: Map<string, string>;
+}
+
+export function drawn(groups: readonly Group[]): Drawn {
+  return { order: groups.flatMap((g) => g.items.map((i) => i.id)), stage: new Map(groups.flatMap((g) => g.items.map((i) => [i.id, g.label] as const))) };
+}
+
+/**
+ * Puts the focus back after a redraw. The focused item keeps it if it is still drawn (and
+ * a move to another stage is announced); otherwise the nearest item in the first of
+ * `orders` that has one takes it, else #work, so focus never falls to the body. The
+ * selection follows, after this render, so the store is not re-entered mid-draw.
+ */
+export function restoreFocus(
+  focusedId: string | undefined,
+  before: Drawn,
+  now: Drawn,
+  nodes: ReadonlyMap<string, HTMLElement>,
+  host: HTMLElement,
+  quietly: (el: HTMLElement) => void,
+  on: { select(id: string | null): void; announce: Announce },
+  orders: readonly (readonly string[])[] = [before.order],
+) {
+  if (!focusedId) return;
+  const back = nodes.get(focusedId);
+  if (back) {
+    quietly(back);
+    const was = before.stage.get(focusedId);
+    const is = now.stage.get(focusedId);
+    if (was && is && was !== is) on.announce(`${focusedId} moved to ${is}.`);
+    return;
+  }
+  const near = orders.map((o) => neighbour(o, focusedId, (id) => nodes.has(id))).find((id) => id !== undefined);
+  const target = near ? nodes.get(near) : host.closest<HTMLElement>('main');
+  if (target) quietly(target);
+  on.announce(`${focusedId} is no longer in this view.`);
+  queueMicrotask(() => on.select(near ?? null));
 }
 
 // Rows are kept by item id and reused, and the list is only rebuilt when what it shows
 // changes. A live record must not take the focus off the row a keyboard user is on.
-export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewState): void; focusSelected(): void } {
+export function itemList(
+  on: ListHandlers,
+  board: { el: HTMLElement; render(s: ViewState, columns: Group[]): void; focusSelected(): void },
+  announce: Announce,
+): { el: HTMLElement; render(s: ViewState): void; focusSelected(): void } {
   const el = h('div', { class: 'list' });
   const rows = new Map<string, HTMLAnchorElement>();
   let shown = '';
   let restoring = false;
-  let order: string[] = [];
+  let last: Drawn = drawn([]);
+  const quietly = (target: HTMLElement) => {
+    restoring = true;
+    target.focus({ preventScroll: true });
+    restoring = false;
+  };
+  const focusedHere = () => {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && el.contains(active) ? (active.dataset.id ?? active.closest<HTMLElement>('[data-id]')?.dataset.id) : undefined;
+  };
   el.addEventListener('focusin', (e) => {
     const id = (e.target as HTMLElement).closest<HTMLElement>('.row')?.dataset.id;
     if (id && !restoring) on.select(id);
@@ -49,13 +109,13 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
 
   const show = (key: string, ...children: HTMLElement[]) => {
     if (key === shown) return;
+    const focusedId = focusedHere();
     shown = key;
-    const lost = el.contains(document.activeElement);
     rows.clear();
-    order = [];
+    last = drawn([]);
     el.replaceChildren(...children);
-    // The focused row is gone; focus must not fall to the body.
-    if (lost) el.closest('main')?.focus({ preventScroll: true });
+    // A state with no rows: a focused row or card has nowhere to go but #work.
+    restoreFocus(focusedId, last, last, rows, el, quietly, { select: on.select, announce }, []);
   };
   const row = (id: string, title: string, waits: string): HTMLAnchorElement => {
     let a = rows.get(id);
@@ -80,6 +140,16 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
     return a;
   };
 
+  // The board keeps its own cards; the list only decides that it is the board's turn.
+  const showBoard = (s: ViewState, columns: Group[]) => {
+    if (shown !== 'board') {
+      shown = 'board';
+      rows.clear();
+      last = drawn([]);
+      el.replaceChildren(board.el);
+    }
+    board.render(s, columns);
+  };
   const view = {
     el,
     render(s: ViewState) {
@@ -121,29 +191,31 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
         );
       }
       if (s.items.length === 0) return show('empty', emptyState('No work yet', 'Items appear here as the tracker imports issues from its sources.'));
-      const shownItems = visible(s);
-      if (s.view === 'blocked' && shownItems.length === 0) {
+      if (s.view === 'blocked' && inScope(s).length === 0) {
         return show('noblocked', emptyState('Nothing is blocked', 'An item shows here while a link or a prerequisite holds it back.'));
       }
-      const groups = group(shownItems, s.query);
+      const groups = visible(s);
       const waits = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
       if (groups.length === 0) {
-        return show(`nomatch|${s.query}`,
-          emptyState(`Nothing matches “${s.query}”`, 'Search looks at item ids and titles.',
-            h('button', { type: 'button', class: 'button', onclick: on.clearSearch }, 'Clear search')),
+        const filtered = activeCount(s.filters) > 0;
+        const what = s.query ? `“${s.query}”` : 'these filters';
+        return show(`nomatch|${s.query}|${JSON.stringify(s.filters)}`,
+          emptyState(`Nothing matches ${what}`, filtered ? 'Search looks at item ids and titles, inside the filters.' : 'Search looks at item ids and titles.',
+            h('span', { class: 'actions' },
+              s.query ? h('button', { type: 'button', class: 'button', onclick: on.clearSearch }, 'Clear search') : null,
+              filtered ? h('button', { type: 'button', class: 'button', onclick: on.clearFilters }, 'Clear filters') : null,
+            )),
         );
       }
+      if (s.layout === 'board') return showBoard(s, groups);
       const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? ''])]))}`;
       if (key !== shown) {
-        const active = document.activeElement;
-        const focusedId = active instanceof HTMLElement && el.contains(active) ? active.dataset.id : undefined;
+        const focusedId = focusedHere();
+        const before = last;
         const kept = new Map(rows);
-        const before = order;
         shown = key;
         rows.clear();
-        order = [];
         for (const g of groups) for (const i of g.items) {
-          order.push(i.id);
           const a = kept.get(i.id);
           if (a) rows.set(i.id, a);
         }
@@ -156,18 +228,9 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
             );
           }),
         );
+        last = drawn(groups);
         // Moving a focused node blurs it; put the focus back without scrolling or re-selecting.
-        const back = focusedId ? rows.get(focusedId) : undefined;
-        if (back) {
-          restoring = true;
-          back.focus({ preventScroll: true });
-          restoring = false;
-        } else if (focusedId) {
-          // The focused row left the view: the next row takes the focus, else the previous one.
-          const at = before.indexOf(focusedId);
-          const near = at < 0 ? undefined : [...before.slice(at + 1), ...before.slice(0, at).reverse()].find((id) => rows.has(id));
-          (near ? rows.get(near) : el.closest('main'))?.focus({ preventScroll: true });
-        }
+        restoreFocus(focusedId, before, last, rows, el, quietly, { select: on.select, announce });
       }
       for (const [id, a] of rows) {
         const href = itemHref(id, s);
@@ -183,6 +246,7 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
       }
     },
     focusSelected() {
+      if (shown === 'board') return board.focusSelected();
       const selected = el.querySelector<HTMLElement>('[data-selected]');
       selected?.focus();
       selected?.scrollIntoView({ block: 'nearest' });

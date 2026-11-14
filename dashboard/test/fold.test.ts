@@ -28,9 +28,23 @@ test('items lists each item with its stage', () => {
   const fold = new Folder();
   const rec = (o: object) => new TextEncoder().encode(JSON.stringify({ at_ms: 1, by: 'gabriel', actor: 'person', ...o }));
   fold.apply(0, rec({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'a#1', title: 'first' }));
-  assert.deepEqual(JSON.parse(fold.items_json()), [{ id: 'r1', title: 'first', stage: 'triage' }]);
+  assert.deepEqual(JSON.parse(fold.items_json()), [
+    { id: 'r1', title: 'first', stage: 'triage', tier: null, source: 'github', repo: null },
+  ]);
   fold.apply(1, rec({ kind: 'accepted', item: 'r1', tier: 1 }));
   assert.equal(JSON.parse(fold.items_json())[0].stage, 'ready');
+  assert.equal(JSON.parse(fold.items_json())[0].tier, 1);
+});
+
+test('items carry the repo an owner/repo#n id names, and children inherit it from the root', () => {
+  const fold = new Folder();
+  const rec = (o: object) => new TextEncoder().encode(JSON.stringify({ at_ms: 1, by: 'gabriel', actor: 'person', ...o }));
+  fold.apply(0, rec({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'GetFelix/KBL#7', title: 'first' }));
+  fold.apply(1, rec({ kind: 'accepted', item: 'r1', tier: 2 }));
+  fold.apply(2, rec({ kind: 'proposed', item: 'c1', parent: 'r1', key: 'k1', work: 'split', title: 'child' }));
+  const byId = Object.fromEntries(JSON.parse(fold.items_json()).map((i: { id: string }) => [i.id, i]));
+  assert.deepEqual([byId.r1.source, byId.r1.repo, byId.r1.tier], ['github', 'GetFelix/KBL', 2]);
+  assert.deepEqual([byId.c1.source, byId.c1.repo], ['github', 'GetFelix/KBL']);
 });
 
 test('a blocked item names a blocker in another repo with that repo', () => {

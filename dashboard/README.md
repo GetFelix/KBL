@@ -96,13 +96,38 @@ in the status line.
 | `Ctrl+K` (`Cmd+K` on a Mac) | Command palette: every command, plus items by id or title |
 | `?` | Keyboard shortcuts |
 | `/` | Search |
-| `J` / `K`, arrows | Next and previous item |
-| `Home` / `End` | First and last item |
+| `J` / `K`, `↓` / `↑` | Next and previous item (on the board, within the column) |
+| `H` / `L`, `←` / `→` | Previous and next column on the board |
+| `V` | Switch list and board |
+| `F` | Go to the filters |
+| `Home` / `End` | First and last item; on the board, of the current column |
 | `Enter` | Open the selected item in the panel |
 | `Esc` | Close the panel or dialog, or clear the search |
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
-palette and the `?` overlay all read it. The theme switch is in the palette only.
+palette and the `?` overlay all read it. Theme and density are in the palette
+only. Clear filters and Save view are buttons above the work as well as palette commands, and the palette also
+has one entry per filter value and per saved view.
+
+## Views
+
+- **Board.** One column per stage, in the list's order. Each column is one `Tab` stop; the arrows or `H` `J` `K`
+  `L` move inside the board. Below 720 px the columns stack. When a record moves the focused card to another
+  column the focus goes with it; when one takes it out of the view, the next card in its column (else the nearest
+  card, else the work list) takes the focus. Either is announced. The list does the same with its rows.
+- **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
+  it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
+  search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
+- **The address.** `view=blocked`, `layout=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
+  address, so a link opens the same view. An older `view=board` link still opens the board and is rewritten to
+  `layout=board`.
+- **Saved views.** Save view names the current view, layout, search and filters and puts it in the sidebar; Edit
+  renames or deletes it, and a name another view has is refused. After a rename the focus is back on that view's
+  Edit; after a delete, on the next saved view or Save view. Saved views and the density are kept in this
+  browser's local storage, per viewer, and the page works without them when storage is blocked. Each change
+  re-reads storage first and the page follows changes from other tabs, so two tabs do not drop each other's views.
+- **Phones.** Below 720 px the sidebar is a drawer behind the Menu button. While it is open the page behind it
+  is inert under a backdrop and `Tab` stays inside it; `Esc`, the backdrop or a choice closes it.
 
 ## Files
 
@@ -110,10 +135,11 @@ palette and the `?` overlay all read it. The theme switch is in the palette only
 - `src/gateway.ts`: the WebSocket transport and the `join` handshake.
 - `src/fold.ts`: the shape of the WebAssembly fold, and how a blocked row names its blockers.
 - `src/main.ts`: starts the page, runs the gateway loop and dispatches keys.
-- `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?item=`, `?q=`).
+- `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?layout=`, `?item=`, `?q=`, filters).
+- `src/views.ts`: filters, the view in the address, and saved views.
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.
-- `src/ui/`: the views (shell, list, panel, palette, shortcuts, status line), `tokens.css` for colour, space and
+- `src/ui/`: the views (shell, filter bar, list, board, panel, palette, shortcuts, saved-view dialog, status line), `tokens.css` for colour, space and
   type, and `app.css`.
 - `check/`: the headless Chrome check and its fixture log.
 - `../wasm`: the Rust crate that wraps `core`'s fold for the page.

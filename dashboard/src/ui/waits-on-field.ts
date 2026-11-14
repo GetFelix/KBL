@@ -15,6 +15,7 @@ export const waitsOnField: Field = {
         h('a', {
           class: 'blocker-id',
           'data-item': b.id,
+          'data-focus': `blocker:${b.id}`,
           href: itemHref(b.id, s),
           onclick: (e) => {
             const m = e as MouseEvent;

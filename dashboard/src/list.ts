@@ -3,6 +3,7 @@
 import type { ItemRow } from './fold.ts';
 import { score } from './palette.ts';
 import type { ViewState } from './state.ts';
+import { applyFilters } from './views.ts';
 
 /** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
 export const STAGES = [
@@ -58,14 +59,54 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
   return rows[Math.max(0, Math.min(rows.length - 1, at + step))].id;
 }
 
-/** The items the current view lists, before the search: every item, or only the Blocked ones. */
-export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
+/** The items the view covers, before filters and search: every item, or only the Blocked ones. */
+export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
   if (s.view === 'all') return s.items;
   const blocked = new Set(s.blocked.map((b) => b.id));
   return s.items.filter((i) => blocked.has(i.id));
 }
 
+/** What the page shows: the items in the view, filtered, matching the search, grouped by stage. */
+export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>): Group[] {
+  return group(applyFilters(inScope(s), s.filters), s.query);
+}
+
 /** The rows the list shows, in the order j and k walk. */
-export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query'>): ItemRow[] {
-  return flatten(group(visible(s), s.query));
+export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>): ItemRow[] {
+  return flatten(visible(s));
+}
+
+export type Direction = 'up' | 'down' | 'left' | 'right';
+
+/**
+ * The id one step from `current` on the board, where each group is a column. Up and
+ * down stay in the column; left and right keep the row, or the column's last card
+ * when it is shorter. The edges stop. No current card starts at the first one.
+ */
+export function moveBoard(columns: readonly Group[], current: string | null, dir: Direction): string | null {
+  const col = columns.findIndex((g) => g.items.some((i) => i.id === current));
+  if (col < 0) return columns[0]?.items[0]?.id ?? null;
+  const row = columns[col].items.findIndex((i) => i.id === current);
+  if (dir === 'up' || dir === 'down') {
+    const items = columns[col].items;
+    return items[Math.max(0, Math.min(items.length - 1, row + (dir === 'down' ? 1 : -1)))].id;
+  }
+  const next = columns[Math.max(0, Math.min(columns.length - 1, col + (dir === 'right' ? 1 : -1)))];
+  return next.items[Math.min(row, next.items.length - 1)].id;
+}
+
+/** The first or last card of `current`'s column, so Home and End stay in the column. No current card uses the first column. */
+export function boardEdge(columns: readonly Group[], current: string | null, edge: 'first' | 'last'): string | null {
+  const items = (columns.find((g) => g.items.some((i) => i.id === current)) ?? columns[0])?.items ?? [];
+  return (edge === 'first' ? items[0] : items.at(-1))?.id ?? null;
+}
+
+/**
+ * Where the focus goes when `gone` leaves the page: the nearest id after it in `before`
+ * that is still `shown`, else the nearest before it. Undefined when none is left.
+ */
+export function neighbour(before: readonly string[], gone: string, shown: (id: string) => boolean): string | undefined {
+  const at = before.indexOf(gone);
+  if (at < 0) return undefined;
+  return [...before.slice(at + 1), ...before.slice(0, at).reverse()].find(shown);
 }

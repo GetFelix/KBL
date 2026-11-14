@@ -3,6 +3,7 @@
 import type { ItemRow } from '../fold.ts';
 import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
+import { FACETS, valueOf } from '../views.ts';
 import { h } from './dom.ts';
 import { itemHref } from './item-list.ts';
 import { overlapField } from './overlap-section.ts';
@@ -27,8 +28,17 @@ const stageField: Field = {
   render: (item) => ['Stage', document.createTextNode(stageLabel(item.stage))],
 };
 
+// Only what the log recorded: a facet with no value is left out, not shown as "none".
+const facetFields: Field[] = FACETS.map(([facet, label]) => ({
+  key: (item) => valueOf(item, facet) ?? '',
+  render: (item) => {
+    const v = valueOf(item, facet);
+    return v === null ? null : [label, document.createTextNode(v)];
+  },
+}));
+
 // A new field is one module and one entry here.
-const FIELDS: readonly Field[] = [stageField, waitsOnField, overlapField];
+const FIELDS: readonly Field[] = [stageField, ...facetFields, waitsOnField, overlapField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
