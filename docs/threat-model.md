@@ -142,7 +142,7 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 
 | Route | What ingest controls | Check |
 |---|---|---|
-| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:104`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:110`, `core/src/work_fold.rs:1650`). So does `shipped`, which is also refused once a release is recorded (`tracker/src/tracker/ingest.rs:120`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:91`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1535`); ingest cuts titles itself (`ingest/src/sync.rs:1140`) |
+| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:104`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:110`, `core/src/work_fold.rs:1650`). So does `shipped`, which is also refused once a release is recorded (`tracker/src/tracker/ingest.rs:120`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:91`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1535`); ingest cuts titles itself (`ingest/src/sync.rs:1176`) |
 | `/v1/ingest/roots` | Nothing | Read only |
 | `GET /v1/ingest/state/{source}`, `PUT /v1/ingest/state/{source}` | The saved cursor for a source | The name is a key (`tracker/src/tracker/ingest.rs:237`). 4 MB at most (`tracker/src/tracker/ingest.rs:258`). Saved only if nobody saved since the version read (`tracker/src/tracker/ingest.rs:261`). Any ingest token reaches any source's state, which is fine with one worker |
 | `/healthz` | Nothing | No token. Answers `ok` and nothing else |
@@ -192,16 +192,16 @@ request only when all of these hold, so the name alone steers nothing.
 
 | Attack | Check |
 |---|---|
-| Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:936`) |
+| Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:962`) |
 | Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:554`, `ingest/src/github.rs:359`) |
 | Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:568`) |
 | Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs:371`) |
-| Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:641`) |
-| Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:728`) |
-| Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs:704`) |
+| Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:654`) |
+| Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:741`) |
+| Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs:717`) |
 | Name another item's request in other letter case | The tracker records the casing an open item already uses, so the fold refuses it as `pr_in_use` (`tracker/src/tracker.rs:241`) |
-| Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:891`) |
-| Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:1149`), our own comments are skipped (`ingest/src/sync.rs:484`), and an edit after triage shows as "changed upstream" |
+| Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:917`) |
+| Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:1185`), our own comments are skipped (`ingest/src/sync.rs:484`), and an edit after triage shows as "changed upstream" |
 
 ## MCP tools
 
@@ -248,7 +248,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `triaged` | Person, or the agent holding the item's triage child | `core/src/work_fold.rs:2546`. An agent writes it through `/v1/work/triage` |
 | `accepted` | Tracker, person | `core/src/work_fold.rs:1121` |
 | `prerequisite` | The holding agent | `core/src/work_fold.rs:2340`. With `triage`, the agent holding that triage item writes it for the item under triage, and keeps its claim (`core/src/work_fold.rs:933`). Format 3, so refused until a person raises the log |
-| `shipped` | Tracker, person, ingest | Only a done item (`core/src/work_fold.rs:1181`). Ingest only on a root it imported whose reported request has a merged status, and not once a release is recorded (`tracker/src/tracker/ingest.rs:120`). The worker, not the tracker, checks that the release is published and not a draft or prerelease, and that GitHub says its tag contains the merge commit |
+| `shipped` | Tracker, person, ingest | Only a done item (`core/src/work_fold.rs:1181`). Ingest only on a root it imported whose reported request has a merged status, and not once a release is recorded (`tracker/src/tracker/ingest.rs:120`). The worker, not the tracker, checks that the release is published and not a draft or prerelease, and that GitHub says its tag contains the merge commit. A person's `shipped` replaces the release recorded before, ingest's included (`core/src/work_fold.rs:1184`), and a reopen clears it (`core/src/work_fold.rs:1713`) |
 | `linked` | All | An agent only inside one tree (`core/src/work_fold.rs:2588`) |
 | `unlinked` | Tracker, person | `core/src/work_fold.rs:1207` |
 | `context` | All | An agent only on work it holds (`core/src/work_fold.rs:1219`). An agent replaces only its own entries (`tracker/src/tracker/tools.rs:408`) |

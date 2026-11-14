@@ -137,6 +137,25 @@ pub(crate) struct Release {
     pub(crate) published_ms: u64,
 }
 
+/// One listing of a repo's releases.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Releases {
+    /// Stable releases published at or after the time asked for, oldest first.
+    pub(crate) list: Vec<Release>,
+    /// The listing ran out before the page cap.
+    pub(crate) whole: bool,
+    /// The earliest publish time on any page read, drafts and prereleases included.
+    pub(crate) oldest_ms: Option<u64>,
+}
+
+impl Releases {
+    /// Whether every release after a merge at `merged_ms` is in `list`: the
+    /// listing ran out, or it reached a release published before the merge.
+    pub(crate) fn covers(&self, merged_ms: u64) -> bool {
+        self.whole || self.oldest_ms.is_some_and(|at| at < merged_ms)
+    }
+}
+
 /// What a fetch of one issue found.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Fetched {
@@ -229,12 +248,14 @@ pub(crate) trait Source: Send + Sync {
     /// The repo's stable releases published at or after `since_ms`, oldest
     /// first, so the first that contains a merge is the oldest after it.
     /// Drafts and prereleases are left out. At most 5 pages of 100 are read,
-    /// newest first, so a merge more than 500 releases back finds none.
+    /// newest first. A merge the listing does not cover (see
+    /// [`Releases::covers`]) gets no release at all, never one that may be
+    /// later than the oldest that carries it.
     fn releases(
         &self,
         repo: &str,
         since_ms: u64,
-    ) -> impl Future<Output = Result<Vec<Release>, SourceError>> + Send;
+    ) -> impl Future<Output = Result<Releases, SourceError>> + Send;
 
     /// Whether the release tagged `tag` contains the commit `sha`.
     fn contains(

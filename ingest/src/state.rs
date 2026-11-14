@@ -81,6 +81,9 @@ pub(crate) struct Awaiting {
     /// Tags already compared that do not contain the merge.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub(crate) misses: BTreeSet<String>,
+    /// Polls left to skip this root after a lookup that cannot succeed soon.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub(crate) skip: u32,
 }
 
 impl State {
@@ -97,5 +100,9 @@ impl State {
 }
 
 fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }

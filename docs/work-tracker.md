@@ -489,14 +489,23 @@ What it does with GitHub:
   (`awaits_release` in `GET /v1/ingest/roots`) gets a `shipped` record once a
   published release carries its merge commit. The worker records the oldest
   stable release after the merge that contains it: drafts and prereleases are
-  ignored. It lists the repo's releases newest first, at most 5 pages of 100,
-  and stops at the first one published before the merge, so a merge more than
-  500 releases back finds none. It then compares the merge commit with each
-  tag, oldest first (`ahead` or `identical` means the tag contains it). One
-  poll makes at most `release_compares_per_poll` compares (default 20), and a
-  tag found not to contain the merge is not compared again, so the search
-  carries on over later polls. This step runs last in a poll, so a rate limit
-  here holds up nothing else. A request merged without a merge time, or by one
+  ignored. It lists the repo's releases newest first, at most 5 pages of 100.
+  GitHub orders that list by creation time, so a draft published long after it
+  was made can sit further down; the worker reads one more page past the first
+  release published before the merge to catch those, then stops. If the 5
+  pages run out before it sees a release older than the merge, it records
+  nothing for that root, never a release that may be later than the right one,
+  and says so in its log: a person records `shipped` for it. It then compares
+  the merge commit with each tag, oldest first (`ahead` or `identical` means
+  the tag contains it). One poll makes at most `release_compares_per_poll`
+  requests in this step, pull request reads and compares together (default
+  20), and a tag found not to contain the merge is not compared again, so the
+  search carries on over later polls. A request GitHub answers 404 or 410 for
+  is read again on a later poll. A root whose compare fails, whose `shipped`
+  is refused, or whose merge is past the page bound sits out the next 10 polls,
+  so it cannot spend every poll's budget. This step runs last in a poll, after
+  the cursors move, so a rate limit here holds up nothing else and the tags
+  already found not to contain the merge are kept. A request merged without a merge time, or by one
   of `own_logins`, ships nothing. It checks only a request it may read under
   the rules above. The token needs read access to the repo's contents for the
   compare call and the release list. A merged root nothing waits on costs no
@@ -725,7 +734,9 @@ asks only for roots an open item's link is waiting on, so an ordinary merge
 costs no release requests. The fold takes the record from people and ingest
 only, and only for an item that is done. The tracker takes ingest's only when
 the item's reported request has a merged status, and never over a release
-already recorded. If a person rejects or dismisses the prerequisite, the held
+already recorded. A person's `shipped` replaces any release recorded before,
+ingest's included, and a reopen clears the release, since a new merge needs a
+new one. If a person rejects or dismisses the prerequisite, the held
 item goes to Needs you as "dependency dropped".
 
 This is the only cross-tree link an agent can make, and the tracker checks it

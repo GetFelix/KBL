@@ -585,8 +585,9 @@ async fn releases_skip_drafts_prereleases_and_odd_tags_and_come_oldest_first() {
         ])),
     );
     let got = github(&gh).releases("GetFelix/felix", 0).await.unwrap();
-    let tags: Vec<_> = got.iter().map(|r| r.tag.as_str()).collect();
+    let tags: Vec<_> = got.list.iter().map(|r| r.tag.as_str()).collect();
     assert_eq!(tags, ["v1", "v2"]);
+    assert!(got.whole && got.covers(0));
 }
 
 #[tokio::test]
@@ -638,18 +639,36 @@ async fn releases_page_back_to_the_merge_and_no_further_than_five_pages() {
             .filter(|r| r.url.contains("/releases?"))
             .count()
     };
-    // Everything is newer than the merge: five pages, then it stops.
+    // Everything is newer than the merge: five pages, then it stops, and a
+    // merge older than every page read is not covered.
     let all = g.releases("GetFelix/felix", 0).await.unwrap();
     assert_eq!(pages(&gh), 5);
-    assert_eq!(all.len(), 500);
+    assert_eq!(all.list.len(), 500);
     assert!(
-        all.windows(2)
+        all.list
+            .windows(2)
             .all(|w| w[0].published_ms <= w[1].published_ms)
     );
-    // A release older than the merge on page 2 ends the listing there.
-    let since = all[350].published_ms;
+    let oldest = all.list[0].published_ms;
+    assert!(!all.whole);
+    assert!(!all.covers(oldest) && !all.covers(0));
+    assert!(all.covers(oldest + 1));
+    // A release older than the merge on page 2: one more page, then it stops.
+    let since = all.list[350].published_ms;
     let some = g.releases("GetFelix/felix", since).await.unwrap();
-    assert_eq!(pages(&gh), 7);
-    assert_eq!(some.len(), 150);
-    assert!(some.iter().all(|r| r.published_ms >= since));
+    assert_eq!(pages(&gh), 8);
+    assert_eq!(some.list.len(), 150);
+    assert!(some.list.iter().all(|r| r.published_ms >= since));
+    assert!(some.covers(since));
+    // First seen on the last page: the cap still holds.
+    let since = all.list[50].published_ms;
+    let last = g.releases("GetFelix/felix", since).await.unwrap();
+    assert_eq!(pages(&gh), 13);
+    assert_eq!(last.list.len(), 450);
+    assert!(last.covers(since));
+    // A short page is the end of the list.
+    gh.on("GET", "/releases?per_page=100&page=2", ok(json!([rel(1)])));
+    let short = g.releases("GetFelix/felix", 0).await.unwrap();
+    assert_eq!(pages(&gh), 15);
+    assert!(short.whole && short.covers(0));
 }

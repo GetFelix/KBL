@@ -19,7 +19,7 @@ use kbl_core::work::{
 
 use crate::source::{
     Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, PullRequest, Release,
-    Source, SourceError, WriteBack,
+    Releases, Source, SourceError, WriteBack,
 };
 
 pub(crate) mod transport;
@@ -566,10 +566,12 @@ impl<T: Transport> Source for Github<T> {
         Ok(())
     }
 
-    async fn releases(&self, repo: &str, since_ms: u64) -> Result<Vec<Release>, SourceError> {
-        // GitHub lists newest first, so the pages stop at the first release
-        // published before `since_ms`.
-        let mut out = Vec::new();
+    async fn releases(&self, repo: &str, since_ms: u64) -> Result<Releases, SourceError> {
+        // GitHub lists by creation time, newest first, which is publish order
+        // except for a draft published later. One more page past the first
+        // release before `since_ms` catches most of those.
+        let mut out = Releases::default();
+        let mut past = false;
         for page in 1..=RELEASE_PAGES {
             let url = format!(
                 "{}/repos/{repo}/releases?per_page=100&page={page}",
@@ -578,7 +580,10 @@ impl<T: Transport> Source for Github<T> {
             let res = self.call(Req::get(url)).await?;
             match res.status {
                 200 => {}
-                404 => break,
+                404 => {
+                    out.whole = true;
+                    break;
+                }
                 s => return Err(anyhow!("GitHub answered {s} for the releases of {repo}").into()),
             }
             let listed = res.body.as_array().cloned().unwrap_or_default();
@@ -587,6 +592,7 @@ impl<T: Transport> Source for Github<T> {
                 let Some(at) = r["published_at"].as_str().and_then(parse_utc_ms) else {
                     continue;
                 };
+                out.oldest_ms = Some(out.oldest_ms.map_or(at, |o| o.min(at)));
                 if at < since_ms {
                     older = true;
                     continue;
@@ -595,17 +601,24 @@ impl<T: Transport> Source for Github<T> {
                     continue;
                 }
                 if let Some(tag) = r["tag_name"].as_str().filter(|t| plain_ref(t)) {
-                    out.push(Release {
+                    out.list.push(Release {
                         tag: tag.to_owned(),
                         published_ms: at,
                     });
                 }
             }
-            if older || listed.len() < 100 {
+            if listed.len() < 100 {
+                out.whole = true;
                 break;
             }
+            if past {
+                break;
+            }
+            past = older;
         }
-        out.sort_by(|a, b| (a.published_ms, &a.tag).cmp(&(b.published_ms, &b.tag)));
+        out.list
+            .sort_by(|a, b| (a.published_ms, &a.tag).cmp(&(b.published_ms, &b.tag)));
+        out.list.dedup();
         Ok(out)
     }
 
