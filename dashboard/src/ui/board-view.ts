@@ -4,6 +4,7 @@
 // list under the column's heading, so a screen reader hears "Ready, list, 3 items".
 import { visible, type Group } from '../list.ts';
 import type { ViewState } from '../state.ts';
+import { flagText } from '../overlap.ts';
 import { h } from './dom.ts';
 import { drawn, itemHref, restoreFocus, type Announce, type Drawn, type ListHandlers } from './item-list.ts';
 
@@ -35,10 +36,10 @@ export function boardView(on: ListHandlers, announce: Announce) {
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'row-flag card-flag', hidden: true }));
       cards.set(id, a);
     }
-    const t = a.lastElementChild!;
+    const t = a.querySelector('.card-title')!;
     if (t.textContent !== title) t.textContent = title;
     return a;
   };
@@ -82,6 +83,11 @@ export function boardView(on: ListHandlers, announce: Announce) {
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
+        // Same text flag as the list row, so the board says it too.
+        const flag = a.querySelector<HTMLElement>('.row-flag')!;
+        const text = flagText(s.overlaps.get(id));
+        if (flag.textContent !== text) flag.textContent = text;
+        flag.hidden = text === '';
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

@@ -2636,7 +2636,7 @@ impl State {
     }
 
     /// Whether `to` can be reached from `from` along edges.
-    fn reaches(&self, from: &ItemId, to: &ItemId) -> bool {
+    pub(crate) fn reaches(&self, from: &ItemId, to: &ItemId) -> bool {
         let mut seen = BTreeSet::new();
         let mut stack = vec![from];
         while let Some(n) = stack.pop() {

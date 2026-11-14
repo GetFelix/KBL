@@ -4,6 +4,7 @@
 import { neighbour, visible, type Group } from '../list.ts';
 import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
+import { flagText } from '../overlap.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
@@ -127,10 +128,10 @@ export function itemList(
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-flag', hidden: true }));
       rows.set(id, a);
     }
-    const t = a.lastElementChild!;
+    const t = a.querySelector('.row-title')!;
     if (t.textContent !== title) t.textContent = title;
     return a;
   };
@@ -227,6 +228,11 @@ export function itemList(
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
+        // Text, not colour alone, so it reads in both themes and to a screen reader as part of the link.
+        const flag = a.querySelector<HTMLElement>('.row-flag')!;
+        const text = flagText(s.overlaps.get(id));
+        if (flag.textContent !== text) flag.textContent = text;
+        flag.hidden = text === '';
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

@@ -337,6 +337,25 @@ try {
   await open(connected, { storage: { 'kbl.dashboard.views': 'not json' } });
   await page.waitFor(live);
   check(await page.eval(`!!document.querySelector('.nav-empty')`), 'unreadable storage leaves the sidebar empty, not broken');
+  await open(`${connected}&item=gh-2219`);
+  await page.waitFor(live);
+  const flag = (id) => page.eval(`document.querySelector('.row[data-id=${id}] .row-flag:not([hidden])')?.textContent ?? ''`);
+  check((await flag('gh-2219')) === '1 file overlap' && (await flag('gh-2215')) === '1 file overlap', 'both rows of an overlap carry a flag');
+  check((await flag('gh-2204')) === '', 'a row without overlaps has no flag');
+  const note = await page.eval(`document.querySelector('.panel .overlap')?.textContent ?? ''`);
+  check(note.includes('gh-2215') && note.includes('core/src/segment/reader.rs') && note.includes('Suggested: gh-2219 waits on gh-2215.'), `the panel names the other item, the shared file and the suggested link (${note})`);
+  await axe('overlap panel');
+  await shoot('overlap-dark');
+  check(await page.eval(`document.querySelector('.panel .overlap a')?.getAttribute('href')?.includes('item=gh-2215') === true`), 'the other item in a note is a link to it');
+  await page.eval(`document.querySelector('.panel .overlap a').focus()`);
+  await page.eval(`window.__push({ kind: 'context', item: 'gh-2204', entry: 'files', text: { text: 'core/src/segment/reader.rs' }, actor: 'person', by: 'maintainer', at_ms: 1800000000001 })`);
+  await page.waitFor(`document.querySelector('.panel .overlap-notes')?.children.length === 2`);
+  check((await flag('gh-2219')) === '2 file overlaps' && (await flag('gh-2204')) === '2 file overlaps', 'a live files entry adds a note and updates the flags');
+  check(await page.eval(`document.activeElement?.dataset.focus === 'other:gh-2215'`), 'a rebuild of the panel leaves focus on the same link');
+  await open(`${connected}&view=board`);
+  await page.waitFor(live);
+  const cardFlag = (id) => page.eval(`document.querySelector('.card[data-id=${id}] .row-flag:not([hidden])')?.textContent ?? ''`);
+  check((await cardFlag('gh-2219')) === '1 file overlap' && (await cardFlag('gh-2204')) === '', 'board cards carry the same overlap flag');
 
   // A fresh page: after a blur, Chrome starts Tab from where focus was, not the top.
   await open(connected);

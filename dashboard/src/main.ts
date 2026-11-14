@@ -7,6 +7,7 @@ import './ui/tokens.css';
 import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { items, type Fold } from './fold.ts';
+import { overlapNotes } from './overlap.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
@@ -51,6 +52,7 @@ const initial: ViewState = {
   connection: q.get('room') && token ? { kind: 'loading', what: 'history' } : { kind: 'setup' },
   synced: false,
   items: [],
+  overlaps: new Map(),
   ...address,
   selected: address.open,
   density: stored(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable',
@@ -261,6 +263,7 @@ async function main() {
     at: () => fold.at(),
     stateJson: () => fold.state_json(),
     itemsJson: () => fold.items_json(),
+    overlapsJson: () => fold.overlaps_json(),
   };
   // Redraw once per frame however many records arrive.
   let queued = false;
@@ -269,7 +272,7 @@ async function main() {
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      store.dispatch({ type: 'items', items: items(sink) });
+      store.dispatch({ type: 'items', items: items(sink), overlaps: overlapNotes(sink) });
     });
   };
   let cursor = 0;
@@ -292,7 +295,7 @@ async function main() {
         },
         onLive: () => {
           delay = 1000;
-          store.dispatch({ type: 'items', items: items(sink) });
+          store.dispatch({ type: 'items', items: items(sink), overlaps: overlapNotes(sink) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
         },
       });

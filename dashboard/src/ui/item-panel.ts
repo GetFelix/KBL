@@ -3,6 +3,10 @@ import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { FACETS, valueOf } from '../views.ts';
 import { h } from './dom.ts';
+import { overlapField } from './overlap-section.ts';
+
+// Panel sections after the recorded fields, each with its own redraw key.
+const FIELDS = [overlapField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
@@ -11,7 +15,7 @@ const WHY = {
   unreachable: () => 'The gateway cannot be reached, so the log has not been read. Trying again.',
 };
 
-export function itemPanel(onClose: () => void): { el: HTMLElement; render(s: ViewState): void; focus(): void } {
+export function itemPanel(onClose: () => void, onOpen: (id: string) => void): { el: HTMLElement; render(s: ViewState): void; focus(): void } {
   // Focusable itself, so opening an item can move focus here without landing on Close.
   const el = h('aside', { class: 'panel', 'aria-labelledby': 'panel-title', tabindex: '-1', hidden: true });
   let shown = '';
@@ -25,14 +29,16 @@ export function itemPanel(onClose: () => void): { el: HTMLElement; render(s: Vie
       else if (c.kind !== 'loading' || c.linked) failed = false;
       const item = s.items.find((i) => i.id === s.open);
       const why = item ? '' : s.synced ? 'missing' : s.connection.kind === 'stopped' ? 'stopped' : failed ? 'unreachable' : 'reading';
-      const key = s.open === null ? '' : `${s.open}|${JSON.stringify(item)}|${why}`;
+      const key = s.open === null ? '' : `${s.open}|${JSON.stringify(item)}|${why}|${item ? FIELDS.map((f) => f.key(item, s)).join('|') : ''}`;
       if (key === shown) return;
       shown = key;
       el.hidden = s.open === null;
       if (s.open === null) return el.replaceChildren();
       // A live record can redraw the panel under the focus; keep the focus in the panel.
-      const hadFocus = el.contains(document.activeElement);
-      const close = h('button', { type: 'button', class: 'button ghost', 'aria-label': 'Close the item', onclick: onClose }, 'Close');
+      const active = document.activeElement;
+      const hadFocus = el.contains(active);
+      const focusKey = active instanceof HTMLElement ? active.dataset.focus : undefined;
+      const close = h('button', { type: 'button', class: 'button ghost', 'data-focus': 'close', 'aria-label': 'Close the item', onclick: onClose }, 'Close');
       el.replaceChildren(
         h('header', { class: 'panel-head' }, h('span', { class: 'row-id' }, s.open), close),
         item
@@ -45,12 +51,16 @@ export function itemPanel(onClose: () => void): { el: HTMLElement; render(s: Vie
                   const v = valueOf(item, f);
                   return v === null ? [] : [h('dt', {}, label), h('dd', {}, v)];
                 }),
-              ))
+              ),
+              ...FIELDS.map((f) => f.render(item, s, { open: onOpen })))
           : h('div', {},
               h('h2', { id: 'panel-title', class: 'panel-title' }, 'No such item'),
               h('p', { class: 'muted' }, WHY[why as keyof typeof WHY](s.open))),
       );
-      if (hadFocus) el.focus({ preventScroll: true });
+      if (hadFocus) {
+        const same = focusKey ? el.querySelector<HTMLElement>(`[data-focus="${focusKey}"]`) : null;
+        (same ?? el).focus({ preventScroll: true });
+      }
     },
     focus() {
       el.focus({ preventScroll: true });
