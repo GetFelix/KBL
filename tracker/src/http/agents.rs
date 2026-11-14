@@ -159,11 +159,22 @@ async fn list<B: Broker>(app: &Arc<App<B>>, team: &str, headers: &HeaderMap) -> 
         }));
     }
     for name in team.file_agents() {
+        // A name revoked while minted, then put back in the token file, is one
+        // agent: show the file row and mark the revoked minted token.
+        let before = agents.len();
+        agents.retain(|a| !(a["agent"] == name.as_str() && a["revoked"] == true));
+        let revoked_minted = agents.len() != before;
         let holds = match &tracker {
             Some(t) => Some(t.holds_of(&name).await),
             None => None,
         };
-        agents.push(json!({ "agent": name, "token_file": true, "revoked": false, "holds": holds }));
+        agents.push(json!({
+            "agent": name,
+            "token_file": true,
+            "revoked": false,
+            "revoked_minted": revoked_minted,
+            "holds": holds,
+        }));
     }
     Json(json!({ "team": team.name(), "agents": agents })).into_response()
 }

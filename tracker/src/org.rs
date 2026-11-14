@@ -197,7 +197,10 @@ impl<B: Broker> Org<B> {
                 let _ = core.state.apply(&logged);
                 core.at = Some(offset);
                 if offset != guess {
+                    // Another writer got in: read now, or tokens are refused
+                    // until the next renewal.
                     core.stale = true;
+                    self.refresh_or_log(&mut core).await;
                 }
                 self.publish_view(&core);
                 Ok((Applied::Changed, Some(offset)))
@@ -205,6 +208,7 @@ impl<B: Broker> Org<B> {
             Err(e) => {
                 core.stale = true;
                 self.publish_lease(&core);
+                self.refresh_or_log(&mut core).await;
                 Err(OrgError::Felix(e))
             }
         }

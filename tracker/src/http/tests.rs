@@ -22,6 +22,8 @@ struct Quiet {
     log: Arc<StdMutex<Records>>,
     /// Publishes also go on `log`, so a reread finds them.
     keeps: Arc<AtomicBool>,
+    /// Publishes fail, and are not recorded.
+    fail_publish: Arc<AtomicBool>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
@@ -34,6 +36,9 @@ impl Quiet {
 
 impl Broker for Quiet {
     async fn publish(&self, stream: &str, payload: Vec<u8>) -> anyhow::Result<u64> {
+        if self.fail_publish.load(Ordering::SeqCst) {
+            anyhow::bail!("publish refused");
+        }
         let mut published = self.published.lock().unwrap();
         published.push(stream.to_owned());
         let offset = published.len() as u64 - 1;

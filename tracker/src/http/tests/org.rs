@@ -631,3 +631,47 @@ async fn a_minted_agent_the_token_file_also_names_can_still_be_revoked() {
     // The file's own w1 keeps working and keeps its holds.
     assert_eq!(next_as(&o.app, "tok-w1").await, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn a_failed_org_publish_does_not_turn_minted_tokens_away_until_the_next_renewal() {
+    let o = org_app().await;
+    let (_, body) = add_agent(&o.app, Some("tok-ops"), "default", "w2").await;
+    let token = body["token"].as_str().unwrap().to_owned();
+    assert_eq!(next_as(&o.app, &token).await, StatusCode::OK);
+    o.org.fail_publish.store(true, Ordering::SeqCst);
+    let (status, _) = add_agent(&o.app, Some("tok-ops"), "default", "w3").await;
+    assert!(!status.is_success(), "{status}");
+    o.org.fail_publish.store(false, Ordering::SeqCst);
+    // No renewal ran: the failed append itself read the log again.
+    assert_eq!(next_as(&o.app, &token).await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_name_revoked_minted_then_put_in_the_token_file_lists_once() {
+    let o = org_app().await;
+    let org = &o.teams.org().unwrap().org;
+    let by = Key::new("ops").unwrap();
+    let agent = Key::new("w1").unwrap();
+    let added = OrgRecord::AgentAdded {
+        team: name("default"),
+        agent: agent.clone(),
+        token_sha256: TokenHash::of("tok-minted-w1"),
+    };
+    org.append(by.clone(), added).await.unwrap();
+    let revoked = OrgRecord::AgentRevoked {
+        team: name("default"),
+        agent,
+    };
+    org.append(by, revoked).await.unwrap();
+    let list = Request::get("/v1/teams/default/agents");
+    let (_, body) = send(&o.app, list, Some("tok-ops"), Value::Null).await;
+    let rows: Vec<&Value> = body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["agent"] == "w1")
+        .collect();
+    assert_eq!(rows.len(), 1, "{body}");
+    assert_eq!(rows[0]["token_file"], true);
+    assert_eq!(rows[0]["revoked_minted"], true);
+}
