@@ -70,7 +70,7 @@ export function signInDialog(check: (token: string) => Promise<string | null>) {
   const m = modal('Sign in to the tracker', 'sign-in-dialog');
   m.el.setAttribute('aria-labelledby', 'sign-in-title');
   m.el.removeAttribute('aria-label');
-  const input = h('input', { id: 'tracker-token', type: 'password', class: 'field', autocomplete: 'off', spellcheck: 'false', required: true, 'aria-describedby': 'tracker-token-help tracker-token-error' });
+  const input = h('input', { id: 'tracker-token', type: 'password', class: 'field', autocomplete: 'off', spellcheck: 'false', 'aria-required': 'true', 'aria-describedby': 'tracker-token-help tracker-token-error' });
   const error = h('p', { id: 'tracker-token-error', class: 'field-error' });
   const go = h('button', { type: 'submit', class: 'button primary' }, 'Sign in');
   const form = h('form', { method: 'dialog' },

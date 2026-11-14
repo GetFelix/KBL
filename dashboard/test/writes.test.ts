@@ -21,11 +21,16 @@ test('each action is offered only where the fold would take it', () => {
 
 test('requests are the tracker person routes, under the team when one is named', () => {
   assert.deepEqual(request('a', { kind: 'accept', tier: 2 }), { path: '/v1/work/proposals/accept', body: { item: 'a', tier: 2 } });
+  assert.deepEqual(request('a', { kind: 'accept', tier: null }), { path: '/v1/work/proposals/accept', body: { item: 'a' } });
+  assert.deepEqual(request('a', { kind: 'reject' }), { path: '/v1/work/proposals/reject', body: { item: 'a' } });
+  assert.deepEqual(request('a', { kind: 'tier', tier: 0 }), { path: '/v1/work/tier', body: { item: 'a', tier: 0 } });
   assert.deepEqual(request('a', { kind: 'close', why: 'dismissed' }), { path: '/v1/work/close', body: { item: 'a', why: 'dismissed' } });
   assert.deepEqual(request('a', { kind: 'answer', question: 4, text: '  ', chosen: 'rust' }), {
     path: '/v1/work/questions/answer',
     body: { item: 'a', question: 4, chosen: 'rust' },
   });
+  // Inline text is content, `{ text }`: a bare string is refused by the tracker.
+  assert.deepEqual(request('a', { kind: 'answer', question: 4, text: ' yes ', chosen: null }).body, { item: 'a', question: 4, text: { text: 'yes' } });
   assert.equal(route('/v1/work/tier', null), '/v1/work/tier');
   assert.equal(route('/v1/work/tier', 'a b'), '/v1/teams/a%20b/work/tier');
 });

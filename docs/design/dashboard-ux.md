@@ -106,7 +106,7 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   why: no record takes back an acceptance, a rejected proposal stays rejected, a close cancels the item's
   open children (a reopened root goes back to Triage with them still cancelled), and an answer starts the
   work that resumes from it.
-- **Multi-select.** `X` marks the focused item, as in Linear and GitHub; each list row also has a checkbox
+- **Multi-select.** `X` marks the focused item, as in Linear and GitHub; each list row also has a checkbox for the mouse, kept out of the Tab order so Tab still moves row to row,
   beside its link, and board cards say Selected in text. The bulk bar counts the marks and offers only what
   some of them allow, with the count it applies to ("Accept 2…"). A bulk action is one call per item, in
   order, and the activity line reports each refusal. `Esc` clears the marks once nothing else is open.

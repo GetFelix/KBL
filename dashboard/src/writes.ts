@@ -69,7 +69,8 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/close', body: { item, why: a.why } };
     case 'answer': {
       const body: Record<string, unknown> = { item, question: a.question };
-      if (a.text.trim()) body.text = a.text.trim();
+      // The tracker reads `text` as content: inline text is `{ text }`, never a bare string.
+      if (a.text.trim()) body.text = { text: a.text.trim() };
       if (a.chosen !== null) body.chosen = a.chosen;
       return { path: '/v1/work/questions/answer', body };
     }

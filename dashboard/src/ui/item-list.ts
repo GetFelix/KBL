@@ -94,11 +94,12 @@ export function itemList(
   const el = h('div', { class: 'list' });
   const rows = new Map<string, HTMLAnchorElement>();
   // One checkbox per row, beside its link (a control cannot sit inside a link), for bulk actions.
+  // Out of the Tab order so Tab still moves row to row, as in Linear and GitHub; X marks from the keyboard.
   const marks = new Map<string, HTMLInputElement>();
   const markBox = (id: string): HTMLInputElement => {
     let box = marks.get(id);
     if (!box) {
-      box = h('input', { type: 'checkbox', class: 'mark', 'data-mark': id, 'aria-label': `Select ${id}`, onchange: () => on.mark(id) });
+      box = h('input', { type: 'checkbox', class: 'mark', 'data-mark': id, 'aria-label': `Select ${id}`, tabindex: '-1', onchange: () => on.mark(id) });
       marks.set(id, box);
     }
     return box;

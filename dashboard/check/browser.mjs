@@ -53,10 +53,13 @@ const fakeGateway = (log, mode) => `(() => {
     '/v1/work/proposals/reject': (b) => ({ kind: 'rejected', item: b.item }),
     '/v1/work/tier': (b) => ({ kind: 'tier_changed', item: b.item, tier: b.tier }),
     '/v1/work/close': (b) => ({ kind: 'closed', item: b.item, why: b.why }),
-    '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: { text: b.text ?? '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
+    '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: b.text ?? { text: '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
   };
   window.__tracker = { calls: [], refuse: {}, delay: 0, token: 'person-token' };
+  const realFetch = window.fetch.bind(window);
   window.fetch = async (url, init) => {
+    // Only the tracker's routes are faked; the page's own assets (the WebAssembly) load as usual.
+    if (typeof url !== 'string' || !url.startsWith('/v1/')) return realFetch(url, init);
     const t = window.__tracker;
     const body = init.body ? JSON.parse(init.body) : null;
     t.calls.push({ url, auth: init.headers.authorization, body });
@@ -65,6 +68,8 @@ const fakeGateway = (log, mode) => `(() => {
     if (init.headers.authorization !== 'Bearer ' + t.token) return res(401, { error: 'the tracker does not know this token' });
     if (url === '/v1/me') return res(200, { person: 'maintainer', org_admin: true, teams: [{ team: 'default', role: 'admin' }] });
     if (t.refuse[body?.item]) return res(409, t.refuse[body.item]);
+    // The real tracker reads an answer's text as content ({ text }) and refuses a bare string.
+    if (body && 'text' in body && typeof body.text?.text !== 'string') return res(422, { error: 'text: expected content' });
     const make = ROUTES[url];
     if (!make) return res(404, { error: 'no such route' });
     window.__push({ actor: 'person', by: 'maintainer', at_ms: Date.now(), ...make(body) });
@@ -599,10 +604,13 @@ try {
   const tierOf = `[...document.querySelectorAll('.panel dt')].find((d) => d.textContent === 'Tier')?.nextElementSibling.textContent`;
   await page.eval(`document.querySelector('#panel-tier').value = '3'; document.querySelector('[data-focus=set-tier]').focus(); document.querySelector('[data-focus=set-tier]').click(); true`);
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Set the tier of gh-2219.'`);
+  // The tracker answers before the record comes back on the log, so wait for the fold to show it.
+  await page.waitFor(`${tierOf} === '3'`);
   check((await page.eval(tierOf)) === '3' && (await page.eval(`!document.querySelector('.activity button').hidden`)), 'a tier change is written, shown, and offers Undo');
   await axe('tier set');
   await press(page, 'z', MOD);
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Undid the tier change on gh-2219.'`);
+  await page.waitFor(`${tierOf} === '1'`);
   check((await page.eval(tierOf)) === '1' && (await page.eval(`JSON.stringify(window.__tracker.calls.at(-1).body) === '{"item":"gh-2219","tier":1}'`)), `${MOD_NAME}+Z undoes it with a new tier_changed record setting the old tier back`);
   await shoot('undo-dark');
   await page.eval(`window.__tracker.delay = 800; document.querySelector('#panel-tier').value = '0'; document.querySelector('[data-focus=set-tier]').click(); true`);
@@ -647,6 +655,7 @@ try {
   check(await page.eval(`document.querySelector('#confirm-why') && document.querySelector('#confirm-undo').textContent.includes('children stay cancelled')`), 'closing asks why and says what cannot be undone');
   await page.eval(`document.querySelector('#confirm-why').value = 'completed'; document.querySelector('.confirm-dialog form').requestSubmit(); true`);
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Closed gh-2210.'`);
+  await page.waitFor(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`);
   check(await page.eval(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`), 'a checkbox marks a row, and the close lands as completed');
   await page.eval(`window.__tracker.token = 'rotated'; document.querySelector('.row[data-id=gh-2219]').click(); document.querySelector('[data-focus=set-tier]').click(); true`);
   await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);

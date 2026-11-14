@@ -92,7 +92,7 @@ Claiming is not offered: it is an agent's, and the fold refuses `claimed` from a
 
 Each write shows as pending on the item and in the activity line above the work, then as written or refused.
 A refusal shows the tracker's reason and its code (`closed`, `not_open_question`, ...). The list itself changes
-only when the record arrives on the log. `X` marks the focused item (each list row also has a checkbox), and the
+only when the record arrives on the log. `X` marks the focused item (each list row also has a checkbox for the mouse), and the
 bulk bar acts on the marked items, one call per item; `Esc` clears the marks. The Needs you view
 (`?view=inbox`) lists what waits on a person and why.
 
