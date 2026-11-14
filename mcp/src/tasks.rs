@@ -520,14 +520,7 @@ impl<B: Backend> Tasks<B> {
     async fn show(&self, task: &Task) -> Value {
         let body = match &task.body {
             Some(Content::Text(text)) => Some(text.clone()),
-            Some(Content::Artifact(id)) => {
-                let blobs = self.0.resources.blobs();
-                let got = self.0.backend.cache_get(&blobs, id.as_str()).await;
-                Some(match got {
-                    Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
-                    _ => format!("(the body is artifact {id}, which could not be read)"),
-                })
-            }
+            Some(Content::Artifact(id)) => Some(self.artifact_text(id.as_str()).await),
             None => None,
         };
         json!({

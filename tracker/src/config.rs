@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use kbl_core::names::{AgentName, Key};
+use kbl_core::work::Target;
 use serde::Deserialize;
 
 /// A JSON object read as pairs, so a token listed twice is seen instead of overwritten.
@@ -46,14 +47,14 @@ struct File {
     /// Token to an ingest worker's key. It may append the upstream sync records and keep its cursor.
     #[serde(default = "Pairs::empty")]
     ingest: Pairs<Key>,
-    /// Agent name to the repos it may reach outside its own tree.
+    /// Agent name to the `source:owner/repo` targets it may reach outside its own tree.
     #[serde(default)]
     grants: BTreeMap<String, Vec<String>>,
 }
 
-/// Agent name to the repos it may file prerequisites in and link to, beyond
-/// the repo of the tree it is working in.
-pub(crate) type Grants = BTreeMap<String, Vec<String>>;
+/// Agent name to the targets (a source and a repo in it) it may file
+/// prerequisites in and link to, beyond the target of the tree it is working in.
+pub(crate) type Grants = BTreeMap<String, Vec<Target>>;
 
 impl<T> Pairs<T> {
     fn empty() -> Self {
@@ -116,21 +117,27 @@ impl Tokens {
                 "a token is listed more than once, or as both an agent and a person"
             );
         }
-        for (agent, repos) in &file.grants {
+        let mut grants = Grants::new();
+        for (agent, entries) in file.grants {
             anyhow::ensure!(
                 file.agents.0.iter().any(|(_, a)| a.as_str() == agent),
                 "grants name {agent:?}, which is not an agent"
             );
-            anyhow::ensure!(
-                repos.iter().all(|r| r.contains('/')),
-                "a grant for {agent:?} is not an owner/repo"
-            );
+            let mut targets = Vec::new();
+            for e in &entries {
+                targets.push(grant_target(e).with_context(|| {
+                    format!(
+                        "the grant {e:?} for {agent:?} is not source:owner/repo; a grant names its source, such as github:GetFelix/felix"
+                    )
+                })?);
+            }
+            grants.insert(agent, targets);
         }
         Ok(Self {
             agents: file.agents.0,
             people: file.people.0,
             ingest: file.ingest.0,
-            grants: file.grants,
+            grants,
         })
     }
 
@@ -186,6 +193,18 @@ fn same(a: &str, b: &str) -> bool {
         diff |= usize::from(a.get(i).copied().unwrap_or(0) ^ b.get(i).copied().unwrap_or(0));
     }
     diff == 0
+}
+
+/// Reads a grant entry. The source is part of it, so a grant for a GitHub repo
+/// does not also reach a repo of the same name in another source.
+fn grant_target(entry: &str) -> Option<Target> {
+    let (source, repo) = entry.split_once(':')?;
+    let named = |s: &str| !s.is_empty() && !s.contains(|c: char| c.is_whitespace() || c == ':');
+    let (owner, name) = repo.split_once('/')?;
+    (named(source) && named(owner) && named(name) && !name.contains('/')).then(|| Target {
+        source: source.to_owned(),
+        repo: repo.to_owned(),
+    })
 }
 
 #[cfg(test)]
