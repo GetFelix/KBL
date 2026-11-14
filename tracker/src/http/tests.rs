@@ -82,6 +82,7 @@ fn quiet_settings() -> crate::tracker::Settings {
         lease_wait: Duration::ZERO,
         crash_after_poll: false,
         review_tiers: crate::tracker::default_review_tiers(),
+        cost_floor_micros: 0,
     }
 }
 
@@ -95,6 +96,7 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             lease_wait: Duration::ZERO,
             crash_after_poll: false,
             review_tiers: crate::tracker::default_review_tiers(),
+            cost_floor_micros: 0,
         },
     )
     .await

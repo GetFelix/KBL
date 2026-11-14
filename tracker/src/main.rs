@@ -94,6 +94,10 @@ struct Cli {
         default_value = "fast,deep"
     )]
     review_tiers: Vec<String>,
+    /// The least each claim is charged against its root's cost budget, in
+    /// millionths of a dollar, whatever the agent reports.
+    #[arg(long, env = "KBL_COST_FLOOR_MICROS", default_value_t = 100_000)]
+    cost_floor_micros: u64,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -166,6 +170,8 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
     let ttl = Duration::from_millis(cli.lease_ttl_ms);
     let visibility = Duration::from_millis(cli.claim_visibility_ms);
     let (crash_after_poll, review_tiers) = (cli.crash_after_poll, cli.review_tiers.clone());
+    // One floor for every team; each team's tracker charges it against its own fold.
+    let cost_floor_micros = cli.cost_floor_micros;
     let base = target(cli, "");
     Arc::new(move |team: TeamName| {
         let mut target = base.clone();
@@ -182,6 +188,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             lease_wait: ttl * 2,
             crash_after_poll,
             review_tiers: review_tiers.clone(),
+            cost_floor_micros,
         };
         Box::pin(async move {
             let felix = felix::connect(target, Kind::Team).await?;
