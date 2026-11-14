@@ -5,21 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>KBL</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cstyle%3Epath%7Bfill:%2314171C%7D@media (prefers-color-scheme:dark)%7Bpath%7Bfill:%23ECEAE6%7D%7D%3C/style%3E%3Cpath d='M8 12H36V28H52V56H8Z'/%3E%3Crect fill='%23C86A1E' x='40' y='8' width='16' height='16'/%3E%3C/svg%3E" />
-    <style>
-      body { font: 15px/1.4 system-ui, sans-serif; margin: 2rem auto; max-width: 48rem; padding: 0 1rem; color: #1b2328; background: #fff; }
-      @media (prefers-color-scheme: dark) { body { color: #e6edf0; background: #12171a; } }
-      #status { opacity: 0.7; margin-bottom: 1rem; }
-      ul { list-style: none; padding: 0; }
-      li { display: flex; gap: 0.75rem; padding: 0.35rem 0; border-bottom: 1px solid #8884; }
-      .stage { min-width: 6rem; font-variant: small-caps; opacity: 0.8; }
-      .id { font-family: ui-monospace, monospace; min-width: 5rem; }
-      .waits { margin-left: auto; opacity: 0.7; }
-    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <h1>KBL</h1>
-    <div id="status">Connecting</div>
-    <ul id="items"></ul>
+    <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

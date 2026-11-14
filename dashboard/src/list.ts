@@ -1,0 +1,71 @@
+// Groups the fold's items for the list view. The stage itself comes from `core`
+// through the fold; this only orders and labels what the fold decided.
+import type { ItemRow } from './fold.ts';
+import { score } from './palette.ts';
+import type { ViewState } from './state.ts';
+
+/** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
+export const STAGES = [
+  ['needs_you', 'Needs you'],
+  ['triage', 'Triage'],
+  ['proposed', 'Proposed'],
+  ['in_review', 'In review'],
+  ['ready', 'Ready'],
+  ['blocked', 'Blocked'],
+  ['held', 'Held'],
+  ['done', 'Done'],
+  ['closed', 'Closed'],
+] as const;
+
+export interface Group {
+  stage: string;
+  label: string;
+  items: ItemRow[];
+}
+
+/** A stage the page does not know yet still shows, under its own name, after the known ones. */
+export function stageLabel(stage: string): string {
+  const known = STAGES.find(([s]) => s === stage);
+  if (known) return known[1];
+  const words = stage.replaceAll('_', ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Items matching `query` by id or title, grouped by stage in board order, empty groups left out. */
+export function group(items: readonly ItemRow[], query = ''): Group[] {
+  const matching = query.trim() ? items.filter((i) => score(i.title, query) >= 0 || score(i.id, query) >= 0) : items;
+  const order = (s: string) => {
+    const at = STAGES.findIndex(([k]) => k === s);
+    return at < 0 ? STAGES.length : at;
+  };
+  const byStage = new Map<string, ItemRow[]>();
+  for (const item of matching) byStage.set(item.stage, [...(byStage.get(item.stage) ?? []), item]);
+  return [...byStage.entries()]
+    .sort(([a], [b]) => order(a) - order(b) || a.localeCompare(b))
+    .map(([stage, rows]) => ({ stage, label: stageLabel(stage), items: rows }));
+}
+
+/** The rows in display order, which is the order j and k walk. */
+export function flatten(groups: readonly Group[]): ItemRow[] {
+  return groups.flatMap((g) => g.items);
+}
+
+/** The id `step` rows away from `current`, clamped to the ends. No current selection starts at the first row. */
+export function move(rows: readonly ItemRow[], current: string | null, step: number): string | null {
+  if (rows.length === 0) return null;
+  const at = rows.findIndex((r) => r.id === current);
+  if (at < 0) return rows[step < 0 ? rows.length - 1 : 0].id;
+  return rows[Math.max(0, Math.min(rows.length - 1, at + step))].id;
+}
+
+/** The items the current view lists, before the search: every item, or only the Blocked ones. */
+export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
+  if (s.view === 'all') return s.items;
+  const blocked = new Set(s.blocked.map((b) => b.id));
+  return s.items.filter((i) => blocked.has(i.id));
+}
+
+/** The rows the list shows, in the order j and k walk. */
+export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query'>): ItemRow[] {
+  return flatten(group(visible(s), s.query));
+}

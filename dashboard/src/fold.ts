@@ -50,23 +50,46 @@ export function blocked(fold: Fold): BlockedRow[] {
   return JSON.parse(fold.blockedJson()) as BlockedRow[];
 }
 
+/** One blocker as the row it holds shows it. `where` and `release` are empty when there is nothing to say. */
+export interface BlockerLine {
+  id: string;
+  title: string | null;
+  /** Where the blocker lives, when that differs from the row: `github:GetFelix/felix-gateway`, or a source such as `jira`. */
+  where: string;
+  /** True when the blocker is merged and only its release is awaited. */
+  release: boolean;
+}
+
 /**
- * How a blocker reads on the row it holds: its id, then where it lives when that
- * differs from the row's repo (its repo, else its source when the row's is another), then "release" when
- * only the release is awaited.
+ * Each blocker of a row: its repo when that differs from the row's repo, else its
+ * source when the blocker has no repo and the row's source is another.
  */
-export function waitsOn(row: BlockedRow): string {
+export function blockerLines(row: BlockedRow): BlockerLine[] {
   const own = row.repo;
-  return row.waits_on
-    .map((b) => {
-      const where = b.repo
-        ? own && b.repo.source === own.source && b.repo.repo === own.repo
-          ? ''
-          : ` (${b.repo.source}:${b.repo.repo})`
-        : b.source && b.source !== row.source
-          ? ` (${b.source})`
-          : '';
-      return `${b.id}${where}${b.awaiting_release ? ' release' : ''}`;
-    })
-    .join(', ');
+  return row.waits_on.map((b) => {
+    const where = b.repo
+      ? own && b.repo.source === own.source && b.repo.repo === own.repo
+        ? ''
+        : `${b.repo.source}:${b.repo.repo}`
+      : b.source && b.source !== row.source
+        ? b.source
+        : '';
+    return { id: b.id, title: b.title, where, release: b.awaiting_release };
+  });
+}
+
+/** What follows a blocker's id: `(github:GetFelix/felix-gateway)`, `(jira) release`, or nothing. */
+export function blockerNote(b: BlockerLine): string {
+  return [b.where && `(${b.where})`, b.release && 'release'].filter(Boolean).join(' ');
+}
+
+/** A blocker on one line: `gw (github:GetFelix/felix-gateway)`, `j1 (jira)`, `p1 release`. */
+export function blockerText(b: BlockerLine): string {
+  const note = blockerNote(b);
+  return note ? `${b.id} ${note}` : b.id;
+}
+
+/** What a row waits on, as the list shows it after "waits on". */
+export function waitsOn(row: BlockedRow): string {
+  return blockerLines(row).map(blockerText).join(', ');
 }
