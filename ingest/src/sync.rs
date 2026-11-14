@@ -920,7 +920,8 @@ fn alias_moved(state: &State, roots: &mut HashMap<String, Root>) {
         let mut seen = HashSet::from([old.clone()]);
         let mut next = t.moved_to.clone();
         while let Some(new) = next.filter(|n| seen.insert(n.clone())) {
-            roots.entry(new.clone()).or_insert_with(|| root.clone());
+            // As `moved` does: the old id's root wins.
+            roots.insert(new.clone(), root.clone());
             next = state.items.get(&new).and_then(|n| n.moved_to.clone());
         }
     }
