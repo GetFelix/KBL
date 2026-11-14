@@ -35,10 +35,24 @@ test('a blocked item names a blocker in another repo with that repo', () => {
   fold.apply(0, rec(imp('blk', 'GetFelix/felix-blocks#40')));
   fold.apply(1, rec(imp('gw', 'GetFelix/felix-gateway#31')));
   fold.apply(2, rec(imp('blk2', 'GetFelix/felix-blocks#41')));
-  fold.apply(3, rec({ kind: 'linked', item: 'blk', to: 'gw' }));
-  fold.apply(4, rec({ kind: 'linked', item: 'blk', to: 'blk2' }));
+  fold.apply(3, rec({ kind: 'accepted', item: 'blk', tier: 1 }));
+  fold.apply(4, rec({ kind: 'linked', item: 'blk', to: 'gw' }));
+  fold.apply(5, rec({ kind: 'linked', item: 'blk', to: 'blk2' }));
   const sink = { blockedJson: () => fold.blocked_json() } as Fold;
   const rows = blocked(sink);
   assert.deepEqual(rows.map((r) => r.id), ['blk']);
   assert.equal(waitsOn(rows[0]), 'blk2, gw (github:GetFelix/felix-gateway)');
+});
+
+const rec = (o: object) => new TextEncoder().encode(JSON.stringify({ at_ms: 1, by: 'gabriel', actor: 'person', ...o }));
+const imp = (item: string, source: string, upstream_id: string) => ({ kind: 'imported', item, source, upstream_id, title: item });
+
+test('a blocker with no repo shows its source', () => {
+  const fold = new Folder();
+  fold.apply(0, rec(imp('blk', 'github', 'GetFelix/felix-blocks#40')));
+  fold.apply(1, rec(imp('j1', 'jira', 'site/FEL-123')));
+  fold.apply(2, rec({ kind: 'accepted', item: 'blk', tier: 1 }));
+  fold.apply(3, rec({ kind: 'linked', item: 'blk', to: 'j1' }));
+  const rows = blocked({ blockedJson: () => fold.blocked_json() } as Fold);
+  assert.equal(waitsOn(rows[0]), 'j1 (jira)');
 });

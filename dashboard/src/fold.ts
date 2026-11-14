@@ -31,6 +31,10 @@ export interface Blocker {
   title: string | null;
   repo: Repo | null;
   stage: string | null;
+  /** The upstream tracker the blocker's tree came from, such as `jira`. */
+  source: string | null;
+  /** Merged or completed, and the link waits for the release that carries it. */
+  awaiting_release: boolean;
 }
 
 export interface BlockedRow {
@@ -45,14 +49,23 @@ export function blocked(fold: Fold): BlockedRow[] {
   return JSON.parse(fold.blockedJson()) as BlockedRow[];
 }
 
-/** How a blocker reads on the row it holds: its id, plus its repo when that is not the row's own. */
+/**
+ * How a blocker reads on the row it holds: its id, then where it lives when that
+ * differs from the row's repo (its repo, else its source), then "release" when
+ * only the release is awaited.
+ */
 export function waitsOn(row: BlockedRow): string {
   const own = row.repo;
   return row.waits_on
-    .map((b) =>
-      b.repo && !(own && b.repo.source === own.source && b.repo.repo === own.repo)
-        ? `${b.id} (${b.repo.source}:${b.repo.repo})`
-        : b.id,
-    )
+    .map((b) => {
+      const where = b.repo
+        ? own && b.repo.source === own.source && b.repo.repo === own.repo
+          ? ''
+          : ` (${b.repo.source}:${b.repo.repo})`
+        : b.source
+          ? ` (${b.source})`
+          : '';
+      return `${b.id}${where}${b.awaiting_release ? ' release' : ''}`;
+    })
     .join(', ');
 }

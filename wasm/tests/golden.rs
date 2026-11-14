@@ -161,10 +161,26 @@ fn blocked_names_each_blocker_with_its_own_repo() {
                 "title": "compare and set",
                 "repo": { "source": "github", "repo": "GetFelix/felix-gateway" },
                 "stage": "triage",
+                "source": "github",
+                "awaiting_release": false,
             }],
         }])
     );
+    // A child item reports its root's repo.
+    let child = [
+        r#"{"at_ms":5,"by":"gabriel","actor":"person","kind":"proposed","item":"c1","parent":"blk","key":"k1","work":"split","title":"child"}"#,
+        r#"{"at_ms":6,"by":"gabriel","actor":"person","kind":"linked","item":"c1","to":"gw"}"#,
+    ];
+    for (i, r) in child.iter().enumerate() {
+        assert!(f.apply(10.0 + i as f64, r.as_bytes()), "{i}");
+    }
+    let rows: serde_json::Value = serde_json::from_str(&f.blocked_json()).unwrap();
+    let c1 = rows.as_array().unwrap().iter().find(|r| r["id"] == "c1");
+    assert_eq!(
+        c1.map(|r| r["repo"].clone()),
+        Some(serde_json::json!({ "source": "github", "repo": "GetFelix/felix-blocks" }))
+    );
     let done = r#"{"at_ms":5,"by":"gabriel","actor":"person","kind":"closed","item":"gw","why":"completed"}"#;
-    assert!(f.apply(4.0, done.as_bytes()));
+    assert!(f.apply(20.0, done.as_bytes()));
     assert_eq!(f.blocked_json(), "[]");
 }

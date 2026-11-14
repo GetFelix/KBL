@@ -3364,7 +3364,8 @@ fn a_link_blocks_across_repos_and_sources_and_names_the_other_repo() {
             .map(|t| (t.source.as_str(), t.repo.as_str()))
     };
     assert_eq!(repo("gw"), Some(("github", "GetFelix/felix-gateway")));
-    assert_eq!(repo("ado"), Some(("ado", "org/project")));
+    // ADO ids name a project, not a repo, so there is no repo to show.
+    assert_eq!(repo("ado"), None);
     assert!(s.blockers(&id("gw")).is_empty());
 
     l.person(WorkRecord::Closed {
@@ -3399,4 +3400,58 @@ fn a_childs_repo_is_its_roots() {
         (t.source.as_str(), t.repo.as_str()),
         ("github", "GetFelix/felix")
     );
+}
+
+fn linked_pair() -> Log {
+    let mut l = Log::default();
+    for i in ["a", "b"] {
+        l.tracker(imported(i));
+        l.person(WorkRecord::Accepted {
+            item: id(i),
+            tier: None,
+        });
+    }
+    l.person(WorkRecord::Linked {
+        item: id("a"),
+        to: id("b"),
+    });
+    l
+}
+
+#[test]
+fn unlinking_frees_a_blocked_item() {
+    let mut l = linked_pair();
+    assert_eq!(fold(&l.0).stage(&id("a")), Some(Stage::Blocked));
+    l.person(WorkRecord::Unlinked {
+        item: id("a"),
+        to: id("b"),
+    });
+    let s = fold(&l.0);
+    assert!(s.blockers(&id("a")).is_empty());
+    assert_eq!(s.stage(&id("a")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_release_edge_holds_a_merged_blocker_until_it_ships() {
+    let mut l = held_root();
+    l.tracker(imported("r2"));
+    l.agent("w1", needs("r2", false, DoneWhen::Released));
+    l.person(WorkRecord::Closed {
+        item: id("r2"),
+        why: CloseWhy::Merged,
+    });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.blockers(&id("r1")), [&id("r2")]);
+}
+
+#[test]
+fn a_dismissed_or_upstream_closed_blocker_drops_out_and_asks_a_person() {
+    for why in [CloseWhy::Dismissed, CloseWhy::Upstream] {
+        let mut l = linked_pair();
+        l.person(WorkRecord::Closed { item: id("b"), why });
+        let s = fold(&l.0);
+        assert!(s.blockers(&id("a")).is_empty());
+        assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
+    }
 }

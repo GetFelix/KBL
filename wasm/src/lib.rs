@@ -6,7 +6,7 @@
 
 use kbl_core::names::ItemId;
 use kbl_core::work::{ReadError, read};
-use kbl_core::work_fold::State;
+use kbl_core::work_fold::{Stage, State};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
 
@@ -76,10 +76,11 @@ impl Folder {
         serde_json::to_string(&items).expect("plain data serializes")
     }
 
-    /// Every open item a link holds back, as `{id, title, repo, waits_on}`, in
+    /// Every item in the Blocked stage, as `{id, title, repo, waits_on}`, in
     /// id order. `waits_on` lists the items holding it, each with its own
-    /// `repo` and stage, so a blocker in another repo or source shows where it
-    /// lives. `repo` is `{source, repo}`, or null when the fold knows none.
+    /// `repo`, stage, `source` and `awaiting_release` (merged, but the link
+    /// waits for the release), so a blocker in another repo or source shows
+    /// where it lives. `repo` is `{source, repo}`, or null when the fold knows none.
     pub fn blocked_json(&self) -> String {
         let s = &self.state;
         let blocker = |id: &ItemId| {
@@ -88,12 +89,16 @@ impl Folder {
                 "title": s.items.get(id).map(|i| i.title.as_str()),
                 "repo": s.repo_of(id),
                 "stage": s.stage(id),
+                "source": s.items.get(id).and_then(|i| {
+                    s.imported().find(|(_, _, r)| **r == i.root).map(|(src, _, _)| src)
+                }),
+                "awaiting_release": s.items.get(id).is_some_and(|i| i.closed.is_some()),
             })
         };
         let blocked: Vec<_> = s
             .items
             .values()
-            .filter(|i| i.closed.is_none())
+            .filter(|i| i.closed.is_none() && s.stage(&i.id) == Some(Stage::Blocked))
             .filter_map(|i| {
                 let by = s.blockers(&i.id);
                 (!by.is_empty()).then(|| {

@@ -846,8 +846,9 @@ impl State {
             .collect()
     }
 
-    /// The repo an item's work lands in: its own target (a prerequisite's),
-    /// else its root's.
+    /// The repo an item's work lands in, as recorded: its own target (a
+    /// prerequisite's), else its root's. Only a GitHub id (`org/repo#n`) names
+    /// a repo; ADO and Jira items have none, so this is `None` for them.
     pub fn repo_of(&self, id: &ItemId) -> Option<&Target> {
         let it = self.items.get(id)?;
         it.target
@@ -1056,7 +1057,7 @@ impl State {
                 self.budgets.insert(item.clone(), Budget::for_new_root());
                 let mut root = Self::blank(item, WorkKind::Fix, title);
                 root.target = upstream_id.split_once('#').and_then(|(repo, _)| {
-                    repo.contains('/').then(|| Target {
+                    (source == "github" && repo.contains('/')).then(|| Target {
                         source: source.clone(),
                         repo: repo.to_owned(),
                     })

@@ -631,12 +631,19 @@ Azure DevOps work item. People link items of different trees freely; an
 agent links across trees only through a prerequisite (below). The waiting
 item is Blocked until the other one is done, the same as inside one tree.
 
-Every item knows the repo its work lands in: an imported root from its
-upstream id, a prerequisite from its target, and any other item from its
-root. The Blocked view names each blocker with its own repo and source, so
-the board shows "waits on gw (github:GetFelix/felix-gateway)" on the
-felix-blocks card. The fold already holds all of this, so the view is
-derived and adds no record.
+The fold records a repo only where the upstream id names one: a GitHub id
+(`org/repo#n`) gives an imported root its repo, a prerequisite has its
+target, and any other item takes its root's. Jira ids name none, and an ADO id
+names a project, not a repo, so those items have no repo. The Blocked view
+names each blocker with its own repo when it has one and differs from the
+card's, else its source, so the board shows "waits on gw
+(github:GetFelix/felix-gateway)" on the felix-blocks card and "waits on
+j1 (jira)" for a Jira item. A blocker that is merged and only waits for its
+release reads "waits on p1 release". The fold already holds all of this, so
+the view is derived and adds no record.
+
+A dependency that is removed upstream stays linked until a person unlinks it
+([KBL#222](https://github.com/GetFelix/KBL/issues/222)).
 
 ### Prerequisites in another repo
 
