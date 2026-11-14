@@ -193,6 +193,17 @@ impl OrgState {
     }
 
     /// The team that owns `source`.
+    /// Every agent of `team`, revoked ones too, by name.
+    pub fn agents_in<'a>(
+        &'a self,
+        team: &'a TeamName,
+    ) -> impl Iterator<Item = (&'a Key, &'a Agent)> {
+        self.agents
+            .iter()
+            .filter(move |((t, _), _)| t == team)
+            .map(|((_, a), agent)| (a, agent))
+    }
+
     pub fn source_owner(&self, source: &str) -> Option<&TeamName> {
         self.sources.get(source)
     }
@@ -384,7 +395,12 @@ impl OrgState {
                 if self.token_in_use(token_sha256) {
                     return Err(OrgRefusal::TokenInUse);
                 }
-                if self.agents.keys().filter(|(t, _)| t == team).count() >= MAX_AGENTS_PER_TEAM {
+                let live = self
+                    .agents
+                    .iter()
+                    .filter(|((t, _), a)| t == team && !a.revoked)
+                    .count();
+                if live >= MAX_AGENTS_PER_TEAM {
                     return Err(OrgRefusal::TooMany);
                 }
                 Ok(Changed)

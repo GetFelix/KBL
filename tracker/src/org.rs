@@ -3,13 +3,14 @@
 //! second tracker cannot write the org log while this one does. See "One
 //! tracker, many teams" in docs/design.md.
 
+use std::sync::RwLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use kbl_core::codec::Codec;
 use kbl_core::names::Key;
 use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, read};
-use kbl_core::org_fold::{Applied, OrgState};
+use kbl_core::org_fold::{Applied, OrgState, Principal};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
@@ -57,9 +58,25 @@ struct Core {
     stale: bool,
 }
 
+struct View {
+    state: OrgState,
+    /// Until when `state` can be trusted: the lease is held and the log was
+    /// read since it was taken. Unset, another tracker may have revoked a
+    /// token this state still knows.
+    held_until: Option<Instant>,
+}
+
+/// The org view cannot answer for a token: this tracker does not hold the org
+/// lease, or has not read the log since taking it back.
+#[derive(Debug)]
+pub(crate) struct OrgUnavailable;
+
 pub(crate) struct Org<B> {
     broker: B,
     core: Mutex<Core>,
+    /// The state as last folded, for the token check. The core lock is held
+    /// across Felix writes, and a call must not wait on one to be let in.
+    view: RwLock<View>,
     lease_ttl: Duration,
     holder: String,
 }
@@ -80,6 +97,10 @@ impl<B: Broker> Org<B> {
                 lease: None,
                 stale: true,
             }),
+            view: RwLock::new(View {
+                state: OrgState::default(),
+                held_until: None,
+            }),
             lease_ttl,
             holder: format!("tracker-{}-{}", std::process::id(), now_ms()),
         };
@@ -98,7 +119,9 @@ impl<B: Broker> Org<B> {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         let mut core = org.core.lock().await;
-        org.refresh(&mut core).await?;
+        if core.stale {
+            org.refresh(&mut core).await?;
+        }
         drop(core);
         Ok(org)
     }
@@ -106,6 +129,36 @@ impl<B: Broker> Org<B> {
     /// The org as last folded.
     pub(crate) async fn state(&self) -> OrgState {
         self.core.lock().await.state.clone()
+    }
+
+    /// Whose token it is, by the last fold. A revoked agent's token names no
+    /// one. Refused while the lease does not back the fold.
+    pub(crate) fn who(&self, token: &str) -> Result<Option<Principal>, OrgUnavailable> {
+        let view = self.view.read().expect("org view lock");
+        if !view
+            .held_until
+            .is_some_and(|t| t > Instant::now() + LEASE_SKEW)
+        {
+            return Err(OrgUnavailable);
+        }
+        Ok(view.state.who(token))
+    }
+
+    fn publish_view(&self, core: &Core) {
+        let mut view = self.view.write().expect("org view lock");
+        view.state = core.state.clone();
+        view.held_until = Self::held_until(core);
+    }
+
+    fn publish_lease(&self, core: &Core) {
+        self.view.write().expect("org view lock").held_until = Self::held_until(core);
+    }
+
+    fn held_until(core: &Core) -> Option<Instant> {
+        if core.stale {
+            return None;
+        }
+        core.lease.as_ref().map(|l| l.valid_until)
     }
 
     /// Appends `record` if the fold takes it and it changes something. The
@@ -144,12 +197,18 @@ impl<B: Broker> Org<B> {
                 let _ = core.state.apply(&logged);
                 core.at = Some(offset);
                 if offset != guess {
+                    // Another writer got in: read now, or tokens are refused
+                    // until the next renewal.
                     core.stale = true;
+                    self.refresh_or_log(&mut core).await;
                 }
+                self.publish_view(&core);
                 Ok((Applied::Changed, Some(offset)))
             }
             Err(e) => {
                 core.stale = true;
+                self.publish_lease(&core);
+                self.refresh_or_log(&mut core).await;
                 Err(OrgError::Felix(e))
             }
         }
@@ -198,11 +257,16 @@ impl<B: Broker> Org<B> {
                     version,
                     valid_until: started + self.lease_ttl,
                 });
+                if core.stale {
+                    self.refresh_or_log(&mut core).await;
+                }
+                self.publish_lease(&core);
                 true
             }
             Ok(None) => {
                 eprintln!("kbl-tracker: another tracker took the org writer lease");
                 core.lease = None;
+                self.publish_lease(&core);
                 false
             }
             // A blip: the lease stands until its own expiry passes.
@@ -225,18 +289,26 @@ impl<B: Broker> Org<B> {
         .await?;
         Ok(match put {
             Some(version) => {
-                // Stale under the same lock: another tracker may have written
-                // while this one did not hold the lease.
+                // Another tracker may have written, a revoke among it, while
+                // this one did not hold the lease: read before serving tokens.
                 let mut core = self.core.lock().await;
                 core.lease = Some(Lease {
                     version,
                     valid_until: started + self.lease_ttl,
                 });
                 core.stale = true;
+                self.refresh_or_log(&mut core).await;
                 true
             }
             None => false,
         })
+    }
+
+    /// A failed read leaves the state stale, so agent tokens stay refused.
+    async fn refresh_or_log(&self, core: &mut Core) {
+        if let Err(e) = self.refresh(core).await {
+            eprintln!("kbl-tracker: could not read {ORG_EVENTS}: {e:#}");
+        }
     }
 
     async fn refresh(&self, core: &mut Core) -> Result<()> {
@@ -244,6 +316,7 @@ impl<B: Broker> Org<B> {
         core.state = state;
         core.at = at;
         core.stale = false;
+        self.publish_view(core);
         Ok(())
     }
 

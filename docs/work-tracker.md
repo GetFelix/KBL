@@ -173,6 +173,8 @@ token in the clear.
 An agent's token maps to its name, which goes on every record it causes and is
 the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 `KBL_TRACKER_TOKEN`; without them the work tools say they are not set up.
+Each session needs a token of its own; `kbl-tool agent add` makes one
+([One agent token per session](#one-agent-token-per-session)).
 
 | Call | Token | Does |
 |---|---|---|
@@ -327,6 +329,46 @@ to the broker, opened on its first call and closed after ten minutes without
 one. A connection that fails is opened again with a fresh token on the next
 call.
 
+### One agent token per session
+
+Two `kbl-mcp` sessions that share a token claim as one agent, so give each
+session its own. With teams on (`KBL_ORG_NAMESPACE=kbl`), an org admin adds
+an agent with one command, and its token works on the next call, with no
+restart:
+
+```bash
+export KBL_TRACKER_TOKEN=<an org admin's token from the token file>
+kbl-tool agent add w2 > w2.token      # prints the token once; keep it like a password
+kbl-tool agent add w3 > w3.token
+kbl-tool agent add w4 > w4.token
+kbl-tool agent list                   # each agent and what it holds
+kbl-tool agent revoke w3              # its next call gets 401; its holds are released
+```
+
+Start each `kbl-mcp` session with one of those tokens as its
+`KBL_TRACKER_TOKEN`. The agent works in `KBL_NAMESPACE`'s team unless
+`--team` names another.
+
+- The tracker makes the token from 32 random bytes and answers it once. Only
+  its SHA-256 is kept, on `org.events` as `agent_added`, so a lost token
+  cannot be shown again: revoke the agent and add another.
+- A name is used once per team. A name already in the token file, or ever
+  added before, revoked or not, is refused with `name_taken`, so a new token
+  never takes over an old agent's holds or records.
+- Revoking writes `agent_revoked` and the token stops working. Every item the
+  agent holds is then released with the reason `revoked`, the way the sweep
+  releases a lapsed claim, and the item is ready for another agent.
+  Running the revoke again writes nothing and releases anything still held.
+- Agents in the token file keep working as before. They cannot be revoked
+  with the command: remove them from the file and restart the tracker. The
+  tracker will not start while the token file names an agent `agent add`
+  minted and nobody revoked.
+- A team has at most 256 live agents. Revoking one frees its place.
+- While the tracker does not hold the org lease, a token the token file does
+  not name gets `503` with `org_unavailable`: another tracker may have revoked
+  it. It serves again once it has the lease back and has reread `org.events`.
+- Without teams on, the agent routes answer `404` with `teams_off`.
+
 ### Running the ingest worker
 
 `kbl-ingest` is a separate binary. It never writes to Felix: it reads
@@ -474,7 +516,7 @@ With [teams](#teams), each row holds per team: the tracker publishes to a team's
 
 ### Teams
 
-Partly built: the `org.events` records and fold exist in `kbl-core`. The tracker keeps a team table and serves the `/v1/teams/{team}/` paths and `GET /v1/me`. With `KBL_ORG_NAMESPACE` set it reads `org.events`, and `POST /v1/org/teams` (with `kbl-tool team create`) adds a team while it runs. Members, agents, sources, ingest tokens and grants are not on `org.events` yet: the token file's people are the org admins, and its agents and ingest workers belong to `KBL_NAMESPACE`. This is the sketch for [Teams in design.md](design.md#teams)
+Partly built: the `org.events` records and fold exist in `kbl-core`. The tracker keeps a team table and serves the `/v1/teams/{team}/` paths and `GET /v1/me`. With `KBL_ORG_NAMESPACE` set it reads `org.events`, and `POST /v1/org/teams` (with `kbl-tool team create`) adds a team while it runs. Agents can be added and revoked on `org.events` ([One agent token per session](#one-agent-token-per-session)). Members, sources, ingest tokens and grants are not on `org.events` yet: the token file's people are the org admins, and its agents and ingest workers belong to `KBL_NAMESPACE`. This is the sketch for [Teams in design.md](design.md#teams)
 ([#185](https://github.com/GetFelix/KBL/issues/185)). One tracker serves
 several teams, each in its own Felix namespace with its own `work.events`.
 
@@ -521,9 +563,9 @@ with the record's offset.
 | `POST /v1/org/teams` `{team, display_name?}` | `org_admin` | `team_created`. The tracker then creates the team's streams and group if they are missing, takes its lease and serves it. Answers `{team, created, offset, serving}`; a team already on the log answers `created: false`. Built |
 | `POST /v1/teams/{team}/members` `{person, role, repos?, subject?}` | Team `admin` | `person_added` for a new person, with a new token answered once; then `role_granted`. `repos` narrows the role to some of the team's repos |
 | `DELETE /v1/teams/{team}/members/{person}` | Team `admin` | `role_revoked` |
-| `POST /v1/teams/{team}/agents` `{agent}` | Team `triager` | `agent_added`, with a new token answered once |
-| `GET /v1/teams/{team}/agents` | Team `viewer` | Nothing. Names, who added each, and what each holds |
-| `DELETE /v1/teams/{team}/agents/{agent}` | Whoever added it, or team `admin` | `agent_revoked`, then a `released` with the reason `revoked` on the team's log for each hold |
+| `POST /v1/teams/{team}/agents` `{agent}` | `org_admin` today; team `triager` once roles exist | `agent_added`, with a new token answered once: `{team, agent, token, offset}`. Built |
+| `GET /v1/teams/{team}/agents` | `org_admin` today; team `viewer` once roles exist | Nothing. Names, who added each, whether each is revoked, and what each holds. Token-file agents are listed with `token_file: true`; one whose name was revoked while minted carries `revoked_minted: true` instead of a second row. Built |
+| `DELETE /v1/teams/{team}/agents/{agent}` | `org_admin` today; whoever added it, or team `admin`, once roles exist | `agent_revoked`, then a `released` with the reason `revoked` on the team's log for each hold. Answers `{revoked, released, offset}`. Built |
 | `POST /v1/teams/{team}/sources` `{source, repo}` | Team `admin` | `source_added`. `409` with `why: source_owned` when another team owns it |
 | `POST /v1/teams/{team}/ingest` `{name}` | Team `admin` | `ingest_added`, with a new token answered once |
 | `POST /v1/teams/{team}/grants` `{from_team, agents?, repos?, max_pending?}` | Team `admin` of the receiving team | `grant_added`: agents of `from_team` may file prerequisites here |

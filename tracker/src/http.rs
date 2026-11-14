@@ -29,9 +29,11 @@ use tower::ServiceExt;
 
 use crate::config::Caller;
 use crate::felix::Broker;
+use crate::org::OrgUnavailable;
 use crate::teams::Teams;
 use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer};
 
+mod agents;
 mod ingest;
 mod org;
 
@@ -50,6 +52,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
     let app = Arc::new(App { teams });
     let work = work_routes::<B>().with_state(app.clone());
     let scoped = work.clone();
+    let for_agents = app.clone();
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/me", get(me::<B>))
@@ -59,7 +62,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
         )
         .route(
             "/v1/teams/{team}/{*rest}",
-            any(move |req: Request| in_team(scoped.clone(), req)),
+            any(move |req: Request| in_team(scoped.clone(), for_agents.clone(), req)),
         )
         .with_state(app)
         .merge(work)
@@ -102,8 +105,8 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
-/// work and ingest routes have a team form.
-async fn in_team(work: Router, mut req: Request) -> Response {
+/// work and ingest routes have a team form; the agent routes exist only here.
+async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, mut req: Request) -> Response {
     // The raw path, so a percent-encoded segment reaches the inner route as sent.
     let path = req.uri().path().to_owned();
     let Some((team, rest)) = path
@@ -112,6 +115,10 @@ async fn in_team(work: Router, mut req: Request) -> Response {
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if rest == "agents" || rest.starts_with("agents/") {
+        let (team, rest) = (team.to_owned(), rest.to_owned());
+        return agents::route(app, &team, &rest, req).await;
+    }
     if !(rest.starts_with("work/") || rest.starts_with("ingest/")) {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -142,9 +149,11 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {
-        let mut found = bearer(&parts.headers)
-            .map(|t| app.teams.who(t))
-            .unwrap_or_default();
+        let mut found = match bearer(&parts.headers).map(|t| app.teams.who(t)) {
+            Some(Ok(found)) => found,
+            Some(Err(OrgUnavailable)) => return Err(org_unavailable()),
+            None => Vec::new(),
+        };
         if found.is_empty() {
             return Err(denied((
                 StatusCode::UNAUTHORIZED,
@@ -221,9 +230,11 @@ impl<B> Call<B> {
 /// The person's teams and their role in each. A person in the token file is
 /// an org admin, so is an admin in every team that file belongs to.
 async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {
-    let found = bearer(&headers)
-        .map(|t| app.teams.who(t))
-        .unwrap_or_default();
+    let found = match bearer(&headers).map(|t| app.teams.who(t)) {
+        Some(Ok(found)) => found,
+        Some(Err(OrgUnavailable)) => return org_unavailable(),
+        None => Vec::new(),
+    };
     let Some((_, first)) = found.first() else {
         return denied((StatusCode::UNAUTHORIZED, "unknown or missing token"));
     };
@@ -876,6 +887,19 @@ fn denied((status, message): Denied) -> Response {
 
 fn refused(status: StatusCode, message: &str, why: &str) -> Response {
     (status, Json(json!({ "error": message, "why": why }))).into_response()
+}
+
+/// The token is not in the token file, and the org view cannot say whether it
+/// is a live agent's until this tracker holds the org lease again.
+fn org_unavailable() -> Response {
+    let mut res = refused(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "this tracker does not hold the org writer lease; agent tokens wait for it",
+        "org_unavailable",
+    );
+    res.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+    res
 }
 
 #[cfg(test)]

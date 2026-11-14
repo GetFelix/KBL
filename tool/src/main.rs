@@ -4,6 +4,7 @@
 //! kbl-tool run create demo --goal "Review PR 12" --budget-usd 5 --workers 4
 //! ```
 
+mod agents;
 mod felix;
 mod run;
 mod teams;
@@ -76,6 +77,9 @@ enum Command {
     /// Work with teams.
     #[command(subcommand)]
     Team(TeamCommand),
+    /// Add, list and revoke a team's agents on the tracker.
+    #[command(subcommand)]
+    Agent(agents::AgentCommand),
 }
 
 #[derive(Subcommand)]
@@ -147,6 +151,7 @@ async fn serve() -> Result<()> {
         Command::Work(WorkCommand::Log) => print_stream(target, WORK_EVENTS).await,
         Command::Org(OrgCommand::Init(args)) => teams::org_init(target, args).await,
         Command::Team(TeamCommand::Create(args)) => teams::team_create(target, args).await,
+        Command::Agent(command) => agents::run(&target.namespace, command).await,
     }
 }
 

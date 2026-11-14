@@ -414,8 +414,8 @@ and grants, using the caller's Felix sign-in (`KBL_ID_TOKEN`).
 |---|---|---|
 | `kbl-tool team create <team>` | Org admin | Creates the namespace and the viewer and runs roles in Felix, adds the namespace to the `kbl-tracker` role, then `POST /v1/org/teams`. The tracker writes `team_created`, creates the team's streams and group as it does on start today, takes the team's lease, and serves it |
 | `kbl-tool member add <person> --team <team> --role <role> [--subject <oidc sub>]` | The team's admins, and org admins | `POST /v1/teams/{team}/members`. A new person gets `person_added` and a tracker token, printed once. Then `role_granted`. With `--subject`, it also assigns the person the team's viewer role in Felix for the dashboard |
-| `kbl-tool agent add <name> --team <team>` | The team's triagers and admins | `POST /v1/teams/{team}/agents`. Writes `agent_added` and prints the token once. The token works on the next call |
-| `kbl-tool agent revoke <name> --team <team>` | The person who added it, and team admins | `agent_revoked`. Every hold of that agent in the team is released with the reason `revoked`, as a lapsed claim is |
+| `kbl-tool agent add <name> --team <team>` | The team's triagers and admins (org admins until roles exist). Built | `POST /v1/teams/{team}/agents`. Writes `agent_added` and prints the token once. The token works on the next call |
+| `kbl-tool agent revoke <name> --team <team>` | The person who added it, and team admins (org admins until roles exist). Built | `agent_revoked`. Every hold of that agent in the team is released with the reason `revoked`, as a lapsed claim is |
 | `kbl-tool member remove <person> --team <team>` | Team admins, org admins | `role_revoked`, then removes the Felix assignment, which ends the person's open dashboard streams (revocation, security.md in Felix) |
 | `kbl-tool source add <source> --team <team>` | Team admins | `source_added`. Refused when another team owns the source |
 | `kbl-tool ingest add <name> --team <team>` | Team admins | `ingest_added`, prints the token once |

@@ -12,7 +12,7 @@
 //! extends, so one slow Felix call stalls that agent and nobody else.
 //! Every Felix call has a timeout.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -202,6 +202,10 @@ struct Core {
     /// handed the record to before it landed (felix#2207).
     handed_back: HashMap<ItemId, u64>,
     recall: Recall,
+    /// Agents whose token was revoked. A claim checks it under this lock, so a
+    /// `work_next` that passed the token check before the revoke cannot claim
+    /// after the revoke has released the agent's holds.
+    revoked: HashSet<AgentName>,
 }
 
 /// What a review lane looked like when an agent last left it with nothing to take.
@@ -733,6 +737,49 @@ impl<B: Broker> Tracker<B> {
         self.sync_ready().await;
     }
 
+    /// The items `agent` holds, by the log.
+    pub(crate) async fn holds_of(&self, agent: &AgentName) -> Vec<ItemId> {
+        let core = self.0.core.lock().await;
+        core.state
+            .items
+            .values()
+            .filter(|i| i.closed.is_none() && holds(i, agent))
+            .map(|i| i.id.clone())
+            .collect()
+    }
+
+    /// Releases every hold of a revoked agent, as the sweep releases a lapsed
+    /// claim, and refuses its claims from now on. Answers the items released.
+    pub(crate) async fn revoke(&self, agent: &AgentName) -> Result<Vec<ItemId>, Error> {
+        self.0.core.lock().await.revoked.insert(agent.clone());
+        self.begin().await?;
+        let mut released = Vec::new();
+        let mut core = self.0.core.lock().await;
+        let held: Vec<(ItemId, u32)> = core
+            .state
+            .items
+            .values()
+            .filter(|i| i.closed.is_none() && holds(i, agent))
+            .filter_map(|i| Some((i.id.clone(), i.hold.as_ref()?.attempt)))
+            .collect();
+        for (item, attempt) in held {
+            let record = WorkRecord::Released {
+                item: item.clone(),
+                attempt,
+                reason: Some("revoked".into()),
+                cost_micros: self.charge(0),
+            };
+            self.append(&mut core, Actor::Tracker, self.0.me.clone(), record)
+                .await?;
+            // The delivery lapses in Felix by itself, as a lapsed claim's does.
+            core.owner.remove(&item);
+            released.push(item);
+        }
+        drop(core);
+        self.sync_ready().await;
+        Ok(released)
+    }
+
     /// Renews the writer lease, sweeps, and closes idle agent connections, until
     /// the lease is lost for good.
     pub(crate) async fn maintain(&self) {
@@ -1045,6 +1092,12 @@ impl<B: Broker> Tracker<B> {
         let nack = |ops: &mut Vec<Op>, rec: &GroupRecord| {
             ops.push(Op::Nack(stream.clone(), agent.clone(), rec.clone()))
         };
+        if core.revoked.contains(agent) {
+            nack(ops, &record);
+            return Err(Error::Refused {
+                why: "agent_revoked".into(),
+            });
+        }
         let Ok(ready) = ReadyRecord::decode(&record.payload) else {
             eprintln!(
                 "kbl-tracker: {stream} offset {} is not a ready record; acked",

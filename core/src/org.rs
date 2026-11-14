@@ -29,8 +29,8 @@ pub const ORG_FORMAT_V1: u32 = 1;
 /// The highest format this build reads and writes.
 pub const ORG_FORMAT: u32 = ORG_FORMAT_V1;
 
-/// Most agents (live and revoked) one team may have. A revoked name stays
-/// taken, so the count only grows.
+/// Most live agents one team may have. Revoking one frees a place, but its
+/// name stays taken, so a name in the audit trail names one agent.
 pub const MAX_AGENTS_PER_TEAM: usize = 256;
 
 /// Most ingest tokens one team may have.
