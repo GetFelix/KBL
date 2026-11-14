@@ -65,6 +65,14 @@ pub(crate) struct Prerequisite {
     pub(crate) needed_by: Option<String>,
 }
 
+/// One `/v1/ingest/roots` answer: the imported roots and the prerequisites
+/// with no upstream issue yet.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Listed {
+    pub(crate) roots: Vec<Root>,
+    pub(crate) prerequisites: Vec<Prerequisite>,
+}
+
 /// What the tracker did with a record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Appended {
@@ -77,9 +85,7 @@ pub(crate) enum Appended {
 pub(crate) type Saved = (Option<Value>, Option<u64>);
 
 pub(crate) trait Tracker: Send + Sync {
-    fn roots(&self) -> impl Future<Output = Result<Vec<Root>>> + Send;
-
-    fn prerequisites(&self) -> impl Future<Output = Result<Vec<Prerequisite>>> + Send;
+    fn roots(&self) -> impl Future<Output = Result<Listed>> + Send;
 
     fn append(&self, record: &WorkRecord) -> impl Future<Output = Result<Appended>> + Send;
 
@@ -124,28 +130,24 @@ impl Http {
 }
 
 impl Tracker for Http {
-    async fn roots(&self) -> Result<Vec<Root>> {
+    async fn roots(&self) -> Result<Listed> {
         let (status, body) = self
             .send(self.client.get(format!("{}/v1/ingest/roots", self.base)))
             .await?;
         if status != 200 {
             bail!("the tracker answered {status} to the roots call: {body}");
         }
-        Ok(serde_json::from_value(body["roots"].clone())?)
-    }
-
-    async fn prerequisites(&self) -> Result<Vec<Prerequisite>> {
-        let (status, body) = self
-            .send(self.client.get(format!("{}/v1/ingest/roots", self.base)))
-            .await?;
-        if status != 200 {
-            bail!("the tracker answered {status} to the roots call: {body}");
-        }
+        let roots = serde_json::from_value(body["roots"].clone())?;
         // A tracker older than format 6 lists none.
-        if body["prerequisites"].is_null() {
-            return Ok(Vec::new());
-        }
-        Ok(serde_json::from_value(body["prerequisites"].clone())?)
+        let prerequisites = if body["prerequisites"].is_null() {
+            Vec::new()
+        } else {
+            serde_json::from_value(body["prerequisites"].clone())?
+        };
+        Ok(Listed {
+            roots,
+            prerequisites,
+        })
     }
 
     async fn append(&self, record: &WorkRecord) -> Result<Appended> {

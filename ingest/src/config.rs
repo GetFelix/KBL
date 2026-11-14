@@ -105,6 +105,10 @@ pub(crate) struct Rule {
     /// once a person accepts the prerequisite. Needs issues: write there.
     #[serde(default)]
     pub(crate) open_prerequisites: bool,
+    /// The opened issue names the issue waiting on it. Off by default, so a
+    /// private repo's issue is never named in a public one.
+    #[serde(default)]
+    pub(crate) link_waiter: bool,
 }
 
 fn default_tier() -> u8 {

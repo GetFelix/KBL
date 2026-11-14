@@ -195,6 +195,17 @@ pub enum PrWaits {
 }
 
 impl Item {
+    /// Made by a `prerequisite` record. A deferred finding also targets a
+    /// repo and waits for a person, but is not one; neither is an item an
+    /// agent wrote a `prerequisite` context entry onto.
+    pub fn is_prerequisite(&self) -> bool {
+        self.finding.is_none()
+            && self
+                .context
+                .keys()
+                .any(|k| k.as_str() == "prerequisite" && !self.context_agents.contains_key(k))
+    }
+
     /// The attempt number a claim must name: the open attempt for a retry after a
     /// release, lapse or give-up, a new one otherwise.
     pub fn next_attempt(&self) -> u32 {
@@ -609,6 +620,7 @@ impl State {
                     && it.target.is_some()
                     && it.closed.is_none()
                     && it.accepted_by_person
+                    && it.is_prerequisite()
                     && !self.upstream.values().any(|i| *i == it.id)
             })
             .map(|it| {
@@ -2461,14 +2473,17 @@ impl State {
         if it.closed.is_some() {
             return Err(Reject::Closed);
         }
+        if !it.is_prerequisite() {
+            return Err(Reject::NotAProposal);
+        }
         if !it.accepted_by_person {
             return Err(Reject::ActorNotAllowed);
         }
+        // GitHub names are case-insensitive, so a grant's casing may differ.
         let repo = upstream_id.split_once('#').map(|(repo, _)| repo);
-        let same = it
-            .target
-            .as_ref()
-            .is_some_and(|t| t.source == source && Some(t.repo.as_str()) == repo);
+        let same = it.target.as_ref().is_some_and(|t| {
+            t.source == source && repo.is_some_and(|r| r.eq_ignore_ascii_case(&t.repo))
+        });
         if !same {
             return Err(Reject::Duplicate);
         }

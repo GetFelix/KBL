@@ -11,7 +11,7 @@ use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 
 use crate::github::{Req, Res, Transport};
-use crate::tracker_api::{Appended, Prerequisite, Root, Saved, Tracker};
+use crate::tracker_api::{Appended, Listed, Prerequisite, Root, Saved, Tracker};
 
 /// The Fake tracker's clock at offset zero: 2027-01-15T08:00:00Z.
 pub(crate) const CLOCK_START_MS: u64 = 1_800_000_000_000;
@@ -132,6 +132,9 @@ struct Inner {
     save_fails: bool,
     /// Every append fails, as when the tracker cannot be reached.
     append_fails: bool,
+    roots_calls: usize,
+    race_next_save: bool,
+    saves_left: Option<usize>,
 }
 
 /// A tracker that folds what it is given, so a record the real fold would refuse is refused here.
@@ -146,6 +149,9 @@ impl Default for Fake {
             saved: None,
             save_fails: false,
             append_fails: false,
+            roots_calls: 0,
+            race_next_save: false,
+            saves_left: None,
         })))
     }
 }
@@ -225,6 +231,17 @@ impl Fake {
         self.0.lock().unwrap().saved.clone().expect("saved").0
     }
 
+    /// Another ingest process saves just before this one's next save, so
+    /// that save is stale.
+    pub(crate) fn race_next_save(&self) {
+        self.0.lock().unwrap().race_next_save = true;
+    }
+
+    /// The next `n` saves work and every one after is refused.
+    pub(crate) fn fail_saves_after(&self, n: usize) {
+        self.0.lock().unwrap().saves_left = Some(n);
+    }
+
     /// Every later save is refused.
     pub(crate) fn fail_saves(&self) {
         self.0.lock().unwrap().save_fails = true;
@@ -232,7 +249,9 @@ impl Fake {
 
     /// Saves work again after `fail_saves`.
     pub(crate) fn allow_saves(&self) {
-        self.0.lock().unwrap().save_fails = false;
+        let mut i = self.0.lock().unwrap();
+        i.save_fails = false;
+        i.saves_left = None;
     }
 
     /// Whether every later append fails, as if the tracker went away.
@@ -246,10 +265,15 @@ impl Fake {
     }
 }
 
-impl Tracker for Fake {
-    async fn roots(&self) -> Result<Vec<Root>> {
+impl Fake {
+    /// How many times ingest listed the roots.
+    pub(crate) fn roots_calls(&self) -> usize {
+        self.0.lock().unwrap().roots_calls
+    }
+
+    fn root_list(&self) -> Vec<Root> {
         let i = self.0.lock().unwrap();
-        Ok(i.state
+        i.state
             .imported()
             .map(|(source, up, item)| {
                 let it = &i.state.items[item];
@@ -274,13 +298,13 @@ impl Tracker for Fake {
                     awaits_release: i.state.awaits_release(item),
                 }
             })
-            .collect())
+            .collect()
     }
 
-    async fn prerequisites(&self) -> Result<Vec<Prerequisite>> {
+    fn prerequisite_list(&self) -> Vec<Prerequisite> {
         let i = self.0.lock().unwrap();
         let entry = Key::new("prerequisite").unwrap();
-        Ok(i.state
+        i.state
             .unopened_prerequisites()
             .into_iter()
             .map(|(it, needed_by)| {
@@ -303,7 +327,17 @@ impl Tracker for Fake {
                     needed_by: needed_by.map(str::to_owned),
                 }
             })
-            .collect())
+            .collect()
+    }
+}
+
+impl Tracker for Fake {
+    async fn roots(&self) -> Result<Listed> {
+        self.0.lock().unwrap().roots_calls += 1;
+        Ok(Listed {
+            roots: self.root_list(),
+            prerequisites: self.prerequisite_list(),
+        })
     }
 
     async fn append(&self, record: &WorkRecord) -> Result<Appended> {
@@ -330,6 +364,15 @@ impl Tracker for Fake {
     async fn save(&self, _: &str, state: &Value, version: Option<u64>) -> Result<u64> {
         let mut i = self.0.lock().unwrap();
         anyhow::ensure!(!i.save_fails, "the tracker refused the save");
+        if let Some(left) = i.saves_left.as_mut() {
+            anyhow::ensure!(*left > 0, "the tracker refused the save");
+            *left -= 1;
+        }
+        if std::mem::take(&mut i.race_next_save) {
+            let now = i.saved.as_ref().map_or(0, |(_, v)| *v);
+            let other = i.saved.as_ref().map_or(json!({}), |(s, _)| s.clone());
+            i.saved = Some((other, now + 1));
+        }
         let now = i.saved.as_ref().map(|(_, v)| *v);
         anyhow::ensure!(now == version, "stale_state");
         let next = now.unwrap_or(0) + 1;

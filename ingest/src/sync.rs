@@ -57,6 +57,10 @@ struct Poll {
     roots: HashMap<String, Root>,
     /// Issues seen this poll that are open and in scope, whose links to read.
     touched: Vec<String>,
+    /// Accepted prerequisites with no issue, from the same listing as `roots`.
+    prerequisites: Vec<Prerequisite>,
+    /// The saved state's version, moved on by a save mid-poll.
+    version: Option<u64>,
 }
 
 impl<S: Source, T: Tracker> Ingest<S, T> {
@@ -85,10 +89,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         };
         let mut state = state;
         state.migrate(&self.settings.repos);
-        let mut roots: HashMap<String, Root> = self
-            .tracker
-            .roots()
-            .await?
+        let listed = self.tracker.roots().await?;
+        let mut roots: HashMap<String, Root> = listed
+            .roots
             .into_iter()
             .filter(|r| r.source == name)
             .map(|r| (r.upstream_id.clone(), r))
@@ -98,6 +101,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             state,
             roots,
             touched: Vec::new(),
+            prerequisites: listed
+                .prerequisites
+                .into_iter()
+                .filter(|pre| pre.source == name)
+                .collect(),
+            version,
         };
         let done = self.run(&mut poll, reconcile).await;
         // Saved on failure too, so imports already made are remembered. The
@@ -107,7 +116,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .save(
                 name,
                 &serde_json::to_value(&poll.state).map_err(anyhow::Error::from)?,
-                version,
+                poll.version,
             )
             .await;
         match (done, saved) {
@@ -141,7 +150,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         self.retry_waiting(p).await?;
         self.pull_requests(p).await?;
         p.state.polls += 1;
-        if reconcile || p.state.polls >= self.settings.reconcile_every {
+        let reconciled = reconcile || p.state.polls >= self.settings.reconcile_every;
+        if reconciled {
             p.state.polls = 0;
             self.reconcile(p).await?;
         }
@@ -149,7 +159,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         self.write_back(p).await?;
         // Last, so a crash after the issue is opened leaves it to the next
         // listing, which finds it by its marker.
-        self.open_prerequisites(p).await?;
+        self.open_prerequisites(p, reconciled).await?;
         prune(p);
         p.state.cursors.extend(cursors);
         // Last, so a rate limit here holds up nothing else.
@@ -976,15 +986,28 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 
     // ---- prerequisites ----
 
-    /// The item named by the marker in one of our own issues.
+    /// The item named by the marker in one of our own issues, in a repo
+    /// whose rule opts in. Ingest writes its marker last, so the last line
+    /// that looks like one is ours.
     fn prerequisite_marker(&self, issue: &Issue) -> Option<ItemId> {
         if !self.own.contains(&issue.author.to_ascii_lowercase()) {
             return None;
         }
-        issue.body.lines().find_map(|l| {
-            let id = l.trim().strip_prefix(MARKER)?;
-            ItemId::new(id.trim()).ok()
-        })
+        self.opening_rule(&issue.id.repo)?;
+        let id = issue
+            .body
+            .lines()
+            .rev()
+            .find_map(|l| l.trim().strip_prefix(MARKER))?;
+        ItemId::new(id.trim()).ok()
+    }
+
+    /// The rule that lets ingest open prerequisite issues in `repo`.
+    fn opening_rule(&self, repo: &str) -> Option<&Rule> {
+        self.settings
+            .rules
+            .iter()
+            .find(|r| r.open_prerequisites && r.repo.eq_ignore_ascii_case(repo))
     }
 
     /// One of our prerequisite issues in a listing: tie it to its item if
@@ -1003,10 +1026,20 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             return self.follow(p, issue, t).await;
         }
         let known = p.roots.get(&key).map(|r| r.item.clone());
-        let item = match known {
-            Some(root) => root,
-            None if self.attach(p, &item, &issue.id, &issue.title).await? => item,
-            None => return Ok(()),
+        let tied = p
+            .roots
+            .values()
+            .find(|r| r.item == item)
+            .map(|r| r.upstream_id.clone());
+        let item = match (known, tied) {
+            (Some(root), _) => root,
+            (None, Some(other)) => {
+                // Two processes both opened one; a person closes the spare.
+                eprintln!("kbl-ingest: {key} is an orphan: {item} is already tied to {other}");
+                return Ok(());
+            }
+            (None, None) if self.attach(p, &item, &issue.id, &issue.title).await? => item,
+            (None, None) => return Ok(()),
         };
         let mut t = tracked_as(&item, "", issue);
         t.prerequisite = true;
@@ -1015,42 +1048,64 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 
     /// Opens an issue for each prerequisite a person accepted in a repo whose
     /// rule opts in, and ties the two. Nothing is sent unless a rule opts in.
-    async fn open_prerequisites(&self, p: &mut Poll) -> Result<(), SourceError> {
-        let rules = &self.settings.rules;
-        if !rules.iter().any(|r| r.open_prerequisites) {
-            return Ok(());
-        }
-        let opts_in = |repo: &str| {
-            rules
-                .iter()
-                .any(|r| r.open_prerequisites && r.repo.eq_ignore_ascii_case(repo))
-        };
-        for pre in self.tracker.prerequisites().await? {
-            if pre.source != self.source.name() || !opts_in(&pre.repo) {
+    async fn open_prerequisites(&self, p: &mut Poll, reconciled: bool) -> Result<(), SourceError> {
+        // An entry for an item that closed or was tied is done with.
+        let listed: HashSet<&str> = p.prerequisites.iter().map(|x| x.item.as_str()).collect();
+        p.state
+            .opened
+            .retain(|item, _| listed.contains(item.as_str()));
+        let pending = std::mem::take(&mut p.prerequisites);
+        for pre in &pending {
+            let Some(rule) = self.opening_rule(&pre.repo) else {
                 continue;
-            }
+            };
             if p.roots.values().any(|r| r.item == pre.item) {
                 continue;
             }
-            let opened = p
-                .state
-                .opened
-                .get(pre.item.as_str())
-                .and_then(|k| IssueRef::parse(k));
-            let id = match opened {
+            let id = match p.state.opened.get(pre.item.as_str()).map(String::as_str) {
+                Some("") if !reconciled => {
+                    // An earlier poll may have opened it and not lived to say
+                    // so; its marker ties it when the listing shows it. A
+                    // reconcile gives up on that and tries again.
+                    continue;
+                }
+                Some(k) if !k.is_empty() => IssueRef::parse(k),
+                _ => None,
+            };
+            let id = match id {
                 Some(id) => id,
                 None => {
-                    let body = prerequisite_body(&pre);
+                    // Claim the open in the versioned state first, so of two
+                    // processes only the one whose save wins sends the POST.
+                    p.state.opened.insert(pre.item.to_string(), String::new());
+                    let state = serde_json::to_value(&p.state).map_err(anyhow::Error::from)?;
+                    match self
+                        .tracker
+                        .save(self.source.name(), &state, p.version)
+                        .await
+                    {
+                        Ok(v) => p.version = Some(v),
+                        Err(e) => {
+                            eprintln!("kbl-ingest: not opening issues this poll: {e:#}");
+                            p.state.opened.remove(pre.item.as_str());
+                            return Ok(());
+                        }
+                    }
+                    let body = prerequisite_body(pre, rule.link_waiter);
                     match self
                         .source
-                        .open_issue(&pre.repo, &cut_title(&pre.title), &body)
+                        .open_issue(&rule.repo, &cut_title(&pre.title), &body)
                         .await
                     {
                         Ok(id) => id,
-                        Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                        Err(e @ SourceError::RateLimited { .. }) => {
+                            p.state.opened.remove(pre.item.as_str());
+                            return Err(e);
+                        }
                         // A repo we cannot write to must not hold the cursors.
                         Err(e) => {
                             eprintln!("kbl-ingest: no issue opened for {}: {e}", pre.item);
+                            p.state.opened.remove(pre.item.as_str());
                             continue;
                         }
                     }
@@ -1078,11 +1133,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             upstream_id: key.clone(),
             title: cut_title(title),
         };
-        if let Appended::Refused(why) = self.tracker.append(&record).await? {
+        let refused = self.tracker.append(&record).await?;
+        p.state.opened.remove(item.as_str());
+        if let Appended::Refused(why) = refused {
             eprintln!("kbl-ingest: {key} was not tied to {item}: {why}");
             return Ok(false);
         }
-        p.state.opened.remove(item.as_str());
         p.roots.insert(
             key.clone(),
             Root {
@@ -1135,17 +1191,22 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 /// The line that ties an issue ingest opened to its prerequisite item.
 const MARKER: &str = "kbl-prerequisite:";
 
-fn prerequisite_body(pre: &Prerequisite) -> String {
-    let why = pre
+/// The issue body. An agent wrote `why`, so a marker line in it is dropped:
+/// only ingest's own, written last, may name the item.
+fn prerequisite_body(pre: &Prerequisite, link_waiter: bool) -> String {
+    let why: String = pre
         .why
         .as_deref()
-        .unwrap_or("The reason is in the tracker.");
-    let needed = pre
-        .needed_by
-        .as_ref()
-        .map(|up| format!("\n\nNeeded by {up}."))
-        .unwrap_or_default();
-    format!("{}{needed}\n\n{MARKER} {}", cut(why), pre.item)
+        .unwrap_or("The reason is in the tracker.")
+        .lines()
+        .filter(|l| !l.trim().starts_with(MARKER))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let needed = match &pre.needed_by {
+        Some(up) if link_waiter => format!("\n\nNeeded by {up}."),
+        _ => String::new(),
+    };
+    format!("{}{needed}\n\n{MARKER} {}", cut(&why), pre.item)
 }
 
 fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {

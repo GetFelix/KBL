@@ -720,7 +720,8 @@ fn an_accepted_prerequisite_takes_its_upstream_issue_from_format_6() {
             (10, Reject::Duplicate),
             (12, Reject::ActorNotAllowed),
             (15, Reject::Duplicate),
-            (16, Reject::ActorNotAllowed)
+            (16, Reject::ActorNotAllowed),
+            (29, Reject::NotAProposal)
         ]
     );
     assert_eq!(imported_as(&s, "g1"), vec!["GetFelix/felix-gateway#40"]);
@@ -742,7 +743,7 @@ fn format_5_refuses_an_issue_for_an_existing_item() {
     let rejected: Vec<(u64, Reject)> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
     assert_eq!(
         rejected,
-        [10, 12, 14, 15, 16]
+        [10, 12, 14, 15, 16, 29]
             .map(|o| (o, Reject::Duplicate))
             .to_vec()
     );
@@ -759,16 +760,16 @@ fn the_issue_must_match_the_target_on_an_open_item_at_format_6() {
 {"at_ms":1240,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix-blocks#44","title":"swap blocks atomically"}
 "#;
     let s = fold(&entries(&format!("{FORMAT_6_LOG}{more}")));
-    let rejected: Vec<(u64, Reject)> = s.rejections[4..]
+    let rejected: Vec<(u64, Reject)> = s.rejections[5..]
         .iter()
         .map(|r| (r.offset, r.why))
         .collect();
     assert_eq!(
         rejected,
         vec![
-            (19, Reject::Duplicate),
-            (20, Reject::Duplicate),
-            (22, Reject::Duplicate)
+            (31, Reject::Duplicate),
+            (32, Reject::Duplicate),
+            (34, Reject::Duplicate)
         ]
     );
     assert_eq!(imported_as(&s, "g2"), vec!["GetFelix/felix-gateway#43"]);
@@ -780,4 +781,40 @@ fn the_issue_must_match_the_target_on_an_open_item_at_format_6() {
     let s = fold(&entries(&format!("{FORMAT_6_LOG}{closed}")));
     assert_eq!(s.rejections.last().map(|r| r.why), Some(Reject::Closed));
     assert!(imported_as(&s, "g2").is_empty());
+}
+
+/// A deferred review finding targets the reviewed repo and a person may accept
+/// it, but it is not a prerequisite: ingest never opens an issue for it.
+#[test]
+fn a_deferred_finding_is_never_opened_upstream_at_format_6() {
+    let s = fold(&entries(FORMAT_6_LOG));
+    let deferred = s
+        .items
+        .values()
+        .find(|it| it.finding.is_some())
+        .expect("the golden defers a finding");
+    assert!(deferred.accepted_by_person && deferred.target.is_some());
+    assert!(!deferred.is_prerequisite());
+    assert!(imported_as(&s, deferred.id.as_str()).is_empty());
+    assert_eq!(
+        s.rejections.last().map(|r| r.why),
+        Some(Reject::NotAProposal)
+    );
+    let unopened: Vec<&str> = s
+        .unopened_prerequisites()
+        .iter()
+        .map(|(it, _)| it.id.as_str())
+        .collect();
+    assert!(!unopened.contains(&deferred.id.as_str()));
+}
+
+/// GitHub names are case-insensitive, so an issue in `getfelix/...` matches
+/// a prerequisite that targets `GetFelix/...`.
+#[test]
+fn the_target_repo_matches_without_case_at_format_6() {
+    let more = r#"{"at_ms":1300,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1310,"by":"ingest","actor":"tracker","kind":"imported","item":"g2","source":"github","upstream_id":"getfelix/FELIX-gateway#43","title":"gateway rate limits"}
+"#;
+    let s = fold(&entries(&format!("{FORMAT_6_LOG}{more}")));
+    assert_eq!(imported_as(&s, "g2"), vec!["getfelix/FELIX-gateway#43"]);
 }
