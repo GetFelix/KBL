@@ -1881,17 +1881,46 @@ async fn a_tracker_does_not_serve_a_log_that_holds_a_record_of_a_newer_format() 
     assert_eq!(fake.ready_count("work.ready.p1"), 1);
 }
 
-/// This build reads one format, so there is nothing to raise to.
 #[tokio::test]
 async fn a_raise_past_what_the_tracker_reads_is_refused_and_not_logged() {
     let fake = Fake::default();
     let t = start(&fake).await;
     let err = t
-        .person_record(key("gab"), WorkRecord::FormatRaised { to: 2 })
+        .person_record(
+            key("gab"),
+            WorkRecord::FormatRaised {
+                to: kbl_core::work::FORMAT + 1,
+            },
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Refused { why } if why == "format"));
     assert!(fake.log().is_empty());
+}
+
+/// `returned_to_scope` is format 2: refused until a person raises the log,
+/// then the item is claimable again.
+#[tokio::test]
+async fn ingest_returns_an_item_to_scope_once_the_format_is_raised() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 1).await;
+    t.ingest_record(key("ingest-gh"), WorkRecord::LeftScope { item: item("a1") })
+        .await
+        .unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w1").await), None);
+    let back = || WorkRecord::ReturnedToScope { item: item("a1") };
+    let err = t.ingest_record(key("ingest-gh"), back()).await.unwrap_err();
+    assert!(matches!(err, Error::Refused { why } if why == "format"));
+
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 2 })
+        .await
+        .unwrap();
+    t.ingest_record(key("ingest-gh"), back()).await.unwrap();
+    let log = fake.log();
+    let last = log.last().unwrap();
+    assert_eq!((last.v, last.record.kind()), (2, "returned_to_scope"));
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
 }
 
 #[tokio::test]
