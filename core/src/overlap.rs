@@ -12,6 +12,7 @@
 use serde::Serialize;
 
 use crate::names::ItemId;
+use crate::work::Target;
 use crate::work_fold::{Item, Stage, State};
 
 /// The context entry that names the files an item expects to touch.
@@ -28,19 +29,48 @@ pub struct Overlap {
     pub files: Vec<String>,
 }
 
-/// The paths in a `files` entry: one per line, `./` and surrounding space
-/// trimmed, blank lines and `#` comments skipped. A path ending in `/` is a
-/// directory and covers everything under it.
+/// A path that stands for the whole repo: `./`, `/` or `.` in an entry.
+/// It overlaps every path declared for the same repo.
+pub const WHOLE_REPO: &str = "./";
+
+/// The paths in a `files` entry, one per line, normalised: surrounding space
+/// trimmed, `\\` read as `/`, leading `/` and `./` and repeated `/` dropped,
+/// and `..` resolved. A line whose `..` climbs above the repo is skipped, as
+/// are blank lines and `#` comments. A path ending in `/` is a directory and
+/// covers everything under it. Paths compare byte for byte: no case folding
+/// and no globs.
 pub fn parse_files(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text
         .lines()
-        .map(|l| l.trim().trim_start_matches("./"))
+        .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        .map(str::to_owned)
+        .filter_map(normalise)
         .collect();
     out.sort();
     out.dedup();
     out
+}
+
+fn normalise(line: &str) -> Option<String> {
+    let line = line.replace('\\', "/");
+    let mut parts: Vec<&str> = Vec::new();
+    for part in line.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            p => parts.push(p),
+        }
+    }
+    if parts.is_empty() {
+        return Some(WHOLE_REPO.to_owned());
+    }
+    let mut path = parts.join("/");
+    if line.ends_with('/') {
+        path.push('/');
+    }
+    Some(path)
 }
 
 /// The offset of the item's current `files` entry, if it has one.
@@ -53,24 +83,31 @@ pub fn files_offset(item: &Item) -> Option<u64> {
 /// Every overlap between open items, in `(first, then)` order. `files_text`
 /// returns the text of the context record at an offset, if it is inline.
 ///
-/// Pairs already linked either way are left out, since the order is recorded,
-/// and so are an item and its own ancestors, since a split shares its parent's files.
+/// Only items whose roots land in the same repo are compared; items with no
+/// target are compared with each other. A pair is left out when either item
+/// already reaches the other along links, since the fold would refuse the
+/// suggested link or the order is recorded, and so is an item and its own
+/// ancestors, since a split shares its parent's files.
+///
+/// The cost is pairwise: every two declaring items in a repo, and every two of
+/// their paths.
 pub fn overlaps<'a>(state: &State, files_text: impl Fn(u64) -> Option<&'a str>) -> Vec<Overlap> {
-    let declared: Vec<(&Item, u64, Vec<String>)> = state
+    let declared: Vec<(&Item, Option<&Target>, u64, Vec<String>)> = state
         .items
         .values()
         .filter(|it| state.stage(&it.id).is_some_and(open))
         .filter_map(|it| {
             let offset = files_offset(it)?;
             let files = parse_files(files_text(offset)?);
-            (!files.is_empty()).then_some((it, offset, files))
+            (!files.is_empty()).then_some((it, root_target(state, it), offset, files))
         })
         .collect();
     let mut out = Vec::new();
-    for (i, (a, a_at, a_files)) in declared.iter().enumerate() {
-        for (b, b_at, b_files) in &declared[i + 1..] {
-            if state.is_linked(&a.id, &b.id)
-                || state.is_linked(&b.id, &a.id)
+    for (i, (a, a_repo, a_at, a_files)) in declared.iter().enumerate() {
+        for (b, b_repo, b_at, b_files) in &declared[i + 1..] {
+            if a_repo != b_repo
+                || state.reaches(&a.id, &b.id)
+                || state.reaches(&b.id, &a.id)
                 || descends(state, a, &b.id)
                 || descends(state, b, &a.id)
             {
@@ -80,7 +117,7 @@ pub fn overlaps<'a>(state: &State, files_text: impl Fn(u64) -> Option<&'a str>) 
             if files.is_empty() {
                 continue;
             }
-            let a_first = (rank(state, a), *a_at) <= (rank(state, b), *b_at);
+            let a_first = (rank(a), *a_at) <= (rank(b), *b_at);
             let (first, then) = if a_first { (a, b) } else { (b, a) };
             out.push(Overlap {
                 first: first.id.clone(),
@@ -96,14 +133,27 @@ fn open(stage: Stage) -> bool {
     !matches!(stage, Stage::Done | Stage::Closed)
 }
 
-/// Lower goes first: work in review or held is further along than work that
-/// waits. A tie goes to the item that declared its files first.
-fn rank(state: &State, it: &Item) -> u8 {
-    match state.stage(&it.id) {
-        Some(Stage::InReview) => 0,
-        Some(Stage::Held) => 1,
-        _ => 2,
+/// Lower goes first: held work, then work in review, then work nobody has
+/// started. This reads the hold, not the stage, so a held item with an open
+/// question still counts as held. A tie goes to the item whose current
+/// `files` entry is older.
+fn rank(it: &Item) -> u8 {
+    if it.hold.is_some() {
+        0
+    } else if it.pending_fork.is_none() && it.open_path().is_some_and(|p| p.done) {
+        1
+    } else {
+        2
     }
+}
+
+/// The target of the item's root, which is where the item's work lands.
+fn root_target<'s>(state: &'s State, it: &'s Item) -> Option<&'s Target> {
+    let mut root = it;
+    while let Some(p) = root.parent.as_ref().and_then(|p| state.items.get(p)) {
+        root = p;
+    }
+    root.target.as_ref()
 }
 
 fn descends(state: &State, it: &Item, ancestor: &ItemId) -> bool {
@@ -135,7 +185,7 @@ fn shared(a: &[String], b: &[String]) -> Vec<String> {
 
 /// Whether `dir` is `path` or a directory above it.
 fn covers(dir: &str, path: &str) -> bool {
-    dir == path || (dir.ends_with('/') && path.starts_with(dir))
+    dir == WHOLE_REPO || dir == path || (dir.ends_with('/') && path.starts_with(dir))
 }
 
 #[cfg(test)]

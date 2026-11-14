@@ -4,6 +4,7 @@
 //! it returns. It adds no rules of its own: the state is the same fold the
 //! tracker runs, so the two cannot disagree about an item's stage.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use kbl_core::content::Content;
@@ -23,6 +24,9 @@ pub struct Folder {
     /// The text of each item's current `files` entry, by its offset. The
     /// state keeps only the offset, and the page has no log to read it from.
     files: BTreeMap<u64, String>,
+    /// `overlaps_json` as of the last applied record. The comparison is
+    /// pairwise, so a redraw with no new record reuses it.
+    overlaps: RefCell<Option<String>>,
 }
 
 #[wasm_bindgen]
@@ -46,6 +50,7 @@ impl Folder {
                 let before = self.files_offset(&rec);
                 self.state.apply(offset, &rec);
                 self.keep_files(offset, &rec, before);
+                self.overlaps.take();
                 true
             }
             Err(ReadError::Newer { v }) => {
@@ -87,8 +92,13 @@ impl Folder {
     /// Open items that expect to touch the same files, as
     /// `[{first, then, files}]`: `then` is suggested to wait on `first`.
     pub fn overlaps_json(&self) -> String {
-        let found = overlaps(&self.state, |o| self.files.get(&o).map(String::as_str));
-        serde_json::to_string(&found).expect("plain data serializes")
+        self.overlaps
+            .borrow_mut()
+            .get_or_insert_with(|| {
+                let found = overlaps(&self.state, |o| self.files.get(&o).map(String::as_str));
+                serde_json::to_string(&found).expect("plain data serializes")
+            })
+            .clone()
     }
 
     /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.

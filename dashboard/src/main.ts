@@ -23,10 +23,18 @@ function render(fold: Fold) {
         row.append(span);
       }
       li.append(row);
-      for (const note of notes.get(item.id) ?? []) {
+      const card = notes.get(item.id);
+      for (const note of card?.notes ?? []) {
         const warn = document.createElement('div');
         warn.className = 'overlap';
-        warn.textContent = `Same files as ${note.other}: ${note.files.join(', ')}. Suggested: ${note.suggest}.`;
+        const files = note.files.join(', ') + (note.moreFiles ? ` +${note.moreFiles} more` : '');
+        warn.textContent = `Same files as ${note.other}: ${files}. Suggested: ${note.suggest}.`;
+        li.append(warn);
+      }
+      if (card?.more) {
+        const warn = document.createElement('div');
+        warn.className = 'overlap';
+        warn.textContent = `+${card.more} more overlaps`;
         li.append(warn);
       }
       return li;

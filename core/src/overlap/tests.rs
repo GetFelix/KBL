@@ -34,13 +34,16 @@ impl Log {
         self.push("gabriel", Actor::Person, record);
     }
     fn root(&mut self, item: &str) {
+        self.root_in(item, "GetFelix/felix");
+    }
+    fn root_in(&mut self, item: &str, repo: &str) {
         self.push(
             "tracker",
             Actor::Tracker,
             WorkRecord::Imported {
                 item: id(item),
                 source: "github".into(),
-                upstream_id: format!("GetFelix/felix#{item}"),
+                upstream_id: format!("{repo}#{item}"),
                 title: item.into(),
             },
         );
@@ -54,6 +57,23 @@ impl Log {
             item: id(item),
             entry: Key::new(FILES_ENTRY).unwrap(),
             text: Content::Text(text.into()),
+        });
+    }
+    fn claim(&mut self, item: &str) {
+        self.push(
+            "w1",
+            Actor::Agent,
+            WorkRecord::Claimed {
+                item: id(item),
+                attempt: 1,
+                deadline_ms: 90_000,
+            },
+        );
+    }
+    fn link(&mut self, item: &str, to: &str) {
+        self.person(WorkRecord::Linked {
+            item: id(item),
+            to: id(to),
         });
     }
     fn overlaps(&self) -> Vec<Overlap> {
@@ -74,6 +94,75 @@ fn overlap(first: &str, then: &str, files: &[&str]) -> Overlap {
 fn parse_files_trims_skips_comments_and_dedups() {
     let text = "  ./core/src/work.rs \n\n# the fold\ncore/src/work.rs\ndocs/\n";
     assert_eq!(parse_files(text), ["core/src/work.rs", "docs/"]);
+}
+
+#[test]
+fn parse_files_normalises_paths() {
+    let text =
+        "/core//src/./work.rs\ncore\\src\\fold.rs\ndocs/old/../a.md\nsrc/x/../\n../outside.rs\n";
+    assert_eq!(
+        parse_files(text),
+        ["core/src/fold.rs", "core/src/work.rs", "docs/a.md", "src/"]
+    );
+    for whole in ["./", "/", ".", "a/.."] {
+        assert_eq!(parse_files(whole), [WHOLE_REPO], "{whole}");
+    }
+}
+
+#[test]
+fn the_whole_repo_overlaps_every_path_in_it() {
+    let mut l = Log::default();
+    l.root("r1");
+    l.root("r2");
+    l.files("r1", "./");
+    l.files("r2", "a.rs\ndocs/");
+    assert_eq!(l.overlaps(), [overlap("r1", "r2", &["a.rs", "docs/"])]);
+}
+
+#[test]
+fn items_in_different_repos_do_not_overlap() {
+    let mut l = Log::default();
+    l.root_in("r1", "GetFelix/felix");
+    l.root_in("r2", "GetFelix/KBL");
+    l.files("r1", "README.md");
+    l.files("r2", "README.md");
+    assert_eq!(l.overlaps(), []);
+}
+
+#[test]
+fn a_pair_joined_by_a_chain_of_links_is_left_out() {
+    let mut l = Log::default();
+    for r in ["r1", "r2", "r3"] {
+        l.root(r);
+        l.files(r, "a.rs");
+    }
+    l.link("r2", "r1");
+    l.link("r3", "r2");
+    // r3 reaches r1 through r2, so "r1 waits on r3" would be a cycle.
+    assert_eq!(l.overlaps(), []);
+}
+
+#[test]
+fn a_held_item_with_an_open_question_still_goes_first() {
+    let mut l = Log::default();
+    l.root("r1");
+    l.root("r2");
+    l.files("r1", "a.rs");
+    l.files("r2", "a.rs");
+    l.claim("r2");
+    l.push(
+        "w1",
+        Actor::Agent,
+        WorkRecord::Question {
+            item: id("r2"),
+            attempt: 1,
+            text: Content::Text("which way?".into()),
+            options: vec![],
+            default: None,
+            cost_micros: 0,
+        },
+    );
+    assert_eq!(l.overlaps(), [overlap("r2", "r1", &["a.rs"])]);
 }
 
 #[test]
@@ -112,15 +201,7 @@ fn held_work_goes_first() {
     l.root("r2");
     l.files("r1", "a.rs");
     l.files("r2", "a.rs");
-    l.push(
-        "w1",
-        Actor::Agent,
-        WorkRecord::Claimed {
-            item: id("r2"),
-            attempt: 1,
-            deadline_ms: 90_000,
-        },
-    );
+    l.claim("r2");
     assert_eq!(l.overlaps(), [overlap("r2", "r1", &["a.rs"])]);
 }
 

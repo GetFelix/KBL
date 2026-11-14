@@ -626,28 +626,48 @@ cannot complete while a child is open.
 
 Two open items that change the same files will conflict when the second one
 merges. To see that early, an item can declare the files it expects to touch
-in a `files` context entry: one path per line, with a trailing `/` for a whole
-directory. Blank lines and lines starting with `#` are skipped. An agent writes
-it with `work_context`, usually at triage, and a person writes it with a
-`context` record.
+in a `files` context entry: one path per line, relative to the repo root. A
+path ending in `/` is a directory and covers every path under it; without the
+`/`, `docs` names only a file called `docs`. Blank lines and lines starting
+with `#` are skipped. An agent writes it with `work_context`, usually at
+triage, and a person writes it with a `context` record.
 
 ```text
 core/src/work_fold.rs
 docs/
 ```
 
+Paths are tidied before they are compared: `\` reads as `/`, a leading `/`
+or `./` and repeated `/` are dropped, and `..` is resolved. A line whose `..`
+climbs above the repo root is skipped. `./`, `/` or `.` on its own means the
+whole repo and overlaps every path declared for that repo. Paths compare byte
+for byte: there is no case folding and no glob matching, so `Docs/a.md` and
+`docs/a.md` are different files and `src/*.rs` is a file with a `*` in its
+name. An entry over 4 KiB is stored as an artifact, not inline, and is not
+read for overlaps.
+
 When the entries of two open items share a path (or one names a directory
 above the other's file), the dashboard shows a warning on both items naming
 the other item and the shared files, and suggests which should wait on the
-other. The item in review or held goes first; otherwise the one that declared
-its files first. The suggestion is advice: a person links the items with a
-`linked` record, and the warning goes away. Agents cannot link across trees,
-and two overlapping items are usually separate roots.
+other. Held work goes first, then work in review, then the rest; a tie goes to
+the item whose most recent `files` declaration is older. The suggestion is
+advice: a person links the items with a `linked` record, and the warning goes
+away. Agents cannot link across trees, and two overlapping items are usually
+separate roots.
 
-Pairs that are already linked either way are not warned about, and neither are
-an item and its own descendants, since a split shares its parent's files. Done
-and closed items are left out. The warning is computed from the fold on read
-(`kbl_core::overlap`), so it adds no record and needs no format raise.
+Only items whose roots land in the same repo are compared, so `README.md` in
+two repos is no overlap; items with no repo are compared with each other.
+Pairs already joined by links, directly or through other items, are not warned
+about, since the order is recorded and the suggested link would be a cycle.
+Neither are an item and its own descendants, since a split shares its parent's
+files. Done and closed items are left out. The warning is computed from the
+fold on read (`kbl_core::overlap`), so it adds no record and needs no format
+raise.
+
+The comparison is pairwise: every two declaring items in a repo, and every two
+of their paths. The page computes it once per applied record, not per redraw,
+and a card shows at most 5 notes and 10 paths per note, with a "+N more" for
+the rest.
 
 ### Prerequisites in another repo
 
