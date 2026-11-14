@@ -171,8 +171,8 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 | `POST /v1/work/release` `{item, reason, cost_micros}` | agent | Writes `released`, then hands the delivery back |
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
-| `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
-| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed and whether upstream sync (not a person) closed it, and its pull request |
+| `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
+| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
 
@@ -209,11 +209,12 @@ does not parse, an unknown kind of work or text over the inline limit is a
 show why, as `{stream, offset}`. A person reads them as support, so the
 tracker holds them to the item's own tree. Each one must be a `work.events`
 record that names an item with the same root, written before the record that
-cites it. An item that another tree's record created, such as a deferred
-finding or a prerequisite proposal, may also cite that record, which its
-context entry points at. A proposal the agent files is its own root, so the
-item it holds cannot cite records about the proposal. Anything else is
-refused: another tree's record answers `evidence_outside_tree`, another stream `evidence_stream`, a later offset
+cites it. When another tree's record created the root, such as a deferred
+finding or a prerequisite proposal, the tree may also cite that record, which
+the root's context entry points at. A proposal is its own root, so the item
+that filed it cannot cite records of the proposal's tree. Anything else is
+refused: another tree's record answers `evidence_outside_tree`, another stream
+`evidence_stream`, a later offset
 `evidence_from_the_future`. A writer who may not make the record gets the
 fold's refusal instead, so it learns nothing about where a record is. The
 check runs before the append, so logs written before it fold as they did.
@@ -314,7 +315,10 @@ reports is written to (made a draft) only when it is in the same repository as
 the upstream issue, and that repository is one a rule names. A root a person
 dismissed stays closed when its issue is reopened. Whether a close was
 ingest's is read from the log (`GET /v1/ingest/roots`), not from saved state, so
-a poll that stopped between the close and its save does not lose it.
+a poll that stopped between the close and its save does not lose it. The same
+goes for a reopen: an open root whose issue is closed stays open only when a
+person reopened it. When ingest imported or reopened it and the issue closed
+before a save landed, the next poll closes the root.
 
 Ingest's saved state keeps an entry for each open issue, each transferred
 issue, and each closed issue still waiting on its pull request. An issue that is closed
@@ -403,10 +407,20 @@ What it does with GitHub:
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 
-An issue that leaves its rule and later returns stays in Needs you on purpose:
-`left_scope` has no matching record to clear it, so a person confirms the item
-still belongs. A record that clears it would be a new record kind and so a new
-format (see [upgrades](upgrades.md)).
+An issue that leaves its rule and later matches it again gets a
+`returned_to_scope` record, and the item leaves Needs you for the stage it had.
+A person can write the same record to keep an item whose issue no longer
+matches. `returned_to_scope` is the first record of format 2, so the tracker
+refuses it until a person raises the log to format 2 (see
+[upgrades](upgrades.md#upgrade)). Until then a returning item stays in Needs
+you, as before, and ingest writes the record at its next reconcile after the
+raise, or sooner if the issue changes. Ingest brings back only items it took
+out: a `left_scope` a person wrote stays until a person clears it.
+
+An issue is held to the rule that imported it. Renaming or removing that rule
+in the config takes its items out of scope. One case has no rule: an issue
+reopened after ingest forgot it, while no rule matched it. The first rule that
+matches it later becomes its rule, if that rule is under its cap.
 
 ### Grants
 
@@ -889,6 +903,7 @@ matches two rules belongs to the first one listed.
 | Title, body or labels edited | An `updated` record. The item shows "changed upstream since triage". Triaging again is a person's action, so edits never create work |
 | A new comment | A `context` record credited to the upstream author. Agents see it on their next read |
 | No longer matches its rule (label removed, milestone moved) | `left_scope`. Withdrawn from Ready if nobody holds it. If an agent holds it, the attempt finishes or is released and the item then stops. Shown in Needs you |
+| Matches its rule again | `returned_to_scope`: out of Needs you and back to its stage. Needs a log at format 2 |
 | Closed as completed or fixed, or closed with no reason (issues closed before GitHub kept one) | `closed` with reason completed: the item is done and its dependents unblock |
 | Closed as not planned, duplicate or won't fix | `closed` with reason dropped: open children and attempts are cancelled, dependents go to Needs you ("dependency dropped"), and an agent's open pull request becomes a draft with a comment |
 | Reopened | Back to Triage as the same root, with its history and its remaining budget |

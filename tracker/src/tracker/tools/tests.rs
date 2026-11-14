@@ -2291,3 +2291,43 @@ fn ans(
         split: Vec::new(),
     }
 }
+
+#[tokio::test]
+async fn a_prerequisite_proposal_cites_the_record_that_filed_it() {
+    let (fake, t) = granted().await;
+    let reply = t
+        .prerequisite(
+            &agent("w1"),
+            &item("a1"),
+            key("cas"),
+            gateway(),
+            DoneWhen::Merged,
+            0,
+        )
+        .await
+        .unwrap();
+    let g = id_of(&json!({ "item": reply["prerequisite"] }));
+    let origin = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "prerequisite")
+        .unwrap() as u64;
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: g.clone(),
+            tier: Some(2),
+        },
+    )
+    .await;
+    assert_eq!(
+        claimed_id(&claim(&t, "w2").await).as_deref(),
+        Some(g.as_str())
+    );
+    let mut d = decide_args();
+    d.evidence = vec![Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: origin,
+    }];
+    t.decide(&agent("w2"), &g, d).await.unwrap();
+}

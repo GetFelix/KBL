@@ -7,7 +7,7 @@ import { test } from 'node:test';
 const { Folder } = createRequire(import.meta.url)('../.wasm-node/kbl_wasm.js');
 const golden = new URL('../../wasm/golden/', import.meta.url);
 
-for (const name of ['every_record', 'pre_prerequisite', 'pre_questions']) {
+for (const name of ['every_record', 'pre_prerequisite', 'pre_questions', 'format_2']) {
   test(`the wasm fold equals the native fold on ${name}`, () => {
     const log = readFileSync(new URL(`${name}.jsonl`, golden), 'utf8').trimEnd().split('\n');
     const fold = new Folder();

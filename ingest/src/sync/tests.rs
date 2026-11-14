@@ -314,6 +314,160 @@ async fn a_label_removed_from_a_free_item_withdraws_it_from_ready() {
     );
 }
 
+fn raise_format(rig: &Rig) {
+    rig.tracker.person(WorkRecord::FormatRaised { to: 2 });
+}
+
+#[tokio::test]
+async fn an_issue_that_returns_to_its_rule_leaves_needs_you() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let item = rig.root(UP);
+
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::LeftScope)
+    );
+
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    let s = rig.tracker.state();
+    assert_eq!(s.needs_you(&item), None);
+    assert_eq!(s.stage(&item), Some(Stage::Ready));
+
+    // It can leave again.
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T14:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("left_scope"), 2);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::NeedsYou));
+}
+
+/// A saved state from a build before the record says in scope for an item
+/// that returned then: the fold's flag still brings it back.
+#[tokio::test]
+async fn an_item_ingest_took_out_is_brought_back_whatever_its_saved_state_says() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let (saved, version) = rig.tracker.load("github").await.unwrap();
+    let mut saved = saved.unwrap();
+    saved["items"][UP]["in_scope"] = json!(true);
+    rig.tracker.save("github", &saved, version).await.unwrap();
+
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    assert_eq!(rig.tracker.state().needs_you(&item), None);
+}
+
+/// A person's `left_scope` is theirs to undo, even while the issue matches.
+#[tokio::test]
+async fn ingest_does_not_undo_a_person_taking_an_item_out_of_scope() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let item = rig.root(UP);
+    rig.tracker
+        .person(WorkRecord::LeftScope { item: item.clone() });
+    rig.list(vec![at(
+        issue(812, |v| v["title"] = json!("edited")),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("updated"), 1);
+    assert_eq!(rig.tracker.count("returned_to_scope"), 0);
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::LeftScope)
+    );
+}
+
+#[tokio::test]
+async fn a_return_before_the_format_is_raised_is_written_after_the_raise() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+
+    // The log is still at the first format: the tracker refuses the record
+    // and the item waits in Needs you, as it did before the record existed.
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 0);
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::LeftScope)
+    );
+    assert!(!rig.tracker.saved_state().items[UP].in_scope);
+
+    raise_format(&rig);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Ready));
+    assert!(rig.tracker.saved_state().items[UP].in_scope);
+}
+
+#[tokio::test]
+async fn a_pruned_issue_rebuilt_outside_every_rule_takes_the_rule_that_matches_it_later() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let item = rig.root(UP);
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+
+    // Reopened without the label: no rule takes it, so it leaves scope.
+    let mut open = issue(812, |v| labels(v, &["p1"]));
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("reopened"), 1);
+    assert_eq!(rig.tracker.count("left_scope"), 1);
+
+    // The label comes back: the rule that matches is now its rule.
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T14:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    assert_eq!(rig.tracker.saved_state().items[UP].rule, "agent-ok");
+    assert_eq!(rig.tracker.state().needs_you(&item), None);
+}
+
 #[tokio::test]
 async fn closed_as_not_planned_drops_the_item_and_drafts_the_agents_pull_request() {
     let rig = rig();
@@ -510,6 +664,99 @@ async fn a_reopen_whose_save_failed_does_not_accept_the_root_again() {
         rig.tracker.state().stage(&rig.root(UP)),
         Some(Stage::Triage)
     );
+}
+
+#[tokio::test]
+async fn a_root_ingest_reopened_closes_again_when_the_save_was_lost() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+
+    // Ingest reopens the pruned root, and the save after it fails.
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    assert_eq!(rig.tracker.count("reopened"), 1);
+    // The issue closes again before a save lands.
+    rig.tracker.allow_saves();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T14:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("closed"), 2);
+    assert_eq!(
+        rig.tracker.state().items[&rig.root(UP)].closed,
+        Some(Closure::Completed)
+    );
+}
+
+#[tokio::test]
+async fn a_root_whose_import_was_never_saved_closes_with_its_issue() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    rig.tracker.allow_saves();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("closed"), 1);
+    assert_eq!(
+        rig.tracker.state().items[&rig.root(UP)].closed,
+        Some(Closure::Completed)
+    );
+}
+
+#[tokio::test]
+async fn a_childless_root_ingest_reopened_is_not_accepted_on_a_retry() {
+    let rig = rig();
+    let mut propose = admit_rule();
+    propose["mode"] = json!("propose");
+    let ingest = rig.ingest(json!([propose]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.tracker.person(WorkRecord::Accepted {
+        item: item.clone(),
+        tier: Some(3),
+    });
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+
+    // The rule now admits, and the poll that reopens the root fails to save.
+    let ingest = rig.ingest(json!([admit_rule()]));
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    rig.tracker.allow_saves();
+    ingest.poll(false).await.unwrap();
+    // Only the person's accept: the reopened root waits in Triage for a person.
+    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("proposed"), 0);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Triage));
 }
 
 #[tokio::test]

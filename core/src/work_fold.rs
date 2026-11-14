@@ -315,7 +315,12 @@ pub struct Item {
     /// The upstream issue changed after the last triage answer.
     pub changed_upstream: bool,
     /// The upstream issue no longer matches the rule that admitted it.
+    /// Cleared by `returned_to_scope` or a reopen.
     pub left_scope: bool,
+    /// Upstream sync, not a person, took it out of scope, so sync may bring
+    /// it back. Derived from the log, so it survives a lost ingest state.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub left_scope_by_sync: bool,
     pub accepted: bool,
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
@@ -325,6 +330,10 @@ pub struct Item {
     /// a person. Derived from the log, so it survives a lost ingest state.
     #[serde(default, skip_serializing_if = "is_false")]
     pub closed_by_sync: bool,
+    /// Who wrote the last reopen: a person, or upstream sync as the tracker.
+    /// Derived from the log, like `closed_by_sync`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopened_by: Option<Actor>,
     pub redos: u8,
     pub over_budget: bool,
     pub open_question: Option<u64>,
@@ -866,12 +875,14 @@ impl State {
             proposed_from: None,
             changed_upstream: false,
             left_scope: false,
+            left_scope_by_sync: false,
             accepted: false,
             tier: None,
             proposal: None,
             hold: None,
             closed: None,
             closed_by_sync: false,
+            reopened_by: None,
             redos: 0,
             over_budget: false,
             open_question: None,
@@ -1569,7 +1580,14 @@ impl State {
                 it.changed_upstream = true;
             }
             WorkRecord::LeftScope { item } => {
-                self.upstream_sync(item, rec)?.left_scope = true;
+                let it = self.upstream_sync(item, rec)?;
+                it.left_scope = true;
+                it.left_scope_by_sync = rec.actor == Actor::Tracker;
+            }
+            WorkRecord::ReturnedToScope { item } => {
+                let it = self.upstream_sync(item, rec)?;
+                it.left_scope = false;
+                it.left_scope_by_sync = false;
             }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {
@@ -1584,11 +1602,13 @@ impl State {
                 }
                 it.closed = None;
                 it.closed_by_sync = false;
+                it.reopened_by = Some(rec.actor);
                 // A new merge needs a new release.
                 it.release = None;
                 // Back to Triage: a person accepts it again.
                 it.accepted = false;
                 it.left_scope = false;
+                it.left_scope_by_sync = false;
                 it.changed_upstream = true;
                 it.proposal = None;
             }

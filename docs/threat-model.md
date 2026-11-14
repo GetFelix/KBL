@@ -54,7 +54,7 @@ Two more parties are outside KBL and can still steer it:
    that is left is noted in the code there.
 3. **Ingest to tracker.** A separate token and a short list of record kinds,
    only on roots ingest imported (`tracker/src/tracker/ingest.rs:20`,
-   `tracker/src/tracker/ingest.rs:88`).
+   `tracker/src/tracker/ingest.rs:100`).
 4. **GitHub to ingest.** Issue text is data. The pull request an item reports
    is named by an agent, so ingest ties it to the item before it reads it
    (see [What ingest believes](#what-ingest-believes)).
@@ -129,9 +129,9 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 
 | Route | What ingest controls | Check |
 |---|---|---|
-| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:88`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:94`, `core/src/work_fold.rs:1290`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:75`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1290`); ingest cuts titles itself (`ingest/src/sync.rs:890`) |
+| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:100`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:106`, `core/src/work_fold.rs:1290`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:87`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1290`); ingest cuts titles itself (`ingest/src/sync.rs:975`) |
 | `/v1/ingest/roots` | Nothing | Read only |
-| `/v1/ingest/state/{source}` | The saved cursor for a source | The name is a key (`tracker/src/tracker/ingest.rs:181`). 4 MB at most (`tracker/src/tracker/ingest.rs:156`). Saved only if nobody saved since the version read (`tracker/src/tracker/ingest.rs:159`). Any ingest token reaches any source's state, which is fine with one worker |
+| `/v1/ingest/state/{source}` | The saved cursor for a source | The name is a key (`tracker/src/tracker/ingest.rs:234`). 4 MB at most (`tracker/src/tracker/ingest.rs:236`). Saved only if nobody saved since the version read (`tracker/src/tracker/ingest.rs:239`). Any ingest token reaches any source's state, which is fine with one worker |
 | `/healthz` | Nothing | No token. Answers `ok` and nothing else |
 
 ### Team routes
@@ -179,16 +179,16 @@ request only when all of these hold, so the name alone steers nothing.
 
 | Attack | Check |
 |---|---|
-| Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:733`) |
-| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:474`, `ingest/src/github.rs:335`) |
-| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:488`) |
+| Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:793`) |
+| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:526`, `ingest/src/github.rs:335`) |
+| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:540`) |
 | Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs:346`) |
 | Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:516`) |
 | Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:624`) |
 | Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs:597`) |
-| Name another item's request in other letter case | The tracker records the casing an open item already uses, so the fold refuses it as `pr_in_use` (`tracker/src/tracker.rs:223`) |
-| Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:697`) |
-| Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:899`), our own comments are skipped (`ingest/src/sync.rs:404`), and an edit after triage shows as "changed upstream" |
+| Name another item's request in other letter case | The tracker records the casing an open item already uses, so the fold refuses it as `pr_in_use` (`tracker/src/tracker.rs:224`) |
+| Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:748`) |
+| Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:984`), our own comments are skipped (`ingest/src/sync.rs:456`), and an edit after triage shows as "changed upstream" |
 
 ## MCP tools
 
@@ -255,9 +255,10 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `forked_from` | Tracker, person | Redo limit per item (`core/src/work_fold.rs:1240`) |
 | `closed` | Tracker, person | The tracker closes as merged only on a merged status (`core/src/work_fold.rs:1285`) |
 | `rejected` | Tracker, person | `core/src/work_fold.rs:1309` |
-| `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:1537`) |
-| `left_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:1537`) |
-| `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs:1328`). Ingest reopens only what it closed |
+| `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:2049`) |
+| `left_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2049`) |
+| `returned_to_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2049`). Format 2, so refused until a person raises the log (`core/src/work_fold.rs:484`) |
+| `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs:1587`). Ingest reopens only what it closed |
 | `attempt_closed` | Tracker, person | `core/src/work_fold.rs:1348` |
 | `tier_changed` | Person | `core/src/work_fold.rs:1436` |
 | `edited` | Person | `core/src/work_fold.rs:1449` |

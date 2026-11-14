@@ -1369,6 +1369,55 @@ fn leaving_scope_stops_a_free_item_and_waits_for_a_holder() {
 }
 
 #[test]
+fn returning_to_scope_clears_left_scope_once_the_format_is_raised() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "r1");
+    l.tracker(WorkRecord::LeftScope { item: id("r1") });
+    // Format 2: refused on a log still at the first format.
+    let early = l.tracker(WorkRecord::ReturnedToScope { item: id("r1") });
+    let s = fold(&l.0);
+    assert_eq!(
+        s.rejections,
+        vec![Rejection {
+            offset: early,
+            why: Reject::Format
+        }]
+    );
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::LeftScope));
+
+    l.person(WorkRecord::FormatRaised { to: 2 });
+    l.tracker(WorkRecord::ReturnedToScope { item: id("r1") });
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.len(), 1);
+    assert!(!s.items[&id("r1")].left_scope);
+    assert_eq!(s.needs_you(&id("r1")), None);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+    // A repeat, as from a retry after a crash, changes nothing.
+    l.tracker(WorkRecord::ReturnedToScope { item: id("r1") });
+    assert_eq!(fold(&l.0).rejections.len(), 1);
+
+    // A person may say it still belongs; an agent may not.
+    l.tracker(WorkRecord::LeftScope { item: id("r1") });
+    l.agent("w1", WorkRecord::ReturnedToScope { item: id("r1") });
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().unwrap().why, Reject::ActorNotAllowed);
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::LeftScope));
+    l.person(WorkRecord::ReturnedToScope { item: id("r1") });
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Ready));
+
+    // Only open roots, as for leaving.
+    l.tracker(proposed("c1", Some("r1"), "t", WorkKind::Triage));
+    l.tracker(WorkRecord::ReturnedToScope { item: id("c1") });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotARoot);
+    l.tracker(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Completed,
+    });
+    l.tracker(WorkRecord::ReturnedToScope { item: id("r1") });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::Closed);
+}
+
+#[test]
 fn reopening_returns_the_same_root_to_triage_with_its_budget() {
     let mut l = Log::default();
     accepted_root(&mut l, "r1");
@@ -1410,7 +1459,16 @@ fn a_close_remembers_whether_upstream_sync_wrote_it() {
     assert!(s.items[&id("r1")].closed_by_sync);
     assert!(!s.items[&id("r2")].closed_by_sync);
     l.tracker(WorkRecord::Reopened { item: id("r1") });
-    assert!(!fold(&l.0).items[&id("r1")].closed_by_sync);
+    let s = fold(&l.0);
+    assert!(!s.items[&id("r1")].closed_by_sync);
+    assert_eq!(s.items[&id("r1")].reopened_by, Some(Actor::Tracker));
+    // A person's reopen is a person's, whoever reopened before.
+    l.tracker(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Upstream,
+    });
+    l.person(WorkRecord::Reopened { item: id("r1") });
+    assert_eq!(fold(&l.0).items[&id("r1")].reopened_by, Some(Actor::Person));
 }
 
 #[test]
@@ -2956,7 +3014,7 @@ fn a_refused_raise_is_a_rejection_on_replay_and_leaves_the_format() {
         WorkRecord::FormatRaised { to: FORMAT + 1 },
     );
     let s = fold(&l.0);
-    assert_eq!(s.format(), FORMAT);
+    assert_eq!(s.format(), FORMAT_V1);
     assert_eq!(
         s.rejections,
         vec![Rejection {

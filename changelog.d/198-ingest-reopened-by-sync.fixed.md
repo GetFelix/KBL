@@ -1,0 +1,1 @@
+A root that ingest imported or reopened, whose issue closed before ingest's save landed, is now closed on the next poll instead of staying open for good. `GET /v1/ingest/roots` serves `reopened_by` (a person or the tracker), read from the log, and ingest keeps an open root with a closed issue only when a person reopened it.

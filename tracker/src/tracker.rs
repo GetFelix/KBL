@@ -260,13 +260,13 @@ fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), E
             continue;
         }
         let in_tree = core.recall.subjects.get(&e.offset).and_then(root) == Some(own)
-            // An item made by a record in another tree, such as a deferred
+            // A root made by a record in another tree, such as a deferred
             // finding, points at that record from its own context.
             || core
                 .state
                 .items
-                .values()
-                .any(|i| &i.root == own && i.context.values().any(|&o| o == e.offset));
+                .get(own)
+                .is_some_and(|r| r.context.values().any(|&o| o == e.offset));
         if !in_tree {
             return Err(Error::Refused {
                 why: "evidence_outside_tree".into(),
