@@ -278,6 +278,10 @@ pub struct Path {
     pub proven: Vec<u64>,
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 fn is_zero(n: &u32) -> bool {
     *n == 0
 }
@@ -317,6 +321,10 @@ pub struct Item {
     pub proposal: Option<Proposal>,
     pub hold: Option<Hold>,
     pub closed: Option<Closure>,
+    /// The close was written by upstream sync (the tracker's role) and not by
+    /// a person. Derived from the log, so it survives a lost ingest state.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub closed_by_sync: bool,
     pub redos: u8,
     pub over_budget: bool,
     pub open_question: Option<u64>,
@@ -848,6 +856,7 @@ impl State {
             proposal: None,
             hold: None,
             closed: None,
+            closed_by_sync: false,
             redos: 0,
             over_budget: false,
             open_question: None,
@@ -1522,7 +1531,11 @@ impl State {
                     CloseWhy::Dismissed => Closure::Dismissed,
                     CloseWhy::Upstream => Closure::Upstream,
                 };
+                let first = self.item(item)?.closed.is_none();
                 self.close(item, how);
+                if first && rec.actor == Actor::Tracker {
+                    self.item_mut(item)?.closed_by_sync = true;
+                }
             }
             WorkRecord::Rejected { item } => {
                 if rec.actor == Actor::Agent {
@@ -1555,6 +1568,7 @@ impl State {
                     return Err(Reject::NotClosed);
                 }
                 it.closed = None;
+                it.closed_by_sync = false;
                 // A new merge needs a new release.
                 it.release = None;
                 // Back to Triage: a person accepts it again.

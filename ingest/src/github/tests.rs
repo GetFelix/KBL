@@ -86,7 +86,8 @@ async fn closed_reasons_map_to_done_or_dropped() {
     assert_eq!(read(json!("duplicate")), Some(Closed::Dropped));
     // A reason this version does not know stops dependents instead of freeing them.
     assert_eq!(read(json!("something_new")), Some(Closed::Dropped));
-    assert_eq!(read(Value::Null), Some(Closed::Dropped));
+    // No reason is an issue closed before GitHub kept one.
+    assert_eq!(read(Value::Null), Some(Closed::Completed));
 }
 
 #[tokio::test]

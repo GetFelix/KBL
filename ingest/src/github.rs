@@ -413,6 +413,30 @@ impl<T: Transport> Source for Github<T> {
         }))
     }
 
+    async fn issue_comments(&self, id: &IssueRef) -> Result<Vec<Comment>, SourceError> {
+        let url = format!(
+            "{}/repos/{}/issues/{}/comments?per_page=100",
+            self.api, id.repo, id.number
+        );
+        let listing = self
+            .pages(url, &BTreeMap::new(), &mut BTreeMap::new())
+            .await?;
+        if let Some(code) = listing.denied {
+            eprintln!("kbl-ingest: the comments of {id} answered {code}; skipping them");
+        }
+        Ok(listing
+            .items
+            .iter()
+            .filter_map(|raw| match parse_comment(&id.repo, raw) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    eprintln!("kbl-ingest: skipped a comment of {id}: {e:#}");
+                    None
+                }
+            })
+            .collect())
+    }
+
     async fn fetch(&self, id: &IssueRef) -> Result<Fetched, SourceError> {
         let url = format!("{}/repos/{}/issues/{}", self.api, id.repo, id.number);
         let res = self.call(Req::get(url)).await?;
@@ -725,10 +749,12 @@ fn parse_issue(repo: &str, raw: &Value) -> anyhow::Result<Issue> {
     let text = |v: &Value| v.as_str().unwrap_or_default().to_owned();
     let number = raw["number"].as_u64().context("an issue has no number")?;
     let closed = (raw["state"] == "closed").then(|| match raw["state_reason"].as_str() {
-        Some("completed") => Closed::Completed,
-        // Not planned, a duplicate, or a reason or none this version knows:
+        // No reason is how GitHub records issues closed before it kept one,
+        // and a plain close is a completion.
+        Some("completed") | None => Closed::Completed,
+        // Not planned, a duplicate, or a reason this version does not know:
         // dropped is the reading that stops dependents instead of freeing them.
-        _ => Closed::Dropped,
+        Some(_) => Closed::Dropped,
     });
     let names = |v: &Value, field: &str| -> Vec<String> {
         v.as_array()

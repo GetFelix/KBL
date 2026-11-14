@@ -220,13 +220,10 @@ async fn a_root_a_person_dismissed_is_not_reopened_with_the_issue() {
     rig.list(vec![issue(812, |_| {})]);
     ingest.poll(false).await.unwrap();
     let item = rig.root(UP);
-    rig.tracker
-        .append(&WorkRecord::Closed {
-            item: item.clone(),
-            why: CloseWhy::Dismissed,
-        })
-        .await
-        .unwrap();
+    rig.tracker.person(WorkRecord::Closed {
+        item: item.clone(),
+        why: CloseWhy::Dismissed,
+    });
     rig.list(vec![closed(
         issue(812, |_| {}),
         "completed",
@@ -417,6 +414,189 @@ async fn closed_as_completed_finishes_the_item_and_a_reopen_returns_it_to_triage
 }
 
 #[tokio::test]
+async fn an_issue_closed_with_no_reason_is_completed() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let mut old = closed(issue(812, |_| {}), "completed", "2026-11-10T12:00:00Z");
+    old["state_reason"] = Value::Null;
+    rig.list(vec![old]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&rig.root(UP)].closed,
+        Some(Closure::Completed)
+    );
+}
+
+#[tokio::test]
+async fn a_close_whose_save_failed_is_still_ours_when_the_issue_reopens() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "not_planned",
+        "2026-11-10T12:00:00Z",
+    )]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    assert_eq!(rig.tracker.count("closed"), 1);
+    rig.tracker.allow_saves();
+    ingest.poll(false).await.unwrap();
+
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("reopened"), 1);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Triage));
+}
+
+#[tokio::test]
+async fn closed_issues_are_pruned_from_the_saved_state_and_still_reopen() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("closed"), 1);
+
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("reopened"), 1);
+    assert_eq!(rig.tracker.count("imported"), 1);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Triage));
+    assert!(rig.tracker.saved_state().items.contains_key(UP));
+}
+
+#[tokio::test]
+async fn a_reopen_whose_save_failed_does_not_accept_the_root_again() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    rig.tracker.allow_saves();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(
+        rig.tracker.state().stage(&rig.root(UP)),
+        Some(Stage::Triage)
+    );
+}
+
+#[tokio::test]
+async fn a_person_reopening_a_pruned_root_puts_it_back_in_the_saved_state() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    rig.tracker
+        .person(WorkRecord::Reopened { item: rig.root(UP) });
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.contains_key(UP));
+    assert_eq!(rig.tracker.count("closed"), 1);
+}
+
+#[tokio::test]
+async fn a_dropped_issue_is_kept_until_its_pull_request_is_dealt_with() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.hold(UP, Some("GetFelix/felix#2210"));
+    rig.gh.on("GET", "/pulls/2210", status(500, &[]));
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "not_planned",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.contains_key(UP));
+}
+
+#[tokio::test]
+async fn comments_made_while_an_issue_waited_are_imported_when_it_is_admitted() {
+    let rig = rig();
+    let rule = json!({
+        "name": "milestone", "repo": "GetFelix/felix", "milestone": "0.8",
+        "mode": "propose", "cap": 1
+    });
+    let ingest = rig.ingest(json!([rule]));
+    let m = |n: u64, t: &str| {
+        at(
+            issue(n, |v| {
+                v["milestone"] = json!({ "title": "0.8" });
+                labels(v, &[]);
+            }),
+            t,
+        )
+    };
+    rig.list(vec![
+        m(21, "2026-11-10T10:00:00Z"),
+        m(22, "2026-11-10T10:01:00Z"),
+    ]);
+    rig.gh
+        .on("GET", "/issues/22", ok(m(22, "2026-11-10T10:01:00Z")));
+    let mut waiting = fixture("comment");
+    waiting["id"] = json!(9100);
+    waiting["issue_url"] = json!("https://api.github.com/repos/GetFelix/felix/issues/22");
+    rig.gh
+        .on("GET", "/issues/22/comments", ok(json!([waiting])));
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().imported().count(), 1);
+
+    rig.list(vec![closed(
+        m(21, "2026-11-10T10:00:00Z"),
+        "completed",
+        "2026-11-10T11:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root("GetFelix/felix#22");
+    let s = rig.tracker.state();
+    assert!(
+        s.items[&item]
+            .context
+            .keys()
+            .any(|k| k.as_str() == "gh-c9100")
+    );
+    assert!(rig.tracker.saved_state().waiting.is_empty());
+}
+
+#[tokio::test]
 async fn an_edit_flags_the_item_and_makes_no_work() {
     let rig = rig();
     let ingest = rig.ingest(json!([admit_rule()]));
@@ -591,6 +771,45 @@ async fn a_transferred_issue_keeps_its_item_under_its_new_id() {
 }
 
 #[tokio::test]
+async fn a_transferred_issue_that_closes_is_not_imported_again_when_it_reopens() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/felix/issues/812",
+        status(
+            301,
+            &[(
+                "location",
+                "https://api.github.com/repos/GetFelix/felix2/issues/5",
+            )],
+        ),
+    );
+    let mut moved = issue(5, |_| {});
+    moved["html_url"] = json!("https://github.com/GetFelix/felix2/issues/5");
+    let shut = closed(moved.clone(), "completed", "2026-11-10T12:00:00Z");
+    rig.gh
+        .on("GET", "/repos/GetFelix/felix2/issues/5", ok(shut));
+    let cfg = json!([admit_rule(), {
+        "name": "second", "repo": "GetFelix/felix2", "labels_all": ["agent-ok"], "mode": "admit"
+    }]);
+    let ingest = rig.ingest(cfg);
+    ingest.poll(true).await.unwrap();
+
+    rig.gh
+        .on("GET", "/repos/GetFelix/felix/issues?", ok(json!([])));
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/felix2/issues?",
+        ok(json!([at(moved, "2026-11-10T13:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("imported"), 1);
+}
+
+#[tokio::test]
 async fn an_issue_deleted_upstream_is_dropped_at_the_next_reconcile() {
     let rig = rig();
     let ingest = rig.ingest(json!([admit_rule()]));
@@ -666,7 +885,8 @@ async fn a_refused_write_back_does_not_hold_the_cursor_and_is_given_up_on() {
     ingest.poll(false).await.unwrap();
     ingest.poll(false).await.unwrap();
     let saved = rig.tracker.saved_state();
-    assert!(saved.items[UP].written_back);
+    // Given up on, so it is settled and forgotten.
+    assert!(!saved.items.contains_key(UP));
     let comments = |gh: &Script| {
         gh.writes()
             .iter()

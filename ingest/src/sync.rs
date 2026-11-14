@@ -144,6 +144,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         self.link(p).await?;
         self.write_back(p).await?;
+        prune(p);
         p.state.cursors.extend(cursors);
         Ok(())
     }
@@ -191,7 +192,26 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     async fn on_issue(&self, p: &mut Poll, issue: &Issue) -> Result<(), SourceError> {
         let key = issue.id.to_string();
         match p.state.items.get(&key).cloned() {
-            None => self.consider(p, issue).await,
+            None => match p.roots.get(&key).cloned() {
+                // Pruned after it closed, and open again now.
+                Some(root) if root.closed && issue.closed.is_none() => {
+                    let rule = first_match(&self.settings.rules, issue).map_or("", |r| &r.name);
+                    // Stands in for the close that was forgotten, so `follow`
+                    // sees the issue reopen.
+                    let mut t = tracked_as(&root.item, rule, issue);
+                    t.closed = Some(Closed::Dropped);
+                    self.follow(p, issue, t).await
+                }
+                // A person reopened the root of an issue that is still closed.
+                Some(root) if !root.closed && issue.closed.is_some() => {
+                    let rule = first_match(&self.settings.rules, issue).map_or("", |r| &r.name);
+                    let mut t = tracked_as(&root.item, rule, issue);
+                    t.closed = issue.closed;
+                    p.state.items.insert(key, t);
+                    Ok(())
+                }
+                _ => self.consider(p, issue).await,
+            },
             Some(t) if t.moved_to.is_some() => Ok(()),
             Some(t) => self.follow(p, issue, t).await,
         }
@@ -208,10 +228,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 return Ok(());
             }
         };
+        // Left in `waiting` until its comments are in, so a poll that stops
+        // in between does one more pass.
+        let was_waiting = p.state.waiting.contains(&key);
         if let Some(root) = p.roots.get(&key).cloned() {
             // Imported by a poll that stopped before it saved.
             let item = root.item.clone();
-            p.state.waiting.remove(&key);
             p.state
                 .items
                 .insert(key.clone(), tracked(&item, &rule, issue));
@@ -221,9 +243,18 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             self.context(&item, "intake", intake_text(&rule, issue))
                 .await?;
             if rule.mode == Mode::Admit && !root.closed {
-                self.admit(&item, &rule, issue, root.stage == "triage")
-                    .await?;
+                self.admit(
+                    &item,
+                    &rule,
+                    issue,
+                    root.stage == "triage" && !root.has_children,
+                )
+                .await?;
             }
+            if was_waiting {
+                self.import_comments(p, issue).await?;
+            }
+            p.state.waiting.remove(&key);
             p.touched.push(key);
             return Ok(());
         }
@@ -233,7 +264,6 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             p.state.waiting.insert(key);
             return Ok(());
         }
-        p.state.waiting.remove(&key);
         let item = item_id(&key);
         let imported = WorkRecord::Imported {
             item: item.clone(),
@@ -269,6 +299,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 }
                 .to_owned(),
                 closed: false,
+                closed_by_sync: false,
+                has_children: rule.mode == Mode::Admit,
                 pr: None,
                 claimed_at_ms: None,
                 pr_status: None,
@@ -277,7 +309,20 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         p.state
             .items
             .insert(key.clone(), tracked(&item, &rule, issue));
+        if was_waiting {
+            self.import_comments(p, issue).await?;
+        }
+        p.state.waiting.remove(&key);
         p.touched.push(key);
+        Ok(())
+    }
+
+    /// Comments made while the issue waited were not imported, since only
+    /// imported issues take comments. They are read now that it is in.
+    async fn import_comments(&self, p: &mut Poll, issue: &Issue) -> Result<(), SourceError> {
+        for c in self.source.issue_comments(&issue.id).await? {
+            self.on_comment(p, &c).await?;
+        }
         Ok(())
     }
 
@@ -335,7 +380,6 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     })
                     .await?;
                     set_closed(p, &key, true);
-                    t.closed_by_us = true;
                 }
                 t.closed = Some(how);
                 p.state.items.insert(key, t);
@@ -343,13 +387,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             }
             (Some(_), None) => {
                 // A root a person dismissed stays closed.
-                if root.closed && t.closed_by_us {
+                if root.closed && root.closed_by_sync {
                     self.write(&WorkRecord::Reopened {
                         item: t.item.clone(),
                     })
                     .await?;
                     set_closed(p, &key, false);
-                    t.closed_by_us = false;
                 }
                 t.closed = None;
                 t.written_back = false;
@@ -543,9 +586,6 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             })
             .await?;
             set_closed(p, key, true);
-            if let Some(t) = p.state.items.get_mut(key) {
-                t.closed_by_us = true;
-            }
         }
         Ok(())
     }
@@ -608,9 +648,6 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             })
             .await?;
             set_closed(p, key, true);
-            if let Some(t) = p.state.items.get_mut(key) {
-                t.closed_by_us = true;
-            }
         }
         if let Some(t) = p.state.items.get_mut(key) {
             t.closed = Some(Closed::Dropped);
@@ -651,7 +688,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .collect();
         for (key, item, pending) in waiting {
             for to in pending {
-                let Some(other) = p.state.items.get(&to).map(|o| o.item.clone()) else {
+                // A closed issue may have been pruned from the state; its root remains.
+                let Some(other) = p
+                    .roots
+                    .get(&to)
+                    .map(|r| r.item.clone())
+                    .or_else(|| p.state.items.get(&to).map(|o| o.item.clone()))
+                else {
                     continue;
                 };
                 match self
@@ -772,9 +815,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 }
 
 fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
+    tracked_as(item, &rule.name, issue)
+}
+
+fn tracked_as(item: &ItemId, rule: &str, issue: &Issue) -> Tracked {
     Tracked {
         item: item.clone(),
-        rule: rule.name.clone(),
+        rule: rule.to_owned(),
         fingerprint: fingerprint(issue),
         title: issue.title.clone(),
         closed: None,
@@ -784,7 +831,6 @@ fn tracked(item: &ItemId, rule: &Rule, issue: &Issue) -> Tracked {
         linked: Default::default(),
         written_back: false,
         write_back_tries: 0,
-        closed_by_us: false,
         moved_to: None,
     }
 }
@@ -831,9 +877,42 @@ fn open_roots(p: &Poll, rule: &str) -> usize {
         .len()
 }
 
+/// Forgets closed issues, whose entries (and comment maps) would otherwise
+/// grow the saved state without bound. The tracker's root says all that is
+/// needed to handle one that is reopened: see `on_issue`. A dropped issue is
+/// kept until its pull request has been dealt with.
+fn prune(p: &mut Poll) {
+    // The new id of a transfer is the only entry that keeps the move from
+    // importing the issue a second time under it.
+    let targets: HashSet<String> = p
+        .state
+        .items
+        .values()
+        .filter_map(|t| t.moved_to.clone())
+        .collect();
+    let done: Vec<String> = p
+        .state
+        .items
+        .iter()
+        .filter(|(k, t)| {
+            !targets.contains(*k)
+                && t.moved_to.is_none()
+                && t.closed.is_some()
+                && (t.closed == Some(Closed::Completed) || t.written_back)
+                && p.roots.get(*k).is_some_and(|r| r.closed)
+        })
+        .map(|(k, _)| k.clone())
+        .collect();
+    for k in done {
+        p.state.items.remove(&k);
+    }
+}
+
 fn set_closed(p: &mut Poll, key: &str, closed: bool) {
     if let Some(r) = p.roots.get_mut(key) {
         r.closed = closed;
+        // Ingest is the only writer here, so its close is a sync close.
+        r.closed_by_sync = closed;
     }
 }
 

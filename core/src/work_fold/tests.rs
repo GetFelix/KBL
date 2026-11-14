@@ -1389,6 +1389,31 @@ fn reopening_returns_the_same_root_to_triage_with_its_budget() {
 }
 
 #[test]
+fn a_close_remembers_whether_upstream_sync_wrote_it() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "r1");
+    accepted_root(&mut l, "r2");
+    l.tracker(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Upstream,
+    });
+    l.person(WorkRecord::Closed {
+        item: id("r2"),
+        why: CloseWhy::Dismissed,
+    });
+    // A later sync close of what a person closed does not take it over.
+    l.tracker(WorkRecord::Closed {
+        item: id("r2"),
+        why: CloseWhy::Upstream,
+    });
+    let s = fold(&l.0);
+    assert!(s.items[&id("r1")].closed_by_sync);
+    assert!(!s.items[&id("r2")].closed_by_sync);
+    l.tracker(WorkRecord::Reopened { item: id("r1") });
+    assert!(!fold(&l.0).items[&id("r1")].closed_by_sync);
+}
+
+#[test]
 fn upstream_sync_records_are_about_open_roots() {
     let mut l = Log::default();
     accepted_root(&mut l, "r1");

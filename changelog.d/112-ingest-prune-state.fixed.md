@@ -1,0 +1,1 @@
+Ingest forgets closed, settled issues from its saved state, so the state no longer grows toward the 4 MiB limit and fails with `too_big`. A pruned issue that is reopened upstream still reopens its root.
