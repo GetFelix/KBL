@@ -5,7 +5,7 @@ import type { ItemRow } from './fold.ts';
 
 export type Connection =
   | { kind: 'setup' }
-  | { kind: 'loading'; what: 'history' | 'reconnecting' }
+  | { kind: 'loading'; what: 'history' | 'reconnecting'; /** The socket is joined and the log is being read. */ linked?: boolean }
   | { kind: 'live'; refused: number }
   | { kind: 'retrying'; reason: string; seconds: number }
   | { kind: 'stopped'; reason: string; advice: Advice };

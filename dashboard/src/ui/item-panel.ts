@@ -7,17 +7,23 @@ const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
   stopped: () => 'The dashboard stopped before it finished reading the log.',
   reading: () => 'Still reading the log.',
+  unreachable: () => 'The gateway cannot be reached, so the log has not been read. Trying again.',
 };
 
 export function itemPanel(onClose: () => void): { el: HTMLElement; render(s: ViewState): void; focus(): void } {
   // Focusable itself, so opening an item can move focus here without landing on Close.
   const el = h('aside', { class: 'panel', 'aria-labelledby': 'panel-title', tabindex: '-1', hidden: true });
   let shown = '';
+  let failed = false;
   return {
     el,
     render(s) {
+      // A failed attempt stays the story until the socket is joined again.
+      const c = s.connection;
+      if (c.kind === 'retrying') failed = true;
+      else if (c.kind !== 'loading' || c.linked) failed = false;
       const item = s.items.find((i) => i.id === s.open);
-      const why = item ? '' : s.synced ? 'missing' : s.connection.kind === 'stopped' ? 'stopped' : 'reading';
+      const why = item ? '' : s.synced ? 'missing' : s.connection.kind === 'stopped' ? 'stopped' : failed ? 'unreachable' : 'reading';
       const key = s.open === null ? '' : `${s.open}|${item?.title}|${item?.stage}|${why}`;
       if (key === shown) return;
       shown = key;

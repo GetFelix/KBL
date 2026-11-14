@@ -12,7 +12,7 @@ the rest (issue [#132](https://github.com/GetFelix/KBL/issues/132)).
 | ![The first page with no token](img/before-setup.png) | ![Setup state with the next step](img/setup-dark.png) |
 
 More shots: [palette](img/palette-dark.png), [shortcuts](img/shortcuts-light.png), [panel](img/panel-dark.png),
-[loading](img/loading-dark.png), [no match](img/empty-search-dark.png), [stopped](img/error-dark.png),
+[loading](img/loading-dark.png), [no match](img/empty-search-dark.png), [stopped](img/error-dark.png), [cannot reach the gateway](img/unreachable-dark.png),
 [phone](img/phone-dark.png), [light list](img/list-light.png). `node dashboard/check/browser.mjs <dir>`
 regenerates the "after" set.
 

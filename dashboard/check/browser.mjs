@@ -211,6 +211,7 @@ try {
   await page.waitFor(`document.querySelector('.status')?.textContent.includes('Retrying')`);
   check(await page.eval(`document.querySelector('.empty h2')?.textContent === 'Cannot reach the gateway'`), 'a gateway that is down at open says nothing has been read, not that there is no work');
   await axe('unreachable');
+  await shoot('unreachable-dark');
 
   await open(connected, { width: 390, height: 844 });
   await page.waitFor(live);

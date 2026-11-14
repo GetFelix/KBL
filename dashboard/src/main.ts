@@ -41,8 +41,16 @@ const openItem = (id: string) => {
   ui.panel.focus();
 };
 const closeItem = () => {
+  const before = store.get();
   store.dispatch({ type: 'open', id: null });
-  ui.list.focusSelected();
+  // The open item may have no visible row (filtered out, or not in the log): keep the focus somewhere real.
+  const rows = flatten(group(before.items, before.query));
+  if (before.open && rows.some((r) => r.id === before.open)) return ui.list.focusSelected();
+  const first = rows[0]?.id;
+  if (first) {
+    store.dispatch({ type: 'select', id: first });
+    ui.list.focusSelected();
+  } else ui.search.focus();
 };
 
 const run = (id: CommandId): void => {
@@ -66,7 +74,7 @@ const run = (id: CommandId): void => {
       return ui.list.focusSelected();
     }
     case 'open':
-      if (s.selected) openItem(s.selected);
+      if (s.selected && flatten(group(s.items, s.query)).some((r) => r.id === s.selected)) openItem(s.selected);
       return;
     case 'close':
       if (document.activeElement === ui.search) ui.search.blur();
@@ -166,6 +174,7 @@ async function main() {
     try {
       store.dispatch({ type: 'connection', connection: { kind: 'loading', what: cursor === 0 ? 'history' : 'reconnecting' } });
       const transport = await connect(url, room, token);
+      store.dispatch({ type: 'connection', connection: { kind: 'loading', what: cursor === 0 ? 'history' : 'reconnecting', linked: true } });
       refusedBefore = refused;
       cursor = await follow(transport, sink, {
         stream: q.get('stream') ?? 'events',

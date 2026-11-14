@@ -11,6 +11,7 @@ export function statusBar(): { el: HTMLElement; render(s: ViewState): void } {
   const el = h('p', { class: 'status', role: 'status', 'aria-live': 'polite' });
   let last = '';
   let lastKind = '';
+  let latest = { text: '', tone: 'ok' as keyof typeof ICON };
   let pending: ReturnType<typeof setTimeout> | undefined;
   const write = (text: string, tone: keyof typeof ICON) => {
     el.dataset.tone = tone;
@@ -23,11 +24,16 @@ export function statusBar(): { el: HTMLElement; render(s: ViewState): void } {
       const { text, tone } = describe(s.connection, s.items.length);
       if (text + tone === last) return;
       last = text + tone;
-      clearTimeout(pending);
-      pending = undefined;
+      latest = { text, tone };
       if (s.connection.kind === lastKind && s.connection.kind === 'live' && el.dataset.tone === tone) {
-        pending = setTimeout(() => write(text, tone), COUNT_SETTLE_MS);
+        // Throttle: a timer already pending is kept, so a steady import still updates, and it writes the latest text.
+        pending ??= setTimeout(() => {
+          pending = undefined;
+          write(latest.text, latest.tone);
+        }, COUNT_SETTLE_MS);
       } else {
+        clearTimeout(pending);
+        pending = undefined;
         write(text, tone);
       }
       lastKind = s.connection.kind;

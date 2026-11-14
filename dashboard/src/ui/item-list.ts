@@ -2,7 +2,7 @@
 // explains why there are none. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
 import { group } from '../list.ts';
-import type { ViewState } from '../state.ts';
+import { toAddress, type ViewState } from '../state.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
@@ -27,10 +27,9 @@ const ADVICE = {
   reload: 'The log has records newer than this page reads. Reload to get the current page.',
 } as const;
 
-export function itemHref(id: string): string {
-  const q = new URLSearchParams(location.search);
-  q.set('item', id);
-  return `?${q}`;
+// Built from the store's query, not the address bar, which lags the store by up to 250 ms.
+export function itemHref(id: string, query: string): string {
+  return toAddress(location.search, { query, open: id }) || '?';
 }
 
 // Rows are kept by item id and reused, and the list is only rebuilt when what it shows
@@ -66,8 +65,6 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
       }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }));
       rows.set(id, a);
     }
-    const href = itemHref(id);
-    if (a.getAttribute('href') !== href) a.setAttribute('href', href);
     const t = a.lastElementChild!;
     if (t.textContent !== title) t.textContent = title;
     return a;
@@ -77,7 +74,9 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
     el,
     render(s: ViewState) {
       const c = s.connection;
-      el.toggleAttribute('aria-busy', !s.synced && s.items.length === 0 && c.kind === 'loading');
+      // After a failed first attempt the retry view stays up until the socket is joined.
+      const again = c.kind === 'loading' && !c.linked && (shown.startsWith('retrying') || shown === 'again');
+      el.toggleAttribute('aria-busy', !s.synced && s.items.length === 0 && c.kind === 'loading' && !again);
       if (c.kind === 'setup') {
         return show('setup',
           emptyState(
@@ -104,7 +103,7 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
             emptyState('Cannot reach the gateway', `Nothing has been read yet. ${c.reason}. Trying again in ${c.seconds} s.`));
         }
         // A retry after a failed first attempt keeps saying so instead of flashing placeholder rows.
-        if (shown.startsWith('retrying') || shown === 'again') {
+        if (again) {
           return show('again', emptyState('Cannot reach the gateway', 'Nothing has been read yet. Trying again now.'));
         }
         return show('loading',
@@ -148,6 +147,8 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
         }
       }
       for (const [id, a] of rows) {
+        const href = itemHref(id, s.query);
+        if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
