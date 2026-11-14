@@ -1,0 +1,1 @@
+An agent can no longer report a pull request another open item already holds by changing the letter case of its owner or repo; the tracker records the casing already in use. Ingest also ignores check runs written by its own GitHub App, as it already did for its own commit statuses.

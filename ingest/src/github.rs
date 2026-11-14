@@ -594,6 +594,16 @@ fn check_state(
         .unwrap_or_default();
     let mut results: Vec<(String, Outcome, String)> = Vec::new();
     for r in &list {
+        // Only an App writes check runs. One run by our own App (`<slug>[bot]` in
+        // `own_logins`) is skipped like our own status below.
+        let app = r["app"]["slug"].as_str().unwrap_or_default();
+        if !app.is_empty()
+            && own
+                .iter()
+                .any(|o| o.eq_ignore_ascii_case(&format!("{app}[bot]")))
+        {
+            continue;
+        }
         let outcome = match r["conclusion"].as_str() {
             Some("failure" | "timed_out" | "action_required" | "startup_failure") => Outcome::Fail,
             Some("success" | "neutral" | "skipped") => Outcome::Pass,

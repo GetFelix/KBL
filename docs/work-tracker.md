@@ -402,12 +402,16 @@ What it does with GitHub:
   is tied to the item, either by a closing reference to the issue in its body
   (`Fixes #812`) or by its head branch, which is `kbl/<item id>`. The claim
   reply gives the agent that name as `item.pr_branch`. The branch the agent
-  reported in `work_progress` is not a link, and the fold refuses a `pr` that
-  another open item already reports.
+  reported in `work_progress` is not a link, and the tracker refuses a `pr`
+  that another open item already reports (`pr_in_use`), in any letter case:
+  `getfelix/felix#12` and `GetFelix/felix#12` are one request, and the
+  tracker records the casing already in use.
   Reviews count only from the repo's owners, members and collaborators, the
   latest per reviewer; a dismissed review no longer counts. Checks are the
   check runs and the commit statuses on the head commit, with statuses paged
-  so none are lost; a status written by one of `own_logins` is ignored. When
+  so none are lost; a status written by one of `own_logins`, or a check run
+  written by an App whose `<slug>[bot]` login is in `own_logins`, is ignored
+  (so a required check must come from another App, such as GitHub Actions). When
   the credential may read the base branch's protection, only the required
   checks count, and a required one with no result yet is pending; an empty
   list means unknown and every check counts. A listing that failed or was cut
