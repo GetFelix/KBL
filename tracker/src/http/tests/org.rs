@@ -328,3 +328,237 @@ async fn the_tracker_stops_when_the_org_lease_is_lost_for_its_grace() {
         .expect("the tracker stops once the org lease is gone for its grace")
         .unwrap();
 }
+
+async fn add_agent(
+    app: &Router,
+    token: Option<&str>,
+    team: &str,
+    agent: &str,
+) -> (StatusCode, Value) {
+    call(
+        app,
+        &format!("/v1/teams/{team}/agents"),
+        token,
+        json!({ "agent": agent }),
+    )
+    .await
+}
+
+async fn revoke_agent(
+    app: &Router,
+    token: Option<&str>,
+    team: &str,
+    agent: &str,
+) -> (StatusCode, Value) {
+    let path = format!("/v1/teams/{team}/agents/{agent}");
+    send(app, Request::delete(path.as_str()), token, Value::Null).await
+}
+
+async fn next_as(app: &Router, token: &str) -> StatusCode {
+    call(
+        app,
+        "/v1/work/next",
+        Some(token),
+        json!({ "wait_seconds": 0 }),
+    )
+    .await
+    .0
+}
+
+fn agent_of(teams: &Teams<Quiet>, token: &str) -> Vec<(String, String)> {
+    teams
+        .who(token)
+        .into_iter()
+        .map(|(team, caller)| match caller {
+            Caller::Agent(a) => (team.name().to_string(), a.as_str().to_owned()),
+            Caller::Person(_) | Caller::Ingest(_) => panic!("not an agent"),
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn three_agents_added_with_three_calls_are_three_callers_with_no_restart() {
+    let o = org_app().await;
+    let mut tokens = Vec::new();
+    for name in ["w2", "w3", "w4"] {
+        let (status, body) = add_agent(&o.app, Some("tok-ops"), "default", name).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let token = body["token"].as_str().unwrap().to_owned();
+        assert_eq!(token.len(), 64);
+        assert_eq!(next_as(&o.app, &token).await, StatusCode::OK);
+        assert_eq!(
+            agent_of(&o.teams, &token),
+            [("default".to_owned(), name.to_owned())]
+        );
+        tokens.push(token);
+    }
+    let first = tokens[0].clone();
+    tokens.sort();
+    tokens.dedup();
+    assert_eq!(tokens.len(), 3, "two agents got one token");
+    let (status, body) = get_json(&o.app, "/v1/teams/default/agents", Some("tok-ops")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let names: Vec<(&str, bool)> = body["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            (
+                a["agent"].as_str().unwrap(),
+                a["token_file"].as_bool() == Some(true),
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [("w2", false), ("w3", false), ("w4", false), ("w1", true)]
+    );
+    // The org log keeps the token's hash.
+    let state = o.teams.org().unwrap().org.state().await;
+    let w2 = state
+        .agent(&name("default"), &Key::new("w2").unwrap())
+        .unwrap();
+    assert_eq!(w2.token, kbl_core::org::TokenHash::of(&first));
+}
+
+#[tokio::test]
+async fn an_added_agent_is_bound_to_its_team() {
+    let o = org_app().await;
+    assert_eq!(
+        create(&o.app, Some("tok-ops"), "alpha").await.0,
+        StatusCode::OK
+    );
+    let (_, body) = add_agent(&o.app, Some("tok-ops"), "alpha", "w2").await;
+    let token = body["token"].as_str().unwrap();
+    let (status, body) = call(
+        &o.app,
+        "/v1/teams/default/work/next",
+        Some(token),
+        json!({ "wait_seconds": 0 }),
+    )
+    .await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::NOT_FOUND, Some("unknown_team"))
+    );
+    assert_eq!(
+        agent_of(&o.teams, token),
+        [("alpha".to_owned(), "w2".to_owned())]
+    );
+}
+
+#[tokio::test]
+async fn only_an_org_admin_adds_lists_or_revokes_agents() {
+    let o = org_app().await;
+    let (status, body) = add_agent(&o.app, Some("tok-w1"), "default", "w2").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::FORBIDDEN, Some("org_admin_required"))
+    );
+    assert_eq!(
+        add_agent(&o.app, None, "default", "w2").await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        add_agent(&o.app, Some("tok-nobody"), "default", "w2")
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, body) = get_json(&o.app, "/v1/teams/default/agents", Some("tok-w1")).await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::FORBIDDEN, Some("org_admin_required"))
+    );
+    let (status, body) = revoke_agent(&o.app, Some("tok-w1"), "default", "w1").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::FORBIDDEN, Some("org_admin_required"))
+    );
+    let (status, body) = add_agent(&o.app, Some("tok-ops"), "nope", "w2").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::NOT_FOUND, Some("unknown_team"))
+    );
+    // Only the adoption is on the log.
+    assert_eq!(o.org.published().len(), 1);
+    let (status, body) = add_agent(&app().await, Some("tok-gab"), "default", "w2").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::NOT_FOUND, Some("teams_off"))
+    );
+}
+
+#[tokio::test]
+async fn a_name_in_the_token_file_or_once_revoked_is_not_added_again() {
+    let o = org_app().await;
+    // Two tokens for one name would claim as one consumer-group member.
+    let (status, body) = add_agent(&o.app, Some("tok-ops"), "default", "w1").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::CONFLICT, Some("name_taken"))
+    );
+    for bad in ["a-b", "plan", ""] {
+        let (status, body) = add_agent(&o.app, Some("tok-ops"), "default", bad).await;
+        assert_eq!(
+            (status, why(&body)),
+            (StatusCode::BAD_REQUEST, Some("invalid_agent")),
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        add_agent(&o.app, Some("tok-ops"), "default", "w2").await.0,
+        StatusCode::OK
+    );
+    let (status, body) = add_agent(&o.app, Some("tok-ops"), "default", "w2").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::CONFLICT, Some("name_taken"))
+    );
+    assert_eq!(
+        revoke_agent(&o.app, Some("tok-ops"), "default", "w2")
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, body) = add_agent(&o.app, Some("tok-ops"), "default", "w2").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::CONFLICT, Some("name_taken"))
+    );
+}
+
+#[tokio::test]
+async fn a_revoked_token_is_refused_on_its_next_call() {
+    let o = org_app().await;
+    let (_, body) = add_agent(&o.app, Some("tok-ops"), "default", "w2").await;
+    let token = body["token"].as_str().unwrap().to_owned();
+    assert_eq!(next_as(&o.app, &token).await, StatusCode::OK);
+    let (status, body) = revoke_agent(&o.app, Some("tok-ops"), "default", "w2").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (body["revoked"].as_bool(), body["released"].clone()),
+        (Some(true), json!([]))
+    );
+    assert_eq!(next_as(&o.app, &token).await, StatusCode::UNAUTHORIZED);
+    // A retry writes nothing.
+    let before = o.org.published().len();
+    let (status, body) = revoke_agent(&o.app, Some("tok-ops"), "default", "w2").await;
+    assert_eq!(
+        (status, body["revoked"].as_bool()),
+        (StatusCode::OK, Some(false))
+    );
+    assert_eq!(o.org.published().len(), before);
+    let (status, body) = revoke_agent(&o.app, Some("tok-ops"), "default", "w1").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::CONFLICT, Some("in_token_file"))
+    );
+    let (status, body) = revoke_agent(&o.app, Some("tok-ops"), "default", "w9").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::NOT_FOUND, Some("unknown_agent"))
+    );
+    let (_, body) = get_json(&o.app, "/v1/teams/default/agents", Some("tok-ops")).await;
+    assert_eq!(body["agents"][0]["revoked"], true);
+}

@@ -3,13 +3,14 @@
 //! second tracker cannot write the org log while this one does. See "One
 //! tracker, many teams" in docs/design.md.
 
+use std::sync::RwLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use kbl_core::codec::Codec;
 use kbl_core::names::Key;
 use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, read};
-use kbl_core::org_fold::{Applied, OrgState};
+use kbl_core::org_fold::{Applied, OrgState, Principal};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
@@ -60,6 +61,9 @@ struct Core {
 pub(crate) struct Org<B> {
     broker: B,
     core: Mutex<Core>,
+    /// The state as last folded, for the token check. The core lock is held
+    /// across Felix writes, and a call must not wait on one to be let in.
+    view: RwLock<OrgState>,
     lease_ttl: Duration,
     holder: String,
 }
@@ -80,6 +84,7 @@ impl<B: Broker> Org<B> {
                 lease: None,
                 stale: true,
             }),
+            view: RwLock::default(),
             lease_ttl,
             holder: format!("tracker-{}-{}", std::process::id(), now_ms()),
         };
@@ -106,6 +111,15 @@ impl<B: Broker> Org<B> {
     /// The org as last folded.
     pub(crate) async fn state(&self) -> OrgState {
         self.core.lock().await.state.clone()
+    }
+
+    /// Whose token it is, by the last fold. A revoked agent's token names no one.
+    pub(crate) fn who(&self, token: &str) -> Option<Principal> {
+        self.view.read().expect("org view lock").who(token)
+    }
+
+    fn publish_view(&self, core: &Core) {
+        *self.view.write().expect("org view lock") = core.state.clone();
     }
 
     /// Appends `record` if the fold takes it and it changes something. The
@@ -142,6 +156,7 @@ impl<B: Broker> Org<B> {
             Ok(offset) => {
                 // Checked above against the same state, so this applies.
                 let _ = core.state.apply(&logged);
+                self.publish_view(&core);
                 core.at = Some(offset);
                 if offset != guess {
                     core.stale = true;
@@ -244,6 +259,7 @@ impl<B: Broker> Org<B> {
         core.state = state;
         core.at = at;
         core.stale = false;
+        self.publish_view(core);
         Ok(())
     }
 

@@ -193,6 +193,17 @@ impl OrgState {
     }
 
     /// The team that owns `source`.
+    /// Every agent of `team`, revoked ones too, by name.
+    pub fn agents_in<'a>(
+        &'a self,
+        team: &'a TeamName,
+    ) -> impl Iterator<Item = (&'a Key, &'a Agent)> {
+        self.agents
+            .iter()
+            .filter(move |((t, _), _)| t == team)
+            .map(|((_, a), agent)| (a, agent))
+    }
+
     pub fn source_owner(&self, source: &str) -> Option<&TeamName> {
         self.sources.get(source)
     }

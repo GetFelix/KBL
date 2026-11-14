@@ -10,8 +10,9 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::Result;
-use kbl_core::names::Key;
+use kbl_core::names::{AgentName, Key};
 use kbl_core::org::TeamName;
+use kbl_core::org_fold::Principal;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::task::JoinSet;
 
@@ -81,6 +82,16 @@ impl<B: Broker> Team<B> {
 impl<B> Team<B> {
     pub(crate) fn name(&self) -> &TeamName {
         &self.name
+    }
+
+    /// Whether the token file names an agent of this name in this team.
+    pub(crate) fn has_file_agent(&self, agent: &str) -> bool {
+        self.tokens.has_agent(agent)
+    }
+
+    /// The agents the token file names in this team.
+    pub(crate) fn file_agents(&self) -> Vec<AgentName> {
+        self.tokens.agent_names()
     }
 
     /// The team's tracker, or none while it is not serving.
@@ -222,6 +233,13 @@ impl<B: Broker> Teams<B> {
             if let Some(caller) = team.tokens.who(token) {
                 found.push((team.clone(), caller));
             }
+        }
+        // An agent added with `agent add` is on org.events, bound to one team.
+        if let Some(Principal::Agent { team, agent }) =
+            self.org.as_ref().and_then(|o| o.org.who(token))
+            && let (Some(team), Ok(agent)) = (self.find(&team), AgentName::new(agent.as_str()))
+        {
+            found.push((team, Caller::Agent(agent)));
         }
         found
     }

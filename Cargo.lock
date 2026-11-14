@@ -1166,6 +1166,7 @@ dependencies = [
  "bytes",
  "clap",
  "felix-client",
+ "getrandom 0.3.4",
  "kbl-core",
  "reqwest",
  "serde",

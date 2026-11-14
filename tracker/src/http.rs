@@ -32,6 +32,7 @@ use crate::felix::Broker;
 use crate::teams::Teams;
 use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer};
 
+mod agents;
 mod ingest;
 mod org;
 
@@ -50,6 +51,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
     let app = Arc::new(App { teams });
     let work = work_routes::<B>().with_state(app.clone());
     let scoped = work.clone();
+    let for_agents = app.clone();
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/me", get(me::<B>))
@@ -59,7 +61,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
         )
         .route(
             "/v1/teams/{team}/{*rest}",
-            any(move |req: Request| in_team(scoped.clone(), req)),
+            any(move |req: Request| in_team(scoped.clone(), for_agents.clone(), req)),
         )
         .with_state(app)
         .merge(work)
@@ -102,8 +104,8 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
-/// work and ingest routes have a team form.
-async fn in_team(work: Router, mut req: Request) -> Response {
+/// work and ingest routes have a team form; the agent routes exist only here.
+async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, mut req: Request) -> Response {
     // The raw path, so a percent-encoded segment reaches the inner route as sent.
     let path = req.uri().path().to_owned();
     let Some((team, rest)) = path
@@ -112,6 +114,10 @@ async fn in_team(work: Router, mut req: Request) -> Response {
     else {
         return StatusCode::NOT_FOUND.into_response();
     };
+    if rest == "agents" || rest.starts_with("agents/") {
+        let (team, rest) = (team.to_owned(), rest.to_owned());
+        return agents::route(app, &team, &rest, req).await;
+    }
     if !(rest.starts_with("work/") || rest.starts_with("ingest/")) {
         return StatusCode::NOT_FOUND.into_response();
     }
