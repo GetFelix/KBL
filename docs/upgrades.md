@@ -76,7 +76,7 @@ is 4.
 | 1 | Every record written before formats existed | Nothing |
 | 2 | `returned_to_scope`: an issue that matches its intake rule again leaves Needs you | Until the raise, an item whose issue comes back into scope stays in Needs you, as it did before. Ingest writes the record at its next reconcile after the raise, or sooner if the issue changes |
 | 3 | `prerequisite` with `triage`: the agent triaging an item posts work another repo must do first, and the item waits on it before anyone builds | Until the raise, a prerequisite posted while holding a triage item is refused with `format`. Agents still find the work while building, as before |
-| 4 | No record or field: a redo on an item whose pull request has a failed check outranks the failed check while its attempt is not done, if the redo names a note newer than the `pr_status` that reported the failure. The item is Ready, an agent gets the redo while the checks are still red, and a released or lapsed claim on it can be retried | Until the raise, such a redo waits in Needs you until the checks turn green, and its claim is refused with `not_ready`. After it, a redo with no note or an older one also waits for green. The tracker asks for a newer note only when the checks are already red as the redo is written, so a redo made while they were running can have none |
+| 4 | No record or field: a redo on an item whose pull request has a failed check outranks the failed check while the redo waits or its attempt is not done, if the item's newest note is newer than the `pr_status` that reported the failure. The item is Ready, an agent gets the redo while the checks are still red, and a released or lapsed claim on it can be retried. If the checks fail again, the item waits until a person writes a new note on it; no new redo is needed | Until the raise, such a redo waits in Needs you until the checks turn green, and its claim is refused with `not_ready`. After it, an item with no note newer than the failure also waits, for a note or for green. The tracker asks for a newer note only when the checks are already red as the redo is written, so a redo made while they were running can have none |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -161,7 +161,8 @@ tracker does not have yet.
   the same for format 3. Format 4 adds no record, so
   `core/tests/work_format_4.jsonl` pins the fold rule instead: the same claim
   of a redo on a red item is refused before the raise and folds after it, and
-  a retry after that claim is released folds too.
+  a retry after that claim is released folds too. A second item's redo goes
+  red again after it pushed: its retry is refused until a new note is written.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

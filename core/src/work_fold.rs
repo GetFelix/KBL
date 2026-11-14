@@ -191,6 +191,12 @@ impl Item {
         }
     }
 
+    /// The offset of the newest note on the item, addressed to an attempt or not.
+    pub fn newest_note(&self) -> Option<u64> {
+        let on_paths = self.paths.iter().flat_map(|p| p.human_inputs.iter());
+        self.human_inputs.iter().chain(on_paths).max().copied()
+    }
+
     /// The newest attempt that is not closed.
     pub fn open_path(&self) -> Option<&Path> {
         self.paths.iter().rev().find(|p| !p.closed)
@@ -347,7 +353,7 @@ pub struct Item {
     #[serde(default)]
     pub pr_status: Option<PrSnapshot>,
     /// The offset of the `pr_status` that turned the checks red, while they
-    /// stays red. A redo whose note is newer was written after the failure.
+    /// stay red. A note newer than this was written after the failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub red_since: Option<u64>,
     /// When the first claim on the item was logged, in the tracker's clock.
@@ -644,15 +650,16 @@ impl State {
         }
         // From format 4 a redo is what the person asked for, so it is handed
         // out instead of waiting for green, until its attempt is done. Its claim
-        // may be released and retried. A redo whose note predates the failure
-        // was not written for it, so it still waits.
-        let redo = it.pending_fork.as_ref().or_else(|| {
-            it.open_path()
-                .filter(|p| !p.done)
-                .and_then(|p| p.forked_from.as_ref())
-        });
+        // may be released and retried. Each failure needs a person to read it:
+        // the item waits until it has a note newer than the failure, so a
+        // redo that goes red again is freed by a note, not a new redo.
+        let redo = it.pending_fork.is_some()
+            || it
+                .open_path()
+                .is_some_and(|p| !p.done && p.forked_from.is_some());
         let redo_runs = self.format() >= FORMAT_V4
-            && redo.is_some_and(|f| f.note.is_some_and(|n| Some(n) > it.red_since));
+            && redo
+            && it.newest_note().is_some_and(|n| Some(n) > it.red_since);
         if it.hold.is_none()
             && !redo_runs
             && it

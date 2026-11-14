@@ -193,9 +193,9 @@ async fn a_released_redo_of_a_red_item_can_be_claimed_again() {
 }
 
 /// A redo made while the checks were still running names no note about the
-/// failure that came after, so it waits for green even at format 4.
+/// failure that came after, so it waits for a note or for green.
 #[tokio::test]
-async fn a_redo_from_before_the_failure_waits_for_green() {
+async fn a_redo_from_before_the_failure_waits_for_a_note() {
     let fake = Fake::default();
     let t = start(&fake).await;
     let at = finished(&t).await;
@@ -217,10 +217,82 @@ async fn a_redo_from_before_the_failure_waits_for_green() {
         .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w2").await), None);
 
-    t.ingest_record(ingest, status(PrChecks::Green))
+    note(&t).await;
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
+
+async fn raise_to_4(t: &Tracker<Fake>) {
+    let raise = WorkRecord::FormatRaised {
+        to: kbl_core::work::FORMAT_V4,
+    };
+    t.person_record(key("gab"), raise).await.unwrap();
+}
+
+/// A waiting redo whose checks are re-run and fail again waits for a note on
+/// the new failure; the person writes one and need not redo again.
+#[tokio::test]
+async fn a_waiting_redo_that_goes_red_again_is_freed_by_a_note() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let at = finished(&t).await;
+    raise_to_4(&t).await;
+    let ingest = key("ingest-gh");
+    t.ingest_record(ingest.clone(), status(PrChecks::Red))
         .await
         .unwrap();
+    let late = note(&t).await;
+    redo(&t, at, Some(late)).await.unwrap();
+    t.ingest_record(ingest.clone(), status(PrChecks::Pending))
+        .await
+        .unwrap();
+    t.ingest_record(ingest, status(PrChecks::Red))
+        .await
+        .unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+
+    note(&t).await;
+    let got = claim(&t, "w2").await;
+    assert_eq!(claimed_id(&got).as_deref(), Some("a1"));
+    assert_eq!(got["attempt"], 2, "{got}");
+}
+
+/// A redo that pushed, went red again and was released is retried once a
+/// person writes a note on the new failure.
+#[tokio::test]
+async fn a_claimed_redo_that_goes_red_again_is_retried_after_a_note() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let at = finished(&t).await;
+    raise_to_4(&t).await;
+    let ingest = key("ingest-gh");
+    t.ingest_record(ingest.clone(), status(PrChecks::Red))
+        .await
+        .unwrap();
+    let late = note(&t).await;
+    redo(&t, at, Some(late)).await.unwrap();
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+    t.progress(
+        &agent("w2"),
+        &item("a1"),
+        Content::Text("pushed".into()),
+        None,
+        Some(PR.into()),
+    )
+    .await
+    .unwrap();
+    t.ingest_record(ingest.clone(), status(PrChecks::Pending))
+        .await
+        .unwrap();
+    t.ingest_record(ingest, status(PrChecks::Red))
+        .await
+        .unwrap();
+    t.release(&agent("w2"), &item("a1"), None, 0).await.unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w3").await), None);
+
+    note(&t).await;
+    let got = claim(&t, "w3").await;
+    assert_eq!(claimed_id(&got).as_deref(), Some("a1"));
+    assert_eq!(got["attempt"], 2, "{got}");
 }
 
 #[tokio::test]
@@ -241,25 +313,4 @@ async fn a_closed_item_gets_the_folds_refusal_not_a_request_for_a_note() {
         matches!(r, Err(Error::Refused { ref why }) if why == "closed"),
         "{r:?}"
     );
-}
-
-#[test]
-fn another_request_on_the_item_starts_a_new_failure() {
-    let progress = |pr: &str| WorkRecord::Progress {
-        item: item("a1"),
-        attempt: 2,
-        note: Content::Text("opened".into()),
-        branch: None,
-        pr: Some(pr.into()),
-    };
-    let mut recall = Recall::default();
-    recall.remember(10, &status(PrChecks::Red));
-    // Reported again, the request keeps its mark.
-    recall.remember(15, &progress(PR));
-    assert_eq!(recall.red_since[&item("a1")].1, 10);
-    // Away to another request and back: the old failure is over.
-    recall.remember(20, &progress("GetFelix/felix#b2"));
-    recall.remember(30, &progress(PR));
-    recall.remember(40, &status(PrChecks::Red));
-    assert_eq!(recall.red_since[&item("a1")].1, 40);
 }

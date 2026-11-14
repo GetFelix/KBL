@@ -389,7 +389,7 @@ fn a_redo_of_a_red_item_is_handed_out_once_the_log_is_at_format_4() {
     assert_eq!(raised.needs_you(&r1), None);
     assert_eq!(raised.stage(&r1), Some(Stage::Ready));
 
-    let s = fold(&log);
+    let s = fold(&log[..14]);
     assert_eq!(
         s.rejections,
         vec![Rejection {
@@ -405,6 +405,42 @@ fn a_redo_of_a_red_item_is_handed_out_once_the_log_is_at_format_4() {
     );
     assert_eq!(it.paths[1].tries, 2);
     assert!(it.paths[1].forked_from.is_some());
+}
+
+/// r2's redo pushed, its checks failed again and its claim lapsed. The note
+/// the redo named is older than the new failure, so the retry waits; a new
+/// note on the item frees it without another redo.
+#[test]
+fn a_redo_that_goes_red_again_waits_for_a_new_note() {
+    let log = entries(FORMAT_4_LOG);
+    let r2 = kbl_core::names::ItemId::new("r2").unwrap();
+    let lapsed = fold(&log[..28]);
+    assert_eq!(lapsed.items[&r2].red_since, Some(26));
+    assert_eq!(lapsed.needs_you(&r2), Some(NeedsYou::CheckFailed));
+    let noted = fold(&log[..30]);
+    assert_eq!(noted.needs_you(&r2), None);
+    assert_eq!(noted.stage(&r2), Some(Stage::Ready));
+
+    let s = fold(&log);
+    assert_eq!(
+        s.rejections,
+        vec![
+            Rejection {
+                offset: 9,
+                why: Reject::NotReady
+            },
+            Rejection {
+                offset: 28,
+                why: Reject::NotReady
+            }
+        ]
+    );
+    let it = &s.items[&r2];
+    assert_eq!(
+        it.hold.as_ref().map(|h| (h.by.as_str(), h.attempt)),
+        Some(("w4", 2))
+    );
+    assert_eq!(it.paths[1].tries, 2);
 }
 
 /// A raise to format 3 is not enough: the redo still waits for green.
