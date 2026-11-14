@@ -811,6 +811,21 @@ impl State {
         Ok(it)
     }
 
+    /// Whether the writer may make the record if it cites evidence: the holder
+    /// for a decision or prerequisite, someone who may answer for an answer.
+    /// Lets the tracker check what evidence points at only for a writer the
+    /// fold would let act.
+    pub fn may_cite(&self, rec: &WorkLogged) -> Result<(), Reject> {
+        match &rec.record {
+            WorkRecord::Decision { item, attempt, .. }
+            | WorkRecord::Prerequisite { item, attempt, .. } => {
+                self.agent_holder(item, *attempt, rec)
+            }
+            WorkRecord::Answer { item, .. } => self.may_answer(item, rec).map(|_| ()),
+            _ => Ok(()),
+        }
+    }
+
     fn agent_holder(&self, id: &ItemId, attempt: u32, rec: &WorkLogged) -> Result<(), Reject> {
         if rec.actor != Actor::Agent {
             return Err(Reject::ActorNotAllowed);

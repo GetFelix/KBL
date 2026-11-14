@@ -200,10 +200,23 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | `POST /v1/work/context` `{item}` | Reads an item's context entries and the notes people left for the attempt |
 | `POST /v1/work/context/add` `{item, entry, text}` | Writes a context entry on an item the agent holds, or on the parent of a child it holds. An agent replaces only entries it wrote itself: upstream text, the fold's entries and a person's notes stay as written |
 | `POST /v1/work/progress` `{item, note, branch, pr}` | Records progress on the held item |
-| `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` |
+| `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` (see Evidence below) |
 | `POST /v1/work/step` `{item, command, exit_code, output}` | A command the agent ran |
 | `POST /v1/work/edit` `{item, file, hunk, decision}` | A code change and the offset of the decision it carries out |
 | `POST /v1/work/ask` `{item, text, options?, default?}` / `POST /v1/work/answer` `{item, question, text?, chosen?, evidence}` | Asks a person, or answers as the holder of a `question` item. An answer starts resume work; see [Questions with choices](#questions-with-choices) |
+
+**Evidence.** A decision, an answer and a new prerequisite can cite evidence: records that
+show why, as `{stream, offset}`. A person reads them as support, so the
+tracker holds them to the item's own tree. Each one must be a `work.events`
+record that names an item with the same root, written before the record that
+cites it. An item that another tree's record created, such as a deferred
+finding or a prerequisite proposal, may also cite that record, which its
+context entry points at. A proposal the agent files is its own root, so the
+item it holds cannot cite records about the proposal. Anything else is
+refused: another tree's record answers `evidence_outside_tree`, another stream `evidence_stream`, a later offset
+`evidence_from_the_future`. A writer who may not make the record gets the
+fold's refusal instead, so it learns nothing about where a record is. The
+check runs before the append, so logs written before it fold as they did.
 
 Text in a record stays inline up to 4 KiB. Longer text is an artifact the
 caller stored first and names by its hash; `kbl-mcp` does that for the
@@ -518,7 +531,7 @@ An agent sometimes finds that its item needs a change in another repo first: a
 
 | Field | Meaning |
 |---|---|
-| `target_source`, `target_repo`, `title`, `why`, `evidence` | A new proposal in that repo's Triage, with the reason and the steps that show it. `why` is shown with the proposal |
+| `target_source`, `target_repo`, `title`, `why`, `evidence` | A new proposal in that repo's Triage, with the reason and the steps that show it, records of the same tree as for a decision. `why` is shown with the proposal |
 | `existing` | Instead of the five above: an item that already exists, to avoid a duplicate |
 | `done_when` | `merged` (default) or `released`. `released` also waits for the release that carries the work |
 

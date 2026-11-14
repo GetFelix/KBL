@@ -513,6 +513,169 @@ async fn a_decision_needs_phase_so_far_why_and_commit_and_cannot_cite_the_future
 }
 
 #[tokio::test]
+async fn evidence_must_cite_a_record_of_the_same_tree() {
+    let (fake, t) = held().await;
+    let a = agent("w1");
+    let a1 = item("a1");
+    // a2 is another tree: its import cannot back a decision on a1.
+    seed(&t, "a2", 3).await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let cite = |stream: &str, offset: u64| {
+        let mut d = decide_args();
+        d.evidence = vec![Evidence {
+            stream: stream.into(),
+            offset,
+        }];
+        d
+    };
+    let before = fake.log().len();
+    assert_eq!(
+        why(t.decide(&a, &a1, cite(WORK_EVENTS, a2_import)).await),
+        "evidence_outside_tree"
+    );
+    assert_eq!(
+        why(t.decide(&a, &a1, cite("agents.log.r-1", 0)).await),
+        "evidence_stream"
+    );
+    // A person's answer is held to the same rule.
+    let q = t
+        .ask(&a, &a1, text("which?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    let foreign = vec![Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: a2_import,
+    }];
+    let r = t
+        .person_answer(
+            key("gab"),
+            &a1,
+            Some(q),
+            text("x"),
+            foreign,
+            Reply::default(),
+        )
+        .await;
+    assert_eq!(why(r), "evidence_outside_tree");
+    assert_eq!(fake.log().len(), before + 1);
+    // A record of a1's own tree, here its question, is fine.
+    let own = vec![Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: q,
+    }];
+    t.person_answer(key("gab"), &a1, Some(q), text("x"), own, Reply::default())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_writer_the_fold_refuses_learns_nothing_about_the_evidence() {
+    let (fake, t) = held().await;
+    seed(&t, "a2", 3).await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let a1 = item("a1");
+    let q = t
+        .ask(&agent("w1"), &a1, text("which?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    let foreign = vec![Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: a2_import,
+    }];
+    // w2 holds no question under a1, so the fold's refusal is what it sees.
+    let r = t
+        .answer(&agent("w2"), &a1, q, text("x"), foreign, None)
+        .await;
+    assert_eq!(why(r), "not_holder");
+}
+
+#[tokio::test]
+async fn a_restarted_tracker_still_holds_evidence_to_the_tree() {
+    let (fake, t) = held().await;
+    seed(&t, "a2", 3).await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let a1_import = fake
+        .log()
+        .iter()
+        .position(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    drop(t);
+    let t2 = start(&fake).await;
+    // The claim is gone with the old process; w1 gets it back as a resume.
+    let _ = claim(&t2, "w1").await;
+    let cite = |offset: u64| {
+        let mut d = decide_args();
+        d.evidence = vec![Evidence {
+            stream: WORK_EVENTS.into(),
+            offset,
+        }];
+        d
+    };
+    let (a, a1) = (agent("w1"), item("a1"));
+    assert_eq!(
+        why(t2.decide(&a, &a1, cite(a2_import)).await),
+        "evidence_outside_tree"
+    );
+    t2.decide(&a, &a1, cite(a1_import)).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_new_prerequisite_cites_evidence_of_its_own_tree() {
+    let (fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    import(&t, "a2", "GetFelix/felix#2").await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let a1_import = fake
+        .log()
+        .iter()
+        .position(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let citing = |offset: u64| match gateway() {
+        Prereq::New {
+            target, title, why, ..
+        } => Prereq::New {
+            target,
+            title,
+            why,
+            evidence: vec![Evidence {
+                stream: WORK_EVENTS.into(),
+                offset,
+            }],
+        },
+        other => other,
+    };
+    assert_eq!(
+        why(t
+            .prerequisite(&w1, &a1, key("cas"), citing(a2_import), DoneWhen::Merged, 0)
+            .await),
+        "evidence_outside_tree"
+    );
+    t.prerequisite(&w1, &a1, key("cas"), citing(a1_import), DoneWhen::Merged, 0)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn steps_and_edits_hang_off_the_attempt_and_an_edit_cites_a_real_decision() {
     let (fake, t) = held().await;
     let a = agent("w1");
@@ -862,7 +1025,7 @@ async fn the_question_text_is_read_back_with_the_context() {
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
     let core = t.0.core.lock().await;
-    assert_eq!(core.texts[&q], text("which cache?"));
+    assert_eq!(core.recall.texts[&q], text("which cache?"));
 }
 
 #[tokio::test]
@@ -1057,7 +1220,10 @@ async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
         let it = &core.state.items[&g];
         assert_eq!(it.target.as_ref().unwrap().repo, "GetFelix/felix-gateway");
         let at = it.context.values().next().unwrap();
-        assert_eq!(core.texts[at], text("the client cannot swap atomically"));
+        assert_eq!(
+            core.recall.texts[at],
+            text("the client cannot swap atomically")
+        );
         // No try was spent and nothing was released or given up.
         assert_eq!(core.state.items[&a1].paths[0].tries, 0);
     }
@@ -1373,7 +1539,7 @@ async fn one_key_answers_with_a_choice_and_appends_one_resume_item() {
     // The asker is parked until the resume work is done.
     assert_eq!(core.state.stage(&item("a1")), Some(Stage::Blocked));
     let answer = core.state.items[&ids[0]].context[&key("answer")];
-    assert_eq!(core.texts[&answer], text("write"));
+    assert_eq!(core.recall.texts[&answer], text("write"));
     assert!(q < answer);
 }
 
@@ -1393,7 +1559,7 @@ async fn answering_without_choosing_takes_the_default() {
     let ids = resume_ids(&t).await;
     let core = t.0.core.lock().await;
     let answer = core.state.items[&ids[0]].context[&key("answer")];
-    assert_eq!(core.texts[&answer], text("read"));
+    assert_eq!(core.recall.texts[&answer], text("read"));
 }
 
 #[tokio::test]

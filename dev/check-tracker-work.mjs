@@ -104,7 +104,8 @@ try {
     chosen: "reader",
     why: "the writer holds the lock",
     commit: "abc123",
-    evidence: [{ stream: "work.events", offset: 0 }],
+    // Evidence must be a record of the same tree: the context entry above.
+    evidence: [{ stream: "work.events", offset: read.context[0].offset }],
   });
   await w1.tool("record_step", { command: "cargo test", exit_code: 101, output: "1 failed" });
   await w1.tool("record_step", { command: "cargo test", exit_code: 0, output: "x".repeat(6000) });

@@ -779,6 +779,62 @@ impl WorkRecord {
         }
     }
 
+    /// The item the record is about, if it names one. A budget or rules record
+    /// for a root answers with that root.
+    pub fn item(&self) -> Option<&ItemId> {
+        // No wildcard: a new kind must say which item it is about.
+        match self {
+            WorkRecord::Imported { item, .. }
+            | WorkRecord::Proposed { item, .. }
+            | WorkRecord::Triaged { item, .. }
+            | WorkRecord::Accepted { item, .. }
+            | WorkRecord::Prerequisite { item, .. }
+            | WorkRecord::Shipped { item, .. }
+            | WorkRecord::Linked { item, .. }
+            | WorkRecord::Unlinked { item, .. }
+            | WorkRecord::Context { item, .. }
+            | WorkRecord::Claimed { item, .. }
+            | WorkRecord::Progress { item, .. }
+            | WorkRecord::Done { item, .. }
+            | WorkRecord::Released { item, .. }
+            | WorkRecord::GaveUp { item, .. }
+            | WorkRecord::Question { item, .. }
+            | WorkRecord::Answer { item, .. }
+            | WorkRecord::Decision { item, .. }
+            | WorkRecord::Finding { item, .. }
+            | WorkRecord::ReviewVerdict { item, .. }
+            | WorkRecord::Step { item, .. }
+            | WorkRecord::Edit { item, .. }
+            | WorkRecord::HumanInput { item, .. }
+            | WorkRecord::ForkedFrom { item, .. }
+            | WorkRecord::Closed { item, .. }
+            | WorkRecord::Rejected { item }
+            | WorkRecord::Updated { item, .. }
+            | WorkRecord::LeftScope { item }
+            | WorkRecord::Reopened { item }
+            | WorkRecord::AttemptClosed { item, .. }
+            | WorkRecord::TierChanged { item, .. }
+            | WorkRecord::Edited { item, .. }
+            | WorkRecord::BudgetSet { root: item, .. }
+            | WorkRecord::PrStatus { item, .. } => Some(item),
+            WorkRecord::RulesSet { root, .. } | WorkRecord::Refused { item: root, .. } => {
+                root.as_ref()
+            }
+            WorkRecord::SourceStalled { .. }
+            | WorkRecord::FormatRaised { .. }
+            | WorkRecord::Unknown => None,
+        }
+    }
+
+    /// The evidence the record cites.
+    pub fn evidence(&self) -> &[Evidence] {
+        match self {
+            WorkRecord::Decision { evidence, .. } | WorkRecord::Answer { evidence, .. } => evidence,
+            WorkRecord::Prerequisite { new: Some(n), .. } => &n.evidence,
+            _ => &[],
+        }
+    }
+
     /// The lowest format whose readers fold this record as this build does.
     /// A kind, or a use of a field, that an older fold would skip or ignore
     /// answers with the format that introduced it.

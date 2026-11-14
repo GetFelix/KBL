@@ -534,3 +534,48 @@ async fn reviewer_tiers_must_be_names_that_fit_the_lanes() {
         assert!(Tracker::start(fake.reconnect(), bad).await.is_err());
     }
 }
+
+#[tokio::test]
+async fn a_deferred_finding_cites_the_finding_it_came_from() {
+    let (_fake, t) = opened().await;
+    let got = t
+        .next_for(&agent("w2"), Duration::ZERO, &fast())
+        .await
+        .unwrap();
+    let first = item(got["item"]["id"].as_str().unwrap());
+    t.finding(&agent("w2"), &first, finding(FindingVerdict::Defer))
+        .await
+        .unwrap();
+    let (deferred, origin) = {
+        let core = t.0.core.lock().await;
+        let p = core
+            .state
+            .items
+            .values()
+            .find(|i| i.finding.is_some() && i.parent.is_none())
+            .unwrap();
+        (p.id.clone(), p.finding.unwrap())
+    };
+    t.person_record(
+        key("gab"),
+        WorkRecord::Accepted {
+            item: deferred.clone(),
+            tier: Some(2),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        claim(&t, "w5").await["item"]["id"],
+        deferred.as_str(),
+        "the proposal is the only ready item"
+    );
+    // The finding is a record of a1's tree; the proposal is its own root but
+    // points at it from its `finding` context entry.
+    let mut d = decide(None);
+    d.evidence = vec![kbl_core::work::Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: origin,
+    }];
+    t.decide(&agent("w5"), &deferred, d).await.unwrap();
+}

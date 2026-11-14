@@ -40,11 +40,14 @@ scope. The worker prompt asks for it at those points and nowhere else; a
 decision per keystroke is as unreadable as none.
 
 Only recorded steps count as evidence. An agent that ran a test and did not
-call `record_step` has no step to cite. A decision cites evidence by stream
-and offset: the test it ran, the log it read, the file it searched. Offsets
-are stable, so a citation still resolves a year
-later, and Felix records which agent wrote each step, so a decision can only
-cite steps that really happened in the order they happened.
+call `record_step` has no step to cite. A decision cites evidence by offset
+in `work.events`: the step that ran the test, read the log or searched the
+file, or another earlier record of the same work tree. The tracker refuses
+evidence on another stream or from another tree (see
+[Running the tracker](work-tracker.md#running-the-tracker)). Offsets are
+stable, so a citation still resolves a year later, and Felix records which
+agent wrote each step, so a decision can only cite steps that really happened
+in the order they happened.
 
 ## Reading it back
 
