@@ -895,7 +895,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 let Some(other) = item_of(p, &to) else {
                     continue;
                 };
-                match self
+                let made = match self
                     .tracker
                     .append(&WorkRecord::Linked {
                         item: item.clone(),
@@ -903,14 +903,18 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     })
                     .await?
                 {
-                    Appended::Written => {}
+                    // Only an edge ingest made is its to unlink later.
+                    Appended::Written => true,
                     Appended::Refused(why) => {
                         eprintln!("kbl-ingest: link {key} -> {to} refused: {why}");
+                        false
                     }
-                }
+                };
                 if let Some(t) = p.state.items.get_mut(&key) {
                     t.pending_links.remove(&to);
-                    t.linked.insert(to);
+                    if made {
+                        t.linked.insert(to);
+                    }
                 }
             }
         }
@@ -918,8 +922,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     }
 
     /// Removes the edges ingest made for `key` whose dependency is gone from
-    /// the complete upstream listing `upstream`. The tracker refuses an edge a
-    /// person or an agent also linked, which then stays.
+    /// the complete upstream listing `upstream`. The tracker refuses an edge
+    /// ingest's own link did not make, which then stays.
     async fn unlink_removed(
         &self,
         p: &mut Poll,
@@ -933,24 +937,36 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         let gone: Vec<String> = t.linked.difference(upstream).cloned().collect();
         // A transferred dependency is listed under its new id, which names the same item.
         let still: HashSet<ItemId> = upstream.iter().filter_map(|u| item_of(p, u)).collect();
+        // An id that names no item may be a transfer ingest has not seen yet.
+        let unknown = upstream.iter().any(|u| item_of(p, u).is_none());
         for to in gone {
+            let Some(id) = IssueRef::parse(&to) else {
+                continue;
+            };
             // A repo ingest cannot read now may simply be hidden from the listing.
-            if IssueRef::parse(&to).is_some_and(|r| p.state.stalled.contains_key(&r.repo)) {
+            if p.state.stalled.contains_key(&id.repo) {
                 continue;
             }
-            if let Some(other) = item_of(p, &to).filter(|o| !still.contains(o)) {
-                match self
-                    .tracker
-                    .append(&WorkRecord::Unlinked {
-                        item: item.clone(),
-                        to: other,
-                    })
-                    .await?
-                {
-                    Appended::Written => {}
-                    Appended::Refused(why) => {
-                        eprintln!("kbl-ingest: unlink {key} -> {to} refused: {why}");
-                    }
+            let Some(other) = item_of(p, &to).filter(|o| !still.contains(o)) else {
+                if let Some(t) = p.state.items.get_mut(key) {
+                    t.linked.remove(&to);
+                }
+                continue;
+            };
+            if unknown && matches!(self.source.fetch(&id).await?, Fetched::Moved(_)) {
+                continue;
+            }
+            match self
+                .tracker
+                .append(&WorkRecord::Unlinked {
+                    item: item.clone(),
+                    to: other,
+                })
+                .await?
+            {
+                Appended::Written => {}
+                Appended::Refused(why) => {
+                    eprintln!("kbl-ingest: unlink {key} -> {to} refused: {why}");
                 }
             }
             if let Some(t) = p.state.items.get_mut(key) {

@@ -2605,3 +2605,113 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
     .unwrap();
     assert_eq!(stage(&t, &a1).await, Some(Stage::Ready));
 }
+
+/// Ingest links `item` to `to`, then unlinks it, as upstream adding and then
+/// dropping the dependency would. Neither may touch an edge ingest did not make.
+async fn ingest_cannot_take_over(fake: &Fake, item: &ItemId, to: &ItemId) {
+    let ingest = |t: Tracker<Fake>, r| async move { t.ingest_record(key("ingest-gh"), r).await };
+    let edge = (item.clone(), to.clone());
+    for t in [start(fake).await, start(fake).await] {
+        let before = fake.log().len();
+        let linked = WorkRecord::Linked {
+            item: item.clone(),
+            to: to.clone(),
+        };
+        let unlinked = WorkRecord::Unlinked {
+            item: item.clone(),
+            to: to.clone(),
+        };
+        assert_eq!(why(ingest(t.clone(), linked).await), "already_linked");
+        assert_eq!(why(ingest(t.clone(), unlinked).await), "not_ingests");
+        assert_eq!(fake.log().len(), before);
+        assert!(t.0.core.lock().await.state.edges.contains(&edge));
+    }
+}
+
+#[tokio::test]
+async fn ingest_cannot_unlink_an_agents_prerequisite() {
+    let (fake, t) = granted().await;
+    let (w1, a1, f2) = (agent("w1"), item("a1"), item("f2"));
+    person(&t, WorkRecord::FormatRaised { to: 5 }).await;
+    import(&t, "f2", "GetFelix/felix-gateway#4").await;
+    t.prerequisite(
+        &w1,
+        &a1,
+        key("k"),
+        Prereq::Existing(f2.clone()),
+        DoneWhen::Released,
+        0,
+    )
+    .await
+    .unwrap();
+    drop(t);
+    ingest_cannot_take_over(&fake, &a1, &f2).await;
+    let t = start(&fake).await;
+    assert!(
+        t.0.core
+            .lock()
+            .await
+            .state
+            .release_edges
+            .contains(&(a1, f2))
+    );
+}
+
+#[tokio::test]
+async fn ingest_cannot_unlink_a_prerequisite_from_an_answer() {
+    let (fake, t, _q) = asked_with_options().await;
+    person(&t, WorkRecord::FormatRaised { to: 6 }).await;
+    let moves = Reply {
+        moves_to: Some((
+            Target {
+                source: "github".into(),
+                repo: "GetFelix/felix-gateway".into(),
+            },
+            "gateway needs a CAS call".into(),
+        )),
+        ..Reply::default()
+    };
+    t.person_answer(
+        key("gab"),
+        &item("a1"),
+        None,
+        text("belongs in felix-gateway"),
+        vec![],
+        moves,
+    )
+    .await
+    .unwrap();
+    let p =
+        t.0.core
+            .lock()
+            .await
+            .state
+            .edges
+            .iter()
+            .next()
+            .unwrap()
+            .1
+            .clone();
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: p.clone(),
+            tier: None,
+        },
+    )
+    .await;
+    // Ingest opens its issue upstream and imports it.
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::Imported {
+            item: p.clone(),
+            source: "github".into(),
+            upstream_id: "GetFelix/felix-gateway#40".into(),
+            title: "gateway needs a CAS call".into(),
+        },
+    )
+    .await
+    .unwrap();
+    drop(t);
+    ingest_cannot_take_over(&fake, &item("a1"), &p).await;
+}

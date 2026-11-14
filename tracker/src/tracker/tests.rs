@@ -1328,7 +1328,7 @@ async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
 }
 
 #[tokio::test]
-async fn ingest_unlinks_only_an_edge_no_person_or_agent_linked() {
+async fn ingest_unlinks_only_an_edge_its_own_link_made() {
     let fake = Fake::default();
     let t = start(&fake).await;
     let ingest = |t: &Tracker<Fake>, r| {
@@ -1366,12 +1366,19 @@ async fn ingest_unlinks_only_an_edge_no_person_or_agent_linked() {
     // A person links the same pair: the edge is theirs too, also after a restart.
     ingest(&t, linked()).await.unwrap();
     t.person_record(key("gab"), linked()).await.unwrap();
-    assert_eq!(why(ingest(&t, unlinked()).await), "linked_by_hand");
+    assert_eq!(why(ingest(&t, unlinked()).await), "not_ingests");
     let t = start(&fake).await;
-    assert_eq!(why(ingest(&t, unlinked()).await), "linked_by_hand");
+    assert_eq!(why(ingest(&t, unlinked()).await), "not_ingests");
+    // Ingest's link of an edge it did not make changes nothing, and is not logged.
+    let before = fake.log().len();
+    assert_eq!(why(ingest(&t, linked()).await), "already_linked");
+    assert_eq!(fake.log().len(), before);
     // Once the person unlinks it, an edge ingest makes again is ingest's.
     t.person_record(key("gab"), unlinked()).await.unwrap();
     ingest(&t, linked()).await.unwrap();
+    // A retry of its own link is accepted, and the edge stays ingest's.
+    ingest(&t, linked()).await.unwrap();
+    let t = start(&fake).await;
     ingest(&t, unlinked()).await.unwrap();
 }
 

@@ -25,7 +25,7 @@ use kbl_core::work::{
     Actor, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS,
     WORK_EVENTS, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
-use kbl_core::work_fold::{Seek, Stage, State};
+use kbl_core::work_fold::{Stage, State};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -49,8 +49,6 @@ const POLL_EVERY: Duration = Duration::from_millis(200);
 pub(crate) const MAX_WAIT: Duration = Duration::from_secs(30);
 /// How long any one Felix call may take.
 const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
-/// Records between the snapshots the startup fold keeps.
-const SNAPSHOT_EVERY: usize = 1000;
 const DEFAULT_TIER: u8 = 2;
 /// An item to publish: its tier, the record it had, and whether that record lapsed.
 type Want = (ItemId, u8, Option<(u8, u64)>, bool);
@@ -318,29 +316,44 @@ struct Recall {
     texts: HashMap<u64, Content>,
     /// The item each record names, so evidence can be held to its tree.
     subjects: HashMap<u64, ItemId>,
-    /// Edges a person or an agent linked and no person has unlinked since.
-    /// An edge has no author in the fold, so this is what keeps ingest from
-    /// removing a link someone made by hand.
-    linked_by_hand: HashSet<(ItemId, ItemId)>,
+    /// Edges ingest made: its `linked` found no edge and the fold created it
+    /// from that record. Ingest may unlink only these. The fold keeps no author
+    /// for an edge, and one from a prerequisite, an answer or anyone else's
+    /// link is never ingest's to remove.
+    ingest_edges: HashSet<(ItemId, ItemId)>,
 }
 
 impl Recall {
-    fn remember(&mut self, offset: u64, logged: &WorkLogged) {
+    /// `created` says the record made an edge that was not there before it.
+    fn remember(&mut self, offset: u64, logged: &WorkLogged, me: &Key, created: bool) {
         let record = &logged.record;
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
         }
-        match (record, logged.actor) {
-            (WorkRecord::Linked { item, to }, Actor::Person | Actor::Agent) => {
-                self.linked_by_hand.insert((item.clone(), to.clone()));
+        match record {
+            WorkRecord::Linked { item, to } => {
+                let edge = (item.clone(), to.clone());
+                if logged.actor == Actor::Tracker && logged.by != *me {
+                    if created {
+                        self.ingest_edges.insert(edge);
+                    }
+                } else {
+                    // A person or an agent who links it makes it theirs too.
+                    self.ingest_edges.remove(&edge);
+                }
             }
-            (WorkRecord::Unlinked { item, to }, Actor::Person) => {
-                self.linked_by_hand.remove(&(item.clone(), to.clone()));
+            WorkRecord::Unlinked { item, to } => {
+                self.ingest_edges.remove(&(item.clone(), to.clone()));
             }
             _ => {}
         }
         remember(&mut self.texts, offset, record);
     }
+}
+
+/// Whether `record` is a `linked` whose edge `state` does not have.
+fn edge_absent(state: &State, record: &WorkRecord) -> bool {
+    matches!(record, WorkRecord::Linked { item, to } if !state.edges.contains(&(item.clone(), to.clone())))
 }
 
 /// Keeps the text of the records a read shows.
@@ -1557,6 +1570,7 @@ impl<B: Broker> Tracker<B> {
             evidence_in_tree(core, &logged.record, guess)?;
         }
         retry_has_note(core, &logged.record)?;
+        let absent = edge_absent(&core.state, &logged.record);
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.
         if let Err(why) = core.state.try_apply(guess, &logged) {
@@ -1577,7 +1591,7 @@ impl<B: Broker> Tracker<B> {
                 if offset != guess {
                     core.stale = true;
                 }
-                core.recall.remember(offset, &logged);
+                core.recall.remember(offset, &logged, &self.0.me, absent);
                 Ok(offset)
             }
             Err(e) => {
@@ -1628,7 +1642,7 @@ impl<B: Broker> Tracker<B> {
         Ok(())
     }
 
-    /// The fold of every record in `work.events`, with seek snapshots.
+    /// The fold of every record in `work.events`.
     async fn read_state(&self) -> anyhow::Result<(State, Recall)> {
         let mut entries = Vec::new();
         for (offset, payload) in self
@@ -1646,13 +1660,13 @@ impl<B: Broker> Tracker<B> {
             }
         }
         let mut recall = Recall::default();
+        let mut state = State::default();
         for (offset, rec) in &entries {
-            recall.remember(*offset, rec);
+            let absent = edge_absent(&state, &rec.record);
+            state.apply(*offset, rec);
+            let created = absent && !edge_absent(&state, &rec.record);
+            recall.remember(*offset, rec, &self.0.me, created);
         }
-        let state = match entries.last() {
-            Some((last, _)) => Seek::build(&entries, SNAPSHOT_EVERY).state_at(&entries, *last),
-            None => State::default(),
-        };
         Ok((state, recall))
     }
 

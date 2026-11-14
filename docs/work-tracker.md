@@ -130,7 +130,7 @@ sequenceDiagram
 
 `kbl-tracker` signs in to Felix as its own principal, creates `work.events`,
 `work.ready.p0` to `p3`, `work.review.r0` to `r3` and the consumer group on each if
-they are not there, and folds `work.events` from the start (with seek snapshots) before it
+they are not there, and folds `work.events` from the start before it
 serves. It appends a record only when the fold accepts it, so a refused call
 leaves no trace in the log.
 
@@ -521,15 +521,24 @@ What it does with GitHub:
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported, in the same repo or another one the rules import. A link to
   an issue no rule imports waits until one does. When a dependency is removed
-  upstream, ingest writes `unlinked` for the edge it made, and an item that
-  waited only on it leaves Blocked. Ingest removes only edges it made itself:
-  the tracker refuses ingest's `unlinked` for an edge a person or an agent also
-  linked, so that link stays until a person unlinks it. Nothing is unlinked
-  from a listing that may be incomplete: a failed or rate-limited read, a list
-  with a second page, a redirect for a transferred issue, a 404, or an entry
-  without a number. A dependency that was transferred is listed under its new
-  id and keeps its edge. One in a repo ingest cannot read at the moment is
-  left alone, since GitHub may just be hiding it.
+  upstream, ingest writes `unlinked`, and an item that waited only on it
+  leaves Blocked. Ingest removes only an edge its own `linked` created. It
+  never removes an edge that was there before its link: one from an agent's
+  prerequisite (with its release wait), from an answer that moves the work
+  elsewhere, or one a person or an agent linked. The tracker refuses ingest's
+  `linked` of such an edge as `already_linked`, and its `unlinked` as
+  `not_ingests`. A person who links an edge ingest made makes it theirs too.
+  An agent's `work_link` of an edge that is already there is refused as
+  `already_linked` and not logged, so the edge stays ingest's and goes when
+  upstream drops it; the agent can link it again after that. Nothing is
+  unlinked from a listing that may be incomplete: a failed or rate-limited
+  read, a list with a second page, a redirect or 410 for a transferred issue,
+  404 on both lists, or an entry without a number. A 404 on one list while
+  the other answers means that list is not offered for the repo, and it
+  counts as empty. A dependency that was transferred keeps its edge: it is
+  listed under its new id, and if ingest has not seen the move yet it reads
+  the old id first and leaves a redirected one alone. One in a repo ingest
+  cannot read at the moment is left alone, since GitHub may just be hiding it.
 
 An issue that leaves its rule and later matches it again gets a
 `returned_to_scope` record, and the item leaves Needs you for the stage it had.
@@ -687,7 +696,8 @@ the view is derived and adds no record. The item panel lists the same
 blockers with their titles.
 
 A dependency that is removed upstream is unlinked at the next poll that reads
-the issue's links. See Links under [Running the ingest worker](#running-the-ingest-worker) for when it stays.
+the issue's links, if ingest's link made the edge. An agent cannot unlink:
+only a person removes an edge an agent made. See Links under [Running the ingest worker](#running-the-ingest-worker) for when it stays.
 
 ### Files that overlap
 

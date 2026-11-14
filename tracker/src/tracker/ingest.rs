@@ -131,15 +131,20 @@ impl<B: Broker> Tracker<B> {
                     return Err(refused("already_shipped"));
                 }
             }
-            // Ingest removes only an edge it made: one a person or an agent
-            // also linked stays until a person unlinks it.
-            if let WorkRecord::Unlinked { item, to } = &record {
+            // Ingest removes only an edge it made, so it may not take over one
+            // that a prerequisite, an answer, a person or an agent made.
+            if let WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } = &record {
                 let edge = (item.clone(), to.clone());
-                if !core.state.edges.contains(&edge) {
-                    return Err(refused("not_linked"));
-                }
-                if core.recall.linked_by_hand.contains(&edge) {
-                    return Err(refused("linked_by_hand"));
+                let ours = core.recall.ingest_edges.contains(&edge);
+                match (&record, core.state.edges.contains(&edge)) {
+                    (WorkRecord::Linked { .. }, true) if !ours => {
+                        return Err(refused("already_linked"));
+                    }
+                    (WorkRecord::Unlinked { .. }, false) => return Err(refused("not_linked")),
+                    (WorkRecord::Unlinked { .. }, true) if !ours => {
+                        return Err(refused("not_ingests"));
+                    }
+                    _ => {}
                 }
             }
             let opened = match &record {

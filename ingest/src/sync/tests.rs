@@ -1220,7 +1220,7 @@ async fn a_failed_or_partial_listing_unlinks_nothing() {
                 body: json!([]),
             },
         ),
-        ("/issues/813/sub_issues", status(404, &[])),
+        ("/issues/813/sub_issues", status(410, &[])),
         ("/issues/813/dependencies/blocked_by", status(301, &[])),
         ("/issues/813/dependencies/blocked_by", ok(json!({ "message": "?" }))),
         ("/issues/813/dependencies/blocked_by", ok(json!([{ "repository_url": "x" }]))),
@@ -1246,6 +1246,131 @@ async fn a_failed_or_partial_listing_unlinks_nothing() {
     assert!(ingest.poll(false).await.is_err());
     assert_eq!(rig.tracker.state().edges.len(), 1);
     assert_eq!(rig.tracker.count("unlinked"), 0);
+}
+
+#[tokio::test]
+async fn a_list_not_offered_is_empty_unless_both_are_missing() {
+    // Sub-issues are not offered here, while blocked-by answers: it is empty.
+    {
+        let rig = rig();
+        let ingest = linked_pair(&rig).await;
+        rig.gh
+            .on("GET", "/issues/813/dependencies/blocked_by", ok(json!([])));
+        rig.gh.on("GET", "/issues/813/sub_issues", status(404, &[]));
+        ingest.poll(false).await.unwrap();
+        assert!(rig.tracker.state().edges.is_empty());
+    }
+    // Both missing may be the issue itself: nothing is unlinked.
+    let rig = rig();
+    let ingest = linked_pair(&rig).await;
+    rig.gh.on(
+        "GET",
+        "/issues/813/dependencies/blocked_by",
+        status(404, &[]),
+    );
+    rig.gh.on("GET", "/issues/813/sub_issues", status(404, &[]));
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().edges.len(), 1);
+    assert_eq!(rig.tracker.count("unlinked"), 0);
+}
+
+#[tokio::test]
+async fn a_dependency_transferred_upstream_keeps_its_edge() {
+    let rig = rig();
+    let ingest = linked_pair(&rig).await;
+    let moved = Res {
+        status: 301,
+        headers: [(
+            "location".to_owned(),
+            "https://api.github.com/repos/GetFelix/felix/issues/900".to_owned(),
+        )]
+        .into(),
+        body: json!({}),
+    };
+    rig.gh
+        .on("GET", "/repos/GetFelix/felix/issues/812", moved.clone());
+    rig.gh.on(
+        "GET",
+        "/issues/813/dependencies/blocked_by",
+        ok(json!([
+            { "number": 900, "repository_url": "https://api.github.com/repos/GetFelix/felix" }
+        ])),
+    );
+    // Listed under its new id before ingest has seen the move.
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().edges.len(), 1);
+    // And after reconcile records it.
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/felix/issues/900",
+        ok(issue(900, |_| {})),
+    );
+    ingest.poll(true).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().edges.len(), 1);
+    assert_eq!(rig.tracker.count("unlinked"), 0);
+}
+
+#[tokio::test]
+async fn a_dependency_in_a_stalled_repo_keeps_its_edge() {
+    let rig = rig();
+    let ingest = rig.ingest(two_repo_rules());
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/other/issues?",
+        ok(json!([at(issue(7, |_| {}), "2026-11-10T09:00:00Z")])),
+    );
+    rig.list(vec![at(issue(813, |_| {}), "2026-11-10T10:00:00Z")]);
+    rig.gh.on(
+        "GET",
+        "/issues/813/dependencies/blocked_by",
+        ok(json!([
+            { "number": 7, "repository_url": "https://api.github.com/repos/GetFelix/other" }
+        ])),
+    );
+    rig.gh.on("GET", "/issues/813/sub_issues", ok(json!([])));
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().edges.len(), 1);
+    // The other repo stops answering, and hides #7 from the listing.
+    rig.gh
+        .on("GET", "/repos/GetFelix/other/issues?", status(404, &[]));
+    rig.gh
+        .on("GET", "/issues/813/dependencies/blocked_by", ok(json!([])));
+    rig.list(vec![at(issue(813, |_| {}), "2026-11-10T11:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("source_stalled"), 1);
+    assert_eq!(rig.tracker.state().edges.len(), 1);
+    assert_eq!(rig.tracker.count("unlinked"), 0);
+}
+
+#[tokio::test]
+async fn a_link_still_waiting_is_dropped_once_upstream_removes_it() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![at(issue(813, |_| {}), "2026-11-10T10:00:00Z")]);
+    // 900 is not imported yet, so the link waits.
+    rig.gh.on(
+        "GET",
+        "/issues/813/dependencies/blocked_by",
+        ok(json!([
+            { "number": 900, "repository_url": "https://api.github.com/repos/GetFelix/felix" }
+        ])),
+    );
+    rig.gh.on("GET", "/issues/813/sub_issues", ok(json!([])));
+    ingest.poll(false).await.unwrap();
+    rig.gh
+        .on("GET", "/issues/813/dependencies/blocked_by", ok(json!([])));
+    ingest.poll(false).await.unwrap();
+    // 900 arrives after upstream dropped the link: no edge.
+    rig.list(vec![
+        at(issue(813, |_| {}), "2026-11-10T10:00:00Z"),
+        at(issue(900, |_| {}), "2026-11-10T11:00:00Z"),
+    ]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().imported().count(), 2);
+    assert!(rig.tracker.state().edges.is_empty());
+    assert_eq!(rig.tracker.count("linked"), 0);
 }
 
 #[test]
@@ -2493,6 +2618,17 @@ async fn prerequisite_rig_with(
     why: &str,
     accept: bool,
 ) -> (Rig, Ingest<Github<Script>, Fake>) {
+    prerequisite_rig_until(rules, repo, why, accept, kbl_core::work::DoneWhen::Merged).await
+}
+
+/// `prerequisite_rig_with`, the root waiting until `done_when`.
+async fn prerequisite_rig_until(
+    rules: Value,
+    repo: &str,
+    why: &str,
+    accept: bool,
+    done_when: kbl_core::work::DoneWhen,
+) -> (Rig, Ingest<Github<Script>, Fake>) {
     let rig = rig();
     let ingest = rig.ingest(rules);
     rig.gh.on("GET", GATEWAY_LIST, ok(json!([])));
@@ -2519,7 +2655,7 @@ async fn prerequisite_rig_with(
                 why: Content::Text(why.into()),
                 evidence: vec![],
             }),
-            done_when: kbl_core::work::DoneWhen::Merged,
+            done_when,
             cost_micros: 0,
             triage: None,
         },
@@ -2827,4 +2963,39 @@ async fn one_roots_listing_serves_the_poll() {
     ingest.poll(false).await.unwrap();
     assert_eq!(rig.tracker.roots_calls(), before + 1);
     assert!(rig.tracker.saved_state().opened.is_empty());
+}
+
+#[tokio::test]
+async fn upstream_dropping_a_link_to_an_agents_prerequisite_leaves_its_edge() {
+    let rules = json!([admit_rule(), gateway_rule(true)]);
+    let (rig, ingest) = prerequisite_rig_until(
+        rules,
+        "GetFelix/felix-gateway",
+        "the client cannot swap atomically",
+        true,
+        kbl_core::work::DoneWhen::Released,
+    )
+    .await;
+    ingest.poll(false).await.unwrap();
+    let (root, g1) = (rig.root(UP), rig.root("GetFelix/felix-gateway#40"));
+    let edge = (root.clone(), g1.clone());
+    assert!(rig.tracker.state().release_edges.contains(&edge));
+    // Someone adds the matching blocked-by upstream, then removes it.
+    rig.gh.on(
+        "GET",
+        "/issues/812/dependencies/blocked_by",
+        ok(json!([
+            { "number": 40, "repository_url": "https://api.github.com/repos/GetFelix/felix-gateway" }
+        ])),
+    );
+    rig.list(vec![at(issue(812, |_| {}), "2027-01-16T00:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    rig.gh
+        .on("GET", "/issues/812/dependencies/blocked_by", ok(json!([])));
+    rig.list(vec![at(issue(812, |_| {}), "2027-01-17T00:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert!(s.edges.contains(&edge));
+    assert!(s.release_edges.contains(&edge));
+    assert_eq!(rig.tracker.count("unlinked"), 0);
 }
