@@ -64,13 +64,29 @@ impl Folder {
         serde_json::to_string(&self.state).expect("plain data serializes")
     }
 
-    /// Every item as `{id, title, stage}`, in id order.
+    /// Every item as `{id, title, stage, tier, source, repo}`, in id order. The
+    /// last three are null unless recorded: `tier` by triage or acceptance,
+    /// `source` and `repo` by the item's target, or its root's target or import.
     pub fn items_json(&self) -> String {
         let items: Vec<_> = self
             .state
             .items
             .values()
-            .map(|i| json!({ "id": i.id, "title": i.title, "stage": self.state.stage(&i.id) }))
+            .map(|i| {
+                let root = self.state.items.get(&i.root);
+                let target = i.target.as_ref().or(root.and_then(|r| r.target.as_ref()));
+                let source = target
+                    .map(|t| t.source.as_str())
+                    .or_else(|| self.state.imported_source(&i.root));
+                json!({
+                    "id": i.id,
+                    "title": i.title,
+                    "stage": self.state.stage(&i.id),
+                    "tier": i.tier,
+                    "source": source,
+                    "repo": target.map(|t| &t.repo),
+                })
+            })
             .collect();
         serde_json::to_string(&items).expect("plain data serializes")
     }

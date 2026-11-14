@@ -2,6 +2,7 @@
 // through the fold; this only orders and labels what the fold decided.
 import type { ItemRow } from './fold.ts';
 import { score } from './palette.ts';
+import { applyFilters, type Filters } from './views.ts';
 
 /** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
 export const STAGES = [
@@ -55,4 +56,28 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
   const at = rows.findIndex((r) => r.id === current);
   if (at < 0) return rows[step < 0 ? rows.length - 1 : 0].id;
   return rows[Math.max(0, Math.min(rows.length - 1, at + step))].id;
+}
+
+/** What the page shows: the filtered items matching the search, grouped by stage. */
+export function visible(items: readonly ItemRow[], query: string, filters: Filters): Group[] {
+  return group(applyFilters(items, filters), query);
+}
+
+export type Direction = 'up' | 'down' | 'left' | 'right';
+
+/**
+ * The id one step from `current` on the board, where each group is a column. Up and
+ * down stay in the column; left and right keep the row, or the column's last card
+ * when it is shorter. The edges stop. No current card starts at the first one.
+ */
+export function moveBoard(columns: readonly Group[], current: string | null, dir: Direction): string | null {
+  const col = columns.findIndex((g) => g.items.some((i) => i.id === current));
+  if (col < 0) return columns[0]?.items[0]?.id ?? null;
+  const row = columns[col].items.findIndex((i) => i.id === current);
+  if (dir === 'up' || dir === 'down') {
+    const items = columns[col].items;
+    return items[Math.max(0, Math.min(items.length - 1, row + (dir === 'down' ? 1 : -1)))].id;
+  }
+  const next = columns[Math.max(0, Math.min(columns.length - 1, col + (dir === 'right' ? 1 : -1)))];
+  return next.items[Math.min(row, next.items.length - 1)].id;
 }

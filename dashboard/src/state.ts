@@ -2,6 +2,7 @@
 // only main.ts talks to the gateway. The item and search are kept in the address so
 // a link opens the same view for someone else.
 import type { ItemRow } from './fold.ts';
+import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter } from './views.ts';
 
 export type Connection =
   | { kind: 'setup' }
@@ -30,7 +31,14 @@ export interface ViewState {
   /** The item shown in the side panel. */
   open: string | null;
   theme: 'light' | 'dark';
+  layout: Layout;
+  filters: Filters;
+  density: Density;
+  /** This viewer's saved views, from local storage. */
+  saved: SavedView[];
 }
+
+export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
@@ -38,7 +46,14 @@ export type Action =
   | { type: 'query'; query: string }
   | { type: 'select'; id: string | null }
   | { type: 'open'; id: string | null }
-  | { type: 'theme'; theme: 'light' | 'dark' };
+  | { type: 'theme'; theme: 'light' | 'dark' }
+  | { type: 'layout'; layout: Layout }
+  | { type: 'filter'; facet: Facet; value: string | null }
+  | { type: 'clearFilters' }
+  | { type: 'density'; density: Density }
+  | { type: 'saved'; saved: SavedView[] }
+  /** Opens a saved view: its layout, search and filters replace the current ones. */
+  | { type: 'view'; search: string };
 
 export function reduce(s: ViewState, a: Action): ViewState {
   switch (a.type) {
@@ -55,6 +70,18 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, open: a.id, selected: a.id ?? s.selected };
     case 'theme':
       return { ...s, theme: a.theme };
+    case 'layout':
+      return { ...s, layout: a.layout };
+    case 'filter':
+      return { ...s, filters: setFilter(s.filters, a.facet, a.value) };
+    case 'clearFilters':
+      return { ...s, filters: {} };
+    case 'density':
+      return { ...s, density: a.density };
+    case 'saved':
+      return { ...s, saved: a.saved };
+    case 'view':
+      return { ...s, ...decodeView(a.search) };
   }
 }
 
@@ -77,19 +104,18 @@ export function createStore(initial: ViewState): Store {
   };
 }
 
-/** Reads `q` and `item` from a query string. */
-export function fromAddress(search: string): Pick<ViewState, 'query' | 'open'> {
-  const q = new URLSearchParams(search);
-  return { query: q.get('q') ?? '', open: q.get('item') };
+export type AddressState = Pick<ViewState, 'query' | 'open' | 'layout' | 'filters'>;
+
+/** Reads the view (`view`, `q`, filters) and `item` from a query string. */
+export function fromAddress(search: string): AddressState {
+  return { ...decodeView(search), open: new URLSearchParams(search).get('item') };
 }
 
 /** Writes the view into a query string, keeping every other parameter as it was. */
-export function toAddress(search: string, s: Pick<ViewState, 'query' | 'open'>): string {
-  const q = new URLSearchParams(search);
-  for (const [k, v] of [['q', s.query], ['item', s.open]] as const) {
-    if (v) q.set(k, v);
-    else q.delete(k);
-  }
+export function toAddress(search: string, s: AddressState): string {
+  const q = new URLSearchParams(encodeView(search, s));
+  if (s.open) q.set('item', s.open);
+  else q.delete('item');
   const out = q.toString();
   return out ? `?${out}` : '';
 }

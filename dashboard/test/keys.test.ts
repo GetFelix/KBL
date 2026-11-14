@@ -19,6 +19,18 @@ test('the common single keys mean what they mean in Linear and GitHub', () => {
   assert.equal(commandFor(press('Escape'), false), 'close');
 });
 
+test('the board keys: V switches layout, h and l and the side arrows move across columns, F filters', () => {
+  assert.equal(commandFor(press('v'), false), 'layout');
+  assert.equal(commandFor(press('h'), false), 'left');
+  assert.equal(commandFor(press('l'), false), 'right');
+  assert.equal(commandFor(press('ArrowLeft'), false), 'left');
+  assert.equal(commandFor(press('ArrowRight'), false), 'right');
+  assert.equal(commandFor(press('f'), false), 'filter');
+  // Side arrows move the caret in a field.
+  for (const key of ['v', 'h', 'l', 'f', 'ArrowLeft', 'ArrowRight']) assert.equal(commandFor(press(key, { inText: true }), false), undefined, key);
+  assert.deepEqual(displayChord('ArrowLeft', false), ['←']);
+});
+
 test('plain letters type into a text field instead of running commands', () => {
   for (const key of ['j', 'k', '/', '?']) assert.equal(commandFor(press(key, { inText: true }), false), undefined, key);
   assert.equal(commandFor(press('Escape', { inText: true }), false), 'close');

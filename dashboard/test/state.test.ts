@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { adviceFor, createStore, describe, fromAddress, reduce, toAddress, type ViewState } from '../src/state.ts';
 
-const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], query: '', selected: null, open: null, theme: 'dark' };
+const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], query: '', selected: null, open: null, theme: 'dark', layout: 'list', filters: {}, density: 'comfortable', saved: [] };
 
 test('opening an item selects it, and closing keeps the selection', () => {
   const opened = reduce(base, { type: 'open', id: 'r1' });
@@ -16,10 +16,19 @@ test('an open item missing from the log stays open so the panel can say so', () 
 });
 
 test('the address round-trips the search and the open item and keeps other parameters', () => {
-  const search = toAddress('?room=kbl&gateway=wss%3A%2F%2Fg', { query: 'cache', open: 'r1' });
-  assert.deepEqual(fromAddress(search), { query: 'cache', open: 'r1' });
+  const view = { query: 'cache', open: 'r1', layout: 'board' as const, filters: { tier: '1' } };
+  const search = toAddress('?room=kbl&gateway=wss%3A%2F%2Fg', view);
+  assert.deepEqual(fromAddress(search), view);
   assert.ok(search.includes('room=kbl'));
-  assert.equal(toAddress('?q=x&item=r1', { query: '', open: null }), '');
+  assert.equal(toAddress('?q=x&item=r1&view=board&tier=1', { query: '', open: null, layout: 'list', filters: {} }), '');
+});
+
+test('opening a saved view replaces the layout, search and filters, and keeps the open item', () => {
+  const s = reduce({ ...base, query: 'old', filters: { repo: 'a/b' }, open: 'r1' }, { type: 'view', search: 'view=board&tier=2' });
+  assert.deepEqual([s.layout, s.query, s.filters, s.open], ['board', '', { tier: '2' }, 'r1']);
+  const f = reduce(reduce(base, { type: 'filter', facet: 'source', value: 'github' }), { type: 'filter', facet: 'tier', value: '1' });
+  assert.deepEqual(f.filters, { source: 'github', tier: '1' });
+  assert.deepEqual(reduce(f, { type: 'clearFilters' }).filters, {});
 });
 
 test('the status line says what the page is doing and what failed', () => {

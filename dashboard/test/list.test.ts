@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { flatten, group, move, stageLabel } from '../src/list.ts';
+import { flatten, group, move, moveBoard, stageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -33,4 +33,26 @@ test('j and k walk display order and stop at the ends', () => {
   assert.equal(move(order, 'b', -1), 'b');
   assert.equal(move(order, 'd', 1), 'd');
   assert.equal(move([], 'b', 1), null);
+});
+
+test('the board moves within a column and across columns, keeping the row', () => {
+  const cols = group(rows);
+  // needs_you [b, e] | triage [c] | done [a] | parked [d]
+  assert.equal(moveBoard(cols, null, 'down'), 'b');
+  assert.equal(moveBoard(cols, 'b', 'down'), 'e');
+  assert.equal(moveBoard(cols, 'e', 'down'), 'e');
+  assert.equal(moveBoard(cols, 'e', 'up'), 'b');
+  assert.equal(moveBoard(cols, 'e', 'right'), 'c', 'a shorter column lands on its last card');
+  assert.equal(moveBoard(cols, 'c', 'left'), 'b', 'row 0 stays row 0');
+  assert.equal(moveBoard(cols, 'b', 'left'), 'b');
+  assert.equal(moveBoard(cols, 'd', 'right'), 'd');
+  assert.equal(moveBoard(cols, 'gone', 'left'), 'b', 'a selection that is no longer shown starts over');
+  assert.equal(moveBoard([], null, 'down'), null);
+});
+
+test('visible applies the filters before the search', () => {
+  const tiered = rows.map((r, i) => ({ ...r, tier: i % 2 ? 1 : 2, source: 'github' }));
+  assert.deepEqual(flatten(visible(tiered, '', { tier: '1' })).map((i) => i.id), ['b', 'd']);
+  assert.deepEqual(flatten(visible(tiered, 'which', { tier: '1' })).map((i) => i.id), ['b']);
+  assert.deepEqual(visible(tiered, '', { source: 'jira' }), []);
 });

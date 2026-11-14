@@ -600,6 +600,15 @@ impl State {
         })
     }
 
+    /// The source an imported root came from, as its `imported` record named it.
+    pub fn imported_source(&self, root: &ItemId) -> Option<&str> {
+        self.upstream
+            .iter()
+            .find(|(_, id)| *id == root)
+            .and_then(|(k, _)| k.split_once('\n'))
+            .map(|(source, _)| source)
+    }
+
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
         Some(match it.closed {
