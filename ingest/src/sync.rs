@@ -202,10 +202,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     t.closed = Some(Closed::Dropped);
                     self.follow(p, issue, t).await
                 }
-                // A person reopened the root of an issue that is still closed.
                 Some(root) if !root.closed && issue.closed.is_some() => {
                     let rule = first_match(&self.settings.rules, issue).map_or("", |r| &r.name);
                     let mut t = tracked_as(&root.item, rule, issue);
+                    // Ingest reopened it and closed state was never saved: the
+                    // issue closed again since, so `follow` closes the root.
+                    if root.reopened_by_sync {
+                        return self.follow(p, issue, t).await;
+                    }
+                    // A person reopened the root of an issue that is still closed.
                     t.closed = issue.closed;
                     p.state.items.insert(key, t);
                     Ok(())
@@ -247,7 +252,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     &item,
                     &rule,
                     issue,
-                    root.stage == "triage" && !root.has_children,
+                    // A root ingest reopened is back in Triage for a person
+                    // to accept again, children or not.
+                    root.stage == "triage" && !root.has_children && !root.reopened_by_sync,
                 )
                 .await?;
             }
@@ -300,6 +307,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 closed_by_sync: false,
+                reopened_by_sync: false,
                 has_children: rule.mode == Mode::Admit,
                 pr: None,
                 claimed_at_ms: None,
@@ -913,6 +921,7 @@ fn set_closed(p: &mut Poll, key: &str, closed: bool) {
         r.closed = closed;
         // Ingest is the only writer here, so its close is a sync close.
         r.closed_by_sync = closed;
+        r.reopened_by_sync = !closed;
     }
 }
 

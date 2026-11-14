@@ -172,7 +172,7 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
-| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed and whether upstream sync (not a person) closed it, and its pull request |
+| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
 
@@ -301,7 +301,10 @@ reports is written to (made a draft) only when it is in the same repository as
 the upstream issue, and that repository is one a rule names. A root a person
 dismissed stays closed when its issue is reopened. Whether a close was
 ingest's is read from the log (`GET /v1/ingest/roots`), not from saved state, so
-a poll that stopped between the close and its save does not lose it.
+a poll that stopped between the close and its save does not lose it. The same
+goes for a reopen: an open root whose issue is closed stays open only when a
+person reopened it. When ingest reopened it and the issue closed again before
+a save landed, the next poll closes the root.
 
 Ingest's saved state keeps an entry for each open issue, each transferred
 issue, and each closed issue still waiting on its pull request. An issue that is closed

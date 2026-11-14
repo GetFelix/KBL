@@ -1,0 +1,1 @@
+A root that ingest reopened, whose issue closed again before ingest's save landed, is now closed on the next poll. `GET /v1/ingest/roots` serves `reopened_by_sync`, read from the log, so ingest no longer takes such a root for one a person reopened and leaves it open for good.

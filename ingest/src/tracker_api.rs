@@ -21,6 +21,10 @@ pub(crate) struct Root {
     /// reopened when its issue is.
     #[serde(default)]
     pub(crate) closed_by_sync: bool,
+    /// Upstream sync wrote the last reopen, not a person. An open root whose
+    /// issue is closed is a person's choice only when this is false.
+    #[serde(default)]
+    pub(crate) reopened_by_sync: bool,
     /// It has its triage and augment items. A root back in Triage that has
     /// them was reopened, so a person, not ingest, accepts it again.
     #[serde(default)]
