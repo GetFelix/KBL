@@ -15,8 +15,12 @@ export type Filters = Partial<Record<Facet, string>>;
 
 export type Layout = 'list' | 'board';
 
+/** Which items are shown: all of them, or only the ones a link holds back. */
+export type View = 'all' | 'blocked';
+
 /** Everything a link or a saved view restores. */
 export interface ViewSpec {
+  view: View;
   layout: Layout;
   query: string;
   filters: Filters;
@@ -79,9 +83,13 @@ export function setFilter(f: Filters, facet: Facet, value: string | null): Filte
   return next;
 }
 
-const PARAMS = { layout: 'view', query: 'q' } as const;
+const PARAMS = { view: 'view', layout: 'layout', query: 'q' } as const;
 
-/** Reads the view from a query string. Unknown layouts read as the list. */
+/**
+ * Reads the view from a query string. Unknown values read as all work in a list. The board
+ * was once `view=board`; links and saved views from then still open it, and the next write
+ * moves it to `layout`.
+ */
 export function decodeView(search: string): ViewSpec {
   const q = new URLSearchParams(search);
   const filters: Filters = {};
@@ -89,13 +97,16 @@ export function decodeView(search: string): ViewSpec {
     const v = q.get(k);
     if (v) filters[k] = v;
   }
-  return { layout: q.get(PARAMS.layout) === 'board' ? 'board' : 'list', query: q.get(PARAMS.query) ?? '', filters };
+  const view = q.get(PARAMS.view);
+  const board = q.get(PARAMS.layout) === 'board' || view === 'board';
+  return { view: view === 'blocked' ? 'blocked' : 'all', layout: board ? 'board' : 'list', query: q.get(PARAMS.query) ?? '', filters };
 }
 
 /** Writes the view into `search`, keeping every other parameter. Defaults are left out, so a plain view has a plain address. */
 export function encodeView(search: string, v: ViewSpec): string {
   const q = new URLSearchParams(search);
   const set = (k: string, value: string | undefined) => (value ? q.set(k, value) : q.delete(k));
+  set(PARAMS.view, v.view === 'blocked' ? 'blocked' : undefined);
   set(PARAMS.layout, v.layout === 'board' ? 'board' : undefined);
   set(PARAMS.query, v.query);
   for (const [k] of FACETS) set(k, v.filters[k]);
@@ -107,7 +118,7 @@ export function sameView(a: ViewSpec, b: ViewSpec): boolean {
   return encodeView('', a) === encodeView('', b);
 }
 
-/** Saved views from storage. Anything malformed is dropped rather than breaking the page. */
+/** Saved views from storage, each rewritten to the current address form. Anything malformed is dropped rather than breaking the page. */
 export function parseSaved(json: string | null): SavedView[] {
   if (!json) return [];
   try {
@@ -115,7 +126,7 @@ export function parseSaved(json: string | null): SavedView[] {
     if (!Array.isArray(raw)) return [];
     return raw.filter(
       (v): v is SavedView => typeof v === 'object' && v !== null && typeof v.name === 'string' && v.name.trim() !== '' && typeof v.search === 'string',
-    );
+    ).map((v) => ({ name: v.name, search: encodeView('', decodeView(v.search)) }));
   } catch {
     return [];
   }

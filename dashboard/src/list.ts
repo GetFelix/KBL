@@ -2,7 +2,8 @@
 // through the fold; this only orders and labels what the fold decided.
 import type { ItemRow } from './fold.ts';
 import { score } from './palette.ts';
-import { applyFilters, type Filters } from './views.ts';
+import type { ViewState } from './state.ts';
+import { applyFilters } from './views.ts';
 
 /** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
 export const STAGES = [
@@ -58,9 +59,21 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
   return rows[Math.max(0, Math.min(rows.length - 1, at + step))].id;
 }
 
-/** What the page shows: the filtered items matching the search, grouped by stage. */
-export function visible(items: readonly ItemRow[], query: string, filters: Filters): Group[] {
-  return group(applyFilters(items, filters), query);
+/** The items the view covers, before filters and search: every item, or only the Blocked ones. */
+export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
+  if (s.view === 'all') return s.items;
+  const blocked = new Set(s.blocked.map((b) => b.id));
+  return s.items.filter((i) => blocked.has(i.id));
+}
+
+/** What the page shows: the items in the view, filtered, matching the search, grouped by stage. */
+export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>): Group[] {
+  return group(applyFilters(inScope(s), s.filters), s.query);
+}
+
+/** The rows the list shows, in the order j and k walk. */
+export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>): ItemRow[] {
+  return flatten(visible(s));
 }
 
 export type Direction = 'up' | 'down' | 'left' | 'right';

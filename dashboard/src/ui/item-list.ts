@@ -1,10 +1,11 @@
 // The list view: items grouped by stage, one link per row, or the state that
-// explains why there are none. Rows are links, so Tab, Enter and middle-click work
+// explains why there are none. A Blocked row also says what it waits on. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
-import { neighbour, visible, type Group } from '../list.ts';
+import { waitsOn } from '../fold.ts';
+import { inScope, neighbour, visible, type Group } from '../list.ts';
+import { flagText } from '../overlap.ts';
 import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
-import { flagText } from '../overlap.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
@@ -31,7 +32,7 @@ const ADVICE = {
 } as const;
 
 // Built from the store's query, not the address bar, which lags the store by up to 250 ms.
-export function itemHref(id: string, s: AddressState): string {
+export function itemHref(id: string, s: Omit<AddressState, 'open'>): string {
   return toAddress(location.search, { ...s, open: id }) || '?';
 }
 
@@ -116,7 +117,7 @@ export function itemList(
     // A state with no rows: a focused row or card has nowhere to go but #work.
     restoreFocus(focusedId, last, last, rows, el, quietly, { select: on.select, announce }, []);
   };
-  const row = (id: string, title: string): HTMLAnchorElement => {
+  const row = (id: string, title: string, waits: string): HTMLAnchorElement => {
     let a = rows.get(id);
     if (!a) {
       a = h('a', {
@@ -128,11 +129,14 @@ export function itemList(
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-flag', hidden: true }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }));
       rows.set(id, a);
     }
     const t = a.querySelector('.row-title')!;
+    const w = a.querySelector('.row-waits')!;
     if (t.textContent !== title) t.textContent = title;
+    const line = waits ? `waits on ${waits}` : '';
+    if (w.textContent !== line) w.textContent = line;
     return a;
   };
 
@@ -187,7 +191,11 @@ export function itemList(
         );
       }
       if (s.items.length === 0) return show('empty', emptyState('No work yet', 'Items appear here as the tracker imports issues from its sources.'));
-      const groups = visible(s.items, s.query, s.filters);
+      if (s.view === 'blocked' && inScope(s).length === 0) {
+        return show('noblocked', emptyState('Nothing is blocked', 'An item shows here while a link or a prerequisite holds it back.'));
+      }
+      const groups = visible(s);
+      const waits = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
       if (groups.length === 0) {
         const filtered = activeCount(s.filters) > 0;
         const what = s.query ? `“${s.query}”` : 'these filters';
@@ -200,7 +208,7 @@ export function itemList(
         );
       }
       if (s.layout === 'board') return showBoard(s, groups);
-      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title])]))}`;
+      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? ''])]))}`;
       if (key !== shown) {
         const focusedId = focusedHere();
         const before = last;
@@ -216,7 +224,7 @@ export function itemList(
             const headingId = `group-${g.stage}`;
             return h('section', { class: 'group', 'aria-labelledby': headingId },
               h('h2', { id: headingId, class: 'group-title' }, g.label, h('span', { class: 'count' }, String(g.items.length))),
-              h('ul', {}, ...g.items.map((item) => h('li', {}, row(item.id, item.title)))),
+              h('ul', {}, ...g.items.map((item) => h('li', {}, row(item.id, item.title, waits.get(item.id) ?? '')))),
             );
           }),
         );

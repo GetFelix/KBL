@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boardEdge, flatten, group, move, moveBoard, neighbour, stageLabel, visible } from '../src/list.ts';
+import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -52,9 +52,10 @@ test('the board moves within a column and across columns, keeping the row', () =
 
 test('visible applies the filters before the search', () => {
   const tiered = rows.map((r, i) => ({ ...r, tier: i % 2 ? 1 : 2, source: 'github' }));
-  assert.deepEqual(flatten(visible(tiered, '', { tier: '1' })).map((i) => i.id), ['b', 'd']);
-  assert.deepEqual(flatten(visible(tiered, 'which', { tier: '1' })).map((i) => i.id), ['b']);
-  assert.deepEqual(visible(tiered, '', { source: 'jira' }), []);
+  const s = { items: tiered, blocked: [], view: 'all' as const };
+  assert.deepEqual(flatten(visible({ ...s, query: '', filters: { tier: '1' } })).map((i) => i.id), ['b', 'd']);
+  assert.deepEqual(flatten(visible({ ...s, query: 'which', filters: { tier: '1' } })).map((i) => i.id), ['b']);
+  assert.deepEqual(visible({ ...s, query: '', filters: { source: 'jira' } }), []);
 });
 
 test('Home and End on the board stay in the column', () => {
@@ -73,4 +74,39 @@ test('a focused item that leaves hands the focus to the next one, else the previ
   assert.equal(neighbour(before, 'd', (id) => id !== 'd'), 'c', 'the last one falls back to the previous');
   assert.equal(neighbour(before, 'b', () => false), undefined);
   assert.equal(neighbour(before, 'x', () => true), undefined);
+});
+
+test('the Blocked view lists only blocked items, and j and k walk only those', () => {
+  const items = [
+    { id: 'a', title: 'one', stage: 'ready' },
+    { id: 'b', title: 'two', stage: 'blocked' },
+    { id: 'c', title: 'three', stage: 'blocked' },
+  ];
+  const blocked = ['b', 'c'].map((id) => ({ id, title: id, repo: null, source: null, waits_on: [] }));
+  assert.equal(inScope({ items, blocked, view: 'all' }).length, 3);
+  assert.deepEqual(inScope({ items, blocked, view: 'blocked' }).map((i) => i.id), ['b', 'c']);
+  assert.deepEqual(shownRows({ items, blocked, view: 'blocked', query: 'thr', filters: {} }).map((i) => i.id), ['c']);
+});
+
+test('the Blocked view composes with filters', () => {
+  const items = [
+    { id: 'a', title: 'one', stage: 'blocked', tier: 1 },
+    { id: 'b', title: 'two', stage: 'blocked', tier: 2 },
+    { id: 'c', title: 'three', stage: 'ready', tier: 1 },
+  ];
+  const blocked = ['a', 'b'].map((id) => ({ id, title: id, repo: null, source: null, waits_on: [] }));
+  assert.deepEqual(shownRows({ items, blocked, view: 'blocked', query: '', filters: { tier: '1' } }).map((i) => i.id), ['a']);
+  assert.deepEqual(shownRows({ items, blocked, view: 'all', query: '', filters: { tier: '1' } }).map((i) => i.id).sort(), ['a', 'c']);
+});
+
+test('a selected id the view no longer shows starts j and k from the ends', () => {
+  const items = [
+    { id: 'a', title: 'one', stage: 'blocked' },
+    { id: 'b', title: 'two', stage: 'blocked' },
+  ];
+  const state = { items, blocked: [{ id: 'a', title: 'a', repo: null, source: null, waits_on: [] }], view: 'blocked' as const, query: '', filters: {} };
+  const shown = shownRows(state);
+  assert.deepEqual(shown.map((i) => i.id), ['a']);
+  assert.equal(move(shown, 'b', 1), 'a');
+  assert.equal(move(shown, 'b', -1), 'a');
 });

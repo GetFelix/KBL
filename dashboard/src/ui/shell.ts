@@ -1,8 +1,9 @@
 // The page layout: skip link, sidebar, top bar with search and status, the list
 // and the side panel. Landmarks (nav, main, aside) let a screen reader jump between them.
 import { chordFor, displayChord } from '../keys.ts';
-import { toAddress, type ViewState } from '../state.ts';
-import { decodeView, sameView, summary, type SavedView } from '../views.ts';
+import { decodeView, encodeView, sameView, summary, type SavedView, type ViewSpec } from '../views.ts';
+import { inScope } from '../list.ts';
+import { toAddress, type View, type ViewState } from '../state.ts';
 import { boardView } from './board-view.ts';
 import { h, kbd } from './dom.ts';
 import { filterBar, type FilterHandlers } from './filter-bar.ts';
@@ -19,6 +20,13 @@ export interface ShellHandlers extends ListHandlers, FilterHandlers {
   palette(): void;
   help(): void;
 }
+
+const VIEWS: readonly [View, string][] = [
+  ['all', 'All work'],
+  ['blocked', 'Blocked'],
+];
+
+const plain = (view: View): ViewSpec => ({ view, layout: 'list', query: '', filters: {} });
 
 const MARK = 'M8 12H36V28H52V56H8Z';
 
@@ -45,7 +53,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   const board = boardView(on, announce);
   const list = itemList(on, board, announce);
   const filters = filterBar(on, mac);
-  const panel = itemPanel(on.closeItem, on.open);
+  const panel = itemPanel(on);
   const status = statusBar();
   const search = h('input', {
     id: 'search',
@@ -55,15 +63,23 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     autocomplete: 'off',
     oninput: (e) => on.query((e.target as HTMLInputElement).value),
   });
-  const allCount = h('span', { class: 'count muted' });
-  const allLink = h('a', {
-    href: '?',
-    onclick: (e) => {
-      e.preventDefault();
-      setMenu(false);
-      on.openView('');
-    },
-  }, 'All work', allCount);
+  // One sidebar link per view, each opening it plain: no filters or search, as a list.
+  // The palette's Show commands change only the view, keeping the rest. A modified click opens a tab.
+  const nav = VIEWS.map(([view, label]) => {
+    const search = encodeView('', plain(view));
+    const count = h('span', { class: 'count muted' });
+    const a = h('a', {
+      'data-view': view,
+      onclick: (e) => {
+        const m = e as MouseEvent;
+        if (m.metaKey || m.ctrlKey || m.shiftKey || m.button !== 0) return;
+        e.preventDefault();
+        setMenu(false);
+        on.openView(search);
+      },
+    }, label, count);
+    return { view, label, a, count };
+  });
   const savedList = h('ul', { class: 'nav saved', 'aria-label': 'Saved views' });
   const heading = h('h1', {}, 'All work');
   // Below 720 px the sidebar is a drawer behind this button, so Commands and
@@ -110,6 +126,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   document.addEventListener('click', (e) => {
     if (menu.getAttribute('aria-expanded') === 'true' && !sidebar.contains(e.target as Node) && e.target !== menu) setMenu(false);
   });
+  const main = h('main', { id: 'work', tabindex: '-1', 'aria-labelledby': 'work-title' }, h('h2', { id: 'work-title', class: 'sr-only' }, 'Work list'), filters.el, list.el, announcer);
   let savedShown = '';
   page.append(
     h('header', { class: 'topbar' },
@@ -119,14 +136,14 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       status.el,
     ),
     h('div', { class: 'content' },
-      h('main', { id: 'work', tabindex: '-1', 'aria-labelledby': 'work-title' }, h('h2', { id: 'work-title', class: 'sr-only' }, 'Work list'), filters.el, list.el, announcer),
+      main,
       panel.el,
     ),
   );
   root.replaceChildren(skip, h('div', { class: 'shell' }, sidebar, backdrop, page));
   sidebar.append(
     h('div', { class: 'brand' }, mark(), 'KBL'),
-    h('ul', { class: 'nav' }, h('li', {}, allLink)),
+    h('ul', { class: 'nav' }, ...nav.map((n) => h('li', {}, n.a))),
     h('h2', { class: 'nav-title', id: 'saved-title' }, 'Saved views'),
     savedList,
     h('div', { class: 'sidebar-foot' },
@@ -168,7 +185,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     panel,
     filters,
     /** A starting name for Save view: the active filters and search in words. */
-    suggestName: (s: ViewState) => [summary(s.filters), s.query && `“${s.query}”`, s.layout === 'board' ? 'board' : ''].filter(Boolean).join(', '),
+    suggestName: (s: ViewState) => [s.view === 'blocked' ? 'Blocked' : '', summary(s.filters), s.query && `“${s.query}”`, s.layout === 'board' ? 'board' : ''].filter(Boolean).join(', '),
     menuOpen: () => menu.getAttribute('aria-expanded') === 'true',
     /**
      * After a saved-view change: focus `name`'s Edit button (`edit`) or its link, else Save
@@ -182,14 +199,19 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       menu.focus();
     },
     closeMenu: () => setMenu(false),
+    main,
     render(s: ViewState) {
       renderSaved(s.saved);
-      const current = sameView(s, { layout: 'list', query: '', filters: {} });
       const named = s.saved.find((v) => sameView(s, decodeView(v.search)));
-      heading.textContent = named?.name ?? 'All work';
-      if (current) allLink.setAttribute('aria-current', 'page');
-      else allLink.removeAttribute('aria-current');
-      allLink.setAttribute('href', toAddress(location.search, { query: '', open: null, layout: 'list', filters: {} }) || '?');
+      for (const n of nav) {
+        const total = inScope({ ...s, view: n.view }).length;
+        n.count.textContent = total ? String(total) : '';
+        n.a.setAttribute('href', toAddress(location.search, { ...plain(n.view), open: null }) || '?');
+        if (!named && sameView(s, plain(n.view))) n.a.setAttribute('aria-current', 'page');
+        else n.a.removeAttribute('aria-current');
+      }
+      const title = named?.name ?? VIEWS.find(([v]) => v === s.view)?.[1] ?? 'All work';
+      if (heading.textContent !== title) heading.textContent = title;
       for (const a of Array.from(savedList.querySelectorAll<HTMLAnchorElement>('a[data-search]'))) {
         const v = decodeView(a.dataset.search ?? '');
         a.setAttribute('href', toAddress(location.search, { ...v, open: null }) || '?');
@@ -198,7 +220,6 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       }
       filters.render(s);
       if (search.value !== s.query) search.value = s.query;
-      allCount.textContent = s.items.length ? String(s.items.length) : '';
       status.render(s);
       list.render(s);
       panel.render(s);

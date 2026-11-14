@@ -2,7 +2,10 @@
 
 The KBL (Kanban By Log) dashboard in the browser. It reads `work.events` through
 [felix-gateway](https://github.com/GetFelix/felix-gateway), folds it with the `core` crate compiled to
-WebAssembly, and lists every item grouped by stage, with a detail panel, search and a command palette. The page
+WebAssembly, and lists every item grouped by stage, with a detail panel, search and a command palette. The
+Blocked view (sidebar, palette or `?view=blocked`) lists only the items a link holds back, each with what it waits on
+and, when that blocker is in a different repo or source, where it lives
+([links across repos](../docs/work-tracker.md#links-across-repos-and-sources)). The page
 is plain TypeScript built with Vite. The fold already holds the state, so there is no UI framework; a small store
 in `src/state.ts` holds only what the view adds (selection, search, open dialogs).
 
@@ -115,9 +118,10 @@ has one entry per filter value and per saved view.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
-- **The address.** `view=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the address, so a link
-  opens the same view.
-- **Saved views.** Save view names the current layout, search and filters and puts it in the sidebar; Edit
+- **The address.** `view=blocked`, `layout=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
+  address, so a link opens the same view. An older `view=board` link still opens the board and is rewritten to
+  `layout=board`.
+- **Saved views.** Save view names the current view, layout, search and filters and puts it in the sidebar; Edit
   renames or deletes it, and a name another view has is refused. After a rename the focus is back on that view's
   Edit; after a delete, on the next saved view or Save view. Saved views and the density are kept in this
   browser's local storage, per viewer, and the page works without them when storage is blocked. Each change
@@ -129,9 +133,9 @@ has one entry per filter value and per saved view.
 
 - `src/follow.ts`: the read-then-subscribe join, written against a small `Transport` so tests can fake the gateway.
 - `src/gateway.ts`: the WebSocket transport and the `join` handshake.
-- `src/fold.ts`: the shape of the WebAssembly fold.
+- `src/fold.ts`: the shape of the WebAssembly fold, and how a blocked row names its blockers.
 - `src/main.ts`: starts the page, runs the gateway loop and dispatches keys.
-- `src/state.ts`: the view state, its reducer and the address round-trip.
+- `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?layout=`, `?item=`, `?q=`, filters).
 - `src/views.ts`: filters, the view in the address, and saved views.
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.

@@ -1,8 +1,8 @@
 // The page's view state and a small store. Views read a snapshot and send actions;
-// only main.ts talks to the gateway. The item and search are kept in the address so
+// only main.ts talks to the gateway. The view, item and search are kept in the address so
 // a link opens the same view for someone else.
-import type { ItemRow } from './fold.ts';
-import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter } from './views.ts';
+import type { BlockedRow, ItemRow } from './fold.ts';
+import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
 
 export type Connection =
@@ -22,13 +22,18 @@ export function adviceFor(code: string): Advice {
   return null;
 }
 
+export type { View };
+
 export interface ViewState {
   connection: Connection;
   /** True once the page has read the whole log and gone live, so an empty list means the log is empty. */
   synced: boolean;
   items: ItemRow[];
+  /** The Blocked items with what each waits on, from the same fold as `items`. */
+  blocked: BlockedRow[];
   /** File overlaps per item, from the same fold as `items`. */
   overlaps: Overlaps;
+  view: View;
   query: string;
   selected: string | null;
   /** The item shown in the side panel. */
@@ -45,7 +50,8 @@ export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; overlaps: Overlaps }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps }
+  | { type: 'view'; view: View }
   | { type: 'query'; query: string }
   | { type: 'select'; id: string | null }
   | { type: 'open'; id: string | null }
@@ -55,8 +61,8 @@ export type Action =
   | { type: 'clearFilters' }
   | { type: 'density'; density: Density }
   | { type: 'saved'; saved: SavedView[] }
-  /** Opens a saved view: its layout, search and filters replace the current ones. */
-  | { type: 'view'; search: string };
+  /** Opens a saved view: its scope, layout, search and filters replace the current ones. */
+  | { type: 'openView'; search: string };
 
 export function reduce(s: ViewState, a: Action): ViewState {
   switch (a.type) {
@@ -64,7 +70,9 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, connection: a.connection, synced: s.synced || a.connection.kind === 'live' };
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
-      return { ...s, items: a.items, overlaps: a.overlaps };
+      return { ...s, items: a.items, blocked: a.blocked, overlaps: a.overlaps };
+    case 'view':
+      return { ...s, view: a.view };
     case 'query':
       return { ...s, query: a.query };
     case 'select':
@@ -83,7 +91,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, density: a.density };
     case 'saved':
       return { ...s, saved: a.saved };
-    case 'view':
+    case 'openView':
       return { ...s, ...decodeView(a.search) };
   }
 }
@@ -107,9 +115,9 @@ export function createStore(initial: ViewState): Store {
   };
 }
 
-export type AddressState = Pick<ViewState, 'query' | 'open' | 'layout' | 'filters'>;
+export type AddressState = Pick<ViewState, 'view' | 'query' | 'open' | 'layout' | 'filters'>;
 
-/** Reads the view (`view`, `q`, filters) and `item` from a query string. */
+/** Reads the view (`view`, `layout`, `q`, filters) and `item` from a query string. */
 export function fromAddress(search: string): AddressState {
   return { ...decodeView(search), open: new URLSearchParams(search).get('item') };
 }

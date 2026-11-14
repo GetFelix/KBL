@@ -2,6 +2,7 @@
 // one Tab stop (roving tabindex): Tab moves between columns, j/k and the up and down
 // arrows move within one, h/l and the side arrows move across. Cards are links in a
 // list under the column's heading, so a screen reader hears "Ready, list, 3 items".
+import { waitsOn } from '../fold.ts';
 import { visible, type Group } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { flagText } from '../overlap.ts';
@@ -36,7 +37,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'row-flag card-flag', hidden: true }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }));
       cards.set(id, a);
     }
     const t = a.querySelector('.card-title')!;
@@ -46,7 +47,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
   return {
     el,
     /** Draws the columns; the caller has already ruled out the empty and error states. */
-    render(s: ViewState, columns: Group[] = visible(s.items, s.query, s.filters)) {
+    render(s: ViewState, columns: Group[] = visible(s)) {
       const key = JSON.stringify(columns.map((g) => [g.stage, g.items.map((i) => [i.id, i.title])]));
       if (key !== shown) {
         const active = document.activeElement;
@@ -79,6 +80,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
         const stop = g.items.find((i) => i.id === s.selected)?.id ?? g.items[0]?.id;
         for (const i of g.items) cards.get(i.id)?.setAttribute('tabindex', i.id === stop ? '0' : '-1');
       }
+      const waits = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
       for (const [id, a] of cards) {
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
@@ -88,6 +90,12 @@ export function boardView(on: ListHandlers, announce: Announce) {
         const text = flagText(s.overlaps.get(id));
         if (flag.textContent !== text) flag.textContent = text;
         flag.hidden = text === '';
+        // Same "waits on" line as a Blocked row in the list.
+        const w = a.querySelector<HTMLElement>('.card-waits')!;
+        const what = waits.get(id);
+        const line = what ? `waits on ${what}` : '';
+        if (w.textContent !== line) w.textContent = line;
+        w.hidden = line === '';
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

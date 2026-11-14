@@ -19,7 +19,9 @@ export type CommandId =
   | 'clearFilters'
   | 'saveView'
   | 'density'
-  | 'theme';
+  | 'theme'
+  | 'view-all'
+  | 'view-blocked';
 
 export interface Command {
   id: CommandId;
@@ -42,6 +44,8 @@ export const COMMANDS: readonly Command[] = [
   { id: 'right', label: 'Next column on the board', group: 'Navigation', keys: ['L', 'ArrowRight'] },
   { id: 'open', label: 'Open the selected item', group: 'Navigation', keys: ['Enter'] },
   { id: 'close', label: 'Close, or clear the search', group: 'Navigation', keys: ['Escape'] },
+  { id: 'view-all', label: 'Show all work', group: 'View', keys: [] },
+  { id: 'view-blocked', label: 'Show blocked work', group: 'View', keys: [] },
   { id: 'layout', label: 'Switch list and board', group: 'View', keys: ['V'] },
   { id: 'filter', label: 'Filter items', group: 'View', keys: ['F'] },
   { id: 'clearFilters', label: 'Clear all filters', group: 'View', keys: [] },

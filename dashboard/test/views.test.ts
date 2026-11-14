@@ -44,17 +44,18 @@ test('filters match recorded values only, and combine', () => {
 });
 
 test('the view round-trips through the address and keeps other parameters', () => {
-  const v = { layout: 'board' as const, query: 'lease', filters: { repo: 'GetFelix/felix', tier: '1' } };
+  const v = { view: 'blocked' as const, layout: 'board' as const, query: 'lease', filters: { repo: 'GetFelix/felix', tier: '1' } };
   const search = encodeView('room=kbl&gateway=wss%3A%2F%2Fg&item=a', v);
   assert.deepEqual(decodeView(search), v);
   assert.ok(search.includes('room=kbl') && search.includes('item=a'));
-  assert.equal(encodeView('view=board&q=x&tier=1', { layout: 'list', query: '', filters: {} }), '', 'defaults leave nothing behind');
-  assert.equal(decodeView('view=grid').layout, 'list');
+  assert.equal(encodeView('view=blocked&layout=board&q=x&tier=1', { view: 'all', layout: 'list', query: '', filters: {} }), '', 'defaults leave nothing behind');
+  assert.equal(decodeView('layout=grid').layout, 'list');
+  assert.equal(decodeView('view=grid').view, 'all');
   assert.ok(sameView(decodeView('tier=1&q=x'), decodeView('q=x&tier=1')));
 });
 
 test('saved views add, refuse a taken name, rename without clobbering, and delete', () => {
-  const v = { layout: 'list' as const, query: '', filters: { source: 'github' } };
+  const v = { view: 'all' as const, layout: 'list' as const, query: '', filters: { source: 'github' } };
   let list = saveView([], ' GitHub ', v) as SavedView[];
   assert.deepEqual(list, [{ name: 'GitHub', search: 'source=github' }]);
   list = saveView(list, 'Tier 1', { ...v, filters: { tier: '1' } }) as SavedView[];
@@ -79,4 +80,12 @@ test('saved views from storage drop anything malformed', () => {
   assert.deepEqual(parseSaved('{'), []);
   assert.deepEqual(parseSaved('{"name":"x"}'), []);
   assert.deepEqual(parseSaved('[{"name":"ok","search":"tier=1"},{"name":""},{"name":"n","search":3},null]'), [{ name: 'ok', search: 'tier=1' }]);
+});
+
+test('a saved view from before the layout parameter opens the board and is read back in the new form', () => {
+  const [old] = parseSaved('[{"name":"Board","search":"view=board&tier=1"}]');
+  assert.deepEqual(old, { name: 'Board', search: 'layout=board&tier=1' });
+  assert.deepEqual(decodeView('view=board&tier=1'), { view: 'all', layout: 'board', query: '', filters: { tier: '1' } });
+  assert.ok(sameView(decodeView('view=board'), decodeView('layout=board')));
+  assert.equal(decodeView('view=blocked&layout=board').view, 'blocked');
 });

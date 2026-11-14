@@ -2,7 +2,7 @@
 // filters hide in words, Clear filters, and Save view. Native selects, so every
 // screen reader and keyboard already knows how to use them.
 import { chordFor, displayChord } from '../keys.ts';
-import { flatten, visible } from '../list.ts';
+import { inScope, shownRows } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { activeCount, facets, summary, type Facet, type Layout } from '../views.ts';
 import { h, kbd } from './dom.ts';
@@ -60,16 +60,19 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   const setOptions = (select: HTMLSelectElement, options: [string, string][], value: string) => {
     options.forEach(([v, text], i) => {
       const o = select.options[i] ?? select.appendChild(h('option'));
-      if (o.value !== v) o.value = v;
+      // Without a value attribute an option's value is its text, so "Any" would not match ''
+      // and the select would show nothing. Set both, and the selection, explicitly.
+      if (!o.hasAttribute('value') || o.value !== v) o.value = v;
       if (o.textContent !== text) o.textContent = text;
+      if (o.selected !== (v === value)) o.selected = v === value;
     });
     while (select.options.length > options.length) select.options[select.options.length - 1].remove();
-    if (select.value !== value) select.value = value;
   };
   const render = (s: ViewState) => {
     last = s;
     for (const b of [list, board]) b.setAttribute('aria-pressed', String(b.dataset.layout === s.layout));
-    const offered = facets(s.items, s.filters);
+    const scoped = inScope(s);
+    const offered = facets(scoped, s.filters);
     const busy = document.activeElement;
     for (const [facet, c] of kept) {
       if (!offered.some((o) => o.facet === facet) && c.select !== busy) {
@@ -90,9 +93,9 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     });
     const n = activeCount(s.filters);
     clear.hidden = n === 0;
-    const shownCount = flatten(visible(s.items, s.query, s.filters)).length;
+    const shownCount = shownRows(s).length;
     const parts = [s.query.trim() && `search “${s.query.trim()}”`, summary(s.filters)].filter(Boolean);
-    const words = parts.length ? `Showing ${shownCount} of ${s.items.length}: ${parts.join(', ')}` : '';
+    const words = parts.length ? `Showing ${shownCount} of ${scoped.length}: ${parts.join(', ')}` : '';
     if (summaryEl.textContent !== words) summaryEl.textContent = words;
   };
   return {

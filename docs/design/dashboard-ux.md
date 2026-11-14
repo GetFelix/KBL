@@ -13,7 +13,8 @@ the rest (issue [#132](https://github.com/GetFelix/KBL/issues/132)).
 
 Phase 2: [board](img/board-dark-comfortable.png), [board, compact, light](img/board-light-compact.png),
 [filters](img/filters-dark.png), [saved view](img/saved-view-dark.png), [save dialog](img/save-view-dark.png),
-[board with the panel](img/board-panel-dark.png), [phone menu](img/phone-menu-dark.png).
+[board with the panel](img/board-panel-dark.png), [phone menu](img/phone-menu-dark.png),
+[Blocked](img/blocked-dark.png), [Blocked on the board, filtered](img/blocked-board-dark.png), [Waits on in the panel](img/blocked-panel-dark.png).
 
 More shots: [palette](img/palette-dark.png), [shortcuts](img/shortcuts-light.png), [panel](img/panel-dark.png),
 [overlap](img/overlap-dark.png), [loading](img/loading-dark.png), [no match](img/empty-search-dark.png), [stopped](img/error-dark.png), [cannot reach the gateway](img/unreachable-dark.png),
@@ -48,6 +49,13 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   the side panel and in the address (`?item=`), so a link opens the same view. Opening moves focus into the
   panel and `Esc` puts it back on the row. Rows are kept per item and only redrawn when the list changes, so a
   live record never takes the focus off the row you are on.
+- **Views.** The sidebar lists All work and Blocked, and the palette has a command for each. The view is in the
+  address (`?view=blocked`). A sidebar link opens its view plain (no filters or search, as a list); the palette's
+  Show commands change only the view, so Blocked composes with filters, search, the board and saved views. The
+  sidebar counts every item in each view. Blocked lists only the items a link or prerequisite holds back; on those
+  rows and board cards, in either view, the list says what each waits on, with the blocker's repo (or its source
+  when it has no repo) only when that differs from the row's, and `release` when the blocker is merged and the
+  link waits for its release. The panel lists the same blockers with their titles, each a link that opens it.
 - **Board.** Columns are the list's stage groups in the same order, so switching with `V` never reorders
   anything, and the selection and focus stay on the same item. Keyboard pattern: one `Tab` stop per column
   (roving `tabindex` on the selected card, else the column's first), `J`/`K` and up/down inside a column, `H`/`L`
@@ -59,19 +67,20 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   its root's. Values with no items are never offered, and a facet nobody recorded is hidden. Each filter is a
   native `<select>`, which owns its own keys; `Esc` and `Mod` chords still work there. The bar says
   "Showing N of M" with the active filters in words, and no match inside filters offers Clear filters.
-- **Saved views.** Layout, search and filters are the address (`view`, `q`, `source`, `tier`, `repo`), so a view
-  is a link. Save view stores it by name in local storage, per viewer, and puts it in the sidebar, where the
+- **Saved views.** View, layout, search and filters are the address (`view`, `layout`, `q`, `source`, `tier`,
+  `repo`), so a view is a link. The board was once `?view=board`; such a link or saved view still opens the board,
+  and the page rewrites it to `?layout=board` when it reads it. Save view stores it by name in local storage, per viewer, and puts it in the sidebar, where the
   current one is `aria-current` and names the page. Edit renames or deletes; a name already in use is refused
   next to the field rather than overwriting a view. Storage is read in `try`/`catch`: blocked or broken storage
   leaves an empty sidebar, never a broken page.
 - **Density.** Comfortable or compact, from the palette, remembered per viewer. Only tokens change
   (`--row-height`, card padding and gap, column width); compact rows stay above the 24 px target size.
-- **Panel sections.** Each section of the item panel is its own module under `src/ui/`, listed in the panel's
-  `FIELDS`. "Same files" lists the open items that declare the same paths, with the suggested link, and their
+- **Panel.** One labelled field per entry in `FIELDS` in `src/ui/item-panel.ts` (stage, the recorded facets,
+  Waits on, Same files); a new detail is one module under `src/ui/`. "Same files" lists the open items that declare the same paths, with the suggested link, and their
   rows and board cards carry a text flag ("2 file overlaps") rather than colour alone. The notes come from `core` (`src/overlap.ts` only shapes them).
 - **States.** Each has a heading, one sentence and the next step: setup (how to connect), loading (placeholder
   rows, `aria-busy`), cannot reach the gateway (nothing read yet, when the next try is), empty, no match
-  (Clear search), no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,
+  (Clear search), nothing blocked, no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,
   Reload for a log newer than the page).
 - **Tokens.** `src/ui/tokens.css` holds every colour, space, type size and radius, for dark and light.
   Accent is KBL amber `#C86A1E` per [brand/story.md](../brand/story.md), with Inter and JetBrains Mono. Views

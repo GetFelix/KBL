@@ -195,7 +195,7 @@ try {
   check(await focused('.card[data-selected]'), 'switching layout keeps focus on the selected item');
   const columns = await page.eval(`[...document.querySelectorAll('.column')].map((c) => c.querySelectorAll('.card').length)`);
   check(await page.eval(`[...document.querySelectorAll('.column')].every((c) => c.querySelectorAll('.card[tabindex="0"]').length === 1)`), `each column is one Tab stop (${columns.join(' ')})`);
-  await page.waitFor(`location.search.includes('view=board')`);
+  await page.waitFor(`location.search.includes('layout=board')`);
   check(true, 'the board is in the address');
   const colOf = `[...document.querySelectorAll('.column')].findIndex((c) => c.contains(document.activeElement))`;
   await press(page, 'l');
@@ -219,8 +219,11 @@ try {
 
   // Live records on the board: a card that leaves the filter hands the focus to its column,
   // a card that moves column keeps it. Both are announced, and the selection follows.
+  // The board was once ?view=board: such a link still opens it, and the address moves to ?layout=board.
   await open(`${connected}&view=board&tier=1`);
   await page.waitFor(live);
+  await page.waitFor(`location.search.includes('layout=board') && !location.search.includes('view=')`);
+  check(await page.eval(`!!document.querySelector('.board .column')`), 'an old ?view=board link opens the board and is rewritten to ?layout=board');
   const announced = () => page.eval(`document.querySelector('.announce')?.textContent ?? ''`);
   const person = `actor: 'person', by: 'maintainer', at_ms: 1800000000000`;
   await page.eval(`window.__push({ kind: 'imported', item: 'gh-3001', source: 'github', title: 'A second ready card', upstream_id: 'GetFelix/felix#3001', ${person} })`);
@@ -248,7 +251,7 @@ try {
   await page.waitFor(`document.querySelector('.row[data-selected]')?.dataset.id === 'gh-2210'`);
   check(await focused('.row[data-id=gh-2210]'), 'a filter that hides the focused row moves the focus to the next row, not the body');
   for (const theme of ['dark', 'light']) for (const density of ['comfortable', 'compact']) {
-    await open(`${connected}&view=board`, { theme, storage: { 'kbl.dashboard.density': density } });
+    await open(`${connected}&layout=board`, { theme, storage: { 'kbl.dashboard.density': density } });
     await page.waitFor(live);
     check((await page.eval(`document.documentElement.dataset.density`)) === density, `${theme} ${density}: density is remembered`);
     await axe(`board ${theme} ${density}`);
@@ -264,13 +267,15 @@ try {
   await page.waitFor(live);
   const offered = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.dataset.facet).join(' ')`);
   check(offered === 'source tier repo', `filters offer the recorded facets (${offered})`);
+  const shownValues = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.selectedOptions[0]?.textContent ?? '').join(',')`);
+  check(shownValues === 'Any,Any,Any', `every filter with no value shows Any, not a blank (${shownValues})`);
   await press(page, 'f');
   check(await focused('#filter-source'), 'F focuses the first filter');
   await page.eval(`(() => { const s = document.querySelector('#filter-repo'); s.value = 'GetFelix/felix'; s.dispatchEvent(new Event('change')); return true; })()`);
   await page.waitFor(`location.search.includes('repo=GetFelix')`);
   const repoRows = await page.eval(`document.querySelectorAll('.row').length`);
   check(repoRows === 5, `a repo filter keeps only that repo's items (${repoRows})`);
-  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 5 of 9: Repo GetFelix/felix'`), 'the summary says what the filters hide');
+  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 5 of 14: Repo GetFelix/felix'`), 'the summary says what the filters hide');
   await press(page, 'k', MOD);
   for (const ch of 'tier: 2') await press(page, ch);
   await press(page, 'Enter');
@@ -284,13 +289,13 @@ try {
   check(await page.eval(`[...document.querySelectorAll('.empty button')].map((b) => b.textContent).join(',') === 'Clear search,Clear filters'`), 'no match inside filters offers Clear search and Clear filters');
   await press(page, 'Escape');
   await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent === 'Clear filters').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 9 && !location.search.includes('tier=')`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 14 && !location.search.includes('tier=')`);
   check(true, 'Clear filters shows everything and clears the address');
 
   // Saved views: from the address, to the sidebar, rename, delete, and back from storage.
-  await open(`${connected}&view=board&source=github&tier=1`);
+  await open(`${connected}&layout=board&source=github&tier=1`);
   await page.waitFor(live);
-  check((await page.eval(`document.querySelectorAll('.card').length`)) === 4, 'a link with a view and filters opens that view');
+  check((await page.eval(`document.querySelectorAll('.card').length`)) === 6, 'a link with a view and filters opens that view');
   await press(page, 'k', MOD);
   for (const ch of 'save this') await press(page, ch);
   await press(page, 'Enter');
@@ -302,7 +307,7 @@ try {
   await page.waitFor(`!!document.querySelector('.saved-row a')`);
   check(await page.eval(`document.querySelector('.saved-row a').getAttribute('aria-current') === 'page' && document.querySelector('.topbar h1').textContent === 'Source github, Tier 1, board'`), 'the saved view is in the sidebar, current, and names the page');
   const saved = await page.eval(`localStorage.getItem('kbl.dashboard.views')`);
-  check(saved === '[{"name":"Source github, Tier 1, board","search":"view=board&source=github&tier=1"}]', 'the view is stored for this viewer');
+  check(saved === '[{"name":"Source github, Tier 1, board","search":"layout=board&source=github&tier=1"}]', 'the view is stored for this viewer');
   await shoot('saved-view-dark');
   await page.eval(`document.querySelector('.saved-row button').click(); true`);
   await page.eval(`(() => { const i = document.querySelector('#view-name'); i.value = 'Urgent GitHub'; return true; })()`);
@@ -310,10 +315,10 @@ try {
   await page.waitFor(`document.querySelector('.saved-row a')?.textContent === 'Urgent GitHub'`);
   check(await focused('.saved-row button[aria-label="Edit view Urgent GitHub"]'), 'Edit renames a view and the focus is back on its Edit button');
   await page.eval(`document.querySelector('.nav a').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 9`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 14`);
   check(await page.eval(`document.querySelector('.nav a').getAttribute('aria-current') === 'page' && !document.querySelector('.saved-row a').hasAttribute('aria-current')`), 'All work resets the view');
   await page.eval(`document.querySelector('.saved-row a').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.card').length === 4`);
+  await page.waitFor(`document.querySelectorAll('.card').length === 6`);
   check(true, 'a saved view opens from the sidebar');
   await page.eval(`document.querySelector('.saved-row button').click(); true`);
   await page.eval(`[...document.querySelectorAll('.view-dialog button')].find((b) => b.textContent === 'Delete view').click(); true`);
@@ -337,6 +342,79 @@ try {
   await open(connected, { storage: { 'kbl.dashboard.views': 'not json' } });
   await page.waitFor(live);
   check(await page.eval(`!!document.querySelector('.nav-empty')`), 'unreadable storage leaves the sidebar empty, not broken');
+  // The Blocked view: reached from the palette, left from the sidebar.
+  const rowIds = `[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(' ')`;
+  const rowText = (id) => page.eval(`document.querySelector('.row[data-id=${id}] .row-waits')?.textContent ?? ''`);
+  await press(page, 'k', MOD);
+  for (const ch of 'blocked') await press(page, ch);
+  await press(page, 'Enter');
+  await page.waitFor(`location.search.includes('view=blocked')`);
+  check((await page.eval(rowIds)) === 'blk-40 blk-41', `the palette opens the Blocked view with only blocked items (${await page.eval(rowIds)})`);
+  check(await page.eval(`document.querySelector('h1').textContent === 'Blocked' && document.querySelector('.nav a[aria-current=page]').dataset.view === 'blocked'`), 'the Blocked view is the current sidebar entry and the heading');
+  const waits40 = await rowText('blk-40');
+  check(waits40 === 'waits on gw-31 (github:GetFelix/felix-gateway), jira-300 (jira)', `a blocked row names blockers in another repo and source (${waits40})`);
+  const waits41 = await rowText('blk-41');
+  check(waits41 === 'waits on blk-42 release', `a blocker in the same repo awaiting its release says release only (${waits41})`);
+  await axe('blocked dark');
+  await shoot('blocked-dark');
+  await press(page, 'j');
+  await press(page, 'Enter');
+  await page.waitFor(`location.search.includes('item=blk-40')`);
+  const blockers = await page.eval(`[...document.querySelectorAll('.panel .blockers li')].map((l) => l.textContent).join(' | ')`);
+  check(
+    blockers === 'gw-31 Compare-and-set on the gateway (github:GetFelix/felix-gateway) | jira-300 Agree the write semantics (jira)',
+    `the panel lists each blocker with its title and where it lives (${blockers})`,
+  );
+  await axe('blocked panel');
+  await shoot('blocked-panel-dark');
+  await page.eval(`document.querySelector('.panel .blockers a').click()`);
+  await page.waitFor(`location.search.includes('item=gw-31')`);
+  check(await page.eval(`document.querySelector('.panel .row-id').textContent === 'gw-31'`), 'a blocker link opens that blocker in the panel');
+  await press(page, 'Escape');
+  await page.eval(`document.querySelector('.nav a[data-view=all]').click()`);
+  await page.waitFor(`!location.search.includes('view=')`);
+  check((await page.eval(`document.querySelectorAll('.row').length`)) > 2, 'the sidebar goes back to all work');
+
+  // Blocked composes with filters and the board; the palette keeps the filters, and cards say what they wait on.
+  await open(`${connected}&tier=1&layout=board`);
+  await page.waitFor(live);
+  await press(page, 'k', MOD);
+  for (const ch of 'show blocked') await press(page, ch);
+  await press(page, 'Enter');
+  await page.waitFor(`location.search.includes('view=blocked')`);
+  check(await page.eval(`location.search.includes('tier=1') && location.search.includes('layout=board')`), 'Show blocked work keeps the filters and the layout');
+  const cardIds = await page.eval(`[...document.querySelectorAll('.card')].map((c) => c.dataset.id).sort().join(' ')`);
+  check(cardIds === 'blk-40 blk-41', `the Blocked board shows only blocked items inside the filter (${cardIds})`);
+  const cardWaits = await page.eval(`document.querySelector('.card[data-id=blk-40] .card-waits')?.textContent ?? ''`);
+  check(cardWaits === 'waits on gw-31 (github:GetFelix/felix-gateway), jira-300 (jira)', `a blocked card says what it waits on (${cardWaits})`);
+  check(await page.eval(`document.querySelector('#filter-tier')?.selectedOptions[0]?.textContent.startsWith('1') === true`), 'the active filter shows its value');
+  await axe('blocked board');
+  await shoot('blocked-board-dark');
+
+  // A live record that unblocks the focused row hands the focus to a neighbour, then to main.
+  await open(`${connected}&view=blocked`);
+  await page.waitFor(live);
+  const blockedCount = () => page.eval(`document.querySelector('.nav a[data-view=blocked] .count')?.textContent ?? ''`);
+  const onRowOrMain = () => page.eval(`document.activeElement?.matches('.row, main') ?? false`);
+  check((await blockedCount()) === '2', 'the sidebar counts the blocked items');
+  await page.eval(`document.querySelector('.row[data-id=blk-40]').focus()`);
+  for (const item of ['gw-31', 'jira-300']) {
+    await page.eval(`window.__push({ kind: 'closed', item: '${item}', why: 'merged', actor: 'person', by: 'maintainer', at_ms: 1800000000001 })`);
+  }
+  await page.waitFor(`!document.querySelector('.row[data-id=blk-40]')`);
+  check((await page.eval(rowIds)) === 'blk-41' && (await blockedCount()) === '1', 'closing both blockers drops the row and the sidebar count');
+  check(await focused('.row[data-id=blk-41]'), 'the focus moves to the neighbouring row');
+  await page.eval(`window.__push({ kind: 'shipped', item: 'blk-42', release: 'v1', actor: 'person', by: 'maintainer', at_ms: 1800000000002 })`);
+  await page.waitFor(`!document.querySelector('.row')`);
+  check((await onRowOrMain()) && (await focused('main')), 'an emptied view leaves the focus on main, not the body');
+
+  for (const theme of ['dark', 'light']) {
+    await open(`${connected}&view=blocked&item=blk-41`, { theme });
+    await page.waitFor(live);
+    check((await page.eval(rowIds)) === 'blk-40 blk-41' && !(await page.eval(`document.querySelector('.panel').hidden`)), `${theme}: a link opens the Blocked view with the item`);
+    await axe(`blocked link ${theme}`);
+  }
+
   await open(`${connected}&item=gh-2219`);
   await page.waitFor(live);
   const flag = (id) => page.eval(`document.querySelector('.row[data-id=${id}] .row-flag:not([hidden])')?.textContent ?? ''`);
@@ -352,7 +430,7 @@ try {
   await page.waitFor(`document.querySelector('.panel .overlap-notes')?.children.length === 2`);
   check((await flag('gh-2219')) === '2 file overlaps' && (await flag('gh-2204')) === '2 file overlaps', 'a live files entry adds a note and updates the flags');
   check(await page.eval(`document.activeElement?.dataset.focus === 'other:gh-2215'`), 'a rebuild of the panel leaves focus on the same link');
-  await open(`${connected}&view=board`);
+  await open(`${connected}&layout=board`);
   await page.waitFor(live);
   const cardFlag = (id) => page.eval(`document.querySelector('.card[data-id=${id}] .row-flag:not([hidden])')?.textContent ?? ''`);
   check((await cardFlag('gh-2219')) === '1 file overlap' && (await cardFlag('gh-2204')) === '', 'board cards carry the same overlap flag');
