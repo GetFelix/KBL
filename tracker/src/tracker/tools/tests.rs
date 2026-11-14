@@ -2455,4 +2455,18 @@ async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
     let before = fake.log().len();
     existing("a2").await.unwrap();
     assert_eq!(fake.log().len(), before);
+    // Asking to wait for the release instead is a change, so it is written.
+    t.prerequisite(
+        &w1,
+        &tr,
+        key("dep"),
+        Prereq::Existing(item("a2")),
+        DoneWhen::Released,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+    let core = t.0.core.lock().await;
+    assert!(core.state.release_edges.contains(&(a1, item("a2"))));
 }

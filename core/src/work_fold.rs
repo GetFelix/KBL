@@ -841,7 +841,8 @@ impl State {
     }
 
     /// The item whose holder may write a prerequisite for `item`: `item`
-    /// itself, or with `triage` the triage item under it, while `item` is open.
+    /// itself, or with `triage` the triage item under it. Closing `item`
+    /// ends that claim, so a held triage item means `item` is open.
     fn prerequisite_holder<'a>(
         &self,
         item: &'a ItemId,
@@ -855,9 +856,6 @@ impl State {
             let t = self.item(t)?;
             if t.work != WorkKind::Triage || t.parent.as_ref() != Some(item) {
                 return Err(Reject::NotHolder);
-            }
-            if self.item(item)?.closed.is_some() {
-                return Err(Reject::Closed);
             }
         }
         Ok(holder)
@@ -2277,7 +2275,8 @@ impl State {
                 }
             }
         }
-        if item == prerequisite || self.reaches(prerequisite, item) {
+        if item == prerequisite || triage == Some(prerequisite) || self.reaches(prerequisite, item)
+        {
             return Err(Reject::Cycle);
         }
         if let Some(n) = new {

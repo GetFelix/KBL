@@ -202,7 +202,7 @@ impl<B: Broker> Tracker<B> {
         };
         self.begin().await?;
         let created = new.is_some();
-        let under = {
+        {
             let mut core = self.0.core.lock().await;
             let under = core
                 .state
@@ -222,6 +222,10 @@ impl<B: Broker> Tracker<B> {
                 .state
                 .edges
                 .contains(&(waiter.clone(), prerequisite.clone()));
+            if under.is_some() {
+                // This claim goes on, so only its holder gets an answer.
+                held(&core, agent, item)?;
+            }
             if let Some(n) = &new {
                 // A retry after the claim ended answers with what the first call made.
                 if let Some(old) = core.state.items.get(&prerequisite) {
@@ -243,7 +247,11 @@ impl<B: Broker> Tracker<B> {
                     )));
                 }
                 // The claim goes on, so a repeat would only use up a post.
-                if linked {
+                let released = core
+                    .state
+                    .release_edges
+                    .contains(&(waiter.clone(), prerequisite.clone()));
+                if linked && released == (done_when == DoneWhen::Released) {
                     return Ok(reply(false));
                 }
             }
@@ -267,14 +275,12 @@ impl<B: Broker> Tracker<B> {
                 self.proposal_room(&mut core, agent, item, "prerequisite")
                     .await?;
             }
-            under
-        };
-        if let Some(target) = under {
-            let reply = waiting(&target, item, &prerequisite, created);
-            // Nothing is charged here: triage reports its cost when it completes.
-            self.held_write(agent, item, "prerequisite", |attempt| {
-                WorkRecord::Prerequisite {
-                    item: target,
+            if let Some(target) = &under {
+                let attempt = held(&core, agent, item)?;
+                let reply = reply(created);
+                // Nothing is charged here: triage reports its cost when it completes.
+                let record = WorkRecord::Prerequisite {
+                    item: target.clone(),
                     attempt,
                     prerequisite,
                     key,
@@ -282,12 +288,16 @@ impl<B: Broker> Tracker<B> {
                     done_when,
                     cost_micros: 0,
                     triage: Some(item.clone()),
-                }
-            })
-            .await?;
-            // The item under triage is no longer Ready.
-            self.sync_ready().await;
-            return Ok(reply);
+                };
+                // Appended under the lock the caps were checked under: this
+                // claim goes on, so a second call could otherwise race past them.
+                self.agent_append(&mut core, agent, item, "prerequisite", record)
+                    .await?;
+                drop(core);
+                // The item under triage is no longer Ready.
+                self.sync_ready().await;
+                return Ok(reply);
+            }
         }
         let cost_micros = self.charge(cost_micros);
         let record = {

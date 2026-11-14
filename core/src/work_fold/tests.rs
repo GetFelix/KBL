@@ -2468,13 +2468,16 @@ fn a_triage_prerequisite_waits_for_the_format_and_for_the_triage_holder() {
     }
     l.agent("w2", other);
     refused(&l, 3, Reject::NotHolder);
-    // A closed item waits on nothing.
+    // The item cannot wait on its own triage.
+    l.agent("w2", triage_needs("t1", false));
+    refused(&l, 4, Reject::Cycle);
+    // Closing the item ends the triage claim with it.
     l.person(WorkRecord::Closed {
         item: id("r1"),
         why: CloseWhy::Dismissed,
     });
     l.agent("w2", triage_needs("g1", true));
-    refused(&l, 4, Reject::Closed);
+    refused(&l, 5, Reject::NotHolder);
 
     // Before the raise the record is refused, as an older build would not read it.
     let mut l = Log::default();
