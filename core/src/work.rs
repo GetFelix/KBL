@@ -21,8 +21,11 @@ pub const WORK_EVENTS: &str = "work.events";
 /// fold differently gets a higher format instead. See `docs/upgrades.md`.
 pub const FORMAT_V1: u32 = 1;
 
+/// The format that added `returned_to_scope`.
+pub const FORMAT_V2: u32 = 2;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V1;
+pub const FORMAT: u32 = FORMAT_V2;
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer
@@ -666,6 +669,10 @@ pub enum WorkRecord {
     /// The upstream issue no longer matches the rule that admitted it. A
     /// holder finishes or releases, then the item stops in Needs you.
     LeftScope { item: ItemId },
+    /// The upstream issue matches its rule again, or a person says the item
+    /// still belongs: `left_scope` is cleared and the item goes back to its
+    /// stage. Format 2.
+    ReturnedToScope { item: ItemId },
     /// The upstream issue was reopened: the same root goes back to Triage with
     /// its history and its remaining budget.
     Reopened { item: ItemId },
@@ -765,6 +772,7 @@ impl WorkRecord {
             WorkRecord::Rejected { .. } => "rejected",
             WorkRecord::Updated { .. } => "updated",
             WorkRecord::LeftScope { .. } => "left_scope",
+            WorkRecord::ReturnedToScope { .. } => "returned_to_scope",
             WorkRecord::Reopened { .. } => "reopened",
             WorkRecord::AttemptClosed { .. } => "attempt_closed",
             WorkRecord::TierChanged { .. } => "tier_changed",
@@ -811,6 +819,7 @@ impl WorkRecord {
             | WorkRecord::Rejected { item }
             | WorkRecord::Updated { item, .. }
             | WorkRecord::LeftScope { item }
+            | WorkRecord::ReturnedToScope { item }
             | WorkRecord::Reopened { item }
             | WorkRecord::AttemptClosed { item, .. }
             | WorkRecord::TierChanged { item, .. }
@@ -843,7 +852,8 @@ impl WorkRecord {
         // A new field the fold reads on a kind below needs a guard here too,
         // which only review catches (docs/upgrades.md).
         match self {
-            WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V1 + 1),
+            WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V2),
+            WorkRecord::ReturnedToScope { .. } => FORMAT_V2,
             WorkRecord::Imported { .. }
             | WorkRecord::Proposed { .. }
             | WorkRecord::Triaged { .. }

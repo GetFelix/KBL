@@ -83,7 +83,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         };
         let mut state = state;
         state.migrate(&self.settings.repos);
-        let roots = self
+        let mut roots: HashMap<String, Root> = self
             .tracker
             .roots()
             .await?
@@ -91,6 +91,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .filter(|r| r.source == name)
             .map(|r| (r.upstream_id.clone(), r))
             .collect();
+        alias_moved(&state, &mut roots);
         let mut poll = Poll {
             state,
             roots,
@@ -307,6 +308,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 closed_by_sync: false,
+                left_scope_by_sync: false,
                 reopened_by: None,
                 has_children: rule.mode == Mode::Admit,
                 pr: None,
@@ -413,14 +415,24 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             }
             (None, None) => {}
         }
-        let still_open = p.roots.get(&key).is_some_and(|r| !r.closed);
-        if still_open {
-            let in_rule = self
-                .settings
-                .rules
-                .iter()
-                .find(|r| r.name == t.rule)
-                .is_some_and(|r| r.filter(issue));
+        let open = p.roots.get(&key).filter(|r| !r.closed);
+        if let Some(root) = open {
+            let left_by_sync = root.left_scope_by_sync;
+            let rules = &self.settings.rules;
+            let in_rule = match rules.iter().find(|r| r.name == t.rule) {
+                Some(r) => r.filter(issue),
+                // Rebuilt after a prune while no rule took it: the rule that
+                // takes it now is its rule, if that rule has room.
+                None if t.rule.is_empty() => match first_match(rules, issue) {
+                    Some(r) if r.cap.is_none_or(|c| open_roots(p, &r.name) < c as usize) => {
+                        t.rule.clone_from(&r.name);
+                        true
+                    }
+                    _ => false,
+                },
+                // Its rule was renamed or removed, which takes its items out.
+                None => false,
+            };
             if !in_rule {
                 if t.in_scope {
                     self.write(&WorkRecord::LeftScope {
@@ -430,7 +442,18 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     t.in_scope = false;
                 }
             } else {
-                t.in_scope = true;
+                // The fold's flag decides too: a saved state from before the
+                // record, or one rebuilt by a crash retry, says in scope.
+                // Until the log is raised to the record's format the tracker
+                // refuses it, so the item stays in Needs you and this is tried
+                // again on the next change or reconcile.
+                if !t.in_scope || left_by_sync {
+                    t.in_scope = self
+                        .write(&WorkRecord::ReturnedToScope {
+                            item: t.item.clone(),
+                        })
+                        .await?;
+                }
                 let fp = fingerprint(issue);
                 if fp != t.fingerprint {
                     self.write(&WorkRecord::Updated {
@@ -799,17 +822,18 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 
     // ---- writes ----
 
-    /// Appends a record. A refusal that says it is already there is fine; any
-    /// other refusal is logged, since the next poll will find the same thing.
-    async fn write(&self, record: &WorkRecord) -> Result<(), SourceError> {
+    /// Appends a record and says whether the log has it. A refusal that says
+    /// it is already there counts as written; any other is printed, not
+    /// returned, so one bad record does not stop the poll.
+    async fn write(&self, record: &WorkRecord) -> Result<bool, SourceError> {
         match self.tracker.append(record).await? {
-            Appended::Written => {}
-            Appended::Refused(why) if why == "duplicate" => {}
+            Appended::Written => Ok(true),
+            Appended::Refused(why) if why == "duplicate" => Ok(true),
             Appended::Refused(why) => {
                 eprintln!("kbl-ingest: a {} record was refused: {why}", record.kind());
+                Ok(false)
             }
         }
-        Ok(())
     }
 
     async fn context(&self, item: &ItemId, entry: &str, text: String) -> Result<(), SourceError> {
@@ -818,7 +842,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             entry: Key::new(entry).map_err(anyhow::Error::from)?,
             text: Content::Text(text),
         })
-        .await
+        .await?;
+        Ok(())
     }
 }
 
@@ -913,6 +938,24 @@ fn prune(p: &mut Poll) {
         .collect();
     for k in done {
         p.state.items.remove(&k);
+    }
+}
+
+/// The tracker knows a transferred issue's root only under the id it was
+/// imported with, so each new id is given the root of the id it moved from.
+/// A chain of moves is followed to its end.
+fn alias_moved(state: &State, roots: &mut HashMap<String, Root>) {
+    for (old, t) in &state.items {
+        let Some(root) = roots.get(old).cloned() else {
+            continue;
+        };
+        let mut seen = HashSet::from([old.clone()]);
+        let mut next = t.moved_to.clone();
+        while let Some(new) = next.filter(|n| seen.insert(n.clone())) {
+            // As `moved` does: the old id's root wins.
+            roots.insert(new.clone(), root.clone());
+            next = state.items.get(&new).and_then(|n| n.moved_to.clone());
+        }
     }
 }
 
