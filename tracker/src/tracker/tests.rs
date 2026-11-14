@@ -1615,6 +1615,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 }
 
 mod races;
+mod retry;
 mod review;
 
 #[tokio::test(start_paused = true)]

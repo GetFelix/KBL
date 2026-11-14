@@ -28,6 +28,7 @@ pub(crate) use transport::{Req, Res, Transport};
 
 /// Pages followed in one listing before the cursor stops where they ended.
 const MAX_PAGES: usize = 20;
+const REVIEWS_PER_PAGE: usize = 100;
 /// The longest a rate-limit wait is trusted to be; a bogus header must not park the worker for days.
 const MAX_WAIT: Duration = Duration::from_secs(3600);
 
@@ -175,6 +176,27 @@ impl<T: Transport> Github<T> {
             "statuses": all,
             "incomplete": (all.len() as u64) < total,
         })))
+    }
+
+    /// Every review on a pull request, oldest first, paged. `None` when a call
+    /// failed or the list was cut short: a later review can undo an approval,
+    /// so part of the list is not read as the whole.
+    async fn reviews(&self, pull: &str) -> Result<Option<Value>, SourceError> {
+        let mut all: Vec<Value> = Vec::new();
+        for page in 1..=MAX_PAGES {
+            let url = format!("{pull}/reviews?per_page={REVIEWS_PER_PAGE}&page={page}");
+            let res = self.call(Req::get(url)).await?;
+            if res.status != 200 {
+                return Ok(None);
+            }
+            let got = res.body.as_array().cloned().unwrap_or_default();
+            let last = got.len() < REVIEWS_PER_PAGE;
+            all.extend(got);
+            if last {
+                return Ok(Some(Value::Array(all)));
+            }
+        }
+        Ok(None)
     }
 
     /// The checks the base branch requires, when the credential may read its
@@ -376,11 +398,8 @@ impl<T: Transport> Source for Github<T> {
             || pull["requested_teams"]
                 .as_array()
                 .is_some_and(|a| !a.is_empty());
-        let reviews = self
-            .call(Req::get(format!("{base}/reviews?per_page=100")))
-            .await?;
-        status.review = if reviews.status == 200 {
-            review_state(&reviews.body, &author, asked)
+        status.review = if let Some(reviews) = self.reviews(&base).await? {
+            review_state(&reviews, &author, asked)
         } else if asked {
             PrReview::Requested
         } else {
