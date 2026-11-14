@@ -4,7 +4,15 @@ Who can reach KBL (Kanban By Log, pronounced Kibble), what they could damage, an
 attempt. Every tracker route, ingest route, MCP tool and record kind has a row.
 
 A pull request that adds a route, a tool or a record kind adds its row here.
-`scripts/check-threat-model.mjs` fails CI when one is missing.
+`scripts/check-threat-model.mjs` fails CI when one is missing. It finds routes
+and tools in every crate of the workspace, and a path served with more than one
+method needs a row per method, named like `` `PUT /v1/x` ``.
+
+Each `file:line` cited below is pinned to the text of that line in
+`docs/threat-model-citations.json`. When code moves, the check fails and names
+the new line; `node scripts/check-threat-model.mjs --fix` updates the doc. A new
+citation fails until `--fix` pins it, so look at the line first: it should be
+the one that does the check, not a closing brace near it.
 
 A cell marked **None** is a gap with an open issue. The gaps are listed at
 the end.
