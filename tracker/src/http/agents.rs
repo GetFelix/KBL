@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::body::to_bytes;
-use axum::extract::{Request, State};
+use axum::extract::Request;
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use kbl_core::names::{AgentName, Key};

@@ -266,7 +266,9 @@ node dev/agents.mjs --run demo --tokens tokens.json --ca-file "$PWD/dev/state/br
 ```
 
 The tokens file names each session and its two tokens, one per agent. Prefer it to `--agent name=<felix>,<tracker>`,
-which puts tokens in the process list. Minting them with one command is not built yet.
+which puts tokens in the process list. With teams on, `kbl-tool agent add <name>` mints a tracker token for a new
+agent with one command, and the tracker accepts it at once; `agent list` and `agent revoke` go with it
+([One agent token per session](docs/work-tracker.md#one-agent-token-per-session)).
 
 ```json
 { "w1": { "felix": "<Felix token>", "tracker": "<tracker token>" },
