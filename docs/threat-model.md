@@ -42,7 +42,7 @@ Two more parties are outside KBL and can still steer it:
 ## Trust boundaries
 
 1. **Agent to tracker.** The bearer token names the caller
-   (`tracker/src/http.rs:139`). The name and role on a record come from the
+   (`tracker/src/http.rs:144`). The name and role on a record come from the
    token, never from the body (`tracker/src/tracker.rs:958`). The attempt
    number comes from the hold, never from the body
    (`tracker/src/tracker/tools.rs:647`, `tracker/src/tracker.rs:778`).
@@ -79,7 +79,7 @@ Every route but `/healthz` needs a bearer token. A wrong kind of token gets
 
 ### Agent routes
 
-All of them need an agent token (`tracker/src/http.rs:187`).
+All of them need an agent token (`tracker/src/http.rs:202`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
@@ -101,12 +101,12 @@ All of them need an agent token (`tracker/src/http.rs:187`).
 | `/v1/work/step` | `command`, `exit_code`, `output` | Claim a command passed | Holder only (`core/src/work_fold.rs:1202`). Sizes (`tracker/src/tracker/tools.rs:520`). 500 per attempt (`core/src/work_fold.rs:1204`). A step is the agent's word. Check results come from ingest, never from steps |
 | `/v1/work/edit` | `file`, `hunk`, `decision` | Tie an edit to another attempt's decision | Holder only (`core/src/work_fold.rs:1215`). The decision is one of this attempt's (`core/src/work_fold.rs:1217`). Sizes (`tracker/src/tracker/tools.rs:541`). 500 per attempt (`core/src/work_fold.rs:1220`) |
 | `/v1/work/ask` | `text`, `options`, `default`, `cost_micros` | Flood Needs you; report no cost | Holder only (`core/src/work_fold.rs:1282`). At most 8 options of 200 bytes (`tracker/src/tracker/tools.rs:821`). 20 per attempt (`core/src/work_fold.rs:1285`). Cost: **None** (#155); the item total saturates (`core/src/work_fold.rs:1292`) |
-| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:704`) and the fold refuses it from an agent (`core/src/work_fold.rs:1776`). Must hold a question item under `item` (`core/src/work_fold.rs:1914`). Only the open question (`core/src/work_fold.rs:1156`). `chosen` is one of the options (`core/src/work_fold.rs:1159`). 10 per attempt (`core/src/work_fold.rs:1172`). The resume item obeys the depth limit (`core/src/work_fold.rs:1767`) |
+| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:719`) and the fold refuses it from an agent (`core/src/work_fold.rs:1776`). Must hold a question item under `item` (`core/src/work_fold.rs:1914`). Only the open question (`core/src/work_fold.rs:1156`). `chosen` is one of the options (`core/src/work_fold.rs:1159`). 10 per attempt (`core/src/work_fold.rs:1172`). The resume item obeys the depth limit (`core/src/work_fold.rs:1767`) |
 | `/v1/work/rules/read` | `item` | Read rules of work it does not hold | Holder only (`tracker/src/tracker/tools.rs:412`) |
 
 ### Person routes
 
-All of them need a person token (`tracker/src/http.rs:196`). An agent or
+All of them need a person token (`tracker/src/http.rs:211`). An agent or
 ingest token gets 403. The fold then checks the record, and sizes are checked
 in `check_sizes` (`tracker/src/tracker/tools.rs:906`).
 
@@ -139,18 +139,18 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 Every route above acts in one team, the team of the token, and only reaches
 that team's tracker: its fold, its lease and its Felix connections
 (`tracker/src/teams.rs`). The team comes from the token's entry, never from the
-body (`tracker/src/http.rs:139`). Today there is one team, `KBL_NAMESPACE`,
+body (`tracker/src/http.rs:144`). Today there is one team, `KBL_NAMESPACE`,
 and the token file's callers belong to it.
 
 | Route | Fields the caller controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:110`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:149`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
-| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:208`) |
-| `/v1/org/teams` | `team`, `display_name` on `POST` | Create a team, or adopt a namespace that already holds another team's data; list the org's teams | Org admin only: a person of the token file. An agent or ingest token gets `403` with `org_admin_required`, before the body is read (`tracker/src/http/org.rs`). The name follows the key rule and is not `kbl`. A name already on `org.events` writes nothing and answers `created: false`. The tracker only serves the namespace: Felix grants on it come from `kbl-tool team create`, run with the org admin's own Felix sign-in. Without `KBL_ORG_NAMESPACE` it answers `404` with `teams_off` |
+| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:115`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:154`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
+| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:223`) |
+| `/v1/org/teams` | `team`, `display_name` on `POST` | Create a team, or adopt a namespace that already holds another team's data; list the org's teams | Org admin only: a person of the token file. An agent or ingest token gets `403` with `org_admin_required` before the body is read, and the body is capped at 4 KiB (`tracker/src/http/org.rs`). The name follows the key rule and is not `kbl`. A name already on `org.events` writes nothing and answers `created: false`. The tracker only serves the namespace: Felix grants on it come from `kbl-tool team create`, run with the org admin's own Felix sign-in. Without `KBL_ORG_NAMESPACE` it answers `404` with `teams_off` |
 
 A person token in more than one team gets `400` with `team_required` on a path
 without a team. A team takes at most `KBL_TEAM_INFLIGHT` calls at once and
-answers `503` with `team_busy` over that (`tracker/src/teams.rs:61`), so one
+answers `503` with `team_busy` over that (`tracker/src/teams.rs:98`), so one
 team's load does not hold the others' calls; waiting `work_next` calls have
 their own pool, so they cannot starve a holder's `extend`. A slot is taken
 before the body is read, so a slow upload holds one of its own team's slots

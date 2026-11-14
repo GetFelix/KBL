@@ -193,6 +193,9 @@ pub(crate) async fn team_create(target: Target, args: CreateTeamArgs) -> Result<
         .post(url)
         .bearer_auth(&args.tracker_token)
         .json(&request)
+        // Starting a team can wait out another tracker's lease (twice its
+        // time to live) on top of connecting to Felix.
+        .timeout(std::time::Duration::from_secs(120))
         .send()
         .await
         .context("could not reach the tracker")?;

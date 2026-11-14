@@ -19,6 +19,19 @@ use crate::felix::Broker;
 /// revocations would stop taking effect.
 pub(crate) const ORG_LEASE_GRACE: Duration = Duration::from_secs(60);
 
+/// The longest one Felix call may take. A write must land while the lease
+/// still stands, so the lease must outlast it plus some clock skew.
+const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
+const LEASE_SKEW: Duration = Duration::from_secs(1);
+
+/// A Felix call with a time limit, so a hung call cannot outlast the lease or
+/// hold the org lock for good.
+async fn timed<T>(call: impl Future<Output = Result<T>>) -> Result<T> {
+    tokio::time::timeout(FELIX_TIMEOUT, call)
+        .await
+        .map_err(|_| anyhow::anyhow!("Felix did not answer in time"))?
+}
+
 /// Why an org change was not made.
 #[derive(Debug)]
 pub(crate) enum OrgError {
@@ -103,7 +116,7 @@ impl<B: Broker> Org<B> {
         record: OrgRecord,
     ) -> Result<(Applied, Option<u64>), OrgError> {
         let mut core = self.core.lock().await;
-        let margin = self.lease_ttl / 3;
+        let margin = (FELIX_TIMEOUT + LEASE_SKEW).min(self.lease_ttl / 2);
         if !core
             .lease
             .as_ref()
@@ -125,7 +138,7 @@ impl<B: Broker> Org<B> {
             Ok(Applied::Changed) => {}
         }
         let guess = core.at.map_or(0, |a| a + 1);
-        match self.broker.publish(ORG_EVENTS, logged.encode()).await {
+        match timed(self.broker.publish(ORG_EVENTS, logged.encode())).await {
             Ok(offset) => {
                 // Checked above against the same state, so this applies.
                 let _ = core.state.apply(&logged);
@@ -163,10 +176,7 @@ impl<B: Broker> Org<B> {
         let Some(version) = expect else {
             // Taking it back means another tracker may have written meanwhile.
             return match self.take_lease().await {
-                Ok(true) => {
-                    self.core.lock().await.stale = true;
-                    true
-                }
+                Ok(true) => true,
                 Ok(false) => false,
                 Err(e) => {
                     eprintln!("kbl-tracker: could not take the org writer lease: {e:#}");
@@ -175,14 +185,12 @@ impl<B: Broker> Org<B> {
             };
         };
         let started = Instant::now();
-        let put = self
-            .broker
-            .lease_put(
-                self.holder.as_bytes().to_vec(),
-                self.lease_ttl,
-                Some(version),
-            )
-            .await;
+        let put = timed(self.broker.lease_put(
+            self.holder.as_bytes().to_vec(),
+            self.lease_ttl,
+            Some(version),
+        ))
+        .await;
         let mut core = self.core.lock().await;
         match put {
             Ok(Some(version)) => {
@@ -209,16 +217,22 @@ impl<B: Broker> Org<B> {
 
     async fn take_lease(&self) -> Result<bool> {
         let started = Instant::now();
-        let put = self
-            .broker
-            .lease_put(self.holder.as_bytes().to_vec(), self.lease_ttl, None)
-            .await?;
+        let put = timed(self.broker.lease_put(
+            self.holder.as_bytes().to_vec(),
+            self.lease_ttl,
+            None,
+        ))
+        .await?;
         Ok(match put {
             Some(version) => {
-                self.core.lock().await.lease = Some(Lease {
+                // Stale under the same lock: another tracker may have written
+                // while this one did not hold the lease.
+                let mut core = self.core.lock().await;
+                core.lease = Some(Lease {
                     version,
                     valid_until: started + self.lease_ttl,
                 });
+                core.stale = true;
                 true
             }
             None => false,
@@ -238,7 +252,7 @@ impl<B: Broker> Org<B> {
     async fn read(&self) -> Result<(OrgState, Option<u64>)> {
         let mut state = OrgState::default();
         let mut at = None;
-        for (offset, payload) in self.broker.read_from(ORG_EVENTS, 0).await? {
+        for (offset, payload) in timed(self.broker.read_from(ORG_EVENTS, 0)).await? {
             at = Some(offset);
             match read(&payload) {
                 Ok(logged) => {

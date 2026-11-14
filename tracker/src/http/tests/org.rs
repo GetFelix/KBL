@@ -121,6 +121,12 @@ async fn only_an_org_admin_creates_a_team_and_a_retry_creates_nothing() {
             "{bad}"
         );
     }
+    let big = json!({ "team": "big", "display_name": "x".repeat(8 * 1024) });
+    let (status, body) = call(&o.app, "/v1/org/teams", Some("tok-ops"), big).await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::BAD_REQUEST, Some("invalid"))
+    );
     // Only the adoption is on the log.
     assert_eq!(
         o.org.published().len(),

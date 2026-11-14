@@ -5,7 +5,8 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::State;
+use axum::body::to_bytes;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use kbl_core::names::Key;
@@ -18,6 +19,9 @@ use super::{App, bearer, denied, refused};
 use crate::felix::Broker;
 use crate::org::OrgError;
 use crate::teams::OrgSide;
+
+/// A team name and a display name fit in far less.
+const MAX_BODY: usize = 4 * 1024;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,14 +60,18 @@ pub(super) async fn list_teams<B: Broker>(
 /// is not served yet, so a create that stopped part way finishes on a retry.
 pub(super) async fn create_team<B: Broker>(
     State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    body: Result<Json<CreateBody>, axum::extract::rejection::JsonRejection>,
+    req: Request,
 ) -> Response {
-    let (org, by) = match org_admin(&app, &headers) {
+    // The caller is checked before the body is read, and the body is small.
+    let (org, by) = match org_admin(&app, req.headers()) {
         Ok(found) => found,
         Err(res) => return *res,
     };
-    let Ok(Json(body)) = body else {
+    let body = match to_bytes(req.into_body(), MAX_BODY).await {
+        Ok(bytes) => serde_json::from_slice::<CreateBody>(&bytes).ok(),
+        Err(_) => None,
+    };
+    let Some(body) = body else {
         return refused(StatusCode::BAD_REQUEST, "the body is not a team", "invalid");
     };
     let Ok(team) = TeamName::new(body.team) else {

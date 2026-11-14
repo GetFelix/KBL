@@ -90,7 +90,11 @@ const posted = await api("POST", "/v1/teams/alpha/work/records", "tok-ops", {
   record: { kind: "imported", item, source: "gh", upstream_id: item, title: "t" },
 });
 check(posted.status === 200, `a person records work in alpha ${JSON.stringify(posted.body)}`);
-const log = (team) => run(TOOL, ["work", "log"], { KBL_NAMESPACE: team }).stdout;
+const log = (team) => {
+  const read = run(TOOL, ["work", "log"], { KBL_NAMESPACE: team });
+  if (read.status !== 0) throw new Error(`could not read ${team}'s log: ${read.stderr}`);
+  return read.stdout;
+};
 check(log("alpha").includes(item), "alpha's log has the item");
 check(!log("beta").includes(item), "beta's log does not");
 const next = await api("POST", "/v1/teams/alpha/work/next", "tok-w1", {});
@@ -115,6 +119,10 @@ async function rawRead(token, team) {
   }
   return result;
 }
+// Beta's log must be readable by a token allowed to read it, so each refusal
+// below is about the grant and not about a stream that is not open yet.
+const betaReader = await exchange("agents-admin", { audience: "felix-broker", resources: ["namespace:agents/beta"] });
+check((await rawRead(betaReader, "beta")).status === 0, "a token narrowed to beta reads beta");
 const alice = await exchange("alice", { audience: "felix-broker" });
 check((await rawRead(alice, "alpha")).stdout.includes(item), "alice reads alpha's log straight from Felix");
 check(raw(alice, "read", "beta", "work.events").status !== 0, "alice cannot read beta's log");
