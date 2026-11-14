@@ -36,15 +36,15 @@ impl NewRun {
     }
 
     pub(crate) fn started(&self, at_ms: u64) -> Result<Logged, InvalidName> {
-        Ok(Logged {
+        Ok(Logged::new(
             at_ms,
-            by: Key::new(WRITER)?,
-            record: Record::RunStarted {
+            Key::new(WRITER)?,
+            Record::RunStarted {
                 goal: self.goal.clone(),
                 budget_micros: self.budget_micros,
                 agents: self.agents()?,
             },
-        })
+        ))
     }
 
     pub(crate) fn resources(&self) -> Resources {

@@ -15,7 +15,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, Key, Resources, TaskId, WORKERS_GROUP};
 use kbl_core::record::{Logged, Record};
 use kbl_core::stored::TaskResult;
-use kbl_core::task::Task;
+use kbl_core::task::{self, Task, TaskReadError};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
@@ -131,13 +131,12 @@ impl<B: Backend> Tasks<B> {
             None => None,
         };
         let task = Task {
-            id: id.clone(),
-            parent: parent.clone(),
-            title: post.title.clone(),
             body,
             lease,
             deadline_ms: post.deadline_ms,
-        };
+            ..Task::new(id.clone(), parent.clone(), post.title.clone())
+        }
+        .stamped();
         let stream = self.0.resources.tasks();
         let offset = self
             .checked(
@@ -200,8 +199,23 @@ impl<B: Backend> Tasks<B> {
             let Some(record) = polled else {
                 return Ok(json!({ "claimed": false }).to_string());
             };
-            let task = match Task::decode(&record.payload) {
+            let task = match task::read(&record.payload) {
                 Ok(task) => task,
+                // Not dead-lettered: a newer worker can run it. Handing it
+                // back still uses up one of its deliveries.
+                Err(e @ TaskReadError::Newer { .. }) => {
+                    let error = format!("the task at offset {}: {e}", record.offset);
+                    self.refuse("task_read", &stream, None, &anyhow::anyhow!("{error}"))
+                        .await;
+                    self.checked(
+                        "group_nack",
+                        &stream,
+                        None,
+                        self.0.backend.nack(&stream, WORKERS_GROUP, &record),
+                    )
+                    .await?;
+                    return Err(format!("{error}. It was handed back for a newer worker"));
+                }
                 Err(e) => {
                     self.dead_letter(record.offset).await?;
                     return Err(format!(
@@ -562,11 +576,11 @@ impl<B: Backend> Tasks<B> {
     }
 
     async fn log(&self, record: Record) {
-        let logged = Logged {
-            at_ms: now_ms(),
-            by: Key::new(self.0.agent.as_str()).expect("an agent name is a key"),
+        let logged = Logged::new(
+            now_ms(),
+            Key::new(self.0.agent.as_str()).expect("an agent name is a key"),
             record,
-        };
+        );
         let stream = self.0.resources.log();
         if let Err(e) = self.0.backend.publish(&stream, logged.encode()).await {
             eprintln!("kbl-mcp: could not write to the run log: {e:#}");
