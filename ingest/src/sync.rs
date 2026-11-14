@@ -407,12 +407,20 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         let still_open = p.roots.get(&key).is_some_and(|r| !r.closed);
         if still_open {
-            let in_rule = self
-                .settings
-                .rules
-                .iter()
-                .find(|r| r.name == t.rule)
-                .is_some_and(|r| r.filter(issue));
+            let rules = &self.settings.rules;
+            let in_rule = match rules.iter().find(|r| r.name == t.rule) {
+                Some(r) => r.filter(issue),
+                // A root rebuilt after a prune while no rule took it, or one
+                // whose rule was renamed or removed: the rule that takes the
+                // issue now is its rule.
+                None => match first_match(rules, issue) {
+                    Some(r) => {
+                        t.rule.clone_from(&r.name);
+                        true
+                    }
+                    None => false,
+                },
+            };
             if !in_rule {
                 if t.in_scope {
                     self.write(&WorkRecord::LeftScope {
@@ -422,7 +430,16 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     t.in_scope = false;
                 }
             } else {
-                t.in_scope = true;
+                // Until the log is raised to the record's format the tracker
+                // refuses it, so the item stays in Needs you and this is
+                // tried again on the next change or reconcile.
+                if !t.in_scope {
+                    t.in_scope = self
+                        .write(&WorkRecord::ReturnedToScope {
+                            item: t.item.clone(),
+                        })
+                        .await?;
+                }
                 let fp = fingerprint(issue);
                 if fp != t.fingerprint {
                     self.write(&WorkRecord::Updated {
@@ -793,15 +810,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 
     /// Appends a record. A refusal that says it is already there is fine; any
     /// other refusal is logged, since the next poll will find the same thing.
-    async fn write(&self, record: &WorkRecord) -> Result<(), SourceError> {
+    /// Appends a record and says whether the log has it. A refusal is
+    /// printed, not returned, so one bad record does not stop the poll.
+    async fn write(&self, record: &WorkRecord) -> Result<bool, SourceError> {
         match self.tracker.append(record).await? {
-            Appended::Written => {}
-            Appended::Refused(why) if why == "duplicate" => {}
+            Appended::Written => Ok(true),
+            Appended::Refused(why) if why == "duplicate" => Ok(true),
             Appended::Refused(why) => {
                 eprintln!("kbl-ingest: a {} record was refused: {why}", record.kind());
+                Ok(false)
             }
         }
-        Ok(())
     }
 
     async fn context(&self, item: &ItemId, entry: &str, text: String) -> Result<(), SourceError> {
@@ -810,7 +829,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             entry: Key::new(entry).map_err(anyhow::Error::from)?,
             text: Content::Text(text),
         })
-        .await
+        .await?;
+        Ok(())
     }
 }
 

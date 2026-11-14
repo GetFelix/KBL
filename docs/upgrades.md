@@ -28,8 +28,10 @@ Upgrade in this order. No work is lost at any step.
    ```
 
    Features that need the new format are refused with `format` until then.
-   Everything else works without it. Today there is only format 1, so
-   there is nothing to raise yet and the tracker refuses the record.
+   Everything else works without it. With [teams](design.md#teams) each team
+   has its own log, so raise each one, at
+   `$TRACKER/v1/teams/<team>/work/records`. The formats so far are under
+   [Formats](#formats).
 
 You may skip releases: any older build can be upgraded to any newer one.
 
@@ -65,7 +67,14 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 1.
+is 2.
+
+### Formats
+
+| Format | Adds | What waits for the raise |
+|---|---|---|
+| 1 | Every record written before formats existed | Nothing |
+| 2 | `returned_to_scope`: an issue that matches its intake rule again leaves Needs you | Until the raise, an item whose issue comes back into scope stays in Needs you, as it did before. Ingest writes the record on its first poll or reconcile after the raise |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -142,6 +151,10 @@ tracker does not have yet.
   existed and checks that they are format 1, are written back without `v`,
   and fold to the same state with or without `"v":1`. The stored states in `wasm/golden`
   did not change when formats were added.
+- **Each later format.** `core/tests/work_format_2.jsonl` raises a log to
+  format 2 and uses it, including a format 2 record before the raise, which
+  the fold refuses. Its state is pinned in `wasm/golden/format_2.state.json`
+  and folded by the core, the WebAssembly build and the page's tests.
 - **The replay corpus** ([#117](https://github.com/GetFelix/KBL/issues/117))
   will keep a log from every release with its folded state. Each record in a
   stored log carries the format its release wrote, so the corpus pins every
@@ -150,9 +163,10 @@ tracker does not have yet.
 - **Old and new builds on one log.** `dev/check-upgrade.mjs` runs the previous
   tracker build and the new one in turn over the same `work.events`, forward,
   back and forward again, with agents on the previous `kbl-mcp`. Claims
-  survive each switch and each item is claimed and done once. Both builds
-  write format 1 only, so this run does not show a reader stopping at a newer
-  format; the unit tests of `core`, the tracker and the page do. "Previous" is
+  survive each switch and each item is claimed and done once. The run never
+  raises the format, so both builds write format 1 only and this run does not
+  show a reader stopping at a newer format; the unit tests of `core`, the
+  tracker and the page do. "Previous" is
   the commit a change is based on until KBL has releases; then it is the
   last release.
 

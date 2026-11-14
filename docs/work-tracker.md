@@ -171,7 +171,7 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 | `POST /v1/work/release` `{item, reason, cost_micros}` | agent | Writes `released`, then hands the delivery back |
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
-| `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
+| `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed and whether upstream sync (not a person) closed it, and its pull request |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
@@ -399,10 +399,19 @@ What it does with GitHub:
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 
-An issue that leaves its rule and later returns stays in Needs you on purpose:
-`left_scope` has no matching record to clear it, so a person confirms the item
-still belongs. A record that clears it would be a new record kind and so a new
-format (see [upgrades](upgrades.md)).
+An issue that leaves its rule and later matches it again gets a
+`returned_to_scope` record, and the item leaves Needs you for the stage it had.
+A person can write the same record to keep an item whose issue no longer
+matches. `returned_to_scope` is the first record of format 2, so the tracker
+refuses it until a person raises the log to format 2 (see
+[upgrades](upgrades.md#upgrade)). Until then a returning item stays in Needs
+you, as before, and ingest writes the record on the first poll or reconcile
+after the raise.
+
+An issue is held to the rule that imported it. If that rule is gone from the
+config (renamed or removed), or the issue was imported again after ingest
+forgot it while no rule matched it, the first rule that matches the issue
+becomes its rule.
 
 ### Grants
 
@@ -885,6 +894,7 @@ matches two rules belongs to the first one listed.
 | Title, body or labels edited | An `updated` record. The item shows "changed upstream since triage". Triaging again is a person's action, so edits never create work |
 | A new comment | A `context` record credited to the upstream author. Agents see it on their next read |
 | No longer matches its rule (label removed, milestone moved) | `left_scope`. Withdrawn from Ready if nobody holds it. If an agent holds it, the attempt finishes or is released and the item then stops. Shown in Needs you |
+| Matches its rule again | `returned_to_scope`: out of Needs you and back to its stage. Needs a log at format 2 |
 | Closed as completed or fixed, or closed with no reason (issues closed before GitHub kept one) | `closed` with reason completed: the item is done and its dependents unblock |
 | Closed as not planned, duplicate or won't fix | `closed` with reason dropped: open children and attempts are cancelled, dependents go to Needs you ("dependency dropped"), and an agent's open pull request becomes a draft with a comment |
 | Reopened | Back to Triage as the same root, with its history and its remaining budget |

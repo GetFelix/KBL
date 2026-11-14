@@ -314,6 +314,110 @@ async fn a_label_removed_from_a_free_item_withdraws_it_from_ready() {
     );
 }
 
+fn raise_format(rig: &Rig) {
+    rig.tracker.person(WorkRecord::FormatRaised { to: 2 });
+}
+
+#[tokio::test]
+async fn an_issue_that_returns_to_its_rule_leaves_needs_you() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let item = rig.root(UP);
+
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::LeftScope)
+    );
+
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    let s = rig.tracker.state();
+    assert_eq!(s.needs_you(&item), None);
+    assert_eq!(s.stage(&item), Some(Stage::Ready));
+
+    // It can leave again.
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T14:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("left_scope"), 2);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::NeedsYou));
+}
+
+#[tokio::test]
+async fn a_return_before_the_format_is_raised_is_written_after_the_raise() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+
+    // The log is still at the first format: the tracker refuses the record
+    // and the item waits in Needs you, as it did before the record existed.
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 0);
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::LeftScope)
+    );
+    assert!(!rig.tracker.saved_state().items[UP].in_scope);
+
+    raise_format(&rig);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Ready));
+    assert!(rig.tracker.saved_state().items[UP].in_scope);
+}
+
+#[tokio::test]
+async fn a_pruned_issue_rebuilt_outside_every_rule_takes_the_rule_that_matches_it_later() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let item = rig.root(UP);
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.saved_state().items.is_empty());
+
+    // Reopened without the label: no rule takes it, so it leaves scope.
+    let mut open = issue(812, |v| labels(v, &["p1"]));
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("reopened"), 1);
+    assert_eq!(rig.tracker.count("left_scope"), 1);
+
+    // The label comes back: the rule that matches is now its rule.
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T14:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    assert_eq!(rig.tracker.saved_state().items[UP].rule, "agent-ok");
+    assert_eq!(rig.tracker.state().needs_you(&item), None);
+}
+
 #[tokio::test]
 async fn closed_as_not_planned_drops_the_item_and_drafts_the_agents_pull_request() {
     let rig = rig();

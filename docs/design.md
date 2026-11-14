@@ -469,7 +469,8 @@ against the other team's fold and writes what is missing. The waiting team's
 fold never reads another log, so each team's log still replays on its own.
 
 The foreign link and `prerequisite_settled` are new on `work.events`, so they
-raise the format to 2. A log with no cross-team prerequisite stays format 1.
+need a new format. A log with no cross-team prerequisite stays at the format
+it had.
 
 A cross-team proposal counts toward the filing agent's pending-proposal caps,
 and the receiving team can set its own cap per granting team.

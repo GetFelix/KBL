@@ -315,6 +315,7 @@ pub struct Item {
     /// The upstream issue changed after the last triage answer.
     pub changed_upstream: bool,
     /// The upstream issue no longer matches the rule that admitted it.
+    /// Cleared by `returned_to_scope` or a reopen.
     pub left_scope: bool,
     pub accepted: bool,
     pub tier: Option<u8>,
@@ -1570,6 +1571,9 @@ impl State {
             }
             WorkRecord::LeftScope { item } => {
                 self.upstream_sync(item, rec)?.left_scope = true;
+            }
+            WorkRecord::ReturnedToScope { item } => {
+                self.upstream_sync(item, rec)?.left_scope = false;
             }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {

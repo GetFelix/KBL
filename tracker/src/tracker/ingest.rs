@@ -25,6 +25,7 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::Linked { .. }
         | WorkRecord::Updated { .. }
         | WorkRecord::LeftScope { .. }
+        | WorkRecord::ReturnedToScope { .. }
         | WorkRecord::PrStatus { .. }
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::Reopened { .. } => true,
@@ -46,6 +47,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::Context { item, .. }
         | WorkRecord::Updated { item, .. }
         | WorkRecord::LeftScope { item }
+        | WorkRecord::ReturnedToScope { item }
         | WorkRecord::PrStatus { item, .. }
         | WorkRecord::Reopened { item }
         | WorkRecord::Closed { item, .. } => vec![item],
