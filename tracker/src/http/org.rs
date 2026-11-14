@@ -120,22 +120,22 @@ fn org_admin<'a, B: Broker>(
             "teams_off",
         )));
     };
-    let Some(token) = bearer(headers) else {
-        return Err(denied((
+    let unknown = || {
+        Box::new(denied((
             StatusCode::UNAUTHORIZED,
             "unknown or missing token",
-        )));
+        )))
+    };
+    let Some(token) = bearer(headers) else {
+        return Err(unknown());
     };
     if let Some(person) = app.teams.org_admin(token) {
         return Ok((org, person));
     }
     if app.teams.who(token).is_empty() {
-        Err(denied((
-            StatusCode::UNAUTHORIZED,
-            "unknown or missing token",
-        )))
+        Err(unknown())
     } else {
-        Err(refused(
+        Err(Box::new(refused(
             StatusCode::FORBIDDEN,
             "this call is for an org admin",
             "org_admin_required",

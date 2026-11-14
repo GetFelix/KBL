@@ -2,7 +2,7 @@
 // created with no tracker restart, a team's records and Felix grants stay in
 // that team, and teams survive a restart because they come from org.events.
 //
-//   cargo build -p kbl-tool -p kbl-tracker --example raw_felix && node dev/check-teams.mjs
+//   cargo build -p kbl-tool -p kbl-tracker && cargo build -p kbl-tool --example raw_felix && node dev/check-teams.mjs
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { check, giveUpAfter, killAll, sleep, startTracker, TRACKER_URL } from "./lib/stack.mjs";

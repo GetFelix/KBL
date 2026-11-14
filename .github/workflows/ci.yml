@@ -118,7 +118,7 @@ jobs:
         run: node dev/check-tracker-work.mjs
       - name: Create teams and keep them apart
         run: |
-          cargo build -p kbl-tool -p kbl-tracker --example raw_felix
+          cargo build -p kbl-tool --example raw_felix
           node dev/check-teams.mjs
       - name: Run review as work against Felix
         run: node dev/check-tracker-review.mjs
