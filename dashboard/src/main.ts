@@ -1,8 +1,8 @@
 // Connect to felix-gateway, fold work.events with the core crate as WebAssembly,
-// and list the items with their stage. Settings come from the query string:
+// and list the items with their stage and, for a blocked one, what holds it. Settings come from the query string:
 // ?gateway=ws://127.0.0.1:8787/ws&room=kbl&token=<ID token>&stream=events
 import init, { Folder } from './wasm/kbl_wasm.js';
-import { items, type Fold } from './fold.ts';
+import { blocked, items, waitsOn, type Fold } from './fold.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 
@@ -10,10 +10,14 @@ const status = document.getElementById('status')!;
 const list = document.getElementById('items')!;
 
 function render(fold: Fold) {
+  const waits = new Map(blocked(fold).map((b) => [b.id, waitsOn(b)]));
   list.replaceChildren(
     ...items(fold).map((item) => {
       const li = document.createElement('li');
-      for (const [cls, text] of [['id', item.id], ['stage', item.stage.replaceAll('_', ' ')], ['title', item.title]]) {
+      const cells = [['id', item.id], ['stage', item.stage.replaceAll('_', ' ')], ['title', item.title]];
+      const on = waits.get(item.id);
+      if (on) cells.push(['waits', `waits on ${on}`]);
+      for (const [cls, text] of cells) {
         const span = document.createElement('span');
         span.className = cls;
         span.textContent = text;
@@ -46,6 +50,7 @@ async function main() {
     at: () => fold.at(),
     stateJson: () => fold.state_json(),
     itemsJson: () => fold.items_json(),
+    blockedJson: () => fold.blocked_json(),
   };
   // Redraw once per frame however many records arrive.
   let queued = false;

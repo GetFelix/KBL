@@ -3329,3 +3329,74 @@ fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
     });
     assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(0));
 }
+
+#[test]
+fn a_link_blocks_across_repos_and_sources_and_names_the_other_repo() {
+    let mut l = Log::default();
+    for (item, source, up) in [
+        ("blk", "github", "GetFelix/felix-blocks#40"),
+        ("gw", "github", "GetFelix/felix-gateway#31"),
+        ("ado", "ado", "org/project#4410"),
+    ] {
+        l.tracker(WorkRecord::Imported {
+            item: id(item),
+            source: source.into(),
+            upstream_id: up.into(),
+            title: item.into(),
+        });
+        l.person(WorkRecord::Accepted {
+            item: id(item),
+            tier: None,
+        });
+    }
+    for to in ["gw", "ado"] {
+        l.person(WorkRecord::Linked {
+            item: id("blk"),
+            to: id(to),
+        });
+    }
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.stage(&id("blk")), Some(Stage::Blocked));
+    assert_eq!(s.blockers(&id("blk")), [&id("ado"), &id("gw")]);
+    let repo = |i: &str| {
+        s.repo_of(&id(i))
+            .map(|t| (t.source.as_str(), t.repo.as_str()))
+    };
+    assert_eq!(repo("gw"), Some(("github", "GetFelix/felix-gateway")));
+    assert_eq!(repo("ado"), Some(("ado", "org/project")));
+    assert!(s.blockers(&id("gw")).is_empty());
+
+    l.person(WorkRecord::Closed {
+        item: id("gw"),
+        why: CloseWhy::Merged,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.blockers(&id("blk")), [&id("ado")]);
+    l.tracker(WorkRecord::Closed {
+        item: id("ado"),
+        why: CloseWhy::Completed,
+    });
+    let s = fold(&l.0);
+    assert!(s.blockers(&id("blk")).is_empty());
+    assert_eq!(s.stage(&id("blk")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_childs_repo_is_its_roots() {
+    let mut l = Log::default();
+    l.tracker(WorkRecord::Imported {
+        item: id("r1"),
+        source: "github".into(),
+        upstream_id: "GetFelix/felix#812".into(),
+        title: "r1".into(),
+    });
+    l.person(proposed("c1", Some("r1"), "k1", WorkKind::Split));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    let t = s.repo_of(&id("c1")).unwrap();
+    assert_eq!(
+        (t.source.as_str(), t.repo.as_str()),
+        ("github", "GetFelix/felix")
+    );
+}

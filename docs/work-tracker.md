@@ -486,7 +486,8 @@ What it does with GitHub:
   then closes the root as merged (`closed` with reason merged, which the
   ingest token may write only for a merged status of the item's own request).
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
-  are imported.
+  are imported, in the same repo or another one the rules import. A link to
+  an issue no rule imports waits until one does.
 
 An issue that leaves its rule and later matches it again gets a
 `returned_to_scope` record, and the item leaves Needs you for the stage it had.
@@ -621,6 +622,21 @@ Blocked, and becomes Ready the moment that dependency is done, because
 readiness is recomputed from the fold and never stored. A person splits by
 hand with the same records, which draw nothing from the budget. The parent
 cannot complete while a child is open.
+
+### Links across repos and sources
+
+A link joins any two items, whatever tree, repo or source each is in: a
+felix-blocks item can wait on a felix-gateway gap, or a GitHub issue on an
+Azure DevOps work item. People link items of different trees freely; an
+agent links across trees only through a prerequisite (below). The waiting
+item is Blocked until the other one is done, the same as inside one tree.
+
+Every item knows the repo its work lands in: an imported root from its
+upstream id, a prerequisite from its target, and any other item from its
+root. The Blocked view names each blocker with its own repo and source, so
+the board shows "waits on gw (github:GetFelix/felix-gateway)" on the
+felix-blocks card. The fold already holds all of this, so the view is
+derived and adds no record.
 
 ### Prerequisites in another repo
 

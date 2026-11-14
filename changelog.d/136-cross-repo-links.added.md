@@ -1,0 +1,1 @@
+A link holds an item back across repos and sources. The core fold names each blocker and the repo it lives in (`State::blockers`, `State::repo_of`), and the dashboard shows a blocked item's blockers, with the repo when it is a different one.

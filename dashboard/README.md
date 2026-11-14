@@ -2,7 +2,9 @@
 
 The KBL (Kanban By Log) dashboard in the browser. It reads `work.events` through
 [felix-gateway](https://github.com/GetFelix/felix-gateway), folds it with the `core` crate compiled to
-WebAssembly, and lists every item with its stage. The page is plain TypeScript built with Vite. The fold already
+WebAssembly, and lists every item with its stage. A blocked item also says what it waits on, with the
+blocker's repo when that is a different repo or source
+([links across repos](../docs/work-tracker.md#links-across-repos-and-sources)). The page is plain TypeScript built with Vite. The fold already
 holds the state, so there is no UI framework and no second state layer.
 
 This is the data path only. The page is a list; the real views come from the UX work in
@@ -83,7 +85,7 @@ in the status line.
 
 - `src/follow.ts`: the read-then-subscribe join, written against a small `Transport` so tests can fake the gateway.
 - `src/gateway.ts`: the WebSocket transport and the `join` handshake.
-- `src/fold.ts`: the shape of the WebAssembly fold.
+- `src/fold.ts`: the shape of the WebAssembly fold, and how a blocked row names its blockers.
 - `../wasm`: the Rust crate that wraps `core`'s fold for the page.
 - `../wasm/golden`: logs and the state the native fold gives for each. The wasm fold must match them in
   `test/fold.test.ts`, and the native one in `wasm/tests/golden.rs`.

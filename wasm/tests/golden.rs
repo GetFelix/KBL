@@ -134,3 +134,35 @@ fn a_record_of_a_newer_format_stops_the_fold() {
     assert_eq!(f.state_json(), before);
     assert_eq!(f.at(), 0.0);
 }
+
+#[test]
+fn blocked_names_each_blocker_with_its_own_repo() {
+    let mut f = Folder::new();
+    let recs = [
+        r#"{"at_ms":1,"by":"ingest","actor":"tracker","kind":"imported","item":"blk","source":"github","upstream_id":"GetFelix/felix-blocks#40","title":"place blocks"}"#,
+        r#"{"at_ms":2,"by":"ingest","actor":"tracker","kind":"imported","item":"gw","source":"github","upstream_id":"GetFelix/felix-gateway#31","title":"compare and set"}"#,
+        r#"{"at_ms":3,"by":"gabriel","actor":"person","kind":"accepted","item":"blk"}"#,
+        r#"{"at_ms":4,"by":"gabriel","actor":"person","kind":"linked","item":"blk","to":"gw"}"#,
+    ];
+    for (i, r) in recs.iter().enumerate() {
+        assert!(f.apply(i as f64, r.as_bytes()), "{i}");
+    }
+    let blocked: serde_json::Value = serde_json::from_str(&f.blocked_json()).unwrap();
+    assert_eq!(
+        blocked,
+        serde_json::json!([{
+            "id": "blk",
+            "title": "place blocks",
+            "repo": { "source": "github", "repo": "GetFelix/felix-blocks" },
+            "waits_on": [{
+                "id": "gw",
+                "title": "compare and set",
+                "repo": { "source": "github", "repo": "GetFelix/felix-gateway" },
+                "stage": "triage",
+            }],
+        }])
+    );
+    let done = r#"{"at_ms":5,"by":"gabriel","actor":"person","kind":"closed","item":"gw","why":"completed"}"#;
+    assert!(f.apply(4.0, done.as_bytes()));
+    assert_eq!(f.blocked_json(), "[]");
+}

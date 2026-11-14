@@ -72,7 +72,8 @@ Bugs come in as roots from GitHub, Azure DevOps or Jira, and from people. An ing
 id once and posts one triage item and one augment item for it. The agent that claims the triage item answers
 it with `work_triage` (a tier and why, a duplicate, dependencies, a split, or what is unclear), and a person accepts or edits that
 proposal; the dependencies and split are advice a person acts on. Work the item needs from another repo is
-different: the triaging agent posts it as a prerequisite, and the item waits on it before anyone builds. An item becomes claimable when its last
+different: the triaging agent posts it as a prerequisite, and the item waits on it before anyone builds. A dependency can sit in any repo or source,
+and the board names the repo of each item that holds a blocked one. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
 Each agent runs `kbl-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the

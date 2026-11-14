@@ -4,6 +4,7 @@
 //! it returns. It adds no rules of its own: the state is the same fold the
 //! tracker runs, so the two cannot disagree about an item's stage.
 
+use kbl_core::names::ItemId;
 use kbl_core::work::{ReadError, read};
 use kbl_core::work_fold::State;
 use serde_json::json;
@@ -73,5 +74,38 @@ impl Folder {
             .map(|i| json!({ "id": i.id, "title": i.title, "stage": self.state.stage(&i.id) }))
             .collect();
         serde_json::to_string(&items).expect("plain data serializes")
+    }
+
+    /// Every open item a link holds back, as `{id, title, repo, waits_on}`, in
+    /// id order. `waits_on` lists the items holding it, each with its own
+    /// `repo` and stage, so a blocker in another repo or source shows where it
+    /// lives. `repo` is `{source, repo}`, or null when the fold knows none.
+    pub fn blocked_json(&self) -> String {
+        let s = &self.state;
+        let blocker = |id: &ItemId| {
+            json!({
+                "id": id,
+                "title": s.items.get(id).map(|i| i.title.as_str()),
+                "repo": s.repo_of(id),
+                "stage": s.stage(id),
+            })
+        };
+        let blocked: Vec<_> = s
+            .items
+            .values()
+            .filter(|i| i.closed.is_none())
+            .filter_map(|i| {
+                let by = s.blockers(&i.id);
+                (!by.is_empty()).then(|| {
+                    json!({
+                        "id": i.id,
+                        "title": i.title,
+                        "repo": s.repo_of(&i.id),
+                        "waits_on": by.into_iter().map(blocker).collect::<Vec<_>>(),
+                    })
+                })
+            })
+            .collect();
+        serde_json::to_string(&blocked).expect("plain data serializes")
     }
 }

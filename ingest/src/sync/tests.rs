@@ -1786,3 +1786,35 @@ async fn the_branch_the_agent_reported_is_not_a_link() {
     assert_eq!(rig.tracker.count("pr_status"), 0);
     assert_eq!(rig.tracker.state().items[&item].closed, None);
 }
+
+#[tokio::test]
+async fn blocked_by_an_issue_in_another_repo_blocks_across_them() {
+    let rig = rig();
+    let ingest = rig.ingest(two_repo_rules());
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T10:00:00Z")]);
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/other/issues?",
+        ok(json!([at(issue(7, |_| {}), "2026-11-10T10:01:00Z")])),
+    );
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/felix/issues/812/dependencies/blocked_by",
+        ok(json!([
+            { "number": 7, "repository_url": "https://api.github.com/repos/GetFelix/other" }
+        ])),
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    let (blk, gw) = (rig.root(UP), rig.root("GetFelix/other#7"));
+    assert_eq!(s.stage(&blk), Some(Stage::Blocked));
+    assert_eq!(s.blockers(&blk), [&gw]);
+    assert_eq!(
+        s.repo_of(&gw).map(|t| t.repo.as_str()),
+        Some("GetFelix/other")
+    );
+    assert_eq!(
+        s.repo_of(&blk).map(|t| t.repo.as_str()),
+        Some("GetFelix/felix")
+    );
+}
