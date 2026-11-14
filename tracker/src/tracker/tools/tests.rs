@@ -2440,6 +2440,36 @@ async fn triage_posts_a_prerequisite_before_any_build_claim() {
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
 }
 
+/// From format 5 a merged ask on a link that waits for a release changes
+/// nothing, so the tracker answers it without writing a record.
+#[tokio::test]
+async fn a_merged_ask_after_a_released_one_writes_nothing_from_format_5() {
+    let (fake, t) = triaging("GetFelix/felix-gateway").await;
+    let (w1, tr) = (agent("w1"), item("a1-t"));
+    person(&t, WorkRecord::FormatRaised { to: 3 }).await;
+    let reply = t
+        .prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Released, 0)
+        .await
+        .unwrap();
+    let g = item(reply["prerequisite"].as_str().unwrap());
+    let before = fake.log().len();
+    let merged = || t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Merged, 0);
+    assert_eq!(why(merged().await), "invalid");
+    person(&t, WorkRecord::FormatRaised { to: 5 }).await;
+    let before = before + 1;
+    assert_eq!(merged().await.unwrap()["created"], false);
+    let existing = t.prerequisite(
+        &w1,
+        &tr,
+        key("cas-2"),
+        Prereq::Existing(g),
+        DoneWhen::Merged,
+        0,
+    );
+    assert_eq!(existing.await.unwrap()["created"], false);
+    assert_eq!(fake.log().len(), before);
+}
+
 #[tokio::test]
 async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
     let (fake, t) = triaging("GetFelix/felix").await;

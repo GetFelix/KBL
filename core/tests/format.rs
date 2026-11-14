@@ -4,8 +4,8 @@
 
 use kbl_core::codec::Codec;
 use kbl_core::work::{
-    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, ReadError, WorkLogged, WorkRecord,
-    read,
+    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, ReadError, WorkLogged,
+    WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -459,4 +459,207 @@ fn a_redo_of_a_red_item_waits_at_format_3() {
     assert!(s.items[&r1].hold.is_none());
     assert_eq!(s.rejections.len(), 2);
     assert!(s.rejections.iter().all(|r| r.why == Reject::NotReady));
+}
+
+/// A log that raises to the fifth format: an agent waits on the release of
+/// work that is already merged, and a later prerequisite on the same link asks
+/// only for the merge. Its folded state is pinned in
+/// `wasm/golden/format_5.state.json`.
+const FORMAT_5_LOG: &str = include_str!("work_format_5.jsonl");
+
+/// Format 5 adds no record: only the raise is stamped 5.
+#[test]
+fn the_fifth_format_is_five_and_adds_no_record() {
+    assert_eq!(FORMAT_V5, 5);
+    const { assert!(FORMAT >= FORMAT_V5) };
+    for (_, r) in entries(FORMAT_5_LOG) {
+        if r.record.kind() == "format_raised" {
+            assert_eq!(r.v, FORMAT_V5);
+        } else {
+            assert!(r.v < FORMAT_V5);
+        }
+        assert_eq!(r.record.format(), r.v);
+    }
+}
+
+/// Before the raise a merged item with no release is refused as `closed`;
+/// after it the same prerequisite folds and the item waits for the release.
+#[test]
+fn a_merged_item_with_no_release_is_a_prerequisite_from_format_5() {
+    let log = entries(FORMAT_5_LOG);
+    let r1 = kbl_core::names::ItemId::new("r1").unwrap();
+    let g1 = kbl_core::names::ItemId::new("g1").unwrap();
+    let before = fold(&log[..7]);
+    assert_eq!(
+        before.rejections,
+        vec![Rejection {
+            offset: 6,
+            why: Reject::Closed
+        }]
+    );
+    assert_eq!(before.stage(&r1), Some(Stage::Held));
+
+    let waiting = fold(&log[..9]);
+    assert_eq!(waiting.format(), FORMAT_V5);
+    assert_eq!(waiting.rejections.len(), 1);
+    assert!(waiting.release_edges.contains(&(r1.clone(), g1.clone())));
+    assert_eq!(waiting.stage(&r1), Some(Stage::Blocked));
+    let shipped = fold(&log[..10]);
+    assert_eq!(shipped.stage(&r1), Some(Stage::Ready));
+}
+
+/// A later prerequisite asking only for the merge keeps the earlier ask for
+/// the release, so r2 waits after g2 merges.
+#[test]
+fn a_later_merged_ask_keeps_the_release_ask_from_format_5() {
+    let s = fold(&entries(FORMAT_5_LOG));
+    let r2 = kbl_core::names::ItemId::new("r2").unwrap();
+    let g2 = kbl_core::names::ItemId::new("g2").unwrap();
+    assert_eq!(s.rejections.len(), 1);
+    assert!(s.release_edges.contains(&(r2.clone(), g2)));
+    assert_eq!(s.stage(&r2), Some(Stage::Blocked));
+}
+
+/// A raise to format 4 is not enough: the merged item is still refused and
+/// the later merged ask replaces the release ask.
+#[test]
+fn format_4_keeps_the_old_prerequisite_rules() {
+    let raise5 =
+        r#"{"v":5,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":5}"#;
+    let raise4 =
+        r#"{"v":4,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":4}"#;
+    assert!(FORMAT_5_LOG.contains(raise5));
+    let s = fold(&entries(&FORMAT_5_LOG.replace(raise5, raise4)));
+    assert_eq!(s.format(), FORMAT_V4);
+    let id = |s: &str| kbl_core::names::ItemId::new(s).unwrap();
+    assert_eq!(
+        s.rejections,
+        vec![
+            Rejection {
+                offset: 6,
+                why: Reject::Closed
+            },
+            Rejection {
+                offset: 8,
+                why: Reject::Closed
+            }
+        ]
+    );
+    assert!(s.release_edges.is_empty());
+    assert_eq!(s.stage(&id("r2")), Some(Stage::Ready));
+}
+
+/// The format 5 log with `more` appended, one record per line.
+fn format_5_with(more: &str) -> State {
+    fold(&entries(&format!("{FORMAT_5_LOG}{more}")))
+}
+
+fn id(s: &str) -> kbl_core::names::ItemId {
+    kbl_core::names::ItemId::new(s).unwrap()
+}
+
+/// Re-opening a prerequisite keeps every release wait: dropping it would turn
+/// a `released` ask into `merged` and free the waiter on unreleased work. The
+/// reopen clears the release, so the waiter waits for the next one. Other
+/// edges survive, and the rule is the same in a format 4 log.
+#[test]
+fn a_reopened_prerequisite_keeps_its_release_waits() {
+    let raise5 =
+        r#"{"v":5,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":5}"#;
+    let raise4 =
+        r#"{"v":4,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":4}"#;
+    // Up to the release ask on g2, while g2 is still open.
+    let head: String = FORMAT_5_LOG
+        .lines()
+        .take(17)
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let more = r#"{"at_ms":1300,"by":"gabriel","actor":"person","kind":"linked","item":"r2","to":"g1"}
+{"at_ms":1310,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"merged"}
+{"at_ms":1320,"by":"gabriel","actor":"person","kind":"reopened","item":"g2"}
+{"at_ms":1330,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1340,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"merged"}
+"#;
+    let shipped = r#"{"at_ms":1350,"by":"gabriel","actor":"person","kind":"shipped","item":"g2","release":"0.5.0"}
+"#;
+    for log in [head.clone(), head.replace(raise5, raise4)] {
+        let s = fold(&entries(&format!("{log}{more}")));
+        let (r2, g2, g1) = (id("r2"), id("g2"), id("g1"));
+        assert!(s.release_edges.contains(&(r2.clone(), g2.clone())));
+        assert!(s.edges.contains(&(r2.clone(), g1)), "{:?}", s.rejections);
+        assert_eq!(s.stage(&r2), Some(Stage::Blocked));
+        let s = fold(&entries(&format!("{log}{more}{shipped}")));
+        assert_ne!(s.stage(&r2), Some(Stage::Blocked));
+    }
+}
+
+/// Items for the format 5 refusal tests: r3 is held by w3, g3 dismissed, g4
+/// rejected, g5 merged, g6 completed.
+const FORMAT_5_MORE: &str = r#"{"at_ms":1300,"by":"gabriel","actor":"person","kind":"imported","item":"r3","source":"github","upstream_id":"GetFelix/felix-blocks#3","title":"undo"}
+{"at_ms":1301,"by":"gabriel","actor":"person","kind":"accepted","item":"r3","tier":1}
+{"at_ms":1302,"by":"gabriel","actor":"person","kind":"imported","item":"g3","source":"github","upstream_id":"GetFelix/felix-gateway#9","title":"dismissed"}
+{"at_ms":1303,"by":"gabriel","actor":"person","kind":"accepted","item":"g3","tier":1}
+{"at_ms":1304,"by":"gabriel","actor":"person","kind":"closed","item":"g3","why":"dismissed"}
+{"at_ms":1305,"by":"gabriel","actor":"person","kind":"imported","item":"g4","source":"github","upstream_id":"GetFelix/felix-gateway#10","title":"rejected"}
+{"at_ms":1306,"by":"gabriel","actor":"person","kind":"rejected","item":"g4"}
+{"at_ms":1307,"by":"gabriel","actor":"person","kind":"imported","item":"g5","source":"github","upstream_id":"GetFelix/felix-gateway#11","title":"merged"}
+{"at_ms":1308,"by":"gabriel","actor":"person","kind":"accepted","item":"g5","tier":1}
+{"at_ms":1309,"by":"gabriel","actor":"person","kind":"closed","item":"g5","why":"merged"}
+{"at_ms":1310,"by":"gabriel","actor":"person","kind":"imported","item":"g6","source":"github","upstream_id":"GetFelix/felix-gateway#12","title":"completed"}
+{"at_ms":1311,"by":"gabriel","actor":"person","kind":"accepted","item":"g6","tier":1}
+{"at_ms":1312,"by":"gabriel","actor":"person","kind":"closed","item":"g6","why":"completed"}
+{"at_ms":1313,"by":"w3","actor":"agent","kind":"claimed","item":"r3","attempt":1,"deadline_ms":1800000090000}
+"#;
+
+/// w3 asks on r3 to wait for `on` until `done_when`.
+fn ask_from_r3(at: u64, on: &str, done_when: &str) -> String {
+    format!(
+        r#"{{"at_ms":{at},"by":"w3","actor":"agent","kind":"prerequisite","item":"r3","attempt":1,"prerequisite":"{on}","key":"need-{on}","done_when":"{done_when}","cost_micros":0}}
+"#
+    )
+}
+
+/// Only finished, unreleased work is worth a release wait: a released,
+/// dismissed or rejected item is refused, and so is a `merged` ask on merged
+/// work.
+#[test]
+fn closed_prerequisites_are_still_refused_at_format_5() {
+    let base = FORMAT_5_LOG.lines().count() + FORMAT_5_MORE.lines().count();
+    for (on, done_when) in [
+        ("g1", "released"),
+        ("g3", "released"),
+        ("g4", "released"),
+        ("g5", "merged"),
+    ] {
+        let s = format_5_with(&format!(
+            "{FORMAT_5_MORE}{}",
+            ask_from_r3(1400, on, done_when)
+        ));
+        assert_eq!(
+            s.rejections.last(),
+            Some(&Rejection {
+                offset: base as u64,
+                why: Reject::Closed
+            }),
+            "{on} {done_when}"
+        );
+        assert_eq!(s.rejections.len(), 2, "{on} {done_when}");
+    }
+}
+
+/// Completed work waits for a release like merged work, until a person ships
+/// it or unlinks the waiter.
+#[test]
+fn a_completed_item_is_a_release_prerequisite_until_unlinked_at_format_5() {
+    let asked = format!("{FORMAT_5_MORE}{}", ask_from_r3(1400, "g6", "released"));
+    let s = format_5_with(&asked);
+    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
+    assert!(s.release_edges.contains(&(id("r3"), id("g6"))));
+    assert_eq!(s.stage(&id("r3")), Some(Stage::Blocked));
+
+    let unlinked = r#"{"at_ms":1410,"by":"gabriel","actor":"person","kind":"unlinked","item":"r3","to":"g6"}
+"#;
+    let s = format_5_with(&format!("{asked}{unlinked}"));
+    assert!(!s.release_edges.contains(&(id("r3"), id("g6"))));
+    assert_ne!(s.stage(&id("r3")), Some(Stage::Blocked));
 }

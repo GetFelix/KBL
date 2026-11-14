@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 4.
+is 5.
 
 ### Formats
 
@@ -77,6 +77,7 @@ is 4.
 | 2 | `returned_to_scope`: an issue that matches its intake rule again leaves Needs you | Until the raise, an item whose issue comes back into scope stays in Needs you, as it did before. Ingest writes the record at its next reconcile after the raise, or sooner if the issue changes |
 | 3 | `prerequisite` with `triage`: the agent triaging an item posts work another repo must do first, and the item waits on it before anyone builds | Until the raise, a prerequisite posted while holding a triage item is refused with `format`. Agents still find the work while building, as before |
 | 4 | No record or field: a redo on an item whose pull request has a failed check outranks the failed check while the redo waits or its attempt is not done, if the item's newest note is newer than the `pr_status` that reported the failure. The item is Ready, an agent gets the redo while the checks are still red, and a released or lapsed claim on it can be retried. If the checks fail again, the item waits until a person writes a new note on it; no new redo is needed | Until the raise, such a redo waits in Needs you until the checks turn green, and its claim is refused with `not_ready`. After it, an item with no note newer than the failure also waits, for a note or for green. The tracker asks for a newer note only when the checks are already red as the redo is written, so a redo made while they were running can have none |
+| 5 | No record or field: a `prerequisite` with `existing` and `done_when: released` may name an item closed as merged or completed that has no release yet, and the item waits for that release. A later prerequisite on the same link that asks only for the merge keeps the earlier ask for the release, and the tracker answers it without writing a record, so a retry with `merged` after `released` is no longer invalid. | Until the raise, such a prerequisite is refused with `closed`, so the agent posts a new one, a later `merged` ask on the link drops the wait for the release, a retry with `merged` after `released` is invalid |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -163,6 +164,10 @@ tracker does not have yet.
   of a redo on a red item is refused before the raise and folds after it, and
   a retry after that claim is released folds too. A second item's redo goes
   red again after it pushed: its retry is refused until a new note is written.
+  `core/tests/work_format_5.jsonl` does the same for format 5: a prerequisite
+  on a merged item with no release is refused before the raise and folds after
+  it, and a later `merged` ask on a link that waits for a release keeps it
+  waiting.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

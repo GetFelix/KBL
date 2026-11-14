@@ -709,7 +709,7 @@ An agent sometimes finds that its item needs a change in another repo first: a
 |---|---|
 | `target_source`, `target_repo`, `title`, `why`, `evidence` | A new proposal in that repo's Triage, with the reason and the steps that show it, records of the same tree as for a decision. `why` is shown with the proposal |
 | `existing` | Instead of the five above: an item that already exists, to avoid a duplicate |
-| `done_when` | `merged` (default) or `released`. `released` also waits for the release that carries the work |
+| `done_when` | `merged` (default) or `released`. `released` also waits for the release that carries the work. If the item already waits on the same prerequisite, the stricter ask stands: from format 5 the tracker answers a `merged` ask on a link that waits for a release without writing a record, so a retry with `merged` after `released` is not invalid |
 
 One record does all of it:
 
@@ -735,9 +735,16 @@ costs no release requests. The fold takes the record from people and ingest
 only, and only for an item that is done. The tracker takes ingest's only when
 the item's reported request has a merged status, and never over a release
 already recorded. A person's `shipped` replaces any release recorded before,
-ingest's included, and a reopen clears the release, since a new merge needs a
-new one. If a person rejects or dismisses the prerequisite, the held
-item goes to Needs you as "dependency dropped".
+ingest's included. An `existing` item that is already merged or completed but
+has no release yet can still be named with `done_when: released`; any other
+closed item is refused as `closed`. Completed covers work that is not a fix
+too, so a `released` wait on it holds until a `shipped` is recorded or a person
+removes the link. A person's `unlinked` drops a release wait. Re-opening the
+prerequisite keeps it and clears the release, so the waiter waits for the next
+one; dropping it would free the waiter on unreleased work. Accepting a finished
+prerequisite applies from [format 5](upgrades.md#formats). If a person rejects
+or dismisses the prerequisite, the held item goes to Needs you as "dependency
+dropped".
 
 This is the only cross-tree link an agent can make, and the tracker checks it
 before the fold sees the record. A new prerequisite must target a source and

@@ -12,7 +12,7 @@ use kbl_core::artifact::{ArtifactId, INLINE_LIMIT};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, DoneWhen, Evidence, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
+    Actor, DoneWhen, Evidence, FORMAT_V5, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
     MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO, MAX_VERDICT_WHY,
     MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity, Target, Then,
     Unclear, WorkKind, WorkRecord,
@@ -241,7 +241,7 @@ impl<B: Broker> Tracker<B> {
                         .state
                         .release_edges
                         .contains(&(waiter.clone(), prerequisite.clone()));
-                    if under.is_some() && released != (done_when == DoneWhen::Released) {
+                    if under.is_some() && !asks_no_more(&core, released, done_when) {
                         return Err(Error::Invalid(format!(
                             "`done_when` differs from the first call; name {prerequisite} with `existing` to change it"
                         )));
@@ -261,7 +261,7 @@ impl<B: Broker> Tracker<B> {
                     .state
                     .release_edges
                     .contains(&(waiter.clone(), prerequisite.clone()));
-                if linked && released == (done_when == DoneWhen::Released) {
+                if linked && asks_no_more(&core, released, done_when) {
                     return Ok(reply(false));
                 }
             }
@@ -1001,6 +1001,14 @@ fn visible(core: &Core, allowed: &BTreeSet<&Target>, item: &ItemId, other: &Item
             .and_then(|r| r.target.as_ref());
         own || target.is_some_and(|t| allowed.contains(t))
     })
+}
+
+/// Whether a prerequisite asking `done_when` on a link that waits for a release
+/// (`released`) or only a merge would change nothing. From format 5 the fold
+/// keeps the stricter ask.
+fn asks_no_more(core: &Core, released: bool, done_when: DoneWhen) -> bool {
+    let wants = done_when == DoneWhen::Released;
+    released == wants || (released && core.state.format() >= FORMAT_V5)
 }
 
 /// The attempt `agent` holds `item` on, from the log.

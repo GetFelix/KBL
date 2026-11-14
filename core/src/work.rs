@@ -31,8 +31,14 @@ pub const FORMAT_V3: u32 = 3;
 /// is handed out while the request is still red. It adds no record or field.
 pub const FORMAT_V4: u32 = 4;
 
+/// The format from which a prerequisite may name a finished item that has no
+/// release yet when it waits for the release, and a link that waits for a
+/// release keeps waiting for it when a later prerequisite asks only for the
+/// merge. It adds no record or field.
+pub const FORMAT_V5: u32 = 5;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V4;
+pub const FORMAT: u32 = FORMAT_V5;
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer
