@@ -303,8 +303,8 @@ dismissed stays closed when its issue is reopened. Whether a close was
 ingest's is read from the log (`GET /v1/ingest/roots`), not from saved state, so
 a poll that stopped between the close and its save does not lose it. The same
 goes for a reopen: an open root whose issue is closed stays open only when a
-person reopened it. When ingest reopened it and the issue closed again before
-a save landed, the next poll closes the root.
+person reopened it. When ingest imported or reopened it and the issue closed
+before a save landed, the next poll closes the root.
 
 Ingest's saved state keeps an entry for each open issue, each transferred
 issue, and each closed issue still waiting on its pull request. An issue that is closed

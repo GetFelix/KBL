@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::Context;
 use kbl_core::content::Content;
 use kbl_core::names::{ItemId, Key};
-use kbl_core::work::{CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord};
+use kbl_core::work::{Actor, CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord};
 use sha2::{Digest, Sha256};
 
 use crate::config::{Mode, Rule};
@@ -205,12 +205,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 Some(root) if !root.closed && issue.closed.is_some() => {
                     let rule = first_match(&self.settings.rules, issue).map_or("", |r| &r.name);
                     let mut t = tracked_as(&root.item, rule, issue);
-                    // Ingest reopened it and closed state was never saved: the
-                    // issue closed again since, so `follow` closes the root.
-                    if root.reopened_by_sync {
+                    // Only a person's reopen keeps the root open. Otherwise
+                    // ingest's last save was lost (after an import or its own
+                    // reopen) and the issue closed since, so `follow` closes it.
+                    if root.reopened_by != Some(Actor::Person) {
                         return self.follow(p, issue, t).await;
                     }
-                    // A person reopened the root of an issue that is still closed.
                     t.closed = issue.closed;
                     p.state.items.insert(key, t);
                     Ok(())
@@ -247,14 +247,14 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             self.context(&item, "issue", issue_text(issue)).await?;
             self.context(&item, "intake", intake_text(&rule, issue))
                 .await?;
-            if rule.mode == Mode::Admit && !root.closed {
+            // A reopened root is back in Triage for a person to accept again,
+            // and a reopen through `follow` never admits, so neither does this.
+            if rule.mode == Mode::Admit && !root.closed && root.reopened_by.is_none() {
                 self.admit(
                     &item,
                     &rule,
                     issue,
-                    // A root ingest reopened is back in Triage for a person
-                    // to accept again, children or not.
-                    root.stage == "triage" && !root.has_children && !root.reopened_by_sync,
+                    root.stage == "triage" && !root.has_children,
                 )
                 .await?;
             }
@@ -307,7 +307,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 closed_by_sync: false,
-                reopened_by_sync: false,
+                reopened_by: None,
                 has_children: rule.mode == Mode::Admit,
                 pr: None,
                 claimed_at_ms: None,
@@ -921,7 +921,9 @@ fn set_closed(p: &mut Poll, key: &str, closed: bool) {
         r.closed = closed;
         // Ingest is the only writer here, so its close is a sync close.
         r.closed_by_sync = closed;
-        r.reopened_by_sync = !closed;
+        if !closed {
+            r.reopened_by = Some(Actor::Tracker);
+        }
     }
 }
 
