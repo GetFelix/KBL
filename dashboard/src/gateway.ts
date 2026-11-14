@@ -12,6 +12,24 @@ export class GatewayError extends Error {
   }
 }
 
+// A class rather than an object literal: Rollup took the literal's empty `onMessage`
+// for the handler every call would reach and dropped the call, so no message after
+// `hello` reached follow in the built page.
+class Socket implements Transport {
+  onMessage: (message: GatewayMessage) => void = () => {};
+  onClose: (reason: string) => void = () => {};
+  readonly ws: WebSocket;
+  constructor(ws: WebSocket) {
+    this.ws = ws;
+  }
+  send(message: Record<string, unknown>): void {
+    this.ws.send(JSON.stringify(message));
+  }
+  close(): void {
+    this.ws.close();
+  }
+}
+
 /**
  * Opens a WebSocket to felix-gateway, joins `room` with an ID token and resolves
  * with a transport once the gateway answers `hello`. The `read` feature is what
@@ -20,12 +38,7 @@ export class GatewayError extends Error {
 export function connect(url: string, room: string, token: string): Promise<Transport> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url);
-    const transport: Transport = {
-      send: (m) => ws.send(JSON.stringify(m)),
-      onMessage: () => {},
-      onClose: () => {},
-      close: () => ws.close(),
-    };
+    const transport = new Socket(ws);
     let joined = false;
     ws.onopen = () => ws.send(JSON.stringify({ type: 'join', protocol: 1, features: ['read'], room, token }));
     ws.onmessage = (e) => {
