@@ -83,7 +83,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         };
         let mut state = state;
         state.migrate(&self.settings.repos);
-        let roots = self
+        let mut roots: HashMap<String, Root> = self
             .tracker
             .roots()
             .await?
@@ -91,6 +91,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .filter(|r| r.source == name)
             .map(|r| (r.upstream_id.clone(), r))
             .collect();
+        alias_moved(&state, &mut roots);
         let mut poll = Poll {
             state,
             roots,
@@ -937,6 +938,24 @@ fn prune(p: &mut Poll) {
         .collect();
     for k in done {
         p.state.items.remove(&k);
+    }
+}
+
+/// The tracker knows a transferred issue's root only under the id it was
+/// imported with, so each new id is given the root of the id it moved from.
+/// A chain of moves is followed to its end.
+fn alias_moved(state: &State, roots: &mut HashMap<String, Root>) {
+    for (old, t) in &state.items {
+        let Some(root) = roots.get(old).cloned() else {
+            continue;
+        };
+        let mut seen = HashSet::from([old.clone()]);
+        let mut next = t.moved_to.clone();
+        while let Some(new) = next.filter(|n| seen.insert(n.clone())) {
+            // As `moved` does: the old id's root wins.
+            roots.insert(new.clone(), root.clone());
+            next = state.items.get(&new).and_then(|n| n.moved_to.clone());
+        }
     }
 }
 

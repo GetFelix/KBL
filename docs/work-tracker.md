@@ -903,7 +903,7 @@ matches two rules belongs to the first one listed.
 | Closed as completed or fixed, or closed with no reason (issues closed before GitHub kept one) | `closed` with reason completed: the item is done and its dependents unblock |
 | Closed as not planned, duplicate or won't fix | `closed` with reason dropped: open children and attempts are cancelled, dependents go to Needs you ("dependency dropped"), and an agent's open pull request becomes a draft with a comment |
 | Reopened | Back to Triage as the same root, with its history and its remaining budget |
-| Moved or transferred | The same item under its new upstream id, with a link record |
+| Moved or transferred | The same item (the tracker still shows the original id), with a `moved` context entry naming the new one. Later closes and reopens under the new id apply to the item, across ingest restarts too, when a rule names the new repo. Otherwise a close arrives at the next `reconcile_every` check and a reopen is not seen |
 
 Ingest skips upstream events written by KBL's own credential, so its
 comments, pull request links and state changes do not come back as edits.
