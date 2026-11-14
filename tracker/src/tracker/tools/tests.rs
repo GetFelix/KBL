@@ -513,6 +513,68 @@ async fn a_decision_needs_phase_so_far_why_and_commit_and_cannot_cite_the_future
 }
 
 #[tokio::test]
+async fn evidence_must_cite_a_record_of_the_same_tree() {
+    let (fake, t) = held().await;
+    let a = agent("w1");
+    let a1 = item("a1");
+    // a2 is another tree: its import cannot back a decision on a1.
+    seed(&t, "a2", 3).await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let cite = |stream: &str, offset: u64| {
+        let mut d = decide_args();
+        d.evidence = vec![Evidence {
+            stream: stream.into(),
+            offset,
+        }];
+        d
+    };
+    let before = fake.log().len();
+    assert_eq!(
+        why(t.decide(&a, &a1, cite(WORK_EVENTS, a2_import)).await),
+        "evidence_outside_tree"
+    );
+    assert_eq!(
+        why(t.decide(&a, &a1, cite("agents.log.r-1", 0)).await),
+        "evidence_stream"
+    );
+    // A person's answer is held to the same rule.
+    let q = t
+        .ask(&a, &a1, text("which?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    let foreign = vec![Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: a2_import,
+    }];
+    let r = t
+        .person_answer(
+            key("gab"),
+            &a1,
+            Some(q),
+            text("x"),
+            foreign,
+            Reply::default(),
+        )
+        .await;
+    assert_eq!(why(r), "evidence_outside_tree");
+    assert_eq!(fake.log().len(), before + 1);
+    // A record of a1's own tree, here its question, is fine.
+    let own = vec![Evidence {
+        stream: WORK_EVENTS.into(),
+        offset: q,
+    }];
+    t.person_answer(key("gab"), &a1, Some(q), text("x"), own, Reply::default())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn steps_and_edits_hang_off_the_attempt_and_an_edit_cites_a_real_decision() {
     let (fake, t) = held().await;
     let a = agent("w1");
@@ -805,7 +867,7 @@ async fn the_question_text_is_read_back_with_the_context() {
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
     let core = t.0.core.lock().await;
-    assert_eq!(core.texts[&q], text("which cache?"));
+    assert_eq!(core.recall.texts[&q], text("which cache?"));
 }
 
 #[tokio::test]
@@ -993,7 +1055,10 @@ async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
         let it = &core.state.items[&g];
         assert_eq!(it.target.as_ref().unwrap().repo, "GetFelix/felix-gateway");
         let at = it.context.values().next().unwrap();
-        assert_eq!(core.texts[at], text("the client cannot swap atomically"));
+        assert_eq!(
+            core.recall.texts[at],
+            text("the client cannot swap atomically")
+        );
         // No try was spent and nothing was released or given up.
         assert_eq!(core.state.items[&a1].paths[0].tries, 0);
     }
@@ -1270,7 +1335,7 @@ async fn one_key_answers_with_a_choice_and_appends_one_resume_item() {
     // The asker is parked until the resume work is done.
     assert_eq!(core.state.stage(&item("a1")), Some(Stage::Blocked));
     let answer = core.state.items[&ids[0]].context[&key("answer")];
-    assert_eq!(core.texts[&answer], text("write"));
+    assert_eq!(core.recall.texts[&answer], text("write"));
     assert!(q < answer);
 }
 
@@ -1290,7 +1355,7 @@ async fn answering_without_choosing_takes_the_default() {
     let ids = resume_ids(&t).await;
     let core = t.0.core.lock().await;
     let answer = core.state.items[&ids[0]].context[&key("answer")];
-    assert_eq!(core.texts[&answer], text("read"));
+    assert_eq!(core.recall.texts[&answer], text("read"));
 }
 
 #[tokio::test]

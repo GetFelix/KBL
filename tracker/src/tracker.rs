@@ -198,9 +198,7 @@ struct Core {
     /// an offset, not a delivery, so it also takes the lease of anyone Felix
     /// handed the record to before it landed (felix#2207).
     handed_back: HashMap<ItemId, u64>,
-    /// The text of context, note, question, answer, decision and triage records by offset, so a read does
-    /// not scan the log.
-    texts: HashMap<u64, Content>,
+    recall: Recall,
 }
 
 /// What a review lane looked like when an agent last left it with nothing to take.
@@ -211,6 +209,52 @@ struct Emptied {
     /// A record that is leased or dead-lettered in the lane can come free without a
     /// change here, so the mark lapses after a visibility period.
     until: Instant,
+}
+
+/// Refuses evidence outside the record's own tree, or on another stream: a
+/// person reads cited records as support. Checked before the append rather
+/// than in the fold, so the fold of an existing log does not change.
+fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), Error> {
+    let root = |item: &ItemId| core.state.items.get(item).map(|i| &i.root);
+    // An unknown item is the fold's to refuse.
+    let Some(own) = record.item().and_then(root) else {
+        return Ok(());
+    };
+    for e in record.evidence() {
+        if e.stream != WORK_EVENTS {
+            return Err(Error::Refused {
+                why: "evidence_stream".into(),
+            });
+        }
+        // A later offset is the fold's to refuse, as evidence from the future.
+        if e.offset >= next {
+            continue;
+        }
+        if core.recall.subjects.get(&e.offset).and_then(root) != Some(own) {
+            return Err(Error::Refused {
+                why: "evidence_outside_tree".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// What the tracker keeps per record offset, so a call does not scan the log.
+#[derive(Default)]
+struct Recall {
+    /// The text of context, note, question, answer, decision and triage records.
+    texts: HashMap<u64, Content>,
+    /// The item each record names, so evidence can be held to its tree.
+    subjects: HashMap<u64, ItemId>,
+}
+
+impl Recall {
+    fn remember(&mut self, offset: u64, record: &WorkRecord) {
+        if let Some(item) = record.item() {
+            self.subjects.insert(offset, item.clone());
+        }
+        remember(&mut self.texts, offset, record);
+    }
 }
 
 /// Keeps the text of the records a read shows.
@@ -314,11 +358,11 @@ impl<B: Broker> Tracker<B> {
         // must not hold the lease and keep a build that can from starting.
         tracker.read_state().await?;
         tracker.acquire_lease().await?;
-        let (state, texts) = tracker.read_state().await?;
+        let (state, recall) = tracker.read_state().await?;
         {
             let mut core = tracker.0.core.lock().await;
             core.state = state;
-            core.texts = texts;
+            core.recall = recall;
         }
         let holders: Vec<AgentName> = {
             let core = tracker.0.core.lock().await;
@@ -1361,6 +1405,7 @@ impl<B: Broker> Tracker<B> {
         // The tracker is the only writer, so the next offset is the one after the
         // last applied. It can skip (generation starts), which the check below catches.
         let guess = core.state.at.map_or(0, |a| a + 1);
+        evidence_in_tree(core, &logged.record, guess)?;
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.
         if let Err(why) = core.state.try_apply(guess, &logged) {
@@ -1381,7 +1426,7 @@ impl<B: Broker> Tracker<B> {
                 if offset != guess {
                     core.stale = true;
                 }
-                remember(&mut core.texts, offset, &logged.record);
+                core.recall.remember(offset, &logged.record);
                 Ok(offset)
             }
             Err(e) => {
@@ -1421,19 +1466,19 @@ impl<B: Broker> Tracker<B> {
         }
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
-        let (state, texts) = self
+        let (state, recall) = self
             .read_state()
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
         let mut core = self.0.core.lock().await;
         core.state = state;
-        core.texts = texts;
+        core.recall = recall;
         core.stale = false;
         Ok(())
     }
 
     /// The fold of every record in `work.events`, with seek snapshots.
-    async fn read_state(&self) -> anyhow::Result<(State, HashMap<u64, Content>)> {
+    async fn read_state(&self) -> anyhow::Result<(State, Recall)> {
         let mut entries = Vec::new();
         for (offset, payload) in self
             .io(None, self.0.broker.read_from(WORK_EVENTS, 0))
@@ -1449,15 +1494,15 @@ impl<B: Broker> Tracker<B> {
                 Err(e) => eprintln!("kbl-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
-        let mut texts = HashMap::new();
+        let mut recall = Recall::default();
         for (offset, rec) in &entries {
-            remember(&mut texts, *offset, &rec.record);
+            recall.remember(*offset, &rec.record);
         }
         let state = match entries.last() {
             Some((last, _)) => Seek::build(&entries, SNAPSHOT_EVERY).state_at(&entries, *last),
             None => State::default(),
         };
-        Ok((state, texts))
+        Ok((state, recall))
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {

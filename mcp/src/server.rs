@@ -276,9 +276,9 @@ struct RevertCheckArg {
 
 #[derive(Deserialize, Serialize, JsonSchema)]
 struct EvidenceArg {
-    /// The stream, such as `work.events`.
+    /// The stream. Only `work.events` is taken.
     stream: String,
-    /// The offset in that stream.
+    /// The offset of an earlier record about an item of the same tree, such as a step you recorded.
     offset: u64,
 }
 

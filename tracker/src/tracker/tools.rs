@@ -378,7 +378,12 @@ impl<B: Broker> Tracker<B> {
                 "you hold neither {item} nor its parent"
             )));
         }
-        let text = |offset: &u64| core.texts.get(offset).map_or(Value::Null, |c| json!(c));
+        let text = |offset: &u64| {
+            core.recall
+                .texts
+                .get(offset)
+                .map_or(Value::Null, |c| json!(c))
+        };
         let entries: Vec<Value> = it
             .context
             .iter()
