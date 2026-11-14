@@ -109,3 +109,4 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
   .list { padding: var(--space-2) var(--space-4); }
   .content:has(.panel:not([hidden])) { grid-template-columns: 1fr; }
 }
+.overlap-link { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); text-decoration: underline; }

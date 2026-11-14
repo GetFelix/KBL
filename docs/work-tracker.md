@@ -649,14 +649,14 @@ for byte: there is no case folding and no glob matching, so `Docs/a.md` and
 name. An entry over 4 KiB is stored as an artifact, not inline, and is not
 read for overlaps.
 
-When the entries of two open items share a path (or one names a directory
-above the other's file), the dashboard flags both rows ("1 overlap") and the
-item panel's "Same files" section names the other item and the shared files,
-and suggests which should wait on the other. Held work goes first, then work in review, then the rest; a tie goes to
-the item whose most recent `files` declaration is older. The suggestion is
-advice: a person links the items with a `linked` record, and the warning goes
-away. Agents cannot link across trees, and two overlapping items are usually
-separate roots.
+When the entries of two open items share a path (or one names a directory above
+the other's file), the dashboard flags both rows ("1 file overlap") and the item
+panel's "Same files" section names the other item and the shared files, and
+suggests which should wait on the other. Held work goes first, then work in
+review, then the rest; a tie goes to the item whose most recent `files`
+declaration is older. The suggestion is advice: a person links the items with a
+`linked` record, and the warning goes away. Agents cannot link across trees, and
+two overlapping items are usually separate roots.
 
 Only items whose roots land in the same repo are compared, so `README.md` in
 two repos is no overlap; items with no repo are compared with each other.

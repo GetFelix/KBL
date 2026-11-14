@@ -61,7 +61,7 @@ export function overlapCount(card: CardOverlaps | undefined): number {
 /** The row flag's text, or '' for an item with no overlaps. */
 export function flagText(card: CardOverlaps | undefined): string {
   const n = overlapCount(card);
-  return n === 0 ? '' : n === 1 ? '1 overlap' : `${n} overlaps`;
+  return n === 0 ? '' : n === 1 ? '1 file overlap' : `${n} file overlaps`;
 }
 
 /** The trailing "+N more" for a note's file list, or ''. */

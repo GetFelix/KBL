@@ -7,9 +7,9 @@ const card = (pairs: number) =>
 
 test('the row flag counts every overlap, including the notes a card leaves out', () => {
   assert.equal(flagText(undefined), '');
-  assert.equal(flagText(card(1)), '1 overlap');
+  assert.equal(flagText(card(1)), '1 file overlap');
   assert.equal(overlapCount(card(MAX_NOTES + 2)), MAX_NOTES + 2);
-  assert.equal(flagText(card(MAX_NOTES + 2)), `${MAX_NOTES + 2} overlaps`);
+  assert.equal(flagText(card(MAX_NOTES + 2)), `${MAX_NOTES + 2} file overlaps`);
 });
 
 test('the "+N more" lines appear only when something is left out', () => {

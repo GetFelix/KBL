@@ -183,15 +183,18 @@ try {
   await open(`${connected}&item=gh-2221`);
   await page.waitFor(live);
   const flag = (id) => page.eval(`document.querySelector('.row[data-id=${id}] .row-flag:not([hidden])')?.textContent ?? ''`);
-  check((await flag('gh-2219')) === '1 overlap' && (await flag('gh-2221')) === '1 overlap', 'both rows of an overlap carry a flag');
+  check((await flag('gh-2219')) === '1 file overlap' && (await flag('gh-2221')) === '1 file overlap', 'both rows of an overlap carry a flag');
   check((await flag('gh-2204')) === '', 'a row without overlaps has no flag');
   const note = await page.eval(`document.querySelector('.panel .overlap')?.textContent ?? ''`);
   check(note.includes('gh-2219') && note.includes('core/src/segment/reader.rs') && note.includes('Suggested: gh-2221 waits on gh-2219.'), `the panel names the other item, the shared file and the suggested link (${note})`);
   await axe('overlap panel');
   await shoot('overlap-dark');
+  check(await page.eval(`document.querySelector('.panel .overlap a')?.getAttribute('href')?.includes('item=gh-2219') === true`), 'the other item in a note is a link to it');
+  await page.eval(`document.querySelector('.panel .overlap a').focus()`);
   await page.eval(`window.__push({ kind: 'context', item: 'ado-4377', entry: 'files', text: { text: 'core/src/segment/reader.rs' }, actor: 'person', by: 'maintainer', at_ms: 1800000000001 })`);
   await page.waitFor(`document.querySelector('.panel .overlap-notes')?.children.length === 2`);
-  check((await flag('gh-2221')) === '2 overlaps' && (await flag('ado-4377')) === '2 overlaps', 'a live files entry adds a note and updates the flags');
+  check((await flag('gh-2221')) === '2 file overlaps' && (await flag('ado-4377')) === '2 file overlaps', 'a live files entry adds a note and updates the flags');
+  check(await page.eval(`document.activeElement?.dataset.focus === 'other:gh-2219'`), 'a rebuild of the panel leaves focus on the same link');
 
   // A fresh page: after a blur, Chrome starts Tab from where focus was, not the top.
   await open(connected);
