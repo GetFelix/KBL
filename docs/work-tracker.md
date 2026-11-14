@@ -650,9 +650,9 @@ name. An entry over 4 KiB is stored as an artifact, not inline, and is not
 read for overlaps.
 
 When the entries of two open items share a path (or one names a directory
-above the other's file), the dashboard shows a warning on both items naming
-the other item and the shared files, and suggests which should wait on the
-other. Held work goes first, then work in review, then the rest; a tie goes to
+above the other's file), the dashboard flags both rows ("1 overlap") and the
+item panel's "Same files" section names the other item and the shared files,
+and suggests which should wait on the other. Held work goes first, then work in review, then the rest; a tie goes to
 the item whose most recent `files` declaration is older. The suggestion is
 advice: a person links the items with a `linked` record, and the warning goes
 away. Agents cannot link across trees, and two overlapping items are usually
@@ -669,8 +669,8 @@ raise.
 
 The comparison is pairwise: every two declaring items in a repo, and every two
 of their paths. The page computes it once per applied record, not per redraw,
-and a card shows at most 5 notes and 10 paths per note, with a "+N more" for
-the rest.
+and the panel shows at most 5 notes and 10 paths per note, with a "+N more" for
+the rest. The row flag counts them all.
 
 ### Prerequisites in another repo
 
