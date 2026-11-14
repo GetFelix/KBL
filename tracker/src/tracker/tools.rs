@@ -236,6 +236,16 @@ impl<B: Broker> Tracker<B> {
                             why: "key_reused".into(),
                         });
                     }
+                    // A triage holder's retry that changes `done_when` would otherwise look done.
+                    let released = core
+                        .state
+                        .release_edges
+                        .contains(&(waiter.clone(), prerequisite.clone()));
+                    if under.is_some() && released != (done_when == DoneWhen::Released) {
+                        return Err(Error::Invalid(format!(
+                            "`done_when` differs from the first call; name {prerequisite} with `existing` to change it"
+                        )));
+                    }
                     return Ok(reply(false));
                 }
             }

@@ -2344,7 +2344,30 @@ async fn triaging(repo: &str) -> (Fake, Tracker<Fake>) {
         },
     )
     .await;
-    held_triage(&t, "w1").await;
+    // Triage is claimed before `a1` is accepted, so `a1` still has every try.
+    let record = |r| async { t.person_record(key("gab"), r).await.unwrap() };
+    record(WorkRecord::Imported {
+        item: item("a1"),
+        source: "gh".into(),
+        upstream_id: "a1".into(),
+        title: "fix a1".into(),
+    })
+    .await;
+    record(WorkRecord::Proposed {
+        item: item("a1-t"),
+        parent: Some(item("a1")),
+        key: key("triage"),
+        work: WorkKind::Triage,
+        title: "Triage: fix a1".into(),
+        review: None,
+    })
+    .await;
+    claim_item(&t, "w1", &item("a1-t")).await;
+    record(WorkRecord::Accepted {
+        item: item("a1"),
+        tier: Some(2),
+    })
+    .await;
     (fake, t)
 }
 
@@ -2381,6 +2404,10 @@ async fn triage_posts_a_prerequisite_before_any_build_claim() {
     let again = post().await.unwrap();
     assert_eq!(again["created"], false);
     assert_eq!(again["prerequisite"], reply["prerequisite"]);
+    assert_eq!(fake.log().len(), before);
+    // The same key with another `done_when` is refused, not answered as done.
+    let other = t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Released, 0);
+    assert_eq!(why(other.await), "invalid");
     assert_eq!(fake.log().len(), before);
 
     // Triage still holds its claim and finishes as usual.
@@ -2435,8 +2462,9 @@ async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
     let other = t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Merged, 0);
     assert_eq!(why(other.await), "no_grant");
     // Only the holder of the triage item.
+    let w2 = agent("w2");
     let stranger = t.prerequisite(
-        &agent("w2"),
+        &w2,
         &tr,
         key("dep"),
         Prereq::Existing(item("a2")),
