@@ -639,8 +639,11 @@ docs/
 
 Paths are tidied before they are compared: `\` reads as `/`, a leading `/`
 or `./` and repeated `/` are dropped, and `..` is resolved. A line whose `..`
-climbs above the repo root is skipped. `./`, `/` or `.` on its own means the
-whole repo and overlaps every path declared for that repo. Paths compare byte
+climbs above the repo root is skipped. A last segment of `.` or `..` makes the
+path a directory, as a trailing `/` does. Only `./`, `/` or `.` on its own
+means the whole repo and overlaps every path declared for that repo; a line
+that reaches the root another way (`a/..`) or is empty once tidied (`//`) is
+skipped. Paths compare byte
 for byte: there is no case folding and no glob matching, so `Docs/a.md` and
 `docs/a.md` are different files and `src/*.rs` is a file with a `*` in its
 name. An entry over 4 KiB is stored as an artifact, not inline, and is not

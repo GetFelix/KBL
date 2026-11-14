@@ -36,8 +36,10 @@ pub const WHOLE_REPO: &str = "./";
 /// The paths in a `files` entry, one per line, normalised: surrounding space
 /// trimmed, `\\` read as `/`, leading `/` and `./` and repeated `/` dropped,
 /// and `..` resolved. A line whose `..` climbs above the repo is skipped, as
-/// are blank lines and `#` comments. A path ending in `/` is a directory and
-/// covers everything under it. Paths compare byte for byte: no case folding
+/// are blank lines and `#` comments. A path ending in `/`, `.` or `..` is a
+/// directory and covers everything under it. Only a line that is exactly `./`,
+/// `/` or `.` means the whole repo; one that reaches the root any other way
+/// (`a/..`) or is empty once tidied (`//`, `\\`) is skipped. Paths compare byte for byte: no case folding
 /// and no globs.
 pub fn parse_files(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text
@@ -52,6 +54,9 @@ pub fn parse_files(text: &str) -> Vec<String> {
 }
 
 fn normalise(line: &str) -> Option<String> {
+    if matches!(line, "./" | "/" | ".") {
+        return Some(WHOLE_REPO.to_owned());
+    }
     let line = line.replace('\\', "/");
     let mut parts: Vec<&str> = Vec::new();
     for part in line.split('/') {
@@ -64,10 +69,10 @@ fn normalise(line: &str) -> Option<String> {
         }
     }
     if parts.is_empty() {
-        return Some(WHOLE_REPO.to_owned());
+        return None;
     }
     let mut path = parts.join("/");
-    if line.ends_with('/') {
+    if line.ends_with('/') || line.ends_with("/.") || line.ends_with("/..") {
         path.push('/');
     }
     Some(path)

@@ -70,6 +70,17 @@ impl Log {
             },
         );
     }
+    fn done(&mut self, item: &str) {
+        self.push(
+            "w1",
+            Actor::Agent,
+            WorkRecord::Done {
+                item: id(item),
+                attempt: 1,
+                cost_micros: 0,
+            },
+        );
+    }
     fn link(&mut self, item: &str, to: &str) {
         self.person(WorkRecord::Linked {
             item: id(item),
@@ -104,9 +115,70 @@ fn parse_files_normalises_paths() {
         parse_files(text),
         ["core/src/fold.rs", "core/src/work.rs", "docs/a.md", "src/"]
     );
-    for whole in ["./", "/", ".", "a/.."] {
+    for whole in ["./", "/", "."] {
         assert_eq!(parse_files(whole), [WHOLE_REPO], "{whole}");
     }
+    for skipped in ["a/..", "a/b/../..", "//", "\\", "..", "a/../.."] {
+        assert_eq!(parse_files(skipped), Vec::<String>::new(), "{skipped}");
+    }
+}
+
+#[test]
+fn a_last_segment_of_dot_or_dotdot_is_a_directory() {
+    assert_eq!(parse_files("core/src/."), ["core/src/"]);
+    assert_eq!(parse_files("a/b/.."), ["a/"]);
+    let mut l = Log::default();
+    l.root("r1");
+    l.root("r2");
+    l.root("r3");
+    l.files("r1", "core/src/.");
+    l.files("r2", "core/src/work.rs");
+    l.files("r3", "a/b/..\n");
+    l.files("r2", "core/src/work.rs\na/x.rs");
+    assert_eq!(
+        l.overlaps(),
+        [
+            overlap("r1", "r2", &["core/src/work.rs"]),
+            overlap("r3", "r2", &["a/x.rs"]),
+        ]
+    );
+}
+
+#[test]
+fn held_goes_before_in_review() {
+    let mut l = Log::default();
+    l.root("r1");
+    l.root("r2");
+    l.files("r1", "a.rs");
+    l.files("r2", "a.rs");
+    l.claim("r1");
+    l.done("r1");
+    l.claim("r2");
+    assert_eq!(l.overlaps(), [overlap("r2", "r1", &["a.rs"])]);
+}
+
+#[test]
+fn in_review_goes_before_ready() {
+    let mut l = Log::default();
+    l.root("r1");
+    l.root("r2");
+    l.files("r1", "a.rs");
+    l.files("r2", "a.rs");
+    l.claim("r2");
+    l.done("r2");
+    assert_eq!(l.overlaps(), [overlap("r2", "r1", &["a.rs"])]);
+}
+
+#[test]
+fn items_with_no_target_are_compared_with_each_other() {
+    let mut l = Log::default();
+    l.root_in("r1", "");
+    l.root_in("r2", "");
+    l.root("r3");
+    l.files("r1", "a.rs");
+    l.files("r2", "a.rs");
+    l.files("r3", "a.rs");
+    assert_eq!(l.overlaps(), [overlap("r1", "r2", &["a.rs"])]);
 }
 
 #[test]
