@@ -555,7 +555,7 @@ with the record's offset.
 | `POST /v1/teams/{team}/members` `{person, role, repos?, subject?}` | Team `admin` | `person_added` for a new person, with a new token answered once; then `role_granted`. `repos` narrows the role to some of the team's repos |
 | `DELETE /v1/teams/{team}/members/{person}` | Team `admin` | `role_revoked` |
 | `POST /v1/teams/{team}/agents` `{agent}` | `org_admin` today; team `triager` once roles exist | `agent_added`, with a new token answered once: `{team, agent, token, offset}`. Built |
-| `GET /v1/teams/{team}/agents` | `org_admin` today; team `viewer` once roles exist | Nothing. Names, who added each, whether each is revoked, and what each holds. Token-file agents are listed with `token_file: true`. Built |
+| `GET /v1/teams/{team}/agents` | `org_admin` today; team `viewer` once roles exist | Nothing. Names, who added each, whether each is revoked, and what each holds. Token-file agents are listed with `token_file: true`; one whose name was revoked while minted carries `revoked_minted: true` instead of a second row. Built |
 | `DELETE /v1/teams/{team}/agents/{agent}` | `org_admin` today; whoever added it, or team `admin`, once roles exist | `agent_revoked`, then a `released` with the reason `revoked` on the team's log for each hold. Answers `{revoked, released, offset}`. Built |
 | `POST /v1/teams/{team}/sources` `{source, repo}` | Team `admin` | `source_added`. `409` with `why: source_owned` when another team owns it |
 | `POST /v1/teams/{team}/ingest` `{name}` | Team `admin` | `ingest_added`, with a new token answered once |
