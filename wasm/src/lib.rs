@@ -90,6 +90,11 @@ impl Folder {
         let found = overlaps(&self.state, |o| self.files.get(&o).map(String::as_str));
         serde_json::to_string(&found).expect("plain data serializes")
     }
+
+    /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.
+    pub fn spend_json(&self) -> String {
+        serde_json::to_string(&self.state.spend()).expect("plain data serializes")
+    }
 }
 
 impl Folder {
