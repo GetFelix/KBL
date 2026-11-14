@@ -572,17 +572,20 @@ async fn evidence_must_cite_a_record_of_the_same_tree() {
     t.person_answer(key("gab"), &a1, Some(q), text("x"), own, Reply::default())
         .await
         .unwrap();
-    // A restarted tracker rebuilds what each offset is about from the log.
-    let t2 = start(&fake).await;
-    let _ = claim(&t2, "w1").await;
-    assert_eq!(
-        why(t2.decide(&a, &a1, cite(WORK_EVENTS, a2_import)).await),
-        "evidence_outside_tree"
-    );
-    t2.decide(&a, &a1, cite(WORK_EVENTS, q)).await.unwrap();
-    // A writer the fold would refuse learns nothing about where a record is.
-    let q = t2
-        .ask(&a, &a1, text("and now?"), vec![], None, 0)
+}
+
+#[tokio::test]
+async fn a_writer_the_fold_refuses_learns_nothing_about_the_evidence() {
+    let (fake, t) = held().await;
+    seed(&t, "a2", 3).await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let a1 = item("a1");
+    let q = t
+        .ask(&agent("w1"), &a1, text("which?"), vec![], None, 0)
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -591,10 +594,45 @@ async fn evidence_must_cite_a_record_of_the_same_tree() {
         stream: WORK_EVENTS.into(),
         offset: a2_import,
     }];
-    let r = t2
+    // w2 holds no question under a1, so the fold's refusal is what it sees.
+    let r = t
         .answer(&agent("w2"), &a1, q, text("x"), foreign, None)
         .await;
     assert_eq!(why(r), "not_holder");
+}
+
+#[tokio::test]
+async fn a_restarted_tracker_still_holds_evidence_to_the_tree() {
+    let (fake, t) = held().await;
+    seed(&t, "a2", 3).await;
+    let a2_import = fake
+        .log()
+        .iter()
+        .rposition(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    let a1_import = fake
+        .log()
+        .iter()
+        .position(|l| l.record.kind() == "imported")
+        .unwrap() as u64;
+    drop(t);
+    let t2 = start(&fake).await;
+    // The claim is gone with the old process; w1 gets it back as a resume.
+    let _ = claim(&t2, "w1").await;
+    let cite = |offset: u64| {
+        let mut d = decide_args();
+        d.evidence = vec![Evidence {
+            stream: WORK_EVENTS.into(),
+            offset,
+        }];
+        d
+    };
+    let (a, a1) = (agent("w1"), item("a1"));
+    assert_eq!(
+        why(t2.decide(&a, &a1, cite(a2_import)).await),
+        "evidence_outside_tree"
+    );
+    t2.decide(&a, &a1, cite(a1_import)).await.unwrap();
 }
 
 #[tokio::test]
