@@ -568,3 +568,45 @@ fn a_check_run_by_our_own_app_does_not_count() {
     );
     assert_eq!(checks, PrChecks::Green);
 }
+
+#[tokio::test]
+async fn releases_skip_drafts_prereleases_and_odd_tags_and_come_oldest_first() {
+    let gh = Script::default();
+    let rel = |tag: &str, at: &str, draft: bool, pre: bool| json!({ "tag_name": tag, "published_at": at, "draft": draft, "prerelease": pre });
+    gh.on(
+        "GET",
+        "/repos/GetFelix/felix/releases?",
+        ok(json!([
+            rel("v2", "2027-01-15T12:00:00Z", false, false),
+            rel("v3-draft", "2027-01-15T13:00:00Z", true, false),
+            rel("v3-rc", "2027-01-15T13:00:00Z", false, true),
+            rel("a b?x", "2027-01-15T11:00:00Z", false, false),
+            rel("v1", "2027-01-15T10:00:00Z", false, false),
+        ])),
+    );
+    let got = github(&gh).releases("GetFelix/felix").await.unwrap();
+    let tags: Vec<_> = got.iter().map(|r| r.tag.as_str()).collect();
+    assert_eq!(tags, ["v1", "v2"]);
+}
+
+#[tokio::test]
+async fn a_tag_contains_a_commit_only_when_the_compare_is_ahead_or_identical() {
+    let gh = Script::default();
+    gh.on("GET", "/compare/aaa...v1", ok(json!({ "status": "ahead" })));
+    gh.on(
+        "GET",
+        "/compare/aaa...v2",
+        ok(json!({ "status": "identical" })),
+    );
+    gh.on(
+        "GET",
+        "/compare/aaa...v3",
+        ok(json!({ "status": "behind" })),
+    );
+    let g = github(&gh);
+    assert!(g.contains("GetFelix/felix", "v1", "aaa").await.unwrap());
+    assert!(g.contains("GetFelix/felix", "v2", "aaa").await.unwrap());
+    assert!(!g.contains("GetFelix/felix", "v3", "aaa").await.unwrap());
+    assert!(!g.contains("GetFelix/felix", "v4", "aaa").await.unwrap());
+    assert!(!g.contains("GetFelix/felix", "../x?y", "aaa").await.unwrap());
+}

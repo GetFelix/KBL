@@ -485,6 +485,15 @@ What it does with GitHub:
   than `own_logins` (agents never merge their own work, a person does), and
   then closes the root as merged (`closed` with reason merged, which the
   ingest token may write only for a merged status of the item's own request).
+- **Releases.** A merged root that a link waits on for a release (`awaits_release`
+  in `GET /v1/ingest/roots`) gets a `shipped` record once a published release
+  carries its merge commit. Drafts and prereleases are ignored. The worker
+  lists the repo's releases once per poll, oldest first, takes those published
+  after the merge, and asks GitHub to compare the merge commit with each tag
+  (`ahead` or `identical` means the tag contains it). It checks only a request
+  it may read under the rules above. The token needs read access to the
+  repo's contents for the compare call and the release list. A merged root
+  nothing waits on costs no requests.
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 
@@ -647,10 +656,14 @@ One record does all of it:
 When the prerequisite is closed as merged, a link that waits for a merge frees
 the item, and it is Ready again. `work_context` then lists what the item
 waited on, with each prerequisite's stage, pull request and release. A link
-that waits for a release stays blocked until a person records
-`{"kind": "shipped", "item": ..., "release": "0.4.0"}` on the finished
-prerequisite. The fold takes that record from people only and only for an item
-that is done; ingest does not write it yet. If a person rejects or dismisses
+that waits for a release stays blocked until a `shipped` record,
+`{"kind": "shipped", "item": ..., "release": "0.4.0"}`, names the release that
+carries the finished prerequisite. A person can write it. Ingest writes it for
+a prerequisite it imported from GitHub whose pull request it saw merged: it
+looks for the oldest published release, not a draft or prerelease, made after
+the merge whose tag contains the merge commit. It asks only for roots a link
+is waiting on, so an ordinary merge costs no release requests. The fold takes
+the record from people and ingest only, and only for an item that is done. If a person rejects or dismisses
 the prerequisite, the held item goes to Needs you as "dependency dropped".
 
 This is the only cross-tree link an agent can make, and the tracker checks it

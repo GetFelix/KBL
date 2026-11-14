@@ -315,6 +315,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 pr: None,
                 claimed_at_ms: None,
                 pr_status: None,
+                release: None,
+                awaits_release: false,
             },
         );
         p.state

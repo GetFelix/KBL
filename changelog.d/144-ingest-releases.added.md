@@ -1,0 +1,1 @@
+Ingest writes `shipped`. When a published release (not a draft or prerelease) contains the merge commit of a root's pull request, and a link waits on that root for a release, the link is freed. Only roots something waits on cost any release requests. The ingest GitHub token needs read access to repo contents. Part of #144.

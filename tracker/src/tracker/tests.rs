@@ -1393,6 +1393,10 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
             entry: key("note"),
             text: kbl_core::content::Content::Text("hi".into()),
         },
+        WorkRecord::Shipped {
+            item: item("theirs"),
+            release: "v1".into(),
+        },
         WorkRecord::Proposed {
             item: item("x"),
             parent: Some(item("theirs")),

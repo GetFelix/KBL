@@ -248,7 +248,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `triaged` | Person, or the agent holding the item's triage child | `core/src/work_fold.rs:2494`. An agent writes it through `/v1/work/triage` |
 | `accepted` | Tracker, person | `core/src/work_fold.rs:1069` |
 | `prerequisite` | The holding agent | `core/src/work_fold.rs:2288`. With `triage`, the agent holding that triage item writes it for the item under triage, and keeps its claim (`core/src/work_fold.rs:881`). Format 3, so refused until a person raises the log |
-| `shipped` | Tracker, person | Only a done item (`core/src/work_fold.rs:1129`). Ingest's list leaves it out |
+| `shipped` | Tracker, person, ingest | Only a done item (`core/src/work_fold.rs:1129`). Ingest may write it only on a root it imported, and only after seeing a published release whose tag contains the merge commit |
 | `linked` | All | An agent only inside one tree (`core/src/work_fold.rs:2536`) |
 | `unlinked` | Tracker, person | `core/src/work_fold.rs:1155` |
 | `context` | All | An agent only on work it holds (`core/src/work_fold.rs:1167`). An agent replaces only its own entries (`tracker/src/tracker/tools.rs:408`) |
