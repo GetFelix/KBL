@@ -490,7 +490,10 @@ impl<T: Transport> Source for Github<T> {
 
     async fn links(&self, id: &IssueRef) -> Result<Links, SourceError> {
         let base = format!("{}/repos/{}/issues/{}", self.api, id.repo, id.number);
-        let mut links = Links::default();
+        let mut links = Links {
+            complete: true,
+            ..Links::default()
+        };
         for (suffix, into) in [
             ("dependencies/blocked_by", &mut links.blocked_by),
             ("sub_issues", &mut links.sub_issues),
@@ -500,18 +503,28 @@ impl<T: Transport> Source for Github<T> {
                 .await?;
             match res.status {
                 200 => {
-                    for raw in res.body.as_array().into_iter().flatten() {
+                    // A second page is not read, so a listing with one is partial.
+                    if res.headers.get("link").and_then(|l| next_link(l)).is_some() {
+                        links.complete = false;
+                    }
+                    let Some(list) = res.body.as_array() else {
+                        links.complete = false;
+                        continue;
+                    };
+                    for raw in list {
                         let repo = raw["repository_url"]
                             .as_str()
                             .and_then(|u| u.split_once("/repos/"))
                             .map_or(id.repo.as_str(), |(_, r)| r);
-                        if let Some(n) = raw["number"].as_u64() {
-                            into.push(IssueRef::new(repo, n));
+                        match raw["number"].as_u64() {
+                            Some(n) => into.push(IssueRef::new(repo, n)),
+                            None => links.complete = false,
                         }
                     }
                 }
-                // Not offered for this repository, none, or the issue moved.
-                301 | 302 | 307 | 308 | 404 | 410 => {}
+                // Not offered for this repository, or the issue moved: nothing
+                // to link, and nothing known about what to unlink.
+                301 | 302 | 307 | 308 | 404 | 410 => links.complete = false,
                 s => return Err(anyhow!("GitHub answered {s} for the links of {id}").into()),
             }
         }

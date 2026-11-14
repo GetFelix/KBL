@@ -318,12 +318,26 @@ struct Recall {
     texts: HashMap<u64, Content>,
     /// The item each record names, so evidence can be held to its tree.
     subjects: HashMap<u64, ItemId>,
+    /// Edges a person or an agent linked and no person has unlinked since.
+    /// An edge has no author in the fold, so this is what keeps ingest from
+    /// removing a link someone made by hand.
+    linked_by_hand: HashSet<(ItemId, ItemId)>,
 }
 
 impl Recall {
-    fn remember(&mut self, offset: u64, record: &WorkRecord) {
+    fn remember(&mut self, offset: u64, logged: &WorkLogged) {
+        let record = &logged.record;
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
+        }
+        match (record, logged.actor) {
+            (WorkRecord::Linked { item, to }, Actor::Person | Actor::Agent) => {
+                self.linked_by_hand.insert((item.clone(), to.clone()));
+            }
+            (WorkRecord::Unlinked { item, to }, Actor::Person) => {
+                self.linked_by_hand.remove(&(item.clone(), to.clone()));
+            }
+            _ => {}
         }
         remember(&mut self.texts, offset, record);
     }
@@ -1563,7 +1577,7 @@ impl<B: Broker> Tracker<B> {
                 if offset != guess {
                     core.stale = true;
                 }
-                core.recall.remember(offset, &logged.record);
+                core.recall.remember(offset, &logged);
                 Ok(offset)
             }
             Err(e) => {
@@ -1633,7 +1647,7 @@ impl<B: Broker> Tracker<B> {
         }
         let mut recall = Recall::default();
         for (offset, rec) in &entries {
-            recall.remember(*offset, &rec.record);
+            recall.remember(*offset, rec);
         }
         let state = match entries.last() {
             Some((last, _)) => Seek::build(&entries, SNAPSHOT_EVERY).state_at(&entries, *last),

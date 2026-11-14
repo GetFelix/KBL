@@ -345,6 +345,33 @@ impl Tracker for Fake {
             !self.0.lock().unwrap().append_fails,
             "the tracker is unreachable"
         );
+        // The tracker's ingest gate: only an edge that exists, and that no
+        // person or agent linked since a person last unlinked it.
+        if let WorkRecord::Unlinked { item, to } = record {
+            let i = self.0.lock().unwrap();
+            if !i.state.edges.contains(&(item.clone(), to.clone())) {
+                return Ok(Appended::Refused("not_linked".into()));
+            }
+            let mut by_hand = false;
+            for (_, l) in &i.log {
+                match (&l.record, l.actor) {
+                    (WorkRecord::Linked { item: a, to: b }, Actor::Person | Actor::Agent)
+                        if a == item && b == to =>
+                    {
+                        by_hand = true;
+                    }
+                    (WorkRecord::Unlinked { item: a, to: b }, Actor::Person)
+                        if a == item && b == to =>
+                    {
+                        by_hand = false;
+                    }
+                    _ => {}
+                }
+            }
+            if by_hand {
+                return Ok(Appended::Refused("linked_by_hand".into()));
+            }
+        }
         Ok(
             match self.push("ingest-gh", Actor::Tracker, record.clone()) {
                 Ok(()) => Appended::Written,

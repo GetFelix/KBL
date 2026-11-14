@@ -1,0 +1,1 @@
+Ingest now writes `unlinked` when a blocked-by or sub-issue dependency is removed upstream, so the item leaves Blocked. It removes only edges it made: the tracker refuses ingest's `unlinked` for an edge a person or an agent also linked. A failed, rate-limited or partial listing unlinks nothing.

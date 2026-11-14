@@ -857,15 +857,24 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 continue;
             };
             let links = self.source.links(&id).await?;
-            if let Some(t) = p.state.items.get_mut(&key) {
-                let found: Vec<String> = links
-                    .blocked_by
-                    .iter()
-                    .chain(&links.sub_issues)
-                    .map(ToString::to_string)
-                    .filter(|l| !t.linked.contains(l))
-                    .collect();
-                t.pending_links.extend(found);
+            let upstream: BTreeSet<String> = links
+                .blocked_by
+                .iter()
+                .chain(&links.sub_issues)
+                .map(ToString::to_string)
+                .collect();
+            let Some(t) = p.state.items.get_mut(&key) else {
+                continue;
+            };
+            let found: Vec<String> = upstream
+                .iter()
+                .filter(|l| !t.linked.contains(*l))
+                .cloned()
+                .collect();
+            t.pending_links.extend(found);
+            if links.complete {
+                t.pending_links.retain(|l| upstream.contains(l));
+                self.unlink_removed(p, &key, &upstream).await?;
             }
         }
         let waiting: Vec<(String, ItemId, Vec<String>)> = p
@@ -883,13 +892,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .collect();
         for (key, item, pending) in waiting {
             for to in pending {
-                // A closed issue may have been pruned from the state; its root remains.
-                let Some(other) = p
-                    .roots
-                    .get(&to)
-                    .map(|r| r.item.clone())
-                    .or_else(|| p.state.items.get(&to).map(|o| o.item.clone()))
-                else {
+                let Some(other) = item_of(p, &to) else {
                     continue;
                 };
                 match self
@@ -909,6 +912,49 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     t.pending_links.remove(&to);
                     t.linked.insert(to);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the edges ingest made for `key` whose dependency is gone from
+    /// the complete upstream listing `upstream`. The tracker refuses an edge a
+    /// person or an agent also linked, which then stays.
+    async fn unlink_removed(
+        &self,
+        p: &mut Poll,
+        key: &str,
+        upstream: &BTreeSet<String>,
+    ) -> Result<(), SourceError> {
+        let Some(t) = p.state.items.get(key) else {
+            return Ok(());
+        };
+        let item = t.item.clone();
+        let gone: Vec<String> = t.linked.difference(upstream).cloned().collect();
+        // A transferred dependency is listed under its new id, which names the same item.
+        let still: HashSet<ItemId> = upstream.iter().filter_map(|u| item_of(p, u)).collect();
+        for to in gone {
+            // A repo ingest cannot read now may simply be hidden from the listing.
+            if IssueRef::parse(&to).is_some_and(|r| p.state.stalled.contains_key(&r.repo)) {
+                continue;
+            }
+            if let Some(other) = item_of(p, &to).filter(|o| !still.contains(o)) {
+                match self
+                    .tracker
+                    .append(&WorkRecord::Unlinked {
+                        item: item.clone(),
+                        to: other,
+                    })
+                    .await?
+                {
+                    Appended::Written => {}
+                    Appended::Refused(why) => {
+                        eprintln!("kbl-ingest: unlink {key} -> {to} refused: {why}");
+                    }
+                }
+            }
+            if let Some(t) = p.state.items.get_mut(key) {
+                t.linked.remove(&to);
             }
         }
         Ok(())
@@ -1285,6 +1331,15 @@ fn open_roots(p: &Poll, rule: &str) -> usize {
 /// Polls a root sits out after a release lookup that failed or cannot finish,
 /// so one root cannot spend every poll's budget.
 const RELEASE_BACKOFF_POLLS: u32 = 10;
+
+/// The item for an upstream id. A closed issue may have been pruned from the
+/// state; its root remains.
+fn item_of(p: &Poll, key: &str) -> Option<ItemId> {
+    p.roots
+        .get(key)
+        .map(|r| r.item.clone())
+        .or_else(|| p.state.items.get(key).map(|o| o.item.clone()))
+}
 
 fn back_off(p: &mut Poll, key: &str) {
     if let Some(a) = p.state.awaiting.get_mut(key) {

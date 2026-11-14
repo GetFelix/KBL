@@ -1146,6 +1146,108 @@ async fn blocked_by_becomes_an_edge_once_both_issues_are_imported() {
     assert_eq!(rig.tracker.count("linked"), 1, "{:?}", rig.tracker.kinds());
 }
 
+/// 813 waits on 812 upstream, and ingest linked them.
+async fn linked_pair(rig: &Rig) -> Ingest<Github<Script>, Fake> {
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![
+        at(issue(812, |_| {}), "2026-11-10T10:00:00Z"),
+        at(issue(813, |_| {}), "2026-11-10T10:01:00Z"),
+    ]);
+    rig.gh.on(
+        "GET",
+        "/issues/813/dependencies/blocked_by",
+        ok(json!([
+            { "number": 812, "repository_url": "https://api.github.com/repos/GetFelix/felix" }
+        ])),
+    );
+    rig.gh.on("GET", "/issues/813/sub_issues", ok(json!([])));
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.state().edges.len(), 1);
+    ingest
+}
+
+#[tokio::test]
+async fn a_dependency_removed_upstream_is_unlinked_and_frees_the_item() {
+    let rig = rig();
+    let ingest = linked_pair(&rig).await;
+    let b = rig.root("GetFelix/felix#813");
+    assert_eq!(rig.tracker.state().stage(&b), Some(Stage::Blocked));
+    rig.gh
+        .on("GET", "/issues/813/dependencies/blocked_by", ok(json!([])));
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert!(s.edges.is_empty());
+    assert_ne!(s.stage(&b), Some(Stage::Blocked));
+    assert_eq!(rig.tracker.count("unlinked"), 1);
+    // Nothing more to remove on the next poll.
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("unlinked"), 1);
+}
+
+#[tokio::test]
+async fn a_link_a_person_also_made_stays_when_upstream_drops_it() {
+    let rig = rig();
+    let ingest = linked_pair(&rig).await;
+    let (a, b) = (rig.root(UP), rig.root("GetFelix/felix#813"));
+    rig.tracker.person(WorkRecord::Linked {
+        item: b.clone(),
+        to: a.clone(),
+    });
+    rig.gh
+        .on("GET", "/issues/813/dependencies/blocked_by", ok(json!([])));
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().edges.iter().collect::<Vec<_>>(),
+        [&(b, a)]
+    );
+    assert_eq!(rig.tracker.count("unlinked"), 0);
+}
+
+#[tokio::test]
+async fn a_failed_or_partial_listing_unlinks_nothing() {
+    let partial = [
+        // A second page that is never read.
+        (
+            "/issues/813/dependencies/blocked_by",
+            Res {
+                status: 200,
+                headers: [(
+                    "link".to_owned(),
+                    "<https://api.github.com/repos/GetFelix/felix/issues/813/dependencies/blocked_by?page=2>; rel=\"next\"".to_owned(),
+                )]
+                .into(),
+                body: json!([]),
+            },
+        ),
+        ("/issues/813/sub_issues", status(404, &[])),
+        ("/issues/813/dependencies/blocked_by", status(301, &[])),
+        ("/issues/813/dependencies/blocked_by", ok(json!({ "message": "?" }))),
+        ("/issues/813/dependencies/blocked_by", ok(json!([{ "repository_url": "x" }]))),
+    ];
+    for (route, answer) in partial {
+        let rig = rig();
+        let ingest = linked_pair(&rig).await;
+        rig.gh
+            .on("GET", "/issues/813/dependencies/blocked_by", ok(json!([])));
+        rig.gh.on("GET", route, answer);
+        ingest.poll(false).await.unwrap();
+        assert_eq!(rig.tracker.state().edges.len(), 1, "{route}");
+        assert_eq!(rig.tracker.count("unlinked"), 0, "{route}");
+    }
+    // A read that fails stops the poll before anything is unlinked.
+    let rig = rig();
+    let ingest = linked_pair(&rig).await;
+    rig.gh.on(
+        "GET",
+        "/issues/813/dependencies/blocked_by",
+        status(500, &[]),
+    );
+    assert!(ingest.poll(false).await.is_err());
+    assert_eq!(rig.tracker.state().edges.len(), 1);
+    assert_eq!(rig.tracker.count("unlinked"), 0);
+}
+
 #[test]
 fn the_item_id_follows_the_upstream_id() {
     assert_eq!(item_id(UP), item_id(UP));
