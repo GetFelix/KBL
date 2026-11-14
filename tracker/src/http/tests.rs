@@ -19,8 +19,10 @@ struct Quiet {
     published: Arc<StdMutex<Vec<String>>>,
     lease_lost: Arc<AtomicBool>,
     /// What every read returns, for a log that is there before the start.
-    log: Arc<StdMutex<Vec<(u64, Vec<u8>)>>>,
+    log: Arc<StdMutex<Records>>,
 }
+
+type Records = Vec<(u64, Vec<u8>)>;
 
 impl Quiet {
     fn published(&self) -> Vec<String> {

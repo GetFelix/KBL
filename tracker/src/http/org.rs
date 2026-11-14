@@ -33,7 +33,7 @@ pub(super) async fn list_teams<B: Broker>(
 ) -> Response {
     let org = match org_admin(&app, &headers) {
         Ok((org, _)) => org,
-        Err(res) => return res,
+        Err(res) => return *res,
     };
     let state = org.org.state().await;
     let teams: Vec<Value> = state
@@ -61,7 +61,7 @@ pub(super) async fn create_team<B: Broker>(
 ) -> Response {
     let (org, by) = match org_admin(&app, &headers) {
         Ok(found) => found,
-        Err(res) => return res,
+        Err(res) => return *res,
     };
     let Ok(Json(body)) = body else {
         return refused(StatusCode::BAD_REQUEST, "the body is not a team", "invalid");
@@ -112,13 +112,13 @@ pub(super) async fn create_team<B: Broker>(
 fn org_admin<'a, B: Broker>(
     app: &'a Arc<App<B>>,
     headers: &HeaderMap,
-) -> Result<(&'a OrgSide<B>, Key), Response> {
+) -> Result<(&'a OrgSide<B>, Key), Box<Response>> {
     let Some(org) = app.teams.org() else {
-        return Err(refused(
+        return Err(Box::new(refused(
             StatusCode::NOT_FOUND,
             "this tracker runs without teams: set KBL_ORG_NAMESPACE",
             "teams_off",
-        ));
+        )));
     };
     let Some(token) = bearer(headers) else {
         return Err(denied((
@@ -139,6 +139,6 @@ fn org_admin<'a, B: Broker>(
             StatusCode::FORBIDDEN,
             "this call is for an org admin",
             "org_admin_required",
-        ))
+        )))
     }
 }

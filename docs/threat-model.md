@@ -146,6 +146,7 @@ and the token file's callers belong to it.
 |---|---|---|---|
 | `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:110`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:149`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
 | `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:208`) |
+| `/v1/org/teams` | `team`, `display_name` on `POST` | Create a team, or adopt a namespace that already holds another team's data; list the org's teams | Org admin only: a person of the token file. An agent or ingest token gets `403` with `org_admin_required`, before the body is read (`tracker/src/http/org.rs`). The name follows the key rule and is not `kbl`. A name already on `org.events` writes nothing and answers `created: false`. The tracker only serves the namespace: Felix grants on it come from `kbl-tool team create`, run with the org admin's own Felix sign-in. Without `KBL_ORG_NAMESPACE` it answers `404` with `teams_off` |
 
 A person token in more than one team gets `400` with `team_required` on a path
 without a team. A team takes at most `KBL_TEAM_INFLIGHT` calls at once and
@@ -153,8 +154,17 @@ answers `503` with `team_busy` over that (`tracker/src/teams.rs:61`), so one
 team's load does not hold the others' calls; waiting `work_next` calls have
 their own pool, so they cannot starve a holder's `extend`. A slot is taken
 before the body is read, so a slow upload holds one of its own team's slots
-only. A team that loses its lease answers `503` alone; the process exits when
-every team has lost its lease, or at once if a team's maintenance panics (`tracker/src/teams.rs:132`).
+only. A team that loses its lease answers `503` alone. Without teams on, the process
+exits when every team has lost its lease. With teams on, a team that lost its
+lease, or could not start (its log has a record of a newer format), answers
+`503` with `team_unavailable` and is started again in the background with a
+fresh fold; the process exits only when the org lease has been lost for 60
+seconds. Either way it exits at once if a team's maintenance panics
+(`tracker/src/teams.rs`).
+
+Each team's tracker, and the org writer, exchanges its ID token for Felix
+tokens narrowed to its own namespace (`tracker/src/felix.rs`), so a record
+sent on the wrong team's connection is refused by the broker.
 
 ## Ingest
 
@@ -304,7 +314,6 @@ a team or a token it was not given.
 
 | Route | Fields the caller controls | What they could steer | Check |
 |---|---|---|---|
-| `POST /v1/org/teams` | `team`, `display_name` | Create a team, or adopt a namespace that already holds another team's data | `org_admin` only. A name already on `org.events` is refused. `kbl` is reserved. Names follow the key rule |
 | `POST /v1/teams/{team}/members` | `team`, `person`, `role`, `repos`, `subject` | Make itself or a friend admin; reach another team; take over a person by naming their OIDC subject | Admin of that team or `org_admin`. `org_admin` is granted only by an `org_admin`. `repos` must be the team's own sources. A `subject` already on another person is refused. The Felix assignment is made with the caller's own Felix credential, so Felix refuses one outside the caller's scope |
 | `DELETE /v1/teams/{team}/members/{person}` | `team`, `person` | Lock out the other admins | Team admin or `org_admin`. The last admin of a team cannot be removed; an `org_admin` can always add one back |
 | `POST /v1/teams/{team}/agents` | `team`, `agent` | Mint tokens without limit; take an existing agent's name and its holds | Triager or above in that team. A name in use in the team is refused, and so is a revoked one, so a new token never inherits holds. A cap on agents per team |
@@ -318,19 +327,19 @@ a team or a token it was not given.
 
 | Attack | Check |
 |---|---|
-| A team's agent or viewer reads or writes another team's streams with a raw client | Felix: every grant names the team's namespace, and no team principal has anything outside it. Tested with a raw client in `dev/check-teams.mjs` |
+| A team's agent or viewer reads or writes another team's streams with a raw client | Felix: every grant names the team's namespace, and no team principal has anything outside it. Tested with a raw Felix client in `dev/check-teams.mjs`: a viewer of team `alpha` reads `alpha`'s `work.events` and cannot read or write `beta`'s, and the tracker's token narrowed to `alpha` cannot reach `beta` either |
 | A tracker bug routes team A's record to team B's log | Each team's fold publishes only with a Felix token narrowed to its own namespace, so the broker refuses it |
 | A revoked agent keeps working | The token table is the fold of `org.events`; the next call after `agent_revoked` is refused, and its holds are released |
 | A removed member keeps reading the dashboard | Removing the Felix assignment revokes the person's broker tokens and ends open streams, within the control plane's sync interval |
 | A cross-team prerequisite floods another team's Triage | A grant from the receiving team is needed, the filing agent's pending-proposal caps apply, and the grant can carry its own cap |
 | A forged "prerequisite done" frees blocked work | `prerequisite_settled` is written only by the tracker, from the other team's fold. No route takes it from a person, agent or ingest |
 | `org.events` leaks | It holds SHA-256 hashes of 32-byte random tokens, not tokens. Only the tracker and org admins can read it |
-| One team's load or a broken log stops the others | A cap on calls in flight per team, and a team with a lost lease or failing Felix calls answers 503 alone: built, see [Team routes](#team-routes). A team whose log has a newer format at start still stops the process, and a team that lost its lease is not taken back without a restart ([#195](https://github.com/GetFelix/KBL/issues/195)). One process is still one crash for all (#124) |
+| One team's load or a broken log stops the others | A cap on calls in flight per team, and a team with a lost lease or failing Felix calls answers 503 alone: built, see [Team routes](#team-routes). A team whose log has a newer format, or that lost its lease, answers 503 and is retried in the background while the others serve. One process is still one crash for all (#124) |
 | A person in two teams acts in the wrong one | Person routes name the team; a person token in several teams gets `team_required` on a path without one |
 
 ## Records on org.events
 
-Built in `kbl-core` ([#185](https://github.com/GetFelix/KBL/issues/185)); no route writes them yet. The tracker will be the only appender, and
+Built in `kbl-core` ([#185](https://github.com/GetFelix/KBL/issues/185)). The tracker writes `team_created`; no route writes the others yet. The tracker will be the only appender, and
 it checks the caller's role before it asks the fold. The fold (`OrgState::check`)
 then refuses a record the log cannot take, before the append and again on replay, so a
 refused call writes nothing and an old log folds as it did. The log holds the SHA-256 of
@@ -338,7 +347,7 @@ each token and never a token. A format above the build's stops the reader.
 
 | Kind | Who may write | Check |
 |---|---|---|
-| `team_created` | Org admin (route check, later) | Name follows the key rule and is not `kbl`; repeating a team changes nothing |
+| `team_created` | Org admin, through `POST /v1/org/teams`; or the tracker, adopting `KBL_NAMESPACE` when the log is empty | Name follows the key rule and is not `kbl`; repeating a team changes nothing |
 | `person_added` | Org admin, team admin (route check, later) | Name and OIDC subject unique, token hash not used by any person, agent or ingest worker |
 | `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last unscoped admin of a team cannot be demoted; an admin role covers the whole team, so a scoped one is refused |
 | `role_revoked` | Team admin, org admin (route check, later) | The last admin of a team and the last org admin stay |
