@@ -66,9 +66,11 @@ Two more parties are outside KBL and can still steer it:
 The token file must be mode 600 or 400 (`tracker/src/config.rs:91`), a token
 may be listed once (`tracker/src/config.rs:114`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs:149`).
-The tracker and the webhook serve plain HTTP: **None**
-([#158](https://github.com/GetFelix/KBL/issues/158)). Tokens are
-long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
+The tracker and the webhook serve plain HTTP, so each refuses to listen on
+an address other than loopback unless a flag says a TLS proxy is in front
+(`tracker/src/main.rs:121`, `ingest/src/main.rs:63`). The flag is a promise
+the process cannot check: set it without a proxy and tokens cross the network
+in the clear. Tokens are long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
 There is no request rate limit; a refused call writes nothing, and the first
 cap an attempt hits is logged once (`tracker/src/tracker/tools.rs:687`).
 
@@ -170,7 +172,7 @@ sent on the wrong team's connection is refused by the broker.
 
 | Route | Who can call it | What it could steer | Check |
 |---|---|---|---|
-| `/webhook` | Anyone who can reach the port | Make ingest spend GitHub requests; inject data | A webhook carries no data into the tracker, it only wakes the poll. HMAC signature, and an empty secret refuses everything (`ingest/src/webhook.rs:83`). A repeated delivery id is dropped (`ingest/src/webhook.rs:90`), which stops GitHub's own redeliveries and nothing else: the signature covers the body, not the delivery id, so a captured body can be sent again under a new id. Over plain HTTP anyone on the path can capture one (#158). What bounds a replay is that wakes are spaced (`ingest/src/webhook.rs:101`) and a wake only starts a poll |
+| `/webhook` | Anyone who can reach the port | Make ingest spend GitHub requests; inject data | A webhook carries no data into the tracker, it only wakes the poll. HMAC signature, and an empty secret refuses everything (`ingest/src/webhook.rs:83`). A repeated delivery id is dropped (`ingest/src/webhook.rs:90`), which stops GitHub's own redeliveries and nothing else: the signature covers the body, not the delivery id, so a captured body can be sent again under a new id. Without TLS in front, anyone on the path can capture one; ingest listens only on loopback unless a TLS proxy is declared. What bounds a replay is that wakes are spaced (`ingest/src/webhook.rs:101`) and a wake only starts a poll |
 
 ### What ingest believes
 
@@ -374,7 +376,6 @@ each token and never a token. A format above the build's stops the reader.
 
 | Issue | Gap |
 |---|---|
-| [#158](https://github.com/GetFelix/KBL/issues/158) | The tracker and the webhook serve plain HTTP |
 | [#109](https://github.com/GetFelix/KBL/issues/109) | Proposals draw no budget; post keys can be reused across claims |
 | [#185](https://github.com/GetFelix/KBL/issues/185) | `org.events` has no record to remove a person, rotate a person's token or revoke an ingest token yet; counts of teams, people and members are not capped |
 | [#120](https://github.com/GetFelix/KBL/issues/120) | No roles: every person can do everything, every agent can claim any repo's work |

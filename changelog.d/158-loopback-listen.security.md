@@ -1,0 +1,1 @@
+`kbl-tracker` and the `kbl-ingest` webhook serve plain HTTP, so they now refuse a listen address other than loopback unless `--behind-tls-proxy` (`KBL_TRACKER_BEHIND_TLS_PROXY`) or `--webhook-behind-tls-proxy` (`KBL_INGEST_WEBHOOK_BEHIND_TLS_PROXY`) says a TLS proxy is in front.
