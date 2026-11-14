@@ -404,7 +404,7 @@ With [teams](#teams), each row holds per team: the tracker publishes to a team's
 
 ### Teams
 
-Partly built: the `org.events` records and fold exist in `kbl-core`. The tracker keeps a team table and serves the `/v1/teams/{team}/` paths and `GET /v1/me`, with one team, `KBL_NAMESPACE`, whose callers come from the token file. It does not read `org.events` yet. This is the sketch for [Teams in design.md](design.md#teams)
+Partly built: the `org.events` records and fold exist in `kbl-core`. The tracker keeps a team table and serves the `/v1/teams/{team}/` paths and `GET /v1/me`. With `KBL_ORG_NAMESPACE` set it reads `org.events`, and `POST /v1/org/teams` (with `kbl-tool team create`) adds a team while it runs. Members, agents, sources, ingest tokens and grants are not on `org.events` yet: the token file's people are the org admins, and its agents and ingest workers belong to `KBL_NAMESPACE`. This is the sketch for [Teams in design.md](design.md#teams)
 ([#185](https://github.com/GetFelix/KBL/issues/185)). One tracker serves
 several teams, each in its own Felix namespace with its own `work.events`.
 
@@ -413,7 +413,7 @@ it does today.
 
 | Variable | Default | What |
 |---|---|---|
-| `KBL_ORG_NAMESPACE` | unset | The namespace that holds `org.events`. Set, the tracker serves every team the org log lists |
+| `KBL_ORG_NAMESPACE` | unset | The namespace that holds `org.events`, and it must be `kbl`. Set, the tracker serves every team the org log lists. Built |
 | `KBL_NAMESPACE` | `default` | The first team. With teams on, it is adopted as a team the first time the tracker finds `org.events` empty |
 | `KBL_TRACKER_TOKENS_FILE` | required today, optional with teams | Read as today. Its entries belong to the first team, and its people are org admins |
 | `KBL_TEAM_INFLIGHT` | 64 | Calls in flight per team, so one busy team cannot starve the others. Built |
@@ -447,7 +447,8 @@ with the record's offset.
 | Call | Role | Records |
 |---|---|---|
 | `GET /v1/me` | Any person | Nothing. Answers the person's teams and role in each |
-| `POST /v1/org/teams` `{team, display_name?}` | `org_admin` | `team_created`. The tracker then creates the team's streams and group if they are missing, takes its lease and serves it |
+| `GET /v1/org/teams` | `org_admin` | Nothing. Every team, whether it was adopted, and whether it is serving. Built |
+| `POST /v1/org/teams` `{team, display_name?}` | `org_admin` | `team_created`. The tracker then creates the team's streams and group if they are missing, takes its lease and serves it. Answers `{team, created, offset, serving}`; a team already on the log answers `created: false`. Built |
 | `POST /v1/teams/{team}/members` `{person, role, repos?, subject?}` | Team `admin` | `person_added` for a new person, with a new token answered once; then `role_granted`. `repos` narrows the role to some of the team's repos |
 | `DELETE /v1/teams/{team}/members/{person}` | Team `admin` | `role_revoked` |
 | `POST /v1/teams/{team}/agents` `{agent}` | Team `triager` | `agent_added`, with a new token answered once |

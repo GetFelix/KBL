@@ -8,6 +8,9 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::config::Tokens;
+use crate::teams::Team;
+
+mod org;
 
 /// A Felix with no records that remembers which streams were published to, and
 /// whose writer lease can be taken away.
@@ -15,7 +18,11 @@ use crate::config::Tokens;
 struct Quiet {
     published: Arc<StdMutex<Vec<String>>>,
     lease_lost: Arc<AtomicBool>,
+    /// What every read returns, for a log that is there before the start.
+    log: Arc<StdMutex<Records>>,
 }
+
+type Records = Vec<(u64, Vec<u8>)>;
 
 impl Quiet {
     fn published(&self) -> Vec<String> {
@@ -30,7 +37,7 @@ impl Broker for Quiet {
         Ok(published.len() as u64 - 1)
     }
     async fn read_from(&self, _: &str, _: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
-        Ok(Vec::new())
+        Ok(self.log.lock().unwrap().clone())
     }
     async fn poll(
         &self,
@@ -65,6 +72,17 @@ impl Broker for Quiet {
     }
     async fn forget(&self, _: Option<&str>) {}
     async fn close_idle(&self, _: Duration) {}
+}
+
+fn quiet_settings() -> crate::tracker::Settings {
+    crate::tracker::Settings {
+        grants: Default::default(),
+        visibility: Duration::from_secs(90),
+        lease_ttl: Duration::from_secs(15),
+        lease_wait: Duration::ZERO,
+        crash_after_poll: false,
+        review_tiers: crate::tracker::default_review_tiers(),
+    }
 }
 
 async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<Quiet> {

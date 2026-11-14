@@ -29,10 +29,11 @@ use tower::ServiceExt;
 
 use crate::config::Caller;
 use crate::felix::Broker;
-use crate::teams::{Team, Teams};
+use crate::teams::Teams;
 use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer};
 
 mod ingest;
+mod org;
 
 /// A call the token does not allow: status and why.
 type Denied = (StatusCode, &'static str);
@@ -52,6 +53,10 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/me", get(me::<B>))
+        .route(
+            "/v1/org/teams",
+            get(org::list_teams::<B>).post(org::create_team::<B>),
+        )
         .route(
             "/v1/teams/{team}/{*rest}",
             any(move |req: Request| in_team(scoped.clone(), req)),
@@ -128,7 +133,7 @@ async fn in_team(work: Router, mut req: Request) -> Response {
 /// Who is calling and in which team, with the team's slot for the call. Taken
 /// before the body is read, so an unknown token is refused first.
 struct Call<B> {
-    team: Arc<Team<B>>,
+    tracker: Tracker<B>,
     caller: Caller,
     _slot: OwnedSemaphorePermit,
 }
@@ -161,6 +166,16 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
             }
             None => found.remove(0),
         };
+        let Some(tracker) = team.tracker() else {
+            let mut res = refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "the team is not serving; it is being started again",
+                "team_unavailable",
+            );
+            res.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+            return Err(res);
+        };
         let Some(slot) = team.admit(parts.uri.path() == "/v1/work/next") else {
             let mut res = refused(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -172,7 +187,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
             return Err(res);
         };
         Ok(Self {
-            team,
+            tracker,
             caller,
             _slot: slot,
         })
@@ -181,7 +196,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
 
 impl<B> Call<B> {
     fn tracker(&self) -> &Tracker<B> {
-        self.team.tracker()
+        &self.tracker
     }
 
     fn agent(&self) -> Result<AgentName, Denied> {

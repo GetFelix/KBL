@@ -69,7 +69,7 @@ pub(crate) enum Caller {
     Ingest(Key),
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Tokens {
     agents: Vec<(String, AgentName)>,
     people: Vec<(String, Key)>,
@@ -156,6 +156,15 @@ impl Tokens {
             .iter()
             .map(|(t, w)| (t.as_str(), Caller::Ingest(w.clone())));
         agents.chain(people).chain(ingest)
+    }
+
+    /// The people only: what every team other than the token file's own
+    /// knows of the file, since its people are org admins.
+    pub(crate) fn people_only(&self) -> Tokens {
+        Tokens {
+            people: self.people.clone(),
+            ..Tokens::default()
+        }
     }
 
     pub(crate) fn grants(&self) -> Grants {
