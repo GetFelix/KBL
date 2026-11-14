@@ -160,6 +160,9 @@ impl<B: Broker> Tracker<B> {
     /// claim ends as blocked, which costs no try, and the item waits on the
     /// prerequisite. This is the one cross-tree link an agent may make, and
     /// only into a source and repo its grants name or those of its own tree.
+    ///
+    /// From a held triage item, the item under triage waits instead and the
+    /// claim goes on, so the work is found before anyone builds.
     pub(crate) async fn prerequisite(
         &self,
         agent: &AgentName,
@@ -169,7 +172,6 @@ impl<B: Broker> Tracker<B> {
         done_when: DoneWhen,
         cost_micros: u64,
     ) -> Result<Value, Error> {
-        let cost_micros = self.charge(cost_micros);
         let (prerequisite, new) = match which {
             Prereq::New {
                 target,
@@ -199,29 +201,70 @@ impl<B: Broker> Tracker<B> {
             Prereq::Existing(id) => (id, None),
         };
         self.begin().await?;
+        let created = new.is_some();
         {
             let mut core = self.0.core.lock().await;
+            let under = core
+                .state
+                .items
+                .get(item)
+                .filter(|i| i.work == WorkKind::Triage)
+                .and_then(|i| i.parent.clone());
+            let waiter = under.as_ref().unwrap_or(item);
+            let reply = |created| match &under {
+                Some(target) => waiting(target, item, &prerequisite, created),
+                None => json!({
+                    "item": item, "status": "blocked",
+                    "prerequisite": prerequisite, "created": created
+                }),
+            };
+            let linked = core
+                .state
+                .edges
+                .contains(&(waiter.clone(), prerequisite.clone()));
+            if under.is_some() {
+                // This claim goes on, so only its holder gets an answer.
+                held(&core, agent, item)?;
+            }
             if let Some(n) = &new {
                 // A retry after the claim ended answers with what the first call made.
                 if let Some(old) = core.state.items.get(&prerequisite) {
-                    let same = old.proposed_by_agent
-                        && old.target.as_ref() == Some(&n.target)
-                        && core
-                            .state
-                            .edges
-                            .contains(&(item.clone(), prerequisite.clone()));
+                    let same =
+                        old.proposed_by_agent && old.target.as_ref() == Some(&n.target) && linked;
                     if !same {
                         return Err(Error::Refused {
                             why: "key_reused".into(),
                         });
                     }
-                    return Ok(json!({
-                        "item": item, "status": "blocked",
-                        "prerequisite": prerequisite, "created": false
-                    }));
+                    // A triage holder's retry that changes `done_when` would otherwise look done.
+                    let released = core
+                        .state
+                        .release_edges
+                        .contains(&(waiter.clone(), prerequisite.clone()));
+                    if under.is_some() && released != (done_when == DoneWhen::Released) {
+                        return Err(Error::Invalid(format!(
+                            "`done_when` differs from the first call; name {prerequisite} with `existing` to change it"
+                        )));
+                    }
+                    return Ok(reply(false));
                 }
             }
             held(&core, agent, item)?;
+            if under.is_some() {
+                if &prerequisite == item {
+                    return Err(Error::Invalid(format!(
+                        "`existing` names {item}, the triage item itself"
+                    )));
+                }
+                // The claim goes on, so a repeat would only use up a post.
+                let released = core
+                    .state
+                    .release_edges
+                    .contains(&(waiter.clone(), prerequisite.clone()));
+                if linked && released == (done_when == DoneWhen::Released) {
+                    return Ok(reply(false));
+                }
+            }
             let allowed = self.visible_targets(&core, agent, item);
             let seen = match &new {
                 Some(n) => allowed.contains(&n.target),
@@ -242,8 +285,31 @@ impl<B: Broker> Tracker<B> {
                 self.proposal_room(&mut core, agent, item, "prerequisite")
                     .await?;
             }
+            if let Some(target) = &under {
+                let attempt = held(&core, agent, item)?;
+                let reply = reply(created);
+                // Nothing is charged here: triage reports its cost when it completes.
+                let record = WorkRecord::Prerequisite {
+                    item: target.clone(),
+                    attempt,
+                    prerequisite,
+                    key,
+                    new,
+                    done_when,
+                    cost_micros: 0,
+                    triage: Some(item.clone()),
+                };
+                // Appended under the lock the caps were checked under: this
+                // claim goes on, so a second call could otherwise race past them.
+                self.agent_append(&mut core, agent, item, "prerequisite", record)
+                    .await?;
+                drop(core);
+                // The item under triage is no longer Ready.
+                self.sync_ready().await;
+                return Ok(reply);
+            }
         }
-        let created = new.is_some();
+        let cost_micros = self.charge(cost_micros);
         let record = {
             let prerequisite = prerequisite.clone();
             let item = item.clone();
@@ -255,6 +321,7 @@ impl<B: Broker> Tracker<B> {
                 new,
                 done_when,
                 cost_micros,
+                triage: None,
             }
         };
         let reply = json!({
@@ -913,6 +980,14 @@ impl<B: Broker> Tracker<B> {
             _ => {}
         }
     }
+}
+
+/// The answer to a prerequisite posted from triage: `target` waits and the claim stands.
+fn waiting(target: &ItemId, triage: &ItemId, prerequisite: &ItemId, created: bool) -> Value {
+    json!({
+        "item": target, "status": "waiting", "claim": "held",
+        "triage": triage, "prerequisite": prerequisite, "created": created
+    })
 }
 
 /// Whether `other` is in `item`'s tree or in a repo the agent may reach.

@@ -826,13 +826,39 @@ impl State {
     /// fold would let act.
     pub fn may_cite(&self, rec: &WorkLogged) -> Result<(), Reject> {
         match &rec.record {
-            WorkRecord::Decision { item, attempt, .. }
-            | WorkRecord::Prerequisite { item, attempt, .. } => {
-                self.agent_holder(item, *attempt, rec)
-            }
+            WorkRecord::Decision { item, attempt, .. } => self.agent_holder(item, *attempt, rec),
+            WorkRecord::Prerequisite {
+                item,
+                attempt,
+                triage,
+                ..
+            } => self
+                .prerequisite_holder(item, *attempt, triage.as_ref(), rec)
+                .map(|_| ()),
             WorkRecord::Answer { item, .. } => self.may_answer(item, rec).map(|_| ()),
             _ => Ok(()),
         }
+    }
+
+    /// The item whose holder may write a prerequisite for `item`: `item`
+    /// itself, or with `triage` the triage item under it. Closing `item`
+    /// ends that claim, so a held triage item means `item` is open.
+    fn prerequisite_holder<'a>(
+        &self,
+        item: &'a ItemId,
+        attempt: u32,
+        triage: Option<&'a ItemId>,
+        rec: &WorkLogged,
+    ) -> Result<&'a ItemId, Reject> {
+        let holder = triage.unwrap_or(item);
+        self.agent_holder(holder, attempt, rec)?;
+        if let Some(t) = triage {
+            let t = self.item(t)?;
+            if t.work != WorkKind::Triage || t.parent.as_ref() != Some(item) {
+                return Err(Reject::NotHolder);
+            }
+        }
+        Ok(holder)
     }
 
     fn agent_holder(&self, id: &ItemId, attempt: u32, rec: &WorkLogged) -> Result<(), Reject> {
@@ -1054,6 +1080,7 @@ impl State {
                 new,
                 done_when,
                 cost_micros,
+                triage,
             } => self.prerequisite(
                 offset,
                 rec,
@@ -1064,6 +1091,7 @@ impl State {
                 new.as_ref(),
                 *done_when,
                 *cost_micros,
+                triage.as_ref(),
             )?,
             WorkRecord::Shipped { item, release } => {
                 if rec.actor == Actor::Agent {
@@ -2222,9 +2250,12 @@ impl State {
         new: Option<&NewPrerequisite>,
         done_when: DoneWhen,
         cost_micros: u64,
+        triage: Option<&ItemId>,
     ) -> Result<(), Reject> {
-        self.agent_holder(item, attempt, rec)?;
-        if self.path_mut(item, attempt)?.posts >= MAX_POSTS {
+        let holder = self
+            .prerequisite_holder(item, attempt, triage, rec)?
+            .clone();
+        if self.path_mut(&holder, attempt)?.posts >= MAX_POSTS {
             return Err(Reject::LimitReached);
         }
         let scope = (None, Some(rec.by.clone()), key.clone());
@@ -2244,7 +2275,8 @@ impl State {
                 }
             }
         }
-        if item == prerequisite || self.reaches(prerequisite, item) {
+        if item == prerequisite || triage == Some(prerequisite) || self.reaches(prerequisite, item)
+        {
             return Err(Reject::Cycle);
         }
         if let Some(n) = new {
@@ -2264,12 +2296,17 @@ impl State {
         }
         let root = self.item(item)?.root.clone();
         self.draw_cost(&root, cost_micros);
-        let it = self.item_mut(item)?;
-        it.hold = None;
+        let it = self.item_mut(&holder)?;
         it.cost_micros = it.cost_micros.saturating_add(cost_micros);
+        // Triage still has its answer to give, so its claim goes on.
+        if triage.is_none() {
+            it.hold = None;
+        }
         if let Some(p) = it.paths.iter_mut().find(|p| p.attempt == attempt) {
-            // Waiting on another repo is not a failed try.
-            p.tries = p.tries.saturating_sub(1);
+            if triage.is_none() {
+                // Waiting on another repo is not a failed try.
+                p.tries = p.tries.saturating_sub(1);
+            }
             p.posts += 1;
         }
         Ok(())

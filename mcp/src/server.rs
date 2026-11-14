@@ -553,7 +553,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Create work under the item you hold: split, augment, question or test, live at once and counted against the root's budget. Use `proposal` for a bug or task outside this item; a person decides whether it becomes work. Use `prerequisite` when you cannot go on until work in another repo is done: give target_source, target_repo, title and why, or `existing` for an item that is already there. It ends your claim as blocked without costing a try, and the item comes back to Ready when the work is done (`done_when`: merged or released). Sending the same key again is safe."
+        description = "Create work under the item you hold: split, augment, question or test, live at once and counted against the root's budget. Use `proposal` for a bug or task outside this item; a person decides whether it becomes work. Use `prerequisite` when you cannot go on until work in another repo is done: give target_source, target_repo, title and why, or `existing` for an item that is already there. It ends your claim as blocked without costing a try, and the item comes back to Ready when the work is done (`done_when`: merged or released). While you hold a triage item, a `prerequisite` is for the item you are triaging: that item waits, you keep your claim and `cost_micros` is ignored (report the cost when you complete), so post what it needs from other repos before you answer with work_triage. Sending the same key again is safe."
     )]
     async fn work_post(&self, Parameters(a): Parameters<WorkPostArgs>) -> Result<String, String> {
         let item = self.item_or_held(a.item).await?;
@@ -577,7 +577,7 @@ impl Server {
             .into_iter()
             .map(|e| json!({ "stream": e.stream, "offset": e.offset }))
             .collect();
-        // The claim ends with this call, so the keep-alive stops with it.
+        // The claim ends with this call unless it is triage, so the keep-alive stops with it.
         self.work()?
             .finish_post(
                 &item,

@@ -2164,6 +2164,7 @@ fn needs(prereq: &str, new: bool, done_when: DoneWhen) -> WorkRecord {
         }),
         done_when,
         cost_micros: 0,
+        triage: None,
     }
 }
 
@@ -2376,6 +2377,138 @@ fn prerequisite_evidence_cannot_cite_the_future() {
     l.agent("w1", r);
     assert_eq!(last_rejection(&l), Some(Reject::EvidenceFromTheFuture));
     assert!(fold(&l.0).items[&id("r1")].hold.is_some());
+}
+
+/// r1 is accepted with a triage item t1 that w2 holds, on a log at format 3.
+fn held_triage() -> Log {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.person(accept("r1"));
+    l.person(WorkRecord::FormatRaised { to: 3 });
+    l.agent("w2", claimed("t1", 1));
+    l
+}
+
+fn triage_needs(prereq: &str, new: bool) -> WorkRecord {
+    let mut r = needs(prereq, new, DoneWhen::Merged);
+    if let WorkRecord::Prerequisite { triage, .. } = &mut r {
+        *triage = Some(id("t1"));
+    }
+    r
+}
+
+#[test]
+fn triage_posts_a_prerequisite_for_the_item_it_triages_and_keeps_its_claim() {
+    let mut l = held_triage();
+    l.agent("w2", triage_needs("g1", true));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    // The item under triage waits, so no build claim is handed out.
+    assert!(s.edges.contains(&(id("r1"), id("g1"))));
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Blocked));
+    l.agent("w1", claimed("r1", 1));
+    assert_eq!(last_rejection(&l), Some(Reject::NotReady));
+    l.0.pop();
+    // The proposal is in the other repo's Triage, traced to the tree it came from.
+    let g1 = &s.items[&id("g1")];
+    assert!(g1.proposed_by_agent && !g1.accepted);
+    assert_eq!(g1.proposed_from, Some((key("w2"), id("r1"))));
+    // Triage goes on: the claim stands, the try still counts, the post is counted.
+    let t1 = &s.items[&id("t1")];
+    assert_eq!(t1.hold.as_ref().map(|h| h.attempt), Some(1));
+    assert_eq!((t1.paths[0].tries, t1.paths[0].posts), (1, 1));
+    assert!(!s.edges.contains(&(id("t1"), id("g1"))));
+
+    l.agent(
+        "w2",
+        WorkRecord::Triaged {
+            item: id("r1"),
+            tier: 1,
+            why: "needs the gateway first".into(),
+            duplicate_of: None,
+            unclear: None,
+            depends_on: Vec::new(),
+            split: Vec::new(),
+        },
+    );
+    l.agent("w2", done("t1", 1, 0));
+    l.person(accept("g1"));
+    l.person(merged("g1"));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_triage_prerequisite_waits_for_the_format_and_for_the_triage_holder() {
+    let mut l = held_triage();
+    let refused = |l: &Log, n: usize, why: Reject| {
+        let s = fold(&l.0);
+        assert_eq!(s.rejections.len(), n);
+        assert_eq!(s.rejections.last().unwrap().why, why);
+        assert!(s.edges.is_empty() && !s.items.contains_key(&id("g1")));
+    };
+    // Not the holder of the triage item.
+    l.agent("w3", triage_needs("g1", true));
+    refused(&l, 1, Reject::NotHolder);
+    // A held item that is not triage work.
+    l.agent("w3", claimed("r1", 1));
+    let mut wrong = triage_needs("g1", true);
+    if let WorkRecord::Prerequisite { triage, .. } = &mut wrong {
+        *triage = Some(id("r1"));
+    }
+    l.agent("w3", wrong);
+    refused(&l, 2, Reject::NotHolder);
+    // Triage of another item.
+    l.tracker(imported("r2"));
+    let mut other = triage_needs("g1", true);
+    if let WorkRecord::Prerequisite { item, .. } = &mut other {
+        *item = id("r2");
+    }
+    l.agent("w2", other);
+    refused(&l, 3, Reject::NotHolder);
+    // The item cannot wait on its own triage.
+    l.agent("w2", triage_needs("t1", false));
+    refused(&l, 4, Reject::Cycle);
+    // Closing the item ends the triage claim with it.
+    l.person(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Dismissed,
+    });
+    l.agent("w2", triage_needs("g1", true));
+    refused(&l, 5, Reject::NotHolder);
+
+    // Before the raise the record is refused, as an older build would not read it.
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.person(accept("r1"));
+    l.agent("w2", claimed("t1", 1));
+    l.agent("w2", triage_needs("g1", true));
+    assert_eq!(last_rejection(&l), Some(Reject::Format));
+    assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_triage_prerequisite_may_name_an_existing_item_and_cannot_close_a_cycle() {
+    let mut l = held_triage();
+    l.tracker(imported("g2"));
+    l.person(accept("g2"));
+    l.agent("w2", triage_needs("g2", false));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty());
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Blocked));
+    assert!(s.items[&id("t1")].hold.is_some());
+
+    let mut l = held_triage();
+    l.tracker(imported("g2"));
+    l.person(WorkRecord::Linked {
+        item: id("g2"),
+        to: id("r1"),
+    });
+    l.agent("w2", triage_needs("g2", false));
+    assert_eq!(last_rejection(&l), Some(Reject::Cycle));
 }
 
 #[test]

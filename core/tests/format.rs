@@ -4,7 +4,7 @@
 
 use kbl_core::codec::Codec;
 use kbl_core::work::{
-    Actor, FORMAT, FORMAT_V1, FORMAT_V2, ReadError, WorkLogged, WorkRecord, read,
+    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{State, fold};
 
@@ -302,4 +302,57 @@ fn a_second_format_log_folds_after_its_raise() {
     let r2 = kbl_core::names::ItemId::new("r2").unwrap();
     assert!(s.items[&r1].left_scope);
     assert!(!s.items[&r2].left_scope);
+}
+
+/// A log that raises to the third format and uses it: triage posts a
+/// prerequisite for the item it triages. Its folded state is pinned in
+/// `wasm/golden/format_3.state.json`.
+const FORMAT_3_LOG: &str = include_str!("work_format_3.jsonl");
+
+#[test]
+fn the_third_format_is_three_and_is_a_prerequisite_from_triage() {
+    assert_eq!(FORMAT_V3, 3);
+    const { assert!(FORMAT >= FORMAT_V3) };
+    let third: Vec<_> = entries(FORMAT_3_LOG)
+        .into_iter()
+        .filter(|(_, r)| r.v == FORMAT_V3 && r.record.kind() != "format_raised")
+        .collect();
+    assert!(!third.is_empty());
+    for (_, r) in third {
+        assert_eq!(r.record.format(), FORMAT_V3);
+        assert!(matches!(
+            r.record,
+            WorkRecord::Prerequisite {
+                triage: Some(_),
+                ..
+            }
+        ));
+    }
+    // The same kind without `triage` is still the first format.
+    let plain = entries(FORMAT_3_LOG)
+        .into_iter()
+        .find(|(_, r)| matches!(r.record, WorkRecord::Prerequisite { triage: None, .. }))
+        .unwrap();
+    assert_eq!((plain.1.v, plain.1.record.format()), (FORMAT_V1, FORMAT_V1));
+}
+
+/// The record before the raise is refused on replay and the ones after it
+/// fold: the item under triage waits on both.
+#[test]
+fn a_third_format_log_folds_after_its_raise() {
+    let s = fold(&entries(FORMAT_3_LOG));
+    assert_eq!(s.format(), FORMAT_V3);
+    assert_eq!(
+        s.rejections,
+        vec![kbl_core::work_fold::Rejection {
+            offset: 5,
+            why: kbl_core::work_fold::Reject::Format
+        }]
+    );
+    let id = |s: &str| kbl_core::names::ItemId::new(s).unwrap();
+    assert!(s.edges.contains(&(id("r1"), id("g1"))));
+    assert!(s.edges.contains(&(id("r1"), id("r2"))));
+    // Both posts were counted on the triage claim, which went on to finish.
+    assert_eq!(s.items[&id("t1")].paths[0].posts, 2);
+    assert!(!s.items.contains_key(&id("g0")));
 }

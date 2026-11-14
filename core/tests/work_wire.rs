@@ -259,6 +259,7 @@ fn every_record() -> Vec<WorkRecord> {
             }),
             done_when: DoneWhen::Released,
             cost_micros: 25_000,
+            triage: None,
         },
         WorkRecord::Prerequisite {
             item: item("r1"),
@@ -268,6 +269,7 @@ fn every_record() -> Vec<WorkRecord> {
             new: None,
             done_when: DoneWhen::Merged,
             cost_micros: 0,
+            triage: None,
         },
         WorkRecord::Shipped {
             item: item("g1"),

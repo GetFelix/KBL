@@ -55,7 +55,7 @@ Two more parties are outside KBL and can still steer it:
    (`tracker/src/http.rs:144`). The name and role on a record come from the
    token, never from the body (`tracker/src/tracker.rs:1228`). The attempt
    number comes from the hold, never from the body
-   (`tracker/src/tracker/tools.rs:932`, `tracker/src/tracker.rs:1226`).
+   (`tracker/src/tracker/tools.rs:1007`, `tracker/src/tracker.rs:1226`).
 2. **Tracker to log.** The tracker is the only writer of `work.events`. It
    appends a record only if the fold accepts it
    (`tracker/src/tracker.rs:1523`), so every rule in
@@ -83,7 +83,7 @@ the process cannot check: set it without a proxy and tokens cross the network
 in the clear. Callers are not checked either: `kbl-mcp` and ingest send their
 token to whatever tracker URL they are given, `http://` included. Tokens are long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
 There is no request rate limit; a refused call writes nothing, and the first
-cap an attempt hits is logged once (`tracker/src/tracker/tools.rs:902`).
+cap an attempt hits is logged once (`tracker/src/tracker/tools.rs:969`).
 
 ## Tracker routes
 
@@ -96,45 +96,45 @@ All of them need an agent token (`tracker/src/http.rs:202`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs:496`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs:1158`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs:855`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs:890`, `tracker/src/tracker.rs:930`) and the fold refuses the claim too (`core/src/work_fold.rs:1163`) |
+| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs:496`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs:1186`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs:855`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs:890`, `tracker/src/tracker.rs:930`) and the fold refuses the claim too (`core/src/work_fold.rs:1191`) |
 | `/v1/work/extend` | `item` | Keep another agent's claim alive, or its own after losing it | Must own the delivery and the hold (`tracker/src/tracker.rs:1727`, `tracker/src/tracker.rs:1734`) |
-| `/v1/work/complete` | `item`, `cost_micros` | Finish work it does not hold; finish over open children; report no cost | Holder only (`tracker/src/tracker.rs:1226`, `core/src/work_fold.rs:1253`). Open children refuse it (`core/src/work_fold.rs:1258`). A fix is not closed by `done`; a merge or a person closes it. Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word; the item total saturates (`core/src/work_fold.rs:1284`) |
-| `/v1/work/release` | `item`, `reason`, `cost_micros` | Release another's work; write a huge record | Holder only (`core/src/work_fold.rs:1298`). Two claims per attempt (`core/src/work_fold.rs:1145`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1165`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word |
-| `/v1/work/give_up` | `item`, `reason`, `cost_micros` | Same as release | Holder only (`core/src/work_fold.rs:1314`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1165`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word |
-| `/v1/work/post` (child or proposal) | `item`, `key`, `work`, `title` | Create work outside its tree, flood Triage with proposals, or create a kind it may not | Must hold `item` (`tracker/src/tracker/tools.rs:130`). Only split, augment, question, test or a proposal (`tracker/src/tracker/tools.rs:44`). Children draw from the root's items and depth (`core/src/work_fold.rs:2133`). 24 posts per attempt (`core/src/work_fold.rs:2129`). A proposal waits for a person; an agent may have 16 waiting at once and 8 from one root, over all its attempts, and a decision frees a slot. The tracker checks this before it appends (`proposal_room`, `tracker/src/tracker/tools.rs`), so the fold of an old log does not change. Proposals draw no budget and a key can be reused across claims ([#109](https://github.com/GetFelix/KBL/issues/109)) |
-| `/v1/work/post` (`work: "prerequisite"`) | `target_source`, `target_repo`, `title`, `why`, `evidence`, `existing`, `done_when`, `cost_micros` | File work in another repo's Triage, without limit; link to another tree | Only a source and repo in the agent's grants or those of its own tree; a grant names both (`tracker/src/config.rs`), and a missing item answers the same as a hidden one (`tracker/src/tracker/tools.rs:228`). Holder, no cycle, not closed (`core/src/work_fold.rs:2226`). A new one counts against the same pending-proposal caps as `proposal`. Sizes (`tracker/src/tracker/tools.rs:180`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:246`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word. `title` and `why` are read by a person before accepting |
-| `/v1/work/link` | `item`, `to` | Link across trees; block work it does not hold | Same tree only (`core/src/work_fold.rs:2467`). Must hold `item`, a child of it or its parent (`core/src/work_fold.rs:2470`). No cycle (`core/src/work_fold.rs:1089`). 100 links per attempt (`core/src/work_fold.rs:1094`). A repeat is refused (`tracker/src/tracker/tools.rs:309`) |
-| `/v1/work/context` | `item` | Read context of work it does not hold | Must hold the item or its parent (`tracker/src/tracker/tools.rs:376`) |
-| `/v1/work/context/add` | `item`, `entry`, `text` | Write on work it does not hold; replace what ingest or a person wrote | Must hold the item or a child of it (`core/src/work_fold.rs:1114`). Text inline up to 4 KiB (`tracker/src/tracker/tools.rs:1100`). 100 writes per attempt (`core/src/work_fold.rs:1116`). An agent replaces only an entry it wrote itself; ingest's, a person's and the fold's stay, refused as `not_your_entry` before the record is logged (`tracker/src/tracker/tools.rs:341`). The fold takes such a record from an old log as it always did |
-| `/v1/work/progress` | `note`, `branch`, `pr` | Point the item at someone else's pull request so its merge or checks count | Holder only (`core/src/work_fold.rs:1219`). One request, one open item (`core/src/work_fold.rs:1227`). Sizes (`tracker/src/tracker/tools.rs:1136`). 100 per attempt (`core/src/work_fold.rs:1231`). `pr` is only a name: see [What ingest believes](#what-ingest-believes) |
-| `/v1/work/decide` | `phase`, `so_far`, `question`, `options`, `chosen`, `why`, `commit`, `evidence`, `revert_check` | Fill the log; cite evidence that is not there; claim a test guards a fix | Holder only (`core/src/work_fold.rs:1396`). Sizes and counts (`tracker/src/tracker/tools.rs:517`, `tracker/src/tracker/tools.rs:522`). 200 per attempt (`core/src/work_fold.rs:1410`). Evidence is before the record (`core/src/work_fold.rs:1400`). Test name 400 bytes (`core/src/work_fold.rs:1405`). A revert check is the agent's word; only one that failed without and passed with the fix is listed as proven. Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:246`) |
-| `/v1/work/finding` | `item`, `severity`, `file`, `line`, `title`, `scenario`, `verdict` | Fill the log; make fix work without limit; write on a review it does not hold or for an older request | Holder of a review item only (`core/src/work_fold.rs:1943`, `core/src/work_fold.rs:1904`). Sizes: file 400, title 200, scenario 4096 bytes, line from 1 (`tracker/src/tracker/tools.rs:1183`, `core/src/work_fold.rs:1948`). 40 per attempt (`core/src/work_fold.rs:1956`). The request must still be the root's (`core/src/work_fold.rs:1954`). A `fix` draws one item from the root's budget; a `defer` is a proposal a person accepts and counts toward the same pending-proposal caps as `proposal` |
-| `/v1/work/verdict` | `item`, `verdict`, `why` | Recommend a merge with fixes open; give a verdict from a first pass; skip the verdict | Holder of a final review only (`core/src/work_fold.rs:1436`, `core/src/work_fold.rs:1437`). `why` at most 2048 bytes (`tracker/src/tracker/tools.rs:1187`). `merge` is refused while a fix a review asked for is open (`core/src/work_fold.rs:1445`). A final review cannot finish without one (`core/src/work_fold.rs:1267`). It is advice: nothing here merges or closes |
-| `/v1/work/triage` | `item`, `tier`, `why`, `duplicate_of`, `unclear`, `depends_on`, `split` | Triage an item it holds no triage for; raise its own work's tier; park an item in Needs you; point a duplicate at nothing; fill the log | Holder of the triage item only, and the record names that item's parent, never an item the agent picks (`tracker/src/tracker/tools.rs:640`, `core/src/work_fold.rs:2427`). It is a proposal: a tier a person set stands (`core/src/work_fold.rs:994`). `why` at most 4096 bytes (`tracker/src/tracker/tools.rs:629`). `duplicate_of` must be another item the agent can see; a missing item and one outside its grants get the same refusal (`tracker/src/tracker/tools.rs:644`). `depends_on` follows the same rule, and may not name the item itself or repeat; `depends_on` and `split` hold at most 8 entries and a split title at most 256 bytes (`triage_lists`, `tracker/src/tracker/tools.rs:1015`). Neither links or creates anything: a person acts on them. A tier never changes the tier an admitted root has. `unclear` only sends the item to a person as a question. The same answer again from the same holder is not logged; an attempt logs at most 4 different answers, then the call is refused; a new holder of the same attempt shares the count (`triage_full`, `core/src/work_fold.rs`) |
-| `/v1/work/step` | `command`, `exit_code`, `output` | Claim a command passed | Holder only (`core/src/work_fold.rs:1456`). Sizes (`tracker/src/tracker/tools.rs:1145`). 500 per attempt (`core/src/work_fold.rs:1458`). A step is the agent's word. Check results come from ingest, never from steps |
-| `/v1/work/edit` | `file`, `hunk`, `decision` | Tie an edit to another attempt's decision | Holder only (`core/src/work_fold.rs:1469`). The decision is one of this attempt's (`core/src/work_fold.rs:1471`). Sizes (`tracker/src/tracker/tools.rs:1146`). 500 per attempt (`core/src/work_fold.rs:1474`) |
-| `/v1/work/ask` | `text`, `options`, `default`, `cost_micros` | Flood Needs you; report no cost | Holder only (`core/src/work_fold.rs:1332`). At most 8 options of 200 bytes (`tracker/src/tracker/tools.rs:955`). 20 per attempt (`core/src/work_fold.rs:1335`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word; the item total saturates (`core/src/work_fold.rs:1342`) |
-| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:719`) and the fold refuses it from an agent (`core/src/work_fold.rs:2336`). Must hold a question item under `item` (`core/src/work_fold.rs:2484`). Only the open question (`core/src/work_fold.rs:1361`). `chosen` is one of the options (`core/src/work_fold.rs:1369`). 10 per attempt (`core/src/work_fold.rs:1377`). The resume item obeys the depth limit (`core/src/work_fold.rs:2327`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:246`) |
-| `/v1/work/rules/read` | `item` | Read rules of work it does not hold | Holder only (`tracker/src/tracker/tools.rs:444`) |
+| `/v1/work/complete` | `item`, `cost_micros` | Finish work it does not hold; finish over open children; report no cost | Holder only (`tracker/src/tracker.rs:1226`, `core/src/work_fold.rs:1281`). Open children refuse it (`core/src/work_fold.rs:1286`). A fix is not closed by `done`; a merge or a person closes it. Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word; the item total saturates (`core/src/work_fold.rs:1312`) |
+| `/v1/work/release` | `item`, `reason`, `cost_micros` | Release another's work; write a huge record | Holder only (`core/src/work_fold.rs:1326`). Two claims per attempt (`core/src/work_fold.rs:1173`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1240`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word |
+| `/v1/work/give_up` | `item`, `reason`, `cost_micros` | Same as release | Holder only (`core/src/work_fold.rs:1342`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1240`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word |
+| `/v1/work/post` (child or proposal) | `item`, `key`, `work`, `title` | Create work outside its tree, flood Triage with proposals, or create a kind it may not | Must hold `item` (`tracker/src/tracker/tools.rs:130`). Only split, augment, question, test or a proposal (`tracker/src/tracker/tools.rs:44`). Children draw from the root's items and depth (`core/src/work_fold.rs:2161`). 24 posts per attempt (`core/src/work_fold.rs:2157`). A proposal waits for a person; an agent may have 16 waiting at once and 8 from one root, over all its attempts, and a decision frees a slot. The tracker checks this before it appends (`proposal_room`, `tracker/src/tracker/tools.rs`), so the fold of an old log does not change. Proposals draw no budget and a key can be reused across claims ([#109](https://github.com/GetFelix/KBL/issues/109)) |
+| `/v1/work/post` (`work: "prerequisite"`) | `target_source`, `target_repo`, `title`, `why`, `evidence`, `existing`, `done_when`, `cost_micros` | File work in another repo's Triage, without limit; link to another tree | Only a source and repo in the agent's grants or those of its own tree; a grant names both (`tracker/src/config.rs`), and a missing item answers the same as a hidden one (`tracker/src/tracker/tools.rs:271`). Holder, no cycle, not closed (`core/src/work_fold.rs:2256`). A new one counts against the same pending-proposal caps as `proposal`. Sizes (`tracker/src/tracker/tools.rs:182`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:246`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word. `title` and `why` are read by a person before accepting. From a held triage item the same checks apply, except that nothing is charged and a `cost_micros` sent is not recorded (triage reports its cost when it completes), and the item under triage waits instead (`tracker/src/tracker/tools.rs:211`): the agent can hold up the item it triages, as it can with `unclear`, until a person removes the link |
+| `/v1/work/link` | `item`, `to` | Link across trees; block work it does not hold | Same tree only (`core/src/work_fold.rs:2504`). Must hold `item`, a child of it or its parent (`core/src/work_fold.rs:2507`). No cycle (`core/src/work_fold.rs:1117`). 100 links per attempt (`core/src/work_fold.rs:1122`). A repeat is refused (`tracker/src/tracker/tools.rs:376`) |
+| `/v1/work/context` | `item` | Read context of work it does not hold | Must hold the item or its parent (`tracker/src/tracker/tools.rs:443`) |
+| `/v1/work/context/add` | `item`, `entry`, `text` | Write on work it does not hold; replace what ingest or a person wrote | Must hold the item or a child of it (`core/src/work_fold.rs:1142`). Text inline up to 4 KiB (`tracker/src/tracker/tools.rs:1175`). 100 writes per attempt (`core/src/work_fold.rs:1144`). An agent replaces only an entry it wrote itself; ingest's, a person's and the fold's stay, refused as `not_your_entry` before the record is logged (`tracker/src/tracker/tools.rs:408`). The fold takes such a record from an old log as it always did |
+| `/v1/work/progress` | `note`, `branch`, `pr` | Point the item at someone else's pull request so its merge or checks count | Holder only (`core/src/work_fold.rs:1247`). One request, one open item (`core/src/work_fold.rs:1255`). Sizes (`tracker/src/tracker/tools.rs:1211`). 100 per attempt (`core/src/work_fold.rs:1259`). `pr` is only a name: see [What ingest believes](#what-ingest-believes) |
+| `/v1/work/decide` | `phase`, `so_far`, `question`, `options`, `chosen`, `why`, `commit`, `evidence`, `revert_check` | Fill the log; cite evidence that is not there; claim a test guards a fix | Holder only (`core/src/work_fold.rs:1424`). Sizes and counts (`tracker/src/tracker/tools.rs:584`, `tracker/src/tracker/tools.rs:589`). 200 per attempt (`core/src/work_fold.rs:1438`). Evidence is before the record (`core/src/work_fold.rs:1428`). Test name 400 bytes (`core/src/work_fold.rs:1433`). A revert check is the agent's word; only one that failed without and passed with the fix is listed as proven. Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:246`) |
+| `/v1/work/finding` | `item`, `severity`, `file`, `line`, `title`, `scenario`, `verdict` | Fill the log; make fix work without limit; write on a review it does not hold or for an older request | Holder of a review item only (`core/src/work_fold.rs:1971`, `core/src/work_fold.rs:1932`). Sizes: file 400, title 200, scenario 4096 bytes, line from 1 (`tracker/src/tracker/tools.rs:1258`, `core/src/work_fold.rs:1976`). 40 per attempt (`core/src/work_fold.rs:1984`). The request must still be the root's (`core/src/work_fold.rs:1982`). A `fix` draws one item from the root's budget; a `defer` is a proposal a person accepts and counts toward the same pending-proposal caps as `proposal` |
+| `/v1/work/verdict` | `item`, `verdict`, `why` | Recommend a merge with fixes open; give a verdict from a first pass; skip the verdict | Holder of a final review only (`core/src/work_fold.rs:1464`, `core/src/work_fold.rs:1465`). `why` at most 2048 bytes (`tracker/src/tracker/tools.rs:1262`). `merge` is refused while a fix a review asked for is open (`core/src/work_fold.rs:1473`). A final review cannot finish without one (`core/src/work_fold.rs:1295`). It is advice: nothing here merges or closes |
+| `/v1/work/triage` | `item`, `tier`, `why`, `duplicate_of`, `unclear`, `depends_on`, `split` | Triage an item it holds no triage for; raise its own work's tier; park an item in Needs you; point a duplicate at nothing; fill the log | Holder of the triage item only, and the record names that item's parent, never an item the agent picks (`tracker/src/tracker/tools.rs:707`, `core/src/work_fold.rs:2464`). It is a proposal: a tier a person set stands (`core/src/work_fold.rs:1020`). `why` at most 4096 bytes (`tracker/src/tracker/tools.rs:696`). `duplicate_of` must be another item the agent can see; a missing item and one outside its grants get the same refusal (`tracker/src/tracker/tools.rs:711`). `depends_on` follows the same rule, and may not name the item itself or repeat; `depends_on` and `split` hold at most 8 entries and a split title at most 256 bytes (`triage_lists`, `tracker/src/tracker/tools.rs:1090`). Neither links or creates anything: a person acts on them. A tier never changes the tier an admitted root has. `unclear` only sends the item to a person as a question. The same answer again from the same holder is not logged; an attempt logs at most 4 different answers, then the call is refused; a new holder of the same attempt shares the count (`triage_full`, `core/src/work_fold.rs`) |
+| `/v1/work/step` | `command`, `exit_code`, `output` | Claim a command passed | Holder only (`core/src/work_fold.rs:1484`). Sizes (`tracker/src/tracker/tools.rs:1220`). 500 per attempt (`core/src/work_fold.rs:1486`). A step is the agent's word. Check results come from ingest, never from steps |
+| `/v1/work/edit` | `file`, `hunk`, `decision` | Tie an edit to another attempt's decision | Holder only (`core/src/work_fold.rs:1497`). The decision is one of this attempt's (`core/src/work_fold.rs:1499`). Sizes (`tracker/src/tracker/tools.rs:1221`). 500 per attempt (`core/src/work_fold.rs:1502`) |
+| `/v1/work/ask` | `text`, `options`, `default`, `cost_micros` | Flood Needs you; report no cost | Holder only (`core/src/work_fold.rs:1360`). At most 8 options of 200 bytes (`tracker/src/tracker/tools.rs:1030`). 20 per attempt (`core/src/work_fold.rs:1363`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:688`); a report above it is the agent's word; the item total saturates (`core/src/work_fold.rs:1370`) |
+| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:719`) and the fold refuses it from an agent (`core/src/work_fold.rs:2373`). Must hold a question item under `item` (`core/src/work_fold.rs:2521`). Only the open question (`core/src/work_fold.rs:1389`). `chosen` is one of the options (`core/src/work_fold.rs:1397`). 10 per attempt (`core/src/work_fold.rs:1405`). The resume item obeys the depth limit (`core/src/work_fold.rs:2364`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:246`) |
+| `/v1/work/rules/read` | `item` | Read rules of work it does not hold | Holder only (`tracker/src/tracker/tools.rs:511`) |
 
 ### Person routes
 
 All of them need a person token (`tracker/src/http.rs:211`). An agent or
 ingest token gets 403. The fold then checks the record, and sizes are checked
-in `check_sizes` (`tracker/src/tracker/tools.rs:1067`).
+in `check_sizes` (`tracker/src/tracker/tools.rs:1142`).
 
 | Route | Record | Check beyond the token |
 |---|---|---|
 | `/v1/work/records` | Any kind a person may write. A kind the tracker does not know is refused | The fold refuses the kinds a person may not write: see [Records on work.events](#records-on-workevents). The strings are held to 4 KiB when the record is appended, including progress `branch` and `pr`, `triaged.why`, `imported` fields and a rules target (`tracker/src/tracker.rs:1427`) |
-| `/v1/work/proposals/accept` | `accepted` | Tier 0 to 3 (`core/src/work_fold.rs:1021`) |
-| `/v1/work/proposals/edit` | `edited` | Only before acceptance (`core/src/work_fold.rs:1725`) |
-| `/v1/work/proposals/reject` | `rejected` | Only a proposal never accepted (`core/src/work_fold.rs:1570`) |
-| `/v1/work/questions/answer` | `answer` | Only the open question; a `moves_to` target and title are bounded (`core/src/work_fold.rs:2342`). Evidence as for an agent's answer |
-| `/v1/work/tier` | `tier_changed` | Tier 0 to 3, item open (`core/src/work_fold.rs:1707`) |
-| `/v1/work/close` | `closed` | Item exists (`core/src/work_fold.rs:1542`) |
-| `/v1/work/unlink` | `unlinked` | Item exists (`core/src/work_fold.rs:1105`) |
-| `/v1/work/budget` | `budget_set` | Person only in the fold too (`core/src/work_fold.rs:1633`) |
-| `/v1/work/rules` | `rules_set` | Person only in the fold too (`core/src/work_fold.rs:1651`). 8 KiB of text, 20 checks of 500 bytes, 500 scopes (`core/src/work_fold.rs:1660`). The tracker never runs a check; the agent does |
+| `/v1/work/proposals/accept` | `accepted` | Tier 0 to 3 (`core/src/work_fold.rs:1047`) |
+| `/v1/work/proposals/edit` | `edited` | Only before acceptance (`core/src/work_fold.rs:1753`) |
+| `/v1/work/proposals/reject` | `rejected` | Only a proposal never accepted (`core/src/work_fold.rs:1598`) |
+| `/v1/work/questions/answer` | `answer` | Only the open question; a `moves_to` target and title are bounded (`core/src/work_fold.rs:2379`). Evidence as for an agent's answer |
+| `/v1/work/tier` | `tier_changed` | Tier 0 to 3, item open (`core/src/work_fold.rs:1735`) |
+| `/v1/work/close` | `closed` | Item exists (`core/src/work_fold.rs:1570`) |
+| `/v1/work/unlink` | `unlinked` | Item exists (`core/src/work_fold.rs:1133`) |
+| `/v1/work/budget` | `budget_set` | Person only in the fold too (`core/src/work_fold.rs:1661`) |
+| `/v1/work/rules` | `rules_set` | Person only in the fold too (`core/src/work_fold.rs:1679`). 8 KiB of text, 20 checks of 500 bytes, 500 scopes (`core/src/work_fold.rs:1688`). The tracker never runs a check; the agent does |
 
 ### Ingest routes and health
 
@@ -142,7 +142,7 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 
 | Route | What ingest controls | Check |
 |---|---|---|
-| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:102`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:108`, `core/src/work_fold.rs:1544`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:89`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1510`); ingest cuts titles itself (`ingest/src/sync.rs:1020`) |
+| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs:20`). Only on roots it imported (`tracker/src/tracker/ingest.rs:102`). Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs:108`, `core/src/work_fold.rs:1572`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs:89`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs:1510`); ingest cuts titles itself (`ingest/src/sync.rs:1020`) |
 | `/v1/ingest/roots` | Nothing | Read only |
 | `GET /v1/ingest/state/{source}`, `PUT /v1/ingest/state/{source}` | The saved cursor for a source | The name is a key (`tracker/src/tracker/ingest.rs:237`). 4 MB at most (`tracker/src/tracker/ingest.rs:239`). Saved only if nobody saved since the version read (`tracker/src/tracker/ingest.rs:242`). Any ingest token reaches any source's state, which is fine with one worker |
 | `/healthz` | Nothing | No token. Answers `ok` and nothing else |
@@ -243,43 +243,43 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 
 | Kind | Who may write | Check |
 |---|---|---|
-| `imported` | Tracker, person | Not an agent; one per upstream id (`core/src/work_fold.rs:938`) |
-| `proposed` | All | An agent needs to hold the parent, and draws budget (`core/src/work_fold.rs:2121`). A `review` item only from the tracker, under an open root that reports the same request, 8 per root (`core/src/work_fold.rs:1869`, `core/src/work_fold.rs:1895`) |
-| `triaged` | Person, or the agent holding the item's triage child | `core/src/work_fold.rs:2425`. An agent writes it through `/v1/work/triage` |
-| `accepted` | Tracker, person | `core/src/work_fold.rs:1018` |
-| `prerequisite` | The holding agent | `core/src/work_fold.rs:2226` |
-| `shipped` | Tracker, person | Only a done item (`core/src/work_fold.rs:1076`). Ingest's list leaves it out |
-| `linked` | All | An agent only inside one tree (`core/src/work_fold.rs:2467`) |
-| `unlinked` | Tracker, person | `core/src/work_fold.rs:1102` |
-| `context` | All | An agent only on work it holds (`core/src/work_fold.rs:1114`). An agent replaces only its own entries (`tracker/src/tracker/tools.rs:341`) |
-| `finding` | The agent holding a review item | `core/src/work_fold.rs:1943`. Bounded and capped as the route above |
-| `review_verdict` | The agent holding a final review | `core/src/work_fold.rs:1436`, `core/src/work_fold.rs:1437`. Open fixes block a merge (`core/src/work_fold.rs:1445`) |
-| `claimed` | Agent, written by the tracker on a delivery | `core/src/work_fold.rs:1134` |
-| `progress` | Holder | `core/src/work_fold.rs:1219` |
-| `done` | Holder | `core/src/work_fold.rs:1253` |
-| `released` | Holder, or the tracker on a lapse | `core/src/work_fold.rs:1298` |
-| `gave_up` | Holder | `core/src/work_fold.rs:1314` |
-| `question` | The holding agent | `core/src/work_fold.rs:1332` |
-| `answer` | Person, or the agent holding a question item | `core/src/work_fold.rs:1360` |
-| `decision` | The holding agent | `core/src/work_fold.rs:1396` |
-| `step` | The holding agent | `core/src/work_fold.rs:1456` |
-| `edit` | The holding agent | `core/src/work_fold.rs:1469` |
-| `human_input` | Tracker, person | `core/src/work_fold.rs:1480` |
-| `forked_from` | Tracker, person | Redo limit per item (`core/src/work_fold.rs:1527`). While the item's pull request has a failed check, the tracker refuses one that names no note written since the failure (`tracker/src/tracker.rs:303`) |
-| `closed` | Tracker, person | The tracker closes as merged only on a merged status (`core/src/work_fold.rs:1544`) |
+| `imported` | Tracker, person | Not an agent; one per upstream id (`core/src/work_fold.rs:964`) |
+| `proposed` | All | An agent needs to hold the parent, and draws budget (`core/src/work_fold.rs:2149`). A `review` item only from the tracker, under an open root that reports the same request, 8 per root (`core/src/work_fold.rs:1897`, `core/src/work_fold.rs:1923`) |
+| `triaged` | Person, or the agent holding the item's triage child | `core/src/work_fold.rs:2462`. An agent writes it through `/v1/work/triage` |
+| `accepted` | Tracker, person | `core/src/work_fold.rs:1044` |
+| `prerequisite` | The holding agent | `core/src/work_fold.rs:2256`. With `triage`, the agent holding that triage item writes it for the item under triage, and keeps its claim (`core/src/work_fold.rs:857`). Format 3, so refused until a person raises the log |
+| `shipped` | Tracker, person | Only a done item (`core/src/work_fold.rs:1104`). Ingest's list leaves it out |
+| `linked` | All | An agent only inside one tree (`core/src/work_fold.rs:2504`) |
+| `unlinked` | Tracker, person | `core/src/work_fold.rs:1130` |
+| `context` | All | An agent only on work it holds (`core/src/work_fold.rs:1142`). An agent replaces only its own entries (`tracker/src/tracker/tools.rs:408`) |
+| `finding` | The agent holding a review item | `core/src/work_fold.rs:1971`. Bounded and capped as the route above |
+| `review_verdict` | The agent holding a final review | `core/src/work_fold.rs:1464`, `core/src/work_fold.rs:1465`. Open fixes block a merge (`core/src/work_fold.rs:1473`) |
+| `claimed` | Agent, written by the tracker on a delivery | `core/src/work_fold.rs:1162` |
+| `progress` | Holder | `core/src/work_fold.rs:1247` |
+| `done` | Holder | `core/src/work_fold.rs:1281` |
+| `released` | Holder, or the tracker on a lapse | `core/src/work_fold.rs:1326` |
+| `gave_up` | Holder | `core/src/work_fold.rs:1342` |
+| `question` | The holding agent | `core/src/work_fold.rs:1360` |
+| `answer` | Person, or the agent holding a question item | `core/src/work_fold.rs:1388` |
+| `decision` | The holding agent | `core/src/work_fold.rs:1424` |
+| `step` | The holding agent | `core/src/work_fold.rs:1484` |
+| `edit` | The holding agent | `core/src/work_fold.rs:1497` |
+| `human_input` | Tracker, person | `core/src/work_fold.rs:1508` |
+| `forked_from` | Tracker, person | Redo limit per item (`core/src/work_fold.rs:1555`). While the item's pull request has a failed check, the tracker refuses one that names no note written since the failure (`tracker/src/tracker.rs:303`) |
+| `closed` | Tracker, person | The tracker closes as merged only on a merged status (`core/src/work_fold.rs:1572`) |
 | `rejected` | Tracker, person | `core/src/work_fold.rs:1567` |
-| `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:2060`) |
-| `left_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2060`) |
-| `returned_to_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2063`). Format 2, so refused until a person raises the log (`core/src/work_fold.rs:503`) |
-| `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs:1600`). Ingest reopens only what it closed |
-| `attempt_closed` | Tracker, person | `core/src/work_fold.rs:1616` |
-| `tier_changed` | Person | `core/src/work_fold.rs:1704` |
-| `edited` | Person | `core/src/work_fold.rs:1717` |
-| `budget_set` | Person | `core/src/work_fold.rs:1633` |
-| `pr_status` | Tracker, person | Only for the request the item reports, bounded and consistent (`core/src/work_fold.rs:1762`) |
-| `source_stalled` | Tracker | 200-byte names, 64 repos (`core/src/work_fold.rs:1781`) |
-| `rules_set` | Person | `core/src/work_fold.rs:1651` |
-| `refused` | Tracker | `core/src/work_fold.rs:1739` |
+| `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:2088`) |
+| `left_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2088`) |
+| `returned_to_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2091`). Format 2, so refused until a person raises the log (`core/src/work_fold.rs:503`) |
+| `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs:1628`). Ingest reopens only what it closed |
+| `attempt_closed` | Tracker, person | `core/src/work_fold.rs:1644` |
+| `tier_changed` | Person | `core/src/work_fold.rs:1732` |
+| `edited` | Person | `core/src/work_fold.rs:1745` |
+| `budget_set` | Person | `core/src/work_fold.rs:1661` |
+| `pr_status` | Tracker, person | Only for the request the item reports, bounded and consistent (`core/src/work_fold.rs:1790`) |
+| `source_stalled` | Tracker | 200-byte names, 64 repos (`core/src/work_fold.rs:1809`) |
+| `rules_set` | Person | `core/src/work_fold.rs:1679` |
+| `refused` | Tracker | `core/src/work_fold.rs:1767` |
 | `format_raised` | Person | Only upward, only to a format the tracker's build reads, and stamped with that format (`core/src/work_fold.rs:498`). An older reader stops at it ([upgrades.md](upgrades.md)) |
 
 ## Records on the run log

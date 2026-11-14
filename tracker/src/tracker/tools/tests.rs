@@ -2331,3 +2331,170 @@ async fn a_prerequisite_proposal_cites_the_record_that_filed_it() {
     }];
     t.decide(&agent("w2"), &g, d).await.unwrap();
 }
+
+/// `a1` with its triage item held by w1, who may reach `repo`.
+async fn triaging(repo: &str) -> (Fake, Tracker<Fake>) {
+    let fake = Fake::default();
+    let grants = [("w1".to_owned(), vec![github(repo)])].into();
+    let t = start_with(
+        &fake,
+        crate::tracker::Settings {
+            grants,
+            ..settings()
+        },
+    )
+    .await;
+    // Triage is claimed before `a1` is accepted, so `a1` still has every try.
+    let record = |r| async { t.person_record(key("gab"), r).await.unwrap() };
+    record(WorkRecord::Imported {
+        item: item("a1"),
+        source: "gh".into(),
+        upstream_id: "a1".into(),
+        title: "fix a1".into(),
+    })
+    .await;
+    record(WorkRecord::Proposed {
+        item: item("a1-t"),
+        parent: Some(item("a1")),
+        key: key("triage"),
+        work: WorkKind::Triage,
+        title: "Triage: fix a1".into(),
+        review: None,
+    })
+    .await;
+    claim_item(&t, "w1", &item("a1-t")).await;
+    record(WorkRecord::Accepted {
+        item: item("a1"),
+        tier: Some(2),
+    })
+    .await;
+    (fake, t)
+}
+
+#[tokio::test]
+async fn triage_posts_a_prerequisite_before_any_build_claim() {
+    let (fake, t) = triaging("GetFelix/felix-gateway").await;
+    let (w1, a1, tr) = (agent("w1"), item("a1"), item("a1-t"));
+    let post = || t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Merged, 0);
+    // Format 3: refused until a person raises the log, and nothing waits.
+    assert_eq!(why(post().await), "format");
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Ready));
+    person(&t, WorkRecord::FormatRaised { to: 3 }).await;
+
+    let reply = post().await.unwrap();
+    assert_eq!(reply["item"], "a1");
+    assert_eq!(reply["status"], "waiting");
+    assert_eq!(reply["claim"], "held");
+    assert_eq!(reply["created"], true);
+    let g = item(reply["prerequisite"].as_str().unwrap());
+    assert_eq!(stage(&t, &g).await, Some(Stage::Proposed));
+    // The item under triage waits, so no build claim is handed out.
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Blocked));
+    assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+    // The record is format 3 and charges nothing: triage has not ended.
+    let last = fake.log().pop().unwrap();
+    assert_eq!(last.v, 3);
+    assert!(matches!(
+        &last.record,
+        WorkRecord::Prerequisite { item, triage: Some(by), cost_micros: 0, .. }
+            if *item == a1 && *by == tr
+    ));
+    // A retry answers with the first call's work and writes nothing.
+    let before = fake.log().len();
+    let again = post().await.unwrap();
+    assert_eq!(again["created"], false);
+    assert_eq!(again["prerequisite"], reply["prerequisite"]);
+    assert_eq!(fake.log().len(), before);
+    // The same key with another `done_when` is refused, not answered as done.
+    let other = t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Released, 0);
+    assert_eq!(why(other.await), "invalid");
+    assert_eq!(fake.log().len(), before);
+
+    // Triage still holds its claim and finishes as usual.
+    t.triage(
+        &w1,
+        &tr,
+        ans(1, "needs the gateway first".into(), None, None),
+    )
+    .await
+    .unwrap();
+    t.complete(&w1, &tr, 0).await.unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+    // Once the other repo's work is merged the item is handed out.
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: g.clone(),
+            tier: None,
+        },
+    )
+    .await;
+    person(
+        &t,
+        WorkRecord::Closed {
+            item: g,
+            why: CloseWhy::Merged,
+        },
+    )
+    .await;
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
+
+#[tokio::test]
+async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
+    let (fake, t) = triaging("GetFelix/felix").await;
+    let (w1, a1, tr) = (agent("w1"), item("a1"), item("a1-t"));
+    seed_in_felix(&t, "a2").await;
+    person(&t, WorkRecord::FormatRaised { to: 3 }).await;
+    let existing = |id: &str| {
+        t.prerequisite(
+            &w1,
+            &tr,
+            key("dep"),
+            Prereq::Existing(item(id)),
+            DoneWhen::Merged,
+            0,
+        )
+    };
+    let before = fake.log().len();
+    assert_eq!(why(existing("a1-t").await), "invalid");
+    assert_eq!(why(existing("nope").await), "unknown_item");
+    let other = t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Merged, 0);
+    assert_eq!(why(other.await), "no_grant");
+    // Only the holder of the triage item.
+    let w2 = agent("w2");
+    let stranger = t.prerequisite(
+        &w2,
+        &tr,
+        key("dep"),
+        Prereq::Existing(item("a2")),
+        DoneWhen::Merged,
+        0,
+    );
+    assert_eq!(why(stranger.await), "not_held");
+    assert_eq!(fake.log().len(), before);
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Ready));
+
+    let reply = existing("a2").await.unwrap();
+    assert_eq!(reply["status"], "waiting");
+    assert_eq!(reply["created"], false);
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Blocked));
+    // The same call again does not use up a post.
+    let before = fake.log().len();
+    existing("a2").await.unwrap();
+    assert_eq!(fake.log().len(), before);
+    // Asking to wait for the release instead is a change, so it is written.
+    t.prerequisite(
+        &w1,
+        &tr,
+        key("dep"),
+        Prereq::Existing(item("a2")),
+        DoneWhen::Released,
+        0,
+    )
+    .await
+    .unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+    let core = t.0.core.lock().await;
+    assert!(core.state.release_edges.contains(&(a1, item("a2"))));
+}
