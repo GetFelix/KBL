@@ -66,10 +66,10 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
       }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }));
       rows.set(id, a);
     }
-    const [, t, w] = a.children;
+    const [t, w] = [a.children[1], a.children[2]];
     if (t.textContent !== title) t.textContent = title;
-    const on = waits ? `waits on ${waits}` : '';
-    if (w.textContent !== on) w.textContent = on;
+    const line = waits ? `waits on ${waits}` : '';
+    if (w.textContent !== line) w.textContent = line;
     return a;
   };
 
