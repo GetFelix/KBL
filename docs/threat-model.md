@@ -256,9 +256,10 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `forked_from` | Tracker, person | Redo limit per item (`core/src/work_fold.rs:1240`) |
 | `closed` | Tracker, person | The tracker closes as merged only on a merged status (`core/src/work_fold.rs:1285`) |
 | `rejected` | Tracker, person | `core/src/work_fold.rs:1309` |
-| `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:1537`) |
-| `left_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:1537`) |
-| `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs:1328`). Ingest reopens only what it closed |
+| `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:2049`) |
+| `left_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2049`) |
+| `returned_to_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2049`). Format 2, so refused until a person raises the log (`core/src/work_fold.rs:484`) |
+| `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs:1587`). Ingest reopens only what it closed |
 | `attempt_closed` | Tracker, person | `core/src/work_fold.rs:1348` |
 | `tier_changed` | Person | `core/src/work_fold.rs:1436` |
 | `edited` | Person | `core/src/work_fold.rs:1449` |

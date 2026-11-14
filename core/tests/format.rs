@@ -3,7 +3,9 @@
 //! format instead of skipping it.
 
 use kbl_core::codec::Codec;
-use kbl_core::work::{Actor, FORMAT, FORMAT_V1, ReadError, WorkLogged, WorkRecord, read};
+use kbl_core::work::{
+    Actor, FORMAT, FORMAT_V1, FORMAT_V2, ReadError, WorkLogged, WorkRecord, read,
+};
 use kbl_core::work_fold::{State, fold};
 
 /// Logs written before records carried a version.
@@ -221,8 +223,8 @@ fn a_raise_is_written_with_the_format_it_raises_to() {
     );
 }
 
-/// This build reads one format, so there is nothing to raise to yet: the
-/// record is refused and the log stays at the first format.
+/// A raise past the newest format this build reads is refused and the log
+/// keeps its format.
 #[test]
 fn a_raise_past_what_this_build_reads_is_refused() {
     let by = kbl_core::names::Key::new("gab").unwrap();
@@ -239,5 +241,65 @@ fn a_raise_past_what_this_build_reads_is_refused() {
         Err(kbl_core::work_fold::Reject::Format)
     );
     assert_eq!(state, before);
-    assert_eq!(state.format(), FORMAT);
+    assert_eq!(state.format(), FORMAT_V1);
+}
+
+/// Every kind of the second format. Frozen like `V1_KINDS`.
+const V2_KINDS: [&str; 1] = ["returned_to_scope"];
+
+/// A log that raises to the second format and uses it. Its folded state is
+/// pinned in `wasm/golden/format_2.state.json`.
+const FORMAT_2_LOG: &str = include_str!("work_format_2.jsonl");
+
+#[test]
+fn the_second_format_is_two_and_names_its_kinds() {
+    assert_eq!(FORMAT_V2, 2);
+    const { assert!(FORMAT >= FORMAT_V2) };
+    let mut seen: Vec<&str> = entries(FORMAT_2_LOG)
+        .iter()
+        .filter(|(_, r)| r.v == FORMAT_V2 && r.record.kind() != "format_raised")
+        .map(|(_, r)| {
+            assert_eq!(r.record.format(), FORMAT_V2, "{}", r.record.kind());
+            r.record.kind()
+        })
+        .collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen, V2_KINDS);
+}
+
+#[test]
+fn a_second_format_record_is_written_with_its_format() {
+    let by = kbl_core::names::Key::new("ingest").unwrap();
+    let rec = WorkLogged::new(
+        7,
+        by,
+        Actor::Tracker,
+        WorkRecord::ReturnedToScope {
+            item: kbl_core::names::ItemId::new("r1").unwrap(),
+        },
+    );
+    assert_eq!(
+        String::from_utf8(rec.encode()).unwrap(),
+        r#"{"v":2,"at_ms":7,"by":"ingest","actor":"tracker","kind":"returned_to_scope","item":"r1"}"#
+    );
+}
+
+/// The record before the raise is refused on replay, the one after it folds,
+/// and a first-format record still folds after the raise.
+#[test]
+fn a_second_format_log_folds_after_its_raise() {
+    let s = fold(&entries(FORMAT_2_LOG));
+    assert_eq!(s.format(), FORMAT_V2);
+    assert_eq!(
+        s.rejections,
+        vec![kbl_core::work_fold::Rejection {
+            offset: 6,
+            why: kbl_core::work_fold::Reject::Format
+        }]
+    );
+    let r1 = kbl_core::names::ItemId::new("r1").unwrap();
+    let r2 = kbl_core::names::ItemId::new("r2").unwrap();
+    assert!(s.items[&r1].left_scope);
+    assert!(!s.items[&r2].left_scope);
 }

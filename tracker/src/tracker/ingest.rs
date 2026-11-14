@@ -25,6 +25,7 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::Linked { .. }
         | WorkRecord::Updated { .. }
         | WorkRecord::LeftScope { .. }
+        | WorkRecord::ReturnedToScope { .. }
         | WorkRecord::PrStatus { .. }
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::Reopened { .. } => true,
@@ -46,6 +47,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::Context { item, .. }
         | WorkRecord::Updated { item, .. }
         | WorkRecord::LeftScope { item }
+        | WorkRecord::ReturnedToScope { item }
         | WorkRecord::PrStatus { item, .. }
         | WorkRecord::Reopened { item }
         | WorkRecord::Closed { item, .. } => vec![item],
@@ -199,6 +201,7 @@ impl<B: Broker> Tracker<B> {
                     "stage": core.state.stage(item),
                     "closed": it.closed.is_some(),
                     "closed_by_sync": it.closed_by_sync,
+                    "left_scope_by_sync": it.left_scope_by_sync,
                     "reopened_by": it.reopened_by,
                     "has_children": !it.children.is_empty(),
                     "held": it.hold.is_some(),
