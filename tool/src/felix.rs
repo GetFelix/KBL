@@ -230,8 +230,8 @@ impl Broker {
         Ok(())
     }
 
-    /// Every committed record of a one-shard stream, oldest first.
-    pub(crate) async fn read_all(&self, stream: &str) -> Result<Vec<Vec<u8>>> {
+    /// Every record on `stream` with its offset, oldest first.
+    pub(crate) async fn read_all(&self, stream: &str) -> Result<Vec<(u64, Vec<u8>)>> {
         let mut payloads = Vec::new();
         let mut from = 0;
         loop {
@@ -243,7 +243,11 @@ impl Broker {
             if page.records.is_empty() {
                 return Ok(payloads);
             }
-            payloads.extend(page.records.into_iter().map(|r| r.payload.to_vec()));
+            payloads.extend(
+                page.records
+                    .into_iter()
+                    .map(|r| (r.offset, r.payload.to_vec())),
+            );
             anyhow::ensure!(
                 page.next_offset > from,
                 "reading {stream} did not advance past offset {from}"

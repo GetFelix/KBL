@@ -108,4 +108,9 @@ impl Folder {
             .collect();
         serde_json::to_string(&blocked).expect("plain data serializes")
     }
+
+    /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.
+    pub fn spend_json(&self) -> String {
+        serde_json::to_string(&self.state.spend()).expect("plain data serializes")
+    }
 }

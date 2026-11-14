@@ -90,6 +90,8 @@ fn the_page_fold_matches_the_core_fold_on_the_golden_logs() {
             assert!(folder.apply(i as f64, l.as_bytes()), "{name}:{i}");
         }
         assert_eq!(folder.state_json(), native, "{name}");
+        let spend = serde_json::to_string(&fold(&log_pairs).spend()).unwrap();
+        assert_eq!(folder.spend_json(), spend, "{name} spend");
 
         if std::env::var_os("WRITE_GOLDEN").is_some() {
             std::fs::write(&path, &log).unwrap();
