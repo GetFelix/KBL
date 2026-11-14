@@ -231,11 +231,6 @@ impl<B: Broker> Teams<B> {
         self.all().into_iter().find(|t| t.name.as_str() == name)
     }
 
-    /// Every team, in name order.
-    pub(crate) fn list(&self) -> Vec<Arc<Team<B>>> {
-        self.all()
-    }
-
     /// Runs each team's lease renewal and sweep. Without teams on, a team
     /// that loses its lease for good stops here and answers 503 from then on,
     /// and this returns when no team holds its lease. With teams on, such a

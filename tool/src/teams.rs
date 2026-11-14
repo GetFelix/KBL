@@ -120,32 +120,36 @@ pub(crate) async fn org_init(target: Target, args: InitArgs) -> Result<()> {
         .to_owned();
     let session = Session::sign_in(target).await?;
     let token = session.exchange("felix-controlplane").await?;
-    let post = |path: &str, body: Value, doing: &str| {
-        session.control_plane_post(&token, path, &body, doing)
-    };
-
-    post(
-        "namespaces",
-        namespace_body(ORG_NAMESPACE),
-        "create the organization's namespace",
-    )
-    .await?;
-    post(
-        &format!("namespaces/{ORG_NAMESPACE}/resources"),
-        org_batch(),
-        "create the organization's log",
-    )
-    .await?;
-    for body in tracker_policies(&tenant, &[ORG_NAMESPACE, &first]) {
-        post("rbac/policies", body, "grant the tracker its namespaces").await?;
-    }
     let who = principal(&issuer, &args.tracker_subject);
-    post(
-        "rbac/groupings",
+    let mut steps = vec![
+        (
+            "namespaces".to_owned(),
+            namespace_body(ORG_NAMESPACE),
+            "create the organization's namespace",
+        ),
+        (
+            format!("namespaces/{ORG_NAMESPACE}/resources"),
+            org_batch(),
+            "create the organization's log",
+        ),
+    ];
+    for body in tracker_policies(&tenant, &[ORG_NAMESPACE, &first]) {
+        steps.push((
+            "rbac/policies".to_owned(),
+            body,
+            "grant the tracker its namespaces",
+        ));
+    }
+    steps.push((
+        "rbac/groupings".to_owned(),
         json!({ "user": who, "role": TRACKER_ROLE }),
         "give the tracker its role",
-    )
-    .await?;
+    ));
+    for (path, body, doing) in steps {
+        session
+            .control_plane_post(&token, &path, &body, doing)
+            .await?;
+    }
 
     println!("organization ready on tenant {tenant}");
     println!("  namespace {ORG_NAMESPACE}: {ORG_EVENTS}, cache {ORG_TRACKER_CACHE}");
