@@ -82,6 +82,18 @@ impl Script {
         });
     }
 
+    /// Like `on`, with answers given in turn; the last one repeats.
+    pub(crate) fn on_seq(&self, method: &'static str, contains: &str, answers: Vec<Res>) {
+        let mut net = self.0.lock().unwrap();
+        net.routes
+            .retain(|r| !(r.method == method && r.contains == contains));
+        net.routes.push(Route {
+            method,
+            contains: contains.to_owned(),
+            answers: VecDeque::from(answers),
+        });
+    }
+
     pub(crate) fn sent(&self) -> Vec<Req> {
         self.0.lock().unwrap().sent.clone()
     }
@@ -250,6 +262,8 @@ impl Tracker for Fake {
                     pr: it.pr.clone(),
                     claimed_at_ms: it.first_claim_ms,
                     pr_status: it.pr_status.clone(),
+                    release: it.release.clone(),
+                    awaits_release: i.state.awaits_release(item),
                 }
             })
             .collect())

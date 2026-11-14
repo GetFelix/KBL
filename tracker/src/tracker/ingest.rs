@@ -28,7 +28,8 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::ReturnedToScope { .. }
         | WorkRecord::PrStatus { .. }
         | WorkRecord::SourceStalled { .. }
-        | WorkRecord::Reopened { .. } => true,
+        | WorkRecord::Reopened { .. }
+        | WorkRecord::Shipped { .. } => true,
         // The two items an admitted root starts with.
         WorkRecord::Proposed { work, .. } => matches!(work, WorkKind::Triage | WorkKind::Augment),
         WorkRecord::Closed { why, .. } => matches!(
@@ -50,6 +51,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::ReturnedToScope { item }
         | WorkRecord::PrStatus { item, .. }
         | WorkRecord::Reopened { item }
+        | WorkRecord::Shipped { item, .. }
         | WorkRecord::Closed { item, .. } => vec![item],
         WorkRecord::Linked { item, to } => vec![item, to],
         WorkRecord::Proposed {
@@ -112,6 +114,21 @@ impl<B: Broker> Tracker<B> {
                 && !merged_request_reported(&core.state, item)
             {
                 return Err(refused("not_merged"));
+            }
+            // A release can carry only a merge the tracker has seen, and the
+            // release a person recorded stands.
+            if let WorkRecord::Shipped { item, .. } = &record {
+                if !merged_request_reported(&core.state, item) {
+                    return Err(refused("not_merged"));
+                }
+                if core
+                    .state
+                    .items
+                    .get(item)
+                    .is_some_and(|it| it.release.is_some())
+                {
+                    return Err(refused("already_shipped"));
+                }
             }
             let opened = match &record {
                 WorkRecord::PrStatus { item, status } if status.phase == PrPhase::Open => {
@@ -208,6 +225,8 @@ impl<B: Broker> Tracker<B> {
                     "pr": it.pr,
                     "claimed_at_ms": it.first_claim_ms,
                     "pr_status": it.pr_status,
+                    "release": it.release,
+                    "awaits_release": core.state.awaits_release(item),
                 }))
             })
             .collect();
@@ -248,7 +267,7 @@ impl<B: Broker> Tracker<B> {
 }
 
 /// Whether the item's reported request has a merged status. Ingest may close
-/// as merged on no other evidence.
+/// as merged, or record a release, on no other evidence.
 fn merged_request_reported(state: &State, item: &ItemId) -> bool {
     state.items.get(item).is_some_and(|it| {
         it.pr_status
