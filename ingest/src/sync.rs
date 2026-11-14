@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::config::{Mode, Rule};
 use crate::rules::first_match;
 use crate::source::{
-    Changes, Closed, Comment, Fetched, Issue, IssueRef, Source, SourceError, WriteBack,
+    Changes, Closed, Comment, Fetched, Issue, IssueRef, Release, Source, SourceError, WriteBack,
 };
 use crate::state::{State, Tracked};
 use crate::tracker_api::{Appended, Root, Tracker};
@@ -138,6 +138,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         self.retry_waiting(p).await?;
         self.pull_requests(p).await?;
+        self.releases(p).await?;
         p.state.polls += 1;
         if reconcile || p.state.polls >= self.settings.reconcile_every {
             p.state.polls = 0;
@@ -619,6 +620,75 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             set_closed(p, key, true);
         }
         Ok(())
+    }
+
+    /// Records the first release that carries a merged root a link waits on,
+    /// which frees that link. Only roots something waits on are looked at, so
+    /// an ordinary merge costs no requests here.
+    async fn releases(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let mut due: Vec<(String, ItemId, IssueRef)> = p
+            .roots
+            .iter()
+            .filter(|(_, r)| r.closed && r.awaits_release && r.release.is_none())
+            .filter_map(|(k, r)| {
+                let status = r.pr_status.as_ref()?;
+                let pr = IssueRef::parse(&status.pr)?;
+                (status.phase == PrPhase::Merged && r.pr.as_deref() == Some(status.pr.as_str()))
+                    .then(|| (k.clone(), r.item.clone(), pr))
+            })
+            .filter(|(k, _, pr)| self.may_write_to(k, pr))
+            .collect();
+        due.sort();
+        let mut listed: HashMap<String, Vec<Release>> = HashMap::new();
+        for (key, item, pr) in due {
+            let found = match self.release_of(&pr, &mut listed).await {
+                Ok(found) => found,
+                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                Err(e) => {
+                    eprintln!("kbl-ingest: could not find the release of {pr} for {key}: {e}");
+                    continue;
+                }
+            };
+            let Some(release) = found else { continue };
+            if self
+                .write(&WorkRecord::Shipped {
+                    item,
+                    release: release.clone(),
+                })
+                .await?
+                && let Some(r) = p.roots.get_mut(&key)
+            {
+                r.release = Some(release);
+            }
+        }
+        Ok(())
+    }
+
+    /// The oldest release published after the merge whose tag contains the
+    /// merge commit. A request merged by someone outside our logins is the
+    /// only kind with a merge here, as for closing the root.
+    async fn release_of(
+        &self,
+        pr: &IssueRef,
+        listed: &mut HashMap<String, Vec<Release>>,
+    ) -> Result<Option<String>, SourceError> {
+        let Some(pull) = self.source.pull_request(pr).await? else {
+            return Ok(None);
+        };
+        let Some((sha, merged_ms)) = pull.merge else {
+            return Ok(None);
+        };
+        if !listed.contains_key(&pr.repo) {
+            let releases = self.source.releases(&pr.repo).await?;
+            listed.insert(pr.repo.clone(), releases);
+        }
+        let after = merged_ms.unwrap_or(0);
+        for release in listed[&pr.repo].iter().filter(|r| r.published_ms >= after) {
+            if self.source.contains(&pr.repo, &release.tag, &sha).await? {
+                return Ok(Some(release.tag.clone()));
+            }
+        }
+        Ok(None)
     }
 
     /// Fetches each open imported issue, which finds what no listing shows.

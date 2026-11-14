@@ -18,8 +18,8 @@ use kbl_core::work::{
 };
 
 use crate::source::{
-    Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, PullRequest, Source,
-    SourceError, WriteBack,
+    Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, PullRequest, Release,
+    Source, SourceError, WriteBack,
 };
 
 pub(crate) mod transport;
@@ -361,6 +361,7 @@ impl<T: Transport> Source for Github<T> {
                 body,
                 created_ms,
                 status: None,
+                merge: None,
             }));
         }
         // A merge counts only into the repo's default branch and by someone
@@ -384,12 +385,20 @@ impl<T: Transport> Source for Github<T> {
             failing: None,
         };
         if phase != PrPhase::Open {
+            let merge = (phase == PrPhase::Merged)
+                .then(|| pull["merge_commit_sha"].as_str())
+                .flatten()
+                .map(|sha| {
+                    let at = pull["merged_at"].as_str().and_then(parse_utc_ms);
+                    (sha.to_owned(), at)
+                });
             return Ok(Some(PullRequest {
                 author,
                 head_ref,
                 body,
                 created_ms,
                 status: Some(status),
+                merge,
             }));
         }
         let asked = pull["requested_reviewers"]
@@ -429,6 +438,7 @@ impl<T: Transport> Source for Github<T> {
             body,
             created_ms,
             status: Some(status),
+            merge: None,
         }))
     }
 
@@ -552,6 +562,57 @@ impl<T: Transport> Source for Github<T> {
         }
         Ok(())
     }
+
+    async fn releases(&self, repo: &str) -> Result<Vec<Release>, SourceError> {
+        let url = format!("{}/repos/{repo}/releases?per_page=100", self.api);
+        let res = self.call(Req::get(url)).await?;
+        match res.status {
+            200 => {}
+            404 => return Ok(Vec::new()),
+            s => return Err(anyhow!("GitHub answered {s} for the releases of {repo}").into()),
+        }
+        let mut out: Vec<Release> = res
+            .body
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|r| r["draft"] != true && r["prerelease"] != true)
+            .filter_map(|r| {
+                let tag = r["tag_name"].as_str().filter(|t| plain_ref(t))?;
+                Some(Release {
+                    tag: tag.to_owned(),
+                    published_ms: r["published_at"].as_str().and_then(parse_utc_ms)?,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| (a.published_ms, &a.tag).cmp(&(b.published_ms, &b.tag)));
+        Ok(out)
+    }
+
+    async fn contains(&self, repo: &str, tag: &str, sha: &str) -> Result<bool, SourceError> {
+        if !plain_ref(tag) || !plain_ref(sha) {
+            return Ok(false);
+        }
+        let url = format!("{}/repos/{repo}/compare/{sha}...{tag}", self.api);
+        let res = self.call(Req::get(url)).await?;
+        match res.status {
+            200 => Ok(matches!(
+                res.body["status"].as_str(),
+                Some("ahead" | "identical")
+            )),
+            404 => Ok(false),
+            s => Err(anyhow!("GitHub answered {s} comparing {sha} with {tag} in {repo}").into()),
+        }
+    }
+}
+
+/// A tag or commit that can go into a URL path as it is.
+fn plain_ref(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 200
+        && !s.contains("..")
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+' | b'/'))
 }
 
 /// The review state from a pull request's reviews: each reviewer's latest

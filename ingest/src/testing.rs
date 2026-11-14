@@ -250,6 +250,8 @@ impl Tracker for Fake {
                     pr: it.pr.clone(),
                     claimed_at_ms: it.first_claim_ms,
                     pr_status: it.pr_status.clone(),
+                    release: it.release.clone(),
+                    awaits_release: i.state.awaits_release(item),
                 }
             })
             .collect())

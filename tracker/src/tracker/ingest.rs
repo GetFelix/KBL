@@ -28,7 +28,8 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::ReturnedToScope { .. }
         | WorkRecord::PrStatus { .. }
         | WorkRecord::SourceStalled { .. }
-        | WorkRecord::Reopened { .. } => true,
+        | WorkRecord::Reopened { .. }
+        | WorkRecord::Shipped { .. } => true,
         // The two items an admitted root starts with.
         WorkRecord::Proposed { work, .. } => matches!(work, WorkKind::Triage | WorkKind::Augment),
         WorkRecord::Closed { why, .. } => matches!(
@@ -50,6 +51,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::ReturnedToScope { item }
         | WorkRecord::PrStatus { item, .. }
         | WorkRecord::Reopened { item }
+        | WorkRecord::Shipped { item, .. }
         | WorkRecord::Closed { item, .. } => vec![item],
         WorkRecord::Linked { item, to } => vec![item, to],
         WorkRecord::Proposed {
@@ -208,6 +210,8 @@ impl<B: Broker> Tracker<B> {
                     "pr": it.pr,
                     "claimed_at_ms": it.first_claim_ms,
                     "pr_status": it.pr_status,
+                    "release": it.release,
+                    "awaits_release": core.state.awaits_release(item),
                 }))
             })
             .collect();

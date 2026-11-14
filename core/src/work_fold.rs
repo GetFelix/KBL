@@ -563,6 +563,12 @@ impl State {
         })
     }
 
+    /// Whether a link waits for a release of `item`. Only then does ingest
+    /// look for the release that carries it.
+    pub fn awaits_release(&self, item: &ItemId) -> bool {
+        self.release_edges.iter().any(|(_, to)| to == item)
+    }
+
     /// Every imported root with its source and upstream id.
     pub fn imported(&self) -> impl Iterator<Item = (&str, &str, &ItemId)> {
         self.upstream.iter().filter_map(|(up, item)| {
