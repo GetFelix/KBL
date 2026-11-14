@@ -584,7 +584,7 @@ async fn releases_skip_drafts_prereleases_and_odd_tags_and_come_oldest_first() {
             rel("v1", "2027-01-15T10:00:00Z", false, false),
         ])),
     );
-    let got = github(&gh).releases("GetFelix/felix").await.unwrap();
+    let got = github(&gh).releases("GetFelix/felix", 0).await.unwrap();
     let tags: Vec<_> = got.iter().map(|r| r.tag.as_str()).collect();
     assert_eq!(tags, ["v1", "v2"]);
 }
@@ -609,4 +609,47 @@ async fn a_tag_contains_a_commit_only_when_the_compare_is_ahead_or_identical() {
     assert!(!g.contains("GetFelix/felix", "v3", "aaa").await.unwrap());
     assert!(!g.contains("GetFelix/felix", "v4", "aaa").await.unwrap());
     assert!(!g.contains("GetFelix/felix", "../x?y", "aaa").await.unwrap());
+}
+
+#[tokio::test]
+async fn releases_page_back_to_the_merge_and_no_further_than_five_pages() {
+    let rel = |n: u64| {
+        let at = format!(
+            "2027-01-{:02}T{:02}:{:02}:00Z",
+            10 + n / 600,
+            n / 60 % 10 + 10,
+            n % 60
+        );
+        json!({ "tag_name": format!("v{n}"), "published_at": at, "draft": false, "prerelease": false })
+    };
+    let page = |from: u64| Value::Array((0..100).map(|i| rel(9_000 - from - i)).collect());
+    let gh = Script::default();
+    for n in 1..=6u64 {
+        gh.on(
+            "GET",
+            &format!("/releases?per_page=100&page={n}"),
+            ok(page((n - 1) * 100)),
+        );
+    }
+    let g = github(&gh);
+    let pages = |gh: &Script| {
+        gh.sent()
+            .iter()
+            .filter(|r| r.url.contains("/releases?"))
+            .count()
+    };
+    // Everything is newer than the merge: five pages, then it stops.
+    let all = g.releases("GetFelix/felix", 0).await.unwrap();
+    assert_eq!(pages(&gh), 5);
+    assert_eq!(all.len(), 500);
+    assert!(
+        all.windows(2)
+            .all(|w| w[0].published_ms <= w[1].published_ms)
+    );
+    // A release older than the merge on page 2 ends the listing there.
+    let since = all[350].published_ms;
+    let some = g.releases("GetFelix/felix", since).await.unwrap();
+    assert_eq!(pages(&gh), 7);
+    assert_eq!(some.len(), 150);
+    assert!(some.iter().all(|r| r.published_ms >= since));
 }

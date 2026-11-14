@@ -29,6 +29,8 @@ pub(crate) use transport::{Req, Res, Transport};
 /// Pages followed in one listing before the cursor stops where they ended.
 const MAX_PAGES: usize = 20;
 const REVIEWS_PER_PAGE: usize = 100;
+/// Release pages read looking for the first release before a merge: 500 releases.
+const RELEASE_PAGES: usize = 5;
 /// The longest a rate-limit wait is trusted to be; a bogus header must not park the worker for days.
 const MAX_WAIT: Duration = Duration::from_secs(3600);
 
@@ -385,13 +387,14 @@ impl<T: Transport> Source for Github<T> {
             failing: None,
         };
         if phase != PrPhase::Open {
+            // Without the merge time no release can be placed after it.
             let merge = (phase == PrPhase::Merged)
-                .then(|| pull["merge_commit_sha"].as_str())
-                .flatten()
-                .map(|sha| {
-                    let at = pull["merged_at"].as_str().and_then(parse_utc_ms);
-                    (sha.to_owned(), at)
-                });
+                .then(|| {
+                    let sha = pull["merge_commit_sha"].as_str()?;
+                    let at = pull["merged_at"].as_str().and_then(parse_utc_ms)?;
+                    Some((sha.to_owned(), at))
+                })
+                .flatten();
             return Ok(Some(PullRequest {
                 author,
                 head_ref,
@@ -563,28 +566,45 @@ impl<T: Transport> Source for Github<T> {
         Ok(())
     }
 
-    async fn releases(&self, repo: &str) -> Result<Vec<Release>, SourceError> {
-        let url = format!("{}/repos/{repo}/releases?per_page=100", self.api);
-        let res = self.call(Req::get(url)).await?;
-        match res.status {
-            200 => {}
-            404 => return Ok(Vec::new()),
-            s => return Err(anyhow!("GitHub answered {s} for the releases of {repo}").into()),
+    async fn releases(&self, repo: &str, since_ms: u64) -> Result<Vec<Release>, SourceError> {
+        // GitHub lists newest first, so the pages stop at the first release
+        // published before `since_ms`.
+        let mut out = Vec::new();
+        for page in 1..=RELEASE_PAGES {
+            let url = format!(
+                "{}/repos/{repo}/releases?per_page=100&page={page}",
+                self.api
+            );
+            let res = self.call(Req::get(url)).await?;
+            match res.status {
+                200 => {}
+                404 => break,
+                s => return Err(anyhow!("GitHub answered {s} for the releases of {repo}").into()),
+            }
+            let listed = res.body.as_array().cloned().unwrap_or_default();
+            let mut older = false;
+            for r in &listed {
+                let Some(at) = r["published_at"].as_str().and_then(parse_utc_ms) else {
+                    continue;
+                };
+                if at < since_ms {
+                    older = true;
+                    continue;
+                }
+                if r["draft"] == true || r["prerelease"] == true {
+                    continue;
+                }
+                if let Some(tag) = r["tag_name"].as_str().filter(|t| plain_ref(t)) {
+                    out.push(Release {
+                        tag: tag.to_owned(),
+                        published_ms: at,
+                    });
+                }
+            }
+            if older || listed.len() < 100 {
+                break;
+            }
         }
-        let mut out: Vec<Release> = res
-            .body
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|r| r["draft"] != true && r["prerelease"] != true)
-            .filter_map(|r| {
-                let tag = r["tag_name"].as_str().filter(|t| plain_ref(t))?;
-                Some(Release {
-                    tag: tag.to_owned(),
-                    published_ms: r["published_at"].as_str().and_then(parse_utc_ms)?,
-                })
-            })
-            .collect();
         out.sort_by(|a, b| (a.published_ms, &a.tag).cmp(&(b.published_ms, &b.tag)));
         Ok(out)
     }
@@ -593,7 +613,8 @@ impl<T: Transport> Source for Github<T> {
         if !plain_ref(tag) || !plain_ref(sha) {
             return Ok(false);
         }
-        let url = format!("{}/repos/{repo}/compare/{sha}...{tag}", self.api);
+        // One commit per page: only the status is read.
+        let url = format!("{}/repos/{repo}/compare/{sha}...{tag}?per_page=1", self.api);
         let res = self.call(Req::get(url)).await?;
         match res.status {
             200 => Ok(matches!(

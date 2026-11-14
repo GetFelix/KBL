@@ -127,7 +127,7 @@ pub(crate) struct PullRequest {
     /// None when the author is not one of ours: nothing more is read.
     pub(crate) status: Option<PrSnapshot>,
     /// The commit a counted merge made, and when, in milliseconds since the epoch.
-    pub(crate) merge: Option<(String, Option<u64>)>,
+    pub(crate) merge: Option<(String, u64)>,
 }
 
 /// A published release.
@@ -226,11 +226,14 @@ pub(crate) trait Source: Send + Sync {
 
     fn write_back(&self, what: &WriteBack) -> impl Future<Output = Result<(), SourceError>> + Send;
 
-    /// The repo's latest published releases, oldest first. Drafts and
-    /// prereleases are left out.
+    /// The repo's stable releases published at or after `since_ms`, oldest
+    /// first, so the first that contains a merge is the oldest after it.
+    /// Drafts and prereleases are left out. At most 5 pages of 100 are read,
+    /// newest first, so a merge more than 500 releases back finds none.
     fn releases(
         &self,
         repo: &str,
+        since_ms: u64,
     ) -> impl Future<Output = Result<Vec<Release>, SourceError>> + Send;
 
     /// Whether the release tagged `tag` contains the commit `sha`.

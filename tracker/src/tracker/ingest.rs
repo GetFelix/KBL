@@ -115,6 +115,21 @@ impl<B: Broker> Tracker<B> {
             {
                 return Err(refused("not_merged"));
             }
+            // A release can carry only a merge the tracker has seen, and the
+            // release a person recorded stands.
+            if let WorkRecord::Shipped { item, .. } = &record {
+                if !merged_request_reported(&core.state, item) {
+                    return Err(refused("not_merged"));
+                }
+                if core
+                    .state
+                    .items
+                    .get(item)
+                    .is_some_and(|it| it.release.is_some())
+                {
+                    return Err(refused("already_shipped"));
+                }
+            }
             let opened = match &record {
                 WorkRecord::PrStatus { item, status } if status.phase == PrPhase::Open => {
                     Some((item.clone(), status.pr.clone()))
@@ -252,7 +267,7 @@ impl<B: Broker> Tracker<B> {
 }
 
 /// Whether the item's reported request has a merged status. Ingest may close
-/// as merged on no other evidence.
+/// as merged, or record a release, on no other evidence.
 fn merged_request_reported(state: &State, item: &ItemId) -> bool {
     state.items.get(item).is_some_and(|it| {
         it.pr_status

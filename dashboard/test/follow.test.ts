@@ -191,7 +191,7 @@ test('a record of a newer format ends the follow instead of being skipped', asyn
     apply: (offset) => offset < 2 && applied.push(offset) > 0,
     newer: () => (applied.length === 2 ? 2 : 0),
   };
-  await assert.rejects(follow(gw, sink, { stream: 'events' }), /record 2 has format 2.*Reload/);
+  await assert.rejects(follow(gw, sink, { stream: 'events' }), { code: 'newer_format', message: /record 2 has format 2/ });
   assert.deepEqual(applied, [0, 1]);
 });
 

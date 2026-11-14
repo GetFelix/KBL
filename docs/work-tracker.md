@@ -485,15 +485,24 @@ What it does with GitHub:
   than `own_logins` (agents never merge their own work, a person does), and
   then closes the root as merged (`closed` with reason merged, which the
   ingest token may write only for a merged status of the item's own request).
-- **Releases.** A merged root that a link waits on for a release (`awaits_release`
-  in `GET /v1/ingest/roots`) gets a `shipped` record once a published release
-  carries its merge commit. Drafts and prereleases are ignored. The worker
-  lists the repo's releases once per poll, oldest first, takes those published
-  after the merge, and asks GitHub to compare the merge commit with each tag
-  (`ahead` or `identical` means the tag contains it). It checks only a request
-  it may read under the rules above. The token needs read access to the
-  repo's contents for the compare call and the release list. A merged root
-  nothing waits on costs no requests.
+- **Releases.** A merged root that an open item's link waits on for a release
+  (`awaits_release` in `GET /v1/ingest/roots`) gets a `shipped` record once a
+  published release carries its merge commit. The worker records the oldest
+  stable release after the merge that contains it: drafts and prereleases are
+  ignored. It lists the repo's releases newest first, at most 5 pages of 100,
+  and stops at the first one published before the merge, so a merge more than
+  500 releases back finds none. It then compares the merge commit with each
+  tag, oldest first (`ahead` or `identical` means the tag contains it). One
+  poll makes at most `release_compares_per_poll` compares (default 20), and a
+  tag found not to contain the merge is not compared again, so the search
+  carries on over later polls. This step runs last in a poll, so a rate limit
+  here holds up nothing else. A request merged without a merge time, or by one
+  of `own_logins`, ships nothing. It checks only a request it may read under
+  the rules above. The token needs read access to the repo's contents for the
+  compare call and the release list. A merged root nothing waits on costs no
+  requests. A tag that is later moved or deleted is not looked at again, and a
+  fix that reaches a release only by a cherry-pick is never found: a person
+  records `shipped` for those.
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 
@@ -660,11 +669,14 @@ that waits for a release stays blocked until a `shipped` record,
 `{"kind": "shipped", "item": ..., "release": "0.4.0"}`, names the release that
 carries the finished prerequisite. A person can write it. Ingest writes it for
 a prerequisite it imported from GitHub whose pull request it saw merged: it
-looks for the oldest published release, not a draft or prerelease, made after
-the merge whose tag contains the merge commit. It asks only for roots a link
-is waiting on, so an ordinary merge costs no release requests. The fold takes
-the record from people and ingest only, and only for an item that is done. If a person rejects or dismisses
-the prerequisite, the held item goes to Needs you as "dependency dropped".
+looks for the oldest stable release after the merge that contains it, within
+the page bound in [Running the ingest worker](#running-the-ingest-worker). It
+asks only for roots an open item's link is waiting on, so an ordinary merge
+costs no release requests. The fold takes the record from people and ingest
+only, and only for an item that is done. The tracker takes ingest's only when
+the item's reported request has a merged status, and never over a release
+already recorded. If a person rejects or dismisses the prerequisite, the held
+item goes to Needs you as "dependency dropped".
 
 This is the only cross-tree link an agent can make, and the tracker checks it
 before the fold sees the record. A new prerequisite must target a source and
@@ -1123,6 +1135,23 @@ The floor is applied when the record is written: the record carries the
 charged cost, and the fold reads it as before. Under `kbl-run` the reported
 figure is measured spend, and a measured figure below the floor is raised to
 it like any other.
+
+**Spend.** The charged costs add up on the item that took the claim, so spend
+is a read of the fold, not a separate record. `kbl-tool work spend` folds
+`work.events` and prints the total, in millionths of a dollar, per root (the
+root and everything under it), per reviewer tier (reviews only) and per repo
+(`source:repo` of the item's root, so a review counts where the request it
+reads lands). The wasm fold exposes the same numbers via
+`Folder.spend_json()`. Spend is a lower bound, because a lapsed claim
+records no cost.
+
+```bash
+kbl-tool work spend
+# {"total_micros": 1400000,
+#  "by_root": {"g3f9a1c0d2b7e4a65": 1400000},
+#  "by_review_tier": {"deep": 300000, "fast": 100000},
+#  "by_repo": {"github:GetFelix/felix": 1400000}}
+```
 
 ## The dashboard
 

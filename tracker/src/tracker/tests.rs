@@ -1492,6 +1492,94 @@ async fn ingest_cannot_close_as_merged_without_a_merged_status() {
     assert_eq!(fake.log().len(), 1);
 }
 
+/// a1, imported and fixed by w1, whose request `pr` reports.
+async fn fixed(t: &Tracker<Fake>, pr: Option<&str>) {
+    seed_in_felix(t, "a1").await;
+    claim(t, "w1").await;
+    t.progress(
+        &agent("w1"),
+        &item("a1"),
+        kbl_core::content::Content::Text("fixed".into()),
+        None,
+        pr.map(str::to_owned),
+    )
+    .await
+    .unwrap();
+    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+}
+
+fn shipped(tag: &str) -> WorkRecord {
+    WorkRecord::Shipped {
+        item: item("a1"),
+        release: tag.into(),
+    }
+}
+
+#[tokio::test]
+async fn ingest_records_the_release_of_a_merged_root_once() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let pr = "GetFelix/felix#9";
+    fixed(&t, Some(pr)).await;
+    let merged = WorkRecord::PrStatus {
+        item: item("a1"),
+        status: kbl_core::work::PrSnapshot {
+            pr: pr.into(),
+            phase: kbl_core::work::PrPhase::Merged,
+            review: kbl_core::work::PrReview::Unreviewed,
+            checks: kbl_core::work::PrChecks::Green,
+            failing: None,
+        },
+    };
+    t.ingest_record(key("ingest-gh"), merged).await.unwrap();
+    let close = WorkRecord::Closed {
+        item: item("a1"),
+        why: kbl_core::work::CloseWhy::Merged,
+    };
+    t.ingest_record(key("ingest-gh"), close).await.unwrap();
+    t.ingest_record(key("ingest-gh"), shipped("v1"))
+        .await
+        .unwrap();
+    let release = t.0.core.lock().await.state.items[&item("a1")]
+        .release
+        .clone();
+    assert_eq!(release.as_deref(), Some("v1"));
+    let err = t
+        .ingest_record(key("ingest-gh"), shipped("v2"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Refused { ref why } if why == "already_shipped"),
+        "{err}"
+    );
+}
+
+#[tokio::test]
+async fn ingest_cannot_ship_a_done_root_without_a_merged_request() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    fixed(&t, None).await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::Closed {
+            item: item("a1"),
+            why: kbl_core::work::CloseWhy::Completed,
+        },
+    )
+    .await
+    .unwrap();
+    let before = fake.log().len();
+    let err = t
+        .ingest_record(key("ingest-gh"), shipped("v1"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Refused { ref why } if why == "not_merged"),
+        "{err}"
+    );
+    assert_eq!(fake.log().len(), before);
+}
+
 pub(super) async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
     t.person_record(
         key("gab"),

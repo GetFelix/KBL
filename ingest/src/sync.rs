@@ -9,7 +9,7 @@
 //!
 //! The upstream-change table is in docs/work-tracker.md.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::Context;
 use kbl_core::content::Content;
@@ -22,7 +22,7 @@ use crate::rules::first_match;
 use crate::source::{
     Changes, Closed, Comment, Fetched, Issue, IssueRef, Release, Source, SourceError, WriteBack,
 };
-use crate::state::{State, Tracked};
+use crate::state::{Awaiting, State, Tracked};
 use crate::tracker_api::{Appended, Root, Tracker};
 
 /// Longest comment or body kept in a record, in bytes. Longer text is cut
@@ -38,6 +38,8 @@ pub(crate) struct Settings {
     pub(crate) repos: Vec<String>,
     /// Polls between full reconciles, which notice transfers and deletions.
     pub(crate) reconcile_every: u32,
+    /// Release compares one poll may make.
+    pub(crate) release_compares: u32,
 }
 
 pub(crate) struct Ingest<S, T> {
@@ -138,7 +140,6 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         self.retry_waiting(p).await?;
         self.pull_requests(p).await?;
-        self.releases(p).await?;
         p.state.polls += 1;
         if reconcile || p.state.polls >= self.settings.reconcile_every {
             p.state.polls = 0;
@@ -148,7 +149,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         self.write_back(p).await?;
         prune(p);
         p.state.cursors.extend(cursors);
-        Ok(())
+        // Last, so a rate limit here holds up nothing else.
+        self.releases(p).await
     }
 
     /// Tells the tracker which repos cannot be read, when that changes. Only
@@ -624,14 +626,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         Ok(())
     }
 
-    /// Records the first release that carries a merged root a link waits on,
-    /// which frees that link. Only roots something waits on are looked at, so
-    /// an ordinary merge costs no requests here.
+    /// Records the oldest release after the merge that carries a merged root
+    /// a link waits on, which frees that link. Only such roots are looked at,
+    /// so an ordinary merge costs no requests here, and each poll makes at
+    /// most `release_compares` compares.
     async fn releases(&self, p: &mut Poll) -> Result<(), SourceError> {
         let mut due: Vec<(String, ItemId, IssueRef)> = p
             .roots
             .iter()
-            .filter(|(_, r)| r.closed && r.awaits_release && r.release.is_none())
+            .filter(|(_, r)| {
+                r.closed && r.stage == "done" && r.awaits_release && r.release.is_none()
+            })
             .filter_map(|(k, r)| {
                 let status = r.pr_status.as_ref()?;
                 let pr = IssueRef::parse(&status.pr)?;
@@ -641,56 +646,99 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .filter(|(k, _, pr)| self.may_write_to(k, pr))
             .collect();
         due.sort();
-        let mut listed: HashMap<String, Vec<Release>> = HashMap::new();
-        for (key, item, pr) in due {
-            let found = match self.release_of(&pr, &mut listed).await {
-                Ok(found) => found,
-                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
-                Err(e) => {
-                    eprintln!("kbl-ingest: could not find the release of {pr} for {key}: {e}");
-                    continue;
+        let keys: HashSet<&str> = due.iter().map(|(k, _, _)| k.as_str()).collect();
+        p.state.awaiting.retain(|k, _| keys.contains(k.as_str()));
+        for (key, _, pr) in &due {
+            let pr_id = pr.to_string();
+            if p.state.awaiting.get(key).is_some_and(|a| a.pr == pr_id) {
+                continue;
+            }
+            match self.source.pull_request(pr).await {
+                Ok(pull) => {
+                    let merge = pull.and_then(|pull| pull.merge);
+                    p.state.awaiting.insert(
+                        key.clone(),
+                        Awaiting {
+                            pr: pr_id,
+                            merge,
+                            misses: BTreeSet::new(),
+                        },
+                    );
                 }
+                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                Err(e) => eprintln!("kbl-ingest: could not read {pr} for {key}: {e}"),
+            }
+        }
+        // One listing per repo, back to the earliest merge it is needed for.
+        let mut since: BTreeMap<String, u64> = BTreeMap::new();
+        for (key, _, pr) in &due {
+            if let Some((_, at)) = p.state.awaiting.get(key).and_then(|a| a.merge.as_ref()) {
+                let s = since.entry(pr.repo.clone()).or_insert(*at);
+                *s = (*s).min(*at);
+            }
+        }
+        let mut listed: HashMap<String, Vec<Release>> = HashMap::new();
+        for (repo, at) in since {
+            match self.source.releases(&repo, at).await {
+                Ok(releases) => {
+                    listed.insert(repo, releases);
+                }
+                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                Err(e) => eprintln!("kbl-ingest: could not list the releases of {repo}: {e}"),
+            }
+        }
+        let mut budget = self.settings.release_compares;
+        for (key, item, pr) in due {
+            let Some(releases) = listed.get(&pr.repo) else {
+                continue;
             };
-            let Some(release) = found else { continue };
-            if self
-                .write(&WorkRecord::Shipped {
-                    item,
-                    release: release.clone(),
-                })
-                .await?
-                && let Some(r) = p.roots.get_mut(&key)
-            {
-                r.release = Some(release);
+            let Some(Awaiting {
+                merge: Some((sha, merged_ms)),
+                misses,
+                ..
+            }) = p.state.awaiting.get(&key).cloned()
+            else {
+                continue;
+            };
+            let untried = releases
+                .iter()
+                .filter(|r| r.published_ms >= merged_ms && !misses.contains(&r.tag));
+            for release in untried {
+                if budget == 0 {
+                    return Ok(());
+                }
+                budget -= 1;
+                match self.source.contains(&pr.repo, &release.tag, &sha).await {
+                    Ok(true) => {
+                        let shipped = WorkRecord::Shipped {
+                            item: item.clone(),
+                            release: release.tag.clone(),
+                        };
+                        if self.write(&shipped).await? {
+                            p.state.awaiting.remove(&key);
+                            if let Some(r) = p.roots.get_mut(&key) {
+                                r.release = Some(release.tag.clone());
+                            }
+                        }
+                        break;
+                    }
+                    Ok(false) => {
+                        if let Some(a) = p.state.awaiting.get_mut(&key) {
+                            a.misses.insert(release.tag.clone());
+                        }
+                    }
+                    Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                    Err(e) => {
+                        eprintln!(
+                            "kbl-ingest: could not compare {} with {sha} for {key}: {e}",
+                            release.tag
+                        );
+                        break;
+                    }
+                }
             }
         }
         Ok(())
-    }
-
-    /// The oldest release published after the merge whose tag contains the
-    /// merge commit. A request merged by someone outside our logins is the
-    /// only kind with a merge here, as for closing the root.
-    async fn release_of(
-        &self,
-        pr: &IssueRef,
-        listed: &mut HashMap<String, Vec<Release>>,
-    ) -> Result<Option<String>, SourceError> {
-        let Some(pull) = self.source.pull_request(pr).await? else {
-            return Ok(None);
-        };
-        let Some((sha, merged_ms)) = pull.merge else {
-            return Ok(None);
-        };
-        if !listed.contains_key(&pr.repo) {
-            let releases = self.source.releases(&pr.repo).await?;
-            listed.insert(pr.repo.clone(), releases);
-        }
-        let after = merged_ms.unwrap_or(0);
-        for release in listed[&pr.repo].iter().filter(|r| r.published_ms >= after) {
-            if self.source.contains(&pr.repo, &release.tag, &sha).await? {
-                return Ok(Some(release.tag.clone()));
-            }
-        }
-        Ok(None)
     }
 
     /// Fetches each open imported issue, which finds what no listing shows.

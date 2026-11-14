@@ -2,12 +2,12 @@
 
 The KBL (Kanban By Log) dashboard in the browser. It reads `work.events` through
 [felix-gateway](https://github.com/GetFelix/felix-gateway), folds it with the `core` crate compiled to
-WebAssembly, and lists every item with its stage. The page is plain TypeScript built with Vite. The fold already
-holds the state, so there is no UI framework and no second state layer.
+WebAssembly, and lists every item grouped by stage, with a detail panel, search and a command palette. The page
+is plain TypeScript built with Vite. The fold already holds the state, so there is no UI framework; a small store
+in `src/state.ts` holds only what the view adds (selection, search, open dialogs).
 
-This is the data path only. The page is a list; the real views come from the UX work in
-[#132](https://github.com/GetFelix/KBL/issues/132). It cannot write: a person's actions will go to the
-tracker's REST routes.
+It cannot write yet: a person's actions will go to the tracker's REST routes. The design, the conventions it
+follows and the plan for later views are in [docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md).
 
 ## Run it
 
@@ -22,7 +22,11 @@ npm ci
 npm run dev     # builds the WebAssembly, then starts Vite
 npm test        # the fold against the golden logs, and the read-then-follow join
 npm run build   # typecheck and production build into dist/
+npm run check   # after build: keyboard flows and axe-core in headless Chrome (set CHROME if it is not found)
 ```
+
+`npm run check` drives `dist/` against a fake gateway (`check/fixture.mjs`) and fails on a broken flow or a
+serious or critical axe-core violation. `node check/browser.mjs <dir>` also writes screenshots to `<dir>`.
 
 The gateway needs a scope that gives the page `subscribe` on `work.events`. `read` is a gateway feature the page
 asks for in `join`, not a scope action: a `read` of a stream needs `subscribe` on it, so one grant covers both.
@@ -52,8 +56,8 @@ since `ws://` sends the token in the clear; and treat a `?gateway=` link from so
 the page sends the token to whatever address it names.
 
 An expired or rejected token (`signed_out`, `forbidden`) or an error a retry cannot fix (`trimmed`, `bad_request`,
-`past_end`) stops the page with a message. So does a record of a newer format than the page's fold reads: the
-page asks for a reload instead of skipping it ([docs/upgrades.md](../docs/upgrades.md)). `subscription_ended` (a broker failover) subscribes again at once from
+`past_end`) stops the page with a message, and for a token it adds that a new sign-in link fixes it. A record of
+a newer format than the page's fold reads stops it too: the page asks for a reload instead of skipping it ([docs/upgrades.md](../docs/upgrades.md)). `subscription_ended` (a broker failover) subscribes again at once from
 the cursor. Any other failure reconnects from the cursor, which is past records the fold refused, with a growing
 delay up to 30 s.
 
@@ -79,11 +83,33 @@ unsubscribe: a second `subscribe` on the stream replaces the first, and the page
 before the new `subscribed`, since that belongs to the replaced one. Records the fold does not read are counted
 in the status line.
 
+## Keys
+
+| Key | Does |
+| --- | --- |
+| `Ctrl+K` (`Cmd+K` on a Mac) | Command palette: every command, plus items by id or title |
+| `?` | Keyboard shortcuts |
+| `/` | Search |
+| `J` / `K`, arrows | Next and previous item |
+| `Home` / `End` | First and last item |
+| `Enter` | Open the selected item in the panel |
+| `Esc` | Close the panel or dialog, or clear the search |
+
+Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
+palette and the `?` overlay all read it. The theme switch is in the palette only.
+
 ## Files
 
 - `src/follow.ts`: the read-then-subscribe join, written against a small `Transport` so tests can fake the gateway.
 - `src/gateway.ts`: the WebSocket transport and the `join` handshake.
 - `src/fold.ts`: the shape of the WebAssembly fold.
+- `src/main.ts`: starts the page, runs the gateway loop and dispatches keys.
+- `src/state.ts`: the view state, its reducer and the address round-trip (`?item=`, `?q=`).
+- `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
+  All pure, tested in `test/`.
+- `src/ui/`: the views (shell, list, panel, palette, shortcuts, status line), `tokens.css` for colour, space and
+  type, and `app.css`.
+- `check/`: the headless Chrome check and its fixture log.
 - `../wasm`: the Rust crate that wraps `core`'s fold for the page.
 - `../wasm/golden`: logs and the state the native fold gives for each. The wasm fold must match them in
   `test/fold.test.ts`, and the native one in `wasm/tests/golden.rs`.

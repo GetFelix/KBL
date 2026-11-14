@@ -15,7 +15,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Parser, Subcommand};
 use kbl_core::codec::Codec;
 use kbl_core::names::{Resources, RunId, WORKERS_GROUP};
-use kbl_core::work::WORK_EVENTS;
+use kbl_core::work::{ReadError, WORK_EVENTS, read};
+use kbl_core::work_fold::{Spend, State};
 
 use felix::{Outcome, Session, Target};
 use run::NewRun;
@@ -98,6 +99,9 @@ enum TeamCommand {
 enum WorkCommand {
     /// Print `work.events`, one JSON record per line.
     Log,
+    /// Fold `work.events` and print what claims cost, in micro-dollars, per
+    /// root, reviewer tier and repo.
+    Spend,
 }
 
 #[derive(Subcommand)]
@@ -149,6 +153,7 @@ async fn serve() -> Result<()> {
         Command::Run(RunCommand::Create(args)) => create(target, args).await,
         Command::Run(RunCommand::Log { run }) => log(target, &run).await,
         Command::Work(WorkCommand::Log) => print_stream(target, WORK_EVENTS).await,
+        Command::Work(WorkCommand::Spend) => print_spend(target).await,
         Command::Org(OrgCommand::Init(args)) => teams::org_init(target, args).await,
         Command::Team(TeamCommand::Create(args)) => teams::team_create(target, args).await,
         Command::Agent(command) => agents::run(&target.namespace, command).await,
@@ -208,10 +213,34 @@ async fn log(target: Target, run: &str) -> Result<()> {
 
 async fn print_stream(target: Target, stream: &str) -> Result<()> {
     let broker = Session::sign_in(target).await?.broker().await?;
-    for payload in broker.read_all(stream).await? {
+    for (_, payload) in broker.read_all(stream).await? {
         println!("{}", String::from_utf8_lossy(&payload));
     }
     Ok(())
+}
+
+async fn print_spend(target: Target) -> Result<()> {
+    let broker = Session::sign_in(target).await?.broker().await?;
+    let records = broker.read_all(WORK_EVENTS).await?;
+    println!("{}", serde_json::to_string_pretty(&spend(&records)?)?);
+    Ok(())
+}
+
+/// The fold's spend over `records`. A record of a newer format than this build
+/// reads stops it, since every total after it would be short.
+fn spend(records: &[(u64, Vec<u8>)]) -> Result<Spend> {
+    let mut state = State::default();
+    for (offset, payload) in records {
+        match read(payload) {
+            Ok(rec) => state.apply(*offset, &rec),
+            Err(ReadError::Newer { v }) => {
+                bail!("work.events has a format {v} record at offset {offset}; update kbl-tool")
+            }
+            // Not a record, so nothing the fold would take.
+            Err(ReadError::Malformed(_)) => {}
+        }
+    }
+    Ok(state.spend())
 }
 
 fn now_ms() -> u64 {
