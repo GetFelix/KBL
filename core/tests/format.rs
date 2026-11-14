@@ -558,22 +558,39 @@ fn id(s: &str) -> kbl_core::names::ItemId {
     kbl_core::names::ItemId::new(s).unwrap()
 }
 
-/// Re-opening a prerequisite starts a new round: its release ask is dropped,
-/// so the waiter's new `merged` ask frees it at the next merge.
+/// Re-opening a prerequisite keeps every release wait: dropping it would turn
+/// a `released` ask into `merged` and free the waiter on unreleased work. The
+/// reopen clears the release, so the waiter waits for the next one. Other
+/// edges survive, and the rule is the same in a format 4 log.
 #[test]
-fn a_reopened_prerequisite_drops_its_release_ask_from_format_5() {
-    let more = r#"{"at_ms":1300,"by":"gabriel","actor":"person","kind":"reopened","item":"g2"}
-{"at_ms":1310,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
-{"at_ms":1320,"by":"tracker","actor":"tracker","kind":"proposed","item":"t3","parent":"r2","key":"retriage","work":"triage","title":"triage again"}
-{"at_ms":1330,"by":"w2","actor":"agent","kind":"claimed","item":"t3","attempt":1,"deadline_ms":1800000090000}
-{"v":3,"at_ms":1340,"by":"w2","actor":"agent","kind":"prerequisite","item":"r2","attempt":1,"prerequisite":"g2","key":"need-limits-2","done_when":"merged","cost_micros":0,"triage":"t3"}
-{"at_ms":1350,"by":"w2","actor":"agent","kind":"done","item":"t3","attempt":1,"cost_micros":0}
-{"at_ms":1360,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"merged"}
+fn a_reopened_prerequisite_keeps_its_release_waits() {
+    let raise5 =
+        r#"{"v":5,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":5}"#;
+    let raise4 =
+        r#"{"v":4,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":4}"#;
+    // Up to the release ask on g2, while g2 is still open.
+    let head: String = FORMAT_5_LOG
+        .lines()
+        .take(17)
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let more = r#"{"at_ms":1300,"by":"gabriel","actor":"person","kind":"linked","item":"r2","to":"g1"}
+{"at_ms":1310,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"merged"}
+{"at_ms":1320,"by":"gabriel","actor":"person","kind":"reopened","item":"g2"}
+{"at_ms":1330,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1340,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"merged"}
 "#;
-    let s = format_5_with(more);
-    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
-    assert!(!s.release_edges.contains(&(id("r2"), id("g2"))));
-    assert_ne!(s.stage(&id("r2")), Some(Stage::Blocked));
+    let shipped = r#"{"at_ms":1350,"by":"gabriel","actor":"person","kind":"shipped","item":"g2","release":"0.5.0"}
+"#;
+    for log in [head.clone(), head.replace(raise5, raise4)] {
+        let s = fold(&entries(&format!("{log}{more}")));
+        let (r2, g2, g1) = (id("r2"), id("g2"), id("g1"));
+        assert!(s.release_edges.contains(&(r2.clone(), g2.clone())));
+        assert!(s.edges.contains(&(r2.clone(), g1)), "{:?}", s.rejections);
+        assert_eq!(s.stage(&r2), Some(Stage::Blocked));
+        let s = fold(&entries(&format!("{log}{more}{shipped}")));
+        assert_ne!(s.stage(&r2), Some(Stage::Blocked));
+    }
 }
 
 /// Items for the format 5 refusal tests: r3 is held by w3, g3 dismissed, g4

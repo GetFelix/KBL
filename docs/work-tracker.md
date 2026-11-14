@@ -655,8 +655,9 @@ merged or completed but has no release yet can still be named with
 `done_when: released`; any other closed item is refused as `closed`.
 Completed covers work that is not a fix too, so a `released` wait on it holds
 until a person records `shipped` or removes the link. A person's `unlinked`
-drops a release wait, and so does re-opening the prerequisite: a re-opened item
-starts a new round and the waiting agent asks again. These rules apply from
+drops a release wait. Re-opening the prerequisite keeps it and clears the
+release, so the waiter waits for the next one; dropping it would free the
+waiter on unreleased work. Accepting a finished prerequisite applies from
 [format 5](upgrades.md#formats). If a person rejects or dismisses
 the prerequisite, the held item goes to Needs you as "dependency dropped".
 
