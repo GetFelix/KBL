@@ -1,0 +1,21 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix-blocks#1","title":"swap blocks atomically"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"imported","item":"g1","source":"github","upstream_id":"GetFelix/felix-gateway#7","title":"gateway CAS call"}
+{"at_ms":1030,"by":"gabriel","actor":"person","kind":"accepted","item":"g1","tier":1}
+{"at_ms":1040,"by":"gabriel","actor":"person","kind":"closed","item":"g1","why":"merged"}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1060,"by":"w1","actor":"agent","kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"g1","key":"need-cas","done_when":"released","cost_micros":0}
+{"v":5,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":5}
+{"at_ms":1080,"by":"w1","actor":"agent","kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"g1","key":"need-cas","done_when":"released","cost_micros":0}
+{"at_ms":1090,"by":"gabriel","actor":"person","kind":"shipped","item":"g1","release":"0.4.0"}
+{"at_ms":1100,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix-blocks#2","title":"rate limit the editor"}
+{"at_ms":1110,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"at_ms":1120,"by":"gabriel","actor":"person","kind":"imported","item":"g2","source":"github","upstream_id":"GetFelix/felix-gateway#8","title":"gateway rate limits"}
+{"at_ms":1130,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1140,"by":"tracker","actor":"tracker","kind":"proposed","item":"t2","parent":"r2","key":"triage","work":"triage","title":"triage: rate limit the editor"}
+{"at_ms":1150,"by":"w2","actor":"agent","kind":"claimed","item":"t2","attempt":1,"deadline_ms":1800000090000}
+{"v":3,"at_ms":1160,"by":"w2","actor":"agent","kind":"prerequisite","item":"r2","attempt":1,"prerequisite":"g2","key":"need-limits","done_when":"released","cost_micros":0,"triage":"t2"}
+{"v":3,"at_ms":1170,"by":"w2","actor":"agent","kind":"prerequisite","item":"r2","attempt":1,"prerequisite":"g2","key":"need-limits","done_when":"merged","cost_micros":0,"triage":"t2"}
+{"at_ms":1180,"by":"w2","actor":"agent","kind":"triaged","item":"r2","tier":1,"why":"needs the gateway release first"}
+{"at_ms":1190,"by":"w2","actor":"agent","kind":"done","item":"t2","attempt":1,"cost_micros":120000}
+{"at_ms":1200,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"merged"}

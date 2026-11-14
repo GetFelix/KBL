@@ -112,6 +112,7 @@ async fn serve() -> Result<()> {
             rules: cfg.rules,
             repos,
             reconcile_every: cfg.reconcile_every,
+            release_compares: cfg.release_compares_per_poll,
         },
     );
 

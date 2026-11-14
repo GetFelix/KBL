@@ -18,8 +18,8 @@ use kbl_core::work::{
 };
 
 use crate::source::{
-    Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, PullRequest, Source,
-    SourceError, WriteBack,
+    Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, PullRequest, Release,
+    Releases, Source, SourceError, WriteBack,
 };
 
 pub(crate) mod transport;
@@ -29,6 +29,8 @@ pub(crate) use transport::{Req, Res, Transport};
 /// Pages followed in one listing before the cursor stops where they ended.
 const MAX_PAGES: usize = 20;
 const REVIEWS_PER_PAGE: usize = 100;
+/// Release pages read looking for the first release before a merge: 500 releases.
+const RELEASE_PAGES: usize = 5;
 /// The longest a rate-limit wait is trusted to be; a bogus header must not park the worker for days.
 const MAX_WAIT: Duration = Duration::from_secs(3600);
 
@@ -361,6 +363,7 @@ impl<T: Transport> Source for Github<T> {
                 body,
                 created_ms,
                 status: None,
+                merge: None,
             }));
         }
         // A merge counts only into the repo's default branch and by someone
@@ -384,12 +387,21 @@ impl<T: Transport> Source for Github<T> {
             failing: None,
         };
         if phase != PrPhase::Open {
+            // Without the merge time no release can be placed after it.
+            let merge = (phase == PrPhase::Merged)
+                .then(|| {
+                    let sha = pull["merge_commit_sha"].as_str()?;
+                    let at = pull["merged_at"].as_str().and_then(parse_utc_ms)?;
+                    Some((sha.to_owned(), at))
+                })
+                .flatten();
             return Ok(Some(PullRequest {
                 author,
                 head_ref,
                 body,
                 created_ms,
                 status: Some(status),
+                merge,
             }));
         }
         let asked = pull["requested_reviewers"]
@@ -429,6 +441,7 @@ impl<T: Transport> Source for Github<T> {
             body,
             created_ms,
             status: Some(status),
+            merge: None,
         }))
     }
 
@@ -552,6 +565,88 @@ impl<T: Transport> Source for Github<T> {
         }
         Ok(())
     }
+
+    async fn releases(&self, repo: &str, since_ms: u64) -> Result<Releases, SourceError> {
+        // GitHub lists by creation time, newest first, which is publish order
+        // except for a draft published later. One more page past the first
+        // release before `since_ms` catches most of those.
+        let mut out = Releases::default();
+        let mut past = false;
+        for page in 1..=RELEASE_PAGES {
+            let url = format!(
+                "{}/repos/{repo}/releases?per_page=100&page={page}",
+                self.api
+            );
+            let res = self.call(Req::get(url)).await?;
+            match res.status {
+                200 => {}
+                404 => {
+                    out.whole = true;
+                    break;
+                }
+                s => return Err(anyhow!("GitHub answered {s} for the releases of {repo}").into()),
+            }
+            let listed = res.body.as_array().cloned().unwrap_or_default();
+            let mut older = false;
+            for r in &listed {
+                let Some(at) = r["published_at"].as_str().and_then(parse_utc_ms) else {
+                    continue;
+                };
+                out.oldest_ms = Some(out.oldest_ms.map_or(at, |o| o.min(at)));
+                if at < since_ms {
+                    older = true;
+                    continue;
+                }
+                if r["draft"] == true || r["prerelease"] == true {
+                    continue;
+                }
+                if let Some(tag) = r["tag_name"].as_str().filter(|t| plain_ref(t)) {
+                    out.list.push(Release {
+                        tag: tag.to_owned(),
+                        published_ms: at,
+                    });
+                }
+            }
+            if listed.len() < 100 {
+                out.whole = true;
+                break;
+            }
+            if past {
+                break;
+            }
+            past = older;
+        }
+        out.list
+            .sort_by(|a, b| (a.published_ms, &a.tag).cmp(&(b.published_ms, &b.tag)));
+        out.list.dedup();
+        Ok(out)
+    }
+
+    async fn contains(&self, repo: &str, tag: &str, sha: &str) -> Result<bool, SourceError> {
+        if !plain_ref(tag) || !plain_ref(sha) {
+            return Ok(false);
+        }
+        // One commit per page: only the status is read.
+        let url = format!("{}/repos/{repo}/compare/{sha}...{tag}?per_page=1", self.api);
+        let res = self.call(Req::get(url)).await?;
+        match res.status {
+            200 => Ok(matches!(
+                res.body["status"].as_str(),
+                Some("ahead" | "identical")
+            )),
+            404 => Ok(false),
+            s => Err(anyhow!("GitHub answered {s} comparing {sha} with {tag} in {repo}").into()),
+        }
+    }
+}
+
+/// A tag or commit that can go into a URL path as it is.
+fn plain_ref(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 200
+        && !s.contains("..")
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+' | b'/'))
 }
 
 /// The review state from a pull request's reviews: each reviewer's latest

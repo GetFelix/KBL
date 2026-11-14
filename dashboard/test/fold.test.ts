@@ -8,7 +8,7 @@ import { MAX_FILES, MAX_NOTES, overlapNotes } from '../src/overlap.ts';
 const { Folder } = createRequire(import.meta.url)('../.wasm-node/kbl_wasm.js');
 const golden = new URL('../../wasm/golden/', import.meta.url);
 
-for (const name of ['every_record', 'pre_prerequisite', 'pre_questions', 'format_2', 'format_3', 'format_4', 'agent_context']) {
+for (const name of ['every_record', 'pre_prerequisite', 'pre_questions', 'format_2', 'format_3', 'format_4', 'format_5', 'agent_context']) {
   test(`the wasm fold equals the native fold on ${name}`, () => {
     const log = readFileSync(new URL(`${name}.jsonl`, golden), 'utf8').trimEnd().split('\n');
     const fold = new Folder();
