@@ -31,3 +31,14 @@ pub trait Codec: Serialize + DeserializeOwned + Sized {
 }
 
 impl<T: Serialize + DeserializeOwned> Codec for T {}
+
+/// The `v` of a payload that failed to decode, when it is above `reads`: the
+/// payload is of a newer format, not malformed.
+pub(crate) fn newer_format(payload: &[u8], reads: u32) -> Option<u32> {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        v: u64,
+    }
+    let Envelope { v } = serde_json::from_slice(payload).ok()?;
+    (v > u64::from(reads)).then(|| u32::try_from(v).unwrap_or(u32::MAX))
+}

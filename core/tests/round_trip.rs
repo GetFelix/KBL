@@ -313,23 +313,14 @@ fn a_reader_skips_fields_it_does_not_know_and_refuses_what_it_cannot_read() {
 #[test]
 fn tasks_round_trip() {
     let full = Task {
-        id: task("t-07"),
-        parent: task("plan-1"),
-        title: "src/limiter/clock.rs".into(),
         body: Some(Content::Artifact(art("diff"))),
         lease: Some(key("shared-limiter-clock")),
         deadline_ms: Some(1_800_000_600_000),
+        ..Task::new(task("t-07"), task("plan-1"), "src/limiter/clock.rs".into())
     };
     assert_eq!(Task::decode(&full.encode()).unwrap(), full);
 
-    let bare = Task {
-        id: task("t-08"),
-        parent: task("plan-1"),
-        title: "x".into(),
-        body: None,
-        lease: None,
-        deadline_ms: None,
-    };
+    let bare = Task::new(task("t-08"), task("plan-1"), "x".into());
     assert_eq!(
         String::from_utf8(bare.encode()).unwrap(),
         r#"{"id":"t-08","parent":"plan-1","title":"x"}"#
@@ -384,26 +375,26 @@ fn wire_form_matches_the_golden_file() {
 
 #[test]
 fn a_log_line_carries_the_time_and_the_writer() {
-    let line = Logged {
-        at_ms: 1_800_000_000_000,
-        by: key("w3"),
-        record: Record::LeaseReleased {
+    let line = Logged::new(
+        1_800_000_000_000,
+        key("w3"),
+        Record::LeaseReleased {
             key: key("shared-api"),
             version: 23,
         },
-    };
+    );
     assert_eq!(
         String::from_utf8(line.encode()).unwrap(),
         r#"{"at_ms":1800000000000,"by":"w3","kind":"lease_released","key":"shared-api","version":23}"#
     );
     assert_eq!(Logged::decode(&line.encode()).unwrap(), line);
-    let program = Logged {
-        at_ms: 1,
-        by: key("kbl-run"),
-        record: Record::RunEnded {
+    let program = Logged::new(
+        1,
+        key("kbl-run"),
+        Record::RunEnded {
             outcome: "ok".into(),
         },
-    };
+    );
     assert_eq!(Logged::decode(&program.encode()).unwrap(), program);
 }
 

@@ -547,3 +547,24 @@ async fn commit_statuses_are_paged_so_none_are_lost_past_a_hundred() {
             .is_err()
     );
 }
+
+#[test]
+fn a_check_run_by_our_own_app_does_not_count() {
+    let r = req(&["unit"]);
+    let run = |app: &str| {
+        json!({ "total_count": 1, "check_runs": [{
+            "name": "unit", "conclusion": "success", "html_url": "u/unit", "app": { "slug": app }
+        }] })
+    };
+    let own = req(&["KBL[bot]"]);
+    // An agent with the App's token could post the required check as passed.
+    let (checks, _) = check_state(Some(&run("kbl")), Some(&nostatus()), &own, Some(&r));
+    assert_eq!(checks, PrChecks::Pending);
+    let (checks, _) = check_state(
+        Some(&run("github-actions")),
+        Some(&nostatus()),
+        &own,
+        Some(&r),
+    );
+    assert_eq!(checks, PrChecks::Green);
+}

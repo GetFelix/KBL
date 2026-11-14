@@ -214,6 +214,10 @@ Five attempts of an LLM task can cost real money, so workers also count
 attempts themselves (the attempt number is in the poll result) and give up
 after two. A per-group limit would make that Felix's job (gap 1).
 
+**Formats.** A task and a run log record each carry a format, like a record
+on `work.events`. A worker hands back a task of a format newer than it reads
+instead of running it ([upgrades.md](upgrades.md#a-runs-own-records)).
+
 **Order.** Felix hands records out in offset order and promises nothing about
 the order they finish in. Tasks that must run in order are one task.
 

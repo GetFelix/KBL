@@ -1615,6 +1615,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 }
 
 mod races;
+mod retry;
 mod review;
 
 #[tokio::test(start_paused = true)]
@@ -1931,4 +1932,41 @@ async fn a_record_of_an_unknown_kind_is_refused_and_not_logged() {
     let err = t.person_record(key("gab"), unknown).await.unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
     assert!(fake.log().is_empty());
+}
+
+#[tokio::test]
+async fn a_pull_request_is_one_request_in_any_letter_case() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let report = |who: &'static str, id: &'static str, pr: &'static str| {
+        let t = t.clone();
+        async move {
+            t.progress(
+                &agent(who),
+                &item(id),
+                kbl_core::content::Content::Text("pr".into()),
+                None,
+                Some(pr.into()),
+            )
+            .await
+        }
+    };
+    seed(&t, "a1", 1).await;
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+    report("w1", "a1", "GetFelix/felix#12").await.unwrap();
+    seed(&t, "a2", 1).await;
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a2"));
+    let err = report("w2", "a2", "getfelix/FELIX#12").await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Refused { why } if why == "pr_in_use"),
+        "{err}"
+    );
+    // The holder's own request in another case keeps the casing on record.
+    report("w1", "a1", "getfelix/felix#12").await.unwrap();
+    let core = t.0.core.lock().await;
+    assert_eq!(
+        core.state.items[&item("a1")].pr.as_deref(),
+        Some("GetFelix/felix#12")
+    );
+    assert_eq!(core.state.items[&item("a2")].pr, None);
 }
