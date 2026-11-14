@@ -107,7 +107,7 @@ palette and the `?` overlay all read it. The theme switch is in the palette only
 - `src/gateway.ts`: the WebSocket transport and the `join` handshake.
 - `src/fold.ts`: the shape of the WebAssembly fold, and how a blocked row names its blockers.
 - `src/main.ts`: starts the page, runs the gateway loop and dispatches keys.
-- `src/state.ts`: the view state, its reducer and the address round-trip (`?item=`, `?q=`).
+- `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?item=`, `?q=`).
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.
 - `src/ui/`: the views (shell, list, panel, palette, shortcuts, status line), `tokens.css` for colour, space and

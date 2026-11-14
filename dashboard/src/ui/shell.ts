@@ -98,7 +98,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       for (const n of nav) {
         const total = n.view === 'all' ? s.items.length : s.blocked.length;
         n.count.textContent = total ? String(total) : '';
-        n.a.setAttribute('href', toAddress(location.search, { view: n.view, query: s.query, open: null }) || '?');
+        n.a.setAttribute('href', toAddress(location.search, { view: n.view, query: s.query, open: s.open }) || '?');
         if (n.view === s.view) n.a.setAttribute('aria-current', 'page');
         else n.a.removeAttribute('aria-current');
         if (n.view === s.view && title.textContent !== n.label) title.textContent = n.label;

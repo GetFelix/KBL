@@ -213,6 +213,23 @@ try {
   await page.waitFor(`!location.search.includes('view=')`);
   check((await page.eval(`document.querySelectorAll('.row').length`)) > 2, 'the sidebar goes back to all work');
 
+  // A live record that unblocks the focused row hands the focus to a neighbour, then to main.
+  await open(`${connected}&view=blocked`);
+  await page.waitFor(live);
+  const blockedCount = () => page.eval(`document.querySelector('.nav a[data-view=blocked] .count')?.textContent ?? ''`);
+  const onRowOrMain = () => page.eval(`document.activeElement?.matches('.row, main') ?? false`);
+  check((await blockedCount()) === '2', 'the sidebar counts the blocked items');
+  await page.eval(`document.querySelector('.row[data-id=blk-40]').focus()`);
+  for (const item of ['gw-31', 'jira-300']) {
+    await page.eval(`window.__push({ kind: 'closed', item: '${item}', why: 'merged', actor: 'person', by: 'maintainer', at_ms: 1800000000001 })`);
+  }
+  await page.waitFor(`!document.querySelector('.row[data-id=blk-40]')`);
+  check((await page.eval(rowIds)) === 'blk-41' && (await blockedCount()) === '1', 'closing both blockers drops the row and the sidebar count');
+  check(await focused('.row[data-id=blk-41]'), 'the focus moves to the neighbouring row');
+  await page.eval(`window.__push({ kind: 'shipped', item: 'blk-42', release: 'v1', actor: 'person', by: 'maintainer', at_ms: 1800000000002 })`);
+  await page.waitFor(`!document.querySelector('.row')`);
+  check((await onRowOrMain()) && (await focused('main')), 'an emptied view leaves the focus on main, not the body');
+
   for (const theme of ['dark', 'light']) {
     await open(`${connected}&view=blocked&item=blk-41`, { theme });
     await page.waitFor(live);

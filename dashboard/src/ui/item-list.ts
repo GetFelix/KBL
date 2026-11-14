@@ -40,6 +40,7 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
   const rows = new Map<string, HTMLAnchorElement>();
   let shown = '';
   let restoring = false;
+  let order: string[] = [];
   el.addEventListener('focusin', (e) => {
     const id = (e.target as HTMLElement).closest<HTMLElement>('.row')?.dataset.id;
     if (id && !restoring) on.select(id);
@@ -48,8 +49,12 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
   const show = (key: string, ...children: HTMLElement[]) => {
     if (key === shown) return;
     shown = key;
+    const lost = el.contains(document.activeElement);
     rows.clear();
+    order = [];
     el.replaceChildren(...children);
+    // The focused row is gone; focus must not fall to the body.
+    if (lost) el.closest('main')?.focus({ preventScroll: true });
   };
   const row = (id: string, title: string, waits: string): HTMLAnchorElement => {
     let a = rows.get(id);
@@ -131,9 +136,12 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
         const active = document.activeElement;
         const focusedId = active instanceof HTMLElement && el.contains(active) ? active.dataset.id : undefined;
         const kept = new Map(rows);
+        const before = order;
         shown = key;
         rows.clear();
+        order = [];
         for (const g of groups) for (const i of g.items) {
+          order.push(i.id);
           const a = kept.get(i.id);
           if (a) rows.set(i.id, a);
         }
@@ -152,6 +160,11 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
           restoring = true;
           back.focus({ preventScroll: true });
           restoring = false;
+        } else if (focusedId) {
+          // The focused row left the view: the next row takes the focus, else the previous one.
+          const at = before.indexOf(focusedId);
+          const near = at < 0 ? undefined : [...before.slice(at + 1), ...before.slice(0, at).reverse()].find((id) => rows.has(id));
+          (near ? rows.get(near) : el.closest('main'))?.focus({ preventScroll: true });
         }
       }
       for (const [id, a] of rows) {

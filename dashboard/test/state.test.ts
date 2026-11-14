@@ -11,7 +11,7 @@ test('opening an item selects it, and closing keeps the selection', () => {
 });
 
 test('an open item missing from the log stays open so the panel can say so', () => {
-  const s = reduce({ ...base, open: 'r9' }, { type: 'items', items: [{ id: 'r1', title: 't', stage: 'ready' }] });
+  const s = reduce({ ...base, open: 'r9' }, { type: 'items', items: [{ id: 'r1', title: 't', stage: 'ready' }], blocked: [] });
   assert.equal(s.open, 'r9');
 });
 
@@ -60,10 +60,6 @@ test('the address keeps the Blocked view and drops the default one', () => {
   assert.equal(fromAddress('?view=board').view, 'all');
 });
 
-test('an items update without blocked rows keeps the ones the state has', () => {
-  const row = { id: 'b', title: 't', repo: null, source: null, waits_on: [] };
-  const s = reduce({ ...base, blocked: [row] }, { type: 'items', items: [] });
-  assert.deepEqual(s.blocked, [row]);
-  assert.deepEqual(reduce(s, { type: 'items', items: [], blocked: [] }).blocked, []);
-  assert.equal(reduce(s, { type: 'view', view: 'blocked' }).view, 'blocked');
+test('the view action switches the view', () => {
+  assert.equal(reduce(base, { type: 'view', view: 'blocked' }).view, 'blocked');
 });

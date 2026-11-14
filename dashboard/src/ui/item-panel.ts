@@ -1,49 +1,33 @@
 // The side panel for the open item. It shows what the fold recorded, nothing inferred.
-// Each entry in FIELDS adds one labelled row, so a new kind of detail is one function.
-import { blockerLines, blockerNote, type ItemRow } from '../fold.ts';
+// Each entry in FIELDS adds one labelled row, so a new kind of detail is one module.
+import type { ItemRow } from '../fold.ts';
 import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { h } from './dom.ts';
 import { itemHref } from './item-list.ts';
+import { waitsOnField } from './waits-on-field.ts';
 
 export interface PanelHandlers {
   closeItem(): void;
   open(id: string): void;
 }
 
-/** One field of the open item: its label and value, or null when it has nothing to show. */
-type Field = (item: ItemRow, s: ViewState, on: PanelHandlers) => [string, Node] | null;
-
-const FIELDS: readonly Field[] = [
-  (item) => ['Stage', document.createTextNode(stageLabel(item.stage))],
-  (item, s, on) => {
-    const row = s.blocked.find((b) => b.id === item.id);
-    if (!row) return null;
-    // Each blocker is a link to it, so a person can walk the chain from the panel.
-    const lines = blockerLines(row).map((b) =>
-      h('li', {},
-        h('a', {
-          class: 'blocker-id',
-          href: itemHref(b.id, s),
-          onclick: (e) => {
-            const m = e as MouseEvent;
-            if (m.metaKey || m.ctrlKey || m.shiftKey || m.button !== 0) return;
-            e.preventDefault();
-            on.open(b.id);
-          },
-        }, b.id),
-        b.title ? h('span', {}, ` ${b.title}`) : null,
-        blockerNote(b) ? h('span', { class: 'muted' }, ` ${blockerNote(b)}`) : null,
-      ),
-    );
-    return ['Waits on', h('ul', { class: 'blockers' }, ...lines)];
-  },
-];
-
-/** What the panel's content depends on beyond the item row, so it redraws when that changes. */
-function extra(item: ItemRow | undefined, s: ViewState): string {
-  return item ? JSON.stringify(s.blocked.find((b) => b.id === item.id) ?? null) : '';
+/**
+ * One field of the open item. `key` is what the field's output depends on beyond the item's
+ * title and stage, so the panel redraws when it changes. `render` returns a label and value, or null.
+ */
+export interface Field {
+  key(item: ItemRow, s: ViewState): string;
+  render(item: ItemRow, s: ViewState, on: PanelHandlers): [string, Node] | null;
 }
+
+const stageField: Field = {
+  key: () => '',
+  render: (item) => ['Stage', document.createTextNode(stageLabel(item.stage))],
+};
+
+// A new field is one module and one entry here.
+const FIELDS: readonly Field[] = [stageField, waitsOnField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
@@ -66,7 +50,12 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
       else if (c.kind !== 'loading' || c.linked) failed = false;
       const item = s.items.find((i) => i.id === s.open);
       const why = item ? '' : s.synced ? 'missing' : s.connection.kind === 'stopped' ? 'stopped' : failed ? 'unreachable' : 'reading';
-      const key = s.open === null ? '' : `${s.open}|${item?.title}|${item?.stage}|${why}|${extra(item, s)}|${s.view}|${s.query}`;
+      const key = s.open === null ? '' : `${s.open}|${item?.title}|${item?.stage}|${why}|${item ? FIELDS.map((f) => f.key(item, s)).join('|') : ''}`;
+      // Links follow the view and query without a redraw, so a search keystroke does not rebuild the panel.
+      for (const a of Array.from(el.querySelectorAll<HTMLAnchorElement>('a[data-item]'))) {
+        const href = itemHref(a.dataset.item!, s);
+        if (a.getAttribute('href') !== href) a.setAttribute('href', href);
+      }
       if (key === shown) return;
       shown = key;
       el.hidden = s.open === null;
@@ -81,7 +70,7 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
               h('h2', { id: 'panel-title', class: 'panel-title' }, item.title),
               h('dl', { class: 'fields' },
                 ...FIELDS.flatMap((f) => {
-                  const got = f(item, s, on);
+                  const got = f.render(item, s, on);
                   return got ? [h('dt', {}, got[0]), h('dd', {}, got[1])] : [];
                 })))
           : h('div', {},

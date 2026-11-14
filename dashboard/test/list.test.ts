@@ -46,3 +46,15 @@ test('the Blocked view lists only blocked items, and j and k walk only those', (
   assert.deepEqual(visible({ items, blocked, view: 'blocked' }).map((i) => i.id), ['b', 'c']);
   assert.deepEqual(shownRows({ items, blocked, view: 'blocked', query: 'thr' }).map((i) => i.id), ['c']);
 });
+
+test('a selected id the view no longer shows starts j and k from the ends', () => {
+  const items = [
+    { id: 'a', title: 'one', stage: 'blocked' },
+    { id: 'b', title: 'two', stage: 'blocked' },
+  ];
+  const state = { items, blocked: [{ id: 'a', title: 'a', repo: null, source: null, waits_on: [] }], view: 'blocked' as const, query: '' };
+  const shown = shownRows(state);
+  assert.deepEqual(shown.map((i) => i.id), ['a']);
+  assert.equal(move(shown, 'b', 1), 'a');
+  assert.equal(move(shown, 'b', -1), 'a');
+});

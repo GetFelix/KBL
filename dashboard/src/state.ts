@@ -40,7 +40,7 @@ export interface ViewState {
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked?: BlockedRow[] }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[] }
   | { type: 'view'; view: View }
   | { type: 'query'; query: string }
   | { type: 'select'; id: string | null }
@@ -53,7 +53,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, connection: a.connection, synced: s.synced || a.connection.kind === 'live' };
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
-      return { ...s, items: a.items, blocked: a.blocked ?? s.blocked };
+      return { ...s, items: a.items, blocked: a.blocked };
     case 'view':
       return { ...s, view: a.view };
     case 'query':
