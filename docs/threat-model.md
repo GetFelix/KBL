@@ -184,12 +184,11 @@ request only when all of these hold, so the name alone steers nothing.
 | Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:488`) |
 | Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs:346`) |
 | Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:516`) |
-| Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:559`) |
+| Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:624`) |
+| Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs:597`) |
+| Name another item's request in other letter case | The tracker records the casing an open item already uses, so the fold refuses it as `pr_in_use` (`tracker/src/tracker.rs:223`) |
 | Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:697`) |
 | Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:899`), our own comments are skipped (`ingest/src/sync.rs:404`), and an edit after triage shows as "changed upstream" |
-
-Still open: canonical request names and a filter on who created a check run
-([#148](https://github.com/GetFelix/KBL/issues/148)).
 
 ## MCP tools
 
@@ -379,5 +378,4 @@ each token and never a token. A format above the build's stops the reader.
 | [#185](https://github.com/GetFelix/KBL/issues/185) | `org.events` has no record to remove a person, rotate a person's token or revoke an ingest token yet; counts of teams, people and members are not capped |
 | [#120](https://github.com/GetFelix/KBL/issues/120) | No roles: every person can do everything, every agent can claim any repo's work |
 | [#121](https://github.com/GetFelix/KBL/issues/121) | Tokens are long-lived |
-| [#148](https://github.com/GetFelix/KBL/issues/148) | Request names are not canonical; check runs are not filtered by author |
 | [#29](https://github.com/GetFelix/KBL/issues/29), [#32](https://github.com/GetFelix/KBL/issues/32), [#45](https://github.com/GetFelix/KBL/issues/45) | Any writer in a run can write any run log record under any name |

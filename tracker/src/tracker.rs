@@ -219,7 +219,8 @@ struct Emptied {
 /// open item already uses, so the fold's exact compare sees one request: another
 /// item's is refused as `pr_in_use`, and the item's own keeps its status.
 /// Rewritten before the append rather than compared in the fold, so the fold of
-/// an existing log does not change.
+/// an existing log does not change. On an old log where two open items hold
+/// one request in two casings, both are refused until one closes.
 fn canonical_pr(state: &State, record: &mut WorkRecord) {
     let WorkRecord::Progress {
         item, pr: Some(pr), ..

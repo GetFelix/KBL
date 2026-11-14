@@ -390,7 +390,8 @@ What it does with GitHub:
   latest per reviewer; a dismissed review no longer counts. Checks are the
   check runs and the commit statuses on the head commit, with statuses paged
   so none are lost; a status written by one of `own_logins`, or a check run
-  written by an App whose `<slug>[bot]` login is in `own_logins`, is ignored. When
+  written by an App whose `<slug>[bot]` login is in `own_logins`, is ignored
+  (so a required check must come from another App, such as GitHub Actions). When
   the credential may read the base branch's protection, only the required
   checks count, and a required one with no result yet is pending; an empty
   list means unknown and every check counts. A listing that failed or was cut
