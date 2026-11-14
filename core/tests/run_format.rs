@@ -115,7 +115,7 @@ fn a_run_log_version_that_is_not_a_format_is_malformed() {
 }
 
 /// A task as `kbl-mcp` posted it before formats, with every field set.
-const OLD_TASK: &str = r#"{"id":"t-07","parent":"plan-1","title":"src/a.rs","body":"look for bugs","lease":"shared-a","deadline_ms":1800000600000}"#;
+const OLD_TASK: &str = r#"{"id":"t-07","parent":"plan-1","title":"src/a.rs","body":{"text":"look for bugs"},"lease":"shared-a","deadline_ms":1800000600000}"#;
 
 #[test]
 fn a_first_format_task_is_written_with_the_bytes_it_always_had() {
