@@ -12,10 +12,10 @@ use kbl_core::artifact::{ArtifactId, INLINE_LIMIT};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, DoneWhen, Evidence, FORMAT_V5, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
-    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO, MAX_VERDICT_WHY,
-    MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity, Target, Then,
-    Unclear, WorkKind, WorkRecord,
+    Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FindingVerdict, MAX_ASK_OPTION_LEN,
+    MAX_ASK_OPTIONS, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO,
+    MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity,
+    Target, Then, Unclear, WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -403,9 +403,14 @@ impl<B: Broker> Tracker<B> {
         // Refused here, not in the fold: a log that holds such a replacement must
         // keep folding as it always has. Upstream text, the fold's own entries and
         // other people's notes stay as written.
-        if let Some(it) = core.state.items.get(item)
-            && it.context.contains_key(&entry)
-            && it.context_agents.get(&entry) != Some(&agent_key(agent))
+        // From format 6 the `prerequisite` entry is the fold's alone: an agent
+        // writing it would clear what marks the item as a prerequisite.
+        let reserved = core.state.format() >= FORMAT_V6 && entry.as_str() == "prerequisite";
+        if reserved
+            || core.state.items.get(item).is_some_and(|it| {
+                it.context.contains_key(&entry)
+                    && it.context_agents.get(&entry) != Some(&agent_key(agent))
+            })
         {
             return Err(Error::Refused {
                 why: "not_your_entry".into(),

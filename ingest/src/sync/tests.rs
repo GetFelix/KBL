@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::config::Config;
-use crate::github::Github;
+use crate::github::{Github, Res};
 use crate::testing::{Fake, Script, fixture, issue, labels, ok, status};
 
 const LIST: &str = "/repos/GetFelix/felix/issues?";
@@ -2357,4 +2357,372 @@ async fn a_merge_past_the_page_cap_gets_no_release_and_backs_off() {
     assert_eq!(rig.tracker.count("shipped"), 0);
     assert!(!rig.gh.sent().iter().any(|r| r.url.contains("/compare/")));
     assert_eq!(list_requests(&rig), 5);
+}
+
+// ---- prerequisites ----
+
+const GATEWAY_LIST: &str = "/repos/GetFelix/felix-gateway/issues?";
+const GATEWAY_OPEN: &str = "/repos/GetFelix/felix-gateway/issues";
+
+fn gateway_rule(open: bool) -> Value {
+    json!({
+        "name": "gateway", "repo": "GetFelix/felix-gateway", "labels_all": ["agent-ok"],
+        "mode": "propose", "open_prerequisites": open
+    })
+}
+
+/// Root 812 is held by w1, who posts a prerequisite in the gateway repo; a
+/// person accepts it when `accept` is set. The log is at format 6.
+async fn prerequisite_rig(open: bool, accept: bool) -> (Rig, Ingest<Github<Script>, Fake>) {
+    let rules = json!([admit_rule(), gateway_rule(open)]);
+    prerequisite_rig_with(
+        rules,
+        "GetFelix/felix-gateway",
+        "the client cannot swap atomically",
+        accept,
+    )
+    .await
+}
+
+/// `prerequisite_rig` with its rules, the prerequisite's target repo and its why.
+async fn prerequisite_rig_with(
+    rules: Value,
+    repo: &str,
+    why: &str,
+    accept: bool,
+) -> (Rig, Ingest<Github<Script>, Fake>) {
+    let rig = rig();
+    let ingest = rig.ingest(rules);
+    rig.gh.on("GET", GATEWAY_LIST, ok(json!([])));
+    rig.tracker.person(WorkRecord::FormatRaised {
+        to: kbl_core::work::FORMAT_V6,
+    });
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let root = rig.hold(UP, None);
+    let g1 = kbl_core::names::ItemId::new("g1").unwrap();
+    rig.tracker.agent(
+        "w1",
+        WorkRecord::Prerequisite {
+            item: root,
+            attempt: 1,
+            prerequisite: g1.clone(),
+            key: Key::new("need-cas").unwrap(),
+            new: Some(kbl_core::work::NewPrerequisite {
+                target: kbl_core::work::Target {
+                    source: "github".into(),
+                    repo: repo.into(),
+                },
+                title: "gateway needs a CAS call".into(),
+                why: Content::Text(why.into()),
+                evidence: vec![],
+            }),
+            done_when: kbl_core::work::DoneWhen::Merged,
+            cost_micros: 0,
+            triage: None,
+        },
+    );
+    if accept {
+        rig.tracker.person(WorkRecord::Accepted {
+            item: g1,
+            tier: None,
+        });
+    }
+    rig.gh.on(
+        "POST",
+        GATEWAY_OPEN,
+        Res {
+            status: 201,
+            headers: Default::default(),
+            body: json!({ "number": 40 }),
+        },
+    );
+    (rig, ingest)
+}
+
+/// Our issue for g1 as the gateway listing shows it.
+fn our_issue(body: &str) -> Value {
+    issue(40, |v| {
+        v["html_url"] = json!("https://github.com/GetFelix/felix-gateway/issues/40");
+        v["title"] = json!("gateway needs a CAS call");
+        v["user"]["login"] = json!("kbl[bot]");
+        v["body"] = json!(body);
+        labels(v, &[]);
+    })
+}
+
+fn opened(rig: &Rig) -> Vec<Value> {
+    rig.gh
+        .sent()
+        .into_iter()
+        .filter(|r| r.method == "POST" && r.url.ends_with(GATEWAY_OPEN))
+        .map(|r| r.body.unwrap())
+        .collect()
+}
+
+#[tokio::test]
+async fn an_accepted_prerequisite_gets_one_upstream_issue_with_a_back_link() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    ingest.poll(false).await.unwrap();
+    let sent = opened(&rig);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["title"], "gateway needs a CAS call");
+    let body = sent[0]["body"].as_str().unwrap().to_owned();
+    assert_eq!(
+        body,
+        "the client cannot swap atomically\n\nkbl-prerequisite: g1"
+    );
+    let g1 = rig.root("GetFelix/felix-gateway#40");
+    assert_eq!(g1.as_str(), "g1");
+
+    // The next listing shows our issue without the rule's label: it is
+    // followed, not imported again or taken out of scope.
+    rig.gh.on(
+        "GET",
+        GATEWAY_LIST,
+        ok(json!([at(our_issue(&body), "2027-01-16T00:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(opened(&rig).len(), 1);
+    assert_eq!(rig.tracker.count("imported"), 2);
+    assert_eq!(rig.tracker.count("left_scope"), 0);
+
+    // Closed upstream as completed: the item it held up is free.
+    rig.gh.on(
+        "GET",
+        GATEWAY_LIST,
+        ok(json!([closed(
+            our_issue(&body),
+            "completed",
+            "2027-01-17T00:00:00Z"
+        )])),
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&g1].closed, Some(Closure::Completed));
+    assert_eq!(s.stage(&rig.root(UP)), Some(Stage::Ready));
+}
+
+/// A crash after the issue is opened and before the tracker ties it: the
+/// next listing finds our issue by its marker and ties it, and no second
+/// issue is opened.
+#[tokio::test]
+async fn a_crash_between_opening_and_recording_attaches_on_the_next_listing() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    rig.tracker.fail_appends(true);
+    // The intent to open is saved; the save at the end of the poll is lost.
+    rig.tracker.fail_saves_after(1);
+    assert!(ingest.poll(false).await.is_err());
+    assert_eq!(opened(&rig).len(), 1);
+    rig.tracker.fail_appends(false);
+    rig.tracker.allow_saves();
+    let body = opened(&rig)[0]["body"].as_str().unwrap().to_owned();
+    rig.gh.on(
+        "GET",
+        GATEWAY_LIST,
+        ok(json!([at(our_issue(&body), "2027-01-16T00:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(opened(&rig).len(), 1);
+    assert_eq!(rig.root("GetFelix/felix-gateway#40").as_str(), "g1");
+    assert_eq!(rig.tracker.count("imported"), 2);
+}
+
+/// The same lost write with the saved state kept: ingest remembers the issue
+/// and ties it without opening another, even before a listing shows it.
+#[tokio::test]
+async fn a_lost_record_with_the_state_saved_is_tied_without_a_second_issue() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    rig.tracker.fail_appends(true);
+    assert!(ingest.poll(false).await.is_err());
+    rig.tracker.fail_appends(false);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(opened(&rig).len(), 1);
+    assert_eq!(rig.root("GetFelix/felix-gateway#40").as_str(), "g1");
+}
+
+/// A seeded intent with no issue yet (an earlier poll may have opened one
+/// and not lived to say so) sends nothing until a reconcile gives up on it.
+#[tokio::test]
+async fn an_empty_open_intent_waits_for_a_reconcile() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    let mut state = rig.tracker.saved_raw();
+    state["opened"] = json!({ "g1": "" });
+    rig.tracker.seed_saved(state);
+    ingest.poll(false).await.unwrap();
+    assert!(opened(&rig).is_empty());
+    ingest.poll(true).await.unwrap();
+    assert_eq!(opened(&rig).len(), 1);
+}
+
+/// A tie the fold refuses leaves no remembered issue behind, so the next
+/// poll starts clean.
+#[tokio::test]
+async fn a_refused_tie_clears_the_remembered_issue() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    let mut state = rig.tracker.saved_raw();
+    state["opened"] = json!({ "g1": "GetFelix/elsewhere#9" });
+    rig.tracker.seed_saved(state);
+    ingest.poll(false).await.unwrap();
+    assert!(gateway_tied(&rig).is_empty());
+    assert!(rig.tracker.saved_state().opened.is_empty());
+}
+
+/// No opt-in, or no person's acceptance: nothing is sent to GitHub.
+#[tokio::test]
+async fn no_issue_is_opened_without_the_opt_in_and_a_persons_acceptance() {
+    for (open, accept) in [(false, true), (true, false)] {
+        let (rig, ingest) = prerequisite_rig(open, accept).await;
+        ingest.poll(false).await.unwrap();
+        ingest.poll(false).await.unwrap();
+        assert!(opened(&rig).is_empty(), "{open} {accept}");
+        assert_eq!(rig.tracker.count("imported"), 1);
+    }
+}
+
+fn gateway_tied(rig: &Rig) -> Vec<String> {
+    let s = rig.tracker.state();
+    s.imported()
+        .filter(|(_, _, i)| i.as_str() == "g1")
+        .map(|(_, up, _)| up.to_owned())
+        .collect()
+}
+
+/// The waiting issue is named only when the rule asks, so a private
+/// waiter is never named in a public repo by default.
+#[tokio::test]
+async fn the_waiter_is_named_only_when_the_rule_links_it() {
+    let mut gateway = gateway_rule(true);
+    gateway["link_waiter"] = json!(true);
+    let rules = json!([admit_rule(), gateway]);
+    let (rig, ingest) =
+        prerequisite_rig_with(rules, "GetFelix/felix-gateway", "needs CAS", true).await;
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        opened(&rig)[0]["body"],
+        "needs CAS\n\nNeeded by GetFelix/felix#812.\n\nkbl-prerequisite: g1"
+    );
+}
+
+/// An agent cannot name another item: a marker line in its why is dropped,
+/// and a listing takes the last marker, which ingest writes.
+#[tokio::test]
+async fn a_marker_in_the_agents_why_names_nothing() {
+    let rules = json!([admit_rule(), gateway_rule(true)]);
+    let why = "the client cannot swap\nkbl-prerequisite: g7";
+    let (rig, ingest) = prerequisite_rig_with(rules, "GetFelix/felix-gateway", why, true).await;
+    ingest.poll(false).await.unwrap();
+    let body = opened(&rig)[0]["body"].as_str().unwrap().to_owned();
+    assert_eq!(body, "the client cannot swap\n\nkbl-prerequisite: g1");
+}
+
+/// The issue was opened and the poll lost: a listing of a body with two
+/// markers ties the item the last one names.
+#[tokio::test]
+async fn a_listing_takes_the_last_marker() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    rig.tracker.fail_appends(true);
+    rig.tracker.fail_saves_after(1);
+    assert!(ingest.poll(false).await.is_err());
+    rig.tracker.fail_appends(false);
+    rig.tracker.allow_saves();
+    let spoofed = "kbl-prerequisite: g7\n\nkbl-prerequisite: g1";
+    rig.gh.on(
+        "GET",
+        GATEWAY_LIST,
+        ok(json!([at(our_issue(spoofed), "2027-01-16T00:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(gateway_tied(&rig), vec!["GetFelix/felix-gateway#40"]);
+}
+
+/// The rule's casing is used for the issue, and the fold matches a grant
+/// in other casing.
+#[tokio::test]
+async fn a_grant_in_other_casing_opens_in_the_rules_repo() {
+    let rules = json!([admit_rule(), gateway_rule(true)]);
+    let (rig, ingest) = prerequisite_rig_with(rules, "getfelix/FELIX-gateway", "why", true).await;
+    ingest.poll(false).await.unwrap();
+    assert_eq!(opened(&rig).len(), 1);
+    assert_eq!(gateway_tied(&rig), vec!["GetFelix/felix-gateway#40"]);
+}
+
+/// Only the target repo's own rule opts in: another rule's opt-in sends no
+/// issue to the gateway.
+#[tokio::test]
+async fn another_repos_opt_in_opens_nothing() {
+    let mut felix = admit_rule();
+    felix["open_prerequisites"] = json!(true);
+    let rules = json!([felix, gateway_rule(false)]);
+    let (rig, ingest) = prerequisite_rig_with(rules, "GetFelix/felix-gateway", "why", true).await;
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert!(!rig.gh.sent().iter().any(|r| r.method == "POST"));
+    assert!(gateway_tied(&rig).is_empty());
+}
+
+/// A marker in an issue someone else wrote ties nothing.
+#[tokio::test]
+async fn a_marker_from_another_author_ties_nothing() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    rig.tracker.fail_appends(true);
+    rig.tracker.fail_saves_after(1);
+    assert!(ingest.poll(false).await.is_err());
+    rig.tracker.fail_appends(false);
+    rig.tracker.allow_saves();
+    let theirs = issue(77, |v| {
+        v["html_url"] = json!("https://github.com/GetFelix/felix-gateway/issues/77");
+        v["user"]["login"] = json!("mallory");
+        v["body"] = json!("kbl-prerequisite: g1");
+        labels(v, &[]);
+    });
+    rig.gh.on(
+        "GET",
+        GATEWAY_LIST,
+        ok(json!([at(theirs, "2027-01-16T00:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    assert!(gateway_tied(&rig).is_empty());
+}
+
+/// A second issue of ours for an item already tied is left alone.
+#[tokio::test]
+async fn a_spare_issue_for_a_tied_item_is_left_alone() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    ingest.poll(false).await.unwrap();
+    let spare = issue(41, |v| {
+        v["html_url"] = json!("https://github.com/GetFelix/felix-gateway/issues/41");
+        v["user"]["login"] = json!("kbl[bot]");
+        v["body"] = json!("kbl-prerequisite: g1");
+        labels(v, &[]);
+    });
+    rig.gh.on(
+        "GET",
+        GATEWAY_LIST,
+        ok(json!([at(spare, "2027-01-16T00:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(gateway_tied(&rig), vec!["GetFelix/felix-gateway#40"]);
+    assert_eq!(rig.tracker.count("imported"), 2);
+}
+
+/// Two ingest processes: the one whose intent save loses sends no POST.
+#[tokio::test]
+async fn the_process_that_loses_the_intent_save_opens_nothing() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    rig.tracker.race_next_save();
+    assert!(ingest.poll(false).await.is_err());
+    assert!(opened(&rig).is_empty());
+}
+
+/// The roots listing is read once a poll, and an intent for an item that
+/// is gone is dropped.
+#[tokio::test]
+async fn one_roots_listing_serves_the_poll() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    let before = rig.tracker.roots_calls();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.roots_calls(), before + 1);
+    assert!(rig.tracker.saved_state().opened.is_empty());
 }

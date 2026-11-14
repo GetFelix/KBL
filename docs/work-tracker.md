@@ -427,6 +427,12 @@ read from `token_file` or `token_env`; the file is read again for every
 request, so a GitHub App installation token can be refreshed beside the worker
 (the worker does not mint installation tokens itself).
 
+`open_prerequisites: true` on a rule lets ingest open issues in that rule's
+`repo` for prerequisites, as in
+[Prerequisites become upstream issues](#prerequisites-become-upstream-issues).
+The credential then needs issues: write on that repo, on top of the read
+access every rule needs. Leave it off and ingest sends no such request.
+
 What it does with GitHub:
 
 - **Cursor.** Each repo has its own cursor. Issues and comments are listed
@@ -770,6 +776,44 @@ one; dropping it would free the waiter on unreleased work. Accepting a finished
 prerequisite applies from [format 5](upgrades.md#formats). If a person rejects
 or dismisses the prerequisite, the held item goes to Needs you as "dependency
 dropped".
+
+### Prerequisites become upstream issues
+
+A new prerequisite lives only in the tracker until someone files it in the
+target repo. From [format 6](upgrades.md#formats) ingest can do that. It opens
+an issue for a prerequisite when all of these hold:
+
+- it was made by a `prerequisite` post (a deferred review finding is not one);
+- a person accepted it after the log was raised to 6 (an acceptance by the
+  tracker, or from before the raise, does not count; accept it again);
+- an intake rule whose `repo` is the target repo has `open_prerequisites: true`;
+- it is open and has no upstream issue yet.
+
+`GET /v1/ingest/roots` lists such prerequisites under `prerequisites`. At the
+end of a poll ingest opens the issue in the rule's `repo`, with the
+prerequisite's title, its `why` and a last line `kbl-prerequisite: <item>`. Any
+line in `why` that starts with `kbl-prerequisite:` is dropped, since an agent
+wrote it. With `link_waiter: true` on the rule the body also says "Needed by"
+the waiting root's issue. It is off by default so an issue in a private repo is
+never named in a public one. It then writes `imported` with the existing item and
+the new issue's id, which makes the prerequisite an imported root: closing or
+editing the issue reaches it like any other, and a pull request for it is
+followed. No intake rule takes it out of scope, since a person already
+accepted the work.
+
+Before it sends the request, ingest saves its intent to the versioned ingest
+state. If another ingest process saved since this one loaded, the save fails
+and this process opens nothing that poll. If ingest stops between opening the
+issue and that write, it remembers the issue in its saved state and writes the
+tie on the next poll. If only the intent was saved, the next listing of the
+target repo shows an issue by one of `own_logins` whose last marker line names
+the item, and ingest ties that one instead of opening another; an intent that
+no listing explains is retried at the next reconcile. A marker issue for an
+item already tied to another issue is logged as an orphan and left for a person
+to close. Markers count only in issues by `own_logins` in a repo whose rule has
+`open_prerequisites`. The fold checks the rest: it refuses the tie unless the
+item is a prerequisite a person accepted, the issue is in the repo it targets
+(owner and name compared without case), and the item has no issue yet.
 
 This is the only cross-tree link an agent can make, and the tracker checks it
 before the fold sees the record. A new prerequisite must target a source and
