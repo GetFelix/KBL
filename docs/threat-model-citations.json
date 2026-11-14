@@ -97,7 +97,7 @@
  "ingest/src/webhook.rs:103": ".is_none_or(|t| now.duration_since(t) >= app.min_gap)",
  "mcp/src/server.rs:772": "Some(i) => Ok(i),",
  "mcp/src/tasks.rs:250": "if attempt > MAX_ATTEMPTS {",
- "mcp/src/tasks.rs:484": "pub(crate) async fn artifact_text(&self, id: &str) -> String {",
+ "mcp/src/tasks.rs:492": "Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {",
  "mcp/src/tasks.rs:577": "fn holding<'a>(held: &'a Option<Held>, task: &str) -> Result<&'a Held, String> {",
  "tracker/src/config.rs:93": "mode == 0o600 || mode == 0o400,",
  "tracker/src/config.rs:114": "anyhow::ensure!(!token.is_empty(), \"a token is empty\");",

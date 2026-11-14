@@ -12,7 +12,9 @@ Each `file:line` cited below is pinned to the text of that line in
 `docs/threat-model-citations.json`. When code moves, the check fails and names
 the new line; `node scripts/check-threat-model.mjs --fix` updates the doc. A new
 citation fails until `--fix` pins it, so look at the line first: it should be
-the one that does the check, not a closing brace near it.
+the one that does the check, not a closing brace near it. A citation whose
+line is gone keeps failing, `--fix` or not, until the row cites the code that
+does the check now.
 
 A cell marked **None** is a gap with an open issue. The gaps are listed at
 the end.
@@ -213,7 +215,7 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_release` | `/v1/work/release` | Tracker row |
 | `work_post` | `/v1/work/post` | Tracker row |
 | `work_link` | `/v1/work/link` | Tracker row |
-| `work_context` | `/v1/work/context` and `/v1/work/context/add` | Tracker rows. Artifacts are shown only if the bytes hash to the id (`mcp/src/tasks.rs:484`) |
+| `work_context` | `/v1/work/context` and `/v1/work/context/add` | Tracker rows. Artifacts are shown only if the bytes hash to the id (`mcp/src/tasks.rs:492`) |
 | `work_progress` | `/v1/work/progress` | Tracker row |
 | `work_finding` | `/v1/work/finding` | Tracker row. The tool also limits `severity` and `verdict` to their words (`mcp/src/server.rs:772`) |
 | `work_triage` | `/v1/work/triage` | Tracker row. The tool limits `unclear` to its three words |
@@ -226,7 +228,7 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_rules` | `/v1/work/rules/read` | Tracker row |
 | `run_info` | Nothing | Reads its own settings |
 | `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/KBL/issues/29)) |
-| `task_claim` | The run's `workers` group | Felix hands a task to one member. An artifact body is shown only if its bytes hash to the id (`mcp/src/tasks.rs:484`). The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/KBL/issues/39)) |
+| `task_claim` | The run's `workers` group | Felix hands a task to one member. An artifact body is shown only if its bytes hash to the id (`mcp/src/tasks.rs:492`). The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/KBL/issues/39)) |
 | `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29) |
 | `task_release` | The `workers` group and run log | `kbl-mcp` only releases the task it holds (`mcp/src/tasks.rs:577`). In Felix: **None** (#29) |
 | `task_give_up` | The `workers` group and run log | Same |

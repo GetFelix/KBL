@@ -29,7 +29,10 @@ const balanced = (text, open) => {
 // Each `.route("path", get(..).post(..))` as {path, methods}. A path that is not a string
 // literal, a method this script does not know, or a `.nest(` (whose prefix it cannot add) is an
 // error: a route this script cannot read must not pass without a row.
-const routesIn = (text, label) => {
+const routesIn = (source, label) => {
+  // Comments and inline test modules (cut at the first, which sits at the end by convention)
+  // build no served route.
+  const text = source.split(/#\[cfg\(test\)\]\s*mod\s+\w+\s*\{/)[0].replace(/^\s*\/\/.*$/gm, '');
   const nest = text.match(/\.(nest|nest_service|route_service)\(/);
   if (nest) throw new Error(`${label}: .${nest[1]}( is not read by this script; update it`);
   const found = [];
@@ -104,6 +107,7 @@ const nearestShift = (moves, line) =>
 
 // A line like `}` or `item,` matches anywhere and says nothing about the check: cite the line
 // that does the checking.
+// A `fn` line is fine when the whole function is the check.
 const telling = (text) => text.length >= 16 && /[a-z]{3}/i.test(text) && !text.startsWith('//');
 
 // Self-test: the shapes the helpers above must handle.
@@ -130,6 +134,7 @@ const telling = (text) => text.length >= 16 && /[a-z]{3}/i.test(text) && !text.s
   throws(() => routesIn('.route(PATH, get(a))', 'self-test'), 'a const path');
   throws(() => routesIn('.route("/a", on(MethodFilter::GET, a))', 'self-test'), 'an unknown method router');
   throws(() => routesIn('.nest("/v2", inner)', 'self-test'), 'a nested router');
+  want(routesIn('// not .nest( or .route("/x", get(a))\n.route("/a", get(a))\n#[cfg(test)]\nmod tests {\n  .route("/t", get(t))\n}', 'self-test'), [{ path: '/a', methods: ['GET'] }], 'routes outside comments and tests');
   want(['t/src/a.rs', 't/src/a/tests.rs', 't/src/tests/b.rs', 't/src/testing.rs'].filter((p) => !isTest(p)), ['t/src/a.rs'], 'scanned files');
   const paths = new Map([['/a', new Set(['POST'])], ['/b', new Set(['GET', 'PUT'])]]);
   want(missingRoutes(paths, new Set(['/a', '/b', 'GET /b'])), ['PUT /b'], 'missing route rows');
@@ -144,6 +149,7 @@ const telling = (text) => text.length >= 16 && /[a-z]{3}/i.test(text) && !text.s
 
 // Routes and tools from every workspace crate. The crate decides the section.
 const members = all(read('Cargo.toml').match(/members\s*=\s*\[([^\]]*)\]/)[1], /"([^"]+)"/g);
+if (members.some((m) => m.includes('*'))) throw new Error('Cargo.toml has a glob member; list members by name or teach this script globs');
 const ROUTE_SECTIONS = { tracker: ['Tracker routes', 'Teams'], ingest: ['Ingest'] };
 const TOOL_SECTIONS = { mcp: 'MCP tools' };
 const failures = [];
@@ -235,7 +241,11 @@ for (const pass of [false, true]) {
       moved[c.cite] = `\`${c.file}:${at}\``;
       used[`${c.file}:${at}`] = c.text;
     } else if (at) failures.push(`${c.file}:${c.line} moved to line ${at}; run node scripts/check-threat-model.mjs --fix`);
-    else failures.push(`${c.file}:${c.line} no longer holds \`${c.text}\`, and no single line of ${c.file} does; cite what the row means now`);
+    else {
+      // Kept, so a later --fix cannot pin whatever line lands at this number.
+      used[`${c.file}:${c.line}`] = c.text;
+      failures.push(`${c.file}:${c.line} no longer holds \`${c.text}\`, and no single line of ${c.file} does; cite what the row means now`);
+    }
     if (at && !pass) (moves[c.file] ??= []).push({ line: c.line, shift: at - c.line });
   }
 }
