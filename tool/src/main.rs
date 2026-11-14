@@ -6,6 +6,7 @@
 
 mod felix;
 mod run;
+mod teams;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -69,6 +70,24 @@ enum Command {
     /// Read the work tracker's log.
     #[command(subcommand)]
     Work(WorkCommand),
+    /// Set up the organization that holds teams.
+    #[command(subcommand)]
+    Org(OrgCommand),
+    /// Work with teams.
+    #[command(subcommand)]
+    Team(TeamCommand),
+}
+
+#[derive(Subcommand)]
+enum OrgCommand {
+    /// Create the organization's namespace, streams and grants. Safe to run again.
+    Init(teams::InitArgs),
+}
+
+#[derive(Subcommand)]
+enum TeamCommand {
+    /// Create a team's namespace and grants, then ask the tracker to serve it.
+    Create(teams::CreateTeamArgs),
 }
 
 #[derive(Subcommand)]
@@ -126,6 +145,8 @@ async fn serve() -> Result<()> {
         Command::Run(RunCommand::Create(args)) => create(target, args).await,
         Command::Run(RunCommand::Log { run }) => log(target, &run).await,
         Command::Work(WorkCommand::Log) => print_stream(target, WORK_EVENTS).await,
+        Command::Org(OrgCommand::Init(args)) => teams::org_init(target, args).await,
+        Command::Team(TeamCommand::Create(args)) => teams::team_create(target, args).await,
     }
 }
 

@@ -50,12 +50,32 @@ fn tokens_of_other_lengths_or_with_a_shared_prefix_do_not_match() {
 }
 
 #[test]
-fn grants_name_agents_and_owner_repo_pairs() {
-    let ok = Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w1":["GetFelix/felix-gateway"]}}"#)
-        .unwrap();
-    assert_eq!(ok.grants()["w1"], ["GetFelix/felix-gateway"]);
-    assert!(Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w2":["a/b"]}}"#).is_err());
-    assert!(Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w1":["*"]}}"#).is_err());
+fn grants_name_agents_and_source_repo_pairs() {
+    let ok =
+        Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w1":["github:GetFelix/felix-gateway"]}}"#)
+            .unwrap();
+    assert_eq!(
+        ok.grants()["w1"],
+        [kbl_core::work::Target {
+            source: "github".into(),
+            repo: "GetFelix/felix-gateway".into(),
+        }]
+    );
+    assert!(Tokens::parse(r#"{"agents":{"t":"w1"},"grants":{"w2":["github:a/b"]}}"#).is_err());
+    // A grant names its source, so a bare repo is refused.
+    for bad in [
+        "*",
+        "a/b",
+        ":a/b",
+        "github:a",
+        "github:a/b/c",
+        "github:/b",
+        "git hub:a/b",
+        "github:a/b:c",
+    ] {
+        let text = format!(r#"{{"agents":{{"t":"w1"}},"grants":{{"w1":["{bad}"]}}}}"#);
+        assert!(Tokens::parse(&text).is_err(), "{bad}");
+    }
     assert!(
         Tokens::parse(r#"{"agents":{"t":"w1"}}"#)
             .unwrap()

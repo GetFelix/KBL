@@ -42,7 +42,7 @@ Two more parties are outside KBL and can still steer it:
 ## Trust boundaries
 
 1. **Agent to tracker.** The bearer token names the caller
-   (`tracker/src/http.rs:139`). The name and role on a record come from the
+   (`tracker/src/http.rs:144`). The name and role on a record come from the
    token, never from the body (`tracker/src/tracker.rs:1002`). The attempt
    number comes from the hold, never from the body
    (`tracker/src/tracker/tools.rs:652`, `tracker/src/tracker.rs:822`).
@@ -63,9 +63,9 @@ Two more parties are outside KBL and can still steer it:
    token and a raw client skips it. Felix grants are the check.
 6. **Browser to gateway.** Read only, one run.
 
-The token file must be mode 600 or 400 (`tracker/src/config.rs:90`), a token
-may be listed once (`tracker/src/config.rs:113`), and the lookup takes the
-same time for a wrong token as for a right one (`tracker/src/config.rs:142`).
+The token file must be mode 600 or 400 (`tracker/src/config.rs:91`), a token
+may be listed once (`tracker/src/config.rs:114`), and the lookup takes the
+same time for a wrong token as for a right one (`tracker/src/config.rs:149`).
 The tracker and the webhook serve plain HTTP: **None**
 ([#158](https://github.com/GetFelix/KBL/issues/158)). Tokens are
 long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
@@ -79,7 +79,7 @@ Every route but `/healthz` needs a bearer token. A wrong kind of token gets
 
 ### Agent routes
 
-All of them need an agent token (`tracker/src/http.rs:187`).
+All of them need an agent token (`tracker/src/http.rs:202`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
@@ -89,7 +89,7 @@ All of them need an agent token (`tracker/src/http.rs:187`).
 | `/v1/work/release` | `item`, `reason`, `cost_micros` | Release another's work; write a huge record | Holder only (`core/src/work_fold.rs:1248`). Two claims per attempt (`core/src/work_fold.rs:1093`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1009`). Cost: **None** (#155) |
 | `/v1/work/give_up` | `item`, `reason`, `cost_micros` | Same as release | Holder only (`core/src/work_fold.rs:1264`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1009`). Cost: **None** (#155) |
 | `/v1/work/post` (child or proposal) | `item`, `key`, `work`, `title` | Create work outside its tree, flood Triage with proposals, or create a kind it may not | Must hold `item` (`tracker/src/tracker/tools.rs:114`). Only split, augment, question, test or a proposal (`tracker/src/tracker/tools.rs:39`). Children draw from the root's items and depth (`core/src/work_fold.rs:1592`). 24 posts per attempt (`core/src/work_fold.rs:1586`). A proposal waits for a person; an agent may have 16 waiting at once and 8 from one root, over all its attempts, and a decision frees a slot. The tracker checks this before it appends (`proposal_room`, `tracker/src/tracker/tools.rs`), so the fold of an old log does not change. Proposals draw no budget and a key can be reused across claims ([#109](https://github.com/GetFelix/KBL/issues/109)) |
-| `/v1/work/post` (`work: "prerequisite"`) | `target_source`, `target_repo`, `title`, `why`, `evidence`, `existing`, `done_when`, `cost_micros` | File work in another repo's Triage, without limit; link to another tree | Only a repo in the agent's grants or its own tree's repo, and a missing item answers the same as a hidden one (`tracker/src/tracker/tools.rs:204`). Holder, no cycle, not closed (`core/src/work_fold.rs:1670`). A new one counts against the same pending-proposal caps as `proposal`. Sizes (`tracker/src/tracker/tools.rs:159`). `target_source`: **None** ([#156](https://github.com/GetFelix/KBL/issues/156)). Evidence target: a `work.events` record of the same tree; another stream is refused (`tracker/src/tracker.rs:217`). Cost: **None** (#155). `title` and `why` are read by a person before accepting |
+| `/v1/work/post` (`work: "prerequisite"`) | `target_source`, `target_repo`, `title`, `why`, `evidence`, `existing`, `done_when`, `cost_micros` | File work in another repo's Triage, without limit; link to another tree | Only a source and repo in the agent's grants or those of its own tree; a grant names both (`tracker/src/config.rs`), and a missing item answers the same as a hidden one (`tracker/src/tracker/tools.rs:204`). Holder, no cycle, not closed (`core/src/work_fold.rs:1670`). A new one counts against the same pending-proposal caps as `proposal`. Sizes (`tracker/src/tracker/tools.rs:159`). Evidence target: a `work.events` record of the same tree; another stream is refused (`tracker/src/tracker.rs:217`). Cost: **None** (#155). `title` and `why` are read by a person before accepting |
 | `/v1/work/link` | `item`, `to` | Link across trees; block work it does not hold | Same tree only (`core/src/work_fold.rs:1906`). Must hold `item`, a child of it or its parent (`core/src/work_fold.rs:1909`). No cycle (`core/src/work_fold.rs:905`). 100 links per attempt (`core/src/work_fold.rs:910`). A repeat is refused (`tracker/src/tracker/tools.rs:293`) |
 | `/v1/work/context` | `item` | Read context of work it does not hold | Must hold the item or its parent (`tracker/src/tracker/tools.rs:349`) |
 | `/v1/work/context/add` | `item`, `entry`, `text` | Write on work it does not hold; replace what ingest or a person wrote | Must hold the item or a child of it (`core/src/work_fold.rs:1062`). Text inline up to 4 KiB (`tracker/src/tracker/tools.rs:331`). 100 writes per attempt (`core/src/work_fold.rs:1066`). An agent replaces only an entry it wrote itself; ingest's, a person's and the fold's stay, refused as `not_your_entry` before the record is logged (`tracker/src/tracker/tools.rs:337`). The fold takes such a record from an old log as it always did |
@@ -101,12 +101,12 @@ All of them need an agent token (`tracker/src/http.rs:187`).
 | `/v1/work/step` | `command`, `exit_code`, `output` | Claim a command passed | Holder only (`core/src/work_fold.rs:1202`). Sizes (`tracker/src/tracker/tools.rs:525`). 500 per attempt (`core/src/work_fold.rs:1204`). A step is the agent's word. Check results come from ingest, never from steps |
 | `/v1/work/edit` | `file`, `hunk`, `decision` | Tie an edit to another attempt's decision | Holder only (`core/src/work_fold.rs:1215`). The decision is one of this attempt's (`core/src/work_fold.rs:1217`). Sizes (`tracker/src/tracker/tools.rs:546`). 500 per attempt (`core/src/work_fold.rs:1220`) |
 | `/v1/work/ask` | `text`, `options`, `default`, `cost_micros` | Flood Needs you; report no cost | Holder only (`core/src/work_fold.rs:1282`). At most 8 options of 200 bytes (`tracker/src/tracker/tools.rs:826`). 20 per attempt (`core/src/work_fold.rs:1285`). Cost: **None** (#155); the item total saturates (`core/src/work_fold.rs:1292`) |
-| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:704`) and the fold refuses it from an agent (`core/src/work_fold.rs:1776`). Must hold a question item under `item` (`core/src/work_fold.rs:1914`). Only the open question (`core/src/work_fold.rs:1156`). `chosen` is one of the options (`core/src/work_fold.rs:1159`). 10 per attempt (`core/src/work_fold.rs:1172`). The resume item obeys the depth limit (`core/src/work_fold.rs:1767`). Evidence target: a `work.events` record of the same tree; another stream is refused (`tracker/src/tracker.rs:217`) |
+| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:719`) and the fold refuses it from an agent (`core/src/work_fold.rs:1776`). Must hold a question item under `item` (`core/src/work_fold.rs:1914`). Only the open question (`core/src/work_fold.rs:1156`). `chosen` is one of the options (`core/src/work_fold.rs:1159`). 10 per attempt (`core/src/work_fold.rs:1172`). The resume item obeys the depth limit (`core/src/work_fold.rs:1767`). Evidence target: a `work.events` record of the same tree; another stream is refused (`tracker/src/tracker.rs:217`) |
 | `/v1/work/rules/read` | `item` | Read rules of work it does not hold | Holder only (`tracker/src/tracker/tools.rs:417`) |
 
 ### Person routes
 
-All of them need a person token (`tracker/src/http.rs:196`). An agent or
+All of them need a person token (`tracker/src/http.rs:211`). An agent or
 ingest token gets 403. The fold then checks the record, and sizes are checked
 in `check_sizes` (`tracker/src/tracker/tools.rs:911`).
 
@@ -139,22 +139,32 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 Every route above acts in one team, the team of the token, and only reaches
 that team's tracker: its fold, its lease and its Felix connections
 (`tracker/src/teams.rs`). The team comes from the token's entry, never from the
-body (`tracker/src/http.rs:139`). Today there is one team, `KBL_NAMESPACE`,
+body (`tracker/src/http.rs:144`). Today there is one team, `KBL_NAMESPACE`,
 and the token file's callers belong to it.
 
 | Route | Fields the caller controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:110`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:149`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
-| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:208`) |
+| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:115`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:154`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
+| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:223`) |
+| `/v1/org/teams` | `team`, `display_name` on `POST` | Create a team, or adopt a namespace that already holds another team's data; list the org's teams | Org admin only: a person of the token file. An agent or ingest token gets `403` with `org_admin_required` before the body is read, and the body is capped at 4 KiB (`tracker/src/http/org.rs`). The name follows the key rule and is not `kbl`. A name already on `org.events` writes nothing and answers `created: false`. The tracker only serves the namespace: Felix grants on it come from `kbl-tool team create`, run with the org admin's own Felix sign-in. Without `KBL_ORG_NAMESPACE` it answers `404` with `teams_off` |
 
 A person token in more than one team gets `400` with `team_required` on a path
 without a team. A team takes at most `KBL_TEAM_INFLIGHT` calls at once and
-answers `503` with `team_busy` over that (`tracker/src/teams.rs:61`), so one
+answers `503` with `team_busy` over that (`tracker/src/teams.rs:98`), so one
 team's load does not hold the others' calls; waiting `work_next` calls have
 their own pool, so they cannot starve a holder's `extend`. A slot is taken
 before the body is read, so a slow upload holds one of its own team's slots
-only. A team that loses its lease answers `503` alone; the process exits when
-every team has lost its lease, or at once if a team's maintenance panics (`tracker/src/teams.rs:132`).
+only. A team that loses its lease answers `503` alone. Without teams on, the process
+exits when every team has lost its lease. With teams on, a team that lost its
+lease, or could not start (its log has a record of a newer format), answers
+`503` with `team_unavailable` and is started again in the background with a
+fresh fold; the process exits only when the org lease has been lost for 60
+seconds. Either way it exits at once if a team's maintenance panics
+(`tracker/src/teams.rs`).
+
+Each team's tracker, and the org writer, exchanges its ID token for Felix
+tokens narrowed to its own namespace (`tracker/src/felix.rs`), so a record
+sent on the wrong team's connection is refused by the broker.
 
 ## Ingest
 
@@ -208,8 +218,8 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_rules` | `/v1/work/rules/read` | Tracker row |
 | `run_info` | Nothing | Reads its own settings |
 | `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/KBL/issues/29)) |
-| `task_claim` | The run's `workers` group | Felix hands a task to one member. The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/KBL/issues/39)) |
-| `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Task bodies are not hash-checked ([#150](https://github.com/GetFelix/KBL/issues/150)) |
+| `task_claim` | The run's `workers` group | Felix hands a task to one member. An artifact body is shown only if its bytes hash to the id (`mcp/src/tasks.rs:484`). The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs:250`, [#39](https://github.com/GetFelix/KBL/issues/39)) |
+| `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29) |
 | `task_release` | The `workers` group and run log | `kbl-mcp` only releases the task it holds (`mcp/src/tasks.rs:584`). In Felix: **None** (#29) |
 | `task_give_up` | The `workers` group and run log | Same |
 
@@ -304,7 +314,6 @@ a team or a token it was not given.
 
 | Route | Fields the caller controls | What they could steer | Check |
 |---|---|---|---|
-| `POST /v1/org/teams` | `team`, `display_name` | Create a team, or adopt a namespace that already holds another team's data | `org_admin` only. A name already on `org.events` is refused. `kbl` is reserved. Names follow the key rule |
 | `POST /v1/teams/{team}/members` | `team`, `person`, `role`, `repos`, `subject` | Make itself or a friend admin; reach another team; take over a person by naming their OIDC subject | Admin of that team or `org_admin`. `org_admin` is granted only by an `org_admin`. `repos` must be the team's own sources. A `subject` already on another person is refused. The Felix assignment is made with the caller's own Felix credential, so Felix refuses one outside the caller's scope |
 | `DELETE /v1/teams/{team}/members/{person}` | `team`, `person` | Lock out the other admins | Team admin or `org_admin`. The last admin of a team cannot be removed; an `org_admin` can always add one back |
 | `POST /v1/teams/{team}/agents` | `team`, `agent` | Mint tokens without limit; take an existing agent's name and its holds | Triager or above in that team. A name in use in the team is refused, and so is a revoked one, so a new token never inherits holds. A cap on agents per team |
@@ -318,19 +327,19 @@ a team or a token it was not given.
 
 | Attack | Check |
 |---|---|
-| A team's agent or viewer reads or writes another team's streams with a raw client | Felix: every grant names the team's namespace, and no team principal has anything outside it. Tested with a raw client in `dev/check-teams.mjs` |
+| A team's agent or viewer reads or writes another team's streams with a raw client | Felix: every grant names the team's namespace, and no team principal has anything outside it. Tested with a raw Felix client in `dev/check-teams.mjs`: a viewer of team `alpha` reads `alpha`'s `work.events` and cannot read or write `beta`'s, and the tracker's token narrowed to `alpha` cannot reach `beta` either |
 | A tracker bug routes team A's record to team B's log | Each team's fold publishes only with a Felix token narrowed to its own namespace, so the broker refuses it |
 | A revoked agent keeps working | The token table is the fold of `org.events`; the next call after `agent_revoked` is refused, and its holds are released |
 | A removed member keeps reading the dashboard | Removing the Felix assignment revokes the person's broker tokens and ends open streams, within the control plane's sync interval |
 | A cross-team prerequisite floods another team's Triage | A grant from the receiving team is needed, the filing agent's pending-proposal caps apply, and the grant can carry its own cap |
 | A forged "prerequisite done" frees blocked work | `prerequisite_settled` is written only by the tracker, from the other team's fold. No route takes it from a person, agent or ingest |
 | `org.events` leaks | It holds SHA-256 hashes of 32-byte random tokens, not tokens. Only the tracker and org admins can read it |
-| One team's load or a broken log stops the others | A cap on calls in flight per team, and a team with a lost lease or failing Felix calls answers 503 alone: built, see [Team routes](#team-routes). A team whose log has a newer format at start still stops the process, and a team that lost its lease is not taken back without a restart ([#195](https://github.com/GetFelix/KBL/issues/195)). One process is still one crash for all (#124) |
+| One team's load or a broken log stops the others | A cap on calls in flight per team, and a team with a lost lease or failing Felix calls answers 503 alone: built, see [Team routes](#team-routes). A team whose log has a newer format, or that lost its lease, answers 503 and is retried in the background while the others serve. One process is still one crash for all (#124) |
 | A person in two teams acts in the wrong one | Person routes name the team; a person token in several teams gets `team_required` on a path without one |
 
 ## Records on org.events
 
-Built in `kbl-core` ([#185](https://github.com/GetFelix/KBL/issues/185)); no route writes them yet. The tracker will be the only appender, and
+Built in `kbl-core` ([#185](https://github.com/GetFelix/KBL/issues/185)). The tracker writes `team_created`; no route writes the others yet. The tracker will be the only appender, and
 it checks the caller's role before it asks the fold. The fold (`OrgState::check`)
 then refuses a record the log cannot take, before the append and again on replay, so a
 refused call writes nothing and an old log folds as it did. The log holds the SHA-256 of
@@ -338,7 +347,7 @@ each token and never a token. A format above the build's stops the reader.
 
 | Kind | Who may write | Check |
 |---|---|---|
-| `team_created` | Org admin (route check, later) | Name follows the key rule and is not `kbl`; repeating a team changes nothing |
+| `team_created` | Org admin, through `POST /v1/org/teams`; or the tracker, adopting `KBL_NAMESPACE` when the log is empty | Name follows the key rule and is not `kbl`; repeating a team changes nothing |
 | `person_added` | Org admin, team admin (route check, later) | Name and OIDC subject unique, token hash not used by any person, agent or ingest worker |
 | `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last unscoped admin of a team cannot be demoted; an admin role covers the whole team, so a scoped one is refused |
 | `role_revoked` | Team admin, org admin (route check, later) | The last admin of a team and the last org admin stay |
@@ -366,12 +375,10 @@ each token and never a token. A format above the build's stops the reader.
 | Issue | Gap |
 |---|---|
 | [#155](https://github.com/GetFelix/KBL/issues/155) | The cost budget rests on what the agent reports |
-| [#156](https://github.com/GetFelix/KBL/issues/156) | A prerequisite's source is not checked against grants |
 | [#158](https://github.com/GetFelix/KBL/issues/158) | The tracker and the webhook serve plain HTTP |
 | [#109](https://github.com/GetFelix/KBL/issues/109) | Proposals draw no budget; post keys can be reused across claims |
 | [#185](https://github.com/GetFelix/KBL/issues/185) | `org.events` has no record to remove a person, rotate a person's token or revoke an ingest token yet; counts of teams, people and members are not capped |
 | [#120](https://github.com/GetFelix/KBL/issues/120) | No roles: every person can do everything, every agent can claim any repo's work |
 | [#121](https://github.com/GetFelix/KBL/issues/121) | Tokens are long-lived |
 | [#148](https://github.com/GetFelix/KBL/issues/148) | Request names are not canonical; check runs are not filtered by author |
-| [#150](https://github.com/GetFelix/KBL/issues/150) | Task bodies are shown without a hash check |
 | [#29](https://github.com/GetFelix/KBL/issues/29), [#32](https://github.com/GetFelix/KBL/issues/32), [#45](https://github.com/GetFelix/KBL/issues/45) | Any writer in a run can write any run log record under any name |

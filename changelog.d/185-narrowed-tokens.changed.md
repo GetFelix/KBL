@@ -1,0 +1,1 @@
+The tracker asks Felix for tokens narrowed to its team's namespace (`resources` on the token exchange), so the broker refuses a write that reaches another team's streams. Felix's control plane must support `resources` narrowing, as 0.6.2 does.

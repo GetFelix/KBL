@@ -159,7 +159,7 @@ impl<B: Broker> Tracker<B> {
     /// The held item cannot go on until work in another tree is done. The
     /// claim ends as blocked, which costs no try, and the item waits on the
     /// prerequisite. This is the one cross-tree link an agent may make, and
-    /// only into a repo its grants name or the repo of its own tree.
+    /// only into a source and repo its grants name or those of its own tree.
     pub(crate) async fn prerequisite(
         &self,
         agent: &AgentName,
@@ -221,9 +221,9 @@ impl<B: Broker> Tracker<B> {
                 }
             }
             held(&core, agent, item)?;
-            let allowed = self.visible_repos(&core, agent, item);
+            let allowed = self.visible_targets(&core, agent, item);
             let seen = match &new {
-                Some(n) => allowed.contains(n.target.repo.as_str()),
+                Some(n) => allowed.contains(&n.target),
                 None => visible(&core, &allowed, item, &prerequisite),
             };
             if !seen {
@@ -269,21 +269,20 @@ impl<B: Broker> Tracker<B> {
         result
     }
 
-    /// The repos `agent` may reach from `item`: its grants and its own tree's repo.
-    fn visible_repos<'a>(
+    /// The targets `agent` may reach from `item`: its grants and its own tree's target.
+    fn visible_targets<'a>(
         &'a self,
         core: &'a Core,
         agent: &AgentName,
         item: &ItemId,
-    ) -> BTreeSet<&'a str> {
-        let mut repos: BTreeSet<&str> = self
+    ) -> BTreeSet<&'a Target> {
+        let mut targets: BTreeSet<&Target> = self
             .0
             .settings
             .grants
             .get(agent.as_str())
             .into_iter()
             .flatten()
-            .map(String::as_str)
             .collect();
         let own = core
             .state
@@ -291,8 +290,8 @@ impl<B: Broker> Tracker<B> {
             .get(item)
             .and_then(|i| core.state.items.get(&i.root))
             .and_then(|r| r.target.as_ref());
-        repos.extend(own.map(|t| t.repo.as_str()));
-        repos
+        targets.extend(own);
+        targets
     }
 
     /// Adds the edge "`item` waits on `to`". Refused when it would close a cycle.
@@ -639,7 +638,7 @@ impl<B: Broker> Tracker<B> {
                 .and_then(|i| i.parent.clone())
                 .ok_or_else(|| Error::Invalid(format!("{item} is not a triage item")))?;
             // A missing item and one outside the agent's grants get the same refusal.
-            let allowed = self.visible_repos(&core, agent, item);
+            let allowed = self.visible_targets(&core, agent, item);
             if let Some(d) = &duplicate_of
                 && (d == &target || !visible(&core, &allowed, item, d))
             {
@@ -915,15 +914,15 @@ impl<B: Broker> Tracker<B> {
 }
 
 /// Whether `other` is in `item`'s tree or in a repo the agent may reach.
-fn visible(core: &Core, allowed: &BTreeSet<&str>, item: &ItemId, other: &ItemId) -> bool {
+fn visible(core: &Core, allowed: &BTreeSet<&Target>, item: &ItemId, other: &ItemId) -> bool {
     core.state.items.get(other).is_some_and(|p| {
         let own = core.state.items.get(item).map(|i| &i.root) == Some(&p.root);
-        let repo = core
+        let target = core
             .state
             .items
             .get(&p.root)
             .and_then(|r| r.target.as_ref());
-        own || repo.is_some_and(|t| allowed.contains(t.repo.as_str()))
+        own || target.is_some_and(|t| allowed.contains(t))
     })
 }
 
