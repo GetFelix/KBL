@@ -225,7 +225,8 @@ impl<T: TrackerApi> Work<T> {
         .await
     }
 
-    /// A post that ends the claim, such as a prerequisite.
+    /// A post that ends the claim, such as a prerequisite. One posted from
+    /// triage answers `"claim": "held"` and the claim goes on.
     pub(crate) async fn finish_post(&self, item: &str, body: Value) -> Result<String, String> {
         self.finish("/v1/work/post", body, item).await
     }
@@ -239,7 +240,10 @@ impl<T: TrackerApi> Work<T> {
             .filter(|h| h.item == item)
             .and_then(|h| at_risk(&h.health));
         let result = self.0.api.call(path, body).await;
-        let settled = matches!(result, Ok(_) | Err(CallError::Lost(_)));
+        let settled = match &result {
+            Ok(reply) => reply["claim"] != "held",
+            Err(e) => matches!(e, CallError::Lost(_)),
+        };
         if settled && let Some(h) = held.take_if(|h| h.item == item) {
             h.extender.abort();
         }

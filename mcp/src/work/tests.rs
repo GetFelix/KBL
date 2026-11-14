@@ -38,6 +38,7 @@ impl TrackerApi for Fake {
             },
             _ => match s.complete {
                 Some("refused") => Err(CallError::Refused("open_children".into())),
+                Some("held") => Ok(json!({ "item": "r1", "status": "waiting", "claim": "held" })),
                 _ => Ok(json!({ "item": "a1", "status": "done" })),
             },
         }
@@ -155,4 +156,17 @@ async fn a_prerequisite_ends_the_claim_and_a_refused_one_keeps_it() {
     let seen = fake.calls("/v1/work/extend");
     tokio::time::sleep(Duration::from_secs(120)).await;
     assert_eq!(fake.calls("/v1/work/extend"), seen);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_prerequisite_from_triage_keeps_the_claim_extended() {
+    let fake = Fake::default();
+    let w = work(&fake);
+    w.next(None).await.unwrap();
+    fake.0.lock().unwrap().complete = Some("held");
+    w.finish_post("a1", json!({})).await.unwrap();
+    assert_eq!(w.held_item().await.as_deref(), Some("a1"));
+    let seen = fake.calls("/v1/work/extend");
+    tokio::time::sleep(Duration::from_secs(65)).await;
+    assert!(fake.calls("/v1/work/extend") > seen);
 }

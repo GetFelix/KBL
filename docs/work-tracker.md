@@ -46,7 +46,7 @@ operations as MCP tools in `kbl-mcp` for agents:
 | `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
 | `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
-| `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on` and `split`, or `unclear`. See [Kinds of work](#kinds-of-work) |
+| `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on` and `split`, or `unclear`. Work the item needs from another repo is posted first, with `work_post`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
 
 Every `kbl-mcp` work tool, claiming included, calls the tracker over REST
@@ -205,7 +205,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | Call | Does |
 |---|---|
 | `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing |
-| `POST /v1/work/post` `{item, key, work: "prerequisite", ...}` | Work another repo must do first. See [Prerequisites in another repo](#prerequisites-in-another-repo) |
+| `POST /v1/work/post` `{item, key, work: "prerequisite", ...}` | Work another repo must do first. From a held triage item it is for the item under triage. See [Prerequisites in another repo](#prerequisites-in-another-repo) |
 | `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree. The edge is refused with `cycle` if `to` already waits on `item`, directly or through other items |
 | `POST /v1/work/rules/read` `{item}` | Reads the rules in effect for the held item |
 | `POST /v1/work/context` `{item}` | Reads an item's context entries and the notes people left for the attempt |
@@ -610,6 +610,53 @@ repository its grants name, and an item it cannot see is refused as
 `unknown_item`, the same answer as one that does not exist. The plain
 `work_link` call still refuses another tree (`cross_root`). Cycles are refused across trees too.
 
+#### Found at triage
+
+Finding the other repo's work before anyone builds is cheaper than finding it
+halfway through a fix. So the agent that holds an item's triage work looks for
+it, and posts it with the same call, naming the triage item it holds:
+
+```json
+{
+  "item": "gh-812-t",
+  "key": "need-cas",
+  "work": "prerequisite",
+  "target_source": "github",
+  "target_repo": "GetFelix/felix-gateway",
+  "title": "gateway needs a CAS call",
+  "why": "the client cannot swap two blocks atomically without it"
+}
+```
+
+The fields, the grants and the caps are the ones above. Two things differ:
+
+- **The item under triage waits**, not the triage item. It is Blocked until
+  the prerequisite is done, so no build claim is handed out for it. If an
+  agent already holds the item, that claim goes on and the next one waits.
+- **The triage claim goes on.** The agent still answers with `work_triage`
+  and completes the triage item. Nothing is charged by this call; triage
+  reports its cost when it completes.
+
+The reply says so:
+
+```json
+{
+  "item": "gh-812",
+  "status": "waiting",
+  "claim": "held",
+  "triage": "gh-812-t",
+  "prerequisite": "w3f9a1c04e7b25d8816a0",
+  "created": true
+}
+```
+
+The same call again answers `created: false` and writes nothing. A person who
+disagrees removes the link (`unlinked`) and rejects the proposal.
+
+This needs log format 3. Until a person
+[raises the format](upgrades.md#upgrade), the call is refused with `format`
+and nothing waits.
+
 ### Questions with choices
 
 A question can offer options. `work_ask` takes `options` (at most 8, each at
@@ -669,6 +716,7 @@ What each new route and record lets a caller do:
 | `answer` that starts resume work | The same | The text the resume agent reads, as any answer can. There is one resume item per question |
 | `answer` with `moves_to` | A person only. The agent route refuses it (403) and the fold refuses it from an agent (`actor_not_allowed`) | Nothing directly. An agent can shape the question a person reads, but only the person puts work in another repo's Triage |
 | `triaged` with `unclear` | The agent holding the triage item, or a person | That an item waits for a person. It cannot make an item Ready or move it to another repo |
+| `prerequisite` from triage | The agent holding the triage item | That the item under triage waits on work in a repo the agent's grants name, and that a proposal appears in that repo's Triage. A person accepts or rejects the proposal, and can remove the link |
 | the `resume` item | The fold only. `work_post` does not accept it | Nothing: no caller creates it |
 
 ### Standing rules

@@ -24,7 +24,7 @@ Upgrade in this order. No work is lost at any step.
    ```bash
    curl -X POST "$TRACKER/v1/work/records" \
      -H "authorization: Bearer $PERSON_TOKEN" -H 'content-type: application/json' \
-     -d '{"record": {"kind": "format_raised", "to": 2}}'
+     -d '{"record": {"kind": "format_raised", "to": 3}}'
    ```
 
    Features that need the new format are refused with `format` until then.
@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 2.
+is 3.
 
 ### Formats
 
@@ -75,6 +75,7 @@ is 2.
 |---|---|---|
 | 1 | Every record written before formats existed | Nothing |
 | 2 | `returned_to_scope`: an issue that matches its intake rule again leaves Needs you | Until the raise, an item whose issue comes back into scope stays in Needs you, as it did before. Ingest writes the record at its next reconcile after the raise, or sooner if the issue changes |
+| 3 | `prerequisite` with `triage`: the agent triaging an item posts work another repo must do first, and the item waits on it before anyone builds | Until the raise, a prerequisite posted while holding a triage item is refused with `format`. Agents still find the work while building, as before |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -155,6 +156,8 @@ tracker does not have yet.
   format 2 and uses it, including a format 2 record before the raise, which
   the fold refuses. Its state is pinned in `wasm/golden/format_2.state.json`
   and folded by the core, the WebAssembly build and the page's tests.
+  `core/tests/work_format_3.jsonl` and `wasm/golden/format_3.state.json` do
+  the same for format 3.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

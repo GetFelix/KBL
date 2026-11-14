@@ -1,0 +1,14 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix-blocks#1","title":"swap blocks atomically"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"tracker","actor":"tracker","kind":"proposed","item":"t1","parent":"r1","key":"triage","work":"triage","title":"triage: swap blocks atomically"}
+{"at_ms":1030,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix-gateway#7","title":"gateway rate limits"}
+{"at_ms":1040,"by":"w2","actor":"agent","kind":"claimed","item":"t1","attempt":1,"deadline_ms":1800000090000}
+{"v":3,"at_ms":1050,"by":"w2","actor":"agent","kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"g0","key":"early","new":{"target":{"source":"github","repo":"GetFelix/felix-gateway"},"title":"gateway needs a CAS call","why":"the client cannot swap atomically","evidence":[]},"done_when":"merged","cost_micros":0,"triage":"t1"}
+{"v":3,"at_ms":1060,"by":"gabriel","actor":"person","kind":"format_raised","to":3}
+{"v":3,"at_ms":1070,"by":"w2","actor":"agent","kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"g1","key":"need-cas","new":{"target":{"source":"github","repo":"GetFelix/felix-gateway"},"title":"gateway needs a CAS call","why":"the client cannot swap atomically","evidence":[]},"done_when":"released","cost_micros":0,"triage":"t1"}
+{"v":3,"at_ms":1080,"by":"w2","actor":"agent","kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"r2","key":"need-limits","done_when":"merged","cost_micros":0,"triage":"t1"}
+{"at_ms":1090,"by":"w2","actor":"agent","kind":"triaged","item":"r1","tier":1,"why":"needs the gateway first"}
+{"at_ms":1100,"by":"w2","actor":"agent","kind":"done","item":"t1","attempt":1,"cost_micros":120000}
+{"at_ms":1110,"by":"gabriel","actor":"person","kind":"accepted","item":"g1","tier":1}
+{"at_ms":1120,"by":"w1","actor":"agent","kind":"claimed","item":"g1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1130,"by":"w1","actor":"agent","kind":"prerequisite","item":"g1","attempt":1,"prerequisite":"r2","key":"need-limits","done_when":"merged","cost_micros":0}

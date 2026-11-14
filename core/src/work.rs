@@ -24,8 +24,11 @@ pub const FORMAT_V1: u32 = 1;
 /// The format that added `returned_to_scope`.
 pub const FORMAT_V2: u32 = 2;
 
+/// The format that added a prerequisite posted from triage.
+pub const FORMAT_V3: u32 = 3;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V2;
+pub const FORMAT: u32 = FORMAT_V3;
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer
@@ -482,6 +485,10 @@ pub enum WorkRecord {
     /// record also creates that prerequisite as a proposal in the target
     /// repo's Triage; without it, `prerequisite` is an existing item. Either
     /// way `item` then waits on it and the claim ends without costing a try.
+    ///
+    /// With `triage`, the writer holds that triage item instead: `item` is
+    /// the item under triage, `attempt` is the triage item's, and the claim
+    /// goes on.
     Prerequisite {
         item: ItemId,
         attempt: u32,
@@ -495,6 +502,8 @@ pub enum WorkRecord {
         /// What the attempt cost so far, charged like a release.
         #[serde(default)]
         cost_micros: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        triage: Option<ItemId>,
     },
     /// A person or upstream sync says a release carries a finished item, which
     /// frees dependents whose edge waits for a release.
@@ -854,6 +863,9 @@ impl WorkRecord {
         match self {
             WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V2),
             WorkRecord::ReturnedToScope { .. } => FORMAT_V2,
+            WorkRecord::Prerequisite {
+                triage: Some(_), ..
+            } => FORMAT_V3,
             WorkRecord::Imported { .. }
             | WorkRecord::Proposed { .. }
             | WorkRecord::Triaged { .. }
