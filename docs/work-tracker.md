@@ -1111,6 +1111,22 @@ charged cost, and the fold reads it as before. Under `kbl-run` the reported
 figure is measured spend, and a measured figure below the floor is raised to
 it like any other.
 
+**Spend.** The charged costs add up on the item that took the claim, so spend
+is a read of the fold, not a separate record. `kbl-tool work spend` folds
+`work.events` and prints the total, in millionths of a dollar, per root (the
+root and everything under it), per reviewer tier (reviews only) and per repo
+(`source:repo` of the item's root, so a review counts where the request it
+reads lands). The dashboard's fold returns the same numbers from
+`Folder.spend_json()`.
+
+```bash
+kbl-tool work spend
+# {"total_micros": 1400000,
+#  "by_root": {"g3f9a1c0d2b7e4a65": 1400000},
+#  "by_review_tier": {"deep": 300000, "fast": 100000},
+#  "by_repo": {"github:GetFelix/felix": 1400000}}
+```
+
 ## The dashboard
 
 The dashboard shows everything before and around

@@ -81,6 +81,21 @@ impl Budget {
     }
 }
 
+/// What claims cost, summed from the cost each one reported when it ended
+/// (`done`, `released`, `gave_up`, `question`, `prerequisite`). Derived from
+/// the items, so it needs no record of its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Spend {
+    pub total_micros: u64,
+    /// Per root, over the root and everything under it.
+    pub by_root: BTreeMap<ItemId, u64>,
+    /// Reviews only, per the reviewer tier each one asked for.
+    pub by_review_tier: BTreeMap<String, u64>,
+    /// Per `source:repo` of the item's root. Work under a root with no repo is
+    /// in the total and its root only.
+    pub by_repo: BTreeMap<String, u64>,
+}
+
 /// The latest `rules_set` for one scope: a repo, or a root in it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RulesSet {
@@ -569,6 +584,35 @@ impl State {
             let (source, id) = up.split_once('\n')?;
             Some((source, id, item))
         })
+    }
+
+    /// Spend per root, reviewer tier and repo. Items that cost nothing are left out.
+    pub fn spend(&self) -> Spend {
+        let mut s = Spend::default();
+        for it in self.items.values().filter(|it| it.cost_micros > 0) {
+            let cost = it.cost_micros;
+            s.total_micros = s.total_micros.saturating_add(cost);
+            let by_root = s.by_root.entry(it.root.clone()).or_default();
+            *by_root = by_root.saturating_add(cost);
+            if let Some(r) = &it.review {
+                let tier = s.by_review_tier.entry(r.tier.clone()).or_default();
+                *tier = tier.saturating_add(cost);
+            }
+            // The root's repo, as for rules: a child lands where its root does.
+            let target = self
+                .items
+                .get(&it.root)
+                .and_then(|r| r.target.as_ref())
+                .or(it.target.as_ref());
+            if let Some(t) = target {
+                let repo = s
+                    .by_repo
+                    .entry(format!("{}:{}", t.source, t.repo))
+                    .or_default();
+                *repo = repo.saturating_add(cost);
+            }
+        }
+        s
     }
 
     /// The rules in effect for `id`: its repo's, with the root's own keys on top.

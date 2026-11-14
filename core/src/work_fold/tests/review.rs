@@ -550,3 +550,53 @@ fn a_revert_check_is_evidence_on_a_decision() {
     );
     assert_eq!(last(&l), Some(Reject::MissingField));
 }
+
+#[test]
+fn spend_sums_claim_costs_per_root_reviewer_tier_and_repo() {
+    let mut l = reviewed();
+    l.agent("w2", claimed("v1", 1));
+    l.agent("w2", done("v1", 1, 100));
+    l.agent("w3", claimed("v2", 1));
+    l.agent(
+        "w3",
+        WorkRecord::Released {
+            item: id("v2"),
+            attempt: 1,
+            reason: None,
+            cost_micros: 300,
+        },
+    );
+    l.tracker(WorkRecord::Imported {
+        item: id("r2"),
+        source: "github".into(),
+        upstream_id: "GetFelix/felix-gateway#3".into(),
+        title: "gap".into(),
+    });
+    l.person(WorkRecord::Accepted {
+        item: id("r2"),
+        tier: None,
+    });
+    l.agent("w1", claimed("r2", 1));
+    l.agent("w1", done("r2", 1, 1_000));
+    let s = state(&l);
+    assert_eq!(s.rejections.len(), 0);
+
+    let spend = s.spend();
+    assert_eq!(spend.total_micros, 1_400);
+    assert_eq!(
+        spend.by_root,
+        BTreeMap::from([(id("r1"), 400), (id("r2"), 1_000)])
+    );
+    assert_eq!(
+        spend.by_review_tier,
+        BTreeMap::from([("fast".to_owned(), 100), ("deep".to_owned(), 300)])
+    );
+    // Reviews have no repo of their own; they count where their root lands.
+    assert_eq!(
+        spend.by_repo,
+        BTreeMap::from([
+            ("github:GetFelix/felix".to_owned(), 400),
+            ("github:GetFelix/felix-gateway".to_owned(), 1_000),
+        ])
+    );
+}
