@@ -27,6 +27,27 @@ export function needsText(needs: string | null | undefined): string {
   return needs ? (NEEDS[needs] ?? needs.replaceAll('_', ' ')) : '';
 }
 
+/** What triage could not settle, as the answer form asks it. Its question has no text of its own. */
+export const UNCLEAR: Readonly<Record<string, string>> = {
+  scope: 'Triage could not tell what this item asks for. What should the work be?',
+  repo: 'Triage could not tell which repository the work belongs in. Which one is it?',
+  acceptance: 'Triage could not tell what would count as done. What should be true when it is?',
+};
+
+/** The tier the panel and an accept start from: the recorded one, else triage's proposal, else none. */
+export const shownTier = (i: ItemRow): number | null => i.tier ?? i.proposed_tier ?? null;
+
+/**
+ * The tier an accept sends. `picked` is the tier field's value ('' for none or "keep
+ * each"). Left as it started, it sends none, so the fold keeps the recorded or proposed
+ * tier instead of the page's guess.
+ */
+export function acceptTier(item: ItemRow | null, picked: string): number | null {
+  if (picked === '') return null;
+  if (item && String(shownTier(item)) === picked) return null;
+  return Number(picked);
+}
+
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
@@ -138,8 +159,8 @@ export interface Undo {
 
 /** The undo for a tier change, or why there is none. */
 export function undoFor(before: ItemRow, tier: number): Undo | string {
-  if (before.tier == null) return 'It had no tier before, and no record removes a tier.';
-  if (before.tier === tier) return 'Its tier did not change.';
+  if (before.tier == null) return 'it had no tier before, and no record removes a tier.';
+  if (before.tier === tier) return 'its tier did not change.';
   return { item: before.id, tier: before.tier, set: tier };
 }
 
@@ -165,6 +186,8 @@ export interface Write {
   reason?: string;
   why?: string;
   undo?: Undo;
+  /** Why a tier change written here has no Undo. */
+  noUndo?: string;
 }
 
 export interface Writes {
@@ -174,14 +197,49 @@ export interface Writes {
 }
 
 export const NO_WRITES: Writes = { list: [], last: null };
-const KEEP = 50;
+const KEEP_BATCHES = 10;
 
-/** Adds or replaces a write by id. Old batches fall off so the list stays small. */
+/**
+ * Adds or replaces a write by id. Old batches fall off whole so the list stays small,
+ * but a pending write never does: Undo, the summary and the double-send guard need every
+ * write of a batch however many items it covers.
+ */
 export function putWrite(w: Writes, write: Write): Writes {
   const at = w.list.findIndex((x) => x.id === write.id);
   const list = at < 0 ? [...w.list, write] : w.list.map((x, i) => (i === at ? write : x));
+  const keep = new Set([...new Set(list.map((x) => x.batch))].sort((a, b) => b - a).slice(0, KEEP_BATCHES));
   // Batches can finish out of order; the activity line stays on the newest.
-  return { list: list.slice(-KEEP), last: Math.max(w.last ?? 0, write.batch) };
+  return { list: list.filter((x) => x.status === 'pending' || keep.has(x.batch)), last: Math.max(w.last ?? 0, write.batch) };
+}
+
+/** Why `item` would no longer take the write, or null. The view may be older than the log by a confirm dialog's lifetime. */
+function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly ItemRow[]): string | null {
+  const now = items.find((i) => i.id === id);
+  if (!now) return `${id} is no longer in the log.`;
+  if (CAN[kind](now)) return null;
+  return `${id} changed since: it is ${now.stage.replaceAll('_', ' ')} now, so nothing was sent.`;
+}
+
+export interface Job {
+  item: string;
+  req: Request | string;
+  undo?: Undo;
+  noUndo?: string;
+}
+
+/**
+ * The writes to send for `ids`, checked against the items as they are now. An item with
+ * a write in flight is left out, since a second send would write the same record twice;
+ * an item that no longer takes the write is refused here, with the reason, unsent.
+ */
+export function jobsFor(ids: readonly string[], args: WriteArgs, items: readonly ItemRow[], writes: Writes): Job[] {
+  return ids.filter((item) => !pending(writes, item)).map((item) => {
+    const why = stale(args.kind, item, items);
+    if (why) return { item, req: why };
+    const before = items.find((i) => i.id === item)!;
+    const undo = args.kind === 'tier' ? undoFor(before, args.tier) : undefined;
+    return { item, req: request(item, args), undo: typeof undo === 'object' ? undo : undefined, noUndo: typeof undo === 'string' ? undo : undefined };
+  });
 }
 
 /** The newest write for an item, which the panel shows next to its actions. */
@@ -212,15 +270,19 @@ export function canUndo(batch: readonly Write[], items: readonly ItemRow[]): boo
 }
 
 /** One line for the activity area: what is pending, what was written, and each refusal with its reason. */
-export function summary(batch: readonly Write[]): { text: string; tone: 'busy' | 'ok' | 'error'; undoable: boolean } {
+export function summary(batch: readonly Write[]): { text: string; tone: 'busy' | 'ok' | 'error'; undoable: number } {
   const kind = batch[0]?.kind ?? 'tier';
   const by = (s: WriteStatus) => batch.filter((x) => x.status === s).map((x) => x.item);
   const [doing, done] = DONE[kind];
   const wait = by('pending');
-  if (wait.length) return { text: `${doing} ${items(batch.map((x) => x.item))}…`, tone: 'busy', undoable: false };
+  if (wait.length) return { text: `${doing} ${items(batch.map((x) => x.item))}…`, tone: 'busy', undoable: 0 };
   const ok = by('ok');
   const bad = batch.filter((x) => x.status !== 'ok');
   const parts = [ok.length ? `${done} ${items(ok)}.` : ''];
+  // Said here because the Undo button only appears for the writes it can take back.
+  const noUndo = new Map<string, string[]>();
+  for (const x of batch) if (x.status === 'ok' && x.noUndo) noUndo.set(x.noUndo, [...(noUndo.get(x.noUndo) ?? []), x.item]);
+  for (const [why, ids] of noUndo) parts.push(`No undo for ${items(ids)}: ${why}`);
   for (const x of bad) parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'not sent'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
-  return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.some((x) => x.status === 'ok' && x.undo) };
+  return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.filter((x) => x.status === 'ok' && x.undo).length };
 }

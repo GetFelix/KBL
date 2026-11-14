@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { CAN, canUndo, checkAnswer, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, summary, undoFor, undoRequest, type Write } from '../src/writes.ts';
+import { acceptTier, CAN, canUndo, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, ...o });
 
@@ -55,6 +55,7 @@ test('a refusal keeps the tracker’s own reason and code', () => {
   assert.equal((outcome(401, null) as { why: string }).why, 'signed_out');
   // Only a 401 or 403 signs the page out, never a fold refusal that happens to say so.
   assert.equal((outcome(401, null) as { signedOut?: true }).signedOut, true);
+  assert.equal((outcome(403, null) as { signedOut?: true }).signedOut, true);
   assert.equal((outcome(409, { error: 'x', why: 'forbidden' }) as { signedOut?: true }).signedOut, undefined);
   assert.equal(outcome(503, { error: 'team busy' }).status, 'failed');
   assert.match((outcome(null, null, 'Failed to fetch') as { reason: string }).reason, /Cannot reach the tracker: Failed to fetch/);
@@ -82,12 +83,12 @@ test('the write list moves from pending to a result and says so in one line', ()
   let ws = putWrite(NO_WRITES, w({ id: 1, item: 'a', undo: { item: 'a', tier: 1, set: 2 } }));
   ws = putWrite(ws, w({ id: 2, item: 'b' }));
   assert.equal(pending(ws, 'a'), true);
-  assert.deepEqual(summary(ws.list), { text: 'Setting the tier of 2 items…', tone: 'busy', undoable: false });
+  assert.deepEqual(summary(ws.list), { text: 'Setting the tier of 2 items…', tone: 'busy', undoable: 0 });
   ws = putWrite(ws, { ...ws.list[0], status: 'ok' });
   ws = putWrite(ws, { ...ws.list[1], status: 'refused', reason: 'the item is closed', why: 'closed' });
   assert.equal(pending(ws, 'a'), false);
   assert.equal(latestFor(ws, 'b')?.status, 'refused');
-  assert.deepEqual(summary(ws.list), { text: 'Set the tier of a. b: refused, the item is closed (closed)', tone: 'error', undoable: true });
+  assert.deepEqual(summary(ws.list), { text: 'Set the tier of a. b: refused, the item is closed (closed)', tone: 'error', undoable: 1 });
   assert.equal(ws.last, 1);
   // A slower, older batch finishing late does not take the activity line back.
   const later = putWrite(putWrite(ws, w({ id: 3, item: 'c', batch: 2 })), { ...ws.list[0], batch: 1, status: 'failed', reason: 'x' });
@@ -132,4 +133,53 @@ test('the Needs you inbox is a view in the address that holds only items waiting
   const { markedShown } = await import('../src/list.ts');
   const marks = { items, blocked: [], view: 'all' as const, query: 'b', filters: {}, marked: ['a', 'b'] };
   assert.deepEqual(markedShown(marks).map((i) => i.id), ['b']);
+});
+
+test('a bulk write over many items keeps every write until its batch is old', () => {
+  const ids = Array.from({ length: 80 }, (_, i) => `i${i}`);
+  let ws: Writes = NO_WRITES;
+  for (const [n, item] of ids.entries()) ws = putWrite(ws, { id: n + 1, batch: 1, kind: 'tier', item, status: 'pending', undo: { item, tier: 1, set: 3 } });
+  // The first item's write is still known, so a second click on it is not sent again.
+  assert.equal(pending(ws, 'i0'), true);
+  for (const w of [...ws.list]) ws = putWrite(ws, w.item === 'i3' ? { ...w, status: 'refused', reason: 'the item is closed', why: 'closed', undo: undefined } : { ...w, status: 'ok' });
+  const batch = ws.list.filter((w) => w.batch === 1);
+  assert.equal(batch.length, 80);
+  const line = summary(batch);
+  assert.equal(line.text, 'Set the tier of 79 items. i3: refused, the item is closed (closed)');
+  assert.equal(line.undoable, 79);
+  // Later batches push out old ones whole, never a pending write.
+  ws = putWrite(ws, { id: 1000, batch: 2, kind: 'close', item: 'p', status: 'pending' });
+  for (let b = 3; b <= 12; b++) ws = putWrite(ws, { id: 1000 + b, batch: b, kind: 'tier', item: `b${b}`, status: 'ok' });
+  assert.equal(ws.list.some((w) => w.batch === 1), false);
+  assert.equal(pending(ws, 'p'), true);
+});
+
+test('a tier field starts from the recorded or proposed tier, and an accept sends one only when changed', () => {
+  const tri = item({ id: 't', stage: 'triage', tier: null, proposed_tier: 0 });
+  assert.equal(shownTier(tri), 0);
+  assert.equal(shownTier(item({ id: 'n', stage: 'triage', tier: null })), null);
+  // Left at triage's tier 0, the accept sends none and the fold takes the proposal, not 2.
+  assert.equal(acceptTier(tri, '0'), null);
+  assert.equal(acceptTier(tri, '3'), 3);
+  assert.equal(acceptTier(item({ id: 'n', stage: 'triage', tier: null }), ''), null);
+  assert.equal(acceptTier(null, ''), null);
+  assert.equal(acceptTier(null, '1'), 1);
+});
+
+test('a write is checked against the log when it is sent, not when its dialog opened', () => {
+  const now = [item({ id: 'a', stage: 'ready', tier: 1 }), item({ id: 'b', stage: 'triage', tier: null }), item({ id: 'c', stage: 'ready', tier: null })];
+  // `a` was accepted by someone else while the confirm was open; `gone` left the log.
+  const jobs = jobsFor(['a', 'b', 'gone'], { kind: 'accept', tier: 2 }, now, NO_WRITES);
+  assert.match(jobs[0].req as string, /^a changed since: it is ready now/);
+  assert.deepEqual(jobs[1].req, { path: '/v1/work/proposals/accept', body: { item: 'b', tier: 2 } });
+  assert.match(jobs[2].req as string, /no longer in the log/);
+  // A first tier has no Undo, and the activity line says why.
+  const [first] = jobsFor(['c'], { kind: 'tier', tier: 0 }, now, NO_WRITES);
+  assert.equal(first.undo, undefined);
+  const line = summary([{ id: 1, batch: 1, kind: 'tier', item: 'c', status: 'ok', noUndo: first.noUndo }]);
+  assert.equal(line.text, 'Set the tier of c. No undo for c: it had no tier before, and no record removes a tier.');
+  assert.equal(line.undoable, 0);
+  // An item with a write in flight is left out.
+  const busy = putWrite(NO_WRITES, { id: 1, batch: 1, kind: 'tier', item: 'c', status: 'pending' });
+  assert.deepEqual(jobsFor(['c'], { kind: 'tier', tier: 0 }, now, busy), []);
 });

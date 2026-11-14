@@ -88,11 +88,12 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   Reload for a log newer than the page).
 - **Writes.** Every write is a tracker person route, sent with the viewer's own person token
   (`src/tracker.ts`), so the page can never do more than that person could with `curl`. The token is
-  typed into Sign in, checked with `GET /v1/me`, and kept in memory for the tab only. The page calls only
+  typed into Sign in, checked with `GET /v1/me`, and kept in memory for the tab only. The sidebar names the
+  person signed in, and Sign out there drops the token. The page calls only
   its own origin's `/v1/...`, so no link can point the token somewhere else, and the tracker needs no
   CORS; serve the page behind the same host as the tracker (`npm run dev` proxies `/v1`). The panel
-  offers only what the fold would take for that item (`CAN` in `src/writes.ts`): Accept and Reject in
-  Triage and Proposed, a tier and Close on open work, and an answer form on an open question. Claim is not
+  offers only what the fold would take for that item (`CAN` in `src/writes.ts`): Accept in
+  Triage and Proposed, Reject in Proposed only, a tier and Close on open work, and an answer form on an open question. Claim is not
   offered: claiming is an agent's, and the fold refuses `claimed` from a person.
 - **Write states.** A write is pending, written, refused or not sent. While pending, the item's
   buttons are `aria-disabled` (not `disabled`, which would drop the focus) and say what is in flight. The
@@ -102,7 +103,9 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   token the tracker stops taking signs the page out with its reason.
 - **Undo.** Only a tier change can be undone (`Mod+Z` or Undo): the undo is a new `tier_changed` record
   setting the old tier back, never a delete, and it is offered only while the item still has the tier the
-  write set, and only once that change is back on the log, so it does not undo someone else's later change. The rest cannot be, and the confirm step says
+  write set, and only once that change is back on the log, so it does not undo someone else's later change.
+  A first tier on an item that had none has no Undo, and the activity line says so; a bulk Undo says how many
+  changes it takes back. The rest cannot be, and the confirm step says
   why: no record takes back an acceptance, a rejected proposal stays rejected, a close cancels the item's
   open children (a reopened root goes back to Triage with them still cancelled), and an answer starts the
   work that resumes from it.
@@ -163,8 +166,8 @@ on serious or critical.
 | 3.3.1 Error identification | Met: a missing token, a token the tracker refuses, an empty answer and a missing or taken view name are each named in text next to the field, which is `aria-invalid` and gets the focus. A refused write is named with the tracker's reason. |
 | 3.3.2 Labels or instructions | Met: every field has a visible label; the token field says where the token comes from and where it is sent, the answer form says it cannot be undone. |
 | 3.3.3 Error suggestion | Met: each message says what to do ("Pick an option, or write an answer", "Keep the answer under 4 KiB", "open the page with ?team= naming one"). |
-| 3.3.4 Error prevention | Met: accept, reject and close open a confirm dialog that lists the items, says what the write does and that it cannot be undone, opening on its first field, or on Cancel when it has none, so a stray Enter cannot send it; a tier change can be undone. |
-| 3.3.7 Redundant entry | Met: a confirm starts from the item's recorded tier, and the token is asked once per tab. |
+| 3.3.4 Error prevention | Met: accept, reject and close open a confirm dialog that lists the items, says what the write does and that it cannot be undone, opening on its first field, or on Cancel when it has none, so a stray Enter cannot send it; a tier change on an item that had a tier can be undone, and Undo names how many changes it takes back. Setting a first tier is not confirmed, since it is not a loss, and the activity line says it has no Undo because no record removes a tier. A confirm checks each item again when it is sent, so one someone else changed meanwhile is refused unsent with the reason. |
+| 3.3.7 Redundant entry | Met: the panel and a confirm start from the item's recorded tier, or the tier triage proposed, and show no tier when neither is recorded. An accept left at that tier sends none, so the fold keeps it. The token is asked once per tab. |
 | 3.3.8 Accessible authentication | Met: the token field allows paste and password managers; no puzzle or transcription. |
 | 4.1.2 Name, role, value | Met: combobox with `aria-activedescendant`, `aria-current` on nav. |
 | 4.1.3 Status messages | Met: status line is a polite live region; stopped is `role=alert`. |

@@ -15,8 +15,10 @@ export interface ItemRow {
   id: string;
   title: string;
   stage: string;
-  /** Null or absent unless the log recorded it: the tier from triage or acceptance. */
+  /** Null or absent unless the log recorded it: the tier from acceptance or a tier change. */
   tier?: number | null;
+  /** The tier triage proposed, which an accept without a tier takes. */
+  proposed_tier?: number | null;
   /** The upstream source, such as `github`, from the item's target or its root's import. */
   source?: string | null;
   /** The repository the work lands in, such as `GetFelix/KBL`. */
@@ -27,6 +29,8 @@ export interface ItemRow {
   question?: number | null;
   options?: string[] | null;
   default?: string | null;
+  /** What triage could not settle (`scope`, `repo`, `acceptance`) when the open question is triage's. */
+  unclear?: string | null;
   /** True for an item with no parent. */
   root?: boolean;
 }

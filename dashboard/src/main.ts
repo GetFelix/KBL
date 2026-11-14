@@ -20,7 +20,7 @@ import { shell } from './ui/shell.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { Tracker } from './tracker.ts';
-import { CAN, canUndo, NO_WRITES, pending, request, undoFor, undoRequest, type Request, type Undo, type WriteArgs, type WriteKind } from './writes.ts';
+import { CAN, canUndo, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -80,16 +80,17 @@ const targets = (): string[] => {
   const s = store.get();
   const marked = markedShown(s);
   if (marked.length) return marked.map((i) => i.id);
-  return s.selected && s.items.some((i) => i.id === s.selected) ? [s.selected] : [];
+  // As open and mark: a selection the view no longer shows is not acted on.
+  return s.selected && shownRows(s).some((r) => r.id === s.selected) ? [s.selected] : [];
 };
 
 /**
  * Sends one write per item, in order, each as its own record. One at a time so a bulk
  * action never takes more of the team's in-flight slots than one person clicking.
  */
-async function send(kind: WriteKind, jobs: { item: string; req: Request | string; undo?: Undo }[]) {
+async function send(kind: WriteKind, jobs: Job[]) {
   const batch = ++batches;
-  const list = jobs.map((j) => ({ id: ++writeIds, batch, kind, item: j.item, status: 'pending' as const, undo: j.undo }));
+  const list = jobs.map((j) => ({ id: ++writeIds, batch, kind, item: j.item, status: 'pending' as const, undo: j.undo, noUndo: j.noUndo }));
   for (const w of list) store.dispatch({ type: 'write', write: w });
   for (const [i, j] of jobs.entries()) {
     const w = list[i];
@@ -112,12 +113,8 @@ async function send(kind: WriteKind, jobs: { item: string; req: Request | string
 
 const write = (ids: string[], args: WriteArgs) => {
   const s = store.get();
-  // A second click while the first is in flight would send the same record twice.
-  const jobs = ids.filter((item) => !pending(s.writes, item)).map((item) => {
-    const before = s.items.find((i) => i.id === item);
-    const undo = args.kind === 'tier' && before ? undoFor(before, args.tier) : undefined;
-    return { item, req: request(item, args), undo: typeof undo === 'object' ? undo : undefined };
-  });
+  // Checked against the log as it is now: a confirm dialog may have been open while someone else acted.
+  const jobs = jobsFor(ids, args, s.items, s.writes);
   if (!jobs.length) return;
   // Marks are done with once their action is sent, as in GitHub.
   if (s.marked.length && ids.every((id) => s.marked.includes(id)) && ids.length > 0) store.dispatch({ type: 'marks', ids: [] });
@@ -156,6 +153,12 @@ const signIn = async (token: string): Promise<string | null> => {
   // A bad second token leaves a working sign-in as it was.
   store.dispatch({ type: 'tracker', tracker: tracker && before.kind === 'signed-in' ? before : { kind: 'refused', reason } });
   return reason;
+};
+
+// Drops the token from memory. A write still in flight finishes; the next one is not sent.
+const signOut = () => {
+  tracker = null;
+  store.dispatch({ type: 'tracker', tracker: { kind: 'signed-out' } });
 };
 
 const confirmKind = (kind: ConfirmKind, ids: string[]) => {
@@ -300,6 +303,7 @@ const ui = shell(
     help: () => run('help'),
     mark: (id) => store.dispatch({ type: 'mark', id }),
     signIn: () => signInBox.open(),
+    signOut,
     confirm: confirmKind,
     setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
     answer: (item, question, text, chosen) => write([item], { kind: 'answer', question, text, chosen }),

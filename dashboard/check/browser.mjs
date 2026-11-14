@@ -665,6 +665,49 @@ try {
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Closed gh-2210.'`);
   await page.waitFor(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`);
   check(await page.eval(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`), 'a checkbox marks a row, and the close lands as completed');
+  // A Triage item keeps triage's tier: the panel and the confirm start from it, and the accept sends none.
+  const by = `actor: 'person', by: 'maintainer', at_ms: 1800000000500`;
+  await page.eval(`window.__push({ kind: 'imported', item: 'tri-9', source: 'jira', upstream_id: 'FEL-9', title: 'Urgent triage', ${by} }); window.__push({ kind: 'triaged', item: 'tri-9', tier: 0, why: 'urgent', ${by} }); true`);
+  await page.waitFor(`!!document.querySelector('.row[data-id=tri-9]')`);
+  await page.eval(`document.querySelector('.row[data-id=tri-9]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-head .row-id')?.textContent === 'tri-9' && !!document.querySelector('#panel-tier')`);
+  check(await page.eval(`document.querySelector('#panel-tier').value === '0'`), 'the panel shows the tier triage proposed, not a default');
+  await page.eval(`document.querySelector('.actions [data-focus=accept]').click(); true`);
+  check(await page.eval(`document.querySelector('#confirm-tier').value === '0'`), 'accepting a Triage item starts from its proposed tier');
+  await page.eval(`document.querySelector('.confirm-dialog form').requestSubmit(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Accepted tri-9.'`);
+  check(await page.eval(`JSON.stringify(window.__tracker.calls.at(-1).body) === '{"item":"tri-9"}'`), 'an accept left at the proposed tier sends no tier, so the fold keeps it');
+  await page.waitFor(`${tierOf} === '0'`);
+  check((await page.eval(tierOf)) === '0', 'the accepted item has the tier triage proposed');
+
+  // An item with no tier shows none, and a first tier says it has no Undo.
+  await page.eval(`window.__push({ kind: 'imported', item: 'tri-7', source: 'jira', upstream_id: 'FEL-7', title: 'No tier yet', ${by} }); true`);
+  await page.waitFor(`!!document.querySelector('.row[data-id=tri-7]')`);
+  await page.eval(`document.querySelector('.row[data-id=tri-7]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-head .row-id')?.textContent === 'tri-7' && !!document.querySelector('#panel-tier')`);
+  check(await page.eval(`document.querySelector('#panel-tier').value === '' && document.querySelector('#panel-tier').selectedOptions[0].textContent === 'No tier recorded'`), 'an item with no recorded tier shows none in the panel');
+  await page.eval(`document.querySelector('#panel-tier').value = '1'; document.querySelector('[data-focus=set-tier]').click(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent.startsWith('Set the tier of tri-7.')`);
+  check(await page.eval(`document.querySelector('.activity-text').textContent === 'Set the tier of tri-7. No undo for tri-7: it had no tier before, and no record removes a tier.' && document.querySelector('.activity button').hidden`), 'a first tier says it has no Undo');
+
+  // Triage's own question: the form asks what triage could not settle.
+  await page.eval(`window.__push({ kind: 'imported', item: 'tri-8', source: 'jira', upstream_id: 'FEL-8', title: 'Which repo', ${by} }); window.__push({ kind: 'triaged', item: 'tri-8', tier: 1, unclear: 'repo', why: 'which repo', ${by} }); true`);
+  await page.waitFor(`!!document.querySelector('.row[data-id=tri-8]')`);
+  await page.eval(`document.querySelector('.row[data-id=tri-8]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-head .row-id')?.textContent === 'tri-8' && !!document.querySelector('.answer .question')`);
+  check(await page.eval(`document.querySelector('.answer .question').textContent === 'Triage could not tell which repository the work belongs in. Which one is it?'`), 'an unclear item’s answer form says what triage could not settle');
+  await axe('unclear answer');
+
+  // Who is signed in, and Sign out.
+  check(await page.eval(`document.querySelector('.account-who').textContent === 'Signed in as maintainer' && document.querySelector('.account-button').textContent === 'Sign out'`), 'the sidebar names who is signed in');
+  await page.eval(`document.querySelector('.account-button').click(); true`);
+  await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
+  check(await page.eval(`document.querySelector('.account-who').textContent === 'Not signed in to the tracker' && document.querySelector('.account-button').textContent === 'Sign in'`), 'Sign out forgets the token and the panel asks to sign in');
+  await axe('signed out by hand');
+  await page.eval(`document.querySelector('.account-button').click(); true`);
+  check(await focused('#tracker-token'), 'Sign in from the sidebar asks for the token');
+  await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
+  await page.waitFor(`!document.querySelector('.sign-in-dialog').open && document.querySelector('.account-button').textContent === 'Sign out'`);
   await page.eval(`window.__tracker.token = 'rotated'; document.querySelector('.row[data-id=gh-2219]').click(); document.querySelector('[data-focus=set-tier]').click(); true`);
   await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
   check(await page.eval(`document.querySelector('.actions p').textContent.startsWith('Sign in again: the tracker does not know this token')`), 'a token the tracker stops taking signs the page out, with the reason');

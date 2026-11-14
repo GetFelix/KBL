@@ -166,6 +166,28 @@ fn items_name_the_source_their_import_recorded() {
 }
 
 #[test]
+fn items_carry_triage_s_proposed_tier_and_what_it_found_unclear() {
+    let mut f = Folder::new();
+    let recs = [
+        r#"{"at_ms":1,"by":"gabriel","actor":"person","kind":"imported","item":"t0","source":"github","upstream_id":"o/r#1","title":"t"}"#,
+        r#"{"at_ms":2,"by":"gabriel","actor":"person","kind":"triaged","item":"t0","tier":0,"why":"urgent"}"#,
+        r#"{"at_ms":3,"by":"gabriel","actor":"person","kind":"imported","item":"u1","source":"github","upstream_id":"o/r#2","title":"u"}"#,
+        r#"{"at_ms":4,"by":"gabriel","actor":"person","kind":"triaged","item":"u1","tier":1,"unclear":"repo","why":"which repo"}"#,
+    ];
+    for (i, r) in recs.iter().enumerate() {
+        assert!(f.apply(i as f64, r.as_bytes()), "{i}");
+    }
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let row = |id: &str| items.as_array().unwrap().iter().find(|i| i["id"] == id).unwrap().clone();
+    // Triage proposes a tier; only acceptance or a tier change records one.
+    assert_eq!(row("t0")["tier"], serde_json::Value::Null);
+    assert_eq!(row("t0")["proposed_tier"], 0);
+    assert_eq!(row("t0")["unclear"], serde_json::Value::Null);
+    assert_eq!(row("u1")["needs"], "unclear");
+    assert_eq!(row("u1")["unclear"], "repo");
+}
+
+#[test]
 fn blocked_names_each_blocker_with_its_own_repo() {
     let mut f = Folder::new();
     let recs = [

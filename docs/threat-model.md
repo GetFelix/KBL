@@ -146,7 +146,7 @@ The page has no authority of its own; the tracker's checks are the only checks.
 | Attack | Check |
 |---|---|
 | A crafted link sends the person's token somewhere else | The page calls only its own origin's `/v1/...` routes; no parameter names the tracker. `?team=` only picks the `/v1/teams/{team}/` path, and the tracker checks membership (`dashboard/src/writes.ts`) |
-| A token left behind in the browser | Typed into a password field, kept in memory for the tab, never in the address, local storage or the view state (`dashboard/src/main.ts`) |
+| A token left behind in the browser | Typed into a password field, kept in memory for the tab, never in the address, local storage or the view state, and dropped by Sign out in the sidebar, which also names who is signed in, or by a 401 or 403 (`dashboard/src/main.ts`) |
 | Another site makes writes as the person (CSRF) | The token goes in an `Authorization` header the page sets, not a cookie, so a request from another origin carries nothing |
 | An upstream title runs as script in the page | Views build elements with `dashboard/src/ui/dom.ts`, which never parses HTML |
 | A bulk action does more than the person could | Each item is its own call through the same route and checks, one after another within the action, and only on marked items the view shows (`dashboard/src/list.ts`) |

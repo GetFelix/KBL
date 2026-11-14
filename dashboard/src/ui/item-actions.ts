@@ -3,7 +3,7 @@
 // record never wipes a half-typed answer or takes the focus off a button.
 import type { ItemRow } from '../fold.ts';
 import type { ViewState } from '../state.ts';
-import { CAN, checkAnswer, latestFor, pending, type WriteKind } from '../writes.ts';
+import { CAN, checkAnswer, latestFor, pending, shownTier, UNCLEAR, type WriteKind } from '../writes.ts';
 import { h } from './dom.ts';
 
 export interface WriteHandlers {
@@ -24,13 +24,16 @@ export const TIERS = [
   [3, '3, least urgent'],
 ] as const;
 
-export function tierSelect(id: string, current: number | null | undefined): HTMLSelectElement {
+/** A tier field starting at `current`. With none, it starts on an empty option labelled `none`, never on a tier nobody recorded. */
+export function tierSelect(id: string, current: number | null, none = 'No tier recorded'): HTMLSelectElement {
   const sel = h('select', { id, class: 'field select', 'data-focus': id });
+  if (current === null) sel.append(h('option', { value: '' }, none));
   for (const [t, label] of TIERS) {
     const o = h('option', { value: String(t) }, label);
-    o.selected = t === (current ?? 2);
+    o.selected = t === current;
     sel.append(o);
   }
+  if (current === null) sel.value = '';
   return sel;
 }
 
@@ -69,7 +72,8 @@ export function itemActions(on: WriteHandlers) {
         o === item.default ? h('span', { class: 'muted' }, ' (the agent’s default)') : null));
     const form = h('form', { class: 'answer', 'aria-labelledby': 'answer-title' },
       h('h4', { id: 'answer-title' }, 'Answer the question'),
-      h('p', { class: 'question' }, asked ?? 'The question’s text is stored as an artifact, outside the log.'),
+      // Triage's question has no text: what it could not settle is the question.
+      h('p', { class: 'question' }, asked ?? (item.needs === 'unclear' && item.unclear ? (UNCLEAR[item.unclear] ?? `Triage could not settle its ${item.unclear}.`) : 'The question’s text is stored as an artifact, outside the log.')),
       radios.length ? h('fieldset', {}, h('legend', { class: 'field-label' }, 'Options'), ...radios) : null,
       h('label', { for: 'answer-text', class: 'field-label' }, radios.length ? 'Or answer in words instead' : 'Answer'),
       text,
@@ -101,7 +105,7 @@ export function itemActions(on: WriteHandlers) {
       const kinds = (Object.keys(CAN) as (keyof typeof CAN)[]).filter((k) => CAN[k](item));
       // `checking` keeps the last sign-in state, so checking a token does not rebuild the form.
       if (s.tracker.kind !== 'checking') auth = s.tracker.kind === 'refused' ? `refused:${s.tracker.reason}` : s.tracker.kind;
-      const key = `${item.id}|${kinds.join(',')}|${auth}|${item.question}|${(item.options ?? []).join('\u0000')}|${item.question == null ? '' : s.questions.get(item.question)}`;
+      const key = `${item.id}|${kinds.join(',')}|${auth}|${item.question}|${item.unclear}|${(item.options ?? []).join('\u0000')}|${item.question == null ? '' : s.questions.get(item.question)}`;
       if (key !== built) {
         built = key;
         const hadFocus = el.contains(document.activeElement) ? ((document.activeElement as HTMLElement).dataset.focus ?? '') : null;
@@ -118,14 +122,20 @@ export function itemActions(on: WriteHandlers) {
           const id = item.id;
           const button = (kind: 'accept' | 'reject' | 'close', label: string, cls = 'button') =>
             kinds.includes(kind) ? h('button', { type: 'button', class: cls, 'data-focus': kind, onclick: guard(() => current(), id, () => on.confirm(kind, [id])) }, label) : null;
-          if (kinds.includes('tier')) tier = tierSelect('panel-tier', item.tier);
+          if (kinds.includes('tier')) tier = tierSelect('panel-tier', shownTier(item));
           const parts: (HTMLElement | null)[] = [head,
             h('div', { class: 'action-row' }, button('accept', 'Accept…', 'button primary'), button('reject', 'Reject…', 'button danger'), button('close', 'Close…', 'button danger')),
             tier
               ? h('div', { class: 'action-row' },
                   h('label', { for: 'panel-tier', class: 'inline-label' }, 'Tier'),
                   tier,
-                  h('button', { type: 'button', class: 'button', 'data-focus': 'set-tier', onclick: guard(() => current(), id, () => on.setTier([id], Number(tier!.value))) }, 'Set tier'))
+                  h('button', { type: 'button', class: 'button', 'data-focus': 'set-tier', onclick: guard(() => current(), id, () => {
+                    if (tier!.value === '') {
+                      status.textContent = 'Pick a tier first.';
+                      return tier!.focus();
+                    }
+                    on.setTier([id], Number(tier!.value));
+                  }) }, 'Set tier'))
               : null,
             kinds.includes('answer') ? answerForm(item, s) : null,
             status];
@@ -145,7 +155,8 @@ export function itemActions(on: WriteHandlers) {
         if (busy) b.setAttribute('aria-disabled', 'true');
         else b.removeAttribute('aria-disabled');
       }
-      if (tier && document.activeElement !== tier && !busy && item.tier != null && tier.value !== String(item.tier)) tier.value = String(item.tier);
+      const shown = shownTier(item);
+      if (tier && document.activeElement !== tier && !busy && shown != null && tier.value !== String(shown)) tier.value = String(shown);
       const last = latestFor(s.writes, item.id);
       const text = !last ? '' : last.status === 'pending' ? PENDING[last.kind] : last.status === 'ok' ? '' : `${last.status === 'refused' ? 'The tracker refused it' : 'Not sent'}: ${last.reason}${last.why ? ` (${last.why})` : ''}`;
       if (status.textContent !== text) status.textContent = text;

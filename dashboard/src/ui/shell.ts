@@ -21,6 +21,8 @@ export interface ShellHandlers extends ListHandlers, FilterHandlers, WriteHandle
   closeItem(): void;
   palette(): void;
   help(): void;
+  /** Forgets the tracker token in this tab. */
+  signOut(): void;
 }
 
 const VIEWS: readonly [View, string][] = [
@@ -85,6 +87,10 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     return { view, label, a, count };
   });
   const savedList = h('ul', { class: 'nav saved', 'aria-label': 'Saved views' });
+  // Who the writes are made as, and the way to stop: one button, so the focus stays on it either way.
+  const who = h('p', { class: 'account-who muted small' });
+  let signedIn = false;
+  const account = h('button', { type: 'button', class: 'button ghost account-button', onclick: () => (setMenu(false), signedIn ? on.signOut() : on.signIn()) }, 'Sign in');
   const heading = h('h1', {}, 'All work');
   // Below 720 px the sidebar is a drawer behind this button, so Commands and
   // Shortcuts stay in the same place on every screen (WCAG 3.2.6).
@@ -151,6 +157,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     h('h2', { class: 'nav-title', id: 'saved-title' }, 'Saved views'),
     savedList,
     h('div', { class: 'sidebar-foot' },
+      h('div', { class: 'account' }, who, account),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.palette()) }, 'Commands', kbd(displayChord(chordFor('palette'), mac))),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.help()) }, 'Shortcuts', kbd(displayChord(chordFor('help'), mac))),
     ),
@@ -207,6 +214,11 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     main,
     render(s: ViewState) {
       renderSaved(s.saved);
+      signedIn = s.tracker.kind === 'signed-in';
+      const whoText = s.tracker.kind === 'signed-in' ? `Signed in as ${s.tracker.person}` : s.tracker.kind === 'checking' ? 'Checking the token…' : 'Not signed in to the tracker';
+      if (who.textContent !== whoText) who.textContent = whoText;
+      const label = signedIn ? 'Sign out' : 'Sign in';
+      if (account.textContent !== label) account.textContent = label;
       const named = s.saved.find((v) => sameView(s, decodeView(v.search)));
       for (const n of nav) {
         const total = inScope({ ...s, view: n.view }).length;

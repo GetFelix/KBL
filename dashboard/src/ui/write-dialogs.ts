@@ -1,7 +1,7 @@
 // The sign-in dialog and the confirm step before a write that cannot be undone
 // (WCAG 3.3.4: the person reviews what will be written, and can cancel).
 import type { ItemRow } from '../fold.ts';
-import { CLOSE_WHY, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
+import { acceptTier, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
 import { modal } from './dialog.ts';
 import { h } from './dom.ts';
 import { tierSelect } from './item-actions.ts';
@@ -27,13 +27,8 @@ export function confirmDialog(send: (ids: string[], args: WriteArgs) => void) {
     open(kind: ConfirmKind, list: ItemRow[]) {
       const c = COPY[kind];
       const name = list.length === 1 ? list[0].id : `${list.length} items`;
-      const tier = kind === 'accept' ? tierSelect('confirm-tier', list.length === 1 ? list[0].tier : null) : null;
       // Several proposals may carry different tiers; by default each keeps its own.
-      if (tier && list.length > 1) {
-        const keep = h('option', { value: '' }, 'Keep each item’s tier');
-        tier.prepend(keep);
-        keep.selected = true;
-      }
+      const tier = kind === 'accept' ? (list.length === 1 ? tierSelect('confirm-tier', shownTier(list[0]), 'None recorded: the fold uses 2') : tierSelect('confirm-tier', null, 'Keep each item’s tier')) : null;
       const why = kind === 'close' ? h('select', { id: 'confirm-why', class: 'field select' }, ...CLOSE_WHY.map(([v, label]) => h('option', { value: v }, label))) : null;
       const go = h('button', { type: 'submit', class: c.cls }, c.send);
       const cancel = h('button', { type: 'button', class: 'button ghost', onclick: () => m.close() }, 'Cancel');
@@ -59,7 +54,8 @@ export function confirmDialog(send: (ids: string[], args: WriteArgs) => void) {
         e.preventDefault();
         m.close();
         const ids = list.map((i) => i.id);
-        if (kind === 'accept') send(ids, { kind, tier: tier!.value === '' ? null : Number(tier!.value) });
+        // Left as it started, an accept sends no tier, so the fold keeps the recorded or proposed one.
+        if (kind === 'accept') send(ids, { kind, tier: acceptTier(list.length === 1 ? list[0] : null, tier!.value) });
         else if (kind === 'close') send(ids, { kind, why: why!.value as CloseWhy });
         else send(ids, { kind });
       });

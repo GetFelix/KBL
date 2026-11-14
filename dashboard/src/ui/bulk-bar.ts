@@ -9,7 +9,7 @@ import { tierSelect, type WriteHandlers } from './item-actions.ts';
 
 export function bulkBar(on: WriteHandlers) {
   const count = h('span', { class: 'bulk-count' });
-  const tier = tierSelect('bulk-tier', null);
+  const tier = tierSelect('bulk-tier', 2);
   const setTier = h('button', { type: 'button', class: 'button small' }, 'Set tier');
   const accept = h('button', { type: 'button', class: 'button small' });
   const close = h('button', { type: 'button', class: 'button small danger' });
@@ -62,6 +62,9 @@ export function bulkBar(on: WriteHandlers) {
       activity.dataset.tone = line?.tone ?? '';
       // Hidden until the change is back on the log, so Undo never answers that it cannot yet.
       undo.hidden = !line?.undoable || !canUndo(batch, s.items);
+      // A bulk Undo says how many tier changes it takes back.
+      const label = line && line.undoable > 1 ? `Undo ${line.undoable} tier changes` : 'Undo';
+      if (undo.textContent !== label) undo.textContent = label;
     },
   };
 }
