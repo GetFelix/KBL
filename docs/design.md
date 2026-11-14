@@ -258,7 +258,7 @@ the same person (gap 2).
 
 ## Teams
 
-Status: design. The `org.events` records and their fold are built (`core/src/org.rs`, `core/src/org_fold.rs`); the tracker does not serve teams yet. Tracked in [#185](https://github.com/GetFelix/KBL/issues/185).
+Status: design. The `org.events` records and their fold are built (`core/src/org.rs`, `core/src/org_fold.rs`). The tracker keeps its fold, lease and Felix connections per team behind a team table (`tracker/src/teams.rs`), serves `/v1/teams/{team}/...` and `GET /v1/me`, and caps calls in flight per team, with one team: the namespace in `KBL_NAMESPACE`. It does not read `org.events` yet, and a team that loses its lease stays at 503 until a restart ([#195](https://github.com/GetFelix/KBL/issues/195)). Tracked in [#185](https://github.com/GetFelix/KBL/issues/185).
 
 Today one KBL instance serves one team: one tracker, one `work.events`, one
 Felix namespace and one token file. A second team needs a second deployment.

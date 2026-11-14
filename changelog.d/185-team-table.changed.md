@@ -1,0 +1,1 @@
+The tracker refuses to start when `KBL_NAMESPACE` is `kbl` or does not follow the key rule, since the namespace is now a team's name. A team over `KBL_TEAM_INFLIGHT` calls in flight (64 by default; waiting `work_next` calls have a pool of the same size of their own) answers `503` with `team_busy` and `Retry-After: 1`; raise it for a team with more agents.

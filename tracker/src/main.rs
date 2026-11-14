@@ -5,10 +5,12 @@
 mod config;
 mod felix;
 mod http;
+mod teams;
 mod tracker;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -16,6 +18,8 @@ use clap::Parser;
 
 use config::Tokens;
 use felix::Target;
+use kbl_core::org::TeamName;
+use teams::{Team, Teams};
 use tracker::{Settings, Tracker};
 
 #[derive(Parser)]
@@ -30,8 +34,12 @@ struct Cli {
     tokens_file: PathBuf,
     #[arg(long, env = "KBL_TENANT", default_value = "agents")]
     tenant: String,
+    /// The team's Felix namespace, which is also the team's name.
     #[arg(long, env = "KBL_NAMESPACE", default_value = "default")]
     namespace: String,
+    /// Calls in flight per team. A call over it answers 503 with `team_busy`.
+    #[arg(long, env = "KBL_TEAM_INFLIGHT", default_value_t = teams::DEFAULT_INFLIGHT)]
+    team_inflight: usize,
     #[arg(
         long,
         env = "KBL_FELIX_CONTROL_PLANE",
@@ -94,6 +102,12 @@ fn main() -> Result<()> {
 
 async fn serve() -> Result<()> {
     let cli = Cli::parse();
+    let team = TeamName::new(cli.namespace.clone()).map_err(|e| {
+        anyhow::anyhow!(
+            "KBL_NAMESPACE {:?} cannot name a team: it must follow the key rule and not be `kbl`",
+            e.0
+        )
+    })?;
     let tokens = Tokens::load(&cli.tokens_file)?;
     let grants = tokens.grants();
     let felix = felix::connect(Target {
@@ -125,11 +139,18 @@ async fn serve() -> Result<()> {
         .await
         .with_context(|| format!("listen on {}", cli.listen))?;
     eprintln!("kbl-tracker: listening on {}", listener.local_addr()?);
-    let maintain = tracker.clone();
+    // One team until teams are read from org.events: the namespace, with the token file's callers.
+    let teams = Arc::new(Teams::new(vec![Team::new(
+        team,
+        tracker,
+        tokens,
+        cli.team_inflight,
+    )])?);
+    let maintain = teams.clone();
     tokio::select! {
-        served = axum::serve(listener, http::router(tracker, tokens)) => served.context("serve"),
+        served = axum::serve(listener, http::router(teams)) => served.context("serve"),
         () = async move { maintain.maintain().await } => {
-            anyhow::bail!("the writer lease was lost")
+            anyhow::bail!("no team holds its writer lease, or a team's maintenance failed")
         }
     }
 }

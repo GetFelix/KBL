@@ -4,8 +4,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
-use axum::http::HeaderMap;
+use axum::extract::Path;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -13,7 +12,7 @@ use kbl_core::names::Key;
 use kbl_core::work::WorkRecord;
 use serde::Deserialize;
 
-use super::{App, Caller, StatusCode, caller, denied, reply};
+use super::{App, Call, Caller, StatusCode, denied, reply};
 use crate::felix::Broker;
 
 pub(super) fn routes<B: Broker>() -> Router<Arc<App<B>>> {
@@ -35,51 +34,44 @@ struct SaveBody {
     version: Option<u64>,
 }
 
-fn worker<B>(app: &App<B>, headers: &HeaderMap) -> Result<Key, super::Denied> {
-    match caller(app, headers)? {
-        Caller::Ingest(k) => Ok(k),
-        _ => Err((StatusCode::FORBIDDEN, "this call is for an ingest token")),
+impl<B> Call<B> {
+    fn worker(&self) -> Result<Key, super::Denied> {
+        match &self.caller {
+            Caller::Ingest(k) => Ok(k.clone()),
+            _ => Err((StatusCode::FORBIDDEN, "this call is for an ingest token")),
+        }
     }
 }
 
-async fn record<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Json(body): Json<RecordBody>,
-) -> Response {
-    match worker(&app, &headers) {
-        Ok(by) => reply(app.tracker.ingest_record(by, body.record).await),
+async fn record<B: Broker>(call: Call<B>, Json(body): Json<RecordBody>) -> Response {
+    match call.worker() {
+        Ok(by) => reply(call.tracker().ingest_record(by, body.record).await),
         Err(d) => denied(d),
     }
 }
 
-async fn roots<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {
-    match worker(&app, &headers) {
-        Ok(_) => reply(app.tracker.ingest_roots().await),
+async fn roots<B: Broker>(call: Call<B>) -> Response {
+    match call.worker() {
+        Ok(_) => reply(call.tracker().ingest_roots().await),
         Err(d) => denied(d),
     }
 }
 
-async fn load<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
-    Path(source): Path<String>,
-) -> Response {
-    match worker(&app, &headers) {
-        Ok(_) => reply(app.tracker.ingest_state(&source).await),
+async fn load<B: Broker>(call: Call<B>, Path(source): Path<String>) -> Response {
+    match call.worker() {
+        Ok(_) => reply(call.tracker().ingest_state(&source).await),
         Err(d) => denied(d),
     }
 }
 
 async fn save<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    headers: HeaderMap,
+    call: Call<B>,
     Path(source): Path<String>,
     Json(body): Json<SaveBody>,
 ) -> Response {
-    match worker(&app, &headers) {
+    match call.worker() {
         Ok(_) => reply(
-            app.tracker
+            call.tracker()
                 .ingest_save(&source, &body.state, body.version)
                 .await,
         ),
