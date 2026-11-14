@@ -355,6 +355,56 @@ async fn an_issue_that_returns_to_its_rule_leaves_needs_you() {
     assert_eq!(rig.tracker.state().stage(&item), Some(Stage::NeedsYou));
 }
 
+/// A saved state from a build before the record says in scope for an item
+/// that returned then: the fold's flag still brings it back.
+#[tokio::test]
+async fn an_item_ingest_took_out_is_brought_back_whatever_its_saved_state_says() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.list(vec![at(
+        issue(812, |v| labels(v, &["p1"])),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let (saved, version) = rig.tracker.load("github").await.unwrap();
+    let mut saved = saved.unwrap();
+    saved["items"][UP]["in_scope"] = json!(true);
+    rig.tracker.save("github", &saved, version).await.unwrap();
+
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("returned_to_scope"), 1);
+    assert_eq!(rig.tracker.state().needs_you(&item), None);
+}
+
+/// A person's `left_scope` is theirs to undo, even while the issue matches.
+#[tokio::test]
+async fn ingest_does_not_undo_a_person_taking_an_item_out_of_scope() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    raise_format(&rig);
+    let item = rig.root(UP);
+    rig.tracker
+        .person(WorkRecord::LeftScope { item: item.clone() });
+    rig.list(vec![at(
+        issue(812, |v| v["title"] = json!("edited")),
+        "2026-11-10T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("updated"), 1);
+    assert_eq!(rig.tracker.count("returned_to_scope"), 0);
+    assert_eq!(
+        rig.tracker.state().needs_you(&item),
+        Some(NeedsYou::LeftScope)
+    );
+}
+
 #[tokio::test]
 async fn a_return_before_the_format_is_raised_is_written_after_the_raise() {
     let rig = rig();

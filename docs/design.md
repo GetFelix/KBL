@@ -543,7 +543,7 @@ In order. S is under 300 changed lines, M up to 800, L more.
 | 4 | Members and roles in a team (#120): `member add`, `remove`, `role_granted`, the role check on every person route | L |
 | 5 | Agents per team (#181): `agent add`, `list`, `revoke --team`; revoke releases holds | M |
 | 6 | Ingest per team: team-bound ingest tokens, `source add`, one owner per source, team blocks in the ingest config | M |
-| 7 | Cross-team prerequisites and grants: format 2, the foreign link, `prerequisite_settled`, the restart check | L |
+| 7 | Cross-team prerequisites and grants: a new format, the foreign link, `prerequisite_settled`, the restart check | L |
 | 8 | Dashboard: `/v1/me`, the team switcher, team in the URL; a gateway per team until gap 10 is closed | M |
 | 9 | Runs per team: `run create --team` and the runs role; the grants test with a raw client per team ([#32](https://github.com/GetFelix/KBL/issues/32)) | S |
 

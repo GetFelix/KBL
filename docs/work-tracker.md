@@ -172,7 +172,7 @@ the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 | `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it |
-| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed and whether upstream sync (not a person) closed it, and its pull request |
+| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed and whether upstream sync (not a person) closed it, whether upstream sync (not a person) took it out of scope (`left_scope_by_sync`), and its pull request |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
 
@@ -405,13 +405,14 @@ A person can write the same record to keep an item whose issue no longer
 matches. `returned_to_scope` is the first record of format 2, so the tracker
 refuses it until a person raises the log to format 2 (see
 [upgrades](upgrades.md#upgrade)). Until then a returning item stays in Needs
-you, as before, and ingest writes the record on the first poll or reconcile
-after the raise.
+you, as before, and ingest writes the record at its next reconcile after the
+raise, or sooner if the issue changes. Ingest brings back only items it took
+out: a `left_scope` a person wrote stays until a person clears it.
 
-An issue is held to the rule that imported it. If that rule is gone from the
-config (renamed or removed), or the issue was imported again after ingest
-forgot it while no rule matched it, the first rule that matches the issue
-becomes its rule.
+An issue is held to the rule that imported it. Renaming or removing that rule
+in the config takes its items out of scope. One case has no rule: an issue
+reopened after ingest forgot it, while no rule matched it. The first rule that
+matches it later becomes its rule, if that rule is under its cap.
 
 ### Grants
 

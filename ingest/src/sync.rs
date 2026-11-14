@@ -300,6 +300,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 closed_by_sync: false,
+                left_scope_by_sync: false,
                 has_children: rule.mode == Mode::Admit,
                 pr: None,
                 claimed_at_ms: None,
@@ -405,21 +406,23 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             }
             (None, None) => {}
         }
-        let still_open = p.roots.get(&key).is_some_and(|r| !r.closed);
-        if still_open {
+        let open = p.roots.get(&key).filter(|r| !r.closed);
+        if let Some(root) = open {
+            let left_by_sync = root.left_scope_by_sync;
             let rules = &self.settings.rules;
             let in_rule = match rules.iter().find(|r| r.name == t.rule) {
                 Some(r) => r.filter(issue),
-                // A root rebuilt after a prune while no rule took it, or one
-                // whose rule was renamed or removed: the rule that takes the
-                // issue now is its rule.
-                None => match first_match(rules, issue) {
-                    Some(r) => {
+                // Rebuilt after a prune while no rule took it: the rule that
+                // takes it now is its rule, if that rule has room.
+                None if t.rule.is_empty() => match first_match(rules, issue) {
+                    Some(r) if r.cap.is_none_or(|c| open_roots(p, &r.name) < c as usize) => {
                         t.rule.clone_from(&r.name);
                         true
                     }
-                    None => false,
+                    _ => false,
                 },
+                // Its rule was renamed or removed, which takes its items out.
+                None => false,
             };
             if !in_rule {
                 if t.in_scope {
@@ -430,10 +433,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     t.in_scope = false;
                 }
             } else {
+                // The fold's flag decides too: a saved state from before the
+                // record, or one rebuilt by a crash retry, says in scope.
                 // Until the log is raised to the record's format the tracker
-                // refuses it, so the item stays in Needs you and this is
-                // tried again on the next change or reconcile.
-                if !t.in_scope {
+                // refuses it, so the item stays in Needs you and this is tried
+                // again on the next change or reconcile.
+                if !t.in_scope || left_by_sync {
                     t.in_scope = self
                         .write(&WorkRecord::ReturnedToScope {
                             item: t.item.clone(),
@@ -808,10 +813,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 
     // ---- writes ----
 
-    /// Appends a record. A refusal that says it is already there is fine; any
-    /// other refusal is logged, since the next poll will find the same thing.
-    /// Appends a record and says whether the log has it. A refusal is
-    /// printed, not returned, so one bad record does not stop the poll.
+    /// Appends a record and says whether the log has it. A refusal that says
+    /// it is already there counts as written; any other is printed, not
+    /// returned, so one bad record does not stop the poll.
     async fn write(&self, record: &WorkRecord) -> Result<bool, SourceError> {
         match self.tracker.append(record).await? {
             Appended::Written => Ok(true),

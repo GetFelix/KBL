@@ -201,6 +201,7 @@ impl<B: Broker> Tracker<B> {
                     "stage": core.state.stage(item),
                     "closed": it.closed.is_some(),
                     "closed_by_sync": it.closed_by_sync,
+                    "left_scope_by_sync": it.left_scope_by_sync,
                     "has_children": !it.children.is_empty(),
                     "held": it.hold.is_some(),
                     "pr": it.pr,

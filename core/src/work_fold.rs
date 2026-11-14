@@ -317,6 +317,10 @@ pub struct Item {
     /// The upstream issue no longer matches the rule that admitted it.
     /// Cleared by `returned_to_scope` or a reopen.
     pub left_scope: bool,
+    /// Upstream sync, not a person, took it out of scope, so sync may bring
+    /// it back. Derived from the log, so it survives a lost ingest state.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub left_scope_by_sync: bool,
     pub accepted: bool,
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
@@ -867,6 +871,7 @@ impl State {
             proposed_from: None,
             changed_upstream: false,
             left_scope: false,
+            left_scope_by_sync: false,
             accepted: false,
             tier: None,
             proposal: None,
@@ -1570,10 +1575,14 @@ impl State {
                 it.changed_upstream = true;
             }
             WorkRecord::LeftScope { item } => {
-                self.upstream_sync(item, rec)?.left_scope = true;
+                let it = self.upstream_sync(item, rec)?;
+                it.left_scope = true;
+                it.left_scope_by_sync = rec.actor == Actor::Tracker;
             }
             WorkRecord::ReturnedToScope { item } => {
-                self.upstream_sync(item, rec)?.left_scope = false;
+                let it = self.upstream_sync(item, rec)?;
+                it.left_scope = false;
+                it.left_scope_by_sync = false;
             }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {
@@ -1593,6 +1602,7 @@ impl State {
                 // Back to Triage: a person accepts it again.
                 it.accepted = false;
                 it.left_scope = false;
+                it.left_scope_by_sync = false;
                 it.changed_upstream = true;
                 it.proposal = None;
             }

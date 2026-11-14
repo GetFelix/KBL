@@ -74,7 +74,7 @@ is 2.
 | Format | Adds | What waits for the raise |
 |---|---|---|
 | 1 | Every record written before formats existed | Nothing |
-| 2 | `returned_to_scope`: an issue that matches its intake rule again leaves Needs you | Until the raise, an item whose issue comes back into scope stays in Needs you, as it did before. Ingest writes the record on its first poll or reconcile after the raise |
+| 2 | `returned_to_scope`: an issue that matches its intake rule again leaves Needs you | Until the raise, an item whose issue comes back into scope stays in Needs you, as it did before. Ingest writes the record at its next reconcile after the raise, or sooner if the issue changes |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 

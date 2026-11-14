@@ -21,6 +21,10 @@ pub(crate) struct Root {
     /// reopened when its issue is.
     #[serde(default)]
     pub(crate) closed_by_sync: bool,
+    /// Upstream sync took it out of scope, so sync brings it back when the
+    /// issue matches its rule again.
+    #[serde(default)]
+    pub(crate) left_scope_by_sync: bool,
     /// It has its triage and augment items. A root back in Triage that has
     /// them was reopened, so a person, not ingest, accepts it again.
     #[serde(default)]
