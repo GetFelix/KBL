@@ -19,6 +19,10 @@ pub(crate) struct Config {
     /// transfer or a deletion, which no listing shows.
     #[serde(default = "default_reconcile")]
     pub(crate) reconcile_every: u32,
+    /// The most release compares one poll makes looking for the release
+    /// that carries a merged root. The rest wait for the next poll.
+    #[serde(default = "default_release_compares")]
+    pub(crate) release_compares_per_poll: u32,
     pub(crate) rules: Vec<Rule>,
 }
 
@@ -27,6 +31,10 @@ fn default_poll() -> u64 {
 }
 
 fn default_reconcile() -> u32 {
+    20
+}
+
+fn default_release_compares() -> u32 {
     20
 }
 

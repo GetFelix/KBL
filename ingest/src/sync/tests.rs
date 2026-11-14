@@ -59,6 +59,7 @@ impl Rig {
                 rules: cfg.rules,
                 repos,
                 reconcile_every: cfg.reconcile_every,
+                release_compares: cfg.release_compares_per_poll,
             },
         )
     }
@@ -1817,4 +1818,543 @@ async fn blocked_by_an_issue_in_another_repo_blocks_across_them() {
         s.repo_of(&blk).map(|t| t.repo.as_str()),
         Some("GetFelix/felix")
     );
+}
+
+// ---- releases ----
+
+const MERGE_SHA: &str = "c0ffee1234";
+
+fn release(tag: &str, published: &str) -> Value {
+    json!({ "tag_name": tag, "published_at": published, "draft": false, "prerelease": false })
+}
+
+fn merged_pull() -> Value {
+    pull(|p| {
+        p["state"] = json!("closed");
+        p["merged"] = json!(true);
+        p["merge_commit_sha"] = json!(MERGE_SHA);
+        p["merged_at"] = json!("2027-01-15T10:00:00Z");
+    })
+}
+
+impl Rig {
+    /// Root 812 holds a pull request and root 813 waits on it for a release.
+    async fn waited_on(&self) -> (Ingest<Github<Script>, Fake>, kbl_core::names::ItemId) {
+        let ingest = self.ingest(json!([admit_rule()]));
+        self.list(vec![issue(812, |_| {}), issue(813, |_| {})]);
+        ingest.poll(false).await.unwrap();
+        let item = self.hold(UP, Some(PR));
+        let waiting = self.root("GetFelix/felix#813");
+        self.tracker.agent(
+            "w2",
+            WorkRecord::Claimed {
+                item: waiting.clone(),
+                attempt: 1,
+                deadline_ms: 90_000,
+            },
+        );
+        self.tracker.agent(
+            "w2",
+            WorkRecord::Prerequisite {
+                item: waiting.clone(),
+                attempt: 1,
+                prerequisite: item.clone(),
+                key: kbl_core::names::Key::new("need").unwrap(),
+                new: None,
+                done_when: kbl_core::work::DoneWhen::Released,
+                cost_micros: 0,
+                triage: None,
+            },
+        );
+        (ingest, waiting)
+    }
+
+    fn compare(&self, tag: &str, status: &str) {
+        self.gh.on(
+            "GET",
+            &format!("/compare/{MERGE_SHA}...{tag}"),
+            ok(json!({ "status": status })),
+        );
+    }
+
+    fn merge(&self) {
+        self.pr(merged_pull(), vec![], vec![]);
+    }
+}
+
+fn list_requests(rig: &Rig) -> usize {
+    rig.gh
+        .sent()
+        .iter()
+        .filter(|r| r.url.contains("/releases?"))
+        .count()
+}
+
+#[tokio::test]
+async fn a_release_that_contains_the_merge_ships_the_root_and_frees_the_link() {
+    let rig = rig();
+    let (ingest, waiting) = rig.waited_on().await;
+    let item = rig.root(UP);
+    rig.finish(&item);
+    rig.merge();
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([
+            release("v0.3.0", "2027-01-15T12:00:00Z"),
+            release("v0.2.0", "2027-01-15T11:00:00Z"),
+            release("v0.1.0", "2027-01-15T09:00:00Z"),
+        ])),
+    );
+    rig.compare("v0.2.0", "diverged");
+    rig.compare("v0.3.0", "ahead");
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&item].closed, Some(Closure::Merged));
+    assert_eq!(s.items[&item].release.as_deref(), Some("v0.3.0"));
+    assert_eq!(rig.tracker.count("shipped"), 1);
+    assert_ne!(s.stage(&waiting), Some(Stage::Blocked));
+    // The release before the merge is not compared, and nothing is recorded twice.
+    assert!(!rig.gh.sent().iter().any(|r| r.url.contains("...v0.1.0")));
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("shipped"), 1);
+    // A person's release replaces the one ingest wrote, and ingest leaves it.
+    rig.tracker.person(WorkRecord::Shipped {
+        item: item.clone(),
+        release: "hotfix-1".into(),
+    });
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].release.as_deref(),
+        Some("hotfix-1")
+    );
+    assert_eq!(rig.tracker.count("shipped"), 2);
+}
+
+#[tokio::test]
+async fn a_merge_no_release_carries_yet_leaves_the_link_waiting() {
+    let rig = rig();
+    let (ingest, waiting) = rig.waited_on().await;
+    rig.finish(&rig.root(UP));
+    rig.merge();
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+    );
+    rig.compare("v0.2.0", "diverged");
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("shipped"), 0);
+    assert_eq!(rig.tracker.state().stage(&waiting), Some(Stage::Blocked));
+}
+
+#[tokio::test]
+async fn drafts_and_prereleases_never_ship_anything() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    rig.finish(&rig.root(UP));
+    rig.merge();
+    let mut draft = release("v0.2.0", "2027-01-15T11:00:00Z");
+    draft["draft"] = json!(true);
+    let mut pre = release("v0.3.0-rc.1", "2027-01-15T12:00:00Z");
+    pre["prerelease"] = json!(true);
+    rig.gh.on("GET", "/releases?", ok(json!([draft, pre])));
+    rig.compare("v0.2.0", "ahead");
+    rig.compare("v0.3.0-rc.1", "ahead");
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("shipped"), 0);
+    assert!(!rig.gh.sent().iter().any(|r| r.url.contains("/compare/")));
+}
+
+#[tokio::test]
+async fn a_merged_root_nothing_waits_on_costs_no_release_request() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    rig.merge();
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Merged)
+    );
+    assert_eq!(list_requests(&rig), 0);
+    assert_eq!(rig.tracker.count("shipped"), 0);
+}
+
+impl Rig {
+    /// The same worker with at most `compares` release compares per poll.
+    fn ingest_capped(&self, compares: u32) -> Ingest<Github<Script>, Fake> {
+        let cfg = config(json!([admit_rule()]));
+        let repos = cfg.repos();
+        Ingest::new(
+            Github::new(
+                "https://api.github.com",
+                self.gh.clone(),
+                vec!["KBL[bot]".into()],
+            ),
+            self.tracker.clone(),
+            Settings {
+                rules: cfg.rules,
+                repos,
+                reconcile_every: cfg.reconcile_every,
+                release_compares: compares,
+            },
+        )
+    }
+
+    fn compares_of(&self, tag: &str) -> usize {
+        let needle = format!("...{tag}?");
+        self.gh
+            .sent()
+            .iter()
+            .filter(|r| r.url.contains(&needle))
+            .count()
+    }
+}
+
+#[tokio::test]
+async fn a_failed_or_limited_release_lookup_writes_nothing() {
+    let limited = || {
+        status(
+            403,
+            &[
+                ("x-ratelimit-remaining", "0"),
+                ("x-ratelimit-reset", "9999999999"),
+            ],
+        )
+    };
+    let compare = format!("/compare/{MERGE_SHA}...v0.2.0");
+    for (route, code) in [
+        ("/releases?", 502),
+        ("/releases?", 403),
+        (compare.as_str(), 500),
+    ] {
+        let rig = rig();
+        let (ingest, waiting) = rig.waited_on().await;
+        rig.finish(&rig.root(UP));
+        rig.merge();
+        rig.gh.on(
+            "GET",
+            "/releases?",
+            ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+        );
+        rig.compare("v0.2.0", "ahead");
+        rig.gh.on("GET", route, status(code, &[]));
+        ingest.poll(false).await.unwrap();
+        ingest.poll(false).await.unwrap();
+        assert_eq!(rig.tracker.count("shipped"), 0, "{route} {code}");
+        assert_eq!(rig.tracker.state().stage(&waiting), Some(Stage::Blocked));
+    }
+    for route in ["/releases?", compare.as_str()] {
+        let rig = rig();
+        let (ingest, _) = rig.waited_on().await;
+        rig.finish(&rig.root(UP));
+        rig.merge();
+        rig.gh.on(
+            "GET",
+            "/releases?",
+            ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+        );
+        rig.compare("v0.2.0", "ahead");
+        rig.gh.on("GET", route, limited());
+        ingest.poll(false).await.unwrap();
+        assert!(matches!(
+            ingest.poll(false).await,
+            Err(SourceError::RateLimited { .. })
+        ));
+        assert_eq!(rig.tracker.count("shipped"), 0, "{route}");
+    }
+}
+
+#[tokio::test]
+async fn a_merge_without_a_merge_time_is_never_placed_in_a_release() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    rig.finish(&rig.root(UP));
+    let mut pull = merged_pull();
+    pull["merged_at"] = Value::Null;
+    rig.pr(pull, vec![], vec![]);
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+    );
+    rig.compare("v0.2.0", "ahead");
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("shipped"), 0);
+    assert_eq!(list_requests(&rig), 0);
+}
+
+#[tokio::test]
+async fn a_release_a_person_recorded_is_not_replaced() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    let item = rig.root(UP);
+    rig.finish(&item);
+    rig.merge();
+    ingest.poll(false).await.unwrap();
+    rig.tracker.person(WorkRecord::Shipped {
+        item: item.clone(),
+        release: "hotfix-1".into(),
+    });
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+    );
+    rig.compare("v0.2.0", "ahead");
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].release.as_deref(),
+        Some("hotfix-1")
+    );
+    assert_eq!(rig.tracker.count("shipped"), 1);
+    assert_eq!(list_requests(&rig), 0);
+}
+
+#[tokio::test]
+async fn compares_are_capped_per_poll_and_a_miss_is_not_compared_again() {
+    let rig = rig();
+    let (first, _) = rig.waited_on().await;
+    let item = rig.root(UP);
+    rig.finish(&item);
+    rig.merge();
+    first.poll(false).await.unwrap();
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([
+            release("v0.4.0", "2027-01-15T14:00:00Z"),
+            release("v0.3.0", "2027-01-15T13:00:00Z"),
+            release("v0.2.0", "2027-01-15T12:00:00Z"),
+        ])),
+    );
+    rig.compare("v0.2.0", "diverged");
+    rig.compare("v0.3.0", "diverged");
+    rig.compare("v0.4.0", "ahead");
+    // One poll reads the pull request, which counts too, then one compare each.
+    let ingest = rig.ingest_capped(1);
+    for _ in 0..3 {
+        ingest.poll(false).await.unwrap();
+    }
+    assert_eq!(rig.tracker.count("shipped"), 0);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].release.as_deref(),
+        Some("v0.4.0")
+    );
+    for tag in ["v0.2.0", "v0.3.0", "v0.4.0"] {
+        assert_eq!(rig.compares_of(tag), 1, "{tag}");
+    }
+}
+
+#[tokio::test]
+async fn a_closed_waiter_sends_no_release_request() {
+    let rig = rig();
+    let (ingest, waiting) = rig.waited_on().await;
+    rig.tracker.person(WorkRecord::Closed {
+        item: waiting,
+        why: kbl_core::work::CloseWhy::Dismissed,
+    });
+    rig.finish(&rig.root(UP));
+    rig.merge();
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(list_requests(&rig), 0);
+}
+
+fn limited() -> crate::github::Res {
+    status(
+        403,
+        &[
+            ("x-ratelimit-remaining", "0"),
+            ("x-ratelimit-reset", "9999999999"),
+        ],
+    )
+}
+
+#[tokio::test]
+async fn a_pull_request_that_is_gone_for_a_poll_is_read_again() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    rig.finish(&rig.root(UP));
+    rig.merge();
+    // The merge poll reads it, then the release step finds it gone once.
+    rig.gh.on_seq(
+        "GET",
+        "/pulls/2210",
+        vec![ok(merged_pull()), status(404, &[]), ok(merged_pull())],
+    );
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+    );
+    rig.compare("v0.2.0", "ahead");
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("shipped"), 0);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("shipped"), 1);
+}
+
+#[tokio::test]
+async fn another_request_for_the_same_root_starts_over_with_no_misses() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    let item = rig.root(UP);
+    rig.finish(&item);
+    rig.merge();
+    ingest.poll(false).await.unwrap();
+    let mut saved = rig.tracker.saved_raw();
+    saved["awaiting"] = json!({ UP: {
+        "pr": "GetFelix/felix#9999",
+        "merge": ["0ld5ha", 1],
+        "misses": ["v0.2.0"],
+    }});
+    rig.tracker.seed_saved(saved);
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+    );
+    rig.compare("v0.2.0", "ahead");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].release.as_deref(),
+        Some("v0.2.0")
+    );
+}
+
+#[tokio::test]
+async fn the_search_is_dropped_when_the_waiter_closes_or_the_root_reopens() {
+    for reopen in [false, true] {
+        let rig = rig();
+        let (ingest, waiting) = rig.waited_on().await;
+        let item = rig.root(UP);
+        rig.finish(&item);
+        rig.merge();
+        rig.gh.on(
+            "GET",
+            "/releases?",
+            ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+        );
+        rig.compare("v0.2.0", "diverged");
+        ingest.poll(false).await.unwrap();
+        ingest.poll(false).await.unwrap();
+        assert!(rig.tracker.saved_state().awaiting.contains_key(UP));
+        if reopen {
+            rig.tracker.person(WorkRecord::Reopened { item });
+        } else {
+            rig.tracker.person(WorkRecord::Closed {
+                item: waiting,
+                why: kbl_core::work::CloseWhy::Dismissed,
+            });
+        }
+        ingest.poll(false).await.unwrap();
+        assert!(
+            rig.tracker.saved_state().awaiting.is_empty(),
+            "reopen {reopen}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_rate_limit_in_the_release_step_keeps_the_cursors_and_misses() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    rig.finish(&rig.root(UP));
+    rig.merge();
+    ingest.poll(false).await.unwrap();
+    let before = rig.tracker.saved_state().cursors;
+    rig.list(vec![at(issue(812, |_| {}), "2027-02-01T00:00:00Z")]);
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([
+            release("v0.3.0", "2027-01-15T12:00:00Z"),
+            release("v0.2.0", "2027-01-15T11:00:00Z"),
+        ])),
+    );
+    rig.compare("v0.2.0", "diverged");
+    rig.gh
+        .on("GET", &format!("/compare/{MERGE_SHA}...v0.3.0"), limited());
+    assert!(matches!(
+        ingest.poll(false).await,
+        Err(SourceError::RateLimited { .. })
+    ));
+    let saved = rig.tracker.saved_state();
+    assert_ne!(saved.cursors, before);
+    assert!(saved.awaiting[UP].misses.contains("v0.2.0"));
+}
+
+#[tokio::test]
+async fn a_failed_compare_backs_the_root_off_for_some_polls() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    rig.finish(&rig.root(UP));
+    rig.merge();
+    rig.gh.on(
+        "GET",
+        "/releases?",
+        ok(json!([release("v0.2.0", "2027-01-15T11:00:00Z")])),
+    );
+    rig.gh.on(
+        "GET",
+        &format!("/compare/{MERGE_SHA}...v0.2.0"),
+        status(500, &[]),
+    );
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.compares_of("v0.2.0"), 1);
+    for _ in 0..10 {
+        ingest.poll(false).await.unwrap();
+    }
+    assert_eq!(rig.compares_of("v0.2.0"), 1);
+    assert_eq!(list_requests(&rig), 1);
+    rig.compare("v0.2.0", "ahead");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("shipped"), 1);
+}
+
+#[tokio::test]
+async fn a_merge_past_the_page_cap_gets_no_release_and_backs_off() {
+    let rig = rig();
+    let (ingest, _) = rig.waited_on().await;
+    rig.finish(&rig.root(UP));
+    rig.merge();
+    // 500 releases, all after the merge: the one before it is never seen.
+    for n in 0..5u64 {
+        let page: Vec<Value> = (0..100)
+            .map(|i| {
+                let k = 499 - (n * 100 + i);
+                release(
+                    &format!("v{k}"),
+                    &format!("2027-01-15T{:02}:{:02}:00Z", 11 + k / 60, k % 60),
+                )
+            })
+            .collect();
+        rig.gh.on(
+            "GET",
+            &format!("/releases?per_page=100&page={}", n + 1),
+            ok(Value::Array(page)),
+        );
+    }
+    rig.gh.on(
+        "GET",
+        &format!("/compare/{MERGE_SHA}..."),
+        ok(json!({ "status": "ahead" })),
+    );
+    for _ in 0..3 {
+        ingest.poll(false).await.unwrap();
+    }
+    assert_eq!(rig.tracker.count("shipped"), 0);
+    assert!(!rig.gh.sent().iter().any(|r| r.url.contains("/compare/")));
+    assert_eq!(list_requests(&rig), 5);
 }

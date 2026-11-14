@@ -65,6 +65,25 @@ pub(crate) struct State {
     /// Polls since the last reconcile.
     #[serde(default)]
     pub(crate) polls: u32,
+    /// Merged roots a link waits on, by upstream id, until one ships.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) awaiting: BTreeMap<String, Awaiting>,
+}
+
+/// What a merged root's release search has learned, so no request is repeated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Awaiting {
+    /// The pull request this was read from; another one starts over.
+    pub(crate) pr: String,
+    /// The merge commit and when it was made. None when GitHub gave neither,
+    /// or the merge was not one that counts: nothing can ship it.
+    pub(crate) merge: Option<(String, u64)>,
+    /// Tags already compared that do not contain the merge.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) misses: BTreeSet<String>,
+    /// Polls left to skip this root after a lookup that cannot succeed soon.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub(crate) skip: u32,
 }
 
 impl State {
@@ -81,5 +100,9 @@ impl State {
 }
 
 fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
+fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
