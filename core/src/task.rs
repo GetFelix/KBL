@@ -68,17 +68,20 @@ impl Task {
 
     /// The lowest format whose workers run this task as this build does.
     pub fn format(&self) -> u32 {
-        // No `..`: a new field does not compile until this says what it needs.
+        // No `..` and no wildcard: a new field, or a new kind of body, does
+        // not compile until this says what it needs.
         let Task {
             v: _,
             id: _,
             parent: _,
             title: _,
-            body: _,
+            body,
             lease: _,
             deadline_ms: _,
         } = self;
-        TASK_FORMAT_V1
+        match body {
+            None | Some(Content::Text(_) | Content::Artifact(_)) => TASK_FORMAT_V1,
+        }
     }
 }
 

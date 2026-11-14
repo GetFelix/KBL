@@ -37,13 +37,14 @@ const V1_KINDS: [&str; 24] = [
     "task_claim_lost",
 ];
 
-/// `wire.jsonl` is every kind as the encoder wrote it before formats. Logged,
-/// each is the same bytes behind the time and the writer, with no `v`.
+/// `run_log_format_1.jsonl` is every kind as the encoder wrote it before
+/// formats. It is never regenerated, unlike `wire.jsonl`. Logged, each is the
+/// same bytes behind the time and the writer, with no `v`.
 #[test]
 fn a_first_format_run_log_record_is_written_with_the_bytes_it_always_had() {
     let by = Key::new("w3").unwrap();
     let mut seen = Vec::new();
-    for (i, line) in include_str!("wire.jsonl").lines().enumerate() {
+    for (i, line) in include_str!("run_log_format_1.jsonl").lines().enumerate() {
         let rec = Record::decode(line.as_bytes()).unwrap();
         assert_ne!(rec.kind(), "unknown", "line {i}");
         assert_eq!(rec.format(), RUN_LOG_FORMAT_V1, "line {i}");

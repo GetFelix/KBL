@@ -156,8 +156,8 @@ tracker does not have yet.
   the fold refuses. Its state is pinned in `wasm/golden/format_2.state.json`
   and folded by the core, the WebAssembly build and the page's tests.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
-  log kind and a task of the first format are written byte for byte as before
-  formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests
+  log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
+  first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests
   check that a worker hands back a task of a newer format without running or
   dead-lettering it, and that a result it cannot read still settles a
   redelivered task.
@@ -192,7 +192,8 @@ do.
 **Run log** (`agents.log.<run>`). Each record has a format in `v`, with the
 same rules as `work.events`: no `v` means format 1, format 1 is frozen and
 written without `v`, and `Record::format` in `core/src/record.rs` names a
-format for every kind. `RUN_LOG_FORMAT` is 1 today. A reader that builds
+format for every kind. A new field of an existing kind, or a new shape
+inside a field, is a review rule as it is for the fold. `RUN_LOG_FORMAT` is 1 today. A reader that builds
 anything from a run log reads it with `record::read` and stops at a record of
 a newer format. Nothing decides from a run log today: `kbl-tool run log`
 prints the records as they are, whatever their format.
@@ -205,7 +206,12 @@ logs a `refused` record and tells the agent to upgrade. The task is not
 dead-lettered, so a newer worker can still take it. Handing it back uses up
 one of the task's deliveries, and workers give up on a task after two. So
 when a release raises the task format, upgrade every `kbl-mcp` of a run
-before its planner posts with the new one.
+before its planner posts with the new one. A `kbl-mcp` from before task
+formats does not know `v` at all: it runs a newer task as if it were format
+1 and hands nothing back, so none may be left in a run by then. A worker
+that only reads format 1 also hands back a newer task that already has a
+result, until Felix dead-letters it; nothing is lost, the log just shows the
+refusals.
 
 **Cache values** (results, leases, presence, the board) have no format, and
 do not need one, because nothing is decided from what a value holds:
@@ -217,7 +223,9 @@ do not need one, because nothing is decided from what a value holds:
 | Presence | Whether an agent is up: from the key and its TTL. The value is shown, not acted on |
 | The board | Nothing. The text goes to a model |
 
-A reader ignores a field it does not know in these values. A change that
+Only a task's result has a reader today (`kbl-mcp`); no program reads a
+lease, presence or board value back. A reader ignores a field it does not
+know in these values. A change that
 would make a reader decide from a value's content gives that value a format
 first.
 
