@@ -180,6 +180,63 @@ try {
   await press(page, 'Escape');
   check(await page.eval(`document.querySelectorAll('.row').length > 0`), 'Esc clears the search');
 
+  // The Blocked view: reached from the palette, left from the sidebar.
+  const rowIds = `[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(' ')`;
+  const rowText = (id) => page.eval(`document.querySelector('.row[data-id=${id}] .row-waits')?.textContent ?? ''`);
+  await press(page, 'k', MOD);
+  for (const ch of 'blocked') await press(page, ch);
+  await press(page, 'Enter');
+  await page.waitFor(`location.search.includes('view=blocked')`);
+  check((await page.eval(rowIds)) === 'blk-40 blk-41', `the palette opens the Blocked view with only blocked items (${await page.eval(rowIds)})`);
+  check(await page.eval(`document.querySelector('h1').textContent === 'Blocked' && document.querySelector('.nav a[aria-current=page]').dataset.view === 'blocked'`), 'the Blocked view is the current sidebar entry and the heading');
+  const waits40 = await rowText('blk-40');
+  check(waits40 === 'waits on gw-31 (github:GetFelix/felix-gateway), jira-300 (jira)', `a blocked row names blockers in another repo and source (${waits40})`);
+  const waits41 = await rowText('blk-41');
+  check(waits41 === 'waits on blk-42 release', `a blocker in the same repo awaiting its release says release only (${waits41})`);
+  await axe('blocked dark');
+  await shoot('blocked-dark');
+  await press(page, 'j');
+  await press(page, 'Enter');
+  await page.waitFor(`location.search.includes('item=blk-40')`);
+  const blockers = await page.eval(`[...document.querySelectorAll('.panel .blockers li')].map((l) => l.textContent).join(' | ')`);
+  check(
+    blockers === 'gw-31 Compare-and-set on the gateway (github:GetFelix/felix-gateway) | jira-300 Agree the write semantics (jira)',
+    `the panel lists each blocker with its title and where it lives (${blockers})`,
+  );
+  await axe('blocked panel');
+  await shoot('blocked-panel-dark');
+  await page.eval(`document.querySelector('.panel .blockers a').click()`);
+  await page.waitFor(`location.search.includes('item=gw-31')`);
+  check(await page.eval(`document.querySelector('.panel .row-id').textContent === 'gw-31'`), 'a blocker link opens that blocker in the panel');
+  await press(page, 'Escape');
+  await page.eval(`document.querySelector('.nav a[data-view=all]').click()`);
+  await page.waitFor(`!location.search.includes('view=')`);
+  check((await page.eval(`document.querySelectorAll('.row').length`)) > 2, 'the sidebar goes back to all work');
+
+  // A live record that unblocks the focused row hands the focus to a neighbour, then to main.
+  await open(`${connected}&view=blocked`);
+  await page.waitFor(live);
+  const blockedCount = () => page.eval(`document.querySelector('.nav a[data-view=blocked] .count')?.textContent ?? ''`);
+  const onRowOrMain = () => page.eval(`document.activeElement?.matches('.row, main') ?? false`);
+  check((await blockedCount()) === '2', 'the sidebar counts the blocked items');
+  await page.eval(`document.querySelector('.row[data-id=blk-40]').focus()`);
+  for (const item of ['gw-31', 'jira-300']) {
+    await page.eval(`window.__push({ kind: 'closed', item: '${item}', why: 'merged', actor: 'person', by: 'maintainer', at_ms: 1800000000001 })`);
+  }
+  await page.waitFor(`!document.querySelector('.row[data-id=blk-40]')`);
+  check((await page.eval(rowIds)) === 'blk-41' && (await blockedCount()) === '1', 'closing both blockers drops the row and the sidebar count');
+  check(await focused('.row[data-id=blk-41]'), 'the focus moves to the neighbouring row');
+  await page.eval(`window.__push({ kind: 'shipped', item: 'blk-42', release: 'v1', actor: 'person', by: 'maintainer', at_ms: 1800000000002 })`);
+  await page.waitFor(`!document.querySelector('.row')`);
+  check((await onRowOrMain()) && (await focused('main')), 'an emptied view leaves the focus on main, not the body');
+
+  for (const theme of ['dark', 'light']) {
+    await open(`${connected}&view=blocked&item=blk-41`, { theme });
+    await page.waitFor(live);
+    check((await page.eval(rowIds)) === 'blk-40 blk-41' && !(await page.eval(`document.querySelector('.panel').hidden`)), `${theme}: a link opens the Blocked view with the item`);
+    await axe(`blocked link ${theme}`);
+  }
+
   await open(`${connected}&item=gh-2221`);
   await page.waitFor(live);
   const flag = (id) => page.eval(`document.querySelector('.row[data-id=${id}] .row-flag:not([hidden])')?.textContent ?? ''`);

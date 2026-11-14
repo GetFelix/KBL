@@ -12,7 +12,9 @@ export type CommandId =
   | 'close'
   | 'first'
   | 'last'
-  | 'theme';
+  | 'theme'
+  | 'view-all'
+  | 'view-blocked';
 
 export interface Command {
   id: CommandId;
@@ -33,6 +35,8 @@ export const COMMANDS: readonly Command[] = [
   { id: 'last', label: 'Last item', group: 'Navigation', keys: ['End'] },
   { id: 'open', label: 'Open the selected item', group: 'Navigation', keys: ['Enter'] },
   { id: 'close', label: 'Close, or clear the search', group: 'Navigation', keys: ['Escape'] },
+  { id: 'view-all', label: 'Show all work', group: 'View', keys: [] },
+  { id: 'view-blocked', label: 'Show blocked work', group: 'View', keys: [] },
   { id: 'theme', label: 'Switch light and dark theme', group: 'View', keys: [] },
 ];
 

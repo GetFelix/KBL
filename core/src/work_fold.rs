@@ -844,6 +844,27 @@ impl State {
         self.edges.contains(&(from.clone(), to.clone()))
     }
 
+    /// The items that hold `id` back now, in id order. A link holds whatever
+    /// tree, repo or source the other end is in.
+    pub fn blockers(&self, id: &ItemId) -> Vec<&ItemId> {
+        self.edges
+            .iter()
+            .filter(|(a, b)| a == id && self.waits_on(a, b))
+            .map(|(_, b)| b)
+            .collect()
+    }
+
+    /// The repo an item's work lands in: its own target (a prerequisite's),
+    /// else its root's. Only a GitHub target names a repo; an ADO target is an
+    /// `org/project` that drives rules and spend but is not shown as a repo.
+    pub fn repo_of(&self, id: &ItemId) -> Option<&Target> {
+        let it = self.items.get(id)?;
+        it.target
+            .as_ref()
+            .or_else(|| self.items.get(&it.root)?.target.as_ref())
+            .filter(|t| t.source == "github")
+    }
+
     fn is_closed(&self, id: &ItemId) -> bool {
         self.items.get(id).is_some_and(|i| i.closed.is_some())
     }

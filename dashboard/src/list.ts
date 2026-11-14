@@ -2,6 +2,7 @@
 // through the fold; this only orders and labels what the fold decided.
 import type { ItemRow } from './fold.ts';
 import { score } from './palette.ts';
+import type { ViewState } from './state.ts';
 
 /** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
 export const STAGES = [
@@ -55,4 +56,16 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
   const at = rows.findIndex((r) => r.id === current);
   if (at < 0) return rows[step < 0 ? rows.length - 1 : 0].id;
   return rows[Math.max(0, Math.min(rows.length - 1, at + step))].id;
+}
+
+/** The items the current view lists, before the search: every item, or only the Blocked ones. */
+export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
+  if (s.view === 'all') return s.items;
+  const blocked = new Set(s.blocked.map((b) => b.id));
+  return s.items.filter((i) => blocked.has(i.id));
+}
+
+/** The rows the list shows, in the order j and k walk. */
+export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query'>): ItemRow[] {
+  return flatten(group(visible(s), s.query));
 }

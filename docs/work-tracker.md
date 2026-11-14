@@ -513,7 +513,8 @@ What it does with GitHub:
   fix that reaches a release only by a cherry-pick is never found: a person
   records `shipped` for those.
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
-  are imported.
+  are imported, in the same repo or another one the rules import. A link to
+  an issue no rule imports waits until one does.
 
 An issue that leaves its rule and later matches it again gets a
 `returned_to_scope` record, and the item leaves Needs you for the stage it had.
@@ -648,6 +649,30 @@ Blocked, and becomes Ready the moment that dependency is done, because
 readiness is recomputed from the fold and never stored. A person splits by
 hand with the same records, which draw nothing from the budget. The parent
 cannot complete while a child is open.
+
+### Links across repos and sources
+
+A link joins any two items, whatever tree, repo or source each is in: a
+felix-blocks item can wait on a felix-gateway gap, or a GitHub issue on an
+Azure DevOps work item. People link items of different trees freely; an
+agent links across trees only through a prerequisite (below). The waiting
+item is Blocked until the other one is done, the same as inside one tree.
+
+The fold records a target for every imported root: a GitHub id (`org/repo#n`)
+gives its repo, and an ADO id gives its `org/project`, which still selects
+rules and spend. Only a GitHub target is shown as a repo. A prerequisite has
+its target, and any other item takes its root's. Jira ids name none, so
+those items have no target. The dashboard's Blocked view (in the sidebar and
+the palette, or `?view=blocked`) names each blocker with its own repo when it has one and differs from the
+card's, else its source, so the board shows "waits on gw
+(github:GetFelix/felix-gateway)" on the felix-blocks card and "waits on
+j1 (jira)" for a Jira item. A blocker that is merged and only waits for its
+release reads "waits on p1 release". The fold already holds all of this, so
+the view is derived and adds no record. The item panel lists the same
+blockers with their titles.
+
+A dependency that is removed upstream stays linked until a person unlinks it
+([KBL#222](https://github.com/GetFelix/KBL/issues/222)).
 
 ### Files that overlap
 

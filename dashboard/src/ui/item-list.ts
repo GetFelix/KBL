@@ -1,9 +1,10 @@
 // The list view: items grouped by stage, one link per row, or the state that
-// explains why there are none. Rows are links, so Tab, Enter and middle-click work
+// explains why there are none. A Blocked row also says what it waits on. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
-import { group } from '../list.ts';
+import { waitsOn } from '../fold.ts';
+import { group, visible } from '../list.ts';
 import { flagText } from '../overlap.ts';
-import { toAddress, type ViewState } from '../state.ts';
+import { toAddress, type Address, type ViewState } from '../state.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
@@ -29,8 +30,8 @@ const ADVICE = {
 } as const;
 
 // Built from the store's query, not the address bar, which lags the store by up to 250 ms.
-export function itemHref(id: string, query: string): string {
-  return toAddress(location.search, { query, open: id }) || '?';
+export function itemHref(id: string, s: Omit<Address, 'open'>): string {
+  return toAddress(location.search, { ...s, open: id }) || '?';
 }
 
 // Rows are kept by item id and reused, and the list is only rebuilt when what it shows
@@ -40,6 +41,7 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
   const rows = new Map<string, HTMLAnchorElement>();
   let shown = '';
   let restoring = false;
+  let order: string[] = [];
   el.addEventListener('focusin', (e) => {
     const id = (e.target as HTMLElement).closest<HTMLElement>('.row')?.dataset.id;
     if (id && !restoring) on.select(id);
@@ -48,10 +50,14 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
   const show = (key: string, ...children: HTMLElement[]) => {
     if (key === shown) return;
     shown = key;
+    const lost = el.contains(document.activeElement);
     rows.clear();
+    order = [];
     el.replaceChildren(...children);
+    // The focused row is gone; focus must not fall to the body.
+    if (lost) el.closest('main')?.focus({ preventScroll: true });
   };
-  const row = (id: string, title: string): HTMLAnchorElement => {
+  const row = (id: string, title: string, waits: string): HTMLAnchorElement => {
     let a = rows.get(id);
     if (!a) {
       a = h('a', {
@@ -63,11 +69,14 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-flag', hidden: true }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }));
       rows.set(id, a);
     }
     const t = a.querySelector('.row-title')!;
+    const w = a.querySelector('.row-waits')!;
     if (t.textContent !== title) t.textContent = title;
+    const line = waits ? `waits on ${waits}` : '';
+    if (w.textContent !== line) w.textContent = line;
     return a;
   };
 
@@ -112,21 +121,29 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
         );
       }
       if (s.items.length === 0) return show('empty', emptyState('No work yet', 'Items appear here as the tracker imports issues from its sources.'));
-      const groups = group(s.items, s.query);
+      const shownItems = visible(s);
+      if (s.view === 'blocked' && shownItems.length === 0) {
+        return show('noblocked', emptyState('Nothing is blocked', 'An item shows here while a link or a prerequisite holds it back.'));
+      }
+      const groups = group(shownItems, s.query);
+      const waits = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
       if (groups.length === 0) {
         return show(`nomatch|${s.query}`,
           emptyState(`Nothing matches “${s.query}”`, 'Search looks at item ids and titles.',
             h('button', { type: 'button', class: 'button', onclick: on.clearSearch }, 'Clear search')),
         );
       }
-      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title])]))}`;
+      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? ''])]))}`;
       if (key !== shown) {
         const active = document.activeElement;
         const focusedId = active instanceof HTMLElement && el.contains(active) ? active.dataset.id : undefined;
         const kept = new Map(rows);
+        const before = order;
         shown = key;
         rows.clear();
+        order = [];
         for (const g of groups) for (const i of g.items) {
+          order.push(i.id);
           const a = kept.get(i.id);
           if (a) rows.set(i.id, a);
         }
@@ -135,7 +152,7 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
             const headingId = `group-${g.stage}`;
             return h('section', { class: 'group', 'aria-labelledby': headingId },
               h('h2', { id: headingId, class: 'group-title' }, g.label, h('span', { class: 'count' }, String(g.items.length))),
-              h('ul', {}, ...g.items.map((item) => h('li', {}, row(item.id, item.title)))),
+              h('ul', {}, ...g.items.map((item) => h('li', {}, row(item.id, item.title, waits.get(item.id) ?? '')))),
             );
           }),
         );
@@ -145,10 +162,15 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
           restoring = true;
           back.focus({ preventScroll: true });
           restoring = false;
+        } else if (focusedId) {
+          // The focused row left the view: the next row takes the focus, else the previous one.
+          const at = before.indexOf(focusedId);
+          const near = at < 0 ? undefined : [...before.slice(at + 1), ...before.slice(0, at).reverse()].find((id) => rows.has(id));
+          (near ? rows.get(near) : el.closest('main'))?.focus({ preventScroll: true });
         }
       }
       for (const [id, a] of rows) {
-        const href = itemHref(id, s.query);
+        const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
         // Text, not colour alone, so it reads in both themes and to a screen reader as part of the link.

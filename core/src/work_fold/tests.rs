@@ -3329,3 +3329,158 @@ fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
     });
     assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(0));
 }
+
+#[test]
+fn a_link_blocks_across_repos_and_sources_and_names_the_other_repo() {
+    let mut l = Log::default();
+    for (item, source, up) in [
+        ("blk", "github", "GetFelix/felix-blocks#40"),
+        ("gw", "github", "GetFelix/felix-gateway#31"),
+        ("ado", "ado", "org/project#4410"),
+    ] {
+        l.tracker(WorkRecord::Imported {
+            item: id(item),
+            source: source.into(),
+            upstream_id: up.into(),
+            title: item.into(),
+        });
+        l.person(WorkRecord::Accepted {
+            item: id(item),
+            tier: None,
+        });
+    }
+    for to in ["gw", "ado"] {
+        l.person(WorkRecord::Linked {
+            item: id("blk"),
+            to: id(to),
+        });
+    }
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.stage(&id("blk")), Some(Stage::Blocked));
+    assert_eq!(s.blockers(&id("blk")), [&id("ado"), &id("gw")]);
+    let repo = |i: &str| {
+        s.repo_of(&id(i))
+            .map(|t| (t.source.as_str(), t.repo.as_str()))
+    };
+    assert_eq!(repo("gw"), Some(("github", "GetFelix/felix-gateway")));
+    // ADO ids name a project, not a repo, so there is no repo to show.
+    assert_eq!(repo("ado"), None);
+    assert!(s.blockers(&id("gw")).is_empty());
+
+    l.person(WorkRecord::Closed {
+        item: id("gw"),
+        why: CloseWhy::Merged,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.blockers(&id("blk")), [&id("ado")]);
+    l.tracker(WorkRecord::Closed {
+        item: id("ado"),
+        why: CloseWhy::Completed,
+    });
+    let s = fold(&l.0);
+    assert!(s.blockers(&id("blk")).is_empty());
+    assert_eq!(s.stage(&id("blk")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_childs_repo_is_its_roots() {
+    let mut l = Log::default();
+    l.tracker(WorkRecord::Imported {
+        item: id("r1"),
+        source: "github".into(),
+        upstream_id: "GetFelix/felix#812".into(),
+        title: "r1".into(),
+    });
+    l.person(proposed("c1", Some("r1"), "k1", WorkKind::Split));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    let t = s.repo_of(&id("c1")).unwrap();
+    assert_eq!(
+        (t.source.as_str(), t.repo.as_str()),
+        ("github", "GetFelix/felix")
+    );
+}
+
+fn linked_pair() -> Log {
+    let mut l = Log::default();
+    for i in ["a", "b"] {
+        l.tracker(imported(i));
+        l.person(WorkRecord::Accepted {
+            item: id(i),
+            tier: None,
+        });
+    }
+    l.person(WorkRecord::Linked {
+        item: id("a"),
+        to: id("b"),
+    });
+    l
+}
+
+#[test]
+fn unlinking_frees_a_blocked_item() {
+    let mut l = linked_pair();
+    assert_eq!(fold(&l.0).stage(&id("a")), Some(Stage::Blocked));
+    l.person(WorkRecord::Unlinked {
+        item: id("a"),
+        to: id("b"),
+    });
+    let s = fold(&l.0);
+    assert!(s.blockers(&id("a")).is_empty());
+    assert_eq!(s.stage(&id("a")), Some(Stage::Ready));
+}
+
+#[test]
+fn a_release_edge_holds_a_merged_blocker_until_it_ships() {
+    let mut l = held_root();
+    l.tracker(imported("r2"));
+    l.agent("w1", needs("r2", false, DoneWhen::Released));
+    l.person(WorkRecord::Closed {
+        item: id("r2"),
+        why: CloseWhy::Merged,
+    });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.blockers(&id("r1")), [&id("r2")]);
+}
+
+#[test]
+fn a_dismissed_or_upstream_closed_blocker_drops_out_and_asks_a_person() {
+    for why in [CloseWhy::Dismissed, CloseWhy::Upstream] {
+        let mut l = linked_pair();
+        l.person(WorkRecord::Closed { item: id("b"), why });
+        let s = fold(&l.0);
+        assert!(s.blockers(&id("a")).is_empty());
+        assert_eq!(s.needs_you(&id("a")), Some(NeedsYou::DependencyDropped));
+    }
+}
+
+#[test]
+fn an_ado_roots_target_still_drives_rules_but_is_not_shown_as_a_repo() {
+    let mut l = Log::default();
+    l.tracker(WorkRecord::Imported {
+        item: id("ado"),
+        source: "ado".into(),
+        upstream_id: "org/project#4410".into(),
+        title: "ado".into(),
+    });
+    let ado = Target {
+        source: "ado".into(),
+        repo: "org/project".into(),
+    };
+    l.person(WorkRecord::RulesSet {
+        target: ado.clone(),
+        root: None,
+        text: Some("ado rules".into()),
+        checks: None,
+    });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.items[&id("ado")].target.as_ref(), Some(&ado));
+    assert_eq!(
+        s.rules_for(&id("ado")).and_then(|r| r.text).as_deref(),
+        Some("ado rules")
+    );
+    assert_eq!(s.repo_of(&id("ado")), None);
+}
