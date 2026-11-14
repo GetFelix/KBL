@@ -13,12 +13,20 @@ use felix_client::{
     AckMode, BrokerError, CacheCondition, Client, ClientConfig, ErrorCode, GroupMember,
     GroupPollOptions, GroupRecord, StartPosition, quic_client_config, root_store_from_pem_file,
 };
+use kbl_core::org::{ORG_EVENTS, ORG_TRACKER_CACHE};
 use kbl_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
 use serde_json::{Value, json};
 
-/// The cache and key that hold the tracker's writer lease.
+/// The cache and key that hold a team's writer lease.
 const LEASE_CACHE: &str = "work.tracker";
 const LEASE_KEY: &str = "writer";
+
+/// What a connection is for: one team's namespace, or the org's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Team,
+    Org,
+}
 
 /// The key ingest's state for source `name` is kept under, in the lease cache.
 fn cursor_key(name: &str) -> String {
@@ -167,6 +175,8 @@ impl Session {
                 string(&body, "id_token")?
             }
         };
+        // Narrowed to this namespace, so a record routed to the wrong team's
+        // connection is refused by Felix, not only by this code.
         let request = self
             .http
             .post(format!(
@@ -174,7 +184,10 @@ impl Session {
                 self.target.control_plane, self.target.tenant
             ))
             .bearer_auth(&id_token)
-            .json(&json!({ "audience": audience }));
+            .json(&json!({
+                "audience": audience,
+                "resources": [format!("namespace:{}/{}", self.target.tenant, self.target.namespace)],
+            }));
         let body: Value = send(request, "exchange the identity token")
             .await?
             .json()
@@ -219,11 +232,12 @@ pub(crate) struct Felix {
     /// The connection for publishing and reading the log.
     main: Arc<tokio::sync::Mutex<Option<Conn>>>,
     members: Arc<tokio::sync::Mutex<HashMap<String, Conn>>>,
+    lease_cache: &'static str,
 }
 
-/// Signs in, creates the tracker's streams, cache and consumer groups if they
-/// are not there yet, and returns the broker connection.
-pub(crate) async fn connect(target: Target) -> Result<Felix> {
+/// Signs in, creates the streams, cache and consumer groups of a team (or of
+/// the org) if they are not there yet, and returns the broker connection.
+pub(crate) async fn connect(target: Target, kind: Kind) -> Result<Felix> {
     let http = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()?;
@@ -248,8 +262,8 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
             .http
             .post(url)
             .bearer_auth(admin)
-            .json(&streams_batch()),
-        "create the work streams",
+            .json(&streams_batch(kind)),
+        "create the tracker's streams",
     )
     .await?;
 
@@ -257,17 +271,33 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         session,
         main: Arc::default(),
         members: Arc::default(),
+        lease_cache: match kind {
+            Kind::Team => LEASE_CACHE,
+            Kind::Org => ORG_TRACKER_CACHE,
+        },
     };
-    for lane in 0..LANES {
-        felix.ensure_group(&ready_stream(lane)).await?;
+    if kind == Kind::Team {
+        for lane in 0..LANES {
+            felix.ensure_group(&ready_stream(lane)).await?;
+        }
     }
     Ok(felix)
 }
 
-/// The log and the ready lanes: one durable stream each, and the lease cache.
-fn streams_batch() -> Value {
-    let streams: Vec<Value> = std::iter::once(WORK_EVENTS.to_owned())
-        .chain((0..LANES).map(ready_stream))
+/// A team's log and ready lanes, one durable stream each, and its lease
+/// cache; or the org's log and lease cache.
+fn streams_batch(kind: Kind) -> Value {
+    let (names, cache): (Vec<String>, &str) = match kind {
+        Kind::Team => (
+            std::iter::once(WORK_EVENTS.to_owned())
+                .chain((0..LANES).map(ready_stream))
+                .collect(),
+            LEASE_CACHE,
+        ),
+        Kind::Org => (vec![ORG_EVENTS.to_owned()], ORG_TRACKER_CACHE),
+    };
+    let streams: Vec<Value> = names
+        .into_iter()
         .map(|name| {
             json!({
                 "stream": name,
@@ -282,8 +312,8 @@ fn streams_batch() -> Value {
         })
         .collect();
     let lease = json!({
-        "cache": LEASE_CACHE,
-        "display_name": LEASE_CACHE,
+        "cache": cache,
+        "display_name": cache,
         "shards": 1,
         "replication_factor": 1,
         "consistency": "Leader",
@@ -548,7 +578,7 @@ impl Broker for Felix {
                 .cache_put_if(
                     self.tenant(),
                     self.namespace(),
-                    LEASE_CACHE,
+                    self.lease_cache,
                     LEASE_KEY,
                     Bytes::from(holder),
                     Some(ttl.as_millis() as u64),

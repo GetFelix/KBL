@@ -5,6 +5,7 @@
 mod config;
 mod felix;
 mod http;
+mod org;
 mod teams;
 mod tracker;
 
@@ -16,10 +17,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use config::Tokens;
-use felix::Target;
-use kbl_core::org::TeamName;
-use teams::{Team, Teams};
+use config::{Grants, Tokens};
+use felix::{Kind, Target};
+use kbl_core::names::Key;
+use kbl_core::org::{ORG_NAMESPACE, OrgRecord, TeamName};
+use org::Org;
+use teams::{OrgSide, Starter, Team, Teams};
 use tracker::{Settings, Tracker};
 
 #[derive(Parser)]
@@ -34,9 +37,13 @@ struct Cli {
     tokens_file: PathBuf,
     #[arg(long, env = "KBL_TENANT", default_value = "agents")]
     tenant: String,
-    /// The team's Felix namespace, which is also the team's name.
+    /// The team's Felix namespace, which is also the team's name. With teams
+    /// on, the team the token file's agents and ingest workers belong to.
     #[arg(long, env = "KBL_NAMESPACE", default_value = "default")]
     namespace: String,
+    /// Turns teams on: the namespace that holds `org.events`. It must be `kbl`.
+    #[arg(long, env = "KBL_ORG_NAMESPACE")]
+    org_namespace: Option<String>,
     /// Calls in flight per team. A call over it answers 503 with `team_busy`.
     #[arg(long, env = "KBL_TEAM_INFLIGHT", default_value_t = teams::DEFAULT_INFLIGHT)]
     team_inflight: usize,
@@ -112,50 +119,135 @@ async fn serve() -> Result<()> {
             e.0
         )
     })?;
+    if let Some(ns) = &cli.org_namespace {
+        anyhow::ensure!(
+            ns == ORG_NAMESPACE,
+            "KBL_ORG_NAMESPACE is {ns:?}; the org namespace is `{ORG_NAMESPACE}`"
+        );
+    }
     let tokens = Tokens::load(&cli.tokens_file)?;
-    let grants = tokens.grants();
-    let felix = felix::connect(Target {
-        tenant: cli.tenant,
-        namespace: cli.namespace,
-        control_plane: cli.control_plane.trim_end_matches('/').to_owned(),
-        idp: cli.idp.trim_end_matches('/').to_owned(),
-        id_token: cli.id_token,
-        broker: cli.broker,
-        broker_ca: cli.broker_ca,
-        broker_name: cli.broker_name,
-    })
-    .await?;
     let ttl = Duration::from_millis(cli.lease_ttl_ms);
-    let tracker = Tracker::start(
-        felix,
-        Settings {
-            grants,
-            visibility: Duration::from_millis(cli.claim_visibility_ms),
-            lease_ttl: ttl,
-            // Long enough for a killed tracker's lease to run out.
-            lease_wait: ttl * 2,
-            crash_after_poll: cli.crash_after_poll,
-            review_tiers: cli.review_tiers,
-            cost_floor_micros: cli.cost_floor_micros,
-        },
-    )
-    .await?;
+    let start = starter(&cli, team.clone(), tokens.grants());
+    let teams = match cli.org_namespace.is_some() {
+        false => {
+            // Without teams a team that cannot start stops the process, as before.
+            let tracker = start(team.clone()).await?;
+            Teams::new(vec![Team::new(team, tracker, tokens, cli.team_inflight)])?
+        }
+        true => with_org(&cli, team, tokens, start, ttl).await?,
+    };
     let listener = tokio::net::TcpListener::bind(cli.listen)
         .await
         .with_context(|| format!("listen on {}", cli.listen))?;
     eprintln!("kbl-tracker: listening on {}", listener.local_addr()?);
-    // One team until teams are read from org.events: the namespace, with the token file's callers.
-    let teams = Arc::new(Teams::new(vec![Team::new(
-        team,
-        tracker,
-        tokens,
-        cli.team_inflight,
-    )])?);
+    let teams = Arc::new(teams);
     let maintain = teams.clone();
     tokio::select! {
         served = axum::serve(listener, http::router(teams)) => served.context("serve"),
         () = async move { maintain.maintain().await } => {
-            anyhow::bail!("no team holds its writer lease, or a team's maintenance failed")
+            anyhow::bail!("no team holds its writer lease, the org lease was lost, or a team's maintenance failed")
         }
     }
+}
+
+/// Where Felix is for one namespace.
+fn target(cli: &Cli, namespace: &str) -> Target {
+    Target {
+        tenant: cli.tenant.clone(),
+        namespace: namespace.to_owned(),
+        control_plane: cli.control_plane.trim_end_matches('/').to_owned(),
+        idp: cli.idp.trim_end_matches('/').to_owned(),
+        id_token: cli.id_token.clone(),
+        broker: cli.broker.clone(),
+        broker_ca: cli.broker_ca.clone(),
+        broker_name: cli.broker_name.clone(),
+    }
+}
+
+/// Starts a team's tracker. The token file's grants belong to `first`, the
+/// team its agents are in.
+fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> {
+    let ttl = Duration::from_millis(cli.lease_ttl_ms);
+    let visibility = Duration::from_millis(cli.claim_visibility_ms);
+    let (crash_after_poll, review_tiers) = (cli.crash_after_poll, cli.review_tiers.clone());
+    // One floor for every team; each team's tracker charges it against its own fold.
+    let cost_floor_micros = cli.cost_floor_micros;
+    let base = target(cli, "");
+    Arc::new(move |team: TeamName| {
+        let mut target = base.clone();
+        target.namespace = team.as_str().to_owned();
+        let settings = Settings {
+            grants: if team == first {
+                grants.clone()
+            } else {
+                Grants::default()
+            },
+            visibility,
+            lease_ttl: ttl,
+            // Long enough for a killed tracker's lease to run out.
+            lease_wait: ttl * 2,
+            crash_after_poll,
+            review_tiers: review_tiers.clone(),
+            cost_floor_micros,
+        };
+        Box::pin(async move {
+            let felix = felix::connect(target, Kind::Team).await?;
+            Tracker::start(felix, settings).await
+        })
+    })
+}
+
+/// Takes the org lease, adopts `first` when `org.events` is empty, and starts
+/// every team the log lists. A team that cannot start answers 503 and is
+/// retried in the background; the others serve.
+async fn with_org(
+    cli: &Cli,
+    first: TeamName,
+    tokens: Tokens,
+    start: Starter<felix::Felix>,
+    ttl: Duration,
+) -> Result<Teams<felix::Felix>> {
+    let felix = felix::connect(target(cli, ORG_NAMESPACE), Kind::Org).await?;
+    let org = Arc::new(Org::start(felix, ttl, ttl * 2).await?);
+    if org.state().await.teams().next().is_none() {
+        let adopt = OrgRecord::TeamCreated {
+            team: first.clone(),
+            display_name: None,
+            adopted: true,
+        };
+        org.append(Key::new("tracker").expect("a valid key"), adopt)
+            .await
+            .map_err(|e| anyhow::anyhow!("could not adopt team {first}: {e:?}"))?;
+        eprintln!("kbl-tracker: adopted {first} as the org's first team");
+    }
+    let names: Vec<TeamName> = org.state().await.teams().map(|(t, _)| t.clone()).collect();
+    anyhow::ensure!(
+        names.contains(&first),
+        "KBL_NAMESPACE {first} is not a team on org.events, so the token file's agents would have no team"
+    );
+    let admins = tokens.people_only();
+    let mut teams = Vec::new();
+    for name in names {
+        let own = if name == first {
+            tokens.clone()
+        } else {
+            admins.people_only()
+        };
+        teams.push(match start(name.clone()).await {
+            Ok(tracker) => Team::new(name, tracker, own, cli.team_inflight),
+            Err(e) => {
+                eprintln!("kbl-tracker: team {name} did not start: {e:#}");
+                Team::unavailable(name, own, cli.team_inflight)
+            }
+        });
+    }
+    Teams::with_org(
+        teams,
+        Some(OrgSide {
+            org,
+            start,
+            admins,
+            inflight: cli.team_inflight,
+        }),
+    )
 }

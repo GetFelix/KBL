@@ -974,10 +974,17 @@ async fn an_edited_title_is_bounded_and_not_empty() {
     assert_eq!(fake.log().len(), before);
 }
 
+fn github(repo: &str) -> Target {
+    Target {
+        source: "github".into(),
+        repo: repo.into(),
+    }
+}
+
 /// A tracker where w1 holds `a1`, an issue in `GetFelix/felix`, and may reach `GetFelix/felix-gateway`.
 async fn granted() -> (Fake, crate::tracker::Tracker<Fake>) {
     let fake = Fake::default();
-    let grants = [("w1".to_owned(), vec!["GetFelix/felix-gateway".to_owned()])].into();
+    let grants = [("w1".to_owned(), vec![github("GetFelix/felix-gateway")])].into();
     let t = start_with(
         &fake,
         crate::tracker::Settings {
@@ -1192,6 +1199,45 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
             .await;
         assert_eq!(why(r), "unknown_item");
     }
+    // A granted repo name in another source is not granted.
+    let other_source = Prereq::New {
+        target: Target {
+            source: "jira".into(),
+            repo: "GetFelix/felix-gateway".into(),
+        },
+        title: "x".into(),
+        why: text("y"),
+        evidence: vec![],
+    };
+    assert_eq!(
+        why(t
+            .prerequisite(&w1, &a1, key("k"), other_source, DoneWhen::Merged, 0)
+            .await),
+        "no_grant"
+    );
+    assert_eq!(fake.kinds(), kinds);
+    person(
+        &t,
+        WorkRecord::Imported {
+            item: item("f3"),
+            source: "jira".into(),
+            upstream_id: "GetFelix/felix-gateway#4".into(),
+            title: "fix f3".into(),
+        },
+    )
+    .await;
+    let kinds = fake.kinds();
+    let r = t
+        .prerequisite(
+            &w1,
+            &a1,
+            key("k"),
+            Prereq::Existing(item("f3")),
+            DoneWhen::Merged,
+            0,
+        )
+        .await;
+    assert_eq!(why(r), "unknown_item");
     // The plain link tool never crosses trees, granted or not.
     assert_eq!(why(t.link(&w1, &a1, &item("f2")).await), "cross_root");
     assert_eq!(fake.kinds(), kinds);
@@ -1647,7 +1693,7 @@ async fn held_triage(t: &Tracker<Fake>, who: &str) {
 #[tokio::test]
 async fn an_agent_answers_the_triage_item_it_holds() {
     let fake = Fake::default();
-    let grants = [("w1".to_owned(), vec!["GetFelix/felix".to_owned()])].into();
+    let grants = [("w1".to_owned(), vec![github("GetFelix/felix")])].into();
     let t = start_with(
         &fake,
         crate::tracker::Settings {
@@ -1930,7 +1976,7 @@ async fn proposals_waiting_for_a_person_are_capped_per_root_and_a_decision_frees
 #[tokio::test]
 async fn a_triage_answer_can_carry_dependencies_and_a_split() {
     let fake = Fake::default();
-    let grants = [("w1".to_owned(), vec!["GetFelix/felix".to_owned()])].into();
+    let grants = [("w1".to_owned(), vec![github("GetFelix/felix")])].into();
     let t = start_with(
         &fake,
         crate::tracker::Settings {
@@ -1978,7 +2024,7 @@ async fn a_triage_answer_can_carry_dependencies_and_a_split() {
 #[tokio::test]
 async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
     let fake = Fake::default();
-    let grants = [("w1".to_owned(), vec!["GetFelix/felix".to_owned()])].into();
+    let grants = [("w1".to_owned(), vec![github("GetFelix/felix")])].into();
     let t = start_with(
         &fake,
         crate::tracker::Settings {

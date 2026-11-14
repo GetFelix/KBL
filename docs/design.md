@@ -258,7 +258,7 @@ the same person (gap 2).
 
 ## Teams
 
-Status: design. The `org.events` records and their fold are built (`core/src/org.rs`, `core/src/org_fold.rs`). The tracker keeps its fold, lease and Felix connections per team behind a team table (`tracker/src/teams.rs`), serves `/v1/teams/{team}/...` and `GET /v1/me`, and caps calls in flight per team, with one team: the namespace in `KBL_NAMESPACE`. It does not read `org.events` yet, and a team that loses its lease stays at 503 until a restart ([#195](https://github.com/GetFelix/KBL/issues/195)). Tracked in [#185](https://github.com/GetFelix/KBL/issues/185).
+Status: design. The `org.events` records and their fold are built (`core/src/org.rs`, `core/src/org_fold.rs`). The tracker keeps its fold, lease and Felix connections per team behind a team table (`tracker/src/teams.rs`), serves `/v1/teams/{team}/...` and `GET /v1/me`, and caps calls in flight per team. With `KBL_ORG_NAMESPACE=kbl` it reads `org.events`, adopts `KBL_NAMESPACE` as the first team, and serves every team the log lists; `kbl-tool org init` and `kbl-tool team create` add the org and new teams, with their Felix namespaces and roles, while it runs. A team that loses its lease or cannot start answers 503 and is retried in the background. Members, agents, sources and grants on `org.events` come in later pull requests: until then the token file's people are the org admins and its agents and ingest workers belong to the first team. Tracked in [#185](https://github.com/GetFelix/KBL/issues/185).
 
 Today one KBL instance serves one team: one tracker, one `work.events`, one
 Felix namespace and one token file. A second team needs a second deployment.
