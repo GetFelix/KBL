@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-use kbl_core::org::OrgRecord;
+use kbl_core::codec::Codec;
+use kbl_core::org::{OrgLogged, OrgRecord, TokenHash};
 use kbl_core::work::WORK_EVENTS;
 
 use super::*;
@@ -46,6 +47,7 @@ async fn org_app() -> OrgApp {
         Box::pin(async move { Tracker::start(broker, quiet_settings()).await })
     });
     let org_broker = Quiet::default();
+    org_broker.keeps.store(true, Ordering::SeqCst);
     let org = Arc::new(
         Org::start(org_broker.clone(), Duration::from_secs(15), Duration::ZERO)
             .await
@@ -368,6 +370,7 @@ async fn next_as(app: &Router, token: &str) -> StatusCode {
 fn agent_of(teams: &Teams<Quiet>, token: &str) -> Vec<(String, String)> {
     teams
         .who(token)
+        .unwrap()
         .into_iter()
         .map(|(team, caller)| match caller {
             Caller::Agent(a) => (team.name().to_string(), a.as_str().to_owned()),
@@ -561,4 +564,70 @@ async fn a_revoked_token_is_refused_on_its_next_call() {
     );
     let (_, body) = get_json(&o.app, "/v1/teams/default/agents", Some("tok-ops")).await;
     assert_eq!(body["agents"][0]["revoked"], true);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_revoke_written_while_the_org_lease_was_away_holds_after_the_retake() {
+    let o = org_app().await;
+    let (_, body) = add_agent(&o.app, Some("tok-ops"), "default", "w2").await;
+    let token = body["token"].as_str().unwrap().to_owned();
+    let teams = o.teams.clone();
+    let _maintain = tokio::spawn(async move { teams.maintain().await });
+    o.org.lease_lost.store(true, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    // Without the lease the view may miss a revoke, so only file tokens serve.
+    let (status, body) = call(
+        &o.app,
+        "/v1/work/next",
+        Some(&token),
+        json!({ "wait_seconds": 0 }),
+    )
+    .await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("org_unavailable"))
+    );
+    assert_eq!(next_as(&o.app, "tok-w1").await, StatusCode::OK);
+    // Another tracker holds the lease meanwhile and revokes w2.
+    let revoke = OrgLogged::new(
+        0,
+        Key::new("ops").unwrap(),
+        OrgRecord::AgentRevoked {
+            team: name("default"),
+            agent: Key::new("w2").unwrap(),
+        },
+    );
+    o.org
+        .publish(kbl_core::org::ORG_EVENTS, revoke.encode())
+        .await
+        .unwrap();
+    o.org.lease_lost.store(false, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert_eq!(next_as(&o.app, &token).await, StatusCode::UNAUTHORIZED);
+    assert_eq!(next_as(&o.app, "tok-w1").await, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_minted_agent_the_token_file_also_names_can_still_be_revoked() {
+    let o = org_app().await;
+    let org = &o.teams.org().unwrap().org;
+    let minted = OrgRecord::AgentAdded {
+        team: name("default"),
+        agent: Key::new("w1").unwrap(),
+        token_sha256: TokenHash::of("tok-minted-w1"),
+    };
+    org.append(Key::new("ops").unwrap(), minted).await.unwrap();
+    assert_eq!(next_as(&o.app, "tok-minted-w1").await, StatusCode::OK);
+    let (status, body) = revoke_agent(&o.app, Some("tok-ops"), "default", "w1").await;
+    assert_eq!(
+        (status, body["revoked"].as_bool()),
+        (StatusCode::OK, Some(true)),
+        "{body}"
+    );
+    assert_eq!(
+        next_as(&o.app, "tok-minted-w1").await,
+        StatusCode::UNAUTHORIZED
+    );
+    // The file's own w1 keeps working and keeps its holds.
+    assert_eq!(next_as(&o.app, "tok-w1").await, StatusCode::OK);
 }

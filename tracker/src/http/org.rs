@@ -140,13 +140,13 @@ pub(super) fn org_admin<'a, B: Broker>(
     if let Some(person) = app.teams.org_admin(token) {
         return Ok((org, person));
     }
-    if app.teams.who(token).is_empty() {
-        Err(unknown())
-    } else {
-        Err(Box::new(refused(
+    match app.teams.who(token) {
+        Err(_) => Err(Box::new(super::org_unavailable())),
+        Ok(found) if found.is_empty() => Err(unknown()),
+        Ok(_) => Err(Box::new(refused(
             StatusCode::FORBIDDEN,
             "this call is for an org admin",
             "org_admin_required",
-        )))
+        ))),
     }
 }

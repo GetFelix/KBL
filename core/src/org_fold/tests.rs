@@ -302,6 +302,34 @@ fn a_team_has_a_cap_on_agents() {
 }
 
 #[test]
+fn a_revoked_agent_frees_its_place_but_not_its_name() {
+    let mut s = base();
+    for i in 0..crate::org::MAX_AGENTS_PER_TEAM {
+        run(&mut s, agent("web", &format!("a{i}"), &format!("t{i}"))).unwrap();
+    }
+    run(
+        &mut s,
+        OrgRecord::AgentRevoked {
+            team: team("web"),
+            agent: key("a0"),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        run(&mut s, agent("web", "a0", "t-again")),
+        Err(OrgRefusal::NameTaken)
+    );
+    assert_eq!(
+        run(&mut s, agent("web", "extra", "tx")),
+        Ok(Applied::Changed)
+    );
+    assert_eq!(
+        run(&mut s, agent("web", "extra2", "tx2")),
+        Err(OrgRefusal::TooMany)
+    );
+}
+
+#[test]
 fn who_finds_each_kind_of_token_and_not_a_revoked_agent() {
     let mut s = base();
     run(&mut s, agent("payments", "w1", "t-w1")).unwrap();

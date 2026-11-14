@@ -395,7 +395,12 @@ impl OrgState {
                 if self.token_in_use(token_sha256) {
                     return Err(OrgRefusal::TokenInUse);
                 }
-                if self.agents.keys().filter(|(t, _)| t == team).count() >= MAX_AGENTS_PER_TEAM {
+                let live = self
+                    .agents
+                    .iter()
+                    .filter(|((t, _), a)| t == team && !a.revoked)
+                    .count();
+                if live >= MAX_AGENTS_PER_TEAM {
                     return Err(OrgRefusal::TooMany);
                 }
                 Ok(Changed)

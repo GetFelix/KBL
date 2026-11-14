@@ -18,7 +18,7 @@ use tokio::task::JoinSet;
 
 use crate::config::{Caller, Tokens};
 use crate::felix::Broker;
-use crate::org::Org;
+use crate::org::{Org, OrgUnavailable};
 use crate::tracker::Tracker;
 
 /// How long a team that is not serving waits between tries to start it.
@@ -120,6 +120,9 @@ pub(crate) struct Teams<B> {
     added: mpsc::UnboundedSender<Arc<Team<B>>>,
     added_rx: Mutex<Option<mpsc::UnboundedReceiver<Arc<Team<B>>>>>,
 }
+
+/// A team a token is in, and who it is there.
+pub(crate) type Found<B> = (Arc<Team<B>>, Caller);
 
 impl<B: Broker> Teams<B> {
     /// Refuses two teams of one name, and a token that would name two callers:
@@ -226,8 +229,9 @@ impl<B: Broker> Teams<B> {
 
     /// Every team the token belongs to, with who it is there. Each team's
     /// tokens are compared in full, so the time taken does not say where a
-    /// token matched.
-    pub(crate) fn who(&self, token: &str) -> Vec<(Arc<Team<B>>, Caller)> {
+    /// token matched. Unavailable when only the org view could know the
+    /// token and it cannot answer: it may hold a revoke this tracker missed.
+    pub(crate) fn who(&self, token: &str) -> Result<Vec<Found<B>>, OrgUnavailable> {
         let mut found = Vec::new();
         for team in self.all() {
             if let Some(caller) = team.tokens.who(token) {
@@ -235,13 +239,17 @@ impl<B: Broker> Teams<B> {
             }
         }
         // An agent added with `agent add` is on org.events, bound to one team.
-        if let Some(Principal::Agent { team, agent }) =
-            self.org.as_ref().and_then(|o| o.org.who(token))
-            && let (Some(team), Ok(agent)) = (self.find(&team), AgentName::new(agent.as_str()))
-        {
-            found.push((team, Caller::Agent(agent)));
+        match self.org.as_ref().map(|o| o.org.who(token)) {
+            Some(Ok(Some(Principal::Agent { team, agent }))) => {
+                if let (Some(team), Ok(agent)) = (self.find(&team), AgentName::new(agent.as_str()))
+                {
+                    found.push((team, Caller::Agent(agent)));
+                }
+            }
+            Some(Err(e)) if found.is_empty() => return Err(e),
+            _ => {}
         }
-        found
+        Ok(found)
     }
 
     #[cfg(test)]

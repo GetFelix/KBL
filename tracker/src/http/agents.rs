@@ -184,13 +184,8 @@ async fn revoke<B: Broker>(
     let Ok(agent) = AgentName::new(agent) else {
         return refused(StatusCode::NOT_FOUND, "no such agent", "unknown_agent");
     };
-    if team.has_file_agent(agent.as_str()) {
-        return refused(
-            StatusCode::CONFLICT,
-            "this agent is in the token file; remove it there and restart the tracker",
-            "in_token_file",
-        );
-    }
+    // The token file naming it too must not stop a minted token's revoke.
+    let in_file = team.has_file_agent(agent.as_str());
     let record = OrgRecord::AgentRevoked {
         team: team.name().clone(),
         agent: Key::new(agent.as_str()).expect("an agent name is a key"),
@@ -198,6 +193,13 @@ async fn revoke<B: Broker>(
     let org = app.teams.org().expect("org_admin found the org");
     let (applied, offset) = match org.org.append(by, record).await {
         Ok(done) => done,
+        Err(OrgError::Refused("unknown_agent")) if in_file => {
+            return refused(
+                StatusCode::CONFLICT,
+                "this agent is in the token file; remove it there and restart the tracker",
+                "in_token_file",
+            );
+        }
         Err(OrgError::Refused("unknown_agent")) => {
             return refused(StatusCode::NOT_FOUND, "no such agent", "unknown_agent");
         }
@@ -205,6 +207,11 @@ async fn revoke<B: Broker>(
     };
     // The token is refused from here on, so nothing new can be claimed under it.
     let (released, note) = match team.tracker() {
+        // Holds go by name, and the name is also the token file's live agent.
+        Some(_) if in_file => (
+            None,
+            Some("the token file names this agent too; its holds stay".to_owned()),
+        ),
         Some(t) => match t.revoke(&agent).await {
             Ok(items) => (Some(items), None),
             Err(e) => (

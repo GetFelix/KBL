@@ -20,6 +20,8 @@ struct Quiet {
     lease_lost: Arc<AtomicBool>,
     /// What every read returns, for a log that is there before the start.
     log: Arc<StdMutex<Records>>,
+    /// Publishes also go on `log`, so a reread finds them.
+    keeps: Arc<AtomicBool>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
@@ -31,10 +33,14 @@ impl Quiet {
 }
 
 impl Broker for Quiet {
-    async fn publish(&self, stream: &str, _: Vec<u8>) -> anyhow::Result<u64> {
+    async fn publish(&self, stream: &str, payload: Vec<u8>) -> anyhow::Result<u64> {
         let mut published = self.published.lock().unwrap();
         published.push(stream.to_owned());
-        Ok(published.len() as u64 - 1)
+        let offset = published.len() as u64 - 1;
+        if self.keeps.load(Ordering::SeqCst) {
+            self.log.lock().unwrap().push((offset, payload));
+        }
+        Ok(offset)
     }
     async fn read_from(&self, _: &str, _: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
         Ok(self.log.lock().unwrap().clone())

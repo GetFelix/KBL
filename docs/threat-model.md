@@ -52,7 +52,7 @@ Two more parties are outside KBL and can still steer it:
 ## Trust boundaries
 
 1. **Agent to tracker.** The bearer token names the caller
-   (`tracker/src/http.rs:150`). The name and role on a record come from the
+   (`tracker/src/http.rs:151`). The name and role on a record come from the
    token, never from the body (`tracker/src/tracker.rs:1281`). The attempt
    number comes from the hold, never from the body
    (`tracker/src/tracker/tools.rs:1007`, `tracker/src/tracker.rs:1279`).
@@ -78,7 +78,7 @@ may be listed once (`tracker/src/config.rs:114`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs:149`).
 The tracker and the webhook serve plain HTTP, so each refuses to listen on
 an address other than loopback unless a flag says a TLS proxy is in front
-(`tracker/src/main.rs:123`, `ingest/src/main.rs:69`). The flag is a promise
+(`tracker/src/main.rs:124`, `ingest/src/main.rs:69`). The flag is a promise
 the process cannot check: set it without a proxy and tokens cross the network
 in the clear. Callers are not checked either: `kbl-mcp` and ingest send their
 token to whatever tracker URL they are given, `http://` included. Tokens are long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
@@ -92,7 +92,7 @@ Every route but `/healthz` needs a bearer token. A wrong kind of token gets
 
 ### Agent routes
 
-All of them need an agent token (`tracker/src/http.rs:208`).
+All of them need an agent token (`tracker/src/http.rs:211`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
@@ -114,12 +114,12 @@ All of them need an agent token (`tracker/src/http.rs:208`).
 | `/v1/work/step` | `command`, `exit_code`, `output` | Claim a command passed | Holder only (`core/src/work_fold.rs:1484`). Sizes (`tracker/src/tracker/tools.rs:1220`). 500 per attempt (`core/src/work_fold.rs:1486`). A step is the agent's word. Check results come from ingest, never from steps |
 | `/v1/work/edit` | `file`, `hunk`, `decision` | Tie an edit to another attempt's decision | Holder only (`core/src/work_fold.rs:1497`). The decision is one of this attempt's (`core/src/work_fold.rs:1499`). Sizes (`tracker/src/tracker/tools.rs:1221`). 500 per attempt (`core/src/work_fold.rs:1502`) |
 | `/v1/work/ask` | `text`, `options`, `default`, `cost_micros` | Flood Needs you; report no cost | Holder only (`core/src/work_fold.rs:1360`). At most 8 options of 200 bytes (`tracker/src/tracker/tools.rs:1030`). 20 per attempt (`core/src/work_fold.rs:1363`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:692`); a report above it is the agent's word; the item total saturates (`core/src/work_fold.rs:1370`) |
-| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:725`) and the fold refuses it from an agent (`core/src/work_fold.rs:2373`). Must hold a question item under `item` (`core/src/work_fold.rs:2521`). Only the open question (`core/src/work_fold.rs:1389`). `chosen` is one of the options (`core/src/work_fold.rs:1397`). 10 per attempt (`core/src/work_fold.rs:1405`). The resume item obeys the depth limit (`core/src/work_fold.rs:2364`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:250`) |
+| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:730`) and the fold refuses it from an agent (`core/src/work_fold.rs:2373`). Must hold a question item under `item` (`core/src/work_fold.rs:2521`). Only the open question (`core/src/work_fold.rs:1389`). `chosen` is one of the options (`core/src/work_fold.rs:1397`). 10 per attempt (`core/src/work_fold.rs:1405`). The resume item obeys the depth limit (`core/src/work_fold.rs:2364`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:250`) |
 | `/v1/work/rules/read` | `item` | Read rules of work it does not hold | Holder only (`tracker/src/tracker/tools.rs:511`) |
 
 ### Person routes
 
-All of them need a person token (`tracker/src/http.rs:217`). An agent or
+All of them need a person token (`tracker/src/http.rs:220`). An agent or
 ingest token gets 403. The fold then checks the record, and sizes are checked
 in `check_sizes` (`tracker/src/tracker/tools.rs:1142`).
 
@@ -152,17 +152,17 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 Every route above acts in one team, the team of the token, and only reaches
 that team's tracker: its fold, its lease and its Felix connections
 (`tracker/src/teams.rs`). The team comes from the token's entry, never from the
-body (`tracker/src/http.rs:150`). Today there is one team, `KBL_NAMESPACE`,
+body (`tracker/src/http.rs:151`). Today there is one team, `KBL_NAMESPACE`,
 and the token file's callers belong to it.
 
 | Route | Fields the caller controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/`, `ingest/` and `agents` routes are served under it (`tracker/src/http.rs:121`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:160`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
-| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:229`) |
+| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/`, `ingest/` and `agents` routes are served under it (`tracker/src/http.rs:122`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:163`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
+| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:232`) |
 | `GET /v1/org/teams`, `POST /v1/org/teams` | `team`, `display_name` on `POST` | Create a team, or adopt a namespace that already holds another team's data; list the org's teams | Org admin only: a person of the token file. An agent or ingest token gets `403` with `org_admin_required` before the body is read, and the body is capped at 4 KiB (`tracker/src/http/org.rs`). The name follows the key rule and is not `kbl`. A name already on `org.events` writes nothing and answers `created: false`. The tracker only serves the namespace: Felix grants on it come from `kbl-tool team create`, run with the org admin's own Felix sign-in. Without `KBL_ORG_NAMESPACE` it answers `404` with `teams_off` |
-| `POST /v1/teams/{team}/agents` | `team`, `agent` | Mint tokens without limit; take an existing agent's name and so its holds and its consumer-group member | Org admin only, checked before the body is read; the body is capped at 1 KiB (`tracker/src/http/agents.rs`). The name follows the agent name rule. A name the team's token file lists is refused, and so is one on `org.events`, revoked or not, so a new token never inherits holds. The token is 32 bytes from the OS random source; only its SHA-256 goes on `org.events`, and it is answered once. 256 agents per team. Tested in `tracker/src/http/tests/org.rs` |
+| `POST /v1/teams/{team}/agents` | `team`, `agent` | Mint tokens without limit; take an existing agent's name and so its holds and its consumer-group member | Org admin only, checked before the body is read; the body is capped at 1 KiB (`tracker/src/http/agents.rs`). The name follows the agent name rule. A name the team's token file lists is refused, and so is one on `org.events`, revoked or not, so a new token never inherits holds. The token is 32 bytes from the OS random source; only its SHA-256 goes on `org.events`, and it is answered once. 256 live agents per team: a revoked agent frees its place but keeps its name, so a name on `org.events` always means one agent. Tested in `tracker/src/http/tests/org.rs` |
 | `GET /v1/teams/{team}/agents` | `team` | Learn other agents' names and holds | Org admin only. Answers names, who added each, whether it is revoked and what it holds; never a token or its hash |
-| `DELETE /v1/teams/{team}/agents/{agent}` | `team`, `agent` | Revoke another team's agent; free work held by others; keep a revoked agent working | Org admin only, in that team only. Writes `agent_revoked` first, so the next call with the token gets `401`, then releases only that agent's holds, as the sweep releases a lapsed claim. A `work_next` that passed the token check before the revoke cannot claim after it: the tracker refuses a revoked agent's claim under the same lock the release takes (`tracker/src/tracker.rs`). An agent in the token file answers `409` with `in_token_file` |
+| `DELETE /v1/teams/{team}/agents/{agent}` | `team`, `agent` | Revoke another team's agent; free work held by others; keep a revoked agent working | Org admin only, in that team only. Writes `agent_revoked` first, so the next call with the token gets `401`, then releases only that agent's holds, as the sweep releases a lapsed claim. A `work_next` that passed the token check before the revoke cannot claim after it: the tracker refuses a revoked agent's claim under the same lock the release takes (`tracker/src/tracker.rs`). An agent only the token file names answers `409` with `in_token_file`. One that `agent add` minted is revoked even if the token file names it too, and the tracker refuses to start while the token file names a minted agent nobody revoked, so no name has two live tokens (`tracker/src/main.rs`) |
 
 A person token in more than one team gets `400` with `team_required` on a path
 without a team. A team takes at most `KBL_TEAM_INFLIGHT` calls at once and
@@ -343,7 +343,8 @@ a team or a token it was not given.
 |---|---|
 | A team's agent or viewer reads or writes another team's streams with a raw client | Felix: every grant names the team's namespace, and no team principal has anything outside it. Tested with a raw Felix client in `dev/check-teams.mjs`: a viewer of team `alpha` reads `alpha`'s `work.events` and cannot read or write `beta`'s, and the tracker's token narrowed to `alpha` cannot reach `beta` either |
 | A tracker bug routes team A's record to team B's log | Each team's fold publishes only with a Felix token narrowed to its own namespace, so the broker refuses it |
-| A revoked agent keeps working | Built: the tracker checks a token against the fold of `org.events`, so the next call after `agent_revoked` gets `401`, and its holds are released with the reason `revoked`. Tested in `tracker/src/http/tests/org.rs` and `tracker/src/tracker/tests.rs` |
+| A revoked agent keeps working | Built: the tracker checks a token against the fold of `org.events`, so the next call after `agent_revoked` gets `401`, and its holds are released with the reason `revoked`. A tracker that lost the org lease can miss a revoke another tracker wrote, so until it holds the lease again and has reread `org.events` it answers `503` with `org_unavailable` to every token the token file does not name; token-file tokens keep working (`tracker/src/org.rs`). Tested in `tracker/src/http/tests/org.rs` and `tracker/src/tracker/tests.rs` |
+| A forged `agent_added` mints a token | Any principal that can publish to `org.events` can mint an agent, the same trust every org record gets: the fold checks records, not who wrote them. That is `role:kbl-tracker`, which `kbl-tool org init` grants `ns.manage` on the org namespace, and a Felix tenant admin (`tenant.manage`). No agent, ingest or team principal has a grant there |
 | A removed member keeps reading the dashboard | Removing the Felix assignment revokes the person's broker tokens and ends open streams, within the control plane's sync interval |
 | A cross-team prerequisite floods another team's Triage | A grant from the receiving team is needed, the filing agent's pending-proposal caps apply, and the grant can carry its own cap |
 | A forged "prerequisite done" frees blocked work | `prerequisite_settled` is written only by the tracker, from the other team's fold. No route takes it from a person, agent or ingest |
@@ -365,7 +366,7 @@ each token and never a token. A format above the build's stops the reader.
 | `person_added` | Org admin, team admin (route check, later) | Name and OIDC subject unique, token hash not used by any person, agent or ingest worker |
 | `role_granted` | Team admin, org admin (route check, later) | Person and team exist; `org_admin` only with no team, a team role only with one; `repos` are the team's own sources; the last unscoped admin of a team cannot be demoted; an admin role covers the whole team, so a scoped one is refused |
 | `role_revoked` | Team admin, org admin (route check, later) | The last admin of a team and the last org admin stay |
-| `agent_added` | Org admin, through `POST /v1/teams/{team}/agents`. Triagers and above once roles exist (#120) | Team exists; name unique in the team and a revoked name stays taken; token hash unused; 256 per team |
+| `agent_added` | Org admin, through `POST /v1/teams/{team}/agents`. Triagers and above once roles exist (#120) | Team exists; name unique in the team and a revoked name stays taken; token hash unused; 256 live per team, and a revoked one frees its place |
 | `agent_revoked` | Org admin, through `DELETE /v1/teams/{team}/agents/{agent}`. Whoever added it and team admins once roles exist (#120) | Team and agent exist; revoking twice changes nothing |
 | `source_added` | Team admin (route check, later) | One owning team per source, compared exactly (case counts); a label of 1 to 256 bytes with no control characters |
 | `ingest_added` | Team admin (route check, later) | Name unique in the team, token hash unused, 32 per team |

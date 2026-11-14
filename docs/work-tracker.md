@@ -351,7 +351,13 @@ Start each `kbl-mcp` session with one of those tokens as its
   releases a lapsed claim, and the item is ready for another agent.
   Running the revoke again writes nothing and releases anything still held.
 - Agents in the token file keep working as before. They cannot be revoked
-  with the command: remove them from the file and restart the tracker.
+  with the command: remove them from the file and restart the tracker. The
+  tracker will not start while the token file names an agent `agent add`
+  minted and nobody revoked.
+- A team has at most 256 live agents. Revoking one frees its place.
+- While the tracker does not hold the org lease, a token the token file does
+  not name gets `503` with `org_unavailable`: another tracker may have revoked
+  it. It serves again once it has the lease back and has reread `org.events`.
 - Without teams on, the agent routes answer `404` with `teams_off`.
 
 ### Running the ingest worker
