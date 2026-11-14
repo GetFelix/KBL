@@ -548,3 +548,101 @@ fn format_4_keeps_the_old_prerequisite_rules() {
     assert!(s.release_edges.is_empty());
     assert_eq!(s.stage(&id("r2")), Some(Stage::Ready));
 }
+
+/// The format 5 log with `more` appended, one record per line.
+fn format_5_with(more: &str) -> State {
+    fold(&entries(&format!("{FORMAT_5_LOG}{more}")))
+}
+
+fn id(s: &str) -> kbl_core::names::ItemId {
+    kbl_core::names::ItemId::new(s).unwrap()
+}
+
+/// Re-opening a prerequisite starts a new round: its release ask is dropped,
+/// so the waiter's new `merged` ask frees it at the next merge.
+#[test]
+fn a_reopened_prerequisite_drops_its_release_ask_from_format_5() {
+    let more = r#"{"at_ms":1300,"by":"gabriel","actor":"person","kind":"reopened","item":"g2"}
+{"at_ms":1310,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1320,"by":"tracker","actor":"tracker","kind":"proposed","item":"t3","parent":"r2","key":"retriage","work":"triage","title":"triage again"}
+{"at_ms":1330,"by":"w2","actor":"agent","kind":"claimed","item":"t3","attempt":1,"deadline_ms":1800000090000}
+{"v":3,"at_ms":1340,"by":"w2","actor":"agent","kind":"prerequisite","item":"r2","attempt":1,"prerequisite":"g2","key":"need-limits-2","done_when":"merged","cost_micros":0,"triage":"t3"}
+{"at_ms":1350,"by":"w2","actor":"agent","kind":"done","item":"t3","attempt":1,"cost_micros":0}
+{"at_ms":1360,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"merged"}
+"#;
+    let s = format_5_with(more);
+    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
+    assert!(!s.release_edges.contains(&(id("r2"), id("g2"))));
+    assert_ne!(s.stage(&id("r2")), Some(Stage::Blocked));
+}
+
+/// Items for the format 5 refusal tests: r3 is held by w3, g3 dismissed, g4
+/// rejected, g5 merged, g6 completed.
+const FORMAT_5_MORE: &str = r#"{"at_ms":1300,"by":"gabriel","actor":"person","kind":"imported","item":"r3","source":"github","upstream_id":"GetFelix/felix-blocks#3","title":"undo"}
+{"at_ms":1301,"by":"gabriel","actor":"person","kind":"accepted","item":"r3","tier":1}
+{"at_ms":1302,"by":"gabriel","actor":"person","kind":"imported","item":"g3","source":"github","upstream_id":"GetFelix/felix-gateway#9","title":"dismissed"}
+{"at_ms":1303,"by":"gabriel","actor":"person","kind":"accepted","item":"g3","tier":1}
+{"at_ms":1304,"by":"gabriel","actor":"person","kind":"closed","item":"g3","why":"dismissed"}
+{"at_ms":1305,"by":"gabriel","actor":"person","kind":"imported","item":"g4","source":"github","upstream_id":"GetFelix/felix-gateway#10","title":"rejected"}
+{"at_ms":1306,"by":"gabriel","actor":"person","kind":"rejected","item":"g4"}
+{"at_ms":1307,"by":"gabriel","actor":"person","kind":"imported","item":"g5","source":"github","upstream_id":"GetFelix/felix-gateway#11","title":"merged"}
+{"at_ms":1308,"by":"gabriel","actor":"person","kind":"accepted","item":"g5","tier":1}
+{"at_ms":1309,"by":"gabriel","actor":"person","kind":"closed","item":"g5","why":"merged"}
+{"at_ms":1310,"by":"gabriel","actor":"person","kind":"imported","item":"g6","source":"github","upstream_id":"GetFelix/felix-gateway#12","title":"completed"}
+{"at_ms":1311,"by":"gabriel","actor":"person","kind":"accepted","item":"g6","tier":1}
+{"at_ms":1312,"by":"gabriel","actor":"person","kind":"closed","item":"g6","why":"completed"}
+{"at_ms":1313,"by":"w3","actor":"agent","kind":"claimed","item":"r3","attempt":1,"deadline_ms":1800000090000}
+"#;
+
+/// w3 asks on r3 to wait for `on` until `done_when`.
+fn ask_from_r3(at: u64, on: &str, done_when: &str) -> String {
+    format!(
+        r#"{{"at_ms":{at},"by":"w3","actor":"agent","kind":"prerequisite","item":"r3","attempt":1,"prerequisite":"{on}","key":"need-{on}","done_when":"{done_when}","cost_micros":0}}
+"#
+    )
+}
+
+/// Only finished, unreleased work is worth a release wait: a released,
+/// dismissed or rejected item is refused, and so is a `merged` ask on merged
+/// work.
+#[test]
+fn closed_prerequisites_are_still_refused_at_format_5() {
+    let base = FORMAT_5_LOG.lines().count() + FORMAT_5_MORE.lines().count();
+    for (on, done_when) in [
+        ("g1", "released"),
+        ("g3", "released"),
+        ("g4", "released"),
+        ("g5", "merged"),
+    ] {
+        let s = format_5_with(&format!(
+            "{FORMAT_5_MORE}{}",
+            ask_from_r3(1400, on, done_when)
+        ));
+        assert_eq!(
+            s.rejections.last(),
+            Some(&Rejection {
+                offset: base as u64,
+                why: Reject::Closed
+            }),
+            "{on} {done_when}"
+        );
+        assert_eq!(s.rejections.len(), 2, "{on} {done_when}");
+    }
+}
+
+/// Completed work waits for a release like merged work, until a person ships
+/// it or unlinks the waiter.
+#[test]
+fn a_completed_item_is_a_release_prerequisite_until_unlinked_at_format_5() {
+    let asked = format!("{FORMAT_5_MORE}{}", ask_from_r3(1400, "g6", "released"));
+    let s = format_5_with(&asked);
+    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
+    assert!(s.release_edges.contains(&(id("r3"), id("g6"))));
+    assert_eq!(s.stage(&id("r3")), Some(Stage::Blocked));
+
+    let unlinked = r#"{"at_ms":1410,"by":"gabriel","actor":"person","kind":"unlinked","item":"r3","to":"g6"}
+"#;
+    let s = format_5_with(&format!("{asked}{unlinked}"));
+    assert!(!s.release_edges.contains(&(id("r3"), id("g6"))));
+    assert_ne!(s.stage(&id("r3")), Some(Stage::Blocked));
+}

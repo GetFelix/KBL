@@ -1691,6 +1691,7 @@ impl State {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
                 }
+                let new_round = self.format() >= FORMAT_V5;
                 let it = self.item_mut(item)?;
                 if it.parent.is_some() {
                     return Err(Reject::NotARoot);
@@ -1709,6 +1710,11 @@ impl State {
                 it.left_scope_by_sync = false;
                 it.changed_upstream = true;
                 it.proposal = None;
+                // A re-opened item starts a new round, so a waiter asks again
+                // what it waits for.
+                if new_round {
+                    self.release_edges.retain(|(_, to)| to != item);
+                }
             }
             WorkRecord::AttemptClosed { item, attempt } => {
                 if rec.actor == Actor::Agent {
