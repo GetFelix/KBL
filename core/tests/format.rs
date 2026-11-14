@@ -4,7 +4,8 @@
 
 use kbl_core::codec::Codec;
 use kbl_core::work::{
-    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, ReadError, WorkLogged,
+    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, ReadError,
+    WorkLogged,
     WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
@@ -663,3 +664,113 @@ fn a_completed_item_is_a_release_prerequisite_until_unlinked_at_format_5() {
     assert!(!s.release_edges.contains(&(id("r3"), id("g6"))));
     assert_ne!(s.stage(&id("r3")), Some(Stage::Blocked));
 }
+
+/// A log that raises to the sixth format: ingest opened an issue for each of
+/// two prerequisites, one a person accepted and one the tracker did. Its folded
+/// state is pinned in `wasm/golden/format_6.state.json`.
+const FORMAT_6_LOG: &str = include_str!("work_format_6.jsonl");
+
+const RAISE_6: &str =
+    r#"{"v":6,"at_ms":1110,"by":"gabriel","actor":"person","kind":"format_raised","to":6}"#;
+
+/// Format 6 adds no record: only the raise is stamped 6.
+#[test]
+fn the_sixth_format_is_six_and_adds_no_record() {
+    assert_eq!(FORMAT_V6, 6);
+    const { assert!(FORMAT >= FORMAT_V6) };
+    assert!(FORMAT_6_LOG.contains(RAISE_6));
+    for (_, r) in entries(FORMAT_6_LOG) {
+        if r.record.kind() == "format_raised" {
+            assert_eq!(r.v, FORMAT_V6);
+        } else {
+            assert!(r.v < FORMAT_V6);
+        }
+        assert_eq!(r.record.format(), r.v);
+    }
+}
+
+fn imported_as<'a>(s: &'a State, item: &str) -> Vec<&'a str> {
+    s.imported()
+        .filter(|(_, _, i)| i.as_str() == item)
+        .map(|(_, up, _)| up)
+        .collect()
+}
+
+/// Before the raise `imported` on an existing item is a duplicate. After it,
+/// a prerequisite a person accepted takes the issue once. An acceptance from
+/// before the raise or by the tracker is not enough.
+#[test]
+fn an_accepted_prerequisite_takes_its_upstream_issue_from_format_6() {
+    let log = entries(FORMAT_6_LOG);
+    let before = fold(&log[..11]);
+    assert_eq!(
+        before.rejections,
+        vec![Rejection {
+            offset: 10,
+            why: Reject::Duplicate
+        }]
+    );
+    assert!(imported_as(&before, "g1").is_empty());
+
+    let s = fold(&log);
+    assert_eq!(s.format(), FORMAT_V6);
+    let rejected: Vec<(u64, Reject)> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(
+        rejected,
+        vec![
+            (10, Reject::Duplicate),
+            (12, Reject::ActorNotAllowed),
+            (15, Reject::Duplicate),
+            (16, Reject::ActorNotAllowed)
+        ]
+    );
+    assert_eq!(imported_as(&s, "g1"), vec!["GetFelix/felix-gateway#40"]);
+    assert!(imported_as(&s, "g2").is_empty());
+    assert!(s.items[&id("g1")].closed_by_sync);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+    assert_eq!(s.stage(&id("r2")), Some(Stage::Blocked));
+}
+
+/// A format 5 log keeps `imported` on an existing item a duplicate, so the
+/// prerequisite stays unimported.
+#[test]
+fn format_5_refuses_an_issue_for_an_existing_item() {
+    let raise5 =
+        r#"{"v":5,"at_ms":1110,"by":"gabriel","actor":"person","kind":"format_raised","to":5}"#;
+    let s = fold(&entries(&FORMAT_6_LOG.replace(RAISE_6, raise5)));
+    assert_eq!(s.format(), FORMAT_V5);
+    assert!(imported_as(&s, "g1").is_empty());
+    let rejected: Vec<(u64, Reject)> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(
+        rejected,
+        [10, 12, 14, 15, 16].map(|o| (o, Reject::Duplicate)).to_vec()
+    );
+}
+
+/// The issue must be in the repo the prerequisite targets, on an open item;
+/// a person accepting the tracker-accepted one lets it take its issue.
+#[test]
+fn the_issue_must_match_the_target_on_an_open_item_at_format_6() {
+    let more = r#"{"at_ms":1200,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1210,"by":"ingest","actor":"tracker","kind":"imported","item":"g2","source":"github","upstream_id":"GetFelix/felix-blocks#43","title":"gateway rate limits"}
+{"at_ms":1220,"by":"ingest","actor":"tracker","kind":"imported","item":"g2","source":"gitlab","upstream_id":"GetFelix/felix-gateway#43","title":"gateway rate limits"}
+{"at_ms":1230,"by":"ingest","actor":"tracker","kind":"imported","item":"g2","source":"github","upstream_id":"GetFelix/felix-gateway#43","title":"gateway rate limits"}
+{"at_ms":1240,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix-blocks#44","title":"swap blocks atomically"}
+"#;
+    let s = fold(&entries(&format!("{FORMAT_6_LOG}{more}")));
+    let rejected: Vec<(u64, Reject)> = s.rejections[4..]
+        .iter()
+        .map(|r| (r.offset, r.why))
+        .collect();
+    assert_eq!(rejected, vec![(19, Reject::Duplicate), (20, Reject::Duplicate), (22, Reject::Duplicate)]);
+    assert_eq!(imported_as(&s, "g2"), vec!["GetFelix/felix-gateway#43"]);
+
+    let closed = r#"{"at_ms":1200,"by":"gabriel","actor":"person","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1210,"by":"gabriel","actor":"person","kind":"closed","item":"g2","why":"dismissed"}
+{"at_ms":1220,"by":"ingest","actor":"tracker","kind":"imported","item":"g2","source":"github","upstream_id":"GetFelix/felix-gateway#43","title":"gateway rate limits"}
+"#;
+    let s = fold(&entries(&format!("{FORMAT_6_LOG}{closed}")));
+    assert_eq!(s.rejections.last().map(|r| r.why), Some(Reject::Closed));
+    assert!(imported_as(&s, "g2").is_empty());
+}
+

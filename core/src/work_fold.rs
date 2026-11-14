@@ -13,7 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FindingVerdict,
+    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FORMAT_V6,
+    FindingVerdict,
     MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE,
     MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS,
     MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict,
@@ -344,6 +345,10 @@ pub struct Item {
     #[serde(default, skip_serializing_if = "is_false")]
     pub left_scope_by_sync: bool,
     pub accepted: bool,
+    /// A person wrote the last `accepted` on a log at format 6 or above.
+    /// An earlier acceptance does not count, so a format 5 state is unchanged.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub accepted_by_person: bool,
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
     pub hold: Option<Hold>,
@@ -971,6 +976,7 @@ impl State {
             left_scope: false,
             left_scope_by_sync: false,
             accepted: false,
+            accepted_by_person: false,
             tier: None,
             proposal: None,
             hold: None,
@@ -1030,8 +1036,14 @@ impl State {
                     return Err(Reject::ActorNotAllowed);
                 }
                 let up = format!("{source}\n{upstream_id}");
-                if self.items.contains_key(item) || self.upstream.contains_key(&up) {
+                if self.upstream.contains_key(&up) {
                     return Err(Reject::Duplicate);
+                }
+                if self.items.contains_key(item) {
+                    if self.format() < FORMAT_V6 {
+                        return Err(Reject::Duplicate);
+                    }
+                    return self.attach_upstream(item, source, upstream_id, up);
                 }
                 self.upstream.insert(up, item.clone());
                 self.budgets.insert(item.clone(), Budget::for_new_root());
@@ -1116,6 +1128,7 @@ impl State {
                 if tier.is_some_and(|t| t >= TIERS) {
                     return Err(Reject::BadTier);
                 }
+                let format = self.format();
                 let it = self.item_mut(item)?;
                 // A tier a person set while editing outranks the triage proposal.
                 it.tier = tier
@@ -1123,6 +1136,7 @@ impl State {
                     .or(it.proposal.as_ref().map(|p| p.tier))
                     .or(Some(DEFAULT_TIER));
                 it.accepted = true;
+                it.accepted_by_person = rec.actor == Actor::Person && format >= FORMAT_V6;
                 // A proposal gets its root budget when a person accepts it, not before.
                 if it.parent.is_none() {
                     self.budgets
@@ -1705,6 +1719,7 @@ impl State {
                 it.release = None;
                 // Back to Triage: a person accepts it again.
                 it.accepted = false;
+                it.accepted_by_person = false;
                 it.left_scope = false;
                 it.left_scope_by_sync = false;
                 it.changed_upstream = true;
@@ -2392,6 +2407,41 @@ impl State {
             }
             p.posts += 1;
         }
+        Ok(())
+    }
+
+    /// From format 6, ties an open prerequisite to the issue ingest opened
+    /// for it in its target repo, so upstream sync follows it like any
+    /// imported root. Only a person's acceptance lets an issue be opened.
+    fn attach_upstream(
+        &mut self,
+        item: &ItemId,
+        source: &str,
+        upstream_id: &str,
+        up: String,
+    ) -> Result<(), Reject> {
+        if self.upstream.values().any(|i| i == item) {
+            return Err(Reject::Duplicate);
+        }
+        let it = self.item(item)?;
+        if it.parent.is_some() {
+            return Err(Reject::NotARoot);
+        }
+        if it.closed.is_some() {
+            return Err(Reject::Closed);
+        }
+        if !it.accepted_by_person {
+            return Err(Reject::ActorNotAllowed);
+        }
+        let repo = upstream_id.split_once('#').map(|(repo, _)| repo);
+        let same = it
+            .target
+            .as_ref()
+            .is_some_and(|t| t.source == source && Some(t.repo.as_str()) == repo);
+        if !same {
+            return Err(Reject::Duplicate);
+        }
+        self.upstream.insert(up, item.clone());
         Ok(())
     }
 
