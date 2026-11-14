@@ -258,10 +258,16 @@ fn retry_has_note(core: &Core, record: &WorkRecord) -> Result<(), Error> {
     let WorkRecord::ForkedFrom { item, note, .. } = record else {
         return Ok(());
     };
+    // A closed, held or already redone item gets the fold's refusal, not a
+    // request for a note that would not help.
     let red = core.state.items.get(item).is_some_and(|it| {
-        it.pr_status
-            .as_ref()
-            .is_some_and(|s| s.phase == PrPhase::Open && s.checks == PrChecks::Red)
+        it.closed.is_none()
+            && it.hold.is_none()
+            && it.pending_fork.is_none()
+            && it
+                .pr_status
+                .as_ref()
+                .is_some_and(|s| s.phase == PrPhase::Open && s.checks == PrChecks::Red)
     });
     if !red {
         return Ok(());
@@ -285,6 +291,8 @@ struct Recall {
     subjects: HashMap<u64, ItemId>,
     /// The `pr_status` that turned each item's checks red, while they stay red.
     /// Kept with the request, since a new request starts a new failure.
+    /// A rebuild also reads records the fold refused; a missing mark only
+    /// lets an older note through.
     red_since: HashMap<ItemId, (String, u64)>,
 }
 
@@ -306,6 +314,14 @@ impl Recall {
             } else {
                 self.red_since.remove(item);
             }
+        }
+        // The fold drops the status when the item reports another request.
+        if let WorkRecord::Progress {
+            item, pr: Some(pr), ..
+        } = record
+            && self.red_since.get(item).is_some_and(|(old, _)| old != pr)
+        {
+            self.red_since.remove(item);
         }
         remember(&mut self.texts, offset, record);
     }

@@ -225,8 +225,10 @@ reported the failure. Without one, or with an older note, the tracker answers
 `note_required`. The note is what the next attempt starts from, and it shows
 that someone read the failure before running the work again. A new pull
 request on the item starts a new failure, and green checks end it. This check
-also runs before the append. Such a redo is not handed out while the check
-stays red ([#213](https://github.com/GetFelix/KBL/issues/213)).
+also runs before the append. Today a redo that passes
+still waits in Needs you until the checks are green, because the failed check
+keeps the item there. [#213](https://github.com/GetFelix/KBL/issues/213) is
+the fix.
 
 Text in a record stays inline up to 4 KiB. Longer text is an artifact the
 caller stored first and names by its hash; `kbl-mcp` does that for the
@@ -399,7 +401,7 @@ What it does with GitHub:
   another open item already reports.
   Reviews count only from the repo's owners, members and collaborators, the
   latest per reviewer; a dismissed review no longer counts. Every page of
-  reviews is read. If a page fails, or there are more than 2,000 reviews, the
+  reviews is read. If GitHub refuses a page, or there are 2,000 reviews or more, the
   request reads as not reviewed (or as waiting on the reviewers asked), never
   as approved from part of the list. Checks are the
   check runs and the commit statuses on the head commit, with statuses paged
@@ -1084,7 +1086,7 @@ the note box, not from search or other text fields:
 |---|---|---|---|---|
 | Triage proposal | Accept: `triaged`, `linked` | Merge into the item it duplicates: `rejected` with the original | Decline: `rejected` | |
 | Question | The first option: `answered` | The second option | and so on | The number after the last option goes to the free text field |
-| Failure | Retry, with the note if one is typed: `retried`. Live, a retry after a failed check is refused without a note | Close: `rejected` | | |
+| Failure | Retry, with the note if one is typed: `retried`. The tracker refuses a retry after a failed check without a note | Close: `rejected` | | |
 | Redo limit reached | Take it yourself: `taken` | Split it: `split` | Close: `rejected` | |
 | Blocked | Mark the dependency resolved: `unblocked` | | | |
 | Held by an agent | Send the note: `steered` | Stop it: `released` | | |

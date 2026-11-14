@@ -253,7 +253,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `step` | The holding agent | `core/src/work_fold.rs:1202` |
 | `edit` | The holding agent | `core/src/work_fold.rs:1215` |
 | `human_input` | Tracker, person | `core/src/work_fold.rs:1226` |
-| `forked_from` | Tracker, person | Redo limit per item (`core/src/work_fold.rs:1240`). While the item's pull request has a failed check, the tracker refuses one that names no note written since the failure (`tracker/src/tracker.rs:275`) |
+| `forked_from` | Tracker, person | Redo limit per item (`core/src/work_fold.rs:1240`). While the item's pull request has a failed check, the tracker refuses one that names no note written since the failure (`tracker/src/tracker.rs:281`) |
 | `closed` | Tracker, person | The tracker closes as merged only on a merged status (`core/src/work_fold.rs:1285`) |
 | `rejected` | Tracker, person | `core/src/work_fold.rs:1309` |
 | `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:2049`) |

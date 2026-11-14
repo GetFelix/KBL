@@ -92,10 +92,6 @@ async fn a_redo_after_a_failed_check_names_a_note_written_since_it_failed() {
     t.ingest_record(ingest.clone(), status(PrChecks::Red))
         .await
         .unwrap();
-    // The same failure reported again does not move the mark.
-    t.ingest_record(ingest, status(PrChecks::Red))
-        .await
-        .unwrap();
     let before = fake.log().len();
     assert!(note_required(redo(&t, at, None).await));
     // A note from before the failure says nothing about it.
@@ -103,6 +99,10 @@ async fn a_redo_after_a_failed_check_names_a_note_written_since_it_failed() {
     assert_eq!(fake.log().len(), before);
 
     let late = note(&t).await;
+    // The same failure reported again does not move the mark past the note.
+    t.ingest_record(ingest, status(PrChecks::Red))
+        .await
+        .unwrap();
     redo(&t, at, Some(late)).await.unwrap();
     assert_eq!(fake.kinds().last().map(String::as_str), Some("forked_from"));
 }
@@ -139,4 +139,45 @@ async fn a_redo_needs_no_note_while_no_check_has_failed() {
         .await
         .unwrap();
     redo(&t, at, None).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_closed_item_gets_the_folds_refusal_not_a_request_for_a_note() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let at = finished(&t).await;
+    t.ingest_record(key("ingest-gh"), status(PrChecks::Red))
+        .await
+        .unwrap();
+    let closed = WorkRecord::Closed {
+        item: item("a1"),
+        why: kbl_core::work::CloseWhy::Dismissed,
+    };
+    t.person_record(key("gab"), closed).await.unwrap();
+    let r = redo(&t, at, None).await;
+    assert!(
+        matches!(r, Err(Error::Refused { ref why }) if why == "closed"),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn another_request_on_the_item_starts_a_new_failure() {
+    let progress = |pr: &str| WorkRecord::Progress {
+        item: item("a1"),
+        attempt: 2,
+        note: Content::Text("opened".into()),
+        branch: None,
+        pr: Some(pr.into()),
+    };
+    let mut recall = Recall::default();
+    recall.remember(10, &status(PrChecks::Red));
+    // Reported again, the request keeps its mark.
+    recall.remember(15, &progress(PR));
+    assert_eq!(recall.red_since[&item("a1")].1, 10);
+    // Away to another request and back: the old failure is over.
+    recall.remember(20, &progress("GetFelix/felix#b2"));
+    recall.remember(30, &progress(PR));
+    recall.remember(40, &status(PrChecks::Red));
+    assert_eq!(recall.red_since[&item("a1")].1, 40);
 }
