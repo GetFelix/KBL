@@ -209,11 +209,12 @@ does not parse, an unknown kind of work or text over the inline limit is a
 show why, as `{stream, offset}`. A person reads them as support, so the
 tracker holds them to the item's own tree. Each one must be a `work.events`
 record that names an item with the same root, written before the record that
-cites it. An item that another tree's record created, such as a deferred
-finding or a prerequisite proposal, may also cite that record, which its
-context entry points at. A proposal the agent files is its own root, so the
-item it holds cannot cite records about the proposal. Anything else is
-refused: another tree's record answers `evidence_outside_tree`, another stream `evidence_stream`, a later offset
+cites it. When another tree's record created the root, such as a deferred
+finding or a prerequisite proposal, the tree may also cite that record, which
+the root's context entry points at. A proposal is its own root, so the item
+that filed it cannot cite records of the proposal's tree. Anything else is
+refused: another tree's record answers `evidence_outside_tree`, another stream
+`evidence_stream`, a later offset
 `evidence_from_the_future`. A writer who may not make the record gets the
 fold's refusal instead, so it learns nothing about where a record is. The
 check runs before the append, so logs written before it fold as they did.
