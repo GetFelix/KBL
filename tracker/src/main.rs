@@ -31,6 +31,11 @@ struct Cli {
     /// Where the REST API listens.
     #[arg(long, env = "KBL_TRACKER_LISTEN", default_value = "127.0.0.1:8790")]
     listen: SocketAddr,
+    /// Allows a listen address other than loopback. Set it only when a proxy in
+    /// front terminates TLS: the tracker serves plain HTTP, and every call
+    /// carries a bearer token.
+    #[arg(long, env = "KBL_TRACKER_BEHIND_TLS_PROXY")]
+    behind_tls_proxy: bool,
     /// JSON file mapping tokens to agent names and people:
     /// {"agents": {"<token>": "w1"}, "people": {"<token>": "gabriel"}}.
     #[arg(long, env = "KBL_TRACKER_TOKENS_FILE")]
@@ -111,8 +116,20 @@ fn main() -> Result<()> {
         .block_on(serve())
 }
 
+/// Plain HTTP stays on loopback unless a TLS proxy is said to be in front,
+/// so tokens never cross a network in the clear by accident.
+fn check_listen(addr: SocketAddr, behind_tls_proxy: bool) -> Result<()> {
+    anyhow::ensure!(
+        behind_tls_proxy || addr.ip().to_canonical().is_loopback(),
+        "the tracker serves plain HTTP, so it listens only on loopback; {addr} is not. \
+         Put a TLS proxy in front and set KBL_TRACKER_BEHIND_TLS_PROXY=true (--behind-tls-proxy)"
+    );
+    Ok(())
+}
+
 async fn serve() -> Result<()> {
     let cli = Cli::parse();
+    check_listen(cli.listen, cli.behind_tls_proxy)?;
     let team = TeamName::new(cli.namespace.clone()).map_err(|e| {
         anyhow::anyhow!(
             "KBL_NAMESPACE {:?} cannot name a team: it must follow the key rule and not be `kbl`",
@@ -251,3 +268,6 @@ async fn with_org(
         }),
     )
 }
+
+#[cfg(test)]
+mod tests;

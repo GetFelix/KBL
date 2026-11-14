@@ -42,6 +42,15 @@ struct Cli {
         requires = "webhook_secret_env"
     )]
     webhook_listen: Option<SocketAddr>,
+    /// Allows a webhook address other than loopback. Set it only when a proxy
+    /// in front terminates TLS: the endpoint serves plain HTTP, and a delivery
+    /// carries the issue's text.
+    #[arg(
+        long,
+        env = "KBL_INGEST_WEBHOOK_BEHIND_TLS_PROXY",
+        requires = "webhook_listen"
+    )]
+    webhook_behind_tls_proxy: bool,
     /// The environment variable holding the webhook secret.
     #[arg(long, env = "KBL_INGEST_WEBHOOK_SECRET_ENV")]
     webhook_secret_env: Option<String>,
@@ -51,6 +60,18 @@ struct Cli {
     /// Poll once and exit.
     #[arg(long)]
     once: bool,
+}
+
+/// Plain HTTP stays on loopback unless a TLS proxy is said to be in front, so
+/// a private repo's issue text never crosses a network in the clear by accident.
+fn check_listen(addr: SocketAddr, behind_tls_proxy: bool) -> Result<()> {
+    anyhow::ensure!(
+        behind_tls_proxy || addr.ip().to_canonical().is_loopback(),
+        "the webhook serves plain HTTP, so it listens only on loopback; {addr} is not. \
+         Put a TLS proxy in front and set KBL_INGEST_WEBHOOK_BEHIND_TLS_PROXY=true \
+         (--webhook-behind-tls-proxy)"
+    );
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -96,6 +117,7 @@ async fn serve() -> Result<()> {
 
     let wake = Arc::new(webhook::Wake::default());
     if let Some(addr) = cli.webhook_listen {
+        check_listen(addr, cli.webhook_behind_tls_proxy)?;
         let var = cli
             .webhook_secret_env
             .context("a webhook secret variable")?;

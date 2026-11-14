@@ -159,6 +159,17 @@ same name in another source. The source is the name ingest records, such as
 `github`, and is compared exactly. An agent with no grant can reach only its own
 tree's repository.
 
+The tracker listens on `127.0.0.1:8790` (`--listen`, or `KBL_TRACKER_LISTEN`)
+and serves plain HTTP, so every bearer token crosses the socket in the clear.
+It refuses to start on an address other than loopback unless you say a proxy
+in front of it terminates TLS, with `--behind-tls-proxy` (or
+`KBL_TRACKER_BEHIND_TLS_PROXY=true`). A proxy on the same host that forwards
+to `127.0.0.1:8790` needs no flag; the flag is only for a tracker that must
+listen on another address. Agents and ingest then call the proxy's `https://`
+address. The callers do not check this: a `KBL_TRACKER_URL` or ingest
+`tracker.url` that starts with `http://` and names another host sends the
+token in the clear.
+
 An agent's token maps to its name, which goes on every record it causes and is
 the consumer-group member name. `kbl-mcp` reads `KBL_TRACKER_URL` and
 `KBL_TRACKER_TOKEN`; without them the work tools say they are not set up.
@@ -308,7 +319,12 @@ pull request states at once): it checks `X-Hub-Signature-256`
 against the secret named by `--webhook-secret-env`, and a `transferred` or
 `deleted` event also forces a reconcile. An empty secret is refused, a repeated
 `X-GitHub-Delivery` id is dropped, and wakes are at least
-`--webhook-min-gap-seconds` apart (default 10).
+`--webhook-min-gap-seconds` apart (default 10). The endpoint serves plain
+HTTP and a delivery carries the issue's text, so, like the tracker, it listens
+only on loopback unless `--webhook-behind-tls-proxy`
+(`KBL_INGEST_WEBHOOK_BEHIND_TLS_PROXY=true`) says a TLS proxy is in front.
+GitHub reaches it through that proxy, which can forward to loopback without
+the flag.
 
 The ingest token can act only on roots ingest imported. A pull request an agent
 reports is written to (made a draft) only when it is in the same repository as
