@@ -281,6 +281,6 @@ export function summary(batch: readonly Write[]): { text: string; tone: 'busy' |
   const noUndo = new Map<string, string[]>();
   for (const x of batch) if (x.status === 'ok' && x.noUndo) noUndo.set(x.noUndo, [...(noUndo.get(x.noUndo) ?? []), x.item]);
   for (const [why, ids] of noUndo) parts.push(`No undo for ${items(ids)}: ${why}`);
-  for (const x of bad) parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'not sent'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
+  for (const x of bad) parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'failed'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
   return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.filter((x) => x.status === 'ok' && x.undo).length };
 }

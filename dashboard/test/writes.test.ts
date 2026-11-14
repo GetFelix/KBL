@@ -128,6 +128,8 @@ test('a write that gets no answer is abandoned as failed, with its outcome unkno
   const o = await t.write(request('a', { kind: 'reject' }));
   assert.equal(o.status, 'failed');
   assert.match((o as { reason: string }).reason, /No answer from the tracker; it may or may not have been written/);
+  const line = summary([{ id: 1, batch: 1, kind: 'reject', item: 'a', status: 'failed', reason: (o as { reason: string }).reason }]);
+  assert.match(line.text, /^a: failed, No answer from the tracker/);
 });
 
 test('the Needs you inbox is a view in the address that holds only items waiting on a person', async () => {

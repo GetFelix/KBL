@@ -95,7 +95,7 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   offers only what the fold would take for that item (`CAN` in `src/writes.ts`): Accept in
   Triage and Proposed, Reject in Proposed only, a tier and Close on open work, and an answer form on an open question. Claim is not
   offered: claiming is an agent's, and the fold refuses `claimed` from a person.
-- **Write states.** A write is pending, written, refused or not sent. While pending, the item's
+- **Write states.** A write is pending, written, refused or failed (no answer, or not sent). While pending, the item's
   buttons are `aria-disabled` (not `disabled`, which would drop the focus) and say what is in flight. The
   activity line above the work is a status region that says what the last write did and, for a refusal, the
   tracker's own reason and code. It stays until the next write or Dismiss, never on a timer. The record
