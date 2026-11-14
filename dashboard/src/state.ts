@@ -2,6 +2,7 @@
 // only main.ts talks to the gateway. The view, item and search are kept in the address so
 // a link opens the same view for someone else.
 import type { BlockedRow, ItemRow } from './fold.ts';
+import type { Overlaps } from './overlap.ts';
 
 export type Connection =
   | { kind: 'setup' }
@@ -30,6 +31,8 @@ export interface ViewState {
   items: ItemRow[];
   /** The Blocked items with what each waits on, from the same fold as `items`. */
   blocked: BlockedRow[];
+  /** File overlaps per item, from the same fold as `items`. */
+  overlaps: Overlaps;
   view: View;
   query: string;
   selected: string | null;
@@ -40,7 +43,7 @@ export interface ViewState {
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[] }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps }
   | { type: 'view'; view: View }
   | { type: 'query'; query: string }
   | { type: 'select'; id: string | null }
@@ -53,7 +56,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, connection: a.connection, synced: s.synced || a.connection.kind === 'live' };
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
-      return { ...s, items: a.items, blocked: a.blocked };
+      return { ...s, items: a.items, blocked: a.blocked, overlaps: a.overlaps };
     case 'view':
       return { ...s, view: a.view };
     case 'query':

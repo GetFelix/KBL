@@ -8,6 +8,7 @@ export interface Fold {
   stateJson(): string;
   itemsJson(): string;
   blockedJson(): string;
+  overlapsJson(): string;
 }
 
 export interface ItemRow {

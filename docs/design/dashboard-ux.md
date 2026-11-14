@@ -12,7 +12,7 @@ the rest (issue [#132](https://github.com/GetFelix/KBL/issues/132)).
 | ![The first page with no token](img/before-setup.png) | ![Setup state with the next step](img/setup-dark.png) |
 
 More shots: [palette](img/palette-dark.png), [shortcuts](img/shortcuts-light.png), [panel](img/panel-dark.png),
-[loading](img/loading-dark.png), [no match](img/empty-search-dark.png), [stopped](img/error-dark.png), [cannot reach the gateway](img/unreachable-dark.png),
+[overlap](img/overlap-dark.png), [loading](img/loading-dark.png), [no match](img/empty-search-dark.png), [stopped](img/error-dark.png), [cannot reach the gateway](img/unreachable-dark.png),
 [phone](img/phone-dark.png), [light list](img/list-light.png). `node dashboard/check/browser.mjs <dir>`
 regenerates the "after" set.
 
@@ -49,7 +49,9 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   either view, the list says what each waits on, with the blocker's repo (or its source when it has no repo) only
   when that differs from the row's, and `release` when the blocker is merged and the link waits for its release.
   The panel lists the same blockers with their titles, each a link that opens it.
-- **Panel.** One labelled field per entry in `FIELDS` in `src/ui/item-panel.ts`; a new detail is one function.
+- **Panel.** One labelled field per entry in `FIELDS` in `src/ui/item-panel.ts`; a new detail is one function
+  in its own module under `src/ui/`. "Same files" lists the open items that declare the same paths, with the suggested link, and their rows carry a text flag
+  ("2 file overlaps") rather than colour alone. The notes come from `core` (`src/overlap.ts` only shapes them).
 - **States.** Each has a heading, one sentence and the next step: setup (how to connect), loading (placeholder
   rows, `aria-busy`), cannot reach the gateway (nothing read yet, when the next try is), empty, no match
   (Clear search), nothing blocked, no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,

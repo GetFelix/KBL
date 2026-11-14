@@ -9,6 +9,9 @@ and, when that blocker is in a different repo or source, where it lives
 is plain TypeScript built with Vite. The fold already holds the state, so there is no UI framework; a small store
 in `src/state.ts` holds only what the view adds (selection, search, open dialogs).
 
+Two open items whose `files` context entries share a path each get a flag on their row and a "Same files"
+note in the panel, with the suggested link ([Files that overlap](../docs/work-tracker.md#files-that-overlap)).
+
 It cannot write yet: a person's actions will go to the tracker's REST routes. The design, the conventions it
 follows and the plan for later views are in [docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md).
 

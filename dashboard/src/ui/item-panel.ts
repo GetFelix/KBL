@@ -5,6 +5,7 @@ import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { h } from './dom.ts';
 import { itemHref } from './item-list.ts';
+import { overlapField } from './overlap-section.ts';
 import { waitsOnField } from './waits-on-field.ts';
 
 export interface PanelHandlers {
@@ -27,7 +28,7 @@ const stageField: Field = {
 };
 
 // A new field is one module and one entry here.
-const FIELDS: readonly Field[] = [stageField, waitsOnField];
+const FIELDS: readonly Field[] = [stageField, waitsOnField, overlapField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
@@ -61,8 +62,10 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
       el.hidden = s.open === null;
       if (s.open === null) return el.replaceChildren();
       // A live record can redraw the panel under the focus; keep the focus in the panel.
-      const hadFocus = el.contains(document.activeElement);
-      const close = h('button', { type: 'button', class: 'button ghost', 'aria-label': 'Close the item', onclick: on.closeItem }, 'Close');
+      const active = document.activeElement;
+      const hadFocus = el.contains(active);
+      const focusKey = active instanceof HTMLElement ? active.dataset.focus : undefined;
+      const close = h('button', { type: 'button', class: 'button ghost', 'data-focus': 'close', 'aria-label': 'Close the item', onclick: on.closeItem }, 'Close');
       el.replaceChildren(
         h('header', { class: 'panel-head' }, h('span', { class: 'row-id' }, s.open), close),
         item
@@ -77,7 +80,10 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
               h('h2', { id: 'panel-title', class: 'panel-title' }, 'No such item'),
               h('p', { class: 'muted' }, WHY[why as keyof typeof WHY](s.open))),
       );
-      if (hadFocus) el.focus({ preventScroll: true });
+      if (hadFocus) {
+        const same = focusKey ? el.querySelector<HTMLElement>(`[data-focus="${focusKey}"]`) : null;
+        (same ?? el).focus({ preventScroll: true });
+      }
     },
     focus() {
       el.focus({ preventScroll: true });

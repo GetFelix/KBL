@@ -3,6 +3,7 @@
 // natively; j and k move the selection and the focus together.
 import { waitsOn } from '../fold.ts';
 import { group, visible } from '../list.ts';
+import { flagText } from '../overlap.ts';
 import { toAddress, type Address, type ViewState } from '../state.ts';
 import { h } from './dom.ts';
 
@@ -68,10 +69,11 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }));
       rows.set(id, a);
     }
-    const [t, w] = [a.children[1], a.children[2]];
+    const t = a.querySelector('.row-title')!;
+    const w = a.querySelector('.row-waits')!;
     if (t.textContent !== title) t.textContent = title;
     const line = waits ? `waits on ${waits}` : '';
     if (w.textContent !== line) w.textContent = line;
@@ -171,6 +173,11 @@ export function itemList(on: ListHandlers): { el: HTMLElement; render(s: ViewSta
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
+        // Text, not colour alone, so it reads in both themes and to a screen reader as part of the link.
+        const flag = a.querySelector<HTMLElement>('.row-flag')!;
+        const text = flagText(s.overlaps.get(id));
+        if (flag.textContent !== text) flag.textContent = text;
+        flag.hidden = text === '';
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

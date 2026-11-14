@@ -49,5 +49,8 @@ export function fixtureLog() {
   agent({ kind: 'claimed', item: 'blk-41', attempt: 1, deadline_ms: at + 3_600_000 });
   agent({ kind: 'prerequisite', item: 'blk-41', attempt: 1, prerequisite: 'blk-42', key: 'history', done_when: 'released', cost_micros: 0 });
   rec({ kind: 'closed', item: 'blk-42', why: 'merged' });
+  // Two ready items that name the same files, so the overlap note and row flag show.
+  rec({ kind: 'context', item: 'gh-2219', entry: 'files', text: { text: 'core/src/retention.rs\ncore/src/segment/' } });
+  rec({ kind: 'context', item: 'gh-2221', entry: 'files', text: { text: 'core/src/segment/reader.rs\ngateway/src/offset.rs' } });
   return log;
 }

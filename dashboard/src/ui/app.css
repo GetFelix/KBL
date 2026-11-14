@@ -73,6 +73,13 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .fields dt { color: var(--muted); }
 .fields dd { margin: 0; }
 
+.row-flag { margin-left: var(--space-2); flex-shrink: 0; padding: 0 var(--space-2); border: 1px solid var(--warn); border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text); }
+.section-title { font-size: var(--text-md); font-weight: var(--weight-bold); margin: var(--space-5) 0 var(--space-2); }
+.overlap-notes, .overlap-files { list-style: none; margin: 0; padding: 0; }
+.overlap { border-left: 3px solid var(--warn); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-3); }
+.overlap p { margin: var(--space-1) 0; }
+.overlap-files code { overflow-wrap: anywhere; }
+
 .chord { display: inline-flex; gap: 2px; }
 kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); font-size: var(--text-xs); text-align: center; color: var(--muted); background: var(--bg); }
 
@@ -105,3 +112,4 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .row-waits { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); }
 .blockers { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
 .blocker-id { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); }
+.overlap-link { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); text-decoration: underline; }
