@@ -42,6 +42,12 @@ pub(crate) struct Root {
     /// wrote when the agent changed `pr` in between.
     #[serde(default)]
     pub(crate) pr_status: Option<kbl_core::work::PrSnapshot>,
+    /// The release that carries it, once a `shipped` record names one.
+    #[serde(default)]
+    pub(crate) release: Option<String>,
+    /// A link waits for its release.
+    #[serde(default)]
+    pub(crate) awaits_release: bool,
 }
 
 /// A prerequisite a person accepted that has no upstream issue yet.

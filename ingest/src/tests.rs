@@ -25,6 +25,7 @@ async fn a_failed_poll_keeps_the_reconcile_flag() {
             rules: cfg.rules,
             repos,
             reconcile_every: 1000,
+            release_compares: 20,
         },
     );
     let wake = webhook::Wake::default();

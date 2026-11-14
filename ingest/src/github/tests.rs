@@ -568,3 +568,107 @@ fn a_check_run_by_our_own_app_does_not_count() {
     );
     assert_eq!(checks, PrChecks::Green);
 }
+
+#[tokio::test]
+async fn releases_skip_drafts_prereleases_and_odd_tags_and_come_oldest_first() {
+    let gh = Script::default();
+    let rel = |tag: &str, at: &str, draft: bool, pre: bool| json!({ "tag_name": tag, "published_at": at, "draft": draft, "prerelease": pre });
+    gh.on(
+        "GET",
+        "/repos/GetFelix/felix/releases?",
+        ok(json!([
+            rel("v2", "2027-01-15T12:00:00Z", false, false),
+            rel("v3-draft", "2027-01-15T13:00:00Z", true, false),
+            rel("v3-rc", "2027-01-15T13:00:00Z", false, true),
+            rel("a b?x", "2027-01-15T11:00:00Z", false, false),
+            rel("v1", "2027-01-15T10:00:00Z", false, false),
+        ])),
+    );
+    let got = github(&gh).releases("GetFelix/felix", 0).await.unwrap();
+    let tags: Vec<_> = got.list.iter().map(|r| r.tag.as_str()).collect();
+    assert_eq!(tags, ["v1", "v2"]);
+    assert!(got.whole && got.covers(0));
+}
+
+#[tokio::test]
+async fn a_tag_contains_a_commit_only_when_the_compare_is_ahead_or_identical() {
+    let gh = Script::default();
+    gh.on("GET", "/compare/aaa...v1", ok(json!({ "status": "ahead" })));
+    gh.on(
+        "GET",
+        "/compare/aaa...v2",
+        ok(json!({ "status": "identical" })),
+    );
+    gh.on(
+        "GET",
+        "/compare/aaa...v3",
+        ok(json!({ "status": "behind" })),
+    );
+    let g = github(&gh);
+    assert!(g.contains("GetFelix/felix", "v1", "aaa").await.unwrap());
+    assert!(g.contains("GetFelix/felix", "v2", "aaa").await.unwrap());
+    assert!(!g.contains("GetFelix/felix", "v3", "aaa").await.unwrap());
+    assert!(!g.contains("GetFelix/felix", "v4", "aaa").await.unwrap());
+    assert!(!g.contains("GetFelix/felix", "../x?y", "aaa").await.unwrap());
+}
+
+#[tokio::test]
+async fn releases_page_back_to_the_merge_and_no_further_than_five_pages() {
+    let rel = |n: u64| {
+        let at = format!(
+            "2027-01-{:02}T{:02}:{:02}:00Z",
+            10 + n / 600,
+            n / 60 % 10 + 10,
+            n % 60
+        );
+        json!({ "tag_name": format!("v{n}"), "published_at": at, "draft": false, "prerelease": false })
+    };
+    let page = |from: u64| Value::Array((0..100).map(|i| rel(9_000 - from - i)).collect());
+    let gh = Script::default();
+    for n in 1..=6u64 {
+        gh.on(
+            "GET",
+            &format!("/releases?per_page=100&page={n}"),
+            ok(page((n - 1) * 100)),
+        );
+    }
+    let g = github(&gh);
+    let pages = |gh: &Script| {
+        gh.sent()
+            .iter()
+            .filter(|r| r.url.contains("/releases?"))
+            .count()
+    };
+    // Everything is newer than the merge: five pages, then it stops, and a
+    // merge older than every page read is not covered.
+    let all = g.releases("GetFelix/felix", 0).await.unwrap();
+    assert_eq!(pages(&gh), 5);
+    assert_eq!(all.list.len(), 500);
+    assert!(
+        all.list
+            .windows(2)
+            .all(|w| w[0].published_ms <= w[1].published_ms)
+    );
+    let oldest = all.list[0].published_ms;
+    assert!(!all.whole);
+    assert!(!all.covers(oldest) && !all.covers(0));
+    assert!(all.covers(oldest + 1));
+    // A release older than the merge on page 2: one more page, then it stops.
+    let since = all.list[350].published_ms;
+    let some = g.releases("GetFelix/felix", since).await.unwrap();
+    assert_eq!(pages(&gh), 8);
+    assert_eq!(some.list.len(), 150);
+    assert!(some.list.iter().all(|r| r.published_ms >= since));
+    assert!(some.covers(since));
+    // First seen on the last page: the cap still holds.
+    let since = all.list[50].published_ms;
+    let last = g.releases("GetFelix/felix", since).await.unwrap();
+    assert_eq!(pages(&gh), 13);
+    assert_eq!(last.list.len(), 450);
+    assert!(last.covers(since));
+    // A short page is the end of the list.
+    gh.on("GET", "/releases?per_page=100&page=2", ok(json!([rel(1)])));
+    let short = g.releases("GetFelix/felix", 0).await.unwrap();
+    assert_eq!(pages(&gh), 15);
+    assert!(short.whole && short.covers(0));
+}

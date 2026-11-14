@@ -9,7 +9,7 @@
 //!
 //! The upstream-change table is in docs/work-tracker.md.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::Context;
 use kbl_core::content::Content;
@@ -20,9 +20,9 @@ use sha2::{Digest, Sha256};
 use crate::config::{Mode, Rule};
 use crate::rules::first_match;
 use crate::source::{
-    Changes, Closed, Comment, Fetched, Issue, IssueRef, Source, SourceError, WriteBack,
+    Changes, Closed, Comment, Fetched, Issue, IssueRef, Releases, Source, SourceError, WriteBack,
 };
-use crate::state::{State, Tracked};
+use crate::state::{Awaiting, State, Tracked};
 use crate::tracker_api::{Appended, Prerequisite, Root, Tracker};
 
 /// Longest comment or body kept in a record, in bytes. Longer text is cut
@@ -38,6 +38,8 @@ pub(crate) struct Settings {
     pub(crate) repos: Vec<String>,
     /// Polls between full reconciles, which notice transfers and deletions.
     pub(crate) reconcile_every: u32,
+    /// Release-step requests one poll may make: pull request reads and compares.
+    pub(crate) release_compares: u32,
 }
 
 pub(crate) struct Ingest<S, T> {
@@ -98,8 +100,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             touched: Vec::new(),
         };
         let done = self.run(&mut poll, reconcile).await;
-        // Saved on failure too, so imports already made are remembered; the
-        // cursors only moved if the poll finished.
+        // Saved on failure too, so imports already made are remembered. The
+        // cursors moved only if the poll got as far as the release step.
         let saved = self
             .tracker
             .save(
@@ -150,7 +152,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         self.open_prerequisites(p).await?;
         prune(p);
         p.state.cursors.extend(cursors);
-        Ok(())
+        // Last, so a rate limit here holds up nothing else.
+        self.releases(p).await
     }
 
     /// Tells the tracker which repos cannot be read, when that changes. Only
@@ -321,6 +324,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 pr: None,
                 claimed_at_ms: None,
                 pr_status: None,
+                release: None,
+                awaits_release: false,
             },
         );
         p.state
@@ -625,6 +630,147 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             })
             .await?;
             set_closed(p, key, true);
+        }
+        Ok(())
+    }
+
+    /// Records the oldest release after the merge that carries a merged root
+    /// a link waits on, which frees that link. Only such roots are looked at,
+    /// so an ordinary merge costs no requests here, and each poll makes at
+    /// most `release_compares` pull request reads and compares together.
+    async fn releases(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let mut due: Vec<(String, ItemId, IssueRef)> = p
+            .roots
+            .iter()
+            .filter(|(_, r)| {
+                r.closed && r.stage == "done" && r.awaits_release && r.release.is_none()
+            })
+            .filter_map(|(k, r)| {
+                let status = r.pr_status.as_ref()?;
+                let pr = IssueRef::parse(&status.pr)?;
+                (status.phase == PrPhase::Merged && r.pr.as_deref() == Some(status.pr.as_str()))
+                    .then(|| (k.clone(), r.item.clone(), pr))
+            })
+            .filter(|(k, _, pr)| self.may_write_to(k, pr))
+            .collect();
+        due.sort();
+        let keys: HashSet<&str> = due.iter().map(|(k, _, _)| k.as_str()).collect();
+        p.state.awaiting.retain(|k, _| keys.contains(k.as_str()));
+        let mut budget = self.settings.release_compares;
+        for (key, _, pr) in &due {
+            let pr_id = pr.to_string();
+            if p.state.awaiting.get(key).is_some_and(|a| a.pr == pr_id) {
+                continue;
+            }
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            match self.source.pull_request(pr).await {
+                Ok(Some(pull)) => {
+                    p.state.awaiting.insert(
+                        key.clone(),
+                        Awaiting {
+                            pr: pr_id,
+                            merge: pull.merge,
+                            misses: BTreeSet::new(),
+                            skip: 0,
+                        },
+                    );
+                }
+                // Gone for now; it may answer again, so nothing is cached.
+                Ok(None) => {}
+                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                Err(e) => eprintln!("kbl-ingest: could not read {pr} for {key}: {e}"),
+            }
+        }
+        // A root backing off sits this poll out.
+        due.retain(|(key, _, _)| match p.state.awaiting.get_mut(key) {
+            Some(a) if a.skip > 0 => {
+                a.skip -= 1;
+                false
+            }
+            _ => true,
+        });
+        // One listing per repo, back to the earliest merge it is needed for.
+        let mut since: BTreeMap<String, u64> = BTreeMap::new();
+        for (key, _, pr) in &due {
+            if let Some((_, at)) = p.state.awaiting.get(key).and_then(|a| a.merge.as_ref()) {
+                let s = since.entry(pr.repo.clone()).or_insert(*at);
+                *s = (*s).min(*at);
+            }
+        }
+        let mut listed: HashMap<String, Releases> = HashMap::new();
+        for (repo, at) in since {
+            match self.source.releases(&repo, at).await {
+                Ok(releases) => {
+                    listed.insert(repo, releases);
+                }
+                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                Err(e) => eprintln!("kbl-ingest: could not list the releases of {repo}: {e}"),
+            }
+        }
+        for (key, item, pr) in due {
+            let Some(releases) = listed.get(&pr.repo) else {
+                continue;
+            };
+            let Some(Awaiting {
+                merge: Some((sha, merged_ms)),
+                misses,
+                ..
+            }) = p.state.awaiting.get(&key).cloned()
+            else {
+                continue;
+            };
+            if !releases.covers(merged_ms) {
+                eprintln!(
+                    "kbl-ingest: the release pages of {} end before the merge for {key}; a person records its release",
+                    pr.repo
+                );
+                back_off(p, &key);
+                continue;
+            }
+            let untried = releases
+                .list
+                .iter()
+                .filter(|r| r.published_ms >= merged_ms && !misses.contains(&r.tag));
+            for release in untried {
+                if budget == 0 {
+                    return Ok(());
+                }
+                budget -= 1;
+                match self.source.contains(&pr.repo, &release.tag, &sha).await {
+                    Ok(true) => {
+                        let shipped = WorkRecord::Shipped {
+                            item: item.clone(),
+                            release: release.tag.clone(),
+                        };
+                        if self.write(&shipped).await? {
+                            p.state.awaiting.remove(&key);
+                            if let Some(r) = p.roots.get_mut(&key) {
+                                r.release = Some(release.tag.clone());
+                            }
+                        } else {
+                            back_off(p, &key);
+                        }
+                        break;
+                    }
+                    Ok(false) => {
+                        if let Some(a) = p.state.awaiting.get_mut(&key) {
+                            a.misses.insert(release.tag.clone());
+                        }
+                    }
+                    Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                    Err(e) => {
+                        eprintln!(
+                            "kbl-ingest: could not compare {} with {sha} for {key}: {e}",
+                            release.tag
+                        );
+                        back_off(p, &key);
+                        break;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -952,6 +1098,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 pr: None,
                 claimed_at_ms: None,
                 pr_status: None,
+                release: None,
+                awaits_release: false,
             },
         );
         Ok(true)
@@ -1068,6 +1216,16 @@ fn open_roots(p: &Poll, rule: &str) -> usize {
 /// grow the saved state without bound. The tracker's root says all that is
 /// needed to handle one that is reopened: see `on_issue`. A dropped issue is
 /// kept until its pull request has been dealt with.
+/// Polls a root sits out after a release lookup that failed or cannot finish,
+/// so one root cannot spend every poll's budget.
+const RELEASE_BACKOFF_POLLS: u32 = 10;
+
+fn back_off(p: &mut Poll, key: &str) {
+    if let Some(a) = p.state.awaiting.get_mut(key) {
+        a.skip = RELEASE_BACKOFF_POLLS;
+    }
+}
+
 fn prune(p: &mut Poll) {
     // The new id of a transfer is the only entry that keeps the move from
     // importing the issue a second time under it.

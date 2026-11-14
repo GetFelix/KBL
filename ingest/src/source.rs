@@ -126,6 +126,34 @@ pub(crate) struct PullRequest {
     pub(crate) created_ms: Option<u64>,
     /// None when the author is not one of ours: nothing more is read.
     pub(crate) status: Option<PrSnapshot>,
+    /// The commit a counted merge made, and when, in milliseconds since the epoch.
+    pub(crate) merge: Option<(String, u64)>,
+}
+
+/// A published release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Release {
+    pub(crate) tag: String,
+    pub(crate) published_ms: u64,
+}
+
+/// One listing of a repo's releases.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Releases {
+    /// Stable releases published at or after the time asked for, oldest first.
+    pub(crate) list: Vec<Release>,
+    /// The listing ran out before the page cap.
+    pub(crate) whole: bool,
+    /// The earliest publish time on any page read, drafts and prereleases included.
+    pub(crate) oldest_ms: Option<u64>,
+}
+
+impl Releases {
+    /// Whether every release after a merge at `merged_ms` is in `list`: the
+    /// listing ran out, or it reached a release published before the merge.
+    pub(crate) fn covers(&self, merged_ms: u64) -> bool {
+        self.whole || self.oldest_ms.is_some_and(|at| at < merged_ms)
+    }
 }
 
 /// What a fetch of one issue found.
@@ -216,6 +244,26 @@ pub(crate) trait Source: Send + Sync {
     fn links(&self, id: &IssueRef) -> impl Future<Output = Result<Links, SourceError>> + Send;
 
     fn write_back(&self, what: &WriteBack) -> impl Future<Output = Result<(), SourceError>> + Send;
+
+    /// The repo's stable releases published at or after `since_ms`, oldest
+    /// first, so the first that contains a merge is the oldest after it.
+    /// Drafts and prereleases are left out. At most 5 pages of 100 are read,
+    /// newest first. A merge the listing does not cover (see
+    /// [`Releases::covers`]) gets no release at all, never one that may be
+    /// later than the oldest that carries it.
+    fn releases(
+        &self,
+        repo: &str,
+        since_ms: u64,
+    ) -> impl Future<Output = Result<Releases, SourceError>> + Send;
+
+    /// Whether the release tagged `tag` contains the commit `sha`.
+    fn contains(
+        &self,
+        repo: &str,
+        tag: &str,
+        sha: &str,
+    ) -> impl Future<Output = Result<bool, SourceError>> + Send;
     /// Opens an issue in `repo` as our own credential and says which it is.
     fn open_issue(
         &self,

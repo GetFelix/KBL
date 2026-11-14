@@ -491,6 +491,33 @@ What it does with GitHub:
   than `own_logins` (agents never merge their own work, a person does), and
   then closes the root as merged (`closed` with reason merged, which the
   ingest token may write only for a merged status of the item's own request).
+- **Releases.** A merged root that an open item's link waits on for a release
+  (`awaits_release` in `GET /v1/ingest/roots`) gets a `shipped` record once a
+  published release carries its merge commit. The worker records the oldest
+  stable release after the merge that contains it: drafts and prereleases are
+  ignored. It lists the repo's releases newest first, at most 5 pages of 100.
+  GitHub orders that list by creation time, so a draft published long after it
+  was made can sit further down; the worker reads one more page past the first
+  release published before the merge to catch those, then stops. If the 5
+  pages run out before it sees a release older than the merge, it records
+  nothing for that root, never a release that may be later than the right one,
+  and says so in its log: a person records `shipped` for it. It then compares
+  the merge commit with each tag, oldest first (`ahead` or `identical` means
+  the tag contains it). One poll makes at most `release_compares_per_poll`
+  requests in this step, pull request reads and compares together (default
+  20), and a tag found not to contain the merge is not compared again, so the
+  search carries on over later polls. A request GitHub answers 404 or 410 for
+  is read again on a later poll. A root whose compare fails, whose `shipped`
+  is refused, or whose merge is past the page bound sits out the next 10 polls,
+  so it cannot spend every poll's budget. This step runs last in a poll, after
+  the cursors move, so a rate limit here holds up nothing else and the tags
+  already found not to contain the merge are kept. A request merged without a merge time, or by one
+  of `own_logins`, ships nothing. It checks only a request it may read under
+  the rules above. The token needs read access to the repo's contents for the
+  compare call and the release list. A merged root nothing waits on costs no
+  requests. A tag that is later moved or deleted is not looked at again, and a
+  fix that reaches a release only by a cherry-pick is never found: a person
+  records `shipped` for those.
 - **Links.** Blocked-by and sub-issues become `linked` edges once both issues
   are imported.
 
@@ -703,19 +730,27 @@ One record does all of it:
 When the prerequisite is closed as merged, a link that waits for a merge frees
 the item, and it is Ready again. `work_context` then lists what the item
 waited on, with each prerequisite's stage, pull request and release. A link
-that waits for a release stays blocked until a person records
-`{"kind": "shipped", "item": ..., "release": "0.4.0"}` on the finished
-prerequisite. The fold takes that record from people only and only for an item
-that is done; ingest does not write it yet. An `existing` item that is already
-merged or completed but has no release yet can still be named with
-`done_when: released`; any other closed item is refused as `closed`.
-Completed covers work that is not a fix too, so a `released` wait on it holds
-until a person records `shipped` or removes the link. A person's `unlinked`
-drops a release wait. Re-opening the prerequisite keeps it and clears the
-release, so the waiter waits for the next one; dropping it would free the
-waiter on unreleased work. Accepting a finished prerequisite applies from
-[format 5](upgrades.md#formats). If a person rejects or dismisses
-the prerequisite, the held item goes to Needs you as "dependency dropped".
+that waits for a release stays blocked until a `shipped` record,
+`{"kind": "shipped", "item": ..., "release": "0.4.0"}`, names the release that
+carries the finished prerequisite. A person can write it. Ingest writes it for
+a prerequisite it imported from GitHub whose pull request it saw merged: it
+looks for the oldest stable release after the merge that contains it, within
+the page bound in [Running the ingest worker](#running-the-ingest-worker). It
+asks only for roots an open item's link is waiting on, so an ordinary merge
+costs no release requests. The fold takes the record from people and ingest
+only, and only for an item that is done. The tracker takes ingest's only when
+the item's reported request has a merged status, and never over a release
+already recorded. A person's `shipped` replaces any release recorded before,
+ingest's included. An `existing` item that is already merged or completed but
+has no release yet can still be named with `done_when: released`; any other
+closed item is refused as `closed`. Completed covers work that is not a fix
+too, so a `released` wait on it holds until a `shipped` is recorded or a person
+removes the link. A person's `unlinked` drops a release wait. Re-opening the
+prerequisite keeps it and clears the release, so the waiter waits for the next
+one; dropping it would free the waiter on unreleased work. Accepting a finished
+prerequisite applies from [format 5](upgrades.md#formats). If a person rejects
+or dismisses the prerequisite, the held item goes to Needs you as "dependency
+dropped".
 
 ### Prerequisites become upstream issues
 
