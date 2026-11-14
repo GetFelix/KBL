@@ -49,7 +49,14 @@ export interface FollowOptions {
   onRefused?: (total: number) => void;
 }
 
-export class FollowError extends Error {}
+/** A stop a retry cannot fix. `code` is the gateway's error code, or `newer_format`, `bad_record` or `bad_subscribe`. */
+export class FollowError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
 
 /** Codes a retry cannot fix: the log no longer holds the offset, or the request or sign-in is refused. */
 const FATAL_CODES = new Set(['trimmed', 'bad_request', 'past_end', 'forbidden', 'signed_out', 'bad_frame']);
@@ -76,10 +83,10 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
     let refused = 0;
     let done = false;
 
-    const fail = (error: string) => {
+    const fail = (code: string, error: string) => {
       if (done) return;
       done = true;
-      reject(new FollowError(error)); // before close, whose handler would resolve
+      reject(new FollowError(code, error)); // before close, whose handler would resolve
       transport.close();
     };
     const apply = (offset: number, payload: string) => {
@@ -88,14 +95,14 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
       try {
         bytes = decodeBase64(payload);
       } catch {
-        fail(`record ${offset} is not base64`);
+        fail('bad_record', `record ${offset} is not base64`);
         return;
       }
       if (!sink.apply(offset, bytes)) {
         // Skipping a record of a newer format would show a state the log does not hold.
         const newer = sink.newer?.() ?? 0;
         if (newer) {
-          fail(`record ${offset} has format ${newer}, which this page is too old to read. Reload the page`);
+          fail('newer_format', `record ${offset} has format ${newer}, which this page is too old to read`);
           return;
         }
         // Any other record the fold does not read is counted and skipped; the cursor moves past it.
@@ -128,7 +135,7 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
           // A broker failover or close: the protocol says to subscribe again from the last offset + 1.
           subscribe();
         } else if (FATAL_CODES.has(code)) {
-          fail(`${code}: ${m.message ?? ''}`);
+          fail(code, `${code}: ${m.message ?? ''}`);
         } else if (!done) {
           // read_failed, subscribe_failed and the rest may pass: hand the cursor back so the caller
           // reconnects with a backoff.
@@ -145,7 +152,7 @@ export function follow(transport: Transport, sink: Sink, opts: FollowOptions): P
         else readPage();
       } else if (m.type === 'subscribed' && phase === 'subscribing') {
         if (m.start_offset !== null && m.start_offset !== cursor) {
-          fail(`subscribed from ${m.start_offset}, asked for ${cursor}`);
+          fail('bad_subscribe', `subscribed from ${m.start_offset}, asked for ${cursor}`);
           return;
         }
         phase = 'live';
