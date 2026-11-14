@@ -3,7 +3,7 @@
 //! second tracker cannot write the org log while this one does. See "One
 //! tracker, many teams" in docs/design.md.
 
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use kbl_core::codec::Codec;
@@ -11,6 +11,7 @@ use kbl_core::names::Key;
 use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, read};
 use kbl_core::org_fold::{Applied, OrgState};
 use tokio::sync::Mutex;
+use tokio::time::Instant;
 
 use crate::felix::Broker;
 

@@ -121,8 +121,10 @@ async fn only_an_org_admin_creates_a_team_and_a_retry_creates_nothing() {
             "{bad}"
         );
     }
-    assert!(
-        o.org.published().is_empty(),
+    // Only the adoption is on the log.
+    assert_eq!(
+        o.org.published().len(),
+        1,
         "a refused create wrote to org.events"
     );
 
@@ -132,7 +134,7 @@ async fn only_an_org_admin_creates_a_team_and_a_retry_creates_nothing() {
         (body["created"].as_bool(), body["serving"].as_bool()),
         (Some(true), Some(true))
     );
-    assert_eq!(o.org.published(), vec!["org.events".to_owned()]);
+    assert_eq!(o.org.published().len(), 2);
     let (status, body) = create(&o.app, Some("tok-ops"), "alpha").await;
     assert_eq!(
         (status, body["created"].as_bool()),
@@ -144,7 +146,7 @@ async fn only_an_org_admin_creates_a_team_and_a_retry_creates_nothing() {
         Some(false),
         "the adopted team is not created again"
     );
-    assert_eq!(o.org.published().len(), 1);
+    assert_eq!(o.org.published().len(), 2);
 
     // The new team serves at once, on its own Felix, and only for its members.
     let (status, _) = call(

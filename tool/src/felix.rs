@@ -136,10 +136,6 @@ impl Session {
         outcome(&body)
     }
 
-    pub(crate) fn target(&self) -> &Target {
-        &self.target
-    }
-
     /// POSTs `body` to `path` under the tenant, with a control-plane `token`.
     /// Says whether it was new: a 409 means it is already there, which is what
     /// makes every setup step safe to run again.
