@@ -87,12 +87,20 @@ const missingRoutes = (routes, rows) =>
   });
 
 // Where a pinned line is now: its old line if it still holds the text, else the one line that
-// does. `null` when the text is gone or appears more than once.
-const relocate = (lines, line, text) => {
-  if ((lines[line - 1] ?? '').trim() === text) return line;
+// does. A text that appears more than once is taken at `shift` lines from where it was, the
+// move of the nearest citation in the file that could be placed. `null` when neither holds.
+const relocate = (lines, line, text, shift = 0) => {
+  const holds = (n) => (lines[n - 1] ?? '').trim() === text;
+  if (holds(line)) return line;
   const hits = lines.flatMap((l, i) => (l.trim() === text ? [i + 1] : []));
-  return hits.length === 1 ? hits[0] : null;
+  if (hits.length === 1) return hits[0];
+  return hits.length > 1 && shift && holds(line + shift) ? line + shift : null;
 };
+
+// The shift to try for an ambiguous citation: that of the nearest citation in the same file
+// that moved to one place.
+const nearestShift = (moves, line) =>
+  moves.reduce((best, m) => (!best || Math.abs(m.line - line) < Math.abs(best.line - line) ? m : best), null)?.shift ?? 0;
 
 // A line like `}` or `item,` matches anywhere and says nothing about the check: cite the line
 // that does the checking.
@@ -129,6 +137,8 @@ const telling = (text) => text.length >= 16 && /[a-z]{3}/i.test(text) && !text.s
   const code = ['fn a() {', '    check();', '}'];
   want([relocate(code, 2, 'check();'), relocate(['', ...code], 2, 'check();'), relocate(code, 2, 'gone();')], [2, 3, null], 'relocations');
   want(relocate(['x();', 'x();'], 3, 'x();'), null, 'an ambiguous relocation');
+  want(relocate(['', 'x();', 'y();', 'x();'], 3, 'x();', 1), 4, 'a relocation by its neighbour\'s shift');
+  want(nearestShift([{ line: 10, shift: 1 }, { line: 50, shift: 3 }], 40), 3, 'the nearest shift');
   want(['}', 'item,', '// A comment that is long', 'return Err(Reject::NotHeld);'].filter(telling), ['return Err(Reject::NotHeld);'], 'telling lines');
 }
 
@@ -190,8 +200,9 @@ for (const [heading, names] of Object.entries(named)) {
 const PINS = 'docs/threat-model-citations.json';
 const pins = existsSync(join(root, PINS)) ? JSON.parse(read(PINS)) : {};
 const used = {};
-let fixed = doc;
 const cites = [...new Set([...doc.matchAll(/`[\w./-]+\.(?:rs|toml|mjs):\d+`/g)].map((m) => m[0]))];
+const moved = {};
+const placed = [];
 for (const cite of cites) {
   const [, file, line] = cite.match(/`(.+):(\d+)`/);
   const key = `${file}:${line}`;
@@ -199,24 +210,37 @@ for (const cite of cites) {
     failures.push(`${key} is cited but the file does not exist`);
     continue;
   }
-  const lines = read(file).split('\n');
   const text = pins[key];
   if (text === undefined) {
-    const now = (lines[Number(line) - 1] ?? '').trim();
+    const now = (read(file).split('\n')[Number(line) - 1] ?? '').trim();
     if (!telling(now)) failures.push(`${key} is cited but that line (\`${now}\`) is not one that checks anything; cite the line that does`);
     else if (fix) used[key] = now;
     else failures.push(`${key} is a new citation; check it points at the right line, then pin it with node scripts/check-threat-model.mjs --fix`);
     continue;
   }
   if (!telling(text)) failures.push(`${key} is pinned to \`${text}\`, which is not a line that checks anything; cite the line that does`);
-  const at = relocate(lines, Number(line), text);
-  if (at === Number(line)) used[key] = text;
-  else if (at && fix) {
-    fixed = fixed.replaceAll(cite, `\`${file}:${at}\``);
-    used[`${file}:${at}`] = text;
-  } else if (at) failures.push(`${key} moved to line ${at}; run node scripts/check-threat-model.mjs --fix`);
-  else failures.push(`${key} no longer holds \`${text}\`, and no single line of ${file} does; cite what the row means now`);
+  placed.push({ cite, file, line: Number(line), text });
 }
+// Unique texts first, so an ambiguous one can follow its neighbours' shift.
+const moves = {};
+for (const pass of [false, true]) {
+  for (const c of placed) {
+    if (c.done) continue;
+    const lines = read(c.file).split('\n');
+    const at = relocate(lines, c.line, c.text, pass ? nearestShift(moves[c.file] ?? [], c.line) : 0);
+    if (!at && !pass) continue;
+    c.done = true;
+    if (at === c.line) used[`${c.file}:${c.line}`] = c.text;
+    else if (at && fix) {
+      moved[c.cite] = `\`${c.file}:${at}\``;
+      used[`${c.file}:${at}`] = c.text;
+    } else if (at) failures.push(`${c.file}:${c.line} moved to line ${at}; run node scripts/check-threat-model.mjs --fix`);
+    else failures.push(`${c.file}:${c.line} no longer holds \`${c.text}\`, and no single line of ${c.file} does; cite what the row means now`);
+    if (at && !pass) (moves[c.file] ??= []).push({ line: c.line, shift: at - c.line });
+  }
+}
+// One pass over the doc, so a citation moved onto another's old line is not moved twice.
+const fixed = doc.replace(/`[\w./-]+\.(?:rs|toml|mjs):\d+`/g, (c) => moved[c] ?? c);
 if (!fix) for (const key of Object.keys(pins)) if (!cites.includes(`\`${key}\``)) failures.push(`${PINS} pins ${key}, which the doc no longer cites; run --fix`);
 if (fix) {
   writeFileSync(join(root, 'docs/threat-model.md'), fixed);
