@@ -29,11 +29,22 @@ test('items lists each item with its stage', () => {
   const rec = (o: object) => new TextEncoder().encode(JSON.stringify({ at_ms: 1, by: 'gabriel', actor: 'person', ...o }));
   fold.apply(0, rec({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'a#1', title: 'first' }));
   assert.deepEqual(JSON.parse(fold.items_json()), [
-    { id: 'r1', title: 'first', stage: 'triage', tier: null, source: 'github', repo: null },
+    { id: 'r1', title: 'first', stage: 'triage', tier: null, source: 'github', repo: null, needs: null, question: null, options: null, default: null, root: true },
   ]);
   fold.apply(1, rec({ kind: 'accepted', item: 'r1', tier: 1 }));
   assert.equal(JSON.parse(fold.items_json())[0].stage, 'ready');
   assert.equal(JSON.parse(fold.items_json())[0].tier, 1);
+});
+
+test('an open question carries its offset, options and default, and why the item needs a person', () => {
+  const fold = new Folder();
+  const rec = (o: object) => new TextEncoder().encode(JSON.stringify({ at_ms: 1, by: 'gabriel', actor: 'person', ...o }));
+  fold.apply(0, rec({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'a#1', title: 'first' }));
+  fold.apply(1, rec({ kind: 'accepted', item: 'r1', tier: 1 }));
+  fold.apply(2, rec({ kind: 'claimed', actor: 'agent', by: 'a1', item: 'r1', attempt: 1, deadline_ms: 9e12 }));
+  fold.apply(3, rec({ kind: 'question', actor: 'agent', by: 'a1', item: 'r1', attempt: 1, text: { text: 'Which?' }, options: ['one', 'two'], default: 'two' }));
+  const [r1] = JSON.parse(fold.items_json());
+  assert.deepEqual([r1.stage, r1.needs, r1.question, r1.options, r1.default], ['needs_you', 'question', 3, ['one', 'two'], 'two']);
 });
 
 test('items carry the repo an owner/repo#n id names, and children inherit it from the root', () => {

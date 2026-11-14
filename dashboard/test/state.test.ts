@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { adviceFor, createStore, describe, fromAddress, reduce, toAddress, type ViewState } from '../src/state.ts';
+import { NO_WRITES } from '../src/writes.ts';
 
-const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], blocked: [], overlaps: new Map(), view: 'all', query: '', selected: null, open: null, theme: 'dark', layout: 'list', filters: {}, density: 'comfortable', saved: [] };
+const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], blocked: [], overlaps: new Map(), view: 'all', query: '', selected: null, open: null, theme: 'dark', layout: 'list', filters: {}, density: 'comfortable', saved: [], marked: [], writes: NO_WRITES, tracker: { kind: 'signed-out' }, questions: new Map() };
 
 test('opening an item selects it, and closing keeps the selection', () => {
   const opened = reduce(base, { type: 'open', id: 'r1' });

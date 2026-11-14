@@ -12,7 +12,8 @@ in `src/state.ts` holds only what the view adds (selection, search, open dialogs
 Two open items whose `files` context entries share a path each get a flag on their row and a "Same files"
 note in the panel, with the suggested link ([Files that overlap](../docs/work-tracker.md#files-that-overlap)).
 
-It cannot write yet: a person's actions will go to the tracker's REST routes. The design, the conventions it
+A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
+time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it
 follows and the plan for later views are in [docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md).
 
 ## Run it
@@ -67,6 +68,34 @@ a newer format than the page's fold reads stops it too: the page asks for a relo
 the cursor. Any other failure reconnects from the cursor, which is past records the fold refused, with a growing
 delay up to 30 s.
 
+## Writes
+
+Writes go to the tracker's person routes ([the dashboard's actions](../docs/work-tracker.md)) with your own
+person token, so the page can do exactly what that token can and nothing more. Sign in (in the panel, the bulk
+bar or the palette) asks for the token, checks it with `GET /v1/me`, and keeps it in memory for this tab only:
+not in the address or local storage, so a reload asks again.
+
+The page calls only `/v1/...` at its own origin, never a tracker address from the link, so serve `dist/` behind
+the same host as the tracker. In development, `KBL_TRACKER_URL=http://127.0.0.1:8080 npm run dev` forwards `/v1`
+to the tracker. A person token in several teams needs `&team=<team>` in the address, which picks the
+`/v1/teams/<team>/` routes.
+
+| Action | Where | Route | Undo |
+| --- | --- | --- | --- |
+| Accept | Triage, Proposed | `POST /v1/work/proposals/accept` | No: nothing takes an acceptance back. Asks to confirm |
+| Reject | Proposed | `POST /v1/work/proposals/reject` | No. Asks to confirm |
+| Set tier | Open work | `POST /v1/work/tier` | Yes, while the tier is still the one set: a new `tier_changed` back |
+| Close | Open work | `POST /v1/work/close` (`dismissed` or `completed`) | No: open children are cancelled. Asks to confirm |
+| Answer | An open question | `POST /v1/work/questions/answer` | No: the answer starts the resumed work |
+
+Claiming is not offered: it is an agent's, and the fold refuses `claimed` from a person.
+
+Each write shows as pending on the item and in the activity line above the work, then as written or refused.
+A refusal shows the tracker's reason and its code (`closed`, `not_open_question`, ...). The list itself changes
+only when the record arrives on the log. `X` marks the focused item (each list row also has a checkbox), and the
+bulk bar acts on the marked items, one call per item; `Esc` clears the marks. The Needs you view
+(`?view=inbox`) lists what waits on a person and why.
+
 ## How it follows the log
 
 ```mermaid
@@ -102,7 +131,9 @@ in the status line.
 | `F` | Go to the filters |
 | `Home` / `End` | First and last item; on the board, of the current column |
 | `Enter` | Open the selected item in the panel |
-| `Esc` | Close the panel or dialog, or clear the search |
+| `Esc` | Close the panel or dialog, clear the search, or clear the selection |
+| `X` | Select or unselect the focused item for a bulk action |
+| `Ctrl+Z` (`Cmd+Z` on a Mac) | Undo the last tier change (in a text field, the field's own undo) |
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
 palette and the `?` overlay all read it. Theme and density are in the palette
@@ -118,7 +149,7 @@ has one entry per filter value and per saved view.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
-- **The address.** `view=blocked`, `layout=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
+- **The address.** `view=blocked`, `view=inbox`, `layout=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
   address, so a link opens the same view. An older `view=board` link still opens the board and is rewritten to
   `layout=board`.
 - **Saved views.** Save view names the current view, layout, search and filters and puts it in the sidebar; Edit
@@ -136,6 +167,8 @@ has one entry per filter value and per saved view.
 - `src/fold.ts`: the shape of the WebAssembly fold, and how a blocked row names its blockers.
 - `src/main.ts`: starts the page, runs the gateway loop and dispatches keys.
 - `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?layout=`, `?item=`, `?q=`, filters).
+- `src/writes.ts`: what each item allows, the request for each write, how the tracker's answer reads, undo,
+  and the write list. `src/tracker.ts`: the REST client. Both pure, tested in `test/writes.test.ts`.
 - `src/views.ts`: filters, the view in the address, and saved views.
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.

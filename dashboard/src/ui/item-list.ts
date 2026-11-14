@@ -6,12 +6,15 @@ import { inScope, neighbour, visible, type Group } from '../list.ts';
 import { flagText } from '../overlap.ts';
 import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
+import { needsText } from '../writes.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
   open(id: string): void;
   /** Focus landed on a row: it becomes the selection, so keys act on what has focus. */
   select(id: string | null): void;
+  /** Toggles the item's mark for a bulk action. */
+  mark(id: string): void;
   clearSearch(): void;
   clearFilters(): void;
 }
@@ -90,6 +93,16 @@ export function itemList(
 ): { el: HTMLElement; render(s: ViewState): void; focusSelected(): void } {
   const el = h('div', { class: 'list' });
   const rows = new Map<string, HTMLAnchorElement>();
+  // One checkbox per row, beside its link (a control cannot sit inside a link), for bulk actions.
+  const marks = new Map<string, HTMLInputElement>();
+  const markBox = (id: string): HTMLInputElement => {
+    let box = marks.get(id);
+    if (!box) {
+      box = h('input', { type: 'checkbox', class: 'mark', 'data-mark': id, 'aria-label': `Select ${id}`, onchange: () => on.mark(id) });
+      marks.set(id, box);
+    }
+    return box;
+  };
   let shown = '';
   let restoring = false;
   let last: Drawn = drawn([]);
@@ -135,8 +148,7 @@ export function itemList(
     const t = a.querySelector('.row-title')!;
     const w = a.querySelector('.row-waits')!;
     if (t.textContent !== title) t.textContent = title;
-    const line = waits ? `waits on ${waits}` : '';
-    if (w.textContent !== line) w.textContent = line;
+    if (w.textContent !== waits) w.textContent = waits;
     return a;
   };
 
@@ -191,11 +203,15 @@ export function itemList(
         );
       }
       if (s.items.length === 0) return show('empty', emptyState('No work yet', 'Items appear here as the tracker imports issues from its sources.'));
+      if (s.view === 'inbox' && inScope(s).length === 0) {
+        return show('noinbox', emptyState('Nothing needs you', 'An item shows here when an agent asks a question, a check fails, or work runs out of budget or tries.'));
+      }
       if (s.view === 'blocked' && inScope(s).length === 0) {
         return show('noblocked', emptyState('Nothing is blocked', 'An item shows here while a link or a prerequisite holds it back.'));
       }
       const groups = visible(s);
-      const waits = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
+      const waits = new Map(s.blocked.map((b) => [b.id, `waits on ${waitsOn(b)}`]));
+      for (const i of s.items) if (i.needs) waits.set(i.id, needsText(i.needs));
       if (groups.length === 0) {
         const filtered = activeCount(s.filters) > 0;
         const what = s.query ? `“${s.query}”` : 'these filters';
@@ -211,6 +227,7 @@ export function itemList(
       const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? ''])]))}`;
       if (key !== shown) {
         const focusedId = focusedHere();
+        const focusedMark = document.activeElement instanceof HTMLInputElement && marks.get(document.activeElement.dataset.mark ?? '') === document.activeElement ? document.activeElement : null;
         const before = last;
         const kept = new Map(rows);
         shown = key;
@@ -224,18 +241,24 @@ export function itemList(
             const headingId = `group-${g.stage}`;
             return h('section', { class: 'group', 'aria-labelledby': headingId },
               h('h2', { id: headingId, class: 'group-title' }, g.label, h('span', { class: 'count' }, String(g.items.length))),
-              h('ul', {}, ...g.items.map((item) => h('li', {}, row(item.id, item.title, waits.get(item.id) ?? '')))),
+              h('ul', {}, ...g.items.map((item) => h('li', { class: 'row-item' }, markBox(item.id), row(item.id, item.title, waits.get(item.id) ?? '')))),
             );
           }),
         );
         last = drawn(groups);
         // Moving a focused node blurs it; put the focus back without scrolling or re-selecting.
         restoreFocus(focusedId, before, last, rows, el, quietly, { select: on.select, announce });
+        // A checkbox that had the focus keeps it, rather than handing it to its row.
+        if (focusedMark?.isConnected) quietly(focusedMark);
+        for (const id of marks.keys()) if (!rows.has(id)) marks.delete(id);
       }
+      const marked = new Set(s.marked);
+      for (const [id, box] of marks) if (box.checked !== marked.has(id)) box.checked = marked.has(id);
       for (const [id, a] of rows) {
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
+        a.toggleAttribute('data-marked', marked.has(id));
         // Text, not colour alone, so it reads in both themes and to a screen reader as part of the link.
         const flag = a.querySelector<HTMLElement>('.row-flag')!;
         const text = flagText(s.overlaps.get(id));

@@ -136,6 +136,22 @@ in `check_sizes` (`tracker/src/tracker/tools.rs:1155`).
 | `/v1/work/budget` | `budget_set` | Person only in the fold too (`core/src/work_fold.rs:1822`) |
 | `/v1/work/rules` | `rules_set` | Person only in the fold too (`core/src/work_fold.rs:1840`). 8 KiB of text, 20 checks of 500 bytes, 500 scopes (`core/src/work_fold.rs:1849`). The tracker never runs a check; the agent does |
 
+### The dashboard
+
+The dashboard's writes are the person routes above, called from the page with the
+signed-in person's own token: `proposals/accept`, `proposals/reject`, `tier`, `close`
+and `questions/answer`, plus `GET /v1/me` to check the token (`dashboard/src/tracker.ts`).
+The page has no authority of its own; the tracker's checks are the only checks.
+
+| Attack | Check |
+|---|---|
+| A crafted link sends the person's token somewhere else | The page calls only its own origin's `/v1/...` routes; no parameter names the tracker. `?team=` only picks the `/v1/teams/{team}/` path, and the tracker checks membership (`dashboard/src/writes.ts`) |
+| A token left behind in the browser | Typed into a password field, kept in memory for the tab, never in the address, local storage or the view state (`dashboard/src/main.ts`) |
+| Another site makes writes as the person (CSRF) | The token goes in an `Authorization` header the page sets, not a cookie, so a request from another origin carries nothing |
+| An upstream title runs as script in the page | Views build elements with `dashboard/src/ui/dom.ts`, which never parses HTML |
+| A bulk action does more than the person could | Each item is its own call through the same route and checks, one at a time, so it also takes one of the team's in-flight slots at a time |
+| An undo overwrites someone else's change | Only a tier change has an undo, a new `tier_changed`, and the page offers it only while the item still has the tier it set |
+
 ### Ingest routes and health
 
 The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).

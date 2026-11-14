@@ -79,9 +79,12 @@ impl Folder {
         serde_json::to_string(&self.state).expect("plain data serializes")
     }
 
-    /// Every item as `{id, title, stage, tier, source, repo}`, in id order. The
-    /// last three are null unless recorded: `tier` by triage or acceptance,
-    /// `source` and `repo` by the item's target, or its root's target or import.
+    /// Every item as `{id, title, stage, tier, source, repo, needs, question,
+    /// options, default, root}`, in id order. `tier`, `source` and `repo` are null
+    /// unless recorded: `tier` by triage or acceptance, `source` and `repo` by the
+    /// item's target, or its root's target or import. `needs` says why the item
+    /// waits on a person; `question` is the offset of its open question, with that
+    /// question's `options` and `default`. `root` is true for an item with no parent.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
         let items: Vec<_> = self
@@ -101,6 +104,11 @@ impl Folder {
                     "tier": i.tier,
                     "source": source,
                     "repo": target.map(|t| &t.repo),
+                    "needs": self.state.needs_you(&i.id),
+                    "question": i.open_question,
+                    "options": i.open_question.and(i.ask.as_ref()).map(|a| &a.options),
+                    "default": i.open_question.and(i.ask.as_ref()).and_then(|a| a.default.as_ref()),
+                    "root": i.parent.is_none(),
                 })
             })
             .collect();

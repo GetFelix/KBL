@@ -16,7 +16,7 @@ export type Filters = Partial<Record<Facet, string>>;
 export type Layout = 'list' | 'board';
 
 /** Which items are shown: all of them, or only the ones a link holds back. */
-export type View = 'all' | 'blocked';
+export type View = 'all' | 'blocked' | 'inbox';
 
 /** Everything a link or a saved view restores. */
 export interface ViewSpec {
@@ -99,14 +99,14 @@ export function decodeView(search: string): ViewSpec {
   }
   const view = q.get(PARAMS.view);
   const board = q.get(PARAMS.layout) === 'board' || view === 'board';
-  return { view: view === 'blocked' ? 'blocked' : 'all', layout: board ? 'board' : 'list', query: q.get(PARAMS.query) ?? '', filters };
+  return { view: view === 'blocked' || view === 'inbox' ? view : 'all', layout: board ? 'board' : 'list', query: q.get(PARAMS.query) ?? '', filters };
 }
 
 /** Writes the view into `search`, keeping every other parameter. Defaults are left out, so a plain view has a plain address. */
 export function encodeView(search: string, v: ViewSpec): string {
   const q = new URLSearchParams(search);
   const set = (k: string, value: string | undefined) => (value ? q.set(k, value) : q.delete(k));
-  set(PARAMS.view, v.view === 'blocked' ? 'blocked' : undefined);
+  set(PARAMS.view, v.view === 'all' ? undefined : v.view);
   set(PARAMS.layout, v.layout === 'board' ? 'board' : undefined);
   set(PARAMS.query, v.query);
   for (const [k] of FACETS) set(k, v.filters[k]);

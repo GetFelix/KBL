@@ -62,6 +62,7 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
 /** The items the view covers, before filters and search: every item, or only the Blocked ones. */
 export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
   if (s.view === 'all') return s.items;
+  if (s.view === 'inbox') return s.items.filter((i) => i.stage === 'needs_you');
   const blocked = new Set(s.blocked.map((b) => b.id));
   return s.items.filter((i) => blocked.has(i.id));
 }

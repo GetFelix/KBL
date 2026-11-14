@@ -8,8 +8,10 @@ import { h } from './dom.ts';
 import { itemHref } from './item-list.ts';
 import { overlapField } from './overlap-section.ts';
 import { waitsOnField } from './waits-on-field.ts';
+import { itemActions, type WriteHandlers } from './item-actions.ts';
+import { needsText } from '../writes.ts';
 
-export interface PanelHandlers {
+export interface PanelHandlers extends WriteHandlers {
   closeItem(): void;
   open(id: string): void;
 }
@@ -28,6 +30,11 @@ const stageField: Field = {
   render: (item) => ['Stage', document.createTextNode(stageLabel(item.stage))],
 };
 
+const needsField: Field = {
+  key: (item) => item.needs ?? '',
+  render: (item) => (item.needs ? ['Needs you', document.createTextNode(needsText(item.needs))] : null),
+};
+
 // Only what the log recorded: a facet with no value is left out, not shown as "none".
 const facetFields: Field[] = FACETS.map(([facet, label]) => ({
   key: (item) => valueOf(item, facet) ?? '',
@@ -38,7 +45,7 @@ const facetFields: Field[] = FACETS.map(([facet, label]) => ({
 }));
 
 // A new field is one module and one entry here.
-const FIELDS: readonly Field[] = [stageField, ...facetFields, waitsOnField, overlapField];
+const FIELDS: readonly Field[] = [stageField, needsField, ...facetFields, waitsOnField, overlapField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
@@ -52,6 +59,7 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
   const el = h('aside', { class: 'panel', 'aria-labelledby': 'panel-title', tabindex: '-1', hidden: true });
   let shown = '';
   let failed = false;
+  const actions = itemActions(on);
   return {
     el,
     render(s) {
@@ -67,6 +75,8 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
         const href = itemHref(a.dataset.item!, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
       }
+      // The actions update in place on every render; the rest only when its key changes.
+      if (item) actions.render(item, s);
       if (key === shown) return;
       shown = key;
       el.hidden = s.open === null;
@@ -85,7 +95,8 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
                 ...FIELDS.flatMap((f) => {
                   const got = f.render(item, s, on);
                   return got ? [h('dt', {}, got[0]), h('dd', {}, got[1])] : [];
-                })))
+                })),
+              actions.el)
           : h('div', {},
               h('h2', { id: 'panel-title', class: 'panel-title' }, 'No such item'),
               h('p', { class: 'muted' }, WHY[why as keyof typeof WHY](s.open))),

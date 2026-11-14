@@ -21,6 +21,24 @@ export interface ItemRow {
   source?: string | null;
   /** The repository the work lands in, such as `GetFelix/KBL`. */
   repo?: string | null;
+  /** Why the item waits on a person (`question`, `check_failed`, ...), or null. */
+  needs?: string | null;
+  /** The offset of its open question, with the options and default that question offers. */
+  question?: number | null;
+  options?: string[] | null;
+  default?: string | null;
+  /** True for an item with no parent. */
+  root?: boolean;
+}
+
+/** The inline text of a `question` record, so the panel can show what was asked. An artifact's text is not in the record. */
+export function questionText(payload: Uint8Array): string | null {
+  try {
+    const r = JSON.parse(new TextDecoder().decode(payload)) as { kind?: unknown; text?: { text?: unknown } };
+    return r.kind === 'question' && typeof r.text?.text === 'string' ? r.text.text : null;
+  } catch {
+    return null;
+  }
 }
 
 export function items(fold: Fold): ItemRow[] {

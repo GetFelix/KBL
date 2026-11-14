@@ -16,6 +16,10 @@ Phase 2: [board](img/board-dark-comfortable.png), [board, compact, light](img/bo
 [board with the panel](img/board-panel-dark.png), [phone menu](img/phone-menu-dark.png),
 [Blocked](img/blocked-dark.png), [Blocked on the board, filtered](img/blocked-board-dark.png), [Waits on in the panel](img/blocked-panel-dark.png).
 
+Phase 3: [Needs you](img/inbox-dark.png), [sign in](img/sign-in-dark.png), [answer](img/answer-dark.png),
+[write pending](img/pending-dark.png), [refused](img/refused-dark.png), [undo](img/undo-dark.png),
+[bulk bar](img/bulk-dark.png), [confirm](img/confirm-dark.png), [signed out by the tracker](img/signed-out-dark.png).
+
 More shots: [palette](img/palette-dark.png), [shortcuts](img/shortcuts-light.png), [panel](img/panel-dark.png),
 [overlap](img/overlap-dark.png), [loading](img/loading-dark.png), [no match](img/empty-search-dark.png), [stopped](img/error-dark.png), [cannot reach the gateway](img/unreachable-dark.png),
 [phone](img/phone-dark.png), [light list](img/list-light.png). `node dashboard/check/browser.mjs <dir>`
@@ -82,6 +86,33 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   rows, `aria-busy`), cannot reach the gateway (nothing read yet, when the next try is), empty, no match
   (Clear search), nothing blocked, no such item, and stopped (the reason; a new sign-in link for a rejected or expired token,
   Reload for a log newer than the page).
+- **Writes.** Every write is a tracker person route, sent with the viewer's own person token
+  (`src/tracker.ts`), so the page can never do more than that person could with `curl`. The token is
+  typed into Sign in, checked with `GET /v1/me`, and kept in memory for the tab only. The page calls only
+  its own origin's `/v1/...`, so no link can point the token somewhere else, and the tracker needs no
+  CORS; serve the page behind the same host as the tracker (`npm run dev` proxies `/v1`). The panel
+  offers only what the fold would take for that item (`CAN` in `src/writes.ts`): Accept and Reject in
+  Triage and Proposed, a tier and Close on open work, and an answer form on an open question. Claim is not
+  offered: claiming is an agent's, and the fold refuses `claimed` from a person.
+- **Write states.** A write is pending, written, refused or not sent. While pending, the item's
+  buttons are `aria-disabled` (not `disabled`, which would drop the focus) and say what is in flight. The
+  activity line above the work is a status region that says what the last write did and, for a refusal, the
+  tracker's own reason and code. It stays until the next write or Dismiss, never on a timer. The record
+  then arrives live like any other, so the list shows what the log holds, not what the page hoped for. A
+  token the tracker stops taking signs the page out with its reason.
+- **Undo.** Only a tier change can be undone (`Mod+Z` or Undo): the undo is a new `tier_changed` record
+  setting the old tier back, never a delete, and it is offered only while the item still has the tier the
+  write set, so it cannot overwrite someone else's change. The rest cannot be, and the confirm step says
+  why: no record takes back an acceptance, a rejected proposal stays rejected, a close cancels the item's
+  open children (a reopened root goes back to Triage with them still cancelled), and an answer starts the
+  work that resumes from it.
+- **Multi-select.** `X` marks the focused item, as in Linear and GitHub; each list row also has a checkbox
+  beside its link, and board cards say Selected in text. The bulk bar counts the marks and offers only what
+  some of them allow, with the count it applies to ("Accept 2…"). A bulk action is one call per item, in
+  order, and the activity line reports each refusal. `Esc` clears the marks once nothing else is open.
+- **Needs you.** A sidebar view (`?view=inbox`) of the items waiting on a person, each saying why from the
+  fold's `needs` ("An agent asked a question", "A check failed"). The panel shows the same as a field, and an
+  open question's text, options and default come from the question record.
 - **Tokens.** `src/ui/tokens.css` holds every colour, space, type size and radius, for dark and light.
   Accent is KBL amber `#C86A1E` per [brand/story.md](../brand/story.md), with Inter and JetBrains Mono. Views
   use tokens only.
@@ -93,20 +124,22 @@ page does and checks a message gets through, and CI runs the page itself in Chro
 | --- | --- |
 | Visibility of system status | Met: live status line (Reading history, Live, Disconnected and retrying in N s, Stopped), counts per stage, skeleton rows while loading. |
 | Match with the real world | Met: stage names from the tracker, upstream ids as written upstream. |
-| User control and freedom | Partly: `Esc` closes or clears everywhere, the address restores views, Clear filters and All work reset the view. Undo waits for writes (phase 3). |
+| User control and freedom | Met: `Esc` closes or clears everywhere, the address restores views, Clear filters and All work reset the view, a tier change has Undo, and every write the log cannot take back has a confirm step with Cancel. |
 | Consistency and standards | Met: Linear/GitHub keys, native `<dialog>`, one shortcut map. |
-| Error prevention | Met for saved views: a taken name is refused instead of overwriting, and Delete sits apart from Save in its dialog. |
+| Error prevention | Met: actions the fold would refuse are not offered, accept, reject and close ask to confirm and say they cannot be undone, an answer is checked before it is sent, an undo is refused if the tier changed since, and a taken view name is refused. |
 | Recognition rather than recall | Met: palette lists every command with its key; `?` lists all keys. |
-| Flexibility and efficiency | Met for reading: keys for every action, palette search by id or title, filters by value from the palette, saved views. |
+| Flexibility and efficiency | Met: keys for every action, palette search by id or title, filters by value from the palette, saved views, `X` and bulk actions. |
 | Aesthetic and minimalist design | Met: one list, one panel, no chrome beyond the nav. |
-| Help users recover from errors | Met: stopped state names the cause, and the next step where the cause backs one (a new sign-in link, or Reload); no-match offers Clear. |
+| Help users recover from errors | Met: stopped state names the cause, and the next step where the cause backs one (a new sign-in link, or Reload); no-match offers Clear; a refused write shows the tracker's reason and code, and a rejected token offers Sign in. |
 | Help and documentation | Met: `?` overlay, README Keys table. |
 
 ## WCAG 2.2 AA
 
 `npm run check` runs axe-core (WCAG 2.0 to 2.2 A/AA rules and best practice) on the list, palette, shortcuts,
 no-match, setup, stopped and phone views, in both themes, and on the board in both themes and both densities,
-the filtered list, the save dialog and the phone menu. It reports no violations of any impact, and fails CI
+the filtered list, the save dialog and the phone menu, and on every write state: the Needs you view, signed
+out, the sign-in error, the answer form, a write pending, a refusal, a tier set, the bulk bar and the confirm
+dialog. It reports no violations of any impact, and fails CI
 on serious or critical.
 
 | Criterion | Status |
@@ -125,8 +158,12 @@ on serious or critical.
 | 2.4.11 Focus not obscured | Met: the panel sits beside the list, never over the focused row. Below 720 px it sits under the list, and opening an item scrolls it into view. |
 | 2.5.8 Target size | Met: controls at least 24 px (`--target-min`). |
 | 3.2.6 Consistent help | Met: Shortcuts and Commands sit in the sidebar on every view; below 720 px the sidebar opens from the Menu button, in the same place on every view. |
-| 3.3.1 Error identification | Met: a missing or taken view name is named in text next to the field, which is `aria-invalid`. |
-| 3.3.x Other input criteria | Deferred: the only form is the view name; the rest arrive with writes (phase 3). |
+| 3.3.1 Error identification | Met: a missing token, a token the tracker refuses, an empty answer and a missing or taken view name are each named in text next to the field, which is `aria-invalid` and gets the focus. A refused write is named with the tracker's reason. |
+| 3.3.2 Labels or instructions | Met: every field has a visible label; the token field says where the token comes from and where it is sent, the answer form says it cannot be undone. |
+| 3.3.3 Error suggestion | Met: each message says what to do ("Pick an option, or write an answer", "Keep the answer under 4 KiB", "open the page with ?team= naming one"). |
+| 3.3.4 Error prevention | Met: accept, reject and close open a confirm dialog that lists the items, says what the write does and that it cannot be undone, opening on its first field, or on Cancel when it has none, so a stray Enter cannot send it; a tier change can be undone. |
+| 3.3.7 Redundant entry | Met: a confirm starts from the item's recorded tier, and the token is asked once per tab. |
+| 3.3.8 Accessible authentication | Met: the token field allows paste and password managers; no puzzle or transcription. |
 | 4.1.2 Name, role, value | Met: combobox with `aria-activedescendant`, `aria-current` on nav. |
 | 4.1.3 Status messages | Met: status line is a polite live region; stopped is `role=alert`. |
 
@@ -146,7 +183,8 @@ Each phase is one PR.
    check in CI, and the bundling fix.
 2. **Board and views** (done): board view with `V` to switch, filters by source, tier and repo, saved views in
    the address and sidebar, density setting, and the Menu button below 720 px.
-3. **Writes**: claim, accept, close and answer through the tracker's REST routes, multi-select with bulk actions
-   and undo, the inbox of Needs you items.
+3. **Writes** (done): accept, reject, tier, close and answer through the tracker's person routes with the
+   viewer's token, multi-select with bulk actions, undo for tier changes, the Needs you inbox, and the
+   3.3.x form criteria. Claim stays with agents, since the fold refuses it from a person.
 4. **Spend and settings**: spend per root, tier and repo ([#219](https://github.com/GetFelix/KBL/issues/219)),
    settings with shortcut remapping.
