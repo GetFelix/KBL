@@ -167,6 +167,14 @@ impl Tokens {
         }
     }
 
+    pub(crate) fn agent_names(&self) -> Vec<AgentName> {
+        self.agents.iter().map(|(_, a)| a.clone()).collect()
+    }
+
+    pub(crate) fn has_agent(&self, name: &str) -> bool {
+        self.agents.iter().any(|(_, a)| a.as_str() == name)
+    }
+
     pub(crate) fn grants(&self) -> Grants {
         self.grants.clone()
     }

@@ -21,6 +21,7 @@ use config::{Grants, Tokens};
 use felix::{Kind, Target};
 use kbl_core::names::Key;
 use kbl_core::org::{ORG_NAMESPACE, OrgRecord, TeamName};
+use kbl_core::org_fold::OrgState;
 use org::Org;
 use teams::{OrgSide, Starter, Team, Teams};
 use tracker::{Settings, Tracker};
@@ -242,6 +243,7 @@ async fn with_org(
         names.contains(&first),
         "KBL_NAMESPACE {first} is not a team on org.events, so the token file's agents would have no team"
     );
+    file_agents_not_minted(&org.state().await, &first, &tokens)?;
     let admins = tokens.people_only();
     let mut teams = Vec::new();
     for name in names {
@@ -267,6 +269,23 @@ async fn with_org(
             inflight: cli.team_inflight,
         }),
     )
+}
+
+/// Refuses a token file that names an agent `agent add` minted and nobody
+/// revoked: two live tokens would answer to one name, and revoking the minted
+/// one would also stop the file's agent from claiming.
+fn file_agents_not_minted(state: &OrgState, team: &TeamName, tokens: &Tokens) -> Result<()> {
+    for name in tokens.agent_names() {
+        let key = Key::new(name.as_str()).expect("an agent name is a key");
+        if state.agent(team, &key).is_some_and(|a| !a.revoked) {
+            anyhow::bail!(
+                "the token file names agent {name} of team {team}, which `kbl-tool agent add` also \
+                 minted and has not revoked: take it out of the token file, start, run `kbl-tool agent \
+                 revoke`, then put it back"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1970,3 +1970,42 @@ async fn a_pull_request_is_one_request_in_any_letter_case() {
     );
     assert_eq!(core.state.items[&item("a2")].pr, None);
 }
+
+#[tokio::test]
+async fn revoking_an_agent_releases_only_its_holds_and_stops_its_claims() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    seed(&t, "a2", 2).await;
+    let w1 = claimed_id(&claim(&t, "w1").await).unwrap();
+    let w2 = claimed_id(&claim(&t, "w2").await).unwrap();
+    assert_eq!(t.revoke(&agent("w1")).await.unwrap(), [item(&w1)]);
+    let log = fake.log();
+    let freed = log.last().unwrap();
+    assert_eq!(
+        (freed.actor, freed.by.as_str()),
+        (Actor::Tracker, "tracker")
+    );
+    assert!(matches!(
+        &freed.record,
+        WorkRecord::Released { item: i, reason: Some(r), .. } if i.as_str() == w1 && r == "revoked"
+    ));
+    assert_eq!(t.holds_of(&agent("w2")).await, [item(&w2)]);
+    assert!(matches!(
+        t.extend(&agent("w1"), &item(&w1)).await,
+        Err(Error::Lost(_))
+    ));
+    // A work_next that got past the token check before the revoke claims nothing.
+    fake.lapse_all();
+    let after = t.next(&agent("w1"), Duration::ZERO).await;
+    assert!(
+        matches!(&after, Err(Error::Refused { why }) if why == "agent_revoked"),
+        "{after:?}"
+    );
+    assert_eq!(t.holds_of(&agent("w1")).await, Vec::<ItemId>::new());
+    // The freed item goes to another agent.
+    assert_eq!(
+        claimed_id(&claim(&t, "w3").await).as_deref(),
+        Some(w1.as_str())
+    );
+}
