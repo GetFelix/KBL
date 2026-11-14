@@ -32,7 +32,7 @@ const RUN = newRunId("trackertriage");
 const tokens = {
   agents: { "tok-w1": "w1" },
   people: { "tok-gab": "gab" },
-  grants: { w1: ["check/repo"] },
+  grants: { w1: ["check:check/repo"] },
 };
 const timing = { KBL_CLAIM_VISIBILITY_MS: "8000", KBL_EXTEND_EVERY_MS: "1000" };
 
