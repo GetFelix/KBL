@@ -118,7 +118,10 @@ export function sameView(a: ViewSpec, b: ViewSpec): boolean {
   return encodeView('', a) === encodeView('', b);
 }
 
-/** Saved views from storage, each rewritten to the current address form. Anything malformed is dropped rather than breaking the page. */
+/**
+ * Saved views from storage, each rewritten to the current address form. Parameters this build does not know are kept
+ * as written, so an older tab cannot strip a newer build's. Anything malformed is dropped rather than breaking the page.
+ */
 export function parseSaved(json: string | null): SavedView[] {
   if (!json) return [];
   try {
@@ -126,7 +129,7 @@ export function parseSaved(json: string | null): SavedView[] {
     if (!Array.isArray(raw)) return [];
     return raw.filter(
       (v): v is SavedView => typeof v === 'object' && v !== null && typeof v.name === 'string' && v.name.trim() !== '' && typeof v.search === 'string',
-    ).map((v) => ({ name: v.name, search: encodeView('', decodeView(v.search)) }));
+    ).map((v) => ({ name: v.name, search: encodeView(v.search, decodeView(v.search)) }));
   } catch {
     return [];
   }

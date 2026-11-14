@@ -89,3 +89,11 @@ test('a saved view from before the layout parameter opens the board and is read 
   assert.ok(sameView(decodeView('view=board'), decodeView('layout=board')));
   assert.equal(decodeView('view=blocked&layout=board').view, 'blocked');
 });
+
+test('a saved view keeps parameters this build does not know, so an older tab cannot strip them', () => {
+  const [v] = parseSaved('[{"name":"Legacy","search":"view=board&foo=1&q=x"}]');
+  assert.deepEqual(new URLSearchParams(v.search).getAll('foo'), ['1']);
+  assert.deepEqual(decodeView(v.search), { view: 'all', layout: 'board', query: 'x', filters: {} });
+  assert.equal(v.search, 'foo=1&q=x&layout=board');
+  assert.equal(parseSaved(JSON.stringify([v]))[0].search, v.search);
+});
