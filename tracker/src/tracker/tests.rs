@@ -1974,6 +1974,35 @@ async fn a_tracker_does_not_serve_a_log_that_holds_a_record_of_a_newer_format() 
     assert_eq!(fake.ready_count("work.ready.p1"), 1);
 }
 
+/// From format 6 an agent cannot write the `prerequisite` entry, even where
+/// none exists; before it, the write folds as it always did.
+#[tokio::test]
+async fn an_agent_cannot_write_the_prerequisite_entry_from_format_6() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    let text = kbl_core::content::Content::Text("x".into());
+    t.context_add(&agent("w1"), &item("a1"), key("prerequisite"), text.clone())
+        .await
+        .unwrap();
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 6 })
+        .await
+        .unwrap();
+    let before = fake.log().len();
+    let r = t
+        .context_add(&agent("w1"), &item("a1"), key("prerequisite"), text.clone())
+        .await;
+    assert!(
+        matches!(r, Err(Error::Refused { ref why }) if why == "not_your_entry"),
+        "{r:?}"
+    );
+    assert_eq!(fake.log().len(), before);
+    t.context_add(&agent("w1"), &item("a1"), key("other"), text)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn a_raise_past_what_the_tracker_reads_is_refused_and_not_logged() {
     let fake = Fake::default();

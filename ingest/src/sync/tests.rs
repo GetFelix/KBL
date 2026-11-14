@@ -2542,6 +2542,33 @@ async fn a_lost_record_with_the_state_saved_is_tied_without_a_second_issue() {
     assert_eq!(rig.root("GetFelix/felix-gateway#40").as_str(), "g1");
 }
 
+/// A seeded intent with no issue yet (an earlier poll may have opened one
+/// and not lived to say so) sends nothing until a reconcile gives up on it.
+#[tokio::test]
+async fn an_empty_open_intent_waits_for_a_reconcile() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    let mut state = rig.tracker.saved_raw();
+    state["opened"] = json!({ "g1": "" });
+    rig.tracker.seed_saved(state);
+    ingest.poll(false).await.unwrap();
+    assert!(opened(&rig).is_empty());
+    ingest.poll(true).await.unwrap();
+    assert_eq!(opened(&rig).len(), 1);
+}
+
+/// A tie the fold refuses leaves no remembered issue behind, so the next
+/// poll starts clean.
+#[tokio::test]
+async fn a_refused_tie_clears_the_remembered_issue() {
+    let (rig, ingest) = prerequisite_rig(true, true).await;
+    let mut state = rig.tracker.saved_raw();
+    state["opened"] = json!({ "g1": "GetFelix/elsewhere#9" });
+    rig.tracker.seed_saved(state);
+    ingest.poll(false).await.unwrap();
+    assert!(gateway_tied(&rig).is_empty());
+    assert!(rig.tracker.saved_state().opened.is_empty());
+}
+
 /// No opt-in, or no person's acceptance: nothing is sent to GitHub.
 #[tokio::test]
 async fn no_issue_is_opened_without_the_opt_in_and_a_persons_acceptance() {
