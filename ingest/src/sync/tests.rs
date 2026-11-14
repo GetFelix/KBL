@@ -1205,6 +1205,57 @@ async fn a_link_a_person_also_made_stays_when_upstream_drops_it() {
 }
 
 #[tokio::test]
+async fn a_link_refused_as_someone_elses_is_not_retried_until_upstream_drops_it() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    let touch = |when: &str| {
+        rig.list(vec![
+            at(issue(812, |_| {}), "2026-11-10T10:00:00Z"),
+            at(issue(813, |_| {}), when),
+        ])
+    };
+    let blocked_by = |deps: Value| {
+        rig.gh
+            .on("GET", "/issues/813/dependencies/blocked_by", ok(deps));
+    };
+    rig.gh.on("GET", "/issues/813/sub_issues", ok(json!([])));
+    blocked_by(json!([]));
+    touch("2026-11-10T10:01:00Z");
+    ingest.poll(false).await.unwrap();
+    let (a, b) = (rig.root(UP), rig.root("GetFelix/felix#813"));
+    // A person links the pair first, then upstream adds the same blocked-by.
+    rig.tracker.person(WorkRecord::Linked {
+        item: b.clone(),
+        to: a.clone(),
+    });
+    blocked_by(json!([
+        { "number": 812, "repository_url": "https://api.github.com/repos/GetFelix/felix" }
+    ]));
+    touch("2026-11-10T10:02:00Z");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.links_sent(), 1);
+    let not_ours = |rig: &Rig| {
+        rig.tracker.saved_state().items["GetFelix/felix#813"]
+            .not_ours
+            .clone()
+    };
+    assert!(not_ours(&rig).contains(UP));
+    touch("2026-11-10T10:03:00Z");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.links_sent(), 1, "not retried on a touch");
+    // Upstream drops it: the entry goes, and the person's edge stays.
+    blocked_by(json!([]));
+    touch("2026-11-10T10:04:00Z");
+    ingest.poll(false).await.unwrap();
+    assert!(not_ours(&rig).is_empty());
+    assert_eq!(
+        rig.tracker.state().edges.iter().collect::<Vec<_>>(),
+        [&(b, a)]
+    );
+    assert_eq!(rig.tracker.count("unlinked"), 0);
+}
+
+#[tokio::test]
 async fn a_failed_or_partial_listing_unlinks_nothing() {
     let partial = [
         // A second page that is never read.

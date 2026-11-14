@@ -527,7 +527,10 @@ What it does with GitHub:
   prerequisite (with its release wait), from an answer that moves the work
   elsewhere, or one a person or an agent linked. The tracker refuses ingest's
   `linked` of such an edge as `already_linked`, and its `unlinked` as
-  `not_ingests`. A person who links an edge ingest made makes it theirs too.
+  `not_ingests`. A person who links an edge ingest made makes it theirs too,
+  and so does an agent's prerequisite that names it. Ingest does not retry a
+  link refused as `already_linked` until upstream drops the dependency or the
+  next reconcile.
   An agent's `work_link` of an edge that is already there is refused as
   `already_linked` and not logged, so the edge stays ingest's and goes when
   upstream drops it; the agent can link it again after that. Nothing is

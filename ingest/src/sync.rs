@@ -153,6 +153,11 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         let reconciled = reconcile || p.state.polls >= self.settings.reconcile_every;
         if reconciled {
             p.state.polls = 0;
+            // The other writer may have unlinked since, so a reconcile lets
+            // the next touch try once more.
+            for t in p.state.items.values_mut() {
+                t.not_ours.clear();
+            }
             self.reconcile(p).await?;
         }
         self.link(p).await?;
@@ -868,12 +873,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             };
             let found: Vec<String> = upstream
                 .iter()
-                .filter(|l| !t.linked.contains(*l))
+                .filter(|l| !t.linked.contains(*l) && !t.not_ours.contains(*l))
                 .cloned()
                 .collect();
             t.pending_links.extend(found);
             if links.complete {
                 t.pending_links.retain(|l| upstream.contains(l));
+                t.not_ours.retain(|l| upstream.contains(l));
                 self.unlink_removed(p, &key, &upstream).await?;
             }
         }
@@ -895,7 +901,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 let Some(other) = item_of(p, &to) else {
                     continue;
                 };
-                let made = match self
+                let refused = match self
                     .tracker
                     .append(&WorkRecord::Linked {
                         item: item.clone(),
@@ -903,17 +909,23 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     })
                     .await?
                 {
-                    // Only an edge ingest made is its to unlink later.
-                    Appended::Written => true,
+                    Appended::Written => None,
                     Appended::Refused(why) => {
                         eprintln!("kbl-ingest: link {key} -> {to} refused: {why}");
-                        false
+                        Some(why)
                     }
                 };
                 if let Some(t) = p.state.items.get_mut(&key) {
                     t.pending_links.remove(&to);
-                    if made {
-                        t.linked.insert(to);
+                    match refused.as_deref() {
+                        // Only an edge ingest made is its to unlink later.
+                        None => {
+                            t.linked.insert(to);
+                        }
+                        Some("already_linked") => {
+                            t.not_ours.insert(to);
+                        }
+                        Some(_) => {}
                     }
                 }
             }
@@ -1291,6 +1303,7 @@ fn tracked_as(item: &ItemId, rule: &str, issue: &Issue) -> Tracked {
         comments: BTreeMap::new(),
         pending_links: Default::default(),
         linked: Default::default(),
+        not_ours: Default::default(),
         written_back: false,
         write_back_tries: 0,
         moved_to: None,

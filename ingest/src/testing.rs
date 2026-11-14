@@ -137,6 +137,8 @@ struct Inner {
     saves_left: Option<usize>,
     /// The edges ingest's own `linked` made, as the tracker tracks them.
     ingest_edges: HashSet<(ItemId, ItemId)>,
+    /// `linked` records ingest sent, written or refused.
+    links_sent: usize,
 }
 
 /// A tracker that folds what it is given, so a record the real fold would refuse is refused here.
@@ -155,6 +157,7 @@ impl Default for Fake {
             race_next_save: false,
             saves_left: None,
             ingest_edges: HashSet::new(),
+            links_sent: 0,
         })))
     }
 }
@@ -188,6 +191,11 @@ impl Fake {
             }
             WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } => {
                 i.ingest_edges.remove(&(item.clone(), to.clone()));
+            }
+            WorkRecord::Prerequisite {
+                item, prerequisite, ..
+            } => {
+                i.ingest_edges.remove(&(item.clone(), prerequisite.clone()));
             }
             _ => {}
         }
@@ -285,6 +293,10 @@ impl Fake {
 
 impl Fake {
     /// How many times ingest listed the roots.
+    pub(crate) fn links_sent(&self) -> usize {
+        self.0.lock().unwrap().links_sent
+    }
+
     pub(crate) fn roots_calls(&self) -> usize {
         self.0.lock().unwrap().roots_calls
     }
@@ -366,7 +378,10 @@ impl Tracker for Fake {
         // The tracker's ingest gate: ingest links and unlinks only edges its
         // own link made.
         if let WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } = record {
-            let i = self.0.lock().unwrap();
+            let mut i = self.0.lock().unwrap();
+            if matches!(record, WorkRecord::Linked { .. }) {
+                i.links_sent += 1;
+            }
             let edge = (item.clone(), to.clone());
             let ours = i.ingest_edges.contains(&edge);
             match (record, i.state.edges.contains(&edge)) {

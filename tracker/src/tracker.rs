@@ -345,6 +345,14 @@ impl Recall {
             WorkRecord::Unlinked { item, to } => {
                 self.ingest_edges.remove(&(item.clone(), to.clone()));
             }
+            // The waiter is `item` on the build and triage paths alike, and an
+            // agent's wait (and its release ask) is not ingest's to drop.
+            WorkRecord::Prerequisite {
+                item, prerequisite, ..
+            } => {
+                self.ingest_edges
+                    .remove(&(item.clone(), prerequisite.clone()));
+            }
             _ => {}
         }
         remember(&mut self.texts, offset, record);

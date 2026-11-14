@@ -2657,6 +2657,114 @@ async fn ingest_cannot_unlink_an_agents_prerequisite() {
     );
 }
 
+/// Ingest links first, then an agent names the same edge as a prerequisite
+/// that waits for a release: the edge is the agent's from then on.
+#[tokio::test]
+async fn an_agents_prerequisite_takes_over_an_edge_ingest_made() {
+    let (fake, t) = granted().await;
+    let (w1, a1, f2) = (agent("w1"), item("a1"), item("f2"));
+    person(&t, WorkRecord::FormatRaised { to: 5 }).await;
+    import(&t, "f2", "GetFelix/felix-gateway#4").await;
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::Linked {
+            item: a1.clone(),
+            to: f2.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    person(
+        &t,
+        WorkRecord::Closed {
+            item: f2.clone(),
+            why: CloseWhy::Merged,
+        },
+    )
+    .await;
+    t.prerequisite(
+        &w1,
+        &a1,
+        key("k"),
+        Prereq::Existing(f2.clone()),
+        DoneWhen::Released,
+        0,
+    )
+    .await
+    .unwrap();
+    // Live, before any restart rebuilds what ingest made.
+    let live = t
+        .ingest_record(
+            key("ingest-gh"),
+            WorkRecord::Unlinked {
+                item: a1.clone(),
+                to: f2.clone(),
+            },
+        )
+        .await;
+    assert_eq!(why(live), "not_ingests");
+    drop(t);
+    ingest_cannot_take_over(&fake, &a1, &f2).await;
+    let t = start(&fake).await;
+    let core = t.0.core.lock().await;
+    assert!(core.state.release_edges.contains(&(a1.clone(), f2.clone())));
+    assert_eq!(core.state.stage(&a1), Some(Stage::Blocked));
+}
+
+/// The same from triage, where the waiter is the item under triage.
+#[tokio::test]
+async fn a_triage_prerequisite_takes_over_an_edge_ingest_made() {
+    let (fake, t) = triaging("GetFelix/felix-gateway").await;
+    let (w1, a1, tr, f2) = (agent("w1"), item("a1"), item("a1-t"), item("f2"));
+    person(&t, WorkRecord::FormatRaised { to: 5 }).await;
+    import(&t, "f2", "GetFelix/felix-gateway#4").await;
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::Linked {
+            item: a1.clone(),
+            to: f2.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    person(
+        &t,
+        WorkRecord::Closed {
+            item: f2.clone(),
+            why: CloseWhy::Merged,
+        },
+    )
+    .await;
+    t.prerequisite(
+        &w1,
+        &tr,
+        key("k"),
+        Prereq::Existing(f2.clone()),
+        DoneWhen::Released,
+        0,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        &fake.log().last().unwrap().record,
+        WorkRecord::Prerequisite {
+            triage: Some(_),
+            ..
+        }
+    ));
+    drop(t);
+    ingest_cannot_take_over(&fake, &a1, &f2).await;
+    let t = start(&fake).await;
+    assert!(
+        t.0.core
+            .lock()
+            .await
+            .state
+            .release_edges
+            .contains(&(a1, f2))
+    );
+}
+
 #[tokio::test]
 async fn ingest_cannot_unlink_a_prerequisite_from_an_answer() {
     let (fake, t, _q) = asked_with_options().await;
