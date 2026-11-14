@@ -2,7 +2,8 @@
 
 The KBL (Kanban By Log) dashboard in the browser. It reads `work.events` through
 [felix-gateway](https://github.com/GetFelix/felix-gateway), folds it with the `core` crate compiled to
-WebAssembly, and lists every item with its stage. The page is plain TypeScript built with Vite. The fold already
+WebAssembly, and lists every item with its stage. Two open items whose `files` context entries share a path
+get a warning on both rows with the suggested link ([Files that overlap](../docs/work-tracker.md#files-that-overlap)). The page is plain TypeScript built with Vite. The fold already
 holds the state, so there is no UI framework and no second state layer.
 
 This is the data path only. The page is a list; the real views come from the UX work in

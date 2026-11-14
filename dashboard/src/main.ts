@@ -2,7 +2,7 @@
 // and list the items with their stage. Settings come from the query string:
 // ?gateway=ws://127.0.0.1:8787/ws&room=kbl&token=<ID token>&stream=events
 import init, { Folder } from './wasm/kbl_wasm.js';
-import { items, type Fold } from './fold.ts';
+import { items, overlapNotes, type Fold } from './fold.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 
@@ -10,14 +10,24 @@ const status = document.getElementById('status')!;
 const list = document.getElementById('items')!;
 
 function render(fold: Fold) {
+  const notes = overlapNotes(fold);
   list.replaceChildren(
     ...items(fold).map((item) => {
       const li = document.createElement('li');
+      const row = document.createElement('div');
+      row.className = 'row';
       for (const [cls, text] of [['id', item.id], ['stage', item.stage.replaceAll('_', ' ')], ['title', item.title]]) {
         const span = document.createElement('span');
         span.className = cls;
         span.textContent = text;
-        li.append(span);
+        row.append(span);
+      }
+      li.append(row);
+      for (const note of notes.get(item.id) ?? []) {
+        const warn = document.createElement('div');
+        warn.className = 'overlap';
+        warn.textContent = `Same files as ${note.other}: ${note.files.join(', ')}. Suggested: ${note.suggest}.`;
+        li.append(warn);
       }
       return li;
     }),
@@ -46,6 +56,7 @@ async function main() {
     at: () => fold.at(),
     stateJson: () => fold.state_json(),
     itemsJson: () => fold.items_json(),
+    overlapsJson: () => fold.overlaps_json(),
   };
   // Redraw once per frame however many records arrive.
   let queued = false;

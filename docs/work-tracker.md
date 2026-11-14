@@ -622,6 +622,33 @@ readiness is recomputed from the fold and never stored. A person splits by
 hand with the same records, which draw nothing from the budget. The parent
 cannot complete while a child is open.
 
+### Files that overlap
+
+Two open items that change the same files will conflict when the second one
+merges. To see that early, an item can declare the files it expects to touch
+in a `files` context entry: one path per line, with a trailing `/` for a whole
+directory. Blank lines and lines starting with `#` are skipped. An agent writes
+it with `work_context`, usually at triage, and a person writes it with a
+`context` record.
+
+```text
+core/src/work_fold.rs
+docs/
+```
+
+When the entries of two open items share a path (or one names a directory
+above the other's file), the dashboard shows a warning on both items naming
+the other item and the shared files, and suggests which should wait on the
+other. The item in review or held goes first; otherwise the one that declared
+its files first. The suggestion is advice: a person links the items with a
+`linked` record, and the warning goes away. Agents cannot link across trees,
+and two overlapping items are usually separate roots.
+
+Pairs that are already linked either way are not warned about, and neither are
+an item and its own descendants, since a split shares its parent's files. Done
+and closed items are left out. The warning is computed from the fold on read
+(`kbl_core::overlap`), so it adds no record and needs no format raise.
+
 ### Prerequisites in another repo
 
 An agent sometimes finds that its item needs a change in another repo first: a
