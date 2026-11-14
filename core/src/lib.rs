@@ -13,6 +13,7 @@
 //! - [`record`]: one record per step on the run log.
 //! - [`work`]: the records on `work.events`, and the key shapes of items, edges, context and budgets.
 //! - [`work_fold`]: the pure fold from a prefix of `work.events` to item state, with snapshots.
+//! - [`overlap`]: open items that expect to touch the same files, from their `files` context entries.
 //! - [`org`]: the records on `org.events`: teams, people, roles, agents, sources, grants, and token hashes.
 //! - [`org_fold`]: the fold from `org.events` to the tables the tracker serves teams from.
 //! - [`legacy_env`]: the old `AGENTS_` variable names, adopted at startup.
@@ -25,6 +26,7 @@ pub mod legacy_env;
 pub mod names;
 pub mod org;
 pub mod org_fold;
+pub mod overlap;
 pub mod record;
 pub mod stored;
 pub mod task;

@@ -32,7 +32,7 @@ function mark(): SVGSVGElement {
 
 export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   const list = itemList(on);
-  const panel = itemPanel(on.closeItem);
+  const panel = itemPanel(on.closeItem, on.open);
   const status = statusBar();
   const search = h('input', {
     id: 'search',
