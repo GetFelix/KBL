@@ -7,6 +7,7 @@ export interface Fold {
   at(): number;
   stateJson(): string;
   itemsJson(): string;
+  overlapsJson(): string;
 }
 
 export interface ItemRow {

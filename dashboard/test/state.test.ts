@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { adviceFor, createStore, describe, fromAddress, reduce, toAddress, type ViewState } from '../src/state.ts';
 
-const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], query: '', selected: null, open: null, theme: 'dark' };
+const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], overlaps: new Map(), query: '', selected: null, open: null, theme: 'dark' };
 
 test('opening an item selects it, and closing keeps the selection', () => {
   const opened = reduce(base, { type: 'open', id: 'r1' });
@@ -11,7 +11,7 @@ test('opening an item selects it, and closing keeps the selection', () => {
 });
 
 test('an open item missing from the log stays open so the panel can say so', () => {
-  const s = reduce({ ...base, open: 'r9' }, { type: 'items', items: [{ id: 'r1', title: 't', stage: 'ready' }] });
+  const s = reduce({ ...base, open: 'r9' }, { type: 'items', items: [{ id: 'r1', title: 't', stage: 'ready' }], overlaps: new Map() });
   assert.equal(s.open, 'r9');
 });
 
@@ -51,4 +51,11 @@ test('a stop suggests a sign-in only for a rejected or expired token, and a relo
   assert.equal(adviceFor('forbidden'), 'sign-in');
   assert.equal(adviceFor('newer_format'), 'reload');
   for (const code of ['trimmed', 'bad_request', 'past_end', 'bad_frame', 'no_read']) assert.equal(adviceFor(code), null, code);
+});
+
+test('an items update replaces the overlaps with the ones from the same fold', () => {
+  const card = { notes: [{ other: 'r2', files: ['a.rs'], moreFiles: 0, suggest: 'r2 waits on r1' }], more: 0 };
+  const s = reduce(base, { type: 'items', items: [], overlaps: new Map([['r1', card]]) });
+  assert.equal(s.overlaps.get('r1'), card);
+  assert.equal(reduce(s, { type: 'items', items: [], overlaps: new Map() }).overlaps.size, 0);
 });
