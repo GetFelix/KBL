@@ -580,6 +580,26 @@ async fn progress_sets_the_branch_and_pr_and_a_lapsed_holder_is_refused() {
 }
 
 #[tokio::test]
+async fn asking_is_charged_at_least_the_floor() {
+    let fake = Fake::default();
+    let floor = crate::tracker::Settings {
+        cost_floor_micros: 500,
+        ..settings()
+    };
+    let t = start_with(&fake, floor).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    t.ask(&agent("w1"), &item("a1"), text("which?"), vec![], None, 0)
+        .await
+        .unwrap();
+    let log = fake.log();
+    let Some(WorkRecord::Question { cost_micros, .. }) = log.last().map(|l| &l.record) else {
+        panic!("the last record is not a question");
+    };
+    assert_eq!(*cost_micros, 500);
+}
+
+#[tokio::test]
 async fn asking_and_answering_a_question() {
     let (_fake, t) = held().await;
     let a = agent("w1");

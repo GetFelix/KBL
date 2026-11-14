@@ -169,6 +169,7 @@ impl<B: Broker> Tracker<B> {
         done_when: DoneWhen,
         cost_micros: u64,
     ) -> Result<Value, Error> {
+        let cost_micros = self.charge(cost_micros);
         let (prerequisite, new) = match which {
             Prereq::New {
                 target,
@@ -457,6 +458,7 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
         check_options(&options, default.as_deref())?;
+        let cost_micros = self.charge(cost_micros);
         self.held_write(agent, item, "ask", |attempt| WorkRecord::Question {
             item: item.clone(),
             attempt,

@@ -167,7 +167,8 @@ struct WorkExtendArgs {
 struct WorkCompleteArgs {
     /// The id of the item you hold.
     item: String,
-    /// What this attempt cost, in millionths of a dollar. The tracker cannot verify it.
+    /// What this attempt cost, in millionths of a dollar. The tracker cannot verify it, so it
+    /// charges at least its cost floor.
     cost_micros: Option<u64>,
 }
 

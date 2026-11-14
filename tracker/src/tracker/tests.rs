@@ -486,6 +486,7 @@ pub(super) fn settings() -> Settings {
         lease_wait: Duration::ZERO,
         crash_after_poll: false,
         review_tiers: default_review_tiers(),
+        cost_floor_micros: 0,
     }
 }
 
@@ -609,6 +610,70 @@ async fn done_is_written_before_the_ack() {
         panic!("the last record is not done");
     };
     assert_eq!(*cost_micros, 1234);
+}
+
+/// The cost each record of `kind` on the log carries.
+fn costs(fake: &Fake, kind: &str) -> Vec<u64> {
+    fake.log()
+        .iter()
+        .filter_map(|l| match &l.record {
+            WorkRecord::Done { cost_micros, .. }
+            | WorkRecord::Released { cost_micros, .. }
+            | WorkRecord::GaveUp { cost_micros, .. }
+                if l.record.kind() == kind =>
+            {
+                Some(*cost_micros)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn floor(micros: u64) -> Settings {
+    Settings {
+        cost_floor_micros: micros,
+        ..settings()
+    }
+}
+
+#[tokio::test]
+async fn a_claim_is_charged_at_least_the_floor() {
+    let fake = Fake::default();
+    let t = start_with(&fake, floor(500)).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    claim(&t, "w1").await;
+    t.give_up(&agent("w1"), &item("a1"), "stuck".into(), 7)
+        .await
+        .unwrap();
+    assert_eq!(costs(&fake, "released"), [500]);
+    assert_eq!(costs(&fake, "gave_up"), [500]);
+    // Done reports the charged cost back. A report above the floor stands.
+    seed(&t, "a2", 2).await;
+    claim(&t, "w1").await;
+    let reply = t.complete(&agent("w1"), &item("a2"), 0).await.unwrap();
+    assert_eq!(reply["cost_micros"], 500);
+    seed(&t, "a3", 2).await;
+    claim(&t, "w1").await;
+    t.complete(&agent("w1"), &item("a3"), 1234).await.unwrap();
+    assert_eq!(costs(&fake, "done"), [500, 1234]);
+    seed(&t, "a4", 2).await;
+    let core = t.0.core.lock().await;
+    let left = |id: &str| core.state.budgets[&item(id)].cost_left_micros;
+    assert_eq!(left("a1") + 1000, left("a4"));
+    assert_eq!(left("a2") + 500, left("a4"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lapsed_claim_is_charged_the_floor() {
+    let fake = Fake::default();
+    let t = start_with(&fake, floor(500)).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    pass(&t, VIS + Duration::from_secs(1)).await;
+    t.sweep().await;
+    assert_eq!(costs(&fake, "released"), [500]);
 }
 
 #[tokio::test]

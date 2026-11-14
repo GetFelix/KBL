@@ -87,6 +87,10 @@ struct Cli {
         default_value = "fast,deep"
     )]
     review_tiers: Vec<String>,
+    /// The least each claim is charged against its root's cost budget, in
+    /// millionths of a dollar, whatever the agent reports.
+    #[arg(long, env = "KBL_COST_FLOOR_MICROS", default_value_t = 100_000)]
+    cost_floor_micros: u64,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -132,6 +136,7 @@ async fn serve() -> Result<()> {
             lease_wait: ttl * 2,
             crash_after_poll: cli.crash_after_poll,
             review_tiers: cli.review_tiers,
+            cost_floor_micros: cli.cost_floor_micros,
         },
     )
     .await?;
