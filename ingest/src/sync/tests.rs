@@ -810,6 +810,52 @@ async fn a_transferred_issue_that_closes_is_not_imported_again_when_it_reopens()
 }
 
 #[tokio::test]
+async fn a_transferred_issue_closed_after_a_restart_closes_its_root() {
+    let rig = rig();
+    let cfg = || {
+        json!([admit_rule(), {
+            "name": "second", "repo": "GetFelix/felix2", "labels_all": ["agent-ok"], "mode": "admit"
+        }])
+    };
+    let ingest = rig.ingest(cfg());
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/felix/issues/812",
+        status(
+            301,
+            &[(
+                "location",
+                "https://api.github.com/repos/GetFelix/felix2/issues/5",
+            )],
+        ),
+    );
+    let mut moved = issue(5, |_| {});
+    moved["html_url"] = json!("https://github.com/GetFelix/felix2/issues/5");
+    rig.gh
+        .on("GET", "/repos/GetFelix/felix2/issues/5", ok(moved.clone()));
+    ingest.poll(true).await.unwrap();
+
+    // A new process: only the saved state and the tracker's roots carry over.
+    let ingest = rig.ingest(cfg());
+    rig.gh
+        .on("GET", "/repos/GetFelix/felix/issues?", ok(json!([])));
+    rig.gh.on(
+        "GET",
+        "/repos/GetFelix/felix2/issues?",
+        ok(json!([closed(moved, "completed", "2026-11-10T13:00:00Z")])),
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Completed)
+    );
+    assert_eq!(rig.tracker.count("imported"), 1);
+}
+
+#[tokio::test]
 async fn an_issue_deleted_upstream_is_dropped_at_the_next_reconcile() {
     let rig = rig();
     let ingest = rig.ingest(json!([admit_rule()]));
