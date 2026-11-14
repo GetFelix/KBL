@@ -34,5 +34,8 @@ export function fixtureLog() {
     agent({ kind: 'done', item, attempt: 1, cost_micros: 1_250_000 });
     if (stage === 'done') rec({ kind: 'closed', item, why: 'merged' });
   }
+  // Two ready items that name the same files, so the overlap note and row flag show.
+  rec({ kind: 'context', item: 'gh-2219', entry: 'files', text: { text: 'core/src/retention.rs\ncore/src/segment/' } });
+  rec({ kind: 'context', item: 'gh-2221', entry: 'files', text: { text: 'core/src/segment/reader.rs\ngateway/src/offset.rs' } });
   return log;
 }

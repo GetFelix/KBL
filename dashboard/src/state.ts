@@ -2,6 +2,7 @@
 // only main.ts talks to the gateway. The item and search are kept in the address so
 // a link opens the same view for someone else.
 import type { ItemRow } from './fold.ts';
+import type { Overlaps } from './overlap.ts';
 
 export type Connection =
   | { kind: 'setup' }
@@ -25,6 +26,8 @@ export interface ViewState {
   /** True once the page has read the whole log and gone live, so an empty list means the log is empty. */
   synced: boolean;
   items: ItemRow[];
+  /** File overlaps per item, from the same fold as `items`. */
+  overlaps: Overlaps;
   query: string;
   selected: string | null;
   /** The item shown in the side panel. */
@@ -34,7 +37,7 @@ export interface ViewState {
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[] }
+  | { type: 'items'; items: ItemRow[]; overlaps: Overlaps }
   | { type: 'query'; query: string }
   | { type: 'select'; id: string | null }
   | { type: 'open'; id: string | null }
@@ -46,7 +49,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, connection: a.connection, synced: s.synced || a.connection.kind === 'live' };
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
-      return { ...s, items: a.items };
+      return { ...s, items: a.items, overlaps: a.overlaps };
     case 'query':
       return { ...s, query: a.query };
     case 'select':
