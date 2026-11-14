@@ -1077,9 +1077,11 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 None => {
                     // Claim the open in the versioned state first, so of two
                     // processes only the one whose save wins sends the POST.
-                    // Narrow window left: if the process that saved the intent
-                    // dies after its POST, a reconcile run by another before the
-                    // listing shows that issue opens a second. A person closes it.
+                    // Narrow window left: a second process that loaded the state
+                    // after this save, listed roots before this tie lands, and is
+                    // on a reconcile poll saves at the new version and opens a
+                    // second issue. The window is one POST round trip; the spare
+                    // is logged as an orphan and a person closes it.
                     p.state.opened.insert(pre.item.to_string(), String::new());
                     let state = serde_json::to_value(&p.state).map_err(anyhow::Error::from)?;
                     match self
