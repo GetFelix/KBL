@@ -37,8 +37,14 @@ pub const FORMAT_V4: u32 = 4;
 /// merge. It adds no record or field.
 pub const FORMAT_V5: u32 = 5;
 
+/// The format from which `imported` may name an open prerequisite a person
+/// accepted, with no upstream issue yet, in the repo it targets: ingest opened
+/// the issue for it, and the item becomes an imported root. It adds no record
+/// or field.
+pub const FORMAT_V6: u32 = 6;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V5;
+pub const FORMAT: u32 = FORMAT_V6;
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer

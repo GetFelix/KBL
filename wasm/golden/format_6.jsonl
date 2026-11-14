@@ -1,0 +1,30 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix-blocks#1","title":"swap blocks atomically"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"prerequisite","item":"r1","attempt":1,"prerequisite":"g1","key":"need-cas","new":{"target":{"source":"github","repo":"GetFelix/felix-gateway"},"title":"gateway needs a CAS call","why":{"text":"the client cannot swap atomically"},"evidence":[]},"done_when":"merged","cost_micros":0}
+{"at_ms":1040,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix-blocks#2","title":"rate limit the editor"}
+{"at_ms":1050,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"at_ms":1060,"by":"w2","actor":"agent","kind":"claimed","item":"r2","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1070,"by":"w2","actor":"agent","kind":"prerequisite","item":"r2","attempt":1,"prerequisite":"g2","key":"need-limits","new":{"target":{"source":"github","repo":"GetFelix/felix-gateway"},"title":"gateway rate limits","why":{"text":"the editor floods the gateway"},"evidence":[]},"done_when":"merged","cost_micros":0}
+{"at_ms":1080,"by":"gabriel","actor":"person","kind":"accepted","item":"g1","tier":1}
+{"at_ms":1090,"by":"tracker","actor":"tracker","kind":"accepted","item":"g2","tier":1}
+{"at_ms":1100,"by":"ingest","actor":"tracker","kind":"imported","item":"g1","source":"github","upstream_id":"GetFelix/felix-gateway#40","title":"gateway needs a CAS call"}
+{"v":6,"at_ms":1110,"by":"gabriel","actor":"person","kind":"format_raised","to":6}
+{"at_ms":1112,"by":"ingest","actor":"tracker","kind":"imported","item":"g1","source":"github","upstream_id":"GetFelix/felix-gateway#40","title":"gateway needs a CAS call"}
+{"at_ms":1115,"by":"gabriel","actor":"person","kind":"accepted","item":"g1","tier":1}
+{"at_ms":1120,"by":"ingest","actor":"tracker","kind":"imported","item":"g1","source":"github","upstream_id":"GetFelix/felix-gateway#40","title":"gateway needs a CAS call"}
+{"at_ms":1130,"by":"ingest","actor":"tracker","kind":"imported","item":"g1","source":"github","upstream_id":"GetFelix/felix-gateway#41","title":"gateway needs a CAS call"}
+{"at_ms":1140,"by":"ingest","actor":"tracker","kind":"imported","item":"g2","source":"github","upstream_id":"GetFelix/felix-gateway#42","title":"gateway rate limits"}
+{"at_ms":1150,"by":"ingest","actor":"tracker","kind":"closed","item":"g1","why":"completed"}
+{"at_ms":1160,"by":"gabriel","actor":"person","kind":"imported","item":"r3","source":"github","upstream_id":"GetFelix/felix-blocks#3","title":"stale read"}
+{"at_ms":1170,"by":"gabriel","actor":"person","kind":"accepted","item":"r3","tier":1}
+{"at_ms":1180,"by":"w1","actor":"agent","kind":"claimed","item":"r3","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1190,"by":"w1","actor":"agent","kind":"decision","item":"r3","attempt":1,"phase":"verify","so_far":"fix in, test added","question":"","chosen":"","why":"the test fails without the fix","commit":"9f3c2ab","revert_check":{"test":"reads_see_a_fresh_write","failed_without_fix":true,"passed_with_fix":true}}
+{"at_ms":1200,"by":"w1","actor":"agent","kind":"progress","item":"r3","attempt":1,"note":{"text":"fixed"},"branch":"fix/r3","pr":"GetFelix/felix-blocks#9"}
+{"at_ms":1210,"by":"w1","actor":"agent","kind":"done","item":"r3","attempt":1,"cost_micros":0}
+{"at_ms":1220,"by":"ingest","actor":"tracker","kind":"pr_status","item":"r3","status":{"pr":"GetFelix/felix-blocks#9","phase":"open","review":"unreviewed","checks":"green"}}
+{"at_ms":1230,"by":"ingest","actor":"tracker","kind":"proposed","item":"v1","parent":"r3","key":"review-first","work":"review","title":"First-pass review: GetFelix/felix-blocks#9","review":{"pass":"first","tier":"fast","pr":"GetFelix/felix-blocks#9"}}
+{"at_ms":1240,"by":"w2","actor":"agent","kind":"claimed","item":"v1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1250,"by":"w2","actor":"agent","kind":"finding","item":"v1","attempt":1,"severity":"medium","file":"src/read.rs","line":120,"title":"other readers skip the check","scenario":"a second reader path never looks at the cache epoch","verdict":"defer"}
+{"at_ms":1260,"by":"gabriel","actor":"person","kind":"accepted","item":"wUoHoQdLxyBeOKkEiQ0XK","tier":1}
+{"at_ms":1270,"by":"ingest","actor":"tracker","kind":"imported","item":"wUoHoQdLxyBeOKkEiQ0XK","source":"github","upstream_id":"GetFelix/felix-blocks#45","title":"Deferred: other readers skip the check"}

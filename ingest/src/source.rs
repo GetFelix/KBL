@@ -264,4 +264,11 @@ pub(crate) trait Source: Send + Sync {
         tag: &str,
         sha: &str,
     ) -> impl Future<Output = Result<bool, SourceError>> + Send;
+    /// Opens an issue in `repo` as our own credential and says which it is.
+    fn open_issue(
+        &self,
+        repo: &str,
+        title: &str,
+        body: &str,
+    ) -> impl Future<Output = Result<IssueRef, SourceError>> + Send;
 }

@@ -2528,3 +2528,80 @@ async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
     let core = t.0.core.lock().await;
     assert!(core.state.release_edges.contains(&(a1, item("a2"))));
 }
+
+/// From format 6 ingest may tie a prerequisite to the issue it opened, but
+/// only once a person accepted it after the raise, and only in its target repo.
+#[tokio::test]
+async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
+    let (_fake, t) = granted().await;
+    let (w1, a1) = (agent("w1"), item("a1"));
+    person(&t, WorkRecord::FormatRaised { to: 6 }).await;
+    let reply = t
+        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .await
+        .unwrap();
+    let g = id_of(&json!({ "item": reply["prerequisite"] }));
+    let attach = |up: &str| WorkRecord::Imported {
+        item: g.clone(),
+        source: "github".into(),
+        upstream_id: up.into(),
+        title: "gateway needs a CAS call".into(),
+    };
+    let refused = |e: Error| match e {
+        Error::Refused { why } => why,
+        e => panic!("{e}"),
+    };
+    let listed = t.ingest_roots().await.unwrap()["prerequisites"].clone();
+    assert_eq!(listed, json!([]), "not accepted yet");
+    let err = t
+        .ingest_record(key("ingest-gh"), attach("GetFelix/felix-gateway#5"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused(err), "actor_not_allowed");
+
+    person(
+        &t,
+        WorkRecord::Accepted {
+            item: g.clone(),
+            tier: None,
+        },
+    )
+    .await;
+    let listed = t.ingest_roots().await.unwrap()["prerequisites"].clone();
+    assert_eq!(
+        listed,
+        json!([{
+            "item": g, "title": "gateway needs a CAS call", "source": "github",
+            "repo": "GetFelix/felix-gateway", "why": "the client cannot swap atomically",
+            "needed_by": "GetFelix/felix#1",
+        }])
+    );
+    let err = t
+        .ingest_record(key("ingest-gh"), attach("GetFelix/felix#5"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused(err), "duplicate", "not its target repo");
+    t.ingest_record(key("ingest-gh"), attach("GetFelix/felix-gateway#5"))
+        .await
+        .unwrap();
+    let roots = t.ingest_roots().await.unwrap();
+    assert_eq!(roots["prerequisites"], json!([]));
+    assert!(
+        roots["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["upstream_id"] == "GetFelix/felix-gateway#5")
+    );
+    // Now an imported root, so upstream sync may close it.
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::Closed {
+            item: g.clone(),
+            why: kbl_core::work::CloseWhy::Completed,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(stage(&t, &a1).await, Some(Stage::Ready));
+}
