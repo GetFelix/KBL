@@ -214,6 +214,31 @@ struct Emptied {
     until: Instant,
 }
 
+/// GitHub reads `owner/repo` in any case, so `getfelix/felix#12` and
+/// `GetFelix/felix#12` name one request. A progress record takes the casing an
+/// open item already uses, so the fold's exact compare sees one request: another
+/// item's is refused as `pr_in_use`, and the item's own keeps its status.
+/// Rewritten before the append rather than compared in the fold, so the fold of
+/// an existing log does not change.
+fn canonical_pr(state: &State, record: &mut WorkRecord) {
+    let WorkRecord::Progress {
+        item, pr: Some(pr), ..
+    } = record
+    else {
+        return;
+    };
+    let found = state
+        .items
+        .values()
+        .filter(|o| o.closed.is_none() && o.id != *item)
+        .chain(state.items.get(item))
+        .filter_map(|o| o.pr.as_ref())
+        .find(|p| p.eq_ignore_ascii_case(pr));
+    if let Some(p) = found {
+        *pr = p.clone();
+    }
+}
+
 /// Refuses evidence outside the record's own tree, or on another stream: a
 /// person reads cited records as support. Checked before the append rather
 /// than in the fold, so the fold of an existing log does not change.
@@ -1411,7 +1436,7 @@ impl<B: Broker> Tracker<B> {
         core: &mut Core,
         actor: Actor,
         by: Key,
-        record: WorkRecord,
+        mut record: WorkRecord,
     ) -> Result<u64, Error> {
         if let Some(why) = unavailable(core, self.lease_margin()) {
             return Err(Error::Unavailable(why));
@@ -1423,6 +1448,7 @@ impl<B: Broker> Tracker<B> {
         }
         // Every route (agent, person, ingest) ends here, so one check bounds them all.
         tools::check_sizes(&record)?;
+        canonical_pr(&core.state, &mut record);
         let logged = WorkLogged::new(now_ms(), by, actor, record);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied. It can skip (generation starts), which the check below catches.
