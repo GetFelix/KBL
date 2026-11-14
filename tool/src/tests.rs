@@ -40,6 +40,38 @@ fn log_takes_a_run_id() {
 fn work_log_prints_the_trackers_log() {
     let cli = Cli::try_parse_from(["kbl-tool", "work", "log"]).unwrap();
     assert!(matches!(cli.command, Command::Work(WorkCommand::Log)));
+    let cli = Cli::try_parse_from(["kbl-tool", "work", "spend"]).unwrap();
+    assert!(matches!(cli.command, Command::Work(WorkCommand::Spend)));
+}
+
+fn logged(rec: &str) -> Vec<u8> {
+    format!(r#"{{"at_ms":1,"by":"gabriel","actor":"person",{rec}}}"#).into_bytes()
+}
+
+#[test]
+fn work_spend_folds_the_log_at_its_offsets() {
+    let imported = logged(
+        r#""kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"t""#,
+    );
+    let accepted = logged(r#""kind":"accepted","item":"r1""#);
+    let claimed = br#"{"at_ms":2,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":9}"#;
+    let done = br#"{"at_ms":3,"by":"w1","actor":"agent","kind":"done","item":"r1","attempt":1,"cost_micros":250}"#;
+    let records = vec![
+        (7, imported),
+        (8, b"not a record".to_vec()),
+        (9, accepted),
+        (12, claimed.to_vec()),
+        (13, done.to_vec()),
+    ];
+    let s = spend(&records).unwrap();
+    assert_eq!(s.total_micros, 250);
+    assert_eq!(s.by_repo["github:GetFelix/felix"], 250);
+
+    let newer =
+        br#"{"v":999,"at_ms":4,"by":"gabriel","actor":"person","kind":"accepted","item":"r1"}"#;
+    let mut records = records;
+    records.push((14, newer.to_vec()));
+    assert!(spend(&records).is_err());
 }
 
 #[test]
