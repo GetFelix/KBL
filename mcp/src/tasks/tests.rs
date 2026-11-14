@@ -210,12 +210,12 @@ fn tasks(fake: &Fake) -> Tasks<Fake> {
 
 fn task_bytes(id: &str) -> Vec<u8> {
     Task {
-        id: TaskId::new(id).unwrap(),
-        parent: TaskId::new("root").unwrap(),
-        title: "review a.rs".into(),
         body: Some(Content::Text("look for bugs".into())),
-        lease: None,
-        deadline_ms: None,
+        ..Task::new(
+            TaskId::new(id).unwrap(),
+            TaskId::new("root").unwrap(),
+            "review a.rs".into(),
+        )
     }
     .encode()
 }
@@ -499,6 +499,37 @@ async fn a_record_that_is_not_a_task_is_dead_lettered_and_reported() {
 }
 
 #[tokio::test]
+async fn a_task_of_a_newer_format_is_handed_back_not_run_or_dead_lettered() {
+    let fake = Fake::default();
+    let newer = br#"{"v":999,"id":"t1","parent":"root","title":"x","must_honour":true}"#;
+    fake.deliver(newer.to_vec(), 4, 1);
+    let err = tasks(&fake).claim(None).await.unwrap_err();
+    assert!(err.contains("format 999"), "{err}");
+    assert!(err.contains("upgrade this worker"), "{err}");
+    assert_eq!(fake.calls("nack"), ["nack 4"]);
+    assert!(fake.calls("dead_letter").is_empty());
+    assert!(fake.calls("ack").is_empty());
+    assert_eq!(fake.kinds(RUN), ["refused"]);
+}
+
+/// Settling a finished task rests on the results key being there, not on
+/// what it holds: docs/upgrades.md gives this as why stored values carry no
+/// format.
+#[tokio::test]
+async fn a_result_this_build_cannot_read_still_settles_a_redelivered_task() {
+    let fake = Fake::default();
+    fake.0.lock().unwrap().caches.insert(
+        ("agents.results.r1".into(), "t1".into()),
+        br#"{"v":999,"shape":"new"}"#.to_vec(),
+    );
+    fake.deliver(task_bytes("t1"), 0, 2);
+    let reply = json(tasks(&fake).claim(Some(Duration::ZERO)).await);
+    assert_eq!(reply["claimed"], false);
+    assert_eq!(fake.calls("ack"), ["ack 0"]);
+    assert!(fake.kinds(RUN).is_empty());
+}
+
+#[tokio::test]
 async fn a_delivery_without_an_attempt_count_is_dead_lettered_not_counted_as_the_first() {
     let fake = Fake::default();
     fake.deliver(task_bytes("t1"), 1, 0);
@@ -714,12 +745,12 @@ async fn a_claimed_task_body_must_hash_to_its_artifact_id() {
     };
     let task = |n: &str| {
         Task {
-            id: TaskId::new(n).unwrap(),
-            parent: TaskId::new("root").unwrap(),
-            title: "review a.rs".into(),
             body: Some(Content::Artifact(id.clone())),
-            lease: None,
-            deadline_ms: None,
+            ..Task::new(
+                TaskId::new(n).unwrap(),
+                TaskId::new("root").unwrap(),
+                "review a.rs".into(),
+            )
         }
         .encode()
     };

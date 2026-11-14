@@ -6,12 +6,24 @@
 //!
 //! Money is in millionths of a dollar and times are milliseconds since the
 //! Unix epoch on the writer's clock, so no record holds a float.
+//!
+//! Each record has a format, as on `work.events`: see docs/upgrades.md.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::artifact::ArtifactId;
+use crate::codec::{Codec, DecodeError, newer_format};
 use crate::content::Content;
 use crate::names::{AgentName, Key, TaskId};
+
+/// The format of every run log record written before formats existed. Frozen:
+/// its records are written without a `v` field.
+pub const RUN_LOG_FORMAT_V1: u32 = 1;
+
+/// The highest run log format this build reads and writes.
+pub const RUN_LOG_FORMAT: u32 = RUN_LOG_FORMAT_V1;
 
 /// An agent and its role, as listed when a run starts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,12 +39,86 @@ pub struct AgentSpec {
 /// the broker's values when it has them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Logged {
+    /// Left out at [`RUN_LOG_FORMAT_V1`]. Decoding fails above
+    /// [`RUN_LOG_FORMAT`]: use [`read`] to tell that from a malformed record.
+    #[serde(
+        default = "format_v1",
+        skip_serializing_if = "is_format_v1",
+        deserialize_with = "readable_format"
+    )]
+    pub v: u32,
     /// Milliseconds since the Unix epoch on the writer's clock.
     pub at_ms: u64,
     /// An agent's name, or `kbl-tool` or `kbl-run` for the two programs that write for the run.
     pub by: Key,
     #[serde(flatten)]
     pub record: Record,
+}
+
+impl Logged {
+    /// A record to append, stamped with the lowest format that reads it.
+    pub fn new(at_ms: u64, by: Key, record: Record) -> Self {
+        Self {
+            v: record.format(),
+            at_ms,
+            by,
+            record,
+        }
+    }
+}
+
+/// Why a payload on a run log was not read.
+#[derive(Debug)]
+pub enum RunLogReadError {
+    /// The record is of a format above [`RUN_LOG_FORMAT`]. A reader that
+    /// builds state from the log must stop here: skipping it would show a run
+    /// its writers did not record.
+    Newer {
+        v: u32,
+    },
+    Malformed(DecodeError),
+}
+
+impl fmt::Display for RunLogReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RunLogReadError::Newer { v } => write!(
+                f,
+                "the run log record has format {v} and this build reads up to {RUN_LOG_FORMAT}: upgrade this reader"
+            ),
+            RunLogReadError::Malformed(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for RunLogReadError {}
+
+/// Decodes a payload of a run log, and says when it failed because the record
+/// is newer than this build.
+pub fn read(payload: &[u8]) -> Result<Logged, RunLogReadError> {
+    Logged::decode(payload).map_err(|e| match newer_format(payload, RUN_LOG_FORMAT) {
+        Some(v) => RunLogReadError::Newer { v },
+        None => RunLogReadError::Malformed(e),
+    })
+}
+
+fn format_v1() -> u32 {
+    RUN_LOG_FORMAT_V1
+}
+
+fn is_format_v1(v: &u32) -> bool {
+    *v == RUN_LOG_FORMAT_V1
+}
+
+fn readable_format<'de, D: Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let v = u32::deserialize(d)?;
+    if (RUN_LOG_FORMAT_V1..=RUN_LOG_FORMAT).contains(&v) {
+        Ok(v)
+    } else {
+        Err(serde::de::Error::custom(format_args!(
+            "run log record format {v} is not one this build reads ({RUN_LOG_FORMAT_V1} to {RUN_LOG_FORMAT})"
+        )))
+    }
 }
 
 /// What a record says happened. The `kind` field is the variant name in snake case.
@@ -184,7 +270,8 @@ pub enum Record {
         agent: AgentName,
         micros: u64,
     },
-    /// An operation Felix refused, with Felix's error.
+    /// An operation that was refused, with the error: Felix's, or the
+    /// worker's own when it hands back a task of a newer format.
     Refused {
         op: String,
         resource: String,
@@ -233,6 +320,38 @@ impl Record {
             Record::Refused { .. } => "refused",
             Record::TaskClaimLost { .. } => "task_claim_lost",
             Record::Unknown => "unknown",
+        }
+    }
+
+    /// The lowest format whose readers read this record as this build does.
+    pub fn format(&self) -> u32 {
+        // No wildcard: a new kind does not compile until it names its format.
+        match self {
+            Record::RunStarted { .. }
+            | Record::RunEnded { .. }
+            | Record::AgentUp { .. }
+            | Record::AgentGone { .. }
+            | Record::TaskPosted { .. }
+            | Record::TaskClaimed { .. }
+            | Record::TaskExtended { .. }
+            | Record::TaskReleased { .. }
+            | Record::TaskDone { .. }
+            | Record::TaskDuplicate { .. }
+            | Record::TaskDead { .. }
+            | Record::BoardPut { .. }
+            | Record::BoardConflict { .. }
+            | Record::LeaseTaken { .. }
+            | Record::LeaseRenewed { .. }
+            | Record::LeaseReleased { .. }
+            | Record::LeaseLost { .. }
+            | Record::Message { .. }
+            | Record::ModelStarted { .. }
+            | Record::ModelCall { .. }
+            | Record::BudgetExhausted { .. }
+            | Record::RefundUnconfirmed { .. }
+            | Record::Refused { .. }
+            | Record::TaskClaimLost { .. }
+            | Record::Unknown => RUN_LOG_FORMAT_V1,
         }
     }
 }

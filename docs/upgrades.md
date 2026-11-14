@@ -155,6 +155,12 @@ tracker does not have yet.
   format 2 and uses it, including a format 2 record before the raise, which
   the fold refuses. Its state is pinned in `wasm/golden/format_2.state.json`
   and folded by the core, the WebAssembly build and the page's tests.
+- **A run's own records.** `core/tests/run_format.rs` checks that every run
+  log kind and a task of the first format are written byte for byte as before
+  formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests
+  check that a worker hands back a task of a newer format without running or
+  dead-lettering it, and that a result it cannot read still settles a
+  redelivered task.
 - **The replay corpus** ([#117](https://github.com/GetFelix/KBL/issues/117))
   will keep a log from every release with its folded state. Each record in a
   stored log carries the format its release wrote, so the corpus pins every
@@ -176,11 +182,46 @@ tracker does not have yet.
   step then prints that line and skips this check; it never skips for a
   change that has not declared one.
 
-## Not covered yet
+## A run's own records
 
-Run logs (`agents.log.<run>`) and task records have no format. Readers ignore
-unknown fields and skip unknown kinds there. Tracked in
-[#166](https://github.com/GetFelix/KBL/issues/166).
+A run has records of its own beside `work.events`: its run log, its tasks
+and the values in its caches. All of a run's programs are started together,
+so two builds rarely meet inside one run. The rules below are for when they
+do.
+
+**Run log** (`agents.log.<run>`). Each record has a format in `v`, with the
+same rules as `work.events`: no `v` means format 1, format 1 is frozen and
+written without `v`, and `Record::format` in `core/src/record.rs` names a
+format for every kind. `RUN_LOG_FORMAT` is 1 today. A reader that builds
+anything from a run log reads it with `record::read` and stops at a record of
+a newer format. Nothing decides from a run log today: `kbl-tool run log`
+prints the records as they are, whatever their format.
+
+**Tasks** (`agents.tasks.<run>`). A task has a format in `v` as well
+(`TASK_FORMAT` in `core/src/task.rs`, 1 today, left out at 1). A worker runs
+what a task says, so a worker that got a task of a newer format would run it
+without the part it cannot read. Instead `task_claim` hands the task back,
+logs a `refused` record and tells the agent to upgrade. The task is not
+dead-lettered, so a newer worker can still take it. Handing it back uses up
+one of the task's deliveries, and workers give up on a task after two. So
+when a release raises the task format, upgrade every `kbl-mcp` of a run
+before its planner posts with the new one.
+
+**Cache values** (results, leases, presence, the board) have no format, and
+do not need one, because nothing is decided from what a value holds:
+
+| Value | What is decided, and from what |
+|---|---|
+| A task's result | Whether the task is finished: from the key being there. The first write wins in Felix. A worker that cannot read the value still settles a redelivered copy; it only leaves out the `task_duplicate` record |
+| A lease | Who holds it: from the cache version, which is the fencing token. The value is the holder's name, for people to read |
+| Presence | Whether an agent is up: from the key and its TTL. The value is shown, not acted on |
+| The board | Nothing. The text goes to a model |
+
+A reader ignores a field it does not know in these values. A change that
+would make a reader decide from a value's content gives that value a format
+first.
+
+## Derived streams
 
 The ready streams are derived from `work.events`: a tracker publishes every
 ready item again when it starts, and drops a ready record it cannot read.
