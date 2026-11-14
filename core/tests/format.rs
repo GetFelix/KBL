@@ -4,8 +4,8 @@
 
 use kbl_core::codec::Codec;
 use kbl_core::work::{
-    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, ReadError, WorkLogged, WorkRecord,
-    read,
+    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, ReadError, WorkLogged,
+    WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -459,4 +459,92 @@ fn a_redo_of_a_red_item_waits_at_format_3() {
     assert!(s.items[&r1].hold.is_none());
     assert_eq!(s.rejections.len(), 2);
     assert!(s.rejections.iter().all(|r| r.why == Reject::NotReady));
+}
+
+/// A log that raises to the fifth format: an agent waits on the release of
+/// work that is already merged, and a later prerequisite on the same link asks
+/// only for the merge. Its folded state is pinned in
+/// `wasm/golden/format_5.state.json`.
+const FORMAT_5_LOG: &str = include_str!("work_format_5.jsonl");
+
+/// Format 5 adds no record: only the raise is stamped 5.
+#[test]
+fn the_fifth_format_is_five_and_adds_no_record() {
+    assert_eq!(FORMAT_V5, 5);
+    const { assert!(FORMAT >= FORMAT_V5) };
+    for (_, r) in entries(FORMAT_5_LOG) {
+        if r.record.kind() == "format_raised" {
+            assert_eq!(r.v, FORMAT_V5);
+        } else {
+            assert!(r.v < FORMAT_V5);
+        }
+        assert_eq!(r.record.format(), r.v);
+    }
+}
+
+/// Before the raise a merged item with no release is refused as `closed`;
+/// after it the same prerequisite folds and the item waits for the release.
+#[test]
+fn a_merged_item_with_no_release_is_a_prerequisite_from_format_5() {
+    let log = entries(FORMAT_5_LOG);
+    let r1 = kbl_core::names::ItemId::new("r1").unwrap();
+    let g1 = kbl_core::names::ItemId::new("g1").unwrap();
+    let before = fold(&log[..7]);
+    assert_eq!(
+        before.rejections,
+        vec![Rejection {
+            offset: 6,
+            why: Reject::Closed
+        }]
+    );
+    assert_eq!(before.stage(&r1), Some(Stage::Held));
+
+    let waiting = fold(&log[..9]);
+    assert_eq!(waiting.format(), FORMAT_V5);
+    assert_eq!(waiting.rejections.len(), 1);
+    assert!(waiting.release_edges.contains(&(r1.clone(), g1.clone())));
+    assert_eq!(waiting.stage(&r1), Some(Stage::Blocked));
+    let shipped = fold(&log[..10]);
+    assert_eq!(shipped.stage(&r1), Some(Stage::Ready));
+}
+
+/// A later prerequisite asking only for the merge keeps the earlier ask for
+/// the release, so r2 waits after g2 merges.
+#[test]
+fn a_later_merged_ask_keeps_the_release_ask_from_format_5() {
+    let s = fold(&entries(FORMAT_5_LOG));
+    let r2 = kbl_core::names::ItemId::new("r2").unwrap();
+    let g2 = kbl_core::names::ItemId::new("g2").unwrap();
+    assert_eq!(s.rejections.len(), 1);
+    assert!(s.release_edges.contains(&(r2.clone(), g2)));
+    assert_eq!(s.stage(&r2), Some(Stage::Blocked));
+}
+
+/// A raise to format 4 is not enough: the merged item is still refused and
+/// the later merged ask replaces the release ask.
+#[test]
+fn format_4_keeps_the_old_prerequisite_rules() {
+    let raise5 =
+        r#"{"v":5,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":5}"#;
+    let raise4 =
+        r#"{"v":4,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":4}"#;
+    assert!(FORMAT_5_LOG.contains(raise5));
+    let s = fold(&entries(&FORMAT_5_LOG.replace(raise5, raise4)));
+    assert_eq!(s.format(), FORMAT_V4);
+    let id = |s: &str| kbl_core::names::ItemId::new(s).unwrap();
+    assert_eq!(
+        s.rejections,
+        vec![
+            Rejection {
+                offset: 6,
+                why: Reject::Closed
+            },
+            Rejection {
+                offset: 8,
+                why: Reject::Closed
+            }
+        ]
+    );
+    assert!(s.release_edges.is_empty());
+    assert_eq!(s.stage(&id("r2")), Some(Stage::Ready));
 }

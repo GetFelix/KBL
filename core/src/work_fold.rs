@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FindingVerdict,
+    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FindingVerdict,
     MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE,
     MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS,
     MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY, MergeVerdict,
@@ -2302,7 +2302,13 @@ impl State {
                 }
             }
             None => {
-                if self.item(prerequisite)?.closed.is_some() {
+                let p = self.item(prerequisite)?;
+                // Finished but not yet released is still something to wait on.
+                let unreleased = self.format() >= FORMAT_V5
+                    && done_when == DoneWhen::Released
+                    && matches!(p.closed, Some(Closure::Merged | Closure::Completed))
+                    && p.release.is_none();
+                if p.closed.is_some() && !unreleased {
                     return Err(Reject::Closed);
                 }
             }
@@ -2323,7 +2329,8 @@ impl State {
         let edge = (item.clone(), prerequisite.clone());
         if done_when == DoneWhen::Released {
             self.release_edges.insert(edge);
-        } else {
+        } else if self.format() < FORMAT_V5 {
+            // From format 5 the stricter of the two asks stands.
             self.release_edges.remove(&edge);
         }
         let root = self.item(item)?.root.clone();

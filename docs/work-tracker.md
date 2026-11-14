@@ -632,7 +632,7 @@ An agent sometimes finds that its item needs a change in another repo first: a
 |---|---|
 | `target_source`, `target_repo`, `title`, `why`, `evidence` | A new proposal in that repo's Triage, with the reason and the steps that show it, records of the same tree as for a decision. `why` is shown with the proposal |
 | `existing` | Instead of the five above: an item that already exists, to avoid a duplicate |
-| `done_when` | `merged` (default) or `released`. `released` also waits for the release that carries the work |
+| `done_when` | `merged` (default) or `released`. `released` also waits for the release that carries the work. If the item already waits on the same prerequisite, the stricter ask stands |
 
 One record does all of it:
 
@@ -650,7 +650,10 @@ waited on, with each prerequisite's stage, pull request and release. A link
 that waits for a release stays blocked until a person records
 `{"kind": "shipped", "item": ..., "release": "0.4.0"}` on the finished
 prerequisite. The fold takes that record from people only and only for an item
-that is done; ingest does not write it yet. If a person rejects or dismisses
+that is done; ingest does not write it yet. An `existing` item that is already
+merged or completed but has no release yet can still be named with
+`done_when: released`; any other closed item is refused as `closed`. Both
+rules apply from [format 5](upgrades.md#formats). If a person rejects or dismisses
 the prerequisite, the held item goes to Needs you as "dependency dropped".
 
 This is the only cross-tree link an agent can make, and the tracker checks it
