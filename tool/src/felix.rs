@@ -103,7 +103,7 @@ impl Session {
     }
 
     /// A Felix token for `audience`: `felix-controlplane` or `felix-broker`.
-    async fn exchange(&self, audience: &str) -> Result<String> {
+    pub(crate) async fn exchange(&self, audience: &str) -> Result<String> {
         let url = format!(
             "{}/v1/tenants/{}/token/exchange",
             self.target.control_plane, self.target.tenant
@@ -134,6 +134,48 @@ impl Session {
             .json()
             .await?;
         outcome(&body)
+    }
+
+    pub(crate) fn target(&self) -> &Target {
+        &self.target
+    }
+
+    /// POSTs `body` to `path` under the tenant, with a control-plane `token`.
+    /// Says whether it was new: a 409 means it is already there, which is what
+    /// makes every setup step safe to run again.
+    pub(crate) async fn control_plane_post(
+        &self,
+        token: &str,
+        path: &str,
+        body: &Value,
+        doing: &str,
+    ) -> Result<bool> {
+        let url = format!(
+            "{}/v1/tenants/{}/{path}",
+            self.target.control_plane, self.target.tenant
+        );
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(token)
+            .json(body)
+            .send()
+            .await
+            .with_context(|| format!("could not {doing}"))?;
+        let status = response.status();
+        if status == reqwest::StatusCode::CONFLICT {
+            return Ok(false);
+        }
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            bail!("could not {doing}: {status}: {text}");
+        }
+        Ok(true)
+    }
+
+    /// The same HTTP client, for calls to the tracker.
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
     }
 
     pub(crate) async fn broker(&self) -> Result<Broker> {
