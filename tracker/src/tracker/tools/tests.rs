@@ -602,7 +602,7 @@ async fn asking_is_charged_at_least_the_floor() {
 #[tokio::test]
 async fn a_prerequisite_is_charged_at_least_the_floor() {
     let fake = Fake::default();
-    let grants = [("w1".to_owned(), vec!["GetFelix/felix-gateway".to_owned()])].into();
+    let grants = [("w1".to_owned(), vec![github("GetFelix/felix-gateway")])].into();
     let floor = crate::tracker::Settings {
         grants,
         cost_floor_micros: 500,
