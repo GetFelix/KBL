@@ -1061,6 +1061,15 @@ async fn a_reported_cost_is_refused_with_what_to_send_instead() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
     assert!(reply.to_string().contains("usage"), "{reply}");
+    // An older kbl-mcp always sends 0: that gets past the check.
+    let (status, reply) = call(
+        &app,
+        "/v1/work/complete",
+        Some("tok-w1"),
+        json!({ "item": "a1", "cost_micros": 0 }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::BAD_REQUEST, "{reply}");
 }
 
 #[tokio::test]

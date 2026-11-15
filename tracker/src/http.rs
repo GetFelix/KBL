@@ -310,11 +310,12 @@ struct GiveUpBody {
     cost_micros: Option<u64>,
 }
 
-/// The usage a claim end reports. A `cost_micros` is refused rather than
-/// dropped, so an agent still sending it is told what to send instead.
+/// The usage a claim end reports. A cost above 0 is refused rather than
+/// dropped, so an agent still sending one is told what to send instead. An
+/// older `kbl-mcp` always sends 0, which passes and is charged the floor.
 fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {
     match cost_micros {
-        None => Ok(usage),
+        None | Some(0) => Ok(usage),
         Some(_) => Err(Error::Invalid(
             "cost_micros is no longer read: report `usage`, one entry per model, and the tracker prices it".into(),
         )),

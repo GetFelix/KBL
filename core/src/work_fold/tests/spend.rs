@@ -257,3 +257,54 @@ fn reported_costs_before_the_raise_stand_beside_priced_usage() {
     assert_eq!(s.budgets[&id("r1")].cost_left_micros, 1_000_000 - 1_700);
     assert_eq!(s.spend().by_model["m"].cost_micros, 1_000);
 }
+
+/// A price set for later prices nothing before its start, waiting usage included.
+#[test]
+fn a_first_price_set_for_later_leaves_earlier_usage_unpriced() {
+    let mut l = raised();
+    l.agent("w1", done_with("r1", vec![tokens("m", 100_000, 0)], 0));
+    l.person(WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: 9_000_000,
+        effective_from_ms: Some(1_000_000),
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("r1")].cost_micros, 0);
+    assert!(s.spend().by_model["m"].unpriced);
+}
+
+#[test]
+fn the_models_waiting_for_a_price_are_bounded() {
+    let mut l = raised();
+    for r in ["r2", "r3"] {
+        l.tracker(imported(r));
+        l.person(WorkRecord::Accepted {
+            item: id(r),
+            tier: None,
+        });
+        l.agent("w1", claimed(r, 1));
+    }
+    let models = |from: usize, n: usize| -> Vec<Usage> {
+        (from..from + n)
+            .map(|i| tokens(&format!("m{i}"), 1, 0))
+            .collect()
+    };
+    l.agent("w1", done_with("r1", models(0, 16), 0));
+    l.agent("w1", done_with("r2", models(16, 16), 0));
+    // 32 is the most a log holds; a 33rd is refused, a repeat is not.
+    l.agent("w1", done_with("r3", models(31, 2), 0));
+    l.agent("w1", done_with("r3", models(31, 1), 0));
+    let s = fold(&l.0);
+    assert_eq!(rejected(&s), [Reject::BadUsage]);
+    assert_eq!(s.unpriced_models().len(), 32);
+}
+
+#[test]
+fn an_entry_that_used_nothing_is_left_out() {
+    let mut l = raised();
+    l.agent("w1", done_with("r1", vec![tokens("m", 0, 0)], 0));
+    let s = fold(&l.0);
+    assert!(s.spend().by_model.is_empty());
+    assert!(s.unpriced_models().is_empty());
+}

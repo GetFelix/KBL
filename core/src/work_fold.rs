@@ -394,6 +394,10 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Models with usage waiting for a price that a log may hold. A report that
+/// would add one past this is refused until a person prices some.
+const MAX_UNPRICED_MODELS: usize = 32;
+
 /// Longest model name a report or price may carry.
 const MAX_MODEL_LEN: usize = 100;
 
@@ -582,8 +586,8 @@ pub enum Reject {
     /// or above what this build reads; or a raise that does not go up.
     Format,
     /// From format 8: a report carries a cost of its own, more usage entries
-    /// than a report keeps, a model twice, or a model name that is empty, too
-    /// long or not plain.
+    /// than a report keeps, a model twice, a model name that is empty, too
+    /// long or not plain, or it would leave too many models waiting for a price.
     BadUsage,
     /// A `price_set` with a bad model name, or that takes effect before it was logged.
     BadPrice,
@@ -1217,13 +1221,12 @@ impl State {
     }
 
     /// The price of one unit of `model` for usage logged at `at_ms`: the latest
-    /// in effect then, or the first one set if none was in effect yet.
+    /// in effect then.
     fn price(&self, model: &str, unit: PriceUnit, at_ms: u64) -> Option<u64> {
         let list = self.prices.get(model)?.get(&unit)?;
         list.iter()
             .rev()
             .find(|(from, _)| *from <= at_ms)
-            .or(list.first())
             .map(|(_, p)| *p)
     }
 
@@ -1237,7 +1240,11 @@ impl State {
         let mut usage: BTreeMap<String, ModelSpend> = BTreeMap::new();
         let mut priced = 0u64;
         let mut waiting = Vec::new();
-        for u in c.usage {
+        for u in c
+            .usage
+            .iter()
+            .filter(|u| u.amounts().iter().any(|(_, n)| *n > 0))
+        {
             let m = usage.entry(u.model().to_owned()).or_default();
             for (unit, n) in u.amounts().into_iter().filter(|(_, n)| *n > 0) {
                 m.add_amount(unit, n);
@@ -1339,6 +1346,20 @@ impl State {
             if !model_name_ok(u.model()) || !seen.insert(u.model()) {
                 return Err(Reject::BadUsage);
             }
+        }
+        // Each made-up model would wait for a price forever, so their number is bounded.
+        let mut unpriced = self.unpriced_models();
+        for u in c.usage {
+            let waits = u
+                .amounts()
+                .iter()
+                .any(|(unit, n)| *n > 0 && self.price(u.model(), *unit, rec.at_ms).is_none());
+            if waits {
+                unpriced.insert(u.model());
+            }
+        }
+        if unpriced.len() > MAX_UNPRICED_MODELS {
+            return Err(Reject::BadUsage);
         }
         Ok(())
     }
@@ -2085,7 +2106,10 @@ impl State {
                     .or_default();
                 let at = list.partition_point(|(f, _)| *f <= from);
                 list.insert(at, (from, *price_micros));
-                self.reprice(model, *unit, *price_micros);
+                // Only a price in effect now prices usage that waited for one.
+                if from == rec.at_ms {
+                    self.reprice(model, *unit, *price_micros);
+                }
             }
             WorkRecord::BudgetSet {
                 root,

@@ -1402,8 +1402,10 @@ claim or its last ask:
 `tokens` counts input, output, cache-read and cache-write tokens; leave out
 what you did not use. `aic` counts AI credits in thousandths, so 1.5 credits is
 1500. A report holds at most 16 entries and names each model once. A model name
-is up to 100 letters, digits and `.-_:/@`. `cost_micros` is no longer read: a
-report that sends it is refused with a message that says to send `usage`.
+is up to 100 letters, digits and `.-_:/@`. An entry that used nothing is left
+out. `cost_micros` is no longer read: a report that sends one above 0 is refused
+with a message that says to send `usage`. An older `kbl-mcp` sends 0, which
+passes and is charged the floor, so the tracker can be upgraded first.
 
 **Prices.** A person sets the price of one unit of one model with
 `POST /v1/work/prices`, which writes a `price_set` record:
@@ -1415,10 +1417,12 @@ curl -X POST "$KBL/v1/work/prices" -H "Authorization: Bearer $PERSON_TOKEN" \
 
 `unit` is `input`, `output`, `cache_read` or `cache_write`, priced in millionths
 of a dollar per million tokens, or `aic`, priced in millionths of a dollar per
-credit. The example is $15 per million input tokens. A price takes effect when it is written, or at
-`effective_from_ms` if that is later; it cannot reach back. Prices are never
-edited: a new `price_set` for the same model and unit takes over from its time
-on. The tracker fetches no prices from vendors.
+credit. The example is $15 per million input tokens. A price takes effect when
+it is written, or at `effective_from_ms` if that is later. It cannot reach back:
+an `effective_from_ms` before the tracker's clock is refused with `bad_price`,
+so leave it out for "now". Prices are never edited: a new `price_set` for the
+same model and unit takes over from its time on. The tracker fetches no prices
+from vendors.
 
 **How a report is charged.** The fold prices each report when it folds it,
 with the prices in effect at the time the report was written. A later price
@@ -1434,10 +1438,13 @@ trees and budgets.
 
 **A model with no price.** Usage of a model or unit that has no price is
 recorded, not refused, and never guessed. Until a price exists the report is
-charged its floor (plus any usage that is priced), so work goes on. The model
-is listed in `unpriced` in the spend view, so a person sees it needs a price.
-When a person sets one, the fold prices the waiting usage with it and draws the
-difference from the root's budget.
+charged its floor (or its priced usage, if that is more), so work goes on. The
+model is listed in `unpriced` in the spend view, so a person sees it needs a
+price. When a person sets one that takes effect at once, the fold prices the
+waiting usage with it and draws the difference from the root's budget. A price
+set for a later time prices only usage from that time on. At most 32 models may
+wait for a price at once; a report that would add another is refused with
+`bad_usage` until a person prices some.
 
 **Budgets.** A root's cost budget is in the same derived cost, in millionths of
 a dollar, and is shared by every model and unit in the tree. The budget is
@@ -1456,9 +1463,13 @@ read of the fold, not a separate record. `kbl-tool work spend` folds
 root and everything under it), per reviewer tier (reviews only) and per repo
 (`source:repo` of the item's root, so a review counts where the request it
 reads lands). `by_model` gives each model's usage and the cost of its priced
-part; the total is more than their sum by the floors and by costs reported
-before format 8. `unpriced` names the models still waiting for a price. The
+part. The total can be more than their sum: a report charged its floor adds
+what the floor came to above its priced usage, and costs reported before
+format 8 count only in the total. `unpriced` names the models still waiting for a price. The
 wasm fold exposes the same numbers via `Folder.spend_json()`.
+
+With input priced at $15 and output at $75 per million tokens, 20000 input
+and 4000 output tokens cost $0.30 + $0.30:
 
 ```bash
 kbl-tool work spend
@@ -1467,7 +1478,7 @@ kbl-tool work spend
 #  "by_review_tier": {"deep": 300000, "fast": 100000},
 #  "by_repo": {"github:GetFelix/felix": 1400000},
 #  "by_model": {"claude-opus-5-5": {"input": 20000, "output": 4000, "cache_read": 0,
-#     "cache_write": 0, "aic_milli": 0, "cost_micros": 360000, "unpriced": false}},
+#     "cache_write": 0, "aic_milli": 0, "cost_micros": 600000, "unpriced": false}},
 #  "unpriced": []}
 ```
 
