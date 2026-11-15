@@ -712,12 +712,9 @@ fn an_openssh_body_and_a_blank_line_with_no_end_are_cut() {
     assert_eq!(redact(&text), "[redacted]\nok");
     let text = format!("-----BEGIN PRIVATE KEY-----\n\n{BODY}\nAB12cd==\nok");
     assert_eq!(redact(&text), "[redacted]\nok");
-    // A blank line then prose is still prose; a line over 70 is not a body.
+    // A blank line then prose is still prose.
     let text = "-----BEGIN PRIVATE KEY-----\n\nthanks, done\nok";
     assert_eq!(redact(text), "[redacted]\n\nthanks, done\nok");
-    let long = format!("{BODY}{BODY}");
-    let text = format!("-----BEGIN PRIVATE KEY-----\n{long}\nok");
-    assert_eq!(redact(&text), format!("[redacted]\n{long}\nok"));
 }
 
 #[test]
@@ -833,15 +830,19 @@ fn first_line_length_boundaries_with_no_end() {
 #[test]
 fn full_line_length_boundaries_with_no_end() {
     let hdr = "-----BEGIN PRIVATE KEY-----";
-    // Current behaviour: 64 to 71 bytes count as a body line, 72 does not.
+    // 64 to 71 bytes are a body line; a longer mixed first line is a body
+    // with its line breaks stripped.
     for n in [64, 65, 70, 71] {
         let text = format!("{hdr}\n{}\nAB12cd==\nok", mixed(n));
         assert_eq!(redact(&text), "[redacted]\nok", "{n}");
     }
     let l72 = mixed(72);
+    assert_eq!(redact(&format!("{hdr}\n{l72}\nok")), "[redacted]\nok");
+    // A long line of one or two classes is not.
+    let hex = "ab12".repeat(20);
     assert_eq!(
-        redact(&format!("{hdr}\n{l72}\nok")),
-        format!("[redacted]\n{l72}\nok")
+        redact(&format!("{hdr}\n{hex}\nok")),
+        format!("[redacted]\n{hex}\nok")
     );
     // A diff marker makes a 70 byte line 71 on the page.
     let text = format!("{hdr}\n-{}\n-AB12cd==\nok", mixed(70));
@@ -908,4 +909,155 @@ fn slack_c_tokens_are_cut() {
     let tok = fake("xoxc-", "1234567890-", 1) + &fake("", "Ab3x9Zk2", 8);
     assert_eq!(redact(&format!("c={tok} z")), "c=[redacted] z");
     assert!(untouched("xoxc-short"));
+}
+
+#[test]
+fn a_key_with_its_line_breaks_stripped_is_cut_whole() {
+    let body = format!("{BODY}{BODY}{BODY}AB12cd==");
+    let text = format!("k=-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY----- ok");
+    assert_eq!(redact(&text), "k=[redacted] ok");
+    // Cut off before its END.
+    let text = format!("k=-----BEGIN PRIVATE KEY-----{body} ok");
+    assert_eq!(redact(&text), "k=[redacted] ok");
+    // A word stuck to a header is not a body.
+    assert_eq!(
+        redact("-----BEGIN PRIVATE KEY-----markers in prose"),
+        "[redacted]markers in prose"
+    );
+}
+
+#[test]
+fn pgp_and_armored_keys_are_cut_whole() {
+    let pgp = "PGP PRIVATE KEY BLOCK-----";
+    let text = format!(
+        "a\n-----BEGIN {pgp}\nComment: work laptop\n\n{BODY}\nAB12cd==\n=Xy9Z\n-----END {pgp}\nb"
+    );
+    assert_eq!(redact(&text), "a\n[redacted]\nb");
+    // With no END the header, armor and body go.
+    let text = format!("-----BEGIN {pgp}\nVersion: GnuPG v2\n\n{BODY}\n{BODY}\nAB12cd==\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+    // Legacy encrypted PEM.
+    let text = format!(
+        "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,A1B2C3D4\n\n{BODY}\nAB12cd==\nok"
+    );
+    assert_eq!(redact(&text), "[redacted]\nok");
+    // A public key stays, and a header line then prose loses only the header.
+    assert!(untouched(&format!(
+        "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n{BODY}\n-----END PGP PUBLIC KEY BLOCK-----"
+    )));
+    let text = "-----BEGIN RSA PRIVATE KEY-----\nNote: rotate it\n\nthanks\nok";
+    assert_eq!(redact(text), "[redacted]\nNote: rotate it\n\nthanks\nok");
+}
+
+#[test]
+fn unicode_and_url_encoded_line_breaks_are_followed() {
+    let end = "-----END PRIVATE KEY-----";
+    for nl in [
+        "\\u000a",
+        "\\u000A",
+        "\\u000d\\u000a",
+        "\\\\u000a",
+        "%0A",
+        "%0a",
+        "%0D%0A",
+        "%0d%0a",
+    ] {
+        let text = format!("x \"-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}AB12cd=={nl}{end}\" y");
+        assert_eq!(redact(&text), "x \"[redacted]\" y", "{nl}");
+        let text = format!("x \"-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}AB12cd==\" y");
+        assert!(!redact(&text).contains(BODY), "{nl} no end");
+    }
+}
+
+#[test]
+fn url_encoded_lead_ins_start_a_secret() {
+    let gh = fake("ghp_", "A1", 18);
+    assert_eq!(redact(&format!("q=x%20{gh}&b")), "q=x%20[redacted]&b");
+    let cookie = fake("xoxd-", "Ab3x%2BQ9Zk", 6);
+    assert_eq!(
+        redact(&format!("Cookie: d%3D{cookie}; x")),
+        "Cookie: d%3D[redacted]; x"
+    );
+    // A word before a prefix still is not a lead-in.
+    assert!(untouched(&format!("x{gh}")));
+}
+
+#[test]
+fn aws_ids_joined_by_one_byte_are_cut_whole() {
+    let akia = fake("AKIA", "A1B2", 4);
+    let asia = fake("ASIA", "A1B2", 4);
+    assert_eq!(redact(&format!("k={akia}x{akia} z")), "k=[redacted] z");
+    assert_eq!(
+        redact(&format!("k={akia}x{asia}x{akia} z")),
+        "k=[redacted] z"
+    );
+    assert_eq!(redact(&format!("k={akia}{akia}x z")), "k=[redacted] z");
+    // An id then a word is still a name.
+    assert!(untouched(&format!("k={akia}xEXAMPLEEXAMPLE1234 z")));
+}
+
+#[test]
+fn encoded_breaks_armor_and_stripped_keys_stay_linear() {
+    let mb = 10 * 1024 * 1024;
+    let inputs = [
+        format!("-----BEGIN PRIVATE KEY-----{}", "A".repeat(mb)),
+        "-----BEGIN PRIVATE KEY-----AAAA".repeat(mb / 31),
+        format!(
+            "-----BEGIN PRIVATE KEY-----{}-----END PRIVATE KEY-----",
+            "A".repeat(mb)
+        ),
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----".repeat(mb / 37),
+        "-----BEGIN PRIVATE KEY-----\nA: b\n".repeat(mb / 33),
+        format!("-----BEGIN PRIVATE KEY-----\nA: {}", "\\".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----\nA: {}", "%".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\u000a".repeat(mb / 6)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\u000d".repeat(mb / 6)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "%0D%0A".repeat(mb / 6)),
+        "%20ghp_".repeat(mb / 7),
+        "AKIAA1B2C3D4E5F6A1B2x".repeat(mb / 21),
+        format!("-----BEGIN PRIVATE KEY-----{}", "%2B".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "%2Ba".repeat(mb / 4)),
+        format!("-----BEGIN PRIVATE KEY-----\nA: {}", "\\x".repeat(mb / 2)),
+        "+-----BEGIN PRIVATE KEY-----\n+A: b\n+".repeat(mb / 38),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "ab".repeat(mb / 2)),
+    ];
+    for text in inputs {
+        let start = Instant::now();
+        let _ = redact(&text);
+        let took = start.elapsed();
+        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
+    }
+}
+
+#[test]
+fn reviewed_variants_of_the_new_shapes_are_cut() {
+    let end = "-----END PRIVATE KEY-----";
+    // Armor values with `%`, a backslash or non-ASCII.
+    for comment in ["100% offline backup", "C:\\keys\\me.asc", "Jos\u{e9}"] {
+        let pgp = "PGP PRIVATE KEY BLOCK-----";
+        let text =
+            format!("-----BEGIN {pgp}\nComment: {comment}\n\n{BODY}\n=Xy9Z\n-----END {pgp}\nb");
+        assert_eq!(redact(&text), "[redacted]\nb", "{comment}");
+    }
+    // An encrypted key, and a PGP key with no END, in an added diff hunk.
+    let text = format!(
+        "+-----BEGIN RSA PRIVATE KEY-----\n+Proc-Type: 4,ENCRYPTED\n+DEK-Info: AES-128-CBC,A1B2\n+\n+{BODY}\n+AB12cd==\n+-----END RSA PRIVATE KEY-----\n fn f() {{}}"
+    );
+    assert_eq!(redact(&text), "+[redacted]\n fn f() {}");
+    let text = format!(
+        "+-----BEGIN PGP PRIVATE KEY BLOCK-----\n+\n+{BODY}\n+{BODY}\n+AB12cd==\n fn f() {{}}"
+    );
+    assert_eq!(redact(&text), "+[redacted]\n fn f() {}");
+    // A URL-encoded body with `%2B`, `%2F` and `%3D`, with and without END.
+    let line = "MIIEq9Zx%2BIIEq9Zx%2FIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9Zx";
+    let text = format!("k=-----BEGIN PRIVATE KEY-----%0A{line}%0AAB12cd%3D%3D%0A{end}&x=1");
+    assert_eq!(redact(&text), "k=[redacted]&x=1");
+    let text = format!("k=-----BEGIN PRIVATE KEY-----%0A{line}%0A{line}%0AAB12cd%3D%3D&x=1");
+    assert!(!redact(&text).contains("Zx%2B"), "{}", redact(&text));
+    // A stripped body after a line break or a space, cut off before END.
+    let body = format!("{BODY}{BODY}{BODY}AB12");
+    for gap in ["\n", " ", "\\n"] {
+        let text = format!("\"-----BEGIN PRIVATE KEY-----{gap}{body}");
+        assert_eq!(redact(&text), "\"[redacted]", "{gap:?}");
+    }
 }
