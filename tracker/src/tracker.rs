@@ -50,6 +50,9 @@ const POLL_EVERY: Duration = Duration::from_millis(200);
 pub(crate) const MAX_WAIT: Duration = Duration::from_secs(30);
 /// How long any one Felix call may take.
 const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one lease put or read may take. Short so that one hung put still
+/// leaves two more renewals inside the lease.
+const LEASE_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_TIER: u8 = 2;
 /// An item to publish: its tier, the record it had, and whether that record lapsed.
 type Want = (ItemId, u8, Option<(u8, u64)>, bool);
@@ -645,6 +648,16 @@ impl<B: Broker> Tracker<B> {
                 }))
             }
             Err(ExtendError::Stale) => {
+                // Felix may have expired our lease early (its clock runs fast) and
+                // let another tracker reclaim the delivery for the agent. Answer
+                // `lost` only when this tracker still holds the lease; otherwise
+                // the agent's retry reaches the tracker that does.
+                if !self.confirm_lease().await {
+                    return Err(Error::Unavailable(
+                        "could not confirm the writer lease after Felix refused the extension"
+                            .into(),
+                    ));
+                }
                 // Felix says the delivery is gone, so there is nothing of ours to settle.
                 let d = delivery.take().expect("checked above");
                 let mut core = self.0.core.lock().await;
@@ -880,14 +893,25 @@ impl<B: Broker> Tracker<B> {
     /// Renews the writer lease, sweeps, and closes idle agent connections, until
     /// the lease is lost for good.
     pub(crate) async fn maintain(&self) {
-        let every = self.0.settings.lease_ttl / 3;
+        // Renewal runs beside the sweep, not after it: a sweep's Felix calls can
+        // take the full Felix timeout each, which would let the lease lapse.
+        tokio::select! {
+            () = self.keep_lease() => {}
+            () = self.keep_swept() => {}
+        }
+    }
+
+    /// Renews the lease every third of its time to live. Returns once another
+    /// tracker has held it for [`FENCE_GRACE`].
+    async fn keep_lease(&self) {
+        let mut every = tokio::time::interval(self.0.settings.lease_ttl / 3);
+        every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut fenced_since: Option<Instant> = None;
         loop {
-            // Renew first: the teams start one after another, so serving can
-            // begin late in this team's lease or after it ran out.
+            // The first tick is at once: the teams start one after another, so
+            // serving can begin late in this team's lease or after it ran out.
+            every.tick().await;
             self.renew_lease().await;
-            self.sweep().await;
-            self.0.broker.close_idle(MEMBER_IDLE).await;
             if self.0.core.lock().await.fenced {
                 let since = *fenced_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= FENCE_GRACE {
@@ -897,7 +921,14 @@ impl<B: Broker> Tracker<B> {
             } else {
                 fenced_since = None;
             }
-            tokio::time::sleep(every).await;
+        }
+    }
+
+    async fn keep_swept(&self) {
+        loop {
+            self.sweep().await;
+            self.0.broker.close_idle(MEMBER_IDLE).await;
+            tokio::time::sleep(self.0.settings.lease_ttl / 3).await;
         }
     }
 
@@ -908,14 +939,11 @@ impl<B: Broker> Tracker<B> {
         loop {
             let started = Instant::now();
             let put = self
-                .io(
+                .lease_io(self.0.broker.lease_put(
+                    self.0.holder.as_bytes().to_vec(),
+                    self.0.settings.lease_ttl,
                     None,
-                    self.0.broker.lease_put(
-                        self.0.holder.as_bytes().to_vec(),
-                        self.0.settings.lease_ttl,
-                        None,
-                    ),
-                )
+                ))
                 .await;
             let held = match put {
                 Ok(Some(version)) => Some((version, started + self.0.settings.lease_ttl)),
@@ -945,12 +973,14 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
-    pub(crate) async fn renew_lease(&self) {
+    /// Renews the lease, or takes it back once it has run out. Answers whether
+    /// this call's own put was granted.
+    pub(crate) async fn renew_lease(&self) -> bool {
         let seen = self.lease_until().await;
         let _one_at_a_time = self.0.renewing.lock().await;
         // A renewal that finished while this one waited already did the work.
         if self.lease_until().await != seen {
-            return;
+            return false;
         }
         let Some((version, valid_until, refusals)) = ({
             let core = self.0.core.lock().await;
@@ -958,7 +988,7 @@ impl<B: Broker> Tracker<B> {
                 .as_ref()
                 .map(|l| (l.version, l.valid_until, core.answerable()))
         }) else {
-            return;
+            return false;
         };
         // Felix compares a version against the live entry. Our view of the lease
         // starts before the request, so Felix's entry outlives it by up to a
@@ -969,10 +999,7 @@ impl<B: Broker> Tracker<B> {
         let holder = self.0.holder.as_bytes().to_vec();
         let ttl = self.0.settings.lease_ttl;
         let mut put = self
-            .io(
-                None,
-                self.0.broker.lease_put(holder.clone(), ttl, Some(version)),
-            )
+            .lease_io(self.0.broker.lease_put(holder.clone(), ttl, Some(version)))
             .await;
         // A put of ours that landed with its reply lost left the entry at a
         // version we never heard of: adopt it and renew by it.
@@ -985,7 +1012,7 @@ impl<B: Broker> Tracker<B> {
             } else if matches!(put, Ok(None)) && valid_until <= Instant::now() {
                 retaken = true;
                 put = self
-                    .io(None, self.0.broker.lease_put(holder.clone(), ttl, None))
+                    .lease_io(self.0.broker.lease_put(holder.clone(), ttl, None))
                     .await;
                 if !matches!(put, Ok(Some(_))) {
                     adopted = self.our_lease().await;
@@ -997,20 +1024,18 @@ impl<B: Broker> Tracker<B> {
             // landed after another tracker held the lease: a retake.
             retaken |= valid_until <= Instant::now();
             put = self
-                .io(
-                    None,
-                    self.0.broker.lease_put(holder.clone(), ttl, Some(ours)),
-                )
+                .lease_io(self.0.broker.lease_put(holder.clone(), ttl, Some(ours)))
                 .await;
             // The entry we read can run out before this put lands. With our view
             // run out nobody may hold it now, so take it with Absent.
             if matches!(put, Ok(None)) && valid_until <= Instant::now() {
                 retaken = true;
                 put = self
-                    .io(None, self.0.broker.lease_put(holder, ttl, None))
+                    .lease_io(self.0.broker.lease_put(holder, ttl, None))
                     .await;
             }
         }
+        let granted = matches!(put, Ok(Some(_)));
         let mut core = self.0.core.lock().await;
         match put {
             Ok(Some(version)) => {
@@ -1056,12 +1081,26 @@ impl<B: Broker> Tracker<B> {
                 }
             }
         }
+        granted
+    }
+
+    /// Whether a lease put sent after this call began says this tracker holds
+    /// the lease, and holds it without a lapse another tracker could have used.
+    async fn confirm_lease(&self) -> bool {
+        // A renewal already in flight was sent too early to count, so a second
+        // one may be needed.
+        for _ in 0..2 {
+            if self.renew_lease().await {
+                return !self.0.core.lock().await.retaken;
+            }
+        }
+        false
     }
 
     /// The version of the lease entry when it holds this tracker's name. A
     /// failed read is no answer.
     async fn our_lease(&self) -> Option<u64> {
-        match self.io(None, self.0.broker.lease_get()).await {
+        match self.lease_io(self.0.broker.lease_get()).await {
             Ok(Some((holder, version))) if holder == self.0.holder.as_bytes() => Some(version),
             _ => None,
         }
@@ -2034,7 +2073,24 @@ impl<B: Broker> Tracker<B> {
         member: Option<&str>,
         call: impl Future<Output = anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
-        let done = tokio::time::timeout(FELIX_TIMEOUT, call)
+        self.io_within(FELIX_TIMEOUT, member, call).await
+    }
+
+    /// A call on the lease key, with the lease's shorter time limit.
+    async fn lease_io<T>(
+        &self,
+        call: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        self.io_within(LEASE_TIMEOUT, None, call).await
+    }
+
+    async fn io_within<T>(
+        &self,
+        limit: Duration,
+        member: Option<&str>,
+        call: impl Future<Output = anyhow::Result<T>>,
+    ) -> anyhow::Result<T> {
+        let done = tokio::time::timeout(limit, call)
             .await
             .map_err(|_| anyhow::anyhow!("Felix did not answer in time"))
             .and_then(|r| r);

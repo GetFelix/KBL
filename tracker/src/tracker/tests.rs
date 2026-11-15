@@ -66,6 +66,8 @@ struct Net {
     gate_extend: bool,
     /// The next publish waits for `open_gate` after the record is on the stream.
     gate_publish: bool,
+    /// Publishes to every stream that starts with this never answer.
+    hang_publishes: Option<String>,
     /// The next lease put waits for the gate before it reaches the key.
     gate_lease: bool,
     /// The next this many lease puts land, but their replies are lost.
@@ -233,6 +235,10 @@ impl Fake {
     /// The next extend waits for `open_gate`.
     fn hold_extends(&self) {
         self.net.lock().unwrap().gate_extend = true;
+    }
+
+    fn hang_publishes_to(&self, streams: Option<&str>) {
+        self.net.lock().unwrap().hang_publishes = streams.map(str::to_owned);
     }
 
     fn hold_next_publish(&self) {
@@ -418,6 +424,11 @@ impl Fake {
 
 impl Broker for Fake {
     async fn publish(&self, stream: &str, payload: Vec<u8>) -> anyhow::Result<u64> {
+        let hangs = (self.net.lock().unwrap().hang_publishes.as_deref())
+            .is_some_and(|p| stream.starts_with(p));
+        if hangs {
+            std::future::pending::<()>().await;
+        }
         let (offset, gated) = self.publish_now(stream, payload)?;
         if gated {
             self.gate.notified().await;
@@ -2121,6 +2132,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 
 mod races;
 mod recover;
+mod renewal;
 mod retry;
 mod review;
 
