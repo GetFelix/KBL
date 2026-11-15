@@ -973,14 +973,12 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
-    /// Renews the lease, or takes it back once it has run out. Answers whether
-    /// this call's own put was granted.
-    pub(crate) async fn renew_lease(&self) -> bool {
+    pub(crate) async fn renew_lease(&self) {
         let seen = self.lease_until().await;
         let _one_at_a_time = self.0.renewing.lock().await;
         // A renewal that finished while this one waited already did the work.
         if self.lease_until().await != seen {
-            return false;
+            return;
         }
         let Some((version, valid_until, refusals)) = ({
             let core = self.0.core.lock().await;
@@ -988,7 +986,7 @@ impl<B: Broker> Tracker<B> {
                 .as_ref()
                 .map(|l| (l.version, l.valid_until, core.answerable()))
         }) else {
-            return false;
+            return;
         };
         // Felix compares a version against the live entry. Our view of the lease
         // starts before the request, so Felix's entry outlives it by up to a
@@ -1004,8 +1002,13 @@ impl<B: Broker> Tracker<B> {
         // A put of ours that landed with its reply lost left the entry at a
         // version we never heard of: adopt it and renew by it.
         let mut adopted = None;
+        // A refusal we cannot check against the entry proves nothing: Felix may
+        // be slow, and the entry our own late put left there.
+        let mut unread = false;
         if !matches!(put, Ok(Some(_))) {
-            if let Some(ours) = self.our_lease().await.filter(|&v| v != version) {
+            let read = self.lease_read().await;
+            unread = read.is_err();
+            if let Some(ours) = read.ok().flatten().filter(|&v| v != version) {
                 adopted = Some(ours);
             // Judged after the refusal: the put can land after our view ran out.
             // Absent cannot take a live entry, so trying it early is safe.
@@ -1035,7 +1038,6 @@ impl<B: Broker> Tracker<B> {
                     .await;
             }
         }
-        let granted = matches!(put, Ok(Some(_)));
         let mut core = self.0.core.lock().await;
         match put {
             Ok(Some(version)) => {
@@ -1054,6 +1056,11 @@ impl<B: Broker> Tracker<B> {
                     core.retakes += 1;
                     core.refusals += 1;
                 }
+            }
+            Ok(None) if unread && !retaken => {
+                eprintln!(
+                    "kbl-tracker: the writer lease renewal was refused and the entry could not be read"
+                );
             }
             // Someone else holds it now.
             Ok(None) => {
@@ -1081,17 +1088,27 @@ impl<B: Broker> Tracker<B> {
                 }
             }
         }
-        granted
     }
 
     /// Whether a lease put sent after this call began says this tracker holds
     /// the lease, and holds it without a lapse another tracker could have used.
     async fn confirm_lease(&self) -> bool {
+        let asked = Instant::now();
+        let ttl = self.0.settings.lease_ttl;
         // A renewal already in flight was sent too early to count, so a second
-        // one may be needed.
+        // one may be needed. One sent after `asked` by another caller counts.
         for _ in 0..2 {
-            if self.renew_lease().await {
-                return !self.0.core.lock().await.retaken;
+            self.renew_lease().await;
+            let core = self.0.core.lock().await;
+            if core.fenced || core.retaken {
+                return false;
+            }
+            if core
+                .lease
+                .as_ref()
+                .is_some_and(|l| l.valid_until >= asked + ttl)
+            {
+                return true;
             }
         }
         false
@@ -1100,10 +1117,15 @@ impl<B: Broker> Tracker<B> {
     /// The version of the lease entry when it holds this tracker's name. A
     /// failed read is no answer.
     async fn our_lease(&self) -> Option<u64> {
-        match self.lease_io(self.0.broker.lease_get()).await {
-            Ok(Some((holder, version))) if holder == self.0.holder.as_bytes() => Some(version),
+        self.lease_read().await.ok().flatten()
+    }
+
+    /// Like `our_lease`, but a failed read is an error rather than no answer.
+    async fn lease_read(&self) -> anyhow::Result<Option<u64>> {
+        Ok(match self.lease_io(self.0.broker.lease_get()).await? {
+            Some((holder, version)) if holder == self.0.holder.as_bytes() => Some(version),
             _ => None,
-        }
+        })
     }
 
     // ---- claims ----

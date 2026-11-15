@@ -62,6 +62,8 @@ async fn a_refused_extension_is_not_lost_while_the_lease_is_in_doubt() {
         } else {
             fake.fail_lease(true);
         }
+        // The grant from start must not count as a confirmation.
+        tokio::time::advance(Duration::from_secs(1)).await;
         let r = t.extend(&agent("w1"), &item("a1")).await;
         assert!(
             matches!(r, Err(Error::Unavailable(_))),
@@ -84,4 +86,49 @@ async fn a_refused_extension_is_lost_once_the_lease_is_confirmed() {
         fake.lease_puts() > puts,
         "answered lost without asking Felix"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn refused_extensions_at_once_share_one_confirmation() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let who = ["w1", "w2", "w3", "w4"];
+    for (n, w) in who.iter().enumerate() {
+        seed(&t, &format!("a{n}"), 2).await;
+        claim(&t, w).await;
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    fake.extends_are_stale(true);
+    let extends: Vec<_> = who
+        .iter()
+        .enumerate()
+        .map(|(n, w)| {
+            let t = t.clone();
+            let (w, i) = (agent(w), item(&format!("a{n}")));
+            tokio::spawn(async move { t.extend(&w, &i).await })
+        })
+        .collect();
+    for e in extends {
+        let r = e.await.unwrap();
+        assert!(matches!(r, Err(Error::Lost(_))), "{r:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusal_the_entry_cannot_be_read_against_does_not_fence() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    // A slow Felix: our renewal lands with its reply lost, then reads fail.
+    fake.lose_next_lease_reply();
+    fake.fail_lease_gets(true);
+    t.renew_lease().await;
+    tokio::time::advance(Duration::from_secs(1)).await;
+    // Refused by the old version, and the entry, ours, cannot be read.
+    t.renew_lease().await;
+    assert!(!t.0.core.lock().await.fenced, "fenced on an unread refusal");
+    fake.fail_lease_gets(false);
+    t.renew_lease().await;
+    let core = t.0.core.lock().await;
+    assert!(!core.fenced);
+    assert!(unavailable(&core, t.lease_margin()).is_none());
 }

@@ -318,7 +318,8 @@ When Felix answers an extend with `stale_claim` (it no longer has the
 delivery), the tracker renews its lease by version before it answers `lost`.
 Felix runs the lease out by its own clock, so a broker whose clock runs fast
 can let another tracker take the lease and the claim while this one still
-believes it holds them. If the renewal is not granted, the extend answers 503
+believes it holds them. If no renewal sent after the refusal is granted, or the grant retook a lease
+that had run out, the extend answers 503
 and the agent calls again, reaching whichever tracker holds the lease. This
 assumes broker clocks agree to within the margin the tracker keeps before its
 lease runs out, where it stops writing: 7.5 seconds at the default 15-second
@@ -380,7 +381,10 @@ the `work.tracker` cache, written with a time to live and renewed every third
 of it, starting as soon as the team serves. Renewal runs on its own timer, so a
 sweep waiting on a slow Felix call does not delay it. Each lease put or read
 gives up after 3 seconds, so one hung put still leaves two more renewals before
-the lease runs out. Teams start one after another, so a
+the lease runs out. Writes pause until the next renewal lands, because the
+tracker stops writing when half the lease or less is left. A renewal that Felix
+refuses while the lease entry cannot be read counts as a failed renewal, not a
+lost lease: a slow Felix may have applied an earlier put of ours late. Teams start one after another, so a
 team's lease can lapse (run out without a renewal) before it serves. The
 tracker then renews its own entry if Felix still has it, and otherwise
 takes it again, unless another tracker took it meanwhile. After taking it
