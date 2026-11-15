@@ -195,6 +195,8 @@ struct Core {
     /// The lease was taken again since the last rebuild, so the state may miss
     /// another tracker's records. Unlike an offset skip, no append may use it.
     retaken: bool,
+    /// Counts retakes, so a rebuild that read before one does not clear `retaken`.
+    retakes: u64,
     lease: Option<LeaseHeld>,
     /// Another tracker took the writer lease.
     fenced: bool,
@@ -879,7 +881,12 @@ impl<B: Broker> Tracker<B> {
     }
 
     pub(crate) async fn renew_lease(&self) {
+        let seen = self.lease_until().await;
         let _one_at_a_time = self.0.renewing.lock().await;
+        // A renewal that finished while this one waited already did the work.
+        if self.lease_until().await != seen {
+            return;
+        }
         let Some((version, valid_until)) = self
             .0
             .core
@@ -895,7 +902,6 @@ impl<B: Broker> Tracker<B> {
         // starts before the request, so Felix's entry outlives it by up to a
         // request's latency: renew by version first, even past our expiry, and
         // take the lease again with Absent only once Felix's entry is gone.
-        let expired = valid_until <= Instant::now();
         let mut retaken = false;
         let started = Instant::now();
         let holder = self.0.holder.as_bytes().to_vec();
@@ -906,7 +912,9 @@ impl<B: Broker> Tracker<B> {
                 self.0.broker.lease_put(holder.clone(), ttl, Some(version)),
             )
             .await;
-        if expired && matches!(put, Ok(None)) {
+        // Judged after the refusal: the put can land after our view ran out.
+        // Absent cannot take a live entry, so trying it early is safe.
+        if matches!(put, Ok(None)) && valid_until <= Instant::now() {
             retaken = true;
             put = self
                 .io(None, self.0.broker.lease_put(holder, ttl, None))
@@ -924,6 +932,7 @@ impl<B: Broker> Tracker<B> {
                 if retaken {
                     core.stale = true;
                     core.retaken = true;
+                    core.retakes += 1;
                 }
             }
             // Someone else holds it now.
@@ -1675,9 +1684,13 @@ impl<B: Broker> Tracker<B> {
             }
         }
         let _one_at_a_time = self.0.reload.lock().await;
-        if !self.0.core.lock().await.stale {
-            return Ok(());
-        }
+        let retakes = {
+            let core = self.0.core.lock().await;
+            if !core.stale {
+                return Ok(());
+            }
+            core.retakes
+        };
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
         let (state, recall) = self
@@ -1687,8 +1700,11 @@ impl<B: Broker> Tracker<B> {
         let mut core = self.0.core.lock().await;
         core.state = state;
         core.recall = recall;
-        core.stale = false;
-        core.retaken = false;
+        // A retake during the read may have let records in that it missed.
+        if core.retakes == retakes {
+            core.stale = false;
+            core.retaken = false;
+        }
         Ok(())
     }
 
@@ -1788,6 +1804,16 @@ impl<B: Broker> Tracker<B> {
 
     /// How long before the lease runs out the tracker stops writing: a write
     /// that takes the full Felix timeout must still land inside it.
+    async fn lease_until(&self) -> Option<Instant> {
+        self.0
+            .core
+            .lock()
+            .await
+            .lease
+            .as_ref()
+            .map(|l| l.valid_until)
+    }
+
     fn lease_margin(&self) -> Duration {
         (FELIX_TIMEOUT + LEASE_SKEW).min(self.0.settings.lease_ttl / 2)
     }

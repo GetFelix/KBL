@@ -102,6 +102,10 @@ impl Broker for Quiet {
         if self.lease_lost.load(Ordering::SeqCst) {
             return Ok(None);
         }
+        // Felix refuses a version that is not the live entry's.
+        if expect.is_some_and(|v| v != self.lease_version.load(Ordering::SeqCst)) {
+            return Ok(None);
+        }
         *until = Some(now + ttl + *self.lease_lag.lock().unwrap());
         Ok(Some(self.lease_version.fetch_add(1, Ordering::SeqCst) + 1))
     }

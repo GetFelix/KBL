@@ -51,6 +51,9 @@ struct Net {
     gate_lease: bool,
     /// The next nack waits for `open_gate` before it lands.
     gate_nack: bool,
+    /// The next read waits for `open_gate` before it reads.
+    gate_read: bool,
+    lease_puts: u32,
     /// The next nack panics.
     panic_nack: bool,
     /// Ingest's saved state by name, with versions.
@@ -185,6 +188,14 @@ impl Fake {
 
     fn hold_next_publish(&self) {
         self.net.lock().unwrap().gate_publish = true;
+    }
+
+    fn hold_next_read(&self) {
+        self.net.lock().unwrap().gate_read = true;
+    }
+
+    fn lease_puts(&self) -> u32 {
+        self.net.lock().unwrap().lease_puts
     }
 
     fn hold_next_lease_put(&self) {
@@ -325,6 +336,10 @@ impl Broker for Fake {
     }
 
     async fn read_from(&self, stream: &str, from: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
+        let gated = std::mem::take(&mut self.net.lock().unwrap().gate_read);
+        if gated {
+            self.gate.notified().await;
+        }
         let net = self.net.lock().unwrap();
         if net.fail_reads {
             anyhow::bail!("the broker is down");
@@ -435,6 +450,7 @@ impl Broker for Fake {
             self.gate.notified().await;
         }
         let mut net = self.net.lock().unwrap();
+        net.lease_puts += 1;
         if net.fail_lease {
             anyhow::bail!("the broker is down");
         }
@@ -2441,4 +2457,84 @@ async fn two_renewals_at_once_do_not_fence_the_holder() {
     slow.await.unwrap();
     fast.await.unwrap();
     assert!(!t.0.core.lock().await.fenced);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lease_that_runs_out_while_the_renewal_is_in_flight_is_taken_again() {
+    let ttl = Duration::from_secs(3);
+    let fake = Fake::default();
+    fake.lease_expires();
+    let t = start_with(
+        &fake,
+        Settings {
+            lease_ttl: ttl,
+            ..settings()
+        },
+    )
+    .await;
+    // Our view has a little left when the renewal starts, none when it lands.
+    tokio::time::advance(ttl - Duration::from_millis(50)).await;
+    fake.hold_next_lease_put();
+    let renew = tokio::spawn({
+        let t = t.clone();
+        async move { t.renew_lease().await }
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(100)).await;
+    fake.open_gate();
+    renew.await.unwrap();
+    let core = t.0.core.lock().await;
+    assert!(!core.fenced);
+    assert!(core.retaken);
+    assert!(fake.lease_is_held());
+}
+
+#[tokio::test]
+async fn calls_queued_behind_a_renewal_do_not_renew_again() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    // The lease is near its end, so every call renews before serving.
+    t.0.core.lock().await.lease.as_mut().unwrap().valid_until = Instant::now();
+    let before = fake.lease_puts();
+    fake.hold_next_lease_put();
+    let calls: Vec<_> = (0..4)
+        .map(|_| {
+            let t = t.clone();
+            tokio::spawn(async move { t.begin().await })
+        })
+        .collect();
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    fake.open_gate();
+    for c in calls {
+        c.await.unwrap().unwrap();
+    }
+    assert_eq!(fake.lease_puts() - before, 1);
+}
+
+#[tokio::test]
+async fn a_rebuild_that_read_before_a_retake_stays_stale() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    t.0.core.lock().await.stale = true;
+    fake.hold_next_read();
+    let rebuild = tokio::spawn({
+        let t = t.clone();
+        async move { t.begin().await }
+    });
+    for _ in 0..8 {
+        tokio::task::yield_now().await;
+    }
+    {
+        // A renewal retakes the lease while the rebuild reads.
+        let mut core = t.0.core.lock().await;
+        core.retaken = true;
+        core.retakes += 1;
+    }
+    fake.open_gate();
+    rebuild.await.unwrap().unwrap();
+    let core = t.0.core.lock().await;
+    assert!(core.stale);
+    assert!(core.retaken);
 }
