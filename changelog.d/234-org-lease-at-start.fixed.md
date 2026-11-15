@@ -1,0 +1,1 @@
+A tracker with teams on renews the org writer lease as soon as it starts serving, instead of a third of a lease later. Starting the teams can outlast the lease, and until that renewal a team create answered `503` with `org_unavailable` (#234). `GET /v1/org/teams` now answers `org_writable`, so a client can wait for the lease, and `dev/check-teams.mjs` does.

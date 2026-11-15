@@ -672,7 +672,7 @@ with the record's offset.
 | Call | Role | Records |
 |---|---|---|
 | `GET /v1/me` | Any person | Nothing. Answers the person's teams and role in each |
-| `GET /v1/org/teams` | `org_admin` | Nothing. Every team, whether it was adopted, and whether it is serving. Built |
+| `GET /v1/org/teams` | `org_admin` | Nothing. Every team, whether it was adopted, and whether it is serving. `org_writable` says whether this tracker holds the org writer lease right now; while it is `false`, `POST /v1/org/teams` and agent adds answer `503` with `org_unavailable`. Built |
 | `POST /v1/org/teams` `{team, display_name?}` | `org_admin` | `team_created`. The tracker then creates the team's streams and group if they are missing, takes its lease and serves it. Answers `{team, created, offset, serving}`; a team already on the log answers `created: false`. Built |
 | `POST /v1/teams/{team}/members` `{person, role, repos?, subject?}` | Team `admin` | `person_added` for a new person, with a new token answered once; then `role_granted`. `repos` narrows the role to some of the team's repos |
 | `DELETE /v1/teams/{team}/members/{person}` | Team `admin` | `role_revoked` |

@@ -675,3 +675,38 @@ async fn a_name_revoked_minted_then_put_in_the_token_file_lists_once() {
     assert_eq!(rows[0]["token_file"], true);
     assert_eq!(rows[0]["revoked_minted"], true);
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_team_list_says_whether_an_org_write_would_be_let_in() {
+    let o = org_app().await;
+    let (_, body) = get_json(&o.app, "/v1/org/teams", Some("tok-ops")).await;
+    assert_eq!(body["org_writable"], true, "{body}");
+    o.org.lease_lost.store(true, Ordering::SeqCst);
+    let teams = o.teams.clone();
+    let _maintain = tokio::spawn(async move { teams.maintain().await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (_, body) = get_json(&o.app, "/v1/org/teams", Some("tok-ops")).await;
+    assert_eq!(body["org_writable"], false, "{body}");
+    let (status, body) = create(&o.app, Some("tok-ops"), "alpha").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("org_unavailable"))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_org_lease_is_renewed_as_soon_as_serving_starts() {
+    let broker = Quiet::default();
+    let ttl = Duration::from_secs(3);
+    let org = Arc::new(Org::start(broker, ttl, Duration::ZERO).await.unwrap());
+    // Starting the teams took most of the lease.
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(!org.writable());
+    let renewing = org.clone();
+    let _maintain = tokio::spawn(async move { renewing.maintain().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(
+        org.writable(),
+        "the first renewal waited a third of the lease"
+    );
+}

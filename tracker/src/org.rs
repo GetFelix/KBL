@@ -144,6 +144,19 @@ impl<B: Broker> Org<B> {
         Ok(view.state.who(token))
     }
 
+    /// Whether an org write would be let in now: the lease is held, with room
+    /// for a write to land, and the log was read since it was taken.
+    pub(crate) fn writable(&self) -> bool {
+        let view = self.view.read().expect("org view lock");
+        view.held_until
+            .is_some_and(|t| t > Instant::now() + self.write_margin())
+    }
+
+    /// How long the lease must still stand for a write to be let in.
+    fn write_margin(&self) -> Duration {
+        (FELIX_TIMEOUT + LEASE_SKEW).min(self.lease_ttl / 2)
+    }
+
     fn publish_view(&self, core: &Core) {
         let mut view = self.view.write().expect("org view lock");
         view.state = core.state.clone();
@@ -169,11 +182,10 @@ impl<B: Broker> Org<B> {
         record: OrgRecord,
     ) -> Result<(Applied, Option<u64>), OrgError> {
         let mut core = self.core.lock().await;
-        let margin = (FELIX_TIMEOUT + LEASE_SKEW).min(self.lease_ttl / 2);
         if !core
             .lease
             .as_ref()
-            .is_some_and(|l| l.valid_until > Instant::now() + margin)
+            .is_some_and(|l| l.valid_until > Instant::now() + self.write_margin())
         {
             return Err(OrgError::Unavailable(
                 "this tracker does not hold the org writer lease".into(),
@@ -219,13 +231,15 @@ impl<B: Broker> Org<B> {
     pub(crate) async fn maintain(&self) {
         let mut lost_since: Option<Instant> = None;
         loop {
-            tokio::time::sleep(self.lease_ttl / 3).await;
+            // Renew first: starting the teams can take longer than the lease
+            // stands, and until a renewal the tracker refuses org writes.
             let held = self.renew().await;
             if held {
                 lost_since = None;
             } else if lost_since.get_or_insert_with(Instant::now).elapsed() >= ORG_LEASE_GRACE {
                 return;
             }
+            tokio::time::sleep(self.lease_ttl / 3).await;
         }
     }
 
