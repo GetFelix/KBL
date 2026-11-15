@@ -71,7 +71,7 @@ fn classes(s: &[u8]) -> usize {
 /// An access key id is exactly 16 upper case letters or digits after the
 /// prefix: `feature/AKIA...EXAMPLE1` is a branch name. Two ids stuck
 /// together are the first's 16 bytes, perhaps one joining byte, then a whole
-/// second id.
+/// second id; the rest of the run goes with them.
 fn aws_id(t: &[u8]) -> bool {
     let id = |t: &[u8]| {
         t.len() == 16
@@ -682,11 +682,11 @@ fn pem_body(s: &[u8]) -> bool {
             at += 1;
             continue;
         }
-        let n = s[at..].iter().take_while(|b| base64(**b)).count();
+        let (bytes, n) = base64_run(&s[at..], usize::MAX);
         if n == 0 {
             return false;
         }
-        at += n;
+        at += bytes;
         line_start = false;
         long |= n >= MIN_PEM_RUN;
     }
@@ -702,9 +702,9 @@ fn pem_body(s: &[u8]) -> bool {
 /// A run stuck to the header is a body with its line breaks stripped, and
 /// goes whole when it is longer than a line.
 fn pem_lines(s: &[u8]) -> usize {
-    let stuck = s.iter().take_while(|b| base64(**b)).count();
+    let (stuck_bytes, stuck) = base64_run(s, usize::MAX);
     if stuck > MAX_PEM_LINE_FULL + 1 {
-        return stuck;
+        return stuck_bytes;
     }
     let head = armor(s);
     let mut at = head;
@@ -715,16 +715,21 @@ fn pem_lines(s: &[u8]) -> usize {
             break;
         }
         // One blank line is allowed between the header and the body.
-        if at == head && line_break(&s[at + gap..]).is_some() {
-            gap += pem_gap(&s[at + gap..]).0;
+        let plus = diff_plus(&s[at + gap..]);
+        if at == head && line_break(&s[at + gap + plus..]).is_some() {
+            gap += plus + pem_gap(&s[at + gap + plus..]).0;
         }
         let start = at + gap;
-        let line = s[start..]
-            .iter()
-            .take(MAX_PEM_LINE_FULL + 2)
-            .take_while(|b| base64(**b))
-            .count();
-        let next = start + line;
+        let (bytes, line) = base64_run(&s[start..], MAX_PEM_LINE_FULL + 2);
+        let next = start + bytes;
+        // A first line longer than any line, and mixed, is a body with its
+        // line breaks stripped.
+        if at == head && line > MAX_PEM_LINE_FULL + 1 {
+            let (all, _) = base64_run(&s[start..], usize::MAX);
+            if classes(&s[start..start + all]) >= 3 {
+                return start + all;
+            }
+        }
         // A diff marker makes a full line one longer.
         if line == 0 || line > MAX_PEM_LINE_FULL + 1 {
             break;
@@ -734,7 +739,9 @@ fn pem_lines(s: &[u8]) -> usize {
         let after = &s[next..];
         let closes =
             after.first().is_some_and(|b| b"\"'`".contains(b)) || after.starts_with(b"\\\"");
-        let padded = s[next - 1] == b'=' && n > 0;
+        let padded = (s[next - 1] == b'='
+            || (next >= 3 && s[next - 3..next].eq_ignore_ascii_case(b"%3D")))
+            && n > 0;
         let ends_line =
             br || closes || next + n == s.len() || (n > 0 && line >= PEM_LINE) || (full && padded);
         // A short first line is a key's when it is long and mixed enough that
@@ -791,32 +798,75 @@ fn armor(s: &[u8]) -> usize {
     for _ in 0..MAX_ARMOR_LINES {
         let (gap, br) = pem_gap(&s[at..]);
         let line = &s[at + gap..];
-        let name = line
+        // An added diff line's `+` is stuck to the name.
+        let plus = diff_plus(line);
+        let name = line[plus..]
             .iter()
             .take(MAX_ARMOR_LINE)
             .take_while(|b| b.is_ascii_alphanumeric() || **b == b'-')
             .count();
-        if !br || name == 0 || !line[name..].starts_with(b": ") {
+        let name = plus + name;
+        if !br || name == plus || !line[name..].starts_with(b": ") {
             break;
         }
-        // A value stops at a backslash or `%`, where an escaped break can
-        // start, so no line reads a long run of them twice.
-        let value = line[name..]
-            .iter()
-            .take(MAX_ARMOR_LINE)
-            .take_while(|b| (b' '..=b'~').contains(*b) && !b"\\%".contains(b))
-            .count();
-        if line_break(&line[name + value..]).is_none() {
+        // A run of backslashes that is not a break is skipped whole, so no
+        // line reads a long run twice.
+        let mut v = name;
+        while v < name + MAX_ARMOR_LINE && v < line.len() && line_break(&line[v..]).is_none() {
+            v += match line[v] {
+                b'\\' => line[v..].iter().take_while(|b| **b == b'\\').count(),
+                _ => 1,
+            };
+        }
+        if line_break(&line[v.min(line.len())..]).is_none() {
             break;
         }
-        at += gap + name + value;
+        at += gap + v;
     }
     let (gap, br) = pem_gap(&s[at..]);
-    if at > 0 && br && line_break(&s[at + gap..]).is_some() {
+    let blank = at + gap + diff_plus(&s[at + gap..]);
+    if at > 0 && br && line_break(&s[blank..]).is_some() {
         at
     } else {
         0
     }
+}
+
+/// 1 when `s` starts with a `+` that is not base64 of the line after it: a
+/// diff marker before a name or a blank line.
+fn diff_plus(s: &[u8]) -> usize {
+    usize::from(
+        s.first() == Some(&b'+')
+            && s.get(1)
+                .is_some_and(|b| b.is_ascii_alphabetic() || line_break(&s[1..]).is_some()),
+    )
+}
+
+/// `%2B`, `%2F` or `%3D` at the start of `s`: a base64 byte URL-encoded.
+fn encoded_base64(s: &[u8]) -> bool {
+    s.len() >= 3
+        && s[0] == b'%'
+        && matches!(
+            (s[1], s[2].to_ascii_uppercase()),
+            (b'2', b'B' | b'F') | (b'3', b'D')
+        )
+}
+
+/// The bytes and the base64 characters of the run at the start of `s`, at
+/// most `max` characters, reading `%2B`, `%2F` and `%3D` as one each.
+fn base64_run(s: &[u8], max: usize) -> (usize, usize) {
+    let (mut at, mut n) = (0, 0);
+    while n < max {
+        if s.get(at).is_some_and(|b| base64(*b)) {
+            at += 1;
+        } else if encoded_base64(&s[at..]) {
+            at += 3;
+        } else {
+            break;
+        }
+        n += 1;
+    }
+    (at, n)
 }
 
 fn line_break(s: &[u8]) -> Option<usize> {
