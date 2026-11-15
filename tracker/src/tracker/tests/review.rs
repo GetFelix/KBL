@@ -49,7 +49,9 @@ async fn opened() -> (Fake, Tracker<Fake>) {
     )
     .await
     .unwrap();
-    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     t.ingest_record(key("ingest-gh"), status(PrReview::Unreviewed))
         .await
         .unwrap();
@@ -128,7 +130,9 @@ async fn opened_with_a_partial_write(ok: u32) -> (Fake, Tracker<Fake>) {
     )
     .await
     .unwrap();
-    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     // The status record is one write, then the first pass, the final, the link.
     fake.fail_publishes_to_after(WORK_EVENTS, ok);
     t.ingest_record(key("ingest-gh"), status(PrReview::Unreviewed))
@@ -249,7 +253,9 @@ async fn an_author_passing_over_its_review_does_not_hold_it_back_from_another() 
     )
     .await
     .unwrap();
-    t.complete(&agent("w2"), &item("a2"), 0).await.unwrap();
+    t.complete(&agent("w2"), &item("a2"), Vec::new())
+        .await
+        .unwrap();
     t.ingest_record(
         key("ingest-gh"),
         WorkRecord::PrStatus {
@@ -298,7 +304,9 @@ async fn author_beside_a_review_it_cannot_take() -> (Fake, Tracker<Fake>) {
         )
         .await
         .unwrap();
-        t.complete(&agent(who), &item(id), 0).await.unwrap();
+        t.complete(&agent(who), &item(id), Vec::new())
+            .await
+            .unwrap();
         t.ingest_record(
             key("ingest-gh"),
             WorkRecord::PrStatus {
@@ -381,7 +389,7 @@ async fn findings_become_children_and_proposals_and_a_verdict_ends_the_final_rev
         let deferred = kids.iter().find(|i| i.parent.is_none()).unwrap();
         assert_eq!(core.state.stage(&deferred.id), Some(Stage::Proposed));
     }
-    t.complete(&agent("w2"), &first, 0).await.unwrap();
+    t.complete(&agent("w2"), &first, Vec::new()).await.unwrap();
 
     // The final review waits for the fix the first pass asked for.
     assert_eq!(claim(&t, "w4").await["item"]["work"], "fix");
@@ -390,7 +398,7 @@ async fn findings_become_children_and_proposals_and_a_verdict_ends_the_final_rev
         .await
         .unwrap();
     assert!(not_claimed(&early), "{early}");
-    t.complete(&agent("w4"), &item(&fix_id(&t).await), 0)
+    t.complete(&agent("w4"), &item(&fix_id(&t).await), Vec::new())
         .await
         .unwrap();
     let fin = t
@@ -401,7 +409,7 @@ async fn findings_become_children_and_proposals_and_a_verdict_ends_the_final_rev
     t.review_verdict(&agent("w3"), &last, MergeVerdict::Merge, "good".into())
         .await
         .unwrap();
-    t.complete(&agent("w3"), &last, 0).await.unwrap();
+    t.complete(&agent("w3"), &last, Vec::new()).await.unwrap();
     let core = t.0.core.lock().await;
     let v = core.state.items[&item("a1")]
         .review_verdict

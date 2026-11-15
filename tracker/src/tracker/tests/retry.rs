@@ -52,7 +52,9 @@ async fn finished(t: &Tracker<Fake>) -> u64 {
     )
     .await
     .unwrap();
-    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     at
 }
 
@@ -185,7 +187,9 @@ async fn a_released_redo_of_a_red_item_can_be_claimed_again() {
     let late = note(&t).await;
     redo(&t, at, Some(late)).await.unwrap();
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
-    t.release(&agent("w2"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w2"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
 
     let got = claim(&t, "w3").await;
     assert_eq!(claimed_id(&got).as_deref(), Some("a1"));
@@ -286,7 +290,9 @@ async fn a_claimed_redo_that_goes_red_again_is_retried_after_a_note() {
     t.ingest_record(ingest, status(PrChecks::Red))
         .await
         .unwrap();
-    t.release(&agent("w2"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w2"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w3").await), None);
 
     note(&t).await;

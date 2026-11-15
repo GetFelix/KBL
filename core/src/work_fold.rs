@@ -14,12 +14,12 @@ use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
     Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FORMAT_V6,
-    FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE,
-    MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWS_PER_ROOT,
-    MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_VERDICT_WHY,
-    MergeVerdict, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, RefusalReason,
-    ReviewPass, ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged,
-    WorkRecord, valid_review_tier,
+    FORMAT_V8, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
+    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST,
+    MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
+    MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
+    PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target,
+    Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
 #[cfg(test)]
@@ -81,11 +81,16 @@ impl Budget {
     }
 }
 
-/// What claims cost, summed from the cost each one reported when it ended
-/// (`done`, `released`, `gave_up`, `question`, `prerequisite`). Derived from
-/// the items, so it needs no record of its own.
+/// What claims cost, summed over the reports that end or pause them (`done`,
+/// `released`, `gave_up`, `question`, `prerequisite`). Derived from the
+/// items, so it needs no record of its own.
+///
+/// From format 8 a report's cost is its usage priced with the prices in effect
+/// when it was logged, or its floor if that is more. Below format 8 it is the
+/// `cost_micros` the report carried.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spend {
+    /// Everything charged, floors and costs reported before format 8 included.
     pub total_micros: u64,
     /// Per root, over the root and everything under it.
     pub by_root: BTreeMap<ItemId, u64>,
@@ -94,6 +99,78 @@ pub struct Spend {
     /// Per `source:repo` of the item's root. Work under a root with no repo is
     /// in the total and its root only.
     pub by_repo: BTreeMap<String, u64>,
+    /// Usage and its priced cost per model. The total is more than their sum
+    /// by the floors and by costs reported before format 8.
+    #[serde(default)]
+    pub by_model: BTreeMap<String, ModelSpend>,
+    /// Models with usage that has no price yet. That usage is charged the
+    /// floor until a `price_set` prices it.
+    #[serde(default)]
+    pub unpriced: BTreeSet<String>,
+}
+
+/// One model's usage and what the priced part of it cost.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelSpend {
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub output: u64,
+    #[serde(default)]
+    pub cache_read: u64,
+    #[serde(default)]
+    pub cache_write: u64,
+    /// AI credits, in thousandths.
+    #[serde(default)]
+    pub aic_milli: u64,
+    /// The cost of the usage that has a price.
+    #[serde(default)]
+    pub cost_micros: u64,
+    /// Some of the usage has no price yet.
+    #[serde(default)]
+    pub unpriced: bool,
+}
+
+impl ModelSpend {
+    fn add_amount(&mut self, unit: PriceUnit, n: u64) {
+        let slot = match unit {
+            PriceUnit::Input => &mut self.input,
+            PriceUnit::Output => &mut self.output,
+            PriceUnit::CacheRead => &mut self.cache_read,
+            PriceUnit::CacheWrite => &mut self.cache_write,
+            PriceUnit::Aic => &mut self.aic_milli,
+        };
+        *slot = slot.saturating_add(n);
+    }
+
+    fn add(&mut self, o: &ModelSpend) {
+        for (unit, n) in [
+            (PriceUnit::Input, o.input),
+            (PriceUnit::Output, o.output),
+            (PriceUnit::CacheRead, o.cache_read),
+            (PriceUnit::CacheWrite, o.cache_write),
+            (PriceUnit::Aic, o.aic_milli),
+        ] {
+            self.add_amount(unit, n);
+        }
+        self.cost_micros = self.cost_micros.saturating_add(o.cost_micros);
+        self.unpriced |= o.unpriced;
+    }
+}
+
+/// A report with usage that had no price when it was logged. It was charged
+/// the floor plus its priced part; a later price draws the rest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Unpriced {
+    item: ItemId,
+    root: ItemId,
+    floor_micros: u64,
+    /// The cost of the usage priced so far.
+    priced_micros: u64,
+    /// What the report was charged so far.
+    charged_micros: u64,
+    /// `(model, unit, amount)` still without a price.
+    waiting: Vec<(String, PriceUnit, u64)>,
 }
 
 /// The latest `rules_set` for one scope: a repo, or a root in it.
@@ -317,6 +394,21 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Models with usage waiting for a price that a log may hold. A report that
+/// would add one past this is refused until a person prices some.
+const MAX_UNPRICED_MODELS: usize = 32;
+
+/// Longest model name a report or price may carry.
+const MAX_MODEL_LEN: usize = 100;
+
+/// A model id as vendors write them: letters, digits and `.-_:/@`.
+fn model_name_ok(m: &str) -> bool {
+    !m.is_empty()
+        && m.len() <= MAX_MODEL_LEN
+        && m.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b".-_:/@".contains(&b))
+}
+
 fn is_zero(n: &u32) -> bool {
     *n == 0
 }
@@ -395,6 +487,9 @@ pub struct Item {
     #[serde(default)]
     pub first_claim_ms: Option<u64>,
     pub cost_micros: u64,
+    /// Usage per model, from format 8.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub usage: BTreeMap<String, ModelSpend>,
     pub context: BTreeMap<Key, u64>,
     /// The agent that last wrote each entry an agent wrote. The fold accepts any replacement
     /// (old logs hold some); the tracker reads this to refuse one before it is logged.
@@ -490,6 +585,12 @@ pub enum Reject {
     /// The record's format is above the log's, below what its content needs,
     /// or above what this build reads; or a raise that does not go up.
     Format,
+    /// From format 8: a report carries a cost of its own, more usage entries
+    /// than a report keeps, a model twice, a model name that is empty, too
+    /// long or not plain, or it would leave too many models waiting for a price.
+    BadUsage,
+    /// A `price_set` with a bad model name, or that takes effect before it was logged.
+    BadPrice,
     /// A `flagged` record that would leave the item as it is.
     NoChange,
 }
@@ -524,6 +625,11 @@ pub struct State {
     /// The log's format when a `format_raised` record raised it. None is the first format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     format: Option<u32>,
+    /// Per model and unit, `(effective_from_ms, price_micros)` in effect order.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    prices: BTreeMap<String, BTreeMap<PriceUnit, Vec<(u64, u64)>>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    unpriced: Vec<Unpriced>,
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
     #[serde(skip)]
     probing: Option<Vec<ItemId>>,
@@ -644,7 +750,18 @@ impl State {
     /// Spend per root, reviewer tier and repo. Items that cost nothing are left out.
     pub fn spend(&self) -> Spend {
         let mut s = Spend::default();
-        for it in self.items.values().filter(|it| it.cost_micros > 0) {
+        for u in &self.unpriced {
+            s.unpriced
+                .extend(u.waiting.iter().map(|(model, _, _)| model.clone()));
+        }
+        for it in self
+            .items
+            .values()
+            .filter(|it| it.cost_micros > 0 || !it.usage.is_empty())
+        {
+            for (model, m) in &it.usage {
+                s.by_model.entry(model.clone()).or_default().add(m);
+            }
             let cost = it.cost_micros;
             s.total_micros = s.total_micros.saturating_add(cost);
             let by_root = s.by_root.entry(it.root.clone()).or_default();
@@ -1081,6 +1198,7 @@ impl State {
             red_since: None,
             first_claim_ms: None,
             cost_micros: 0,
+            usage: BTreeMap::new(),
             context: BTreeMap::new(),
             context_agents: BTreeMap::new(),
             paths: Vec::new(),
@@ -1102,6 +1220,150 @@ impl State {
         }
     }
 
+    /// The price of one unit of `model` for usage logged at `at_ms`: the latest
+    /// in effect then.
+    fn price(&self, model: &str, unit: PriceUnit, at_ms: u64) -> Option<u64> {
+        let list = self.prices.get(model)?.get(&unit)?;
+        list.iter()
+            .rev()
+            .find(|(from, _)| *from <= at_ms)
+            .map(|(_, p)| *p)
+    }
+
+    /// Charges `item` and draws `root`'s budget for what the record reports.
+    /// Usage with no price is charged nothing until a price comes, but the
+    /// report is charged at least its floor meanwhile.
+    fn charge(&mut self, item: &ItemId, root: &ItemId, rec: &WorkLogged) {
+        let Some(c) = rec.record.charge() else {
+            return;
+        };
+        let mut usage: BTreeMap<String, ModelSpend> = BTreeMap::new();
+        let mut priced = 0u64;
+        let mut waiting = Vec::new();
+        for u in c
+            .usage
+            .iter()
+            .filter(|u| u.amounts().iter().any(|(_, n)| *n > 0))
+        {
+            let m = usage.entry(u.model().to_owned()).or_default();
+            for (unit, n) in u.amounts().into_iter().filter(|(_, n)| *n > 0) {
+                m.add_amount(unit, n);
+                match self.price(u.model(), unit, rec.at_ms) {
+                    Some(p) => {
+                        let cost = unit.cost_micros(n, p);
+                        m.cost_micros = m.cost_micros.saturating_add(cost);
+                        priced = priced.saturating_add(cost);
+                    }
+                    None => {
+                        m.unpriced = true;
+                        waiting.push((u.model().to_owned(), unit, n));
+                    }
+                }
+            }
+        }
+        let charged = c.floor_micros.max(priced);
+        let total = c.cost_micros.saturating_add(charged);
+        if let Some(it) = self.items.get_mut(item) {
+            it.cost_micros = it.cost_micros.saturating_add(total);
+            for (model, m) in &usage {
+                it.usage.entry(model.clone()).or_default().add(m);
+            }
+        }
+        self.draw_cost(root, total);
+        if !waiting.is_empty() {
+            self.unpriced.push(Unpriced {
+                item: item.clone(),
+                root: root.clone(),
+                floor_micros: c.floor_micros,
+                priced_micros: priced,
+                charged_micros: charged,
+                waiting,
+            });
+        }
+    }
+
+    /// Prices usage that was waiting for `model`'s `unit`, and draws what it
+    /// costs beyond what its report was already charged.
+    fn reprice(&mut self, model: &str, unit: PriceUnit, price_micros: u64) {
+        let mut draws = Vec::new();
+        for u in &mut self.unpriced {
+            let before = u.waiting.len();
+            let mut gained = 0u64;
+            u.waiting.retain(|(m, un, n)| {
+                let hit = m == model && *un == unit;
+                if hit {
+                    gained = gained.saturating_add(unit.cost_micros(*n, price_micros));
+                }
+                !hit
+            });
+            if u.waiting.len() == before {
+                continue;
+            }
+            u.priced_micros = u.priced_micros.saturating_add(gained);
+            let now = u.floor_micros.max(u.priced_micros);
+            let extra = now.saturating_sub(u.charged_micros);
+            u.charged_micros = now;
+            draws.push((u.item.clone(), u.root.clone(), gained, extra));
+        }
+        self.unpriced.retain(|u| !u.waiting.is_empty());
+        for (item, root, gained, extra) in draws {
+            let still = self
+                .unpriced
+                .iter()
+                .any(|u| u.item == item && u.waiting.iter().any(|(m, _, _)| m == model));
+            if let Some(it) = self.items.get_mut(&item) {
+                it.cost_micros = it.cost_micros.saturating_add(extra);
+                if let Some(m) = it.usage.get_mut(model) {
+                    m.cost_micros = m.cost_micros.saturating_add(gained);
+                    m.unpriced = still;
+                }
+            }
+            self.draw_cost(&root, extra);
+        }
+    }
+
+    /// Models with usage that has no price yet.
+    pub fn unpriced_models(&self) -> BTreeSet<&str> {
+        self.unpriced
+            .iter()
+            .flat_map(|u| u.waiting.iter().map(|(m, _, _)| m.as_str()))
+            .collect()
+    }
+
+    /// Checks the cost fields of a report before anything changes.
+    fn check_charge(&self, rec: &WorkLogged) -> Result<(), Reject> {
+        let Some(c) = rec.record.charge() else {
+            return Ok(());
+        };
+        if self.format() < FORMAT_V8 {
+            return Ok(());
+        }
+        if c.cost_micros > 0 || c.usage.len() > MAX_USAGE_ENTRIES {
+            return Err(Reject::BadUsage);
+        }
+        let mut seen = BTreeSet::new();
+        for u in c.usage {
+            if !model_name_ok(u.model()) || !seen.insert(u.model()) {
+                return Err(Reject::BadUsage);
+            }
+        }
+        // Each made-up model would wait for a price forever, so their number is bounded.
+        let mut unpriced = self.unpriced_models();
+        for u in c.usage {
+            let waits = u
+                .amounts()
+                .iter()
+                .any(|(unit, n)| *n > 0 && self.price(u.model(), *unit, rec.at_ms).is_none());
+            if waits {
+                unpriced.insert(u.model());
+            }
+        }
+        if unpriced.len() > MAX_UNPRICED_MODELS {
+            return Err(Reject::BadUsage);
+        }
+        Ok(())
+    }
+
     /// The highest format a record on this log may have. A `format_raised`
     /// record raises it.
     pub fn format(&self) -> u32 {
@@ -1113,6 +1375,7 @@ impl State {
             self.format = Some(raised);
             return Ok(());
         }
+        self.check_charge(rec)?;
         match &rec.record {
             WorkRecord::Imported {
                 item,
@@ -1250,8 +1513,8 @@ impl State {
                 key,
                 new,
                 done_when,
-                cost_micros,
                 triage,
+                ..
             } => self.prerequisite(
                 offset,
                 rec,
@@ -1261,7 +1524,6 @@ impl State {
                 key,
                 new.as_ref(),
                 *done_when,
-                *cost_micros,
                 triage.as_ref(),
             )?,
             WorkRecord::Shipped { item, release } => {
@@ -1445,11 +1707,7 @@ impl State {
                     it.pr = pr.clone();
                 }
             }
-            WorkRecord::Done {
-                item,
-                attempt,
-                cost_micros,
-            } => {
+            WorkRecord::Done { item, attempt, .. } => {
                 let it = self.acting_on(item, *attempt, rec)?;
                 if it.closed.is_some() {
                     return Err(Reject::Closed);
@@ -1481,20 +1739,14 @@ impl State {
                 let it = self.item_mut(item)?;
                 it.paths[idx].done = true;
                 it.hold = None;
-                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 // A fix waits for its merge; other work is finished when its attempt is.
                 // A fix a review asked for lands in the request it came from.
                 if it.work != WorkKind::Fix || it.finding.is_some() {
                     it.closed = Some(Closure::Completed);
                 }
-                self.draw_cost(&root, *cost_micros);
+                self.charge(item, &root, rec);
             }
-            WorkRecord::Released {
-                item,
-                attempt,
-                cost_micros,
-                ..
-            } => {
+            WorkRecord::Released { item, attempt, .. } => {
                 let it = self.acting_on(item, *attempt, rec)?;
                 if it.hold.is_none() {
                     return Err(Reject::NotHeld);
@@ -1502,15 +1754,9 @@ impl State {
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
                 it.hold = None;
-                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
-                self.draw_cost(&root, *cost_micros);
+                self.charge(item, &root, rec);
             }
-            WorkRecord::GaveUp {
-                item,
-                attempt,
-                cost_micros,
-                ..
-            } => {
+            WorkRecord::GaveUp { item, attempt, .. } => {
                 let it = self.acting_on(item, *attempt, rec)?;
                 if it.hold.is_none() {
                     return Err(Reject::NotHeld);
@@ -1518,15 +1764,13 @@ impl State {
                 let root = it.root.clone();
                 let it = self.item_mut(item)?;
                 it.hold = None;
-                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
-                self.draw_cost(&root, *cost_micros);
+                self.charge(item, &root, rec);
             }
             WorkRecord::Question {
                 item,
                 attempt,
                 options,
                 default,
-                cost_micros,
                 ..
             } => {
                 self.agent_holder(item, *attempt, rec)?;
@@ -1537,9 +1781,8 @@ impl State {
                 }
                 p.questions += 1;
                 let root = self.item(item)?.root.clone();
-                self.draw_cost(&root, *cost_micros);
+                self.charge(item, &root, rec);
                 let it = self.item_mut(item)?;
-                it.cost_micros = it.cost_micros.saturating_add(*cost_micros);
                 it.open_question = Some(offset);
                 it.ask = Some(Ask {
                     options: options.clone(),
@@ -1840,6 +2083,33 @@ impl State {
                     it.hold = None;
                 }
                 self.path_mut(item, *attempt)?.closed = true;
+            }
+            WorkRecord::PriceSet {
+                model,
+                unit,
+                price_micros,
+                effective_from_ms,
+            } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let from = effective_from_ms.unwrap_or(rec.at_ms);
+                // A price never reaches back over usage already logged.
+                if !model_name_ok(model) || from < rec.at_ms {
+                    return Err(Reject::BadPrice);
+                }
+                let list = self
+                    .prices
+                    .entry(model.clone())
+                    .or_default()
+                    .entry(*unit)
+                    .or_default();
+                let at = list.partition_point(|(f, _)| *f <= from);
+                list.insert(at, (from, *price_micros));
+                // Only a price in effect now prices usage that waited for one.
+                if from == rec.at_ms {
+                    self.reprice(model, *unit, *price_micros);
+                }
             }
             WorkRecord::BudgetSet {
                 root,
@@ -2445,7 +2715,6 @@ impl State {
         key: &Key,
         new: Option<&NewPrerequisite>,
         done_when: DoneWhen,
-        cost_micros: u64,
         triage: Option<&ItemId>,
     ) -> Result<(), Reject> {
         let holder = self
@@ -2498,9 +2767,8 @@ impl State {
             self.release_edges.remove(&edge);
         }
         let root = self.item(item)?.root.clone();
-        self.draw_cost(&root, cost_micros);
+        self.charge(&holder, &root, rec);
         let it = self.item_mut(&holder)?;
-        it.cost_micros = it.cost_micros.saturating_add(cost_micros);
         // Triage still has its answer to give, so its claim goes on.
         if triage.is_none() {
             it.hold = None;

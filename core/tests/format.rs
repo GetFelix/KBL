@@ -5,7 +5,7 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
-    ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V8, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -854,5 +854,41 @@ fn a_flagged_record_is_written_with_its_format() {
     assert_eq!(
         String::from_utf8(rec.encode()).unwrap(),
         r#"{"v":7,"at_ms":7,"by":"gabriel","actor":"person","kind":"flagged","item":"r1","flagged":true}"#
+    );
+}
+
+/// Usage, a floor or a price is format 8: a format 7 reader would ignore the
+/// fields and fold a different spend. A report without them stays format 1.
+#[test]
+fn usage_floors_and_prices_are_format_8() {
+    use kbl_core::names::{ItemId, Key};
+    use kbl_core::work::{PriceUnit, Usage};
+    assert_eq!(FORMAT_V8, 8);
+    const { assert!(FORMAT >= FORMAT_V8) };
+    let done = |usage: Vec<Usage>, floor_micros| WorkRecord::Done {
+        item: ItemId::new("r1").unwrap(),
+        attempt: 1,
+        cost_micros: 0,
+        usage,
+        floor_micros,
+    };
+    let aic = Usage::Aic {
+        model: "m".into(),
+        milli: 1,
+    };
+    assert_eq!(done(vec![], 0).format(), FORMAT_V1);
+    assert_eq!(done(vec![aic], 0).format(), FORMAT_V8);
+    assert_eq!(done(vec![], 1).format(), FORMAT_V8);
+    let price = WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Aic,
+        price_micros: 1,
+        effective_from_ms: None,
+    };
+    assert_eq!(price.format(), FORMAT_V8);
+    let rec = WorkLogged::new(7, Key::new("gabriel").unwrap(), Actor::Person, price);
+    assert_eq!(
+        String::from_utf8(rec.encode()).unwrap(),
+        r#"{"v":8,"at_ms":7,"by":"gabriel","actor":"person","kind":"price_set","model":"m","unit":"aic","price_micros":1}"#
     );
 }

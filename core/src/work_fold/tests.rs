@@ -80,6 +80,8 @@ fn done(item: &str, attempt: u32, cost_micros: u64) -> WorkRecord {
         item: id(item),
         attempt,
         cost_micros,
+        usage: Vec::new(),
+        floor_micros: 0,
     }
 }
 fn evidence(offset: u64) -> Evidence {
@@ -140,6 +142,8 @@ fn story() -> Log {
             attempt: 1,
             reason: "wrong path".into(),
             cost_micros: 2_000_000,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     ); // 11
     l.person(WorkRecord::ForkedFrom {
@@ -255,6 +259,8 @@ fn agent_records_never_raise_a_budget() {
             attempt: 1,
             reason: "x".into(),
             cost_micros: 700,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.tracker(raise(2));
@@ -526,6 +532,8 @@ fn human_inputs_follow_the_path_up_to_the_fork_plus_its_note() {
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.person(WorkRecord::ForkedFrom {
@@ -567,6 +575,8 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
                 attempt: a,
                 reason: None,
                 cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: 0,
             },
         );
         if a >= 2 {
@@ -607,6 +617,8 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
                 attempt: 1,
                 reason: None,
                 cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: 0,
             },
         );
         l.person(WorkRecord::ForkedFrom {
@@ -634,6 +646,8 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.person(WorkRecord::ForkedFrom {
@@ -661,6 +675,8 @@ fn a_path_gets_two_claims_then_needs_you() {
                 attempt: 1,
                 reason: Some("lapsed".into()),
                 cost_micros: cost,
+                usage: Vec::new(),
+                floor_micros: 0,
             },
         );
     };
@@ -718,6 +734,8 @@ fn a_finished_attempt_can_be_redone_until_the_item_is_closed() {
             attempt: 2,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     // Two attempts are open, so a third is refused until one is closed.
@@ -791,6 +809,8 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
             options: vec![],
             default: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.agent("w3", proposed("q1", Some("r1"), "q", WorkKind::Question));
@@ -977,6 +997,8 @@ fn a_closed_attempt_is_never_claimable() {
             attempt: 2,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.person(WorkRecord::AttemptClosed {
@@ -1025,6 +1047,8 @@ fn a_refused_done_changes_nothing() {
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.person(WorkRecord::AttemptClosed {
@@ -1120,6 +1144,8 @@ fn a_release_must_name_the_running_attempt() {
         attempt: 3,
         reason: None,
         cost_micros: 900,
+        usage: Vec::new(),
+        floor_micros: 0,
     });
     let s = fold(&l.0);
     assert_eq!(s.rejections.last().unwrap().why, Reject::WrongAttempt);
@@ -1130,6 +1156,8 @@ fn a_release_must_name_the_running_attempt() {
         attempt: 1,
         reason: None,
         cost_micros: 900,
+        usage: Vec::new(),
+        floor_micros: 0,
     });
     assert!(fold(&l.0).items[&id("r1")].hold.is_none());
 }
@@ -1150,6 +1178,8 @@ fn done_for_an_attempt_that_does_not_exist_changes_nothing() {
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     let before = fold(&l.0);
@@ -1331,6 +1361,8 @@ fn leaving_scope_stops_a_free_item_and_waits_for_a_holder() {
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     let s = fold(&l.0);
@@ -1630,6 +1662,8 @@ fn an_agent_writes_context_only_on_work_it_holds_or_a_child_it_holds() {
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.agent("w2", claimed("aug", 1));
@@ -1768,6 +1802,8 @@ fn question_rec(item: &str) -> WorkRecord {
         options: vec![],
         default: None,
         cost_micros: 0,
+        usage: Vec::new(),
+        floor_micros: 0,
     }
 }
 
@@ -2133,6 +2169,8 @@ fn needs(prereq: &str, new: bool, done_when: DoneWhen) -> WorkRecord {
         }),
         done_when,
         cost_micros: 0,
+        usage: Vec::new(),
+        floor_micros: 0,
         triage: None,
     }
 }
@@ -2505,6 +2543,8 @@ fn asked_with_options() -> (Log, u64, u64) {
             options: vec!["read".into(), "write".into()],
             default: Some("read".into()),
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     (l, d, q)
@@ -2597,6 +2637,8 @@ fn options_and_default_are_bounded() {
         options,
         default,
         cost_micros: 0,
+        usage: Vec::new(),
+        floor_micros: 0,
     };
     let opts = |n: usize| (0..n).map(|i| format!("o{i}")).collect::<Vec<_>>();
     for (rec, why) in [
@@ -2694,6 +2736,8 @@ fn only_a_person_can_move_work_to_another_repo() {
             options: vec![],
             default: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.agent("w1", proposed("q1", Some("r1"), "q", WorkKind::Question));
@@ -2915,6 +2959,8 @@ fn ask_on(item: &str, cost_micros: u64) -> WorkRecord {
         options: vec![],
         default: None,
         cost_micros,
+        usage: Vec::new(),
+        floor_micros: 0,
     }
 }
 
@@ -3001,6 +3047,7 @@ fn chained_answers_stop_at_the_depth_cap() {
 }
 
 mod review;
+mod spend;
 
 /// The tracker refuses such a replacement before it is logged, but a log that holds
 /// one must keep folding as it always has.
@@ -3033,6 +3080,8 @@ fn reported_costs_saturate_instead_of_overflowing() {
         options: vec![],
         default: None,
         cost_micros,
+        usage: Vec::new(),
+        floor_micros: 0,
     };
     l.agent("w1", ask(u64::MAX));
     l.agent("w1", ask(1));
@@ -3132,6 +3181,8 @@ fn release(item: &str, attempt: u32) -> WorkRecord {
         attempt,
         reason: None,
         cost_micros: 0,
+        usage: Vec::new(),
+        floor_micros: 0,
     }
 }
 

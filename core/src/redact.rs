@@ -1085,6 +1085,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::AttemptClosed { .. }
         | WorkRecord::TierChanged { .. }
         | WorkRecord::BudgetSet { .. }
+        | WorkRecord::PriceSet { .. }
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::FormatRaised { .. }
         | WorkRecord::Refused { .. }

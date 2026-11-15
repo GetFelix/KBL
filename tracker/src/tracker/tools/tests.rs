@@ -101,7 +101,7 @@ async fn children_posted_under_a_held_item_are_live_and_block_its_completion() {
         ]
     );
     // The parent cannot finish with open children.
-    let done = t.complete(&agent("w1"), &item("a1"), 0).await;
+    let done = t.complete(&agent("w1"), &item("a1"), Vec::new()).await;
     assert!(matches!(done, Err(Error::Refused { ref why }) if why == "open_children"));
 }
 
@@ -144,7 +144,9 @@ async fn an_agent_cannot_post_under_an_item_it_does_not_hold() {
     );
     assert_eq!(fake.log().len(), before);
     // And after the item is handed back, even its old holder cannot.
-    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     assert_eq!(why(post(&t, "w1", "a1", "one", "split").await), "not_held");
     assert_eq!(fake.log().len(), before + 1);
 }
@@ -273,7 +275,9 @@ async fn a_child_too_deep_is_refused() {
         let c = post(&t, "w1", parent.as_str(), "d", "split").await.unwrap();
         let child = id_of(&c);
         // The agent holds only one item; the person walks it down.
-        t.release(&agent("w1"), &parent, None, 0).await.unwrap();
+        t.release(&agent("w1"), &parent, None, Vec::new())
+            .await
+            .unwrap();
         claim_item(&t, "w1", &child).await;
         parent = child;
         assert!(n < 3);
@@ -292,7 +296,9 @@ async fn claim_item(t: &crate::tracker::Tracker<Fake>, w: &str, want: &ItemId) {
             return;
         }
         if let Some(other) = got {
-            t.release(&agent(w), &item(&other), None, 0).await.unwrap();
+            t.release(&agent(w), &item(&other), None, Vec::new())
+                .await
+                .unwrap();
         }
     }
     panic!("never got {want}");
@@ -547,7 +553,7 @@ async fn a_token_in_a_persons_answer_is_cut_before_the_write() {
     let (fake, t) = held().await;
     let (a, a1) = (agent("w1"), item("a1"));
     let q = t
-        .ask(&a, &a1, text("which key?"), vec![], None, 0)
+        .ask(&a, &a1, text("which key?"), vec![], None, Vec::new())
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -601,7 +607,7 @@ async fn evidence_must_cite_a_record_of_the_same_tree() {
     );
     // A person's answer is held to the same rule.
     let q = t
-        .ask(&a, &a1, text("which?"), vec![], None, 0)
+        .ask(&a, &a1, text("which?"), vec![], None, Vec::new())
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -643,7 +649,7 @@ async fn a_writer_the_fold_refuses_learns_nothing_about_the_evidence() {
         .unwrap() as u64;
     let a1 = item("a1");
     let q = t
-        .ask(&agent("w1"), &a1, text("which?"), vec![], None, 0)
+        .ask(&agent("w1"), &a1, text("which?"), vec![], None, Vec::new())
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -724,13 +730,27 @@ async fn a_new_prerequisite_cites_evidence_of_its_own_tree() {
     };
     assert_eq!(
         why(t
-            .prerequisite(&w1, &a1, key("cas"), citing(a2_import), DoneWhen::Merged, 0)
+            .prerequisite(
+                &w1,
+                &a1,
+                key("cas"),
+                citing(a2_import),
+                DoneWhen::Merged,
+                Vec::new()
+            )
             .await),
         "evidence_outside_tree"
     );
-    t.prerequisite(&w1, &a1, key("cas"), citing(a1_import), DoneWhen::Merged, 0)
-        .await
-        .unwrap();
+    t.prerequisite(
+        &w1,
+        &a1,
+        key("cas"),
+        citing(a1_import),
+        DoneWhen::Merged,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -810,9 +830,16 @@ async fn asking_is_charged_at_least_the_floor() {
     let t = start_with(&fake, floor).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.ask(&agent("w1"), &item("a1"), text("which?"), vec![], None, 0)
-        .await
-        .unwrap();
+    t.ask(
+        &agent("w1"),
+        &item("a1"),
+        text("which?"),
+        vec![],
+        None,
+        Vec::new(),
+    )
+    .await
+    .unwrap();
     let log = fake.log();
     let Some(WorkRecord::Question { cost_micros, .. }) = log.last().map(|l| &l.record) else {
         panic!("the last record is not a question");
@@ -846,7 +873,7 @@ async fn a_prerequisite_is_charged_at_least_the_floor() {
         key("cas"),
         gateway(),
         DoneWhen::Merged,
-        0,
+        Vec::new(),
     )
     .await
     .unwrap();
@@ -862,7 +889,14 @@ async fn asking_and_answering_a_question() {
     let (_fake, t) = held().await;
     let a = agent("w1");
     let asked = t
-        .ask(&a, &item("a1"), text("which cache?"), vec![], None, 0)
+        .ask(
+            &a,
+            &item("a1"),
+            text("which cache?"),
+            vec![],
+            None,
+            Vec::new(),
+        )
         .await
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
@@ -905,7 +939,14 @@ async fn a_worker_on_a_question_item_answers_for_its_parent() {
     let a = agent("w1");
     let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
     let asked = t
-        .ask(&a, &item("a1"), text("which cache?"), vec![], None, 0)
+        .ask(
+            &a,
+            &item("a1"),
+            text("which cache?"),
+            vec![],
+            None,
+            Vec::new(),
+        )
         .await
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
@@ -1077,7 +1118,7 @@ async fn the_question_text_is_read_back_with_the_context() {
             text("which cache?"),
             vec![],
             None,
-            0,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -1092,13 +1133,13 @@ async fn an_answer_to_a_stale_question_is_refused() {
     let a = agent("w1");
     let q_id = id_of(&post(&t, "w1", "a1", "q", "question").await.unwrap());
     let old = t
-        .ask(&a, &item("a1"), text("one?"), vec![], None, 0)
+        .ask(&a, &item("a1"), text("one?"), vec![], None, Vec::new())
         .await
         .unwrap()["offset"]
         .as_u64()
         .unwrap();
     let open = t
-        .ask(&a, &item("a1"), text("two?"), vec![], None, 0)
+        .ask(&a, &item("a1"), text("two?"), vec![], None, Vec::new())
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -1145,7 +1186,14 @@ async fn evidence_is_bounded_in_size_and_count() {
     d.why = String::new();
     assert_eq!(why(t.decide(&agent("w1"), &item("a1"), d).await), "invalid");
     let q = t
-        .ask(&agent("w1"), &item("a1"), text("which?"), vec![], None, 0)
+        .ask(
+            &agent("w1"),
+            &item("a1"),
+            text("which?"),
+            vec![],
+            None,
+            Vec::new(),
+        )
         .await
         .unwrap()["offset"]
         .as_u64()
@@ -1265,7 +1313,14 @@ async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
     let (fake, t) = granted().await;
     let (w1, a1) = (agent("w1"), item("a1"));
     let reply = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .prerequisite(
+            &w1,
+            &a1,
+            key("cas"),
+            gateway(),
+            DoneWhen::Merged,
+            Vec::new(),
+        )
         .await
         .unwrap();
     assert_eq!(reply["status"], "blocked");
@@ -1296,7 +1351,14 @@ async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
     // A retry answers with the first call's work and writes nothing.
     let before = fake.log().len();
     let again = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .prerequisite(
+            &w1,
+            &a1,
+            key("cas"),
+            gateway(),
+            DoneWhen::Merged,
+            Vec::new(),
+        )
         .await
         .unwrap();
     assert_eq!(again["created"], false);
@@ -1309,7 +1371,14 @@ async fn the_item_is_ready_again_when_the_prerequisite_is_merged() {
     let (_fake, t) = granted().await;
     let (w1, a1) = (agent("w1"), item("a1"));
     let reply = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .prerequisite(
+            &w1,
+            &a1,
+            key("cas"),
+            gateway(),
+            DoneWhen::Merged,
+            Vec::new(),
+        )
         .await
         .unwrap();
     let g = id_of(&json!({ "item": reply["prerequisite"] }));
@@ -1354,7 +1423,14 @@ async fn a_release_link_waits_for_the_release_not_the_merge() {
     let (_fake, t) = granted().await;
     let (w1, a1) = (agent("w1"), item("a1"));
     let reply = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Released, 0)
+        .prerequisite(
+            &w1,
+            &a1,
+            key("cas"),
+            gateway(),
+            DoneWhen::Released,
+            Vec::new(),
+        )
         .await
         .unwrap();
     let g = id_of(&json!({ "item": reply["prerequisite"] }));
@@ -1405,7 +1481,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
     };
     assert_eq!(
         why(t
-            .prerequisite(&w1, &a1, key("k"), elsewhere, DoneWhen::Merged, 0)
+            .prerequisite(&w1, &a1, key("k"), elsewhere, DoneWhen::Merged, Vec::new())
             .await),
         "no_grant"
     );
@@ -1418,7 +1494,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
                 key("k"),
                 Prereq::Existing(item(foreign)),
                 DoneWhen::Merged,
-                0,
+                Vec::new(),
             )
             .await;
         assert_eq!(why(r), "unknown_item");
@@ -1435,7 +1511,14 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
     };
     assert_eq!(
         why(t
-            .prerequisite(&w1, &a1, key("k"), other_source, DoneWhen::Merged, 0)
+            .prerequisite(
+                &w1,
+                &a1,
+                key("k"),
+                other_source,
+                DoneWhen::Merged,
+                Vec::new()
+            )
             .await),
         "no_grant"
     );
@@ -1458,7 +1541,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
             key("k"),
             Prereq::Existing(item("f3")),
             DoneWhen::Merged,
-            0,
+            Vec::new(),
         )
         .await;
     assert_eq!(why(r), "unknown_item");
@@ -1473,7 +1556,7 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
             key("k"),
             Prereq::Existing(item("f2")),
             DoneWhen::Merged,
-            0,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -1482,7 +1565,14 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
     // And an agent that holds nothing cannot name a prerequisite at all.
     assert_eq!(
         why(t
-            .prerequisite(&agent("w2"), &a1, key("k"), gateway(), DoneWhen::Merged, 0)
+            .prerequisite(
+                &agent("w2"),
+                &a1,
+                key("k"),
+                gateway(),
+                DoneWhen::Merged,
+                Vec::new()
+            )
             .await),
         "not_held"
     );
@@ -1511,7 +1601,14 @@ async fn prerequisites_share_the_per_attempt_post_cap() {
     }
     assert_eq!(
         why(t
-            .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+            .prerequisite(
+                &w1,
+                &a1,
+                key("cas"),
+                gateway(),
+                DoneWhen::Merged,
+                Vec::new()
+            )
             .await),
         "limit_reached"
     );
@@ -1548,7 +1645,7 @@ async fn asked_with_options() -> (Fake, crate::tracker::Tracker<Fake>, u64) {
             text("which cache?"),
             vec!["read".into(), "write".into()],
             Some("read".into()),
-            0,
+            Vec::new(),
         )
         .await
         .unwrap()["offset"]
@@ -1876,7 +1973,7 @@ async fn options_are_bounded_when_asking() {
     let before = fake.log().len();
     let (w1, a1) = (agent("w1"), item("a1"));
     let ask = |options: Vec<String>, default: Option<String>| {
-        t.ask(&w1, &a1, text("which?"), options, default, 0)
+        t.ask(&w1, &a1, text("which?"), options, default, Vec::new())
     };
     let many = (0..=kbl_core::work::MAX_ASK_OPTIONS)
         .map(|i| format!("o{i}"))
@@ -1970,7 +2067,9 @@ async fn an_agent_answers_the_triage_item_it_holds() {
         assert_eq!(root.proposal.as_ref().map(|p| p.tier), Some(1));
     }
     // The triage item can now be finished.
-    t.complete(&agent("w1"), &item("a1-t"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1-t"), Vec::new())
+        .await
+        .unwrap();
     assert_eq!(
         t.0.core.lock().await.state.stage(&item("a1-t")),
         Some(Stage::Done)
@@ -2096,7 +2195,7 @@ async fn a_new_holders_identical_answer_is_recorded_under_its_own_hold() {
         }
     };
     answer("w1").await;
-    t.release(&agent("w1"), &item("a1-t"), None, 0)
+    t.release(&agent("w1"), &item("a1-t"), None, Vec::new())
         .await
         .unwrap();
     claim_item(&t, "w2", &item("a1-t")).await;
@@ -2117,7 +2216,7 @@ async fn triage_after_the_hold_is_gone_is_not_held() {
     let fake = Fake::default();
     let t = start(&fake).await;
     held_triage(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1-t"), None, 0)
+    t.release(&agent("w1"), &item("a1-t"), None, Vec::new())
         .await
         .unwrap();
     let before = fake.log().len();
@@ -2180,7 +2279,7 @@ async fn proposals_waiting_for_a_person_are_capped_per_root_and_a_decision_frees
                 key("cas"),
                 gateway(),
                 DoneWhen::Merged,
-                0
+                Vec::new()
             )
             .await),
         "limit_reached"
@@ -2360,7 +2459,7 @@ async fn a_prerequisite_proposal_cites_the_record_that_filed_it() {
             key("cas"),
             gateway(),
             DoneWhen::Merged,
-            0,
+            Vec::new(),
         )
         .await
         .unwrap();
@@ -2433,7 +2532,16 @@ async fn triaging(repo: &str) -> (Fake, Tracker<Fake>) {
 async fn triage_posts_a_prerequisite_before_any_build_claim() {
     let (fake, t) = triaging("GetFelix/felix-gateway").await;
     let (w1, a1, tr) = (agent("w1"), item("a1"), item("a1-t"));
-    let post = || t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Merged, 0);
+    let post = || {
+        t.prerequisite(
+            &w1,
+            &tr,
+            key("cas"),
+            gateway(),
+            DoneWhen::Merged,
+            Vec::new(),
+        )
+    };
     // Format 3: refused until a person raises the log, and nothing waits.
     assert_eq!(why(post().await), "format");
     assert_eq!(stage(&t, &a1).await, Some(Stage::Ready));
@@ -2464,7 +2572,14 @@ async fn triage_posts_a_prerequisite_before_any_build_claim() {
     assert_eq!(again["prerequisite"], reply["prerequisite"]);
     assert_eq!(fake.log().len(), before);
     // The same key with another `done_when` is refused, not answered as done.
-    let other = t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Released, 0);
+    let other = t.prerequisite(
+        &w1,
+        &tr,
+        key("cas"),
+        gateway(),
+        DoneWhen::Released,
+        Vec::new(),
+    );
     assert_eq!(why(other.await), "invalid");
     assert_eq!(fake.log().len(), before);
 
@@ -2476,7 +2591,7 @@ async fn triage_posts_a_prerequisite_before_any_build_claim() {
     )
     .await
     .unwrap();
-    t.complete(&w1, &tr, 0).await.unwrap();
+    t.complete(&w1, &tr, Vec::new()).await.unwrap();
     assert_eq!(claimed_id(&claim(&t, "w2").await), None);
     // Once the other repo's work is merged the item is handed out.
     person(
@@ -2506,12 +2621,28 @@ async fn a_merged_ask_after_a_released_one_writes_nothing_from_format_5() {
     let (w1, tr) = (agent("w1"), item("a1-t"));
     person(&t, WorkRecord::FormatRaised { to: 3 }).await;
     let reply = t
-        .prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Released, 0)
+        .prerequisite(
+            &w1,
+            &tr,
+            key("cas"),
+            gateway(),
+            DoneWhen::Released,
+            Vec::new(),
+        )
         .await
         .unwrap();
     let g = item(reply["prerequisite"].as_str().unwrap());
     let before = fake.log().len();
-    let merged = || t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Merged, 0);
+    let merged = || {
+        t.prerequisite(
+            &w1,
+            &tr,
+            key("cas"),
+            gateway(),
+            DoneWhen::Merged,
+            Vec::new(),
+        )
+    };
     assert_eq!(why(merged().await), "invalid");
     person(&t, WorkRecord::FormatRaised { to: 5 }).await;
     let before = before + 1;
@@ -2522,7 +2653,7 @@ async fn a_merged_ask_after_a_released_one_writes_nothing_from_format_5() {
         key("cas-2"),
         Prereq::Existing(g),
         DoneWhen::Merged,
-        0,
+        Vec::new(),
     );
     assert_eq!(existing.await.unwrap()["created"], false);
     assert_eq!(fake.log().len(), before);
@@ -2541,13 +2672,20 @@ async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
             key("dep"),
             Prereq::Existing(item(id)),
             DoneWhen::Merged,
-            0,
+            Vec::new(),
         )
     };
     let before = fake.log().len();
     assert_eq!(why(existing("a1-t").await), "invalid");
     assert_eq!(why(existing("nope").await), "unknown_item");
-    let other = t.prerequisite(&w1, &tr, key("cas"), gateway(), DoneWhen::Merged, 0);
+    let other = t.prerequisite(
+        &w1,
+        &tr,
+        key("cas"),
+        gateway(),
+        DoneWhen::Merged,
+        Vec::new(),
+    );
     assert_eq!(why(other.await), "no_grant");
     // Only the holder of the triage item.
     let w2 = agent("w2");
@@ -2557,7 +2695,7 @@ async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
         key("dep"),
         Prereq::Existing(item("a2")),
         DoneWhen::Merged,
-        0,
+        Vec::new(),
     );
     assert_eq!(why(stranger.await), "not_held");
     assert_eq!(fake.log().len(), before);
@@ -2578,7 +2716,7 @@ async fn a_triage_prerequisite_names_only_work_the_agent_may_reach() {
         key("dep"),
         Prereq::Existing(item("a2")),
         DoneWhen::Released,
-        0,
+        Vec::new(),
     )
     .await
     .unwrap();
@@ -2595,7 +2733,14 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
     let (w1, a1) = (agent("w1"), item("a1"));
     person(&t, WorkRecord::FormatRaised { to: 6 }).await;
     let reply = t
-        .prerequisite(&w1, &a1, key("cas"), gateway(), DoneWhen::Merged, 0)
+        .prerequisite(
+            &w1,
+            &a1,
+            key("cas"),
+            gateway(),
+            DoneWhen::Merged,
+            Vec::new(),
+        )
         .await
         .unwrap();
     let g = id_of(&json!({ "item": reply["prerequisite"] }));
@@ -2698,7 +2843,7 @@ async fn ingest_cannot_unlink_an_agents_prerequisite() {
         key("k"),
         Prereq::Existing(f2.clone()),
         DoneWhen::Released,
-        0,
+        Vec::new(),
     )
     .await
     .unwrap();
@@ -2746,7 +2891,7 @@ async fn an_agents_prerequisite_takes_over_an_edge_ingest_made() {
         key("k"),
         Prereq::Existing(f2.clone()),
         DoneWhen::Released,
-        0,
+        Vec::new(),
     )
     .await
     .unwrap();
@@ -2799,7 +2944,7 @@ async fn a_triage_prerequisite_takes_over_an_edge_ingest_made() {
         key("k"),
         Prereq::Existing(f2.clone()),
         DoneWhen::Released,
-        0,
+        Vec::new(),
     )
     .await
     .unwrap();

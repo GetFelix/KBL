@@ -204,27 +204,24 @@ impl<T: TrackerApi> Work<T> {
             .map_err(message)
     }
 
-    pub(crate) async fn complete(&self, item: &str, cost_micros: u64) -> Result<String, String> {
-        self.finish(
-            "/v1/work/complete",
-            json!({ "item": item, "cost_micros": cost_micros }),
-            item,
-        )
-        .await
+    /// `charge` is the report's `usage` (and a stray `cost_micros`, which the
+    /// tracker refuses) as the tracker takes them.
+    pub(crate) async fn complete(&self, item: &str, charge: Value) -> Result<String, String> {
+        let mut body = charge;
+        body["item"] = json!(item);
+        self.finish("/v1/work/complete", body, item).await
     }
 
     pub(crate) async fn release(
         &self,
         item: &str,
         reason: Option<String>,
-        cost_micros: u64,
+        charge: Value,
     ) -> Result<String, String> {
-        self.finish(
-            "/v1/work/release",
-            json!({ "item": item, "reason": reason, "cost_micros": cost_micros }),
-            item,
-        )
-        .await
+        let mut body = charge;
+        body["item"] = json!(item);
+        body["reason"] = json!(reason);
+        self.finish("/v1/work/release", body, item).await
     }
 
     /// A post that ends the claim, such as a prerequisite. One posted from

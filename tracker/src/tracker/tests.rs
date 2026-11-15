@@ -4,6 +4,7 @@ use std::sync::Mutex as StdMutex;
 use bytes::Bytes;
 
 use super::*;
+use kbl_core::work::PriceUnit;
 
 const VIS: Duration = Duration::from_secs(90);
 
@@ -798,7 +799,10 @@ async fn done_is_written_before_the_ack() {
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    let reply = t.complete(&agent("w1"), &item("a1"), 1234).await.unwrap();
+    let reply = t
+        .complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     assert_eq!(reply["status"], "done");
     let calls = fake.calls();
     let done = calls
@@ -807,11 +811,7 @@ async fn done_is_written_before_the_ack() {
         .unwrap();
     let ack = calls.iter().position(|c| c == "ack work.ready.p2").unwrap();
     assert!(done < ack, "{calls:?}");
-    let log = fake.log();
-    let WorkRecord::Done { cost_micros, .. } = &log.last().unwrap().record else {
-        panic!("the last record is not done");
-    };
-    assert_eq!(*cost_micros, 1234);
+    assert_eq!(fake.log().last().unwrap().record.kind(), "done");
 }
 
 /// The cost each record of `kind` on the log carries.
@@ -838,33 +838,93 @@ fn floor(micros: u64) -> Settings {
     }
 }
 
+fn tokens(model: &str, input: u64) -> Usage {
+    Usage::Tokens {
+        model: model.into(),
+        input,
+        output: 0,
+        cache_read: 0,
+        cache_write: 0,
+    }
+}
+
 #[tokio::test]
-async fn a_claim_is_charged_at_least_the_floor() {
+async fn below_format_8_a_claim_is_charged_the_floor_and_usage_is_dropped() {
     let fake = Fake::default();
     let t = start_with(&fake, floor(500)).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
-    claim(&t, "w1").await;
-    t.give_up(&agent("w1"), &item("a1"), "stuck".into(), 7)
+    t.release(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
+    claim(&t, "w1").await;
+    t.give_up(
+        &agent("w1"),
+        &item("a1"),
+        "stuck".into(),
+        vec![tokens("m", 9)],
+    )
+    .await
+    .unwrap();
     assert_eq!(costs(&fake, "released"), [500]);
     assert_eq!(costs(&fake, "gave_up"), [500]);
-    // Done reports the charged cost back. A report above the floor stands.
-    seed(&t, "a2", 2).await;
-    claim(&t, "w1").await;
-    let reply = t.complete(&agent("w1"), &item("a2"), 0).await.unwrap();
-    assert_eq!(reply["cost_micros"], 500);
-    seed(&t, "a3", 2).await;
-    claim(&t, "w1").await;
-    t.complete(&agent("w1"), &item("a3"), 1234).await.unwrap();
-    assert_eq!(costs(&fake, "done"), [500, 1234]);
+    assert!(
+        fake.log()
+            .iter()
+            .all(|l| l.record.charge().is_none_or(|c| c.usage.is_empty()))
+    );
     seed(&t, "a4", 2).await;
     let core = t.0.core.lock().await;
     let left = |id: &str| core.state.budgets[&item(id)].cost_left_micros;
     assert_eq!(left("a1") + 1000, left("a4"));
-    assert_eq!(left("a2") + 500, left("a4"));
+}
+
+/// From format 8 the record carries the usage and the floor, and the fold
+/// prices it: the budget draws the priced cost, or the floor if that is more.
+#[tokio::test]
+async fn from_format_8_usage_is_priced_and_floored() {
+    let fake = Fake::default();
+    let t = start_with(&fake, floor(500)).await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 8 })
+        .await
+        .unwrap();
+    t.person_record(
+        key("gab"),
+        WorkRecord::PriceSet {
+            model: "m".into(),
+            unit: PriceUnit::Input,
+            price_micros: 3_000_000,
+            effective_from_ms: None,
+        },
+    )
+    .await
+    .unwrap();
+    for id in ["a1", "a2", "a3"] {
+        seed(&t, id, 2).await;
+    }
+    claim(&t, "w1").await;
+    t.complete(&agent("w1"), &item("a1"), vec![tokens("m", 1_000_000)])
+        .await
+        .unwrap();
+    claim(&t, "w1").await;
+    t.complete(&agent("w1"), &item("a2"), vec![tokens("m", 10)])
+        .await
+        .unwrap();
+    claim(&t, "w1").await;
+    t.complete(&agent("w1"), &item("a3"), vec![tokens("unknown", 10)])
+        .await
+        .unwrap();
+    let log = fake.log();
+    let done: Vec<_> = log.iter().filter(|l| l.record.kind() == "done").collect();
+    let c = done[0].record.charge().unwrap();
+    assert_eq!((c.cost_micros, c.floor_micros, c.usage.len()), (0, 500, 1));
+    let core = t.0.core.lock().await;
+    let cost = |id: &str| core.state.items[&item(id)].cost_micros;
+    assert_eq!(cost("a1"), 3_000_000);
+    assert_eq!(cost("a2"), 500);
+    // An unknown model is recorded, not refused, and costs the floor until priced.
+    assert_eq!(cost("a3"), 500);
+    assert_eq!(core.state.spend().unpriced.len(), 1);
 }
 
 #[tokio::test]
@@ -922,7 +982,7 @@ async fn a_dead_agents_item_goes_to_another_after_visibility() {
     ));
     // Finishing after a takeover is a lost claim too, same as extending.
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), 0).await,
+        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
         Err(Error::Lost(_))
     ));
 }
@@ -933,13 +993,15 @@ async fn an_item_the_agent_released_is_handed_out_again() {
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), Some("stuck".into()), 5)
+    t.release(&agent("w1"), &item("a1"), Some("stuck".into()), Vec::new())
         .await
         .unwrap();
     assert!(fake.calls().contains(&"nack work.ready.p2".to_owned()));
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
     // The second release uses the item's second try; the item then waits for a person.
-    t.release(&agent("w2"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w2"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w1").await), None);
     assert!(fake.calls().contains(&"ack work.ready.p2".to_owned()));
 }
@@ -1018,7 +1080,9 @@ async fn the_work_next_reply_carries_the_work_loop() {
         text.contains("work_next again") && text.contains("asked to stop"),
         "{text}"
     );
-    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     let empty = claim(&t, "w1").await;
     assert_eq!(empty["claimed"], false);
     assert!(empty["loop"].as_str().unwrap().contains("End your session"));
@@ -1059,7 +1123,10 @@ async fn a_restart_takes_back_the_deliveries_felix_still_holds_for_each_agent() 
         (Some(true), Some("a2"))
     );
     assert_eq!(fake.kinds().iter().filter(|k| *k == "claimed").count(), 2);
-    second.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    second
+        .complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
     // The third item is still there for whoever asks.
     assert_eq!(
@@ -1154,6 +1221,8 @@ async fn a_stale_holders_late_calls_cannot_settle_the_next_holders_delivery() {
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     )
     .await
@@ -1167,18 +1236,20 @@ async fn a_stale_holders_late_calls_cannot_settle_the_next_holders_delivery() {
         Err(Error::Lost(_))
     ));
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), 0).await,
+        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
         Err(Error::Lost(_))
     ));
     assert!(matches!(
-        t.release(&agent("w1"), &item("a1"), None, 0).await,
+        t.release(&agent("w1"), &item("a1"), None, Vec::new()).await,
         Err(Error::Lost(_))
     ));
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Leased("w2".into()));
     let acks_after = fake.calls().iter().filter(|c| c.starts_with("ack")).count();
     assert_eq!(acks_before, acks_after);
     // And w2 can still finish.
-    t.complete(&agent("w2"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w2"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
 }
 
@@ -1189,7 +1260,11 @@ async fn a_failed_reload_does_not_empty_the_state_and_nothing_is_served_until_it
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
     fake.fail_publishes_to(Some(WORK_EVENTS));
-    assert!(t.complete(&agent("w1"), &item("a1"), 0).await.is_err());
+    assert!(
+        t.complete(&agent("w1"), &item("a1"), Vec::new())
+            .await
+            .is_err()
+    );
     fake.fail_publishes_to(None);
     fake.fail_reads(true);
     // The state must be rebuilt, the read fails: refuse rather than serve an empty board.
@@ -1198,12 +1273,14 @@ async fn a_failed_reload_does_not_empty_the_state_and_nothing_is_served_until_it
         Err(Error::Unavailable(_))
     ));
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), 0).await,
+        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
         Err(Error::Unavailable(_))
     ));
     fake.fail_reads(false);
     // Rebuilt from the log: the item is still w1's, and finishes once.
-    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 1);
 }
 
@@ -1224,7 +1301,9 @@ async fn one_hung_felix_call_stalls_only_that_agent() {
         tokio::task::yield_now().await;
         // Others carry on while w1's poll hangs.
         assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a2"));
-        t.complete(&agent("w3"), &item("a1"), 0).await.unwrap();
+        t.complete(&agent("w3"), &item("a1"), Vec::new())
+            .await
+            .unwrap();
         seed(&t, "a3", 2).await;
         // The hung call ends by its own timeout, and its connection is dropped.
         assert!(matches!(hung.await.unwrap(), Err(Error::Felix(_))));
@@ -1247,7 +1326,9 @@ async fn a_dropped_connection_does_not_cost_a_live_agent_its_claim() {
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Leased("w1".into()));
     // Settling reconnects too.
     fake.drop_connection("w1");
-    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
     assert_eq!(fake.kinds().iter().filter(|k| *k == "released").count(), 0);
 }
@@ -1325,7 +1406,7 @@ async fn a_tracker_that_lost_the_lease_serves_and_writes_nothing() {
     first.renew_lease().await;
     let before = fake.log().len();
     assert!(matches!(
-        first.complete(&agent("w1"), &item("a1"), 0).await,
+        first.complete(&agent("w1"), &item("a1"), Vec::new()).await,
         Err(Error::Unavailable(_))
     ));
     assert!(matches!(
@@ -1400,7 +1481,7 @@ async fn a_person_closing_a_held_item_ends_the_agents_claim_and_settles_the_deli
     ));
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), 0).await,
+        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
         Err(Error::Lost(_))
     ));
     assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 0);
@@ -1439,10 +1520,18 @@ async fn a_failed_write_is_rebuilt_from_the_log_not_trusted() {
     claim(&t, "w1").await;
     fake.fail_publishes_to(Some(WORK_EVENTS));
     // The fold accepted `done` in memory, but the write failed.
-    assert!(t.complete(&agent("w1"), &item("a1"), 0).await.is_err());
+    assert!(
+        t.complete(&agent("w1"), &item("a1"), Vec::new())
+            .await
+            .is_err()
+    );
     fake.fail_publishes_to(None);
     // The next call reloads, so the item is still held and can be finished.
-    assert!(t.complete(&agent("w1"), &item("a1"), 0).await.is_ok());
+    assert!(
+        t.complete(&agent("w1"), &item("a1"), Vec::new())
+            .await
+            .is_ok()
+    );
     assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 1);
 }
 
@@ -1453,7 +1542,10 @@ async fn a_record_the_fold_refuses_is_not_appended() {
     seed(&t, "a1", 2).await;
     let before = fake.log().len();
     // An agent that holds nothing cannot finish the item.
-    let err = t.complete(&agent("w1"), &item("a1"), 0).await.unwrap_err();
+    let err = t
+        .complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap_err();
     assert!(matches!(err, Error::NotHeld(_)));
     // A person cannot write an agent's record.
     let err = t
@@ -1824,7 +1916,9 @@ async fn fixed(t: &Tracker<Fake>, pr: Option<&str>) {
     )
     .await
     .unwrap();
-    t.complete(&agent("w1"), &item("a1"), 0).await.unwrap();
+    t.complete(&agent("w1"), &item("a1"), Vec::new())
+        .await
+        .unwrap();
 }
 
 fn shipped(tag: &str) -> WorkRecord {
@@ -2126,17 +2220,17 @@ async fn no_route_writes_an_oversized_string() {
     .unwrap();
     claim(&t, "w1").await;
     let err = t
-        .release(&agent("w1"), &item("big"), Some(big.clone()), 0)
+        .release(&agent("w1"), &item("big"), Some(big.clone()), Vec::new())
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
     let err = t
-        .give_up(&agent("w1"), &item("big"), big, 0)
+        .give_up(&agent("w1"), &item("big"), big, Vec::new())
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
     // The claim stands: nothing above changed it.
-    t.release(&agent("w1"), &item("big"), Some("short".into()), 0)
+    t.release(&agent("w1"), &item("big"), Some("short".into()), Vec::new())
         .await
         .unwrap();
 }
@@ -2222,7 +2316,9 @@ async fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
     t.context_add(&agent("w1"), &item("a1"), key("w1-note"), text("x"))
         .await
         .unwrap();
-    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     claim(&t, "w2").await;
     refused(
         t.context_add(&agent("w2"), &item("a1"), key("w1-note"), text("taken"))
@@ -2242,7 +2338,9 @@ async fn a_long_hold_does_not_make_the_record_look_old_after_a_release() {
         pass(&t, VIS / 2).await;
         t.extend(&agent("w1"), &item("a1")).await.unwrap();
     }
-    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     assert_eq!(fake.ready_count("work.ready.p2"), 1);
 }
 
@@ -2256,7 +2354,9 @@ async fn a_record_adopted_after_a_restart_is_published_again_once_dead_lettered(
     // The new tracker takes back w1's delivery and so adopts its record.
     let t = start(&fake).await;
     t.extend(&agent("w1"), &item("a1")).await.unwrap();
-    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     fake.dead_letter("work.ready.p2", 0);
     assert_eq!(claimed_id(&claim(&t, "w3").await), None);
     pass(&t, VIS * 7).await;
