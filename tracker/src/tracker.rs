@@ -222,6 +222,19 @@ struct Core {
     revoked: HashSet<AgentName>,
 }
 
+impl Core {
+    /// The refusals a lease put sent now answers for: only those whose state
+    /// was rebuilt before it. A grant before the rebuild says nothing about
+    /// records that land during it.
+    fn answerable(&self) -> u64 {
+        if self.stale {
+            self.confirmed
+        } else {
+            self.refusals
+        }
+    }
+}
+
 /// What a review lane looked like when an agent last left it with nothing to take.
 struct Emptied {
     at: Option<u64>,
@@ -902,7 +915,7 @@ impl<B: Broker> Tracker<B> {
             let core = self.0.core.lock().await;
             core.lease
                 .as_ref()
-                .map(|l| (l.version, l.valid_until, core.refusals))
+                .map(|l| (l.version, l.valid_until, core.answerable()))
         }) else {
             return;
         };
@@ -936,7 +949,6 @@ impl<B: Broker> Tracker<B> {
                     valid_until: started + ttl,
                 });
                 core.fenced = false;
-                // Sent after those refusals, so Felix answered for them.
                 core.confirmed = core.confirmed.max(refusals);
                 // Another tracker may have held it and written meanwhile.
                 if retaken {
@@ -1688,20 +1700,32 @@ impl<B: Broker> Tracker<B> {
     /// if it may not match the log.
     async fn begin(&self) -> Result<(), Error> {
         // Renew first when the lease is too close to running out for a write to
-        // land, or Felix refused a write: another tracker may have it.
+        // land. While the state is stale this does not confirm a refused write.
         let renew = {
             let core = self.0.core.lock().await;
             !core.fenced
-                && (core.refusals > core.confirmed
-                    || core
-                        .lease
-                        .as_ref()
-                        .is_some_and(|l| l.valid_until <= Instant::now() + self.lease_margin()))
+                && core
+                    .lease
+                    .as_ref()
+                    .is_some_and(|l| l.valid_until <= Instant::now() + self.lease_margin())
         };
         if renew {
             self.renew_lease().await;
         }
-        {
+        let (stale, refused) = {
+            let core = self.0.core.lock().await;
+            if let Some(why) = unavailable(&core, self.lease_margin()) {
+                return Err(Error::Unavailable(why));
+            }
+            (core.stale, core.refusals > core.confirmed)
+        };
+        if stale {
+            self.rebuild().await?;
+        }
+        // Felix refused a write, so another tracker may hold the lease. Checked
+        // after the rebuild: a grant then means no one else wrote since the read.
+        if refused {
+            self.renew_lease().await;
             let core = self.0.core.lock().await;
             if let Some(why) = unavailable(&core, self.lease_margin()) {
                 return Err(Error::Unavailable(why));
@@ -1711,10 +1735,12 @@ impl<B: Broker> Tracker<B> {
                     "checking the writer lease after a refused write".into(),
                 ));
             }
-            if !core.stale {
-                return Ok(());
-            }
         }
+        Ok(())
+    }
+
+    /// Rebuilds the state from the log, unless another call just did.
+    async fn rebuild(&self) -> Result<(), Error> {
         let _one_at_a_time = self.0.reload.lock().await;
         let retakes = {
             let core = self.0.core.lock().await;

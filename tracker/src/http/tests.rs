@@ -38,9 +38,17 @@ struct Quiet {
     /// Offsets another writer was given whose records are not committed yet:
     /// Felix's tail counts them, reads do not show them.
     in_flight: Arc<std::sync::atomic::AtomicU64>,
+    /// The next read fails.
+    fail_next_read: Arc<AtomicBool>,
+    /// The next read takes this long. With a record, another tracker meanwhile
+    /// takes the lease and appends it.
+    slow_read: Arc<StdMutex<Option<SlowRead>>>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
+
+/// How long a read takes, and the record another tracker appends meanwhile.
+type SlowRead = (Duration, Option<Vec<u8>>);
 
 impl Quiet {
     fn published(&self) -> Vec<String> {
@@ -75,7 +83,18 @@ impl Broker for Quiet {
         let offset = self.publish(stream, payload).await?;
         Ok(ConditionalWrite::Written { offset })
     }
-    async fn read_from(&self, _: &str, _: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
+    async fn read_from(&self, stream: &str, _: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
+        if self.fail_next_read.swap(false, Ordering::SeqCst) {
+            anyhow::bail!("the broker is down");
+        }
+        let slow = self.slow_read.lock().unwrap().take();
+        if let Some((pause, theirs)) = slow {
+            tokio::time::sleep(pause).await;
+            if let Some(theirs) = theirs {
+                self.lease_lost.store(true, Ordering::SeqCst);
+                self.publish(stream, theirs).await?;
+            }
+        }
         Ok(self.log.lock().unwrap().clone())
     }
     async fn poll(

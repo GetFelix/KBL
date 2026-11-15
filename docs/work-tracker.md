@@ -355,12 +355,17 @@ A tracker paused past its lease can wake up still believing it holds it, so
 the lease is not enough on its own. Every append also names the offset it
 expects to land at, the one after the last committed record this tracker read,
 and Felix refuses it if anything else was given that offset first. After a
-refusal, or a write whose answer was lost, the tracker writes nothing more
-until Felix renews its lease by version. If another tracker holds the lease, the renewal fails and the tracker
-stops writing. If the lease is still its own (a new shard leader moved the
-offset, say), it reads the log again and the write can go through. A refused
-team write answers 503 ("try again"). An org write checks the lease, reads the
-log and retries by itself, up to three times. The next offset always comes
+refusal, or a write whose answer was lost, the tracker reads the log again and
+then writes nothing more until Felix grants it the lease: a renewal by version,
+or taking the lease again once its entry is gone, both count. The grant must
+come after the read, so no other tracker can have written in between. If
+another tracker holds the lease, the grant fails and the tracker stops
+writing. If the lease is still its own (a new shard leader moved the offset,
+say), the write can go through. A refused team write answers 503 ("try
+again"). An org write reads the log, checks the lease and retries by itself,
+up to three times. Every write also needs the lease to stand for another
+write's time limit, and an org write gives up with 503 once the lease it
+started on runs that short, so it never keeps the renewal waiting. The next offset always comes
 from a read of committed records, never from the refusal: the refusal's tail
 counts offsets given to records that are not committed yet, and writing past
 one would skip a record the tracker never read.

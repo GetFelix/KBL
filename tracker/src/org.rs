@@ -71,6 +71,17 @@ struct Core {
 }
 
 impl Core {
+    /// The refusals a lease put sent now answers for: only those whose state
+    /// was read again before it. A grant before the read says nothing about
+    /// records that land during it.
+    fn answerable(&self) -> u64 {
+        if self.stale {
+            self.confirmed
+        } else {
+            self.refusals
+        }
+    }
+
     /// Where the next record must land for the log to be the one folded.
     fn next(&self) -> u64 {
         self.at.map_or(0, |a| a + 1).max(self.tail)
@@ -180,6 +191,14 @@ impl<B: Broker> Org<B> {
         (FELIX_TIMEOUT + LEASE_SKEW).min(self.lease_ttl / 2)
     }
 
+    /// Whether a write sent now lands while both the lease that let the call
+    /// in and the current one still stand.
+    fn has_room(&self, core: &Core, let_in_until: Option<Instant>) -> bool {
+        let by = Instant::now() + self.write_margin();
+        let_in_until.is_some_and(|t| t > by)
+            && core.lease.as_ref().is_some_and(|l| l.valid_until > by)
+    }
+
     fn publish_view(&self, core: &Core) {
         let mut view = self.view.write().expect("org view lock");
         view.state = core.state.clone();
@@ -205,22 +224,23 @@ impl<B: Broker> Org<B> {
         record: OrgRecord,
     ) -> Result<(Applied, Option<u64>), OrgError> {
         let mut core = self.core.lock().await;
-        if !core
-            .lease
-            .as_ref()
-            .is_some_and(|l| l.valid_until > Instant::now() + self.write_margin())
-        {
+        // Every write must land while the lease that let this call in still
+        // stands. That also bounds how long the core lock keeps renew() out.
+        let let_in_until = core.lease.as_ref().map(|l| l.valid_until);
+        if !self.has_room(&core, let_in_until) {
             return Err(OrgError::Unavailable(
                 "this tracker does not hold the org writer lease".into(),
             ));
         }
-        if core.refusals > core.confirmed {
-            self.confirm_lease(&mut core).await?;
-        }
+        // Read first, then check the lease: Felix granting the version after
+        // the read means no other tracker wrote since.
         if core.stale {
             self.refresh(&mut core)
                 .await
                 .map_err(|e| OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}")))?;
+        }
+        if core.refusals > core.confirmed {
+            self.confirm_lease(&mut core).await?;
         }
         // Conditional on the tail: if another tracker took the lease and wrote,
         // Felix refuses this, whatever this tracker's clock says.
@@ -230,6 +250,11 @@ impl<B: Broker> Org<B> {
                 Err(why) => return Err(OrgError::Refused(why.why())),
                 Ok(Applied::Unchanged) => return Ok((Applied::Unchanged, None)),
                 Ok(Applied::Changed) => {}
+            }
+            if !self.has_room(&core, let_in_until) {
+                return Err(OrgError::Unavailable(
+                    "the org writer lease ran short during this write; try again".into(),
+                ));
             }
             let expected = core.next();
             match timed(
@@ -253,10 +278,10 @@ impl<B: Broker> Org<B> {
                     core.stale = true;
                     core.refusals += 1;
                     self.publish_lease(&core);
-                    self.confirm_lease(&mut core).await?;
                     self.refresh(&mut core).await.map_err(|e| {
                         OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}"))
                     })?;
+                    self.confirm_lease(&mut core).await?;
                 }
                 // A lost reply may have been a refusal: check the lease too.
                 Err(e) => {
@@ -379,7 +404,7 @@ impl<B: Broker> Org<B> {
 
     /// Renews the lease by `version`. False when Felix no longer has it.
     async fn renew_by(&self, version: u64) -> Result<bool> {
-        let refusals = self.core.lock().await.refusals;
+        let refusals = self.core.lock().await.answerable();
         let started = Instant::now();
         let put = timed(self.broker.lease_put(
             self.holder.as_bytes().to_vec(),
@@ -395,7 +420,6 @@ impl<B: Broker> Org<B> {
             version,
             valid_until: started + self.lease_ttl,
         });
-        // Sent after those refusals, so Felix answered for them.
         core.confirmed = core.confirmed.max(refusals);
         if core.stale {
             self.refresh_or_log(&mut core).await;
@@ -405,7 +429,7 @@ impl<B: Broker> Org<B> {
     }
 
     async fn take_lease(&self) -> Result<bool> {
-        let refusals = self.core.lock().await.refusals;
+        let refusals = self.core.lock().await.answerable();
         let started = Instant::now();
         let put = timed(self.broker.lease_put(
             self.holder.as_bytes().to_vec(),

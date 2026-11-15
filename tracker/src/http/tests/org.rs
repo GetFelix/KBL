@@ -798,3 +798,100 @@ async fn an_org_retry_does_not_skip_another_writers_record_in_flight() {
         .unwrap();
     assert_eq!((applied, offset), (Applied::Changed, Some(1)));
 }
+
+/// The org log as written, by team created.
+fn org_teams(broker: &Quiet) -> Vec<String> {
+    broker
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(_, p)| match OrgLogged::decode(p).unwrap().record {
+            OrgRecord::TeamCreated { team, .. } => Some(team.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The reread takes most of the 15 s lease, or this tracker's clock stood
+/// still while it ran (a paused process, a sleeping laptop).
+const PAUSES: [Duration; 2] = [Duration::from_secs(9), Duration::ZERO];
+
+#[tokio::test(start_paused = true)]
+async fn an_org_retry_checks_the_lease_after_it_reads_the_log() {
+    for pause in PAUSES {
+        let broker = Quiet::default();
+        broker.keeps.store(true, Ordering::SeqCst);
+        broker.fences.store(true, Ordering::SeqCst);
+        let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+            .await
+            .unwrap();
+        // A record this tracker did not write, with the lease still its own,
+        // so the first try is refused and the lease would be confirmed.
+        let beta = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+        broker.publish(ORG_EVENTS, beta.encode()).await.unwrap();
+        let gamma = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("gamma"));
+        *broker.slow_read.lock().unwrap() = Some((pause, Some(gamma.encode())));
+        let r = org
+            .append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await;
+        assert!(
+            matches!(r, Err(OrgError::Unavailable(_))),
+            "{pause:?}: {r:?}"
+        );
+        assert_eq!(org_teams(&broker), ["beta", "gamma"], "{pause:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_write_after_a_failed_one_checks_the_lease_after_it_reads_the_log() {
+    for pause in PAUSES {
+        let broker = Quiet::default();
+        broker.keeps.store(true, Ordering::SeqCst);
+        broker.fences.store(true, Ordering::SeqCst);
+        let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+            .await
+            .unwrap();
+        // The write's answer is lost and so is the read after it, so the next
+        // write starts stale with the lease unconfirmed.
+        broker.fail_publish.store(true, Ordering::SeqCst);
+        broker.fail_next_read.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            org.append(Key::new("ops").unwrap(), team_created("alpha"))
+                .await,
+            Err(OrgError::Felix(_))
+        ));
+        broker.fail_publish.store(false, Ordering::SeqCst);
+        let gamma = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("gamma"));
+        *broker.slow_read.lock().unwrap() = Some((pause, Some(gamma.encode())));
+        let r = org
+            .append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await;
+        assert!(
+            matches!(r, Err(OrgError::Unavailable(_))),
+            "{pause:?}: {r:?}"
+        );
+        assert_eq!(org_teams(&broker), ["gamma"], "{pause:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_write_gives_up_once_the_lease_it_started_on_runs_short() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.fences.store(true, Ordering::SeqCst);
+    let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    let beta = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, beta.encode()).await.unwrap();
+    // The reread after the refusal takes 9 s of the 15 s lease. The renewal
+    // after it succeeds, but the lease that let the write in is nearly gone,
+    // and the core lock has kept renew() out that long.
+    *broker.slow_read.lock().unwrap() = Some((Duration::from_secs(9), None));
+    let r = org
+        .append(Key::new("ops").unwrap(), team_created("alpha"))
+        .await;
+    assert!(matches!(r, Err(OrgError::Unavailable(_))), "{r:?}");
+    assert_eq!(org_teams(&broker), ["beta"]);
+}

@@ -2739,3 +2739,40 @@ async fn a_lost_reply_to_a_write_also_checks_the_lease() {
     ));
     assert_eq!(imports_of(&fake, "c1"), 0);
 }
+
+#[tokio::test(start_paused = true)]
+async fn after_a_refusal_the_lease_is_checked_after_the_rebuild_reads_the_log() {
+    // The rebuild takes most of the 15 s lease, or this tracker's clock stood
+    // still while it ran (a paused process, a sleeping laptop).
+    for pause in [Duration::from_secs(9), Duration::ZERO] {
+        let fake = Fake::default();
+        let t = start(&fake).await;
+        seed(&t, "a1", 2).await;
+        // A record this tracker did not write, with the lease still its own.
+        let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+        fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+        assert!(t.person_record(key("gab"), imported("c1")).await.is_err());
+        fake.hold_next_read();
+        let writing = tokio::spawn({
+            let t = t.clone();
+            async move { t.person_record(key("gab"), imported("c1")).await }
+        });
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        // While the rebuild waits on Felix, another tracker takes the lease
+        // and writes; the rebuild then reads that record.
+        tokio::time::advance(pause).await;
+        another_takes_the_lease(&fake).await;
+        let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b2"));
+        fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+        fake.open_gate();
+        let r = writing.await.unwrap();
+        assert!(matches!(r, Err(Error::Unavailable(_))), "{pause:?}: {r:?}");
+        assert_eq!(
+            imports_of(&fake, "c1"),
+            0,
+            "{pause:?}: appended after the new holder's record"
+        );
+    }
+}

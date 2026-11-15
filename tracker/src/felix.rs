@@ -499,32 +499,20 @@ impl Broker for Felix {
     async fn read_to_tip(&self, stream: &str, from: u64) -> Result<ToTip> {
         let done = async {
             let client = self.main().await?;
-            let mut out = Vec::new();
-            let mut from = from;
-            loop {
-                let page = match placed(|| {
+            let client = &client;
+            pages_to_tip(stream, from, |from| async move {
+                let page = placed(|| {
                     client.read(self.tenant(), self.namespace(), stream, 0, from, None, 0)
                 })
-                .await
-                {
-                    Ok(page) => page,
-                    Err(e) if past_the_tail(&e) => return Ok((out, from)),
-                    Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
-                };
-                if page.records.is_empty() {
-                    return Ok((out, from.max(page.next_offset)));
-                }
-                out.extend(
-                    page.records
-                        .into_iter()
-                        .map(|r| (r.offset, r.payload.to_vec())),
-                );
-                anyhow::ensure!(
-                    page.next_offset > from,
-                    "reading {stream} did not advance past offset {from}"
-                );
-                from = page.next_offset;
-            }
+                .await?;
+                let records = page
+                    .records
+                    .into_iter()
+                    .map(|r| (r.offset, r.payload.to_vec()))
+                    .collect();
+                Ok((records, page.next_offset))
+            })
+            .await
         }
         .await;
         self.forget_main(done).await
@@ -781,6 +769,35 @@ where
 }
 
 /// Whether Felix refused a read because the offset is past the stream's tail.
+/// Reads pages from `from` until an empty one: the records, and the committed
+/// tip. `read` returns a page's records and the offset after it. The empty
+/// page's offset can pass the last record, when a new shard leader's
+/// generation start took the offsets after it.
+async fn pages_to_tip<F, Fut>(stream: &str, from: u64, mut read: F) -> Result<ToTip>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: Future<Output = Result<(Vec<(u64, Vec<u8>)>, u64)>>,
+{
+    let mut out = Vec::new();
+    let mut from = from;
+    loop {
+        let (records, next) = match read(from).await {
+            Ok(page) => page,
+            Err(e) if past_the_tail(&e) => return Ok((out, from)),
+            Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+        };
+        if records.is_empty() {
+            return Ok((out, from.max(next)));
+        }
+        out.extend(records);
+        anyhow::ensure!(
+            next > from,
+            "reading {stream} did not advance past offset {from}"
+        );
+        from = next;
+    }
+}
+
 fn past_the_tail(err: &anyhow::Error) -> bool {
     err.downcast_ref::<SubscribeCursorError>()
         .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
