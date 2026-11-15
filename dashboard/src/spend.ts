@@ -75,7 +75,7 @@ export function dollars(micros: number): string {
 
 function rows(map: Record<string, number>, total: number, describe: (key: string) => { label: string; hint: string }): SpendRow[] {
   return Object.entries(map)
-    .map(([key, micros]) => ({ key, micros, ...describe(key), percent: total > 0 ? Math.max(1, Math.round((micros / total) * 100)) : 0 }))
+    .map(([key, micros]) => ({ key, micros, ...describe(key), percent: total > 0 && micros > 0 ? Math.max(1, Math.round((micros / total) * 100)) : 0 }))
     .sort((a, b) => b.micros - a.micros || a.key.localeCompare(b.key));
 }
 

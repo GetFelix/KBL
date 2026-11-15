@@ -47,6 +47,7 @@ function models(list: ModelRow[]): Node {
 
 export function spendView(on: SpendHandlers) {
   const m = modal('Spend', 'spend');
+  let drawn = '';
   const close = h('button', { type: 'button', class: 'button ghost', onclick: () => m.close() }, 'Close');
   return {
     el: m.el,
@@ -54,6 +55,10 @@ export function spendView(on: SpendHandlers) {
     /** Draws the tables, or a loading note when `spend` is null, and opens the dialog; if it is already open, a live record redraws it in place. */
     open(spend: Spend | null, items: readonly ItemRow[], s: ViewState) {
       const wasOpen = m.isOpen();
+      // A live record that changes nothing shown must not rebuild the dialog and drop the keyboard focus.
+      const key = JSON.stringify([spend, items.map((i) => [i.id, i.title])]);
+      if (wasOpen && spend !== null && key === drawn) return;
+      drawn = spend === null ? '' : key;
       if (spend === null) {
         m.body.replaceChildren(
           h('header', { class: 'dialog-head' }, h('h2', {}, 'Spend'), close),
@@ -81,11 +86,12 @@ export function spendView(on: SpendHandlers) {
       m.body.replaceChildren(
         h('header', { class: 'dialog-head' }, h('h2', {}, 'Spend'), close),
         h('p', { class: 'spend-total' }, h('strong', {}, dollars(t.total)), ' spent on claims'),
-        h('p', { class: 'muted small spend-note' }, 'A lower bound: lapsed claims and unpriced models are charged only the cost floor, and reported usage is the agent\'s own word.'),
+        h('p', { class: 'muted small spend-note' }, 'A lower bound: lapsed claims and unpriced models are charged only the cost floor (a minimum charge per claim), and reported usage is the agent\'s own word.'),
         section('Per root', 'spend-roots', 'Root', t.roots, 'No claim has recorded a cost yet.', root),
         section('Per reviewer tier (reviews only)', 'spend-tiers', 'Tier', t.tiers, 'No review has recorded a cost yet.', text, false),
         section('Per repo', 'spend-repos', 'Repo', t.repos, 'No repo has recorded a cost yet.', text),
         models(t.models),
+        h('p', { class: 'muted small spend-note' }, 'The total can be more than the By model costs: each claim is charged at least a minimum, the cost floor, and models without a price are charged only that.'),
       );
       if (wasOpen) return;
       m.open();

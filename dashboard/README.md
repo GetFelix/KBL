@@ -154,7 +154,7 @@ in the status line.
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
 palette and the `?` overlay all read it. Theme and density are in the palette
-only; Spend is in the palette and the sidebar. Clear filters and Save view are buttons above the work as well as palette commands, and the palette also
+only. Spend is in the palette and the sidebar. Clear filters and Save view are buttons above the work as well as palette commands, and the palette also
 has one entry per filter value and per saved view.
 
 ## Views
