@@ -194,7 +194,7 @@ A call that ends a claim (`complete`, `release`, `give_up`, and a
 lost, for example because the tracker died after writing the record. Send the
 `attempt` from the claim's answer, as `kbl-mcp` does. If that attempt already
 ended with the same kind of record, written by this agent on its latest claim
-of the attempt, the tracker writes nothing and answers as the first call did,
+of the attempt (for a prerequisite, naming the same item), the tracker writes nothing and answers as the first call did,
 with `replayed: true` and the record's `offset`. Anything else answers as
 without `attempt`: a claim the tracker released as `lapsed`, another agent's
 claim, another attempt, or another kind of record is still `lost` (or not

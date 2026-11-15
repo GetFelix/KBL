@@ -208,3 +208,29 @@ async fn a_retry_for_an_earlier_attempt_does_not_end_the_agents_next_one() {
     assert_eq!(fake.kinds(), kinds, "the second attempt still stands");
     assert!(t.extend(&agent("w1"), &item("a1")).await.is_ok());
 }
+
+#[tokio::test]
+async fn a_rebuild_ignores_a_claim_the_fold_refused() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let attempt = claim_attempt(&t, &fake, "w1").await;
+    end(&t, "released", "w1", Some(attempt)).await.unwrap();
+    let at = last(&fake);
+    assert_eq!(claim_attempt(&t, &fake, "w2").await, attempt);
+    // A `claimed` by w1 while w2 holds the item: on the log, refused by the fold.
+    let stray = WorkLogged::new(
+        0,
+        key("w1"),
+        Actor::Agent,
+        WorkRecord::Claimed {
+            item: item("a1"),
+            attempt,
+            deadline_ms: 0,
+        },
+    );
+    fake.publish(WORK_EVENTS, stray.encode()).await.unwrap();
+    let t = start(&fake).await;
+    let again = end(&t, "released", "w1", Some(attempt)).await.unwrap();
+    assert_eq!((&again["replayed"], &again["offset"]), (&json!(true), &json!(at)));
+}

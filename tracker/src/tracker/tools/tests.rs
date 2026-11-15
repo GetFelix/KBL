@@ -3089,6 +3089,41 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
     assert_eq!(again["replayed"], true);
     assert_eq!(again["offset"], at);
     assert_eq!(fake.kinds(), kinds);
+    // A retry naming other work is not the call that landed.
+    import(&t, "f3", "GetFelix/felix-gateway#5").await;
+    let other = t
+        .prerequisite(
+            &w1,
+            &a1,
+            Some(1),
+            key("k"),
+            Prereq::Existing(item("f3")),
+            DoneWhen::Merged,
+            Vec::new(),
+        )
+        .await;
+    assert!(matches!(other, Err(Error::NotHeld(_))));
+    let new = Prereq::New {
+        target: Target {
+            source: "github".into(),
+            repo: "GetFelix/felix-gateway".into(),
+        },
+        title: "x".into(),
+        why: text("y"),
+        evidence: vec![],
+    };
+    let other = t
+        .prerequisite(
+            &w1,
+            &a1,
+            Some(1),
+            key("k2"),
+            new,
+            DoneWhen::Merged,
+            Vec::new(),
+        )
+        .await;
+    assert!(matches!(other, Err(Error::NotHeld(_))));
     // Another attempt, or no attempt at all, is not the call that landed.
     assert!(matches!(ask(Some(2)).await, Err(Error::NotHeld(_))));
     assert!(matches!(ask(None).await, Err(Error::NotHeld(_))));

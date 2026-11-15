@@ -382,18 +382,29 @@ struct ClaimLog {
 struct Ended {
     offset: u64,
     kind: &'static str,
+    /// What a `prerequisite` named, so a retry naming another is not replayed.
+    prerequisite: Option<ItemId>,
     actor: Actor,
     by: Key,
 }
 
 impl Recall {
     /// `created` says the record made an edge that was not there before it.
-    fn remember(&mut self, offset: u64, logged: &WorkLogged, me: &Key, created: bool) {
+    fn remember(
+        &mut self,
+        offset: u64,
+        logged: &WorkLogged,
+        me: &Key,
+        created: bool,
+        rejected: bool,
+    ) {
         let record = &logged.record;
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
         }
-        self.attempt(offset, logged);
+        if !rejected {
+            self.attempt(offset, logged);
+        }
         match record {
             WorkRecord::Linked { item, to } => {
                 let edge = (item.clone(), to.clone());
@@ -448,6 +459,10 @@ impl Recall {
             c.ended = Some(Ended {
                 offset,
                 kind: logged.record.kind(),
+                prerequisite: match &logged.record {
+                    WorkRecord::Prerequisite { prerequisite, .. } => Some(prerequisite.clone()),
+                    _ => None,
+                },
                 actor: logged.actor,
                 by: logged.by.clone(),
             });
@@ -463,7 +478,14 @@ impl Recall {
     /// The offset of the record that ended `agent`'s latest claim of `attempt`,
     /// if `agent` itself wrote it as `kind`. A record the tracker or a person
     /// wrote, such as `released lapsed`, is not the agent's outcome.
-    fn ended_by(&self, item: &ItemId, attempt: u32, agent: &AgentName, kind: &str) -> Option<u64> {
+    fn ended_by(
+        &self,
+        item: &ItemId,
+        attempt: u32,
+        agent: &AgentName,
+        kind: &str,
+        prerequisite: Option<&ItemId>,
+    ) -> Option<u64> {
         let claims = self.attempts.get(&(item.clone(), attempt))?;
         let ended = claims
             .iter()
@@ -472,6 +494,7 @@ impl Recall {
             .ended
             .as_ref()?;
         let theirs = ended.kind == kind
+            && ended.prerequisite.as_ref() == prerequisite
             && ended.actor == Actor::Agent
             && ended.by.as_str() == agent.as_str();
         theirs.then_some(ended.offset)
@@ -2001,7 +2024,8 @@ impl<B: Broker> Tracker<B> {
         {
             Ok(ConditionalWrite::Written { offset }) => {
                 core.tail = offset + 1;
-                core.recall.remember(offset, &logged, &self.0.me, absent);
+                core.recall
+                    .remember(offset, &logged, &self.0.me, absent, false);
                 Ok(offset)
             }
             // The record was applied above, so the state is rebuilt, and the
@@ -2117,7 +2141,9 @@ impl<B: Broker> Tracker<B> {
             let absent = edge_absent(&state, &rec.record);
             state.apply(*offset, rec);
             let created = absent && !edge_absent(&state, &rec.record);
-            recall.remember(*offset, rec, &self.0.me, created);
+            // The append path remembers only what the fold took; so does a rebuild.
+            let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
+            recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
         Ok((state, recall, tail))
     }
@@ -2272,7 +2298,13 @@ fn replay(
     kind: &str,
     mut reply: Value,
 ) -> Option<Value> {
-    let offset = core.recall.ended_by(item, attempt?, agent, kind)?;
+    // A prerequisite's answer names what it waits on; the retry must name the same.
+    let prerequisite = reply["prerequisite"]
+        .as_str()
+        .and_then(|p| ItemId::new(p).ok());
+    let offset = core
+        .recall
+        .ended_by(item, attempt?, agent, kind, prerequisite.as_ref())?;
     reply["offset"] = offset.into();
     reply["replayed"] = true.into();
     Some(reply)
