@@ -33,6 +33,12 @@ struct Quiet {
     lease_lag: Arc<StdMutex<Duration>>,
     /// Bumped on every grant, as Felix does.
     lease_version: Arc<std::sync::atomic::AtomicU64>,
+    /// Who the last grant went to.
+    lease_holder: Arc<StdMutex<Vec<u8>>>,
+    /// The next lease put lands, but its reply is lost.
+    lose_lease_reply: Arc<AtomicBool>,
+    /// Reads of the lease key fail.
+    fail_lease_get: Arc<AtomicBool>,
     /// A conditional publish is refused unless it names the next offset.
     fences: Arc<AtomicBool>,
     /// Offsets another writer was given whose records are not committed yet:
@@ -122,7 +128,7 @@ impl Broker for Quiet {
     }
     async fn lease_put(
         &self,
-        _: Vec<u8>,
+        holder: Vec<u8>,
         ttl: Duration,
         expect: Option<u64>,
     ) -> anyhow::Result<Option<u64>> {
@@ -146,7 +152,28 @@ impl Broker for Quiet {
             return Ok(None);
         }
         *until = Some(now + ttl + *self.lease_lag.lock().unwrap());
-        Ok(Some(self.lease_version.fetch_add(1, Ordering::SeqCst) + 1))
+        *self.lease_holder.lock().unwrap() = holder;
+        let version = self.lease_version.fetch_add(1, Ordering::SeqCst) + 1;
+        if self.lose_lease_reply.swap(false, Ordering::SeqCst) {
+            anyhow::bail!("Felix did not answer in time");
+        }
+        Ok(Some(version))
+    }
+    async fn lease_get(&self) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        if self.fail_lease_get.load(Ordering::SeqCst) {
+            anyhow::bail!("the broker is down");
+        }
+        let version = self.lease_version.load(Ordering::SeqCst);
+        // Another tracker holds it.
+        if self.lease_lost.load(Ordering::SeqCst) {
+            return Ok(Some((b"another tracker".to_vec(), version)));
+        }
+        let live = self
+            .lease_until
+            .lock()
+            .unwrap()
+            .is_some_and(|t| t > tokio::time::Instant::now());
+        Ok(live.then(|| (self.lease_holder.lock().unwrap().clone(), version)))
     }
     async fn forget(&self, _: Option<&str>) {}
     async fn close_idle(&self, _: Duration) {}

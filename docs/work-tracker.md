@@ -352,6 +352,20 @@ on its routes, stops renewing after ten seconds, and checks the lease before
 each append. The process exits when no team holds its lease; with one team,
 that is ten seconds after it lost it.
 
+A lease put can land in Felix while its reply is lost, for example when it
+times out on the tracker's side. The tracker then still has the old version,
+and its next renewal by that version would be refused. So when a lease put is
+refused or gets no answer, the tracker reads the lease entry. If the entry
+names this tracker, it takes the entry's version as its own and renews by it.
+Each tracker names itself with a random token drawn at start, so it never
+mistakes another tracker's entry for its own. If its view of the lease had
+already run out, the entry may come from a retake that landed after another
+tracker held the lease, so the tracker treats it as a retake: it reads the log
+again and confirms the lease by version after the read before it writes. If
+the entry runs out between the read and the renewal, the renewal is refused
+and the tracker takes the lease back with Absent, again as a retake. This holds
+for team and org leases, and for the lease taken at start.
+
 A tracker paused past its lease can wake up still believing it holds it, so
 the lease is not enough on its own. Every append also names the offset it
 expects to land at, the one after the last committed record this tracker read,

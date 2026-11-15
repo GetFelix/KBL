@@ -14,7 +14,7 @@ use kbl_core::org_fold::{Applied, OrgState, Principal};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use crate::felix::{Broker, ConditionalWrite};
+use crate::felix::{Broker, ConditionalWrite, holder_token};
 
 /// How long the org lease may stay lost before the process exits. Past it,
 /// revocations would stop taking effect.
@@ -135,7 +135,7 @@ impl<B: Broker> Org<B> {
                 held_until: None,
             }),
             lease_ttl,
-            holder: format!("tracker-{}-{}", std::process::id(), now_ms()),
+            holder: holder_token()?,
         };
         // Read before taking the lease: a build that cannot read the org log
         // must not hold the lease and keep one that can from starting.
@@ -382,13 +382,32 @@ impl<B: Broker> Org<B> {
             ));
         };
         let started = Instant::now();
-        let put = timed(self.broker.lease_put(
+        let mut put = timed(self.broker.lease_put(
             self.holder.as_bytes().to_vec(),
             self.lease_ttl,
             Some(version),
         ))
-        .await
-        .map_err(|e| OrgError::Unavailable(format!("checking the org writer lease: {e:#}")))?;
+        .await;
+        // A renewal of ours may have landed with its reply lost: adopt its
+        // version while our view stands. Past it the entry may be a retake,
+        // which renew() handles with a reread.
+        let live = core
+            .lease
+            .as_ref()
+            .is_some_and(|l| l.valid_until > Instant::now());
+        if !matches!(put, Ok(Some(_)))
+            && live
+            && let Some(ours) = self.ours().await.filter(|&v| v != version)
+        {
+            put = timed(self.broker.lease_put(
+                self.holder.as_bytes().to_vec(),
+                self.lease_ttl,
+                Some(ours),
+            ))
+            .await;
+        }
+        let put = put
+            .map_err(|e| OrgError::Unavailable(format!("checking the org writer lease: {e:#}")))?;
         let Some(version) = put else {
             return Err(OrgError::Unavailable(
                 "another tracker may hold the org writer lease".into(),
@@ -404,14 +423,54 @@ impl<B: Broker> Org<B> {
 
     /// Renews the lease by `version`. False when Felix no longer has it.
     async fn renew_by(&self, version: u64) -> Result<bool> {
-        let refusals = self.core.lock().await.answerable();
+        let (refusals, valid_until) = {
+            let core = self.core.lock().await;
+            let until = core.lease.as_ref().map(|l| l.valid_until);
+            (core.answerable(), until)
+        };
         let started = Instant::now();
-        let put = timed(self.broker.lease_put(
+        let mut put = timed(self.broker.lease_put(
             self.holder.as_bytes().to_vec(),
             self.lease_ttl,
             Some(version),
         ))
-        .await?;
+        .await;
+        // A put of ours that landed with its reply lost left the entry at a
+        // version we never heard of: adopt it and renew by it. With our view
+        // run out it may be an Absent put that landed after another tracker
+        // held the lease, so it counts as a retake.
+        let mut adopted = None;
+        if !matches!(put, Ok(Some(_)))
+            && let Some(ours) = self.ours().await.filter(|&v| v != version)
+        {
+            adopted = Some(ours);
+            if valid_until.is_none_or(|t| t <= Instant::now()) {
+                let mut core = self.core.lock().await;
+                core.stale = true;
+                core.refusals += 1;
+            }
+            put = timed(self.broker.lease_put(
+                self.holder.as_bytes().to_vec(),
+                self.lease_ttl,
+                Some(ours),
+            ))
+            .await;
+        }
+        let put = match put {
+            Ok(put) => put,
+            Err(e) => {
+                // Our view still bounds the entry: whatever landed was sent
+                // after it began.
+                // Unless a write's lease check moved it meanwhile.
+                if let Some(ours) = adopted
+                    && let Some(lease) = self.core.lock().await.lease.as_mut()
+                    && lease.version == version
+                {
+                    lease.version = ours;
+                }
+                return Err(e);
+            }
+        };
         let Some(version) = put else {
             return Ok(false);
         };
@@ -436,15 +495,28 @@ impl<B: Broker> Org<B> {
             self.lease_ttl,
             None,
         ))
-        .await?;
-        Ok(match put {
-            Some(version) => {
+        .await;
+        let held = match put {
+            Ok(Some(version)) => Some((version, started + self.lease_ttl, false)),
+            // The put may have landed with its reply lost. When it is ours we
+            // do not know when it was granted, so our view has run out and
+            // the next renewal goes by version.
+            put => match self.ours().await {
+                Some(version) => Some((version, Instant::now(), true)),
+                None => {
+                    put?;
+                    None
+                }
+            },
+        };
+        Ok(match held {
+            Some((version, valid_until, adopted)) => {
                 // Another tracker may have written, a revoke among it, while
                 // this one did not hold the lease: read before serving tokens.
                 let mut core = self.core.lock().await;
                 core.lease = Some(Lease {
                     version,
-                    valid_until: started + self.lease_ttl,
+                    valid_until,
                 });
                 core.confirmed = core.confirmed.max(refusals);
                 core.stale = true;
@@ -452,10 +524,25 @@ impl<B: Broker> Org<B> {
                 // follow it before the next write.
                 core.refusals += 1;
                 self.refresh_or_log(&mut core).await;
+                drop(core);
+                // An adopted grant has no known start, so renew by version
+                // now rather than refuse writes until the next round.
+                if adopted && let Err(e) = self.renew_by(version).await {
+                    eprintln!("kbl-tracker: could not renew the org writer lease: {e:#}");
+                }
                 true
             }
             None => false,
         })
+    }
+
+    /// The version of the lease entry when it holds this tracker's name. A
+    /// failed read is no answer.
+    async fn ours(&self) -> Option<u64> {
+        match timed(self.broker.lease_get()).await {
+            Ok(Some((holder, version))) if holder == self.holder.as_bytes() => Some(version),
+            _ => None,
+        }
     }
 
     /// A failed read leaves the state stale, so agent tokens stay refused.
