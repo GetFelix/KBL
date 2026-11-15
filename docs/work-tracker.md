@@ -1402,7 +1402,8 @@ is a read of the fold, not a separate record. `kbl-tool work spend` folds
 root and everything under it), per reviewer tier (reviews only) and per repo
 (`source:repo` of the item's root, so a review counts where the request it
 reads lands). The wasm fold exposes the same numbers via
-`Folder.spend_json()`. Spend is a lower bound, because a lapsed claim
+`Folder.spend_json()`, and the dashboard's Spend dialog shows it per root, reviewer
+tier and repo. Spend is a lower bound, because a lapsed claim
 records no cost.
 
 ```bash

@@ -78,7 +78,7 @@ share, and every step above becomes a record in `work.events`.
   so the reason for the decision is found where the work is.
 - **Budgets are visible.** Each root has a work and cost budget. Each claim
   records its cost, so spend per issue, per review tier and per repo is a
-  query, not a guess.
+  query, not a guess. The dashboard's Spend dialog shows it.
 - **The maintainer's wait is measured.** Time to first human action on My
   queue and In review is the number to shrink.
 

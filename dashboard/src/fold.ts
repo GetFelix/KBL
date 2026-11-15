@@ -11,6 +11,8 @@ export interface Fold {
   itemsJson(): string;
   blockedJson(): string;
   overlapsJson(): string;
+  /** The fold's spend: what claims cost per root, reviewer tier and repo. */
+  spendJson(): string;
 }
 
 export interface ItemRow {

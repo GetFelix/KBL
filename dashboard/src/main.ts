@@ -8,6 +8,7 @@ import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { blocked, items, questionText, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
+import { spend } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
@@ -17,6 +18,7 @@ import { deleteView, parseSaved, renameView, saveView, type SavedView } from './
 import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
+import { spendView } from './ui/spend-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { Tracker } from './tracker.ts';
@@ -199,6 +201,8 @@ const run = (id: CommandId): void => {
       return palette.open();
     case 'help':
       return help.open();
+    case 'spend':
+      return readSpend ? spendBox.open(readSpend(), s.items, s) : undefined;
     case 'search':
       ui.search.focus();
       return ui.search.select();
@@ -310,6 +314,7 @@ const ui = shell(
     query: (text) => store.dispatch({ type: 'query', query: text }),
     palette: () => run('palette'),
     help: () => run('help'),
+    spend: () => run('spend'),
     mark: (id) => store.dispatch({ type: 'mark', id }),
     signIn: () => signInBox.open(),
     signOut,
@@ -335,6 +340,9 @@ const palette = paletteView(
   mac,
 );
 const help = helpView(mac);
+// Set once the fold exists; Spend does nothing before then.
+let readSpend: (() => ReturnType<typeof spend>) | null = null;
+const spendBox = spendView({ open: openItem });
 // Another tab may have changed the views since this one read them: every write starts
 // from what storage holds now, and a change made elsewhere shows up here as it lands.
 const currentSaved = (): SavedView[] => {
@@ -370,7 +378,7 @@ const views = viewDialog({
 });
 const confirm = confirmDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, views.el, confirm.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, views.el, confirm.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -397,7 +405,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || views.isOpen() || confirm.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || views.isOpen() || confirm.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;
@@ -433,7 +441,9 @@ async function main() {
     itemsJson: () => fold.items_json(),
     blockedJson: () => fold.blocked_json(),
     overlapsJson: () => fold.overlaps_json(),
+    spendJson: () => fold.spend_json(),
   };
+  readSpend = () => spend(sink);
   // Redraw once per frame however many records arrive.
   let queued = false;
   const redraw = () => {

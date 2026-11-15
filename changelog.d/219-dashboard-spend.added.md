@@ -1,0 +1,1 @@
+The dashboard has a Spend dialog (sidebar button, or `Show spend` in the palette) listing what claims cost per root, reviewer tier and repo, largest first, from the fold's `spend_json()`. It says the total is a lower bound, because a lapsed claim records no cost. No new record and no format raise.

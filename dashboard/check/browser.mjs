@@ -165,6 +165,18 @@ try {
     await axe(`shortcuts ${theme}`);
     await shoot(`shortcuts-${theme}`);
     await press(page, 'Escape');
+
+    // Spend: the fold's recorded costs per root, tier and repo, said to be a lower bound.
+    await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Spend').click()`);
+    check(await page.eval(`document.querySelector('dialog.spend').open`), `${theme}: the Spend button opens the spend dialog`);
+    check(await page.eval(`document.querySelector('.spend-total').textContent.startsWith('$')`), `${theme}: spend shows a total`);
+    check(await page.eval(`/lower bound/.test(document.querySelector('.spend-note').textContent)`), `${theme}: spend says it is a lower bound`);
+    check(await page.eval(`document.querySelectorAll('#spend-roots ~ table tbody tr').length > 0 && document.querySelectorAll('#spend-repos ~ table tbody tr').length > 0`), `${theme}: spend lists roots and repos`);
+    check(await focused('dialog.spend button'), `${theme}: the spend dialog takes focus`);
+    await axe(`spend ${theme}`);
+    await shoot(`spend-${theme}`);
+    await press(page, 'Escape');
+    check(!(await page.eval(`document.querySelector('dialog.spend').open`)), `${theme}: Esc closes spend`);
   }
 
   await open(connected);

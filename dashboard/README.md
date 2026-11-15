@@ -12,6 +12,11 @@ in `src/state.ts` holds only what the view adds (selection, search, open dialogs
 Two open items whose `files` context entries share a path each get a flag on their row and a "Same files"
 note in the panel, with the suggested link ([Files that overlap](../docs/work-tracker.md#files-that-overlap)).
 
+Spend (sidebar button, or `Show spend` in the palette) lists what claims cost per root, reviewer tier and repo, largest
+first, from the fold's `spend_json()` ([Spend](../docs/work-tracker.md#where-work-comes-from-and-its-bounds)). The figures are what each claim
+reported, never an estimate, so the total is a lower bound: a claim that lapsed recorded no cost. A root links to its
+item. A table with nothing recorded says so.
+
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it
 follows and the plan for later views are in [docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md).
@@ -146,7 +151,7 @@ in the status line.
 | `Ctrl+Z` (`Cmd+Z` on a Mac) | Undo the last tier change (in a text field, the field's own undo) |
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
-palette and the `?` overlay all read it. Theme and density are in the palette
+palette and the `?` overlay all read it. Theme, density and Spend are in the palette
 only. Clear filters and Save view are buttons above the work as well as palette commands, and the palette also
 has one entry per filter value and per saved view.
 
