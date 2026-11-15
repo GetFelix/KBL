@@ -192,6 +192,9 @@ struct Core {
     emptied: HashMap<(String, u8), Emptied>,
     /// The state may not match the log: rebuild it before serving.
     stale: bool,
+    /// The lease was taken again since the last rebuild, so the state may miss
+    /// another tracker's records. Unlike an offset skip, no append may use it.
+    retaken: bool,
     lease: Option<LeaseHeld>,
     /// Another tracker took the writer lease.
     fenced: bool,
@@ -426,6 +429,9 @@ struct Inner<B> {
     sync: Mutex<()>,
     /// One rebuild of the state at a time.
     reload: Mutex<()>,
+    /// One renewal at a time: two renewals by the same version would refuse
+    /// one of them, and the loser would fence a tracker that holds the lease.
+    renewing: Mutex<()>,
     settings: Settings,
     me: Key,
     holder: String,
@@ -455,6 +461,7 @@ impl<B: Broker> Tracker<B> {
             slots: StdMutex::default(),
             sync: Mutex::new(()),
             reload: Mutex::new(()),
+            renewing: Mutex::new(()),
             settings,
             me: Key::new("tracker").expect("a valid key"),
             holder: format!("tracker-{}-{}", std::process::id(), now_micros()),
@@ -872,6 +879,7 @@ impl<B: Broker> Tracker<B> {
     }
 
     pub(crate) async fn renew_lease(&self) {
+        let _one_at_a_time = self.0.renewing.lock().await;
         let Some((version, valid_until)) = self
             .0
             .core
@@ -915,6 +923,7 @@ impl<B: Broker> Tracker<B> {
                 // Another tracker may have held it and written meanwhile.
                 if retaken {
                     core.stale = true;
+                    core.retaken = true;
                 }
             }
             // Someone else holds it now.
@@ -1586,9 +1595,8 @@ impl<B: Broker> Tracker<B> {
         if let Some(why) = unavailable(core, self.lease_margin()) {
             return Err(Error::Unavailable(why));
         }
-        // A renewal between two appends of one call can retake the lease, and
-        // the state may then miss another tracker's records.
-        if core.stale {
+        // A retake after begin() rebuilt: the state may miss another tracker's records.
+        if core.retaken {
             return Err(Error::Unavailable("the state is being rebuilt".into()));
         }
         // A kind this build does not know decodes to `unknown`. Logging it
@@ -1680,6 +1688,7 @@ impl<B: Broker> Tracker<B> {
         core.state = state;
         core.recall = recall;
         core.stale = false;
+        core.retaken = false;
         Ok(())
     }
 

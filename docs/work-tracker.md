@@ -343,7 +343,7 @@ The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third
 of it, starting as soon as the team serves. Teams start one after another, so a
 team's lease can lapse (run out without a renewal) before it serves. The
-tracker then renews it by version if Felix still has its entry, and otherwise
+tracker then renews its own entry if Felix still has it, and otherwise
 takes it again, unless another tracker took it meanwhile. After taking it
 again, the tracker rebuilds its state from the log before it writes, since the
 other tracker may have written. A team whose tracker cannot renew answers 503

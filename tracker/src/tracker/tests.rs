@@ -47,6 +47,8 @@ struct Net {
     gate_extend: bool,
     /// The next publish waits for `open_gate` after the record is on the stream.
     gate_publish: bool,
+    /// The next lease put waits for the gate before it reaches the key.
+    gate_lease: bool,
     /// The next nack waits for `open_gate` before it lands.
     gate_nack: bool,
     /// The next nack panics.
@@ -183,6 +185,10 @@ impl Fake {
 
     fn hold_next_publish(&self) {
         self.net.lock().unwrap().gate_publish = true;
+    }
+
+    fn hold_next_lease_put(&self) {
+        self.net.lock().unwrap().gate_lease = true;
     }
 
     fn hold_next_nack(&self) {
@@ -424,6 +430,10 @@ impl Broker for Fake {
         ttl: Duration,
         expect: Option<u64>,
     ) -> anyhow::Result<Option<u64>> {
+        let gated = std::mem::take(&mut self.net.lock().unwrap().gate_lease);
+        if gated {
+            self.gate.notified().await;
+        }
         let mut net = self.net.lock().unwrap();
         if net.fail_lease {
             anyhow::bail!("the broker is down");
@@ -2394,8 +2404,9 @@ async fn an_append_on_a_state_that_may_miss_records_is_refused() {
     let t = start(&fake).await;
     let before = fake.log().len();
     let mut core = t.0.core.lock().await;
-    // A renewal retook the lease between two appends of one call.
+    // A renewal retook the lease after the call's rebuild.
     core.stale = true;
+    core.retaken = true;
     let record = WorkRecord::Imported {
         item: item("b1"),
         source: "gh".into(),
@@ -2408,4 +2419,26 @@ async fn an_append_on_a_state_that_may_miss_records_is_refused() {
     ));
     drop(core);
     assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn two_renewals_at_once_do_not_fence_the_holder() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    // The timer's renewal hangs, and a route renews meanwhile.
+    fake.hold_next_lease_put();
+    let slow = tokio::spawn({
+        let t = t.clone();
+        async move { t.renew_lease().await }
+    });
+    tokio::task::yield_now().await;
+    let fast = tokio::spawn({
+        let t = t.clone();
+        async move { t.renew_lease().await }
+    });
+    tokio::task::yield_now().await;
+    fake.open_gate();
+    slow.await.unwrap();
+    fast.await.unwrap();
+    assert!(!t.0.core.lock().await.fenced);
 }
