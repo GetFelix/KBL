@@ -143,7 +143,7 @@ try {
   const t2 = await takeNext(w2, 20);
   check(t2.claimed && t2.item.id === c2.item, "w2 was handed the second child after the first finished");
   await w2.tool("work_complete", { item: c2.item });
-  await w1.tool("work_complete", { item: "root1", cost_micros: 5000 });
+  await w1.tool("work_complete", { item: "root1", usage: [{ model: "scripted", unit: "tokens", input: 5000 }] });
   check(recordsOf("root1").some((r) => r.kind === "done" && r.by === "w1"), "w1 completed root1");
 
   // 2. A person accepts the proposal.
