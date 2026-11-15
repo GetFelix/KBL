@@ -696,17 +696,21 @@ async fn the_team_list_says_whether_an_org_write_would_be_let_in() {
 
 #[tokio::test(start_paused = true)]
 async fn the_org_lease_is_renewed_as_soon_as_serving_starts() {
-    let broker = Quiet::default();
     let ttl = Duration::from_secs(3);
-    let org = Arc::new(Org::start(broker, ttl, Duration::ZERO).await.unwrap());
-    // Starting the teams took most of the lease.
-    tokio::time::advance(Duration::from_secs(2)).await;
-    assert!(!org.writable());
-    let renewing = org.clone();
-    let _maintain = tokio::spawn(async move { renewing.maintain().await });
-    tokio::time::sleep(Duration::from_millis(10)).await;
-    assert!(
-        org.writable(),
-        "the first renewal waited a third of the lease"
-    );
+    // Starting the teams took most of the lease, or all of it.
+    for took in [Duration::from_secs(2), Duration::from_secs(4)] {
+        let broker = Quiet::default();
+        broker.lease_expires.store(true, Ordering::SeqCst);
+        let org = Arc::new(Org::start(broker, ttl, Duration::ZERO).await.unwrap());
+        tokio::time::advance(took).await;
+        assert!(!org.writable());
+        let renewing = org.clone();
+        let maintain = tokio::spawn(async move { renewing.maintain().await });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            org.writable(),
+            "not writable right after serving began, {took:?} in"
+        );
+        maintain.abort();
+    }
 }

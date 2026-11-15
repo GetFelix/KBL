@@ -24,6 +24,9 @@ struct Quiet {
     keeps: Arc<AtomicBool>,
     /// Publishes fail, and are not recorded.
     fail_publish: Arc<AtomicBool>,
+    /// A renewal by version is refused once the lease has run out, as Felix does.
+    lease_expires: Arc<AtomicBool>,
+    lease_until: Arc<StdMutex<Option<tokio::time::Instant>>>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
@@ -76,10 +79,22 @@ impl Broker for Quiet {
     async fn lease_put(
         &self,
         _: Vec<u8>,
-        _: Duration,
-        _: Option<u64>,
+        ttl: Duration,
+        expect: Option<u64>,
     ) -> anyhow::Result<Option<u64>> {
-        Ok((!self.lease_lost.load(Ordering::SeqCst)).then_some(1))
+        let now = tokio::time::Instant::now();
+        let mut until = self.lease_until.lock().unwrap();
+        if self.lease_expires.load(Ordering::SeqCst)
+            && expect.is_some()
+            && until.is_none_or(|t| t <= now)
+        {
+            return Ok(None);
+        }
+        if self.lease_lost.load(Ordering::SeqCst) {
+            return Ok(None);
+        }
+        *until = Some(now + ttl);
+        Ok(Some(1))
     }
     async fn forget(&self, _: Option<&str>) {}
     async fn close_idle(&self, _: Duration) {}

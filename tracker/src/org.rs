@@ -144,8 +144,9 @@ impl<B: Broker> Org<B> {
         Ok(view.state.who(token))
     }
 
-    /// Whether an org write would be let in now: the lease is held, with room
-    /// for a write to land, and the log was read since it was taken.
+    /// Whether the lease is held with room for a write to land, and the log was
+    /// read since it was taken. False is a hint, not a refusal: a write after a
+    /// failed read may still get in by reading first.
     pub(crate) fn writable(&self) -> bool {
         let view = self.view.read().expect("org view lock");
         view.held_until
@@ -245,7 +246,16 @@ impl<B: Broker> Org<B> {
 
     /// Whether the lease is held after this renewal or retake.
     async fn renew(&self) -> bool {
-        let expect = self.core.lock().await.lease.as_ref().map(|l| l.version);
+        // Felix compares a version against the live entry, so a lease that ran
+        // out (the teams took long to start) is taken again, not renewed.
+        let expect = self
+            .core
+            .lock()
+            .await
+            .lease
+            .as_ref()
+            .filter(|l| l.valid_until > Instant::now())
+            .map(|l| l.version);
         let Some(version) = expect else {
             // Taking it back means another tracker may have written meanwhile.
             return match self.take_lease().await {
