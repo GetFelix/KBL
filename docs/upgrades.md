@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 6.
+is 7.
 
 ### Formats
 
@@ -79,6 +79,7 @@ is 6.
 | 4 | No record or field: a redo on an item whose pull request has a failed check outranks the failed check while the redo waits or its attempt is not done, if the item's newest note is newer than the `pr_status` that reported the failure. The item is Ready, an agent gets the redo while the checks are still red, and a released or lapsed claim on it can be retried. If the checks fail again, the item waits until a person writes a new note on it; no new redo is needed | Until the raise, such a redo waits in Needs you until the checks turn green, and its claim is refused with `not_ready`. After it, an item with no note newer than the failure also waits, for a note or for green. The tracker asks for a newer note only when the checks are already red as the redo is written, so a redo made while they were running can have none |
 | 5 | No record or field: a `prerequisite` with `existing` and `done_when: released` may name an item closed as merged or completed that has no release yet, and the item waits for that release. A later prerequisite on the same link that asks only for the merge keeps the earlier ask for the release, and the tracker answers it without writing a record, so a retry with `merged` after `released` is no longer invalid. | Until the raise, such a prerequisite is refused with `closed`, so the agent posts a new one, a later `merged` ask on the link drops the wait for the release, a retry with `merged` after `released` is invalid |
 | 6 | No record or field: `imported` may name an existing open prerequisite that a person accepted after the raise, with an issue in the repo it targets and no upstream issue yet. The item becomes an imported root, so ingest can open the upstream issue for it ([work tracker](work-tracker.md#prerequisites-become-upstream-issues)) | Until the raise, `imported` on an existing item is refused as `duplicate` and the tracker lists no prerequisites for ingest, so nothing is opened. An acceptance from before the raise does not count; a person accepts again |
+| 7 | `flagged`: a person moves an item into or out of Needs you ([work tracker](work-tracker.md#flagging-an-item-for-a-person)) | Until the raise, `POST /v1/work/flag` and `/v1/work/unflag` are refused with `format` |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -172,7 +173,10 @@ tracker does not have yet.
   `core/tests/work_format_6.jsonl` does the same for format 6: `imported` on an
   accepted prerequisite is a duplicate before the raise, is refused for an
   acceptance from before the raise or by the tracker, and ties it after a
-  person accepts again.
+  person accepts again. `core/tests/work_format_7.jsonl` flags and unflags
+  items, with a `flagged` before the raise that the fold refuses;
+  `core/tests/work_replay.rs` checks each step and that older logs have no
+  flagged item.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

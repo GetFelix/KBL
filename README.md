@@ -47,6 +47,7 @@ work on a backlog that never ends:
 - Let any MCP host (Claude Code, the Claude Agent SDK, another vendor's) ask for the next item it can start, through `kbl-mcp`
 - Let agents triage, split and add context as work they claim, with children bounded by a budget per root
 - Accept, edit or reject an agent's proposal, or answer its question, from the dashboard
+- Read items and an item's history, and move an item into or out of Needs you, through the tracker's REST API with your own token
 - Open a fix's decision replay: scrub through what the agent decided, with the fields it recorded and the steps behind them
 - Redo from a past decision as new work, with your note, without touching the first attempt
 

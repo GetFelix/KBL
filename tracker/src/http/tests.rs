@@ -285,6 +285,160 @@ async fn a_token_pasted_in_a_note_is_cut_before_the_write() {
     assert!(!log.iter().any(|p| p.contains(&secret)));
 }
 
+/// A team whose Felix keeps what is published, so a reread finds it.
+async fn kept() -> Router {
+    let felix = Quiet::default();
+    felix.keeps.store(true, Ordering::SeqCst);
+    let tokens = r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"},"ingest":{}}"#;
+    let one = team("default", felix, tokens, 64).await;
+    router(Arc::new(Teams::new(vec![one]).unwrap()))
+}
+
+async fn raise_to(app: &Router, to: u32) {
+    let raise = json!({ "record": { "kind": "format_raised", "to": to } });
+    let (status, reply) = call(app, "/v1/work/records", Some("tok-gab"), raise).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+}
+
+#[tokio::test]
+async fn a_person_reads_items_one_item_and_its_history() {
+    let app = kept().await;
+    for item in ["a1", "a2"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+    }
+    call(
+        &app,
+        "/v1/work/proposals/accept",
+        Some("tok-gab"),
+        json!({ "item": "a1", "tier": 2 }),
+    )
+    .await;
+    call(
+        &app,
+        "/v1/work/note",
+        Some("tok-gab"),
+        json!({ "item": "a1", "text": { "text": "look at the cache" } }),
+    )
+    .await;
+
+    let (status, all) = get_json(&app, "/v1/work/items", Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    let ids: Vec<&str> = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["item"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["a1", "a2"]);
+    assert_eq!(all["items"][0]["stage"], "ready");
+    assert_eq!(all["items"][0]["tier"], 2);
+
+    let (_, triage) = get_json(&app, "/v1/work/items?stage=triage", Some("tok-gab")).await;
+    assert_eq!(triage["items"].as_array().unwrap().len(), 1);
+    assert_eq!(triage["items"][0]["item"], "a2");
+    let (status, _) = get_json(&app, "/v1/work/items?stage=nope", Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (status, one) = get_json(&app, "/v1/work/items/a1", Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert_eq!(
+        (one["item"]["id"].as_str(), one["stage"].as_str()),
+        (Some("a1"), Some("ready"))
+    );
+
+    let (status, h) = get_json(&app, "/v1/work/items/a1/history", Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{h}");
+    let kinds: Vec<&str> = h["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["record"]["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["imported", "accepted", "human_input"]);
+    assert_eq!(h["records"][2]["record"]["by"], "gab");
+    assert_eq!(h["next"], Value::Null);
+    // From an offset on, the older records are left out.
+    let from = h["records"][1]["offset"].as_u64().unwrap();
+    let (_, later) = get_json(
+        &app,
+        &format!("/v1/work/items/a1/history?from={from}"),
+        Some("tok-gab"),
+    )
+    .await;
+    assert_eq!(later["records"].as_array().unwrap().len(), 2);
+
+    let (status, missing) = get_json(&app, "/v1/work/items/zz/history", Some("tok-gab")).await;
+    assert_eq!(
+        (status, missing["why"].as_str()),
+        (StatusCode::CONFLICT, Some("unknown_item"))
+    );
+    for path in [
+        "/v1/work/items",
+        "/v1/work/items/a1",
+        "/v1/work/items/a1/history",
+    ] {
+        assert_eq!(
+            get_json(&app, path, Some("tok-w1")).await.0,
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+        assert_eq!(
+            get_json(&app, path, None).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_person_moves_an_item_into_needs_you_and_out_once_the_log_is_at_format_7() {
+    let app = kept().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    call(
+        &app,
+        "/v1/work/proposals/accept",
+        Some("tok-gab"),
+        json!({ "item": "a1" }),
+    )
+    .await;
+    let flag = json!({ "item": "a1" });
+
+    // Format 7 is not raised yet: nothing moves.
+    let (status, reply) = call(&app, "/v1/work/flag", Some("tok-gab"), flag.clone()).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("format"))
+    );
+
+    raise_to(&app, 7).await;
+    let (status, reply) = call(&app, "/v1/work/flag", Some("tok-gab"), flag.clone()).await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("flagged")),
+        "{reply}"
+    );
+    let (_, one) = get_json(&app, "/v1/work/items/a1", Some("tok-gab")).await;
+    assert_eq!(
+        (one["stage"].as_str(), one["needs"].as_str()),
+        (Some("needs_you"), Some("flagged"))
+    );
+
+    let (status, reply) = call(&app, "/v1/work/flag", Some("tok-gab"), flag.clone()).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("no_change"))
+    );
+    let (status, _) = call(&app, "/v1/work/unflag", Some("tok-gab"), flag.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, one) = get_json(&app, "/v1/work/items/a1", Some("tok-gab")).await;
+    assert_eq!(one["stage"], "ready");
+    let (status, reply) = call(&app, "/v1/work/unflag", Some("tok-gab"), flag).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("no_change"))
+    );
+}
+
 #[tokio::test]
 async fn a_lost_claim_is_a_conflict_with_a_reason() {
     let app = app().await;
@@ -396,6 +550,8 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
         ),
         ("/v1/work/close", json!({ "item": "a1" })),
         ("/v1/work/unlink", json!({ "item": "a1", "to": "a2" })),
+        ("/v1/work/flag", json!({ "item": "a1" })),
+        ("/v1/work/unflag", json!({ "item": "a1" })),
         (
             "/v1/work/budget",
             json!({ "root": "a1", "items_left": 1, "max_depth": 1, "cost_left_micros": 1, "redos_per_item": 1 }),

@@ -285,6 +285,21 @@ record if the fold accepts it:
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
 | `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` (`text` is a string) | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |
+| `POST /v1/work/flag` `{item}` | `flagged` with `flagged: true`: the item moves to Needs you and is not handed out. See [Flagging an item for a person](#flagging-an-item-for-a-person) |
+| `POST /v1/work/unflag` `{item}` | `flagged` with `flagged: false`: the item leaves Needs you, unless it waits there for another reason |
+
+A person's token can also read the team's work. These calls write nothing:
+
+| Call | Answers with |
+|---|---|
+| `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
+| `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
+| `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and links that point at it. At most 500 per answer; `next` is the offset to pass as `?from=` for the rest, or null. A record the fold refused carries `rejected` with the reason |
+
+An unknown item answers `409` with `why: unknown_item`, like the agent calls.
+The other calls in this section follow the same rules as the agent tools: the
+fold checks each record before it is appended, and a refusal is a `409` with a
+`why`.
 
 Ready records carry a stamp. When the tracker sees an item become Ready it
 publishes a record, and a record that is not the newest for its item (a tier
@@ -343,6 +358,24 @@ connection's first poll, so each active agent has a QUIC connection of its own
 to the broker, opened on its first call and closed after ten minutes without
 one. A connection that fails is opened again with a fresh token on the next
 call.
+
+#### Flagging an item for a person
+
+`POST /v1/work/flag` moves an open item to Needs you by hand, for example to
+hold it while you think it over, or because it needs something only a person
+can give. Agents do not get it from `work_next` until a person calls
+`POST /v1/work/unflag`. Its reason in Needs you is `flagged`.
+
+- If an agent holds the item, the agent keeps it. The item stops in Needs you
+  once the attempt finishes or is released.
+- If the item also waits for another reason (a question, a failed check, a
+  budget), that reason is the one shown. Unflag clears only the flag; the
+  other reason still needs its own answer.
+- Flagging a flagged item, or unflagging one that is not flagged, is refused
+  with `no_change`, so a call that moved nothing says so. A closed item is
+  refused with `closed`. Reopening an item clears the flag.
+- `flagged` is a record of [format 7](upgrades.md#formats). Until a person
+  raises the log to 7, both calls are refused with `format`.
 
 ### One agent token per session
 

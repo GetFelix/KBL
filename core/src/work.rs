@@ -43,8 +43,12 @@ pub const FORMAT_V5: u32 = 5;
 /// or field.
 pub const FORMAT_V6: u32 = 6;
 
+/// The format that added `flagged`: a person moves an item into or out of
+/// Needs you.
+pub const FORMAT_V7: u32 = 7;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V6;
+pub const FORMAT: u32 = FORMAT_V7;
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer
@@ -698,6 +702,10 @@ pub enum WorkRecord {
     /// still belongs: `left_scope` is cleared and the item goes back to its
     /// stage. Format 2.
     ReturnedToScope { item: ItemId },
+    /// A person moves an open item into Needs you (`flagged: true`), so it is
+    /// not handed out until a person moves it back out (`flagged: false`). A
+    /// holder finishes or releases first. Format 7.
+    Flagged { item: ItemId, flagged: bool },
     /// The upstream issue was reopened: the same root goes back to Triage with
     /// its history and its remaining budget.
     Reopened { item: ItemId },
@@ -798,6 +806,7 @@ impl WorkRecord {
             WorkRecord::Updated { .. } => "updated",
             WorkRecord::LeftScope { .. } => "left_scope",
             WorkRecord::ReturnedToScope { .. } => "returned_to_scope",
+            WorkRecord::Flagged { .. } => "flagged",
             WorkRecord::Reopened { .. } => "reopened",
             WorkRecord::AttemptClosed { .. } => "attempt_closed",
             WorkRecord::TierChanged { .. } => "tier_changed",
@@ -845,6 +854,7 @@ impl WorkRecord {
             | WorkRecord::Updated { item, .. }
             | WorkRecord::LeftScope { item }
             | WorkRecord::ReturnedToScope { item }
+            | WorkRecord::Flagged { item, .. }
             | WorkRecord::Reopened { item }
             | WorkRecord::AttemptClosed { item, .. }
             | WorkRecord::TierChanged { item, .. }
@@ -879,6 +889,7 @@ impl WorkRecord {
         match self {
             WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V2),
             WorkRecord::ReturnedToScope { .. } => FORMAT_V2,
+            WorkRecord::Flagged { .. } => FORMAT_V7,
             WorkRecord::Prerequisite {
                 triage: Some(_), ..
             } => FORMAT_V3,

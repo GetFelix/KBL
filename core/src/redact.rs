@@ -853,6 +853,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::Rejected { .. }
         | WorkRecord::LeftScope { .. }
         | WorkRecord::ReturnedToScope { .. }
+        | WorkRecord::Flagged { .. }
         | WorkRecord::Reopened { .. }
         | WorkRecord::AttemptClosed { .. }
         | WorkRecord::TierChanged { .. }

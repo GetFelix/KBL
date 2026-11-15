@@ -4,8 +4,8 @@
 
 use kbl_core::codec::Codec;
 use kbl_core::work::{
-    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, ReadError,
-    WorkLogged, WorkRecord, read,
+    Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
+    ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -817,4 +817,42 @@ fn the_target_repo_matches_without_case_at_format_6() {
 "#;
     let s = fold(&entries(&format!("{FORMAT_6_LOG}{more}")));
     assert_eq!(imported_as(&s, "g2"), vec!["getfelix/FELIX-gateway#43"]);
+}
+
+/// A log that raises to the seventh format and flags items. Its folded state
+/// is pinned in `wasm/golden/format_7.state.json`; `work_replay.rs` checks it.
+const FORMAT_7_LOG: &str = include_str!("work_format_7.jsonl");
+
+#[test]
+fn the_seventh_format_is_seven_and_names_its_kinds() {
+    assert_eq!(FORMAT_V7, 7);
+    const { assert!(FORMAT >= FORMAT_V7) };
+    let mut seen: Vec<&str> = entries(FORMAT_7_LOG)
+        .iter()
+        .filter(|(_, r)| r.v == FORMAT_V7 && r.record.kind() != "format_raised")
+        .map(|(_, r)| {
+            assert_eq!(r.record.format(), FORMAT_V7, "{}", r.record.kind());
+            r.record.kind()
+        })
+        .collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen, ["flagged"]);
+}
+
+#[test]
+fn a_flagged_record_is_written_with_its_format() {
+    let rec = WorkLogged::new(
+        7,
+        kbl_core::names::Key::new("gabriel").unwrap(),
+        Actor::Person,
+        WorkRecord::Flagged {
+            item: kbl_core::names::ItemId::new("r1").unwrap(),
+            flagged: true,
+        },
+    );
+    assert_eq!(
+        String::from_utf8(rec.encode()).unwrap(),
+        r#"{"v":7,"at_ms":7,"by":"gabriel","actor":"person","kind":"flagged","item":"r1","flagged":true}"#
+    );
 }

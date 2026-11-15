@@ -21,6 +21,7 @@ export const NEEDS: Readonly<Record<string, string>> = {
   no_open_attempt: 'No attempt is open',
   left_scope: 'The issue left its intake rule',
   check_failed: 'A check failed',
+  flagged: 'A person moved it here',
 };
 
 export function needsText(needs: string | null | undefined): string {

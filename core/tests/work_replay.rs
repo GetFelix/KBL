@@ -146,3 +146,65 @@ fn a_context_entry_an_agent_wrote_is_kept_with_its_writer() {
     let back: State = serde_json::from_value(json).unwrap();
     assert_eq!(back, end);
 }
+
+/// A log at format 7, where a person moves items into and out of Needs you.
+/// Its folded state is pinned in `wasm/golden/format_7.state.json`.
+#[test]
+fn a_flagged_item_waits_in_needs_you_until_a_person_moves_it_out() {
+    use kbl_core::work_fold::{NeedsYou, Rejection};
+    let log: Vec<_> = include_str!("work_format_7.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let r1 = ItemId::new("r1").unwrap();
+    let r2 = ItemId::new("r2").unwrap();
+
+    // Before the raise the record is refused and nothing moves.
+    let before = kbl_core::work_fold::fold(&log[..6]);
+    assert_eq!(stage(&before, "r1"), Stage::Ready);
+
+    let flagged = kbl_core::work_fold::fold(&log[..8]);
+    assert_eq!(flagged.needs_you(&r1), Some(NeedsYou::Flagged));
+    assert_eq!(stage(&flagged, "r1"), Stage::NeedsYou);
+
+    // A holder finishes first: the item stops once the attempt is done.
+    let held = kbl_core::work_fold::fold(&log[..11]);
+    assert_eq!(stage(&held, "r2"), Stage::Held);
+    let done = kbl_core::work_fold::fold(&log[..12]);
+    assert_eq!(done.needs_you(&r2), Some(NeedsYou::Flagged));
+
+    let end = kbl_core::work_fold::fold(&log);
+    assert_eq!(stage(&end, "r1"), Stage::Ready);
+    assert!(!end.items[&r1].flagged);
+    assert!(end.items[&r2].flagged);
+    let why = |offset, why| Rejection { offset, why };
+    assert_eq!(
+        end.rejections,
+        vec![
+            why(5, Reject::Format),
+            why(8, Reject::ActorNotAllowed),
+            why(13, Reject::NoChange),
+            why(14, Reject::Format),
+        ]
+    );
+}
+
+/// Logs from before format 7 fold with no item flagged, and their states
+/// serialize without the field.
+#[test]
+fn an_old_log_has_no_flagged_items() {
+    for log in [
+        include_str!("work_pre_prerequisite.jsonl"),
+        include_str!("work_format_6.jsonl"),
+    ] {
+        let entries: Vec<_> = log
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+            .collect();
+        let s = kbl_core::work_fold::fold(&entries);
+        assert!(s.items.values().all(|i| !i.flagged));
+        assert!(!serde_json::to_string(&s).unwrap().contains("flagged"));
+    }
+}
