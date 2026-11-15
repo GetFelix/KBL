@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 kbl-core = { path = "../core" }
 anyhow = "=1.0.100"
-axum = { version = "=0.8.8", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "=0.8.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 bytes = "=1.12.1"
 clap = { version = "=4.5.51", features = ["derive", "env"] }
 felix-client = "=0.6.2"

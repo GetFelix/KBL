@@ -170,6 +170,8 @@ pub enum NeedsYou {
     CheckFailed,
     /// Triage could not settle what the item is, which `Item::ask` says.
     Unclear,
+    /// A person moved it here with `flagged`.
+    Flagged,
 }
 
 /// What the open question offers, kept so an answer can be checked and the
@@ -354,6 +356,9 @@ pub struct Item {
     /// it back. Derived from the log, so it survives a lost ingest state.
     #[serde(default, skip_serializing_if = "is_false")]
     pub left_scope_by_sync: bool,
+    /// A person moved it into Needs you. Cleared by `flagged: false` or a reopen.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flagged: bool,
     pub accepted: bool,
     /// A person wrote the last `accepted` on a log at format 6 or above.
     /// An earlier acceptance does not count, so a format 5 state is unchanged.
@@ -485,6 +490,8 @@ pub enum Reject {
     /// The record's format is above the log's, below what its content needs,
     /// or above what this build reads; or a raise that does not go up.
     Format,
+    /// A `flagged` record that would leave the item as it is.
+    NoChange,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -800,6 +807,10 @@ impl State {
                 Some(_) => {}
             }
         }
+        // Last, so an item that also waits for another reason shows that one.
+        if it.flagged && it.hold.is_none() {
+            return Some(NeedsYou::Flagged);
+        }
         None
     }
 
@@ -1050,6 +1061,7 @@ impl State {
             proposed_from: None,
             changed_upstream: false,
             left_scope: false,
+            flagged: false,
             left_scope_by_sync: false,
             accepted: false,
             accepted_by_person: false,
@@ -1777,6 +1789,22 @@ impl State {
                 it.left_scope = false;
                 it.left_scope_by_sync = false;
             }
+            WorkRecord::Flagged { item, flagged } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item_mut(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // Refused rather than kept as a no-op, so "move it out" on an item
+                // that waits for another reason says it did nothing. An item nobody
+                // accepted waits for a person in Triage already.
+                if it.flagged == *flagged || (*flagged && !it.accepted) {
+                    return Err(Reject::NoChange);
+                }
+                it.flagged = *flagged;
+            }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
@@ -1798,6 +1826,7 @@ impl State {
                 it.accepted_by_person = false;
                 it.left_scope = false;
                 it.left_scope_by_sync = false;
+                it.flagged = false;
                 it.changed_upstream = true;
                 it.proposal = None;
             }

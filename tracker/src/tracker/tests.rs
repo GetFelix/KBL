@@ -26,6 +26,8 @@ struct Net {
     /// Publishes to the stream that still succeed, then every one fails.
     publish_budget: Option<(String, u32)>,
     fail_reads: bool,
+    /// Most records one `read_page` answers, like Felix's read cap. None reads all.
+    page_size: Option<usize>,
     extend_stale: bool,
     /// The writer lease key: holder and version, while it is live.
     lease: Option<(Vec<u8>, u64)>,
@@ -61,6 +63,10 @@ pub(super) struct Fake {
 }
 
 impl Fake {
+    pub(super) fn page_size(&self, size: usize) {
+        self.net.lock().unwrap().page_size = Some(size);
+    }
+
     fn reconnect(&self) -> Fake {
         Fake {
             net: self.net.clone(),
@@ -156,7 +162,7 @@ impl Fake {
         self.net.lock().unwrap().dead.insert(member.to_owned());
     }
 
-    fn forgets(&self) -> Vec<Option<String>> {
+    pub(super) fn forgets(&self) -> Vec<Option<String>> {
         self.net.lock().unwrap().forgets.clone()
     }
 
@@ -307,6 +313,17 @@ impl Broker for Fake {
             .get(stream)
             .map(|v| v.iter().filter(|(o, _)| *o >= from).cloned().collect())
             .unwrap_or_default())
+    }
+
+    async fn read_page(&self, stream: &str, from: u64) -> anyhow::Result<crate::felix::Page> {
+        let all = self.read_from(stream, from).await?;
+        let Some(size) = self.net.lock().unwrap().page_size else {
+            return Ok((all, None));
+        };
+        // Like Felix: a page names the offset after it, and an empty page is the tip.
+        let page: Vec<_> = all.into_iter().take(size).collect();
+        let next = page.last().map(|(o, _)| o + 1);
+        Ok((page, next))
     }
 
     async fn poll(

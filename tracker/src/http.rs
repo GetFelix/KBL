@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{FromRequestParts, Request, State};
+use axum::extract::{FromRequestParts, Path, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
@@ -22,6 +22,7 @@ use kbl_core::work::{
     CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, RevertCheck,
     Severity, Target, Unclear, WorkRecord,
 };
+use kbl_core::work_fold::Stage;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::sync::OwnedSemaphorePermit;
@@ -103,11 +104,16 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/budget", post(budget::<B>))
         .route("/v1/work/rules", post(rules::<B>))
         .route("/v1/work/rules/read", post(rules_read::<B>))
+        .route("/v1/work/flag", post(flag::<B>))
+        .route("/v1/work/unflag", post(unflag::<B>))
+        .route("/v1/work/items", get(items::<B>))
+        .route("/v1/work/items/{item}", get(item::<B>))
+        .route("/v1/work/items/{item}/history", get(history::<B>))
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
 /// work and ingest routes have a team form; the agent routes exist only here.
-async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, mut req: Request) -> Response {
+async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, req: Request) -> Response {
     // The raw path, so a percent-encoded segment reaches the inner route as sent.
     let path = req.uri().path().to_owned();
     let Some((team, rest)) = path
@@ -130,8 +136,17 @@ async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, mut req: Request) ->
     let Ok(uri) = target.parse::<Uri>() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    req.extensions_mut().insert(TeamPath(team.to_owned()));
+    // A fresh request: the outer route's `team` and `rest` params sit in the
+    // extensions, and axum adds the inner route's to them, so a `Path` there
+    // would see three.
+    let team = TeamPath(team.to_owned());
+    let (parts, body) = req.into_parts();
+    let mut req = Request::new(body);
+    *req.method_mut() = parts.method;
     *req.uri_mut() = uri;
+    *req.version_mut() = parts.version;
+    *req.headers_mut() = parts.headers;
+    req.extensions_mut().insert(team);
     match work.oneshot(req).await {
         Ok(res) => res,
         Err(never) => match never {},
@@ -878,6 +893,58 @@ async fn rules<B: Broker>(call: Call<B>, Json(b): Json<RulesBody>) -> Response {
 async fn rules_read<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
     match call.agent() {
         Ok(a) => reply(call.tracker().rules_read(&a, &b.item).await),
+        Err(d) => denied(d),
+    }
+}
+
+async fn flag<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
+    let record = WorkRecord::Flagged {
+        item: b.item,
+        flagged: true,
+    };
+    as_person(&call, record).await
+}
+
+async fn unflag<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
+    let record = WorkRecord::Flagged {
+        item: b.item,
+        flagged: false,
+    };
+    as_person(&call, record).await
+}
+
+#[derive(Deserialize)]
+struct ItemsQuery {
+    stage: Option<Stage>,
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    #[serde(default)]
+    from: u64,
+}
+
+async fn items<B: Broker>(call: Call<B>, Query(q): Query<ItemsQuery>) -> Response {
+    match call.person() {
+        Ok(_) => reply(call.tracker().items(q.stage).await),
+        Err(d) => denied(d),
+    }
+}
+
+async fn item<B: Broker>(call: Call<B>, Path(id): Path<ItemId>) -> Response {
+    match call.person() {
+        Ok(_) => reply(call.tracker().item(&id).await),
+        Err(d) => denied(d),
+    }
+}
+
+async fn history<B: Broker>(
+    call: Call<B>,
+    Path(id): Path<ItemId>,
+    Query(q): Query<HistoryQuery>,
+) -> Response {
+    match call.person() {
+        Ok(_) => reply(call.tracker().history(&id, q.from).await),
         Err(d) => denied(d),
     }
 }

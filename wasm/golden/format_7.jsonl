@@ -1,0 +1,15 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix-blocks#1","title":"swap blocks atomically"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix-blocks#2","title":"rate limit the editor"}
+{"at_ms":1030,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"claimed","item":"r2","attempt":1,"deadline_ms":1800000090000}
+{"v":7,"at_ms":1050,"by":"gabriel","actor":"person","kind":"flagged","item":"r1","flagged":true}
+{"v":7,"at_ms":1060,"by":"gabriel","actor":"person","kind":"format_raised","to":7}
+{"v":7,"at_ms":1070,"by":"gabriel","actor":"person","kind":"flagged","item":"r1","flagged":true}
+{"v":7,"at_ms":1080,"by":"w1","actor":"agent","kind":"flagged","item":"r1","flagged":false}
+{"v":7,"at_ms":1090,"by":"gabriel","actor":"person","kind":"flagged","item":"r2","flagged":true}
+{"at_ms":1100,"by":"w1","actor":"agent","kind":"decision","item":"r2","attempt":1,"phase":"verify","so_far":"limit in, test added","question":"","chosen":"","why":"the test fails without the limit","commit":"9f3c2ab","revert_check":{"test":"the_editor_is_limited","failed_without_fix":true,"passed_with_fix":true}}
+{"at_ms":1110,"by":"w1","actor":"agent","kind":"done","item":"r2","attempt":1,"cost_micros":0}
+{"v":7,"at_ms":1120,"by":"gabriel","actor":"person","kind":"flagged","item":"r1","flagged":false}
+{"v":7,"at_ms":1130,"by":"gabriel","actor":"person","kind":"flagged","item":"r1","flagged":false}
+{"at_ms":1140,"by":"gabriel","actor":"person","kind":"flagged","item":"r2","flagged":false}

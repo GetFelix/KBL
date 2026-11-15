@@ -1273,6 +1273,40 @@ fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
 }
 
 #[test]
+fn a_flagged_item_is_not_claimed_and_a_reopen_unflags_it() {
+    let mut l = Log::default();
+    l.person(imported("t1"));
+    l.person(WorkRecord::FormatRaised { to: 7 });
+    // Not accepted: it waits for a person in Triage already.
+    l.person(WorkRecord::Flagged {
+        item: id("t1"),
+        flagged: true,
+    });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NoChange);
+    accepted_root(&mut l, "r1");
+    l.person(WorkRecord::Flagged {
+        item: id("r1"),
+        flagged: true,
+    });
+    l.agent("w1", claimed("r1", 1));
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().unwrap().why, Reject::NotReady);
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::Flagged));
+
+    l.person(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Dismissed,
+    });
+    l.person(WorkRecord::Flagged {
+        item: id("r1"),
+        flagged: false,
+    });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::Closed);
+    l.person(WorkRecord::Reopened { item: id("r1") });
+    assert!(!fold(&l.0).items[&id("r1")].flagged);
+}
+
+#[test]
 fn leaving_scope_stops_a_free_item_and_waits_for_a_holder() {
     let mut l = Log::default();
     accepted_root(&mut l, "r1");

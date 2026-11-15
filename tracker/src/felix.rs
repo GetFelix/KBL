@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use felix_client::{
-    AckMode, BrokerError, CacheCondition, Client, ClientConfig, ErrorCode, GroupMember,
-    GroupPollOptions, GroupRecord, StartPosition, quic_client_config, root_store_from_pem_file,
+    AckMode, BrokerError, CacheCondition, Client, ClientConfig, CursorErrorReason, ErrorCode,
+    GroupMember, GroupPollOptions, GroupRecord, StartPosition, SubscribeCursorError,
+    quic_client_config, root_store_from_pem_file,
 };
 use kbl_core::org::{ORG_EVENTS, ORG_TRACKER_CACHE};
 use kbl_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
@@ -60,6 +61,9 @@ pub(crate) enum ExtendError {
     Failed(anyhow::Error),
 }
 
+/// One page of a stream, and the offset after it (none at the tip).
+pub(crate) type Page = (Vec<(u64, Vec<u8>)>, Option<u64>);
+
 /// What the claim path needs from Felix, so its rules can be tested without a
 /// broker. Every stream has one shard.
 pub(crate) trait Broker: Clone + Send + Sync + 'static {
@@ -72,6 +76,13 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         stream: &str,
         from: u64,
     ) -> impl Future<Output = Result<Vec<(u64, Vec<u8>)>>> + Send;
+
+    /// One page of committed records from `from`, oldest first, and the
+    /// offset to read next, or none at the tip. A caller that stops early
+    /// does not read the rest of the stream.
+    fn read_page(&self, stream: &str, from: u64) -> impl Future<Output = Result<Page>> + Send {
+        async move { Ok((self.read_from(stream, from).await?, None)) }
+    }
 
     /// Takes at most one record for `member` without waiting. The first poll
     /// of a member reclaims what Felix still holds for that name, so each
@@ -459,6 +470,38 @@ impl Broker for Felix {
         self.forget_main(done).await
     }
 
+    async fn read_page(&self, stream: &str, from: u64) -> Result<Page> {
+        let done = async {
+            let client = self.main().await?;
+            let page = match placed(|| {
+                client.read(self.tenant(), self.namespace(), stream, 0, from, None, 0)
+            })
+            .await
+            {
+                Ok(page) => page,
+                // Felix refuses an offset past its tail; nothing is there yet,
+                // and the connection is fine.
+                Err(e) if past_the_tail(&e) => return Ok((Vec::new(), None)),
+                Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+            };
+            if page.records.is_empty() {
+                return Ok((Vec::new(), None));
+            }
+            anyhow::ensure!(
+                page.next_offset > from,
+                "reading {stream} did not advance past offset {from}"
+            );
+            let records = page
+                .records
+                .into_iter()
+                .map(|r| (r.offset, r.payload.to_vec()))
+                .collect();
+            Ok((records, Some(page.next_offset)))
+        }
+        .await;
+        self.forget_main(done).await
+    }
+
     async fn poll(
         &self,
         stream: &str,
@@ -677,6 +720,12 @@ where
     }
 }
 
+/// Whether Felix refused a read because the offset is past the stream's tail.
+fn past_the_tail(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<SubscribeCursorError>()
+        .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
+}
+
 fn is_not_ready(err: &anyhow::Error) -> bool {
     let text = format!("{err:#}");
     NOT_READY.iter().any(|marker| text.contains(marker))
@@ -701,3 +750,6 @@ fn string(body: &Value, field: &str) -> Result<String> {
         .map(str::to_owned)
         .with_context(|| format!("the reply has no `{field}`"))
 }
+
+#[cfg(test)]
+mod tests;
