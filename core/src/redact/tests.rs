@@ -803,3 +803,75 @@ fn new_shapes_stay_linear() {
         assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
     }
 }
+
+fn mixed(n: usize) -> String {
+    "aB3xQ9Zk".repeat(n / 8 + 1)[..n].to_string()
+}
+
+#[test]
+fn first_line_length_boundaries_with_no_end() {
+    let hdr = "-----BEGIN PRIVATE KEY-----";
+    // 31 bytes is a word or hash, kept; 32 bytes of mixed classes is a key.
+    let l31 = mixed(31);
+    assert_eq!(
+        redact(&format!("{hdr}\n{l31}\nok")),
+        format!("[redacted]\n{l31}\nok")
+    );
+    assert_eq!(
+        redact(&format!("{hdr}\n{}\nok", mixed(32))),
+        "[redacted]\nok"
+    );
+    // Current behaviour: a 32 to 63 byte line with 3 classes is cut. That
+    // over-redacts one line after a key header, it never leaks one.
+    assert_eq!(
+        redact(&format!("{hdr}\n{}\nok", mixed(63))),
+        "[redacted]\nok"
+    );
+}
+
+#[test]
+fn full_line_length_boundaries_with_no_end() {
+    let hdr = "-----BEGIN PRIVATE KEY-----";
+    // Current behaviour: 64 to 71 bytes count as a body line, 72 does not.
+    for n in [64, 65, 70, 71] {
+        let text = format!("{hdr}\n{}\nAB12cd==\nok", mixed(n));
+        assert_eq!(redact(&text), "[redacted]\nok", "{n}");
+    }
+    let l72 = mixed(72);
+    assert_eq!(
+        redact(&format!("{hdr}\n{l72}\nok")),
+        format!("[redacted]\n{l72}\nok")
+    );
+    // A diff marker makes a 70 byte line 71 on the page.
+    let text = format!("{hdr}\n-{}\n-AB12cd==\nok", mixed(70));
+    assert_eq!(redact(&text), "[redacted]\nok");
+}
+
+#[test]
+fn a_continued_body_with_crlf_is_cut() {
+    let text = format!(
+        "\"-----BEGIN PRIVATE KEY-----\\n\\\r\n    {BODY}\\n\\\r\n    AB12cd==\\n\\\r\n    -----END PRIVATE KEY-----\" x"
+    );
+    assert_eq!(redact(&text), "\"[redacted]\" x");
+}
+
+#[test]
+fn stuck_asia_ids_mixed_ids_and_three_jwts_are_cut_whole() {
+    let asia = fake("ASIA", "A1B2", 4);
+    let akia = fake("AKIA", "A1B2", 4);
+    assert_eq!(redact(&format!("k={asia}{asia} z")), "k=[redacted] z");
+    assert_eq!(redact(&format!("k={akia}{asia} z")), "k=[redacted] z");
+    assert_eq!(redact(&format!("k={asia}{akia}{asia} z")), "k=[redacted] z");
+    let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.AbCdEfGhIjKlMnOpQrSt";
+    assert_eq!(redact(&format!("t={jwt}{jwt}{jwt} z")), "t=[redacted] z");
+}
+
+#[test]
+fn triple_escaped_bodies_are_not_cut_whole() {
+    // Only one and two levels of escaping are handled; the header goes and
+    // the body stays.
+    let text = format!("-----BEGIN PRIVATE KEY-----\\\\\\n{BODY}\\\\\\nok");
+    let out = redact(&text);
+    assert!(out.starts_with("[redacted]"), "{out}");
+    assert!(out.contains(BODY), "{out}");
+}
