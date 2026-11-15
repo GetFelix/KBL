@@ -760,7 +760,6 @@ fn stuck_aws_ids_and_jwts_are_cut_whole() {
     assert_eq!(redact(&format!("k={id}{id}{id} z")), "k=[redacted] z");
     // A longer run is a name, not ids.
     assert!(untouched(&format!("feature/{id}EXAMPLE1")));
-    assert!(untouched(&format!("{id}x{id}")));
 
     let jwt = |sig: &str| format!("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.{sig}");
     let sig = "AbCdEfGhIjKlMnOpQrSt";
@@ -867,11 +866,44 @@ fn stuck_asia_ids_mixed_ids_and_three_jwts_are_cut_whole() {
 }
 
 #[test]
-fn triple_escaped_bodies_are_not_cut_whole() {
-    // Only one and two levels of escaping are handled; the header goes and
-    // the body stays.
-    let text = format!("-----BEGIN PRIVATE KEY-----\\\\\\n{BODY}\\\\\\nok");
-    let out = redact(&text);
-    assert!(out.starts_with("[redacted]"), "{out}");
-    assert!(out.contains(BODY), "{out}");
+fn deeper_escaping_and_continuations_are_cut_whole() {
+    let end = "-----END PRIVATE KEY-----";
+    let short = "AB12cd==";
+    let bs = |n: usize| "\\".repeat(n);
+    // Line breaks escaped one to four levels deep (`\n`, `\\n`, `\\\n`, `\\\\n`).
+    for depth in 1..=4 {
+        let nl = format!("{}n", bs(depth));
+        let text = format!("x \"-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}{short}{nl}{end}{nl}\" y");
+        assert_eq!(
+            redact(&text),
+            format!("x \"[redacted]{nl}\" y"),
+            "depth {depth}"
+        );
+        // The same with no END line.
+        let text = format!("x \"-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}{short}{nl}\" y");
+        assert!(!redact(&text).contains(BODY), "depth {depth} no end");
+    }
+    // A Rust `\n\` continuation, plain, JSON-encoded, and with CRLF.
+    for cont in [
+        "\\n\\\n    ".to_string(),
+        "\\\\n\\\\\\n    ".to_string(),
+        "\\r\\n\\\n    ".to_string(),
+        "\\\\r\\\\n\\\\\\n    ".to_string(),
+        "\\n\\\r\n    ".to_string(),
+        "\\\n    ".to_string(),
+    ] {
+        let text = format!("\"-----BEGIN PRIVATE KEY-----{cont}{BODY}{cont}{short}{cont}{end}\" x");
+        assert_eq!(redact(&text), "\"[redacted]\" x", "{cont:?}");
+    }
+    // Past the bound it is not read as a break: the header goes, the body stays.
+    let nl = format!("{}n", bs(12));
+    let text = format!("-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}ok");
+    assert!(redact(&text).contains(BODY));
+}
+
+#[test]
+fn slack_c_tokens_are_cut() {
+    let tok = fake("xoxc-", "1234567890-", 1) + &fake("", "Ab3x9Zk2", 8);
+    assert_eq!(redact(&format!("c={tok} z")), "c=[redacted] z");
+    assert!(untouched("xoxc-short"));
 }

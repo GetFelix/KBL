@@ -295,6 +295,7 @@ const SHAPES: &[Shape] = &[
     slack_shape("xapp-", 20),
     slack_shape("xoxa-", 10),
     slack_shape("xoxb-", 10),
+    slack_shape("xoxc-", 10),
     slack_shape("xoxp-", 10),
     slack_shape("xoxr-", 10),
     slack_shape("xoxs-", 10),
@@ -769,20 +770,55 @@ fn pem_gap(s: &[u8]) -> (usize, bool) {
 }
 
 fn line_break(s: &[u8]) -> Option<usize> {
-    // Escaped once or twice, or the `\n\` that continues a Rust string.
-    [
-        "\r\n",
-        "\n",
-        "\\\\r\\\\n",
-        "\\\\n",
-        "\\n\\\r\n",
-        "\\n\\\n",
-        "\\r\\n",
-        "\\n",
-    ]
-    .iter()
-    .find(|b| s.starts_with(b.as_bytes()))
-    .map(|b| b.len())
+    let one = escaped_break(s)?;
+    // `\n\` then a real newline continues a Rust string: one break, not two.
+    // Only after an escape, so a blank line stays a blank line.
+    if s[0] == b'\\'
+        && s.get(one) == Some(&b'\\')
+        && let Some(more) = escaped_break(&s[one..])
+    {
+        return Some(one + more);
+    }
+    Some(one)
+}
+
+/// Longest run of backslashes read as escaping in front of a line break.
+const MAX_ESCAPES: usize = 8;
+
+/// A line break as text carries it: a real one, `\n` or `\r\n` with any
+/// bounded depth of escaping (JSON inside JSON), or backslash then a real
+/// newline.
+fn escaped_break(s: &[u8]) -> Option<usize> {
+    if s.starts_with(b"\r\n") {
+        return Some(2);
+    }
+    if s.starts_with(b"\n") {
+        return Some(1);
+    }
+    let slashes = |s: &[u8]| {
+        s.iter()
+            .take(MAX_ESCAPES + 1)
+            .take_while(|b| **b == b'\\')
+            .count()
+    };
+    let bs = slashes(s);
+    if bs == 0 || bs > MAX_ESCAPES {
+        return None;
+    }
+    let rest = &s[bs..];
+    if rest.starts_with(b"\r\n") {
+        return Some(bs + 2);
+    }
+    if rest.starts_with(b"\n") || rest.first() == Some(&b'n') {
+        return Some(bs + 1);
+    }
+    if rest.first() == Some(&b'r') {
+        let more = slashes(&rest[1..]);
+        if more > 0 && more <= MAX_ESCAPES && rest.get(1 + more) == Some(&b'n') {
+            return Some(bs + 1 + more + 1);
+        }
+    }
+    None
 }
 
 fn redact_in(s: &mut String) {
