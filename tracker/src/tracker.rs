@@ -1669,6 +1669,7 @@ impl<B: Broker> Tracker<B> {
         let mut delivery = slot.lock().await;
         if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
             let core = self.0.core.lock().await;
+            self.recall_current()?;
             return replay(&core, agent, item, which, kind, reply).ok_or_else(|| lapsed(item));
         }
         let mut ops = Vec::new();
@@ -1682,7 +1683,10 @@ impl<B: Broker> Tracker<B> {
             };
             let held = match held {
                 Ok(held) => held,
-                Err(e) => return replay(&core, agent, item, which, kind, reply).ok_or(e),
+                Err(e) => {
+                    self.recall_current()?;
+                    return replay(&core, agent, item, which, kind, reply).ok_or(e);
+                }
             };
             core.published.remove(item);
             offset = self
@@ -1718,6 +1722,17 @@ impl<B: Broker> Tracker<B> {
         let mut reply = reply;
         reply["offset"] = offset.into();
         Ok(with_warning(reply, warning))
+    }
+
+    /// Called under `core` before a replay. A write whose reply was lost leaves
+    /// the state showing its record but the claim index without it, until the
+    /// rebuild; a retry that passed `begin` before then must not be told `lost`.
+    fn recall_current(&self) -> Result<(), Error> {
+        let lease = self.lease();
+        if lease.stale || lease.retaken {
+            return Err(Error::Unavailable("the state is being rebuilt".into()));
+        }
+        Ok(())
     }
 
     /// The fold is the truth for holds. If it no longer shows `agent` holding what

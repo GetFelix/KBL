@@ -346,3 +346,43 @@ async fn a_call_naming_another_claim_is_lost() {
     assert_eq!(fake.kinds(), kinds);
     assert!(t.extend(&agent("w2"), &item("a1")).await.is_ok());
 }
+
+#[tokio::test]
+async fn a_retry_racing_a_write_whose_reply_was_lost_waits_for_the_rebuild() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let attempt = claim_attempt(&t, &fake, "w1").await;
+    let which = Some(Which::Attempt(attempt));
+    // The first call's record lands and its write waits; its reply is lost.
+    fake.hold_next_publish();
+    fake.lose_next_publish_reply(WORK_EVENTS);
+    let first = tokio::spawn({
+        let t = t.clone();
+        async move { end(&t, "done", "w1", which).await }
+    });
+    let landed = fake.log().len();
+    while fake.log().len() == landed {
+        tokio::task::yield_now().await;
+    }
+    // The retry passes `begin` before the lost reply marks the state stale,
+    // then waits behind the first call for the agent's slot.
+    let retry = tokio::spawn({
+        let t = t.clone();
+        async move { end(&t, "done", "w1", which).await }
+    });
+    for _ in 0..50 {
+        tokio::task::yield_now().await;
+    }
+    fake.open_gate();
+    assert!(first.await.unwrap().is_err());
+    // The state shows the hold ended but the claim index has not seen the
+    // record: the retry must not be told its claim was lost.
+    let r = retry.await.unwrap();
+    assert!(matches!(r, Err(Error::Unavailable(_))), "{r:?}");
+    let again = end(&t, "done", "w1", which).await.unwrap();
+    assert_eq!(
+        (&again["replayed"], &again["offset"]),
+        (&json!(true), &json!(last(&fake))),
+    );
+}

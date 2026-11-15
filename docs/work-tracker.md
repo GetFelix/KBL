@@ -180,7 +180,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 |---|---|---|
 | `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item, its `attempt` and the `claimed` record's `offset`. An agent that already holds one gets it again, marked `resumed` |
 | `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed; `503` means the tracker could not confirm its lease, so call again. After a `stale_claim` that check renews the lease, possibly twice and behind a renewal already running, each lease call giving up after 3 seconds, so with a slow Felix the `503` can take tens of seconds |
-| `POST /v1/work/complete` `{item, claim?, attempt?, usage}` | agent | Writes `done`, then acks. Answers with the record's `offset` |
+| `POST /v1/work/complete` `{item, claim?, attempt?, usage}` | agent | Writes `done`, then acks. Answers with the record's `offset`. A retry that lands while the tracker rebuilds after a lost reply gets `503`, so call again |
 | `POST /v1/work/release` `{item, claim?, attempt?, reason, usage}` | agent | Writes `released`, then hands the delivery back. Answers with the record's `offset` |
 | `POST /v1/work/give_up` `{item, claim?, attempt?, reason, usage}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries. Answers with the record's `offset` |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
