@@ -883,18 +883,17 @@ impl<B: Broker> Tracker<B> {
             Some((target, title)) => Then::Prerequisite { target, title },
             None => Then::Resume,
         };
-        self.person_record(
-            person,
-            WorkRecord::Answer {
-                item: item.clone(),
-                question,
-                text,
-                evidence,
-                chosen,
-                then: Some(then),
-            },
-        )
-        .await
+        let mut record = WorkRecord::Answer {
+            item: item.clone(),
+            question,
+            text,
+            evidence,
+            chosen,
+            then: Some(then),
+        };
+        // People paste tokens too. `chosen` is cut the same way the options were.
+        kbl_core::redact::redact_record(&mut record);
+        self.person_record(person, record).await
     }
 
     /// Writes a record that names the attempt the agent is on, found from the log.

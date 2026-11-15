@@ -543,6 +543,34 @@ async fn secrets_in_what_an_agent_reports_are_redacted_before_the_write() {
 }
 
 #[tokio::test]
+async fn a_token_in_a_persons_answer_is_cut_before_the_write() {
+    let (fake, t) = held().await;
+    let (a, a1) = (agent("w1"), item("a1"));
+    let q = t
+        .ask(&a, &a1, text("which key?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "y".repeat(36));
+    t.person_answer(
+        key("gab"),
+        &a1,
+        Some(q),
+        text(&format!("use {secret}")),
+        vec![],
+        Reply::default(),
+    )
+    .await
+    .unwrap();
+    let WorkRecord::Answer { text: said, .. } = fake.log().pop().unwrap().record else {
+        panic!("not an answer")
+    };
+    assert_eq!(said, text("use [redacted]"));
+}
+
+#[tokio::test]
 async fn evidence_must_cite_a_record_of_the_same_tree() {
     let (fake, t) = held().await;
     let a = agent("w1");

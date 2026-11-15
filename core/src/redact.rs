@@ -76,17 +76,95 @@ fn aws_id(t: &[u8]) -> bool {
             .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
 }
 
-/// A provider key has a long random run. `sk-estimator-doc-link-fitted` is a
-/// CSS class: short words of one case.
+/// A generated credential has a long run of letters and digits mixed:
+/// `sk-add-TokenValidatorForUsers-to-the-api` is a branch name and
+/// `sk-estimator-doc-link-fitted` a CSS class. Split at every other byte,
+/// so a run in a suffix that starts after one is a run of the whole.
 fn random_run(t: &[u8]) -> bool {
-    t.split(|b| *b == b'-' || *b == b'_')
-        .any(|seg| seg.len() >= 16 && classes(seg) >= 2)
+    t.split(|b| !b.is_ascii_alphanumeric()).any(|seg| {
+        seg.len() >= 16
+            && seg.iter().any(u8::is_ascii_digit)
+            && seg.iter().any(u8::is_ascii_alphabetic)
+    })
 }
 
-/// `Basic` credentials are padded base64 of `user:pass`; `Basic premises` is
-/// English.
-fn basic(t: &[u8]) -> bool {
-    t.len().is_multiple_of(4) && classes(t) >= 2
+/// Slack tokens are numeric ids then a secret, joined by `-`:
+/// `xoxb-<team>-<bot>-<secret>`, `xapp-<n>-<app>-<ts>-<secret>`.
+/// `xoxb-slackbot-tools` is a repo.
+fn slack_token(t: &[u8]) -> bool {
+    let mut segs = t.split(|b| *b == b'-');
+    segs.next()
+        .is_some_and(|s| !s.is_empty() && s.iter().all(u8::is_ascii_digit))
+        && segs.clone().count() >= 2
+        && segs.all(|s| !s.is_empty())
+}
+
+/// Whether the bytes before a scheme end in an `Authorization` header name,
+/// as in `Authorization: ` or `"authorization": "`.
+fn authorization(before: &[u8]) -> bool {
+    fn trim(s: &[u8]) -> &[u8] {
+        let n = s
+            .iter()
+            .rev()
+            .take_while(|b| b.is_ascii_whitespace() || **b == b'"' || **b == b'\'')
+            .count();
+        &s[..s.len() - n]
+    }
+    let s = trim(&before[before.len().saturating_sub(48)..]);
+    let Some(s) = s.strip_suffix(b":").or_else(|| s.strip_suffix(b"=")) else {
+        return false;
+    };
+    let s = trim(s);
+    let name = b"authorization";
+    s.len() >= name.len() && s[s.len() - name.len()..].eq_ignore_ascii_case(name)
+}
+
+/// `Basic` credentials are base64 of `user:pass`, padded to a multiple of 4
+/// with at most two `=`. After an `Authorization` header that is enough;
+/// elsewhere a digit, `+`, `/` or `=` must show it is not a word, so
+/// `Basic Requirements` and `basic HttpResponse` stay.
+fn basic(before: &[u8], t: &[u8], _: &[u8]) -> bool {
+    let pad = t.iter().rev().take_while(|b| **b == b'=').count();
+    let shape = t.len().is_multiple_of(4)
+        && pad <= 2
+        && !t[..t.len() - pad].contains(&b'=')
+        && classes(t) >= 2;
+    shape && (authorization(before) || t.iter().any(|b| b.is_ascii_digit() || b"+/=".contains(b)))
+}
+
+/// A bearer token has digits: `Bearer authentication/authorization-flow` is
+/// prose.
+fn bearer_value(_: &[u8], t: &[u8], _: &[u8]) -> bool {
+    t.iter().any(u8::is_ascii_digit) && t.iter().any(u8::is_ascii_alphabetic)
+}
+
+/// Whether a `token=` at the end of `before` is a URL query parameter, as in
+/// `?token=` or `&access_token=`.
+fn in_query(before: &[u8]) -> bool {
+    let name = before
+        .iter()
+        .rev()
+        .take(64)
+        .take_while(|b| word(**b))
+        .count();
+    before.len() > name && matches!(before[before.len() - name - 1], b'?' | b'&')
+}
+
+/// `a.b_c.d`: a field or module path.
+fn dotted_path(t: &[u8]) -> bool {
+    t.contains(&b'.')
+        && t.split(|b| *b == b'.').all(|seg| {
+            seg.first()
+                .is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_')
+                && seg.iter().all(|b| word(*b))
+        })
+}
+
+/// In a URL query any value is cut. Elsewhere `token=` is as often code
+/// (`Client(token=os.environ.get("GH"))`, `next_token=settings.API_TOKEN`),
+/// so only a value with a long random run that is not a call or a path is.
+fn token_value(before: &[u8], t: &[u8], after: &[u8]) -> bool {
+    in_query(before) || (!after.starts_with(b"(") && !dotted_path(t) && random_run(t))
 }
 
 const fn shape(prefix: &'static str, min_tail: usize, tail: fn(u8) -> bool) -> Shape {
@@ -96,6 +174,19 @@ const fn shape(prefix: &'static str, min_tail: usize, tail: fn(u8) -> bool) -> S
         tail,
         check: any,
         max_tail: usize::MAX,
+    }
+}
+
+/// Longest Slack token read; real ones are under 100 bytes.
+const MAX_SLACK: usize = 128;
+
+const fn slack_shape(prefix: &'static str, min_tail: usize) -> Shape {
+    Shape {
+        prefix,
+        min_tail,
+        tail: slack,
+        check: slack_token,
+        max_tail: MAX_SLACK,
     }
 }
 
@@ -122,13 +213,15 @@ const SHAPES: &[Shape] = &[
     shape("rk_live_", 24, alnum),
     shape("rk_test_", 24, alnum),
     shape("npm_", 36, alnum),
-    // Slack app, bot, user and refresh tokens.
-    shape("xapp-", 20, slack),
-    shape("xoxa-", 10, slack),
-    shape("xoxb-", 10, slack),
-    shape("xoxp-", 10, slack),
-    shape("xoxr-", 10, slack),
-    shape("xoxs-", 10, slack),
+    // Slack app, bot, user and refresh tokens. The check reads the start of
+    // the tail, so a later prefix inside a failed one can still match and the
+    // tail is bounded instead.
+    slack_shape("xapp-", 20),
+    slack_shape("xoxa-", 10),
+    slack_shape("xoxb-", 10),
+    slack_shape("xoxp-", 10),
+    slack_shape("xoxr-", 10),
+    slack_shape("xoxs-", 10),
     // AWS access key ids; the secret key that goes with one has no prefix.
     Shape {
         prefix: "AKIA",
@@ -157,6 +250,8 @@ const MAX_KEY_LABEL: usize = 32;
 const MAX_KEY_BODY: usize = 16 * 1024;
 /// Length of a full line of a PEM body.
 const PEM_LINE: usize = 64;
+/// Longest body line taken inside a block; OpenSSH keys use 70.
+const MAX_PEM_LINE: usize = 80;
 /// How far a URL's userinfo is looked for after `://`.
 const MAX_USERINFO: usize = 256;
 
@@ -169,6 +264,18 @@ const FIRST: &[u8] = b"-ABTbegnrstx";
 /// than the marker becomes as many `*`, so a record under a size cap stays
 /// under it. Linear in the length of `text`.
 pub fn redact(text: &str) -> Cow<'_, str> {
+    cut(text, true)
+}
+
+/// `text` with only the userinfo of a URL cut, for a value whose content is
+/// a key: a pull request reference or a branch name, which a token-shaped
+/// word in a repo name must not change.
+fn redact_userinfo(text: &str) -> Cow<'_, str> {
+    cut(text, false)
+}
+
+/// [`redact`], or with `shapes` false only URL userinfo.
+fn cut(text: &str, shapes: bool) -> Cow<'_, str> {
     let bytes = text.as_bytes();
     let mut out = String::new();
     // Bytes before `copied` are already in `out`.
@@ -181,7 +288,7 @@ pub fn redact(text: &str) -> Cow<'_, str> {
             None
         } else if bytes[i] == b':' {
             userinfo(bytes, i)
-        } else if FIRST.contains(&bytes[i]) && starts_word(bytes, i) {
+        } else if shapes && FIRST.contains(&bytes[i]) && starts_word(bytes, i) {
             secret_at(text, i, &mut scan)
         } else {
             None
@@ -244,6 +351,10 @@ impl Default for Scan {
 const DEAD_TOKEN: usize = SHAPES.len();
 const DEAD_JWT: usize = SHAPES.len() + 1;
 
+/// A last look at a value: the text before the name, the value, and the
+/// text after the value.
+type NamedCheck = fn(&[u8], &[u8], &[u8]) -> bool;
+
 /// A name kept in the text, the shortest value after it, the value's bytes,
 /// a last look at the value, and the `dead` slot when the name can run into
 /// itself.
@@ -251,29 +362,31 @@ type Named = (
     &'static str,
     usize,
     fn(u8) -> bool,
-    fn(&[u8]) -> bool,
+    NamedCheck,
     Option<usize>,
 );
 
 /// The span to cut for a secret starting at `i`.
 fn secret_at(text: &str, i: usize, scan: &mut Scan) -> Option<(usize, usize)> {
-    let rest = &text.as_bytes()[i..];
+    let (before, rest) = text.as_bytes().split_at(i);
     if let Some(len) = private_key(text, i, &mut scan.ends) {
         return Some((i, i + len));
     }
     // Keep the scheme or the parameter name so the reader still sees what it was.
     // `bearer ` and `basic ` end in a space their tails cannot hold, so only
-    // `token=` can run into itself.
+    // `token=` can run into itself. Its check holds for a value if it holds
+    // for any suffix that starts after a `token=` inside it, which is what
+    // lets a failed value mark the rest dead.
     let named: [Named; 3] = [
-        ("bearer ", 20, bearer, any, None),
+        ("bearer ", 20, bearer, bearer_value, None),
         ("basic ", 12, base64, basic, None),
-        ("token=", 10, query_value, any, Some(DEAD_TOKEN)),
+        ("token=", 10, query_value, token_value, Some(DEAD_TOKEN)),
     ];
     for (name, min, class, check, dead) in named {
         if dead.is_some_and(|d| i + name.len() <= scan.dead[d]) {
             continue;
         }
-        match after_name(rest, name, min, class, check) {
+        match after_name(before, rest, name, min, class, check) {
             Some(Ok(n)) => return Some((i + name.len(), i + name.len() + n)),
             Some(Err(n)) => {
                 if let Some(d) = dead {
@@ -315,18 +428,19 @@ fn secret_at(text: &str, i: usize, scan: &mut Scan) -> Option<(usize, usize)> {
 /// After `name` (matched without case), the length of the value when it is
 /// at least `min` bytes of `class`, or of the run that is not.
 fn after_name(
+    before: &[u8],
     s: &[u8],
     name: &str,
     min: usize,
     class: fn(u8) -> bool,
-    check: fn(&[u8]) -> bool,
+    check: NamedCheck,
 ) -> Option<Result<usize, usize>> {
     if !s.get(..name.len())?.eq_ignore_ascii_case(name.as_bytes()) {
         return None;
     }
     let tail = &s[name.len()..];
     let n = tail.iter().take_while(|b| class(**b)).count();
-    Some(if n >= min && check(&tail[..n]) {
+    Some(if n >= min && check(before, &tail[..n], &tail[n..]) {
         Ok(n)
     } else {
         Err(n)
@@ -402,9 +516,10 @@ impl NextEnd {
 }
 
 /// The length of a PEM private key block at `i`. Without an `END` of the
-/// same type within [`MAX_KEY_BODY`], only the header and the base64 lines
-/// right after it are cut: that covers output that was cut off, and leaves
-/// the rest of a grep line or diff hunk that only names the header.
+/// same type within [`MAX_KEY_BODY`] and only base64 lines between them,
+/// only the header and the base64 lines right after it are cut: that covers
+/// output that was cut off, and leaves the rest of a grep line, a diff hunk
+/// or code that only names the markers.
 fn private_key(text: &str, i: usize, ends: &mut NextEnd) -> Option<usize> {
     let header = text.as_bytes()[i..].strip_prefix(KEY_BEGIN.as_bytes())?;
     // A key label is short; looking further would make a long line of
@@ -420,11 +535,43 @@ fn private_key(text: &str, i: usize, ends: &mut NextEnd) -> Option<usize> {
     let body = i + KEY_BEGIN.len() + label.len() + KEY_TAIL.len();
     if let Some(e) = ends.from(text, body).filter(|e| e - body <= MAX_KEY_BODY) {
         let tail = &text.as_bytes()[e + KEY_END.len()..];
-        if tail.starts_with(label) && tail[label.len()..].starts_with(KEY_TAIL.as_bytes()) {
+        if tail.starts_with(label)
+            && tail[label.len()..].starts_with(KEY_TAIL.as_bytes())
+            && pem_body(&text.as_bytes()[body..e])
+        {
             return Some(e + KEY_END.len() + label.len() + KEY_TAIL.len() - i);
         }
     }
     Some(body + pem_lines(&text.as_bytes()[body..]) - i)
+}
+
+/// Whether `s`, from the end of a key's header to its `END`, is lines of
+/// base64, each perhaps after a diff marker. Stops at the first byte that
+/// is not, so a `BEGIN` inside a failed body is not read twice.
+fn pem_body(s: &[u8]) -> bool {
+    let mut at = 0;
+    let mut lines = 0;
+    while at < s.len() {
+        if let Some(br) = line_break(&s[at..]) {
+            at += br;
+            continue;
+        }
+        // `+` is base64 already.
+        if matches!(s[at], b'-' | b' ') {
+            at += 1;
+        }
+        let n = s[at..]
+            .iter()
+            .take(MAX_PEM_LINE + 1)
+            .take_while(|b| base64(**b))
+            .count();
+        at += n;
+        if n > MAX_PEM_LINE || (at < s.len() && line_break(&s[at..]).is_none()) {
+            return false;
+        }
+        lines += usize::from(n > 0);
+    }
+    lines > 0
 }
 
 /// How many bytes of `s` are line breaks (real or JSON-escaped) each followed
@@ -488,7 +635,10 @@ fn redact_content(c: &mut Content) {
 /// enums, which the tracker checks against fixed shapes; evidence (a stream
 /// and an offset); sources, upstream ids and targets, which name where an
 /// item comes from; a review's tier and `pr`, a pull request reference and
-/// a refusal's `op`, which only the tracker writes.
+/// a refusal's `op`, which only the tracker writes. A progress record's
+/// `pr` and `branch` are keys too (the fold matches a pull request by
+/// `pr`), so only URL userinfo is cut from them: `acme/xoxb-slackbot-tools#7`
+/// is a repo, not a token.
 ///
 /// The match has no wildcard, so a new kind does not compile until its
 /// fields are sorted into one list or the other.
@@ -513,8 +663,11 @@ pub fn redact_record(record: &mut WorkRecord) {
             note, branch, pr, ..
         } => {
             redact_content(note);
-            redact_opt(branch);
-            redact_opt(pr);
+            for s in [branch, pr].into_iter().flatten() {
+                if let Cow::Owned(r) = redact_userinfo(s) {
+                    *s = r;
+                }
+            }
         }
         WorkRecord::Released { reason, .. } => redact_opt(reason),
         WorkRecord::GaveUp { reason, .. } => redact_in(reason),

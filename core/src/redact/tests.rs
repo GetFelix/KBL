@@ -27,8 +27,9 @@ fn known_shapes_are_cut() {
         fake("sk_live_", "4eC3", 6),
         fake("rk_live_", "9aB", 8),
         fake("npm_", "a1B", 12),
-        fake("xapp-", "1-A2", 5),
-        fake("xoxb-", "1-", 6),
+        fake("xapp-1-A0123BCDEFG-1234567890123-", "a1b2", 16),
+        fake("xoxb-123456789012-1234567890123-", "AbC4", 6),
+        fake("xoxp-12345678-23456789-34567890-", "f0e1", 8),
         fake("AKIA", "Q7", 8),
         fake("AIza", "k", 35),
         format!(
@@ -209,6 +210,17 @@ fn adversarial_input_stays_linear() {
         "eyJxxxxxxxxxx.".repeat(mb / 14),
         "Bearer ".repeat(mb / 7),
         "sk-".repeat(mb / 3),
+        "xoxb-".repeat(mb / 5),
+        "xapp-1-".repeat(mb / 7),
+        "token=".repeat(mb / 6),
+        format!("?token={}", "token=a1".repeat(mb / 8)),
+        "Authorization: Basic ".repeat(mb / 21),
+        "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n".repeat(mb / 40) + "-----END RSA PRIVATE KEY-----",
+        format!(
+            "{}-----END RSA PRIVATE KEY-----",
+            "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-\n".repeat(400)
+        )
+        .repeat(mb / 16_000),
         format!("sk-{}", "a-".repeat(mb / 2)),
         "\\n".repeat(mb / 2),
         "A".repeat(mb),
@@ -255,6 +267,8 @@ fn every_free_text_field_of_every_kind_is_cut() {
         "proposed/key",
         "proposed/review/tier",
         "proposed/review/pr",
+        "progress/branch",
+        "progress/pr",
         "prerequisite/key",
         "prerequisite/new/target/source",
         "prerequisite/new/target/repo",
@@ -324,8 +338,6 @@ fn every_free_text_field_of_every_kind_is_cut() {
         "answer/chosen",
         "answer/then/title",
         "triaged/split/0",
-        "progress/branch",
-        "progress/pr",
         "decision/commit",
         "decision/revert_check/test",
         "finding/file",
@@ -357,4 +369,97 @@ fn records_have_their_free_text_cut() {
     };
     assert_eq!(command, "curl -H 'Authorization: token [redacted]'");
     assert_eq!(output, Content::Text("echo [redacted]".into()));
+}
+
+#[test]
+fn a_progress_pr_and_branch_keep_their_words() {
+    let id = || ItemId::new("a1").unwrap();
+    let progress = |pr: &str, branch: &str| WorkRecord::Progress {
+        item: id(),
+        attempt: 1,
+        note: Content::Text("n".into()),
+        branch: Some(branch.into()),
+        pr: Some(pr.into()),
+    };
+    for (pr, branch) in [
+        ("acme/xoxb-slackbot-tools#7", "xoxb-slackbot-tools/fix"),
+        (
+            "acme/sk-learn-extras-and-many-more#12",
+            "feature/xapp-redesign-of-the-settings-page",
+        ),
+        (
+            "acme/token=abc0123456789abcdefghijk#3",
+            "ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+        ),
+    ] {
+        let mut r = progress(pr, branch);
+        redact_record(&mut r);
+        assert_eq!(r, progress(pr, branch), "{pr} {branch}");
+    }
+    // Userinfo in a URL is still cut.
+    let mut r = progress("https://x:s3cretValue@github.com/acme/r/pull/7", "b");
+    redact_record(&mut r);
+    assert_eq!(
+        r,
+        progress("https://[redacted]@github.com/acme/r/pull/7", "b")
+    );
+}
+
+#[test]
+fn prose_and_code_that_name_a_scheme_are_left_alone() {
+    for text in [
+        "## Basic Installation",
+        "Basic Requirements",
+        "fn f() -> basic HttpResponse",
+        "Client(token=os.environ.get(\"GH\"))",
+        "let t = Client { token=self.token_cache.clone() };",
+        "next_token=settings.API_TOKEN",
+        "token=getTokenFromVault2024abcdef()",
+        "feature/xapp-redesign-of-the-settings-page",
+        "git checkout xoxb-slackbot-tools-and-more",
+        "sk-add-TokenValidatorForUsers-to-the-api-layer",
+        "see bearer authentication/authorization-flow",
+    ] {
+        assert!(untouched(text), "{text}");
+    }
+    // The same values in a header or a query are cut.
+    assert_eq!(
+        redact("Authorization: Basic dXNlcjpwYXNz"),
+        "Authorization: Basic [redacted]"
+    );
+    assert_eq!(
+        redact("{\"authorization\": \"basic dXNlcjpwYXNz\"}"),
+        "{\"authorization\": \"basic [redacted]\"}"
+    );
+    assert_eq!(redact("x Basic dXNlcjpwYXNzd29yZDE="), "x Basic [redacted]");
+    assert_eq!(
+        redact("GET /cb?next_token=settings.API_TOKEN"),
+        "GET /cb?next_token=[redacted]"
+    );
+    let t = fake("", "q8Z", 8);
+    assert_eq!(redact(&format!("token={t}")), "token=[redacted]");
+}
+
+#[test]
+fn key_markers_in_code_are_not_a_block() {
+    let text = r#"if s.starts_with("-----BEGIN PRIVATE KEY-----") && s.ends_with("-----END PRIVATE KEY-----") {"#;
+    assert_eq!(
+        redact(text),
+        r#"if s.starts_with("[redacted]") && s.ends_with("-----END PRIVATE KEY-----") {"#
+    );
+    let text = "@@ -1,2 +1,2 @@\n-const BEGIN: &str = \"-----BEGIN PRIVATE KEY-----\";\n+const END: &str = \"-----END PRIVATE KEY-----\";\n fn f() {}";
+    assert_eq!(
+        redact(text),
+        "@@ -1,2 +1,2 @@\n-const BEGIN: &str = \"[redacted]\";\n+const END: &str = \"-----END PRIVATE KEY-----\";\n fn f() {}"
+    );
+    // A key in a diff, every line marked, is still cut whole.
+    let line = "A".repeat(70);
+    let text = format!(
+        "+-----BEGIN OPENSSH PRIVATE KEY-----\n+{line}\n+AB==\n+-----END OPENSSH PRIVATE KEY-----\n fn f() {{}}"
+    );
+    assert_eq!(redact(&text), "+[redacted]\n fn f() {}");
+    let text = format!(
+        "------BEGIN OPENSSH PRIVATE KEY-----\n-{line}\n-AB==\n------END OPENSSH PRIVATE KEY-----\n"
+    );
+    assert_eq!(redact(&text), "-[redacted]\n");
 }
