@@ -178,7 +178,15 @@ fn items_carry_triage_s_proposed_tier_and_what_it_found_unclear() {
         assert!(f.apply(i as f64, r.as_bytes()), "{i}");
     }
     let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
-    let row = |id: &str| items.as_array().unwrap().iter().find(|i| i["id"] == id).unwrap().clone();
+    let row = |id: &str| {
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap()
+            .clone()
+    };
     // Triage proposes a tier; only acceptance or a tier change records one.
     assert_eq!(row("t0")["tier"], serde_json::Value::Null);
     assert_eq!(row("t0")["proposed_tier"], 0);
