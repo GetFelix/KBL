@@ -46,6 +46,36 @@ const fakeGateway = (log, mode) => `(() => {
     }
     close() {}
   };
+  // A fake tracker at the page's own origin: person routes append the record they name
+  // to the fake log, the way the real tracker does, so the result comes back live.
+  const ROUTES = {
+    '/v1/work/proposals/accept': (b) => ({ kind: 'accepted', item: b.item, tier: b.tier }),
+    '/v1/work/proposals/reject': (b) => ({ kind: 'rejected', item: b.item }),
+    '/v1/work/tier': (b) => ({ kind: 'tier_changed', item: b.item, tier: b.tier }),
+    '/v1/work/close': (b) => ({ kind: 'closed', item: b.item, why: b.why }),
+    '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: b.text ?? { text: '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
+  };
+  window.__tracker = { calls: [], refuse: {}, delay: 0, token: 'person-token' };
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async (url, init) => {
+    // Only the tracker's routes are faked; the page's own assets (the WebAssembly) load as usual.
+    if (typeof url !== 'string' || !url.startsWith('/v1/')) return realFetch(url, init);
+    const t = window.__tracker;
+    const body = init.body ? JSON.parse(init.body) : null;
+    t.calls.push({ url, auth: init.headers.authorization, body });
+    await new Promise((ok) => setTimeout(ok, t.delay));
+    const res = (status, json) => ({ status, json: async () => json });
+    if (init.headers.authorization !== 'Bearer ' + t.token) return res(401, { error: 'the tracker does not know this token' });
+    if (url === '/v1/me') return res(200, { person: 'maintainer', org_admin: true, teams: [{ team: 'default', role: 'admin' }] });
+    if (t.refuse[body?.item]) return res(409, t.refuse[body.item]);
+    // The real tracker reads an answer's text as content ({ text }) and refuses a bare string.
+    if (body && 'text' in body && typeof body.text?.text !== 'string') return res(422, { error: 'text: expected content' });
+    if (url.endsWith('/questions/answer') && !body.text === !body.chosen) return res(400, { error: 'answer with one of the options or with text, not both', why: 'invalid' });
+    const make = ROUTES[url];
+    if (!make) return res(404, { error: 'no such route' });
+    window.__push({ actor: 'person', by: 'maintainer', at_ms: Date.now(), ...make(body) });
+    return res(200, { kind: make(body).kind, offset: window.__ws.liveAt - 1 });
+  };
   window.__push = (record) => window.__ws.reply({ type: 'event', offset: window.__ws.liveAt++, payload: encode(record) });
 })();`;
 
@@ -531,6 +561,157 @@ try {
   check(await page.eval(`document.querySelector('.view-dialog').open && document.querySelector('.menu-button').getAttribute('aria-expanded') === 'false'`), 'on a phone, Edit closes the drawer before its dialog opens');
   await press(page, 'Escape');
   check(await focused('.menu-button'), 'cancelling the dialog returns focus to Menu');
+
+  // Writes: the inbox, sign-in, answer, tier with undo, pending, a refusal, bulk accept and close.
+  await open(`${connected}&view=inbox`);
+  await page.waitFor(live);
+  check((await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',')`)) === 'gh-2204', 'the Needs you inbox lists only the items waiting on a person');
+  check(await page.eval(`document.querySelector('.row .row-waits').textContent === 'An agent asked a question'`), 'an inbox row says why it needs you');
+  check(await page.eval(`document.querySelector('.nav a[data-view=inbox]').textContent.includes('1')`), 'the sidebar counts what needs you');
+  await axe('inbox');
+  await shoot('inbox-dark');
+  await page.eval(`document.querySelector('.row[data-id=gh-2204]').click(); true`);
+  check(await page.eval(`document.querySelector('.actions [data-focus=sign-in]') !== null`), 'signed out, the panel offers Sign in instead of actions');
+  await axe('actions signed out');
+  await page.eval(`document.querySelector('.actions [data-focus=sign-in]').click(); true`);
+  check(await focused('#tracker-token'), 'Sign in asks for the person token, with focus in the field');
+  await page.eval(`document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
+  check(await page.eval(`document.querySelector('#tracker-token-error').textContent === 'Paste your person token.' && document.querySelector('#tracker-token').getAttribute('aria-invalid') === 'true'`), 'an empty token is named next to the field');
+  await page.eval(`document.querySelector('#tracker-token').value = 'wrong'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
+  await page.waitFor(`document.querySelector('#tracker-token-error').textContent.includes('does not know')`);
+  check(true, 'a token the tracker refuses shows the tracker’s reason');
+  await axe('sign in error');
+  await shoot('sign-in-dark');
+  await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
+  await page.waitFor(`!document.querySelector('.sign-in-dialog').open`);
+  check(await page.eval(`!!document.querySelector('.actions form.answer') && document.querySelector('.answer .question').textContent === 'Which client saw it?'`), 'signed in, a question shows its recorded text and an answer form');
+  check(await page.eval(`[...document.querySelectorAll('.answer .choice')].map((c) => c.textContent).join('|') === 'Rust client (the agent’s default)|Python client'`), 'the options come from the question, with its default named');
+  await page.eval(`document.querySelector('.answer').requestSubmit(); true`);
+  check(await page.eval(`document.querySelector('#answer-error').textContent === 'Pick an option, or write an answer.'`) && (await focused('#answer-text')), 'an empty answer is named next to the field and the focus goes there');
+  await page.eval(`document.querySelector('#answer-text').value = 'half typed'; true`);
+  await page.eval(`window.__push({ actor: 'person', by: 'maintainer', at_ms: 1, kind: 'context', item: 'gh-2204', entry: 'notes', text: { text: 'a live note' } }); true`);
+  await new Promise((ok) => setTimeout(ok, 300));
+  check((await focused('#answer-text')) && (await page.eval(`document.querySelector('#answer-text').value === 'half typed'`)), 'a live record keeps a half-typed answer and the focus in it');
+  await axe('answer form');
+  await shoot('answer-dark');
+  const sent = await page.eval(`window.__tracker.calls.length`);
+  await page.eval(`document.querySelector('.answer input[value="Python client"]').click(); document.querySelector('.answer').requestSubmit(); true`);
+  check((await page.eval(`document.querySelector('#answer-error').textContent.includes('not both')`)) && (await page.eval(`window.__tracker.calls.length`)) === sent, 'an option and text together are named before sending, since the tracker takes one');
+  await page.eval(`document.querySelector('#answer-text').value = ''; document.querySelector('.answer').requestSubmit(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Answered gh-2204.'`);
+  const answered = await page.eval(`JSON.stringify(window.__tracker.calls.at(-1))`);
+  check(answered.includes('"url":"/v1/work/questions/answer"') && answered.includes('"auth":"Bearer person-token"') && answered.includes('"chosen":"Python client"'), `the answer goes to the person route with the viewer’s token (${answered})`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 0`);
+  check(await page.eval(`document.querySelector('.empty h2')?.textContent === 'Nothing needs you'`), 'answered, the item leaves the inbox and the inbox says it is empty');
+
+  await page.eval(`document.querySelector('.nav a[data-view=all]').click(); document.querySelector('.row[data-id=gh-2219]').click(); true`);
+  const tierOf = `[...document.querySelectorAll('.panel dt')].find((d) => d.textContent === 'Tier')?.nextElementSibling.textContent`;
+  await page.eval(`document.querySelector('#panel-tier').value = '3'; document.querySelector('[data-focus=set-tier]').focus(); document.querySelector('[data-focus=set-tier]').click(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Set the tier of gh-2219.'`);
+  // The tracker answers before the record comes back on the log, so wait for the fold to show it.
+  await page.waitFor(`${tierOf} === '3'`);
+  check((await page.eval(tierOf)) === '3' && (await page.eval(`!document.querySelector('.activity button').hidden`)), 'a tier change is written, shown, and offers Undo');
+  await axe('tier set');
+  await press(page, 'z', MOD);
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Undid the tier change on gh-2219.'`);
+  await page.waitFor(`${tierOf} === '1'`);
+  check((await page.eval(tierOf)) === '1' && (await page.eval(`JSON.stringify(window.__tracker.calls.at(-1).body) === '{"item":"gh-2219","tier":1}'`)), `${MOD_NAME}+Z undoes it with a new tier_changed record setting the old tier back`);
+  await shoot('undo-dark');
+  await page.eval(`window.__tracker.delay = 800; document.querySelector('#panel-tier').value = '0'; document.querySelector('[data-focus=set-tier]').click(); true`);
+  await new Promise((ok) => setTimeout(ok, 150));
+  check(await page.eval(`document.querySelector('.actions').hasAttribute('aria-busy') && document.querySelector('.write-status').textContent === 'Setting the tier…' && document.querySelector('.activity-text').textContent === 'Setting the tier of gh-2219…'`), 'a write in flight shows as pending in the panel and the activity line');
+  check(await focused('[data-focus=set-tier]'), 'the pending button keeps the focus (aria-disabled, not disabled)');
+  await axe('write pending');
+  await shoot('pending-dark');
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Set the tier of gh-2219.'`);
+  await page.eval(`window.__tracker.delay = 0; window.__tracker.refuse['gh-2221'] = { error: 'the fold refused the record: the item is closed', why: 'closed' }; document.querySelector('.row[data-id=gh-2221]').click(); true`);
+  await page.eval(`document.querySelector('#panel-tier').value = '0'; document.querySelector('[data-focus=set-tier]').click(); true`);
+  await page.waitFor(`document.querySelector('.activity').dataset.tone === 'error'`);
+  check(await page.eval(`document.querySelector('.activity-text').textContent === 'gh-2221: refused, the fold refused the record: the item is closed (closed)' && document.querySelector('.write-status').textContent.includes('the item is closed (closed)')`), 'a refused write shows the tracker’s reason in the activity line and the panel');
+  await axe('write refused');
+  await shoot('refused-dark');
+
+  await press(page, 'Escape');
+  await page.eval(`document.querySelector('.row[data-id=ado-4377]').focus(); true`);
+  await press(page, 'x');
+  await page.eval(`document.querySelector('.row[data-id=ado-4380]').focus(); true`);
+  await press(page, 'x');
+  check(await page.eval(`document.querySelector('.bulk-count').textContent === '2 selected' && document.querySelectorAll('.mark:checked').length === 2`), 'X marks the focused row, and the bulk bar counts the marks');
+  check(await page.eval(`[...document.querySelectorAll('.bulk button')].filter((b) => !b.hidden).map((b) => b.textContent).join('|') === 'Set tier|Accept 2…|Close 2…|Clear selection'`), 'the bulk bar offers only what the marked items allow');
+  await axe('bulk');
+  await shoot('bulk-dark');
+  await page.eval(`[...document.querySelectorAll('.bulk button')].find((b) => b.textContent.startsWith('Accept')).click(); true`);
+  check(await page.eval(`document.querySelector('.confirm-dialog').open && document.querySelector('#confirm-title').textContent === 'Accept 2 items?' && document.querySelector('#confirm-undo').textContent.startsWith('This cannot be undone.')`), 'accepting asks to confirm, lists what it covers, and says it cannot be undone');
+  check(await focused('#confirm-tier'), 'the confirm dialog opens on its tier field');
+  await axe('confirm');
+  await shoot('confirm-dark');
+  const before = await page.eval(`window.__tracker.calls.length`);
+  await press(page, 'Escape');
+  check((await page.eval(`window.__tracker.calls.length`)) === before, 'cancelling sends nothing');
+  await page.eval(`[...document.querySelectorAll('.bulk button')].find((b) => b.textContent.startsWith('Accept')).click(); document.querySelector('.confirm-dialog form').requestSubmit(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Accepted 2 items.'`);
+  check(await page.eval(`['ado-4377', 'ado-4380'].every((id) => document.querySelector('#group-ready').closest('section').querySelector('[data-id=' + id + ']'))`), 'bulk accept writes one record per item and both move to Ready');
+  check(await page.eval(`document.querySelector('.activity button').hidden`), 'an accept offers no Undo, since no record takes it back');
+  check(await page.eval(`window.__tracker.calls.slice(-2).every((c) => c.url.endsWith('/proposals/accept') && !('tier' in c.body))`), 'a bulk accept keeps each item’s own tier by default');
+  check(await page.eval(`document.querySelector('.bulk').hidden && document.querySelectorAll('.mark:checked').length === 0`), 'the marks clear once their action is sent');
+  await page.eval(`document.querySelector('.row[data-id=ado-4377]').focus(); true`);
+  await press(page, 'x');
+  check(await page.eval(`!document.querySelector('.bulk').hidden`), 'X marks again after a bulk action');
+  await press(page, 'Escape');
+  check(await page.eval(`document.querySelector('.bulk').hidden && document.querySelectorAll('.mark:checked').length === 0`), 'Esc clears the selection');
+  await page.eval(`document.querySelector('.mark[data-mark=gh-2210]').click(); [...document.querySelectorAll('.bulk button')].find((b) => b.textContent.startsWith('Close')).click(); true`);
+  check(await page.eval(`document.querySelector('#confirm-why') && document.querySelector('#confirm-undo').textContent.includes('children stay cancelled')`), 'closing asks why and says what cannot be undone');
+  await page.eval(`document.querySelector('#confirm-why').value = 'completed'; document.querySelector('.confirm-dialog form').requestSubmit(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Closed gh-2210.'`);
+  await page.waitFor(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`);
+  check(await page.eval(`!!document.querySelector('#group-done')?.closest('section').querySelector('[data-id=gh-2210]')`), 'a checkbox marks a row, and the close lands as completed');
+  // A Triage item keeps triage's tier: the panel and the confirm start from it, and the accept sends the tier shown.
+  const by = `actor: 'person', by: 'maintainer', at_ms: 1800000000500`;
+  await page.eval(`window.__push({ kind: 'imported', item: 'tri-9', source: 'jira', upstream_id: 'FEL-9', title: 'Urgent triage', ${by} }); window.__push({ kind: 'triaged', item: 'tri-9', tier: 0, why: 'urgent', ${by} }); true`);
+  await page.waitFor(`!!document.querySelector('.row[data-id=tri-9]')`);
+  await page.eval(`document.querySelector('.row[data-id=tri-9]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-head .row-id')?.textContent === 'tri-9' && !!document.querySelector('#panel-tier')`);
+  check(await page.eval(`document.querySelector('#panel-tier').value === '0'`), 'the panel shows the tier triage proposed, not a default');
+  await page.eval(`document.querySelector('.actions [data-focus=accept]').click(); true`);
+  check(await page.eval(`document.querySelector('#confirm-tier').value === '0'`), 'accepting a Triage item starts from its proposed tier');
+  await page.eval(`document.querySelector('.confirm-dialog form').requestSubmit(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent === 'Accepted tri-9.'`);
+  check(await page.eval(`window.__tracker.calls.at(-1).body.item === 'tri-9' && window.__tracker.calls.at(-1).body.tier === 0`), 'an accept left at the proposed tier sends that tier, the one the confirm showed');
+  await page.waitFor(`${tierOf} === '0'`);
+  check((await page.eval(tierOf)) === '0', 'the accepted item has the tier triage proposed');
+
+  // An item with no tier shows none, and a first tier says it has no Undo.
+  await page.eval(`window.__push({ kind: 'imported', item: 'tri-7', source: 'jira', upstream_id: 'FEL-7', title: 'No tier yet', ${by} }); true`);
+  await page.waitFor(`!!document.querySelector('.row[data-id=tri-7]')`);
+  await page.eval(`document.querySelector('.row[data-id=tri-7]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-head .row-id')?.textContent === 'tri-7' && !!document.querySelector('#panel-tier')`);
+  check(await page.eval(`document.querySelector('#panel-tier').value === '' && document.querySelector('#panel-tier').selectedOptions[0].textContent === 'No tier recorded'`), 'an item with no recorded tier shows none in the panel');
+  await page.eval(`document.querySelector('#panel-tier').value = '1'; document.querySelector('[data-focus=set-tier]').click(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent.startsWith('Set the tier of tri-7.')`);
+  check(await page.eval(`document.querySelector('.activity-text').textContent === 'Set the tier of tri-7. No undo for tri-7: it had no tier before, and no record removes a tier.' && document.querySelector('.activity button').hidden`), 'a first tier says it has no Undo');
+
+  // Triage's own question: the form asks what triage could not settle.
+  await page.eval(`window.__push({ kind: 'imported', item: 'tri-8', source: 'jira', upstream_id: 'FEL-8', title: 'Which repo', ${by} }); window.__push({ kind: 'triaged', item: 'tri-8', tier: 1, unclear: 'repo', why: 'which repo', ${by} }); true`);
+  await page.waitFor(`!!document.querySelector('.row[data-id=tri-8]')`);
+  await page.eval(`document.querySelector('.row[data-id=tri-8]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-head .row-id')?.textContent === 'tri-8' && !!document.querySelector('.answer .question')`);
+  check(await page.eval(`document.querySelector('.answer .question').textContent === 'Triage could not tell which repository the work belongs in. Which one is it?'`), 'an unclear item’s answer form says what triage could not settle');
+  await axe('unclear answer');
+
+  // Who is signed in, and Sign out.
+  check(await page.eval(`document.querySelector('.account-who').textContent === 'Signed in as maintainer' && document.querySelector('.account-button').textContent === 'Sign out'`), 'the sidebar names who is signed in');
+  await page.eval(`document.querySelector('.account-button').click(); true`);
+  await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
+  check(await page.eval(`document.querySelector('.account-who').textContent === 'Not signed in to the tracker' && document.querySelector('.account-button').textContent === 'Sign in'`), 'Sign out forgets the token and the panel asks to sign in');
+  await axe('signed out by hand');
+  await page.eval(`document.querySelector('.account-button').click(); true`);
+  check(await focused('#tracker-token'), 'Sign in from the sidebar asks for the token');
+  await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
+  await page.waitFor(`!document.querySelector('.sign-in-dialog').open && document.querySelector('.account-button').textContent === 'Sign out'`);
+  await page.eval(`window.__tracker.token = 'rotated'; document.querySelector('.row[data-id=gh-2219]').click(); document.querySelector('[data-focus=set-tier]').click(); true`);
+  await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
+  check(await page.eval(`document.querySelector('.actions p').textContent.startsWith('Sign in again: the tracker does not know this token')`), 'a token the tracker stops taking signs the page out, with the reason');
+  await shoot('signed-out-dark');
   clean();
 } catch (e) {
   console.error('page problems:', page.problems);

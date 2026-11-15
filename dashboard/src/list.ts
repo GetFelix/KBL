@@ -62,6 +62,7 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
 /** The items the view covers, before filters and search: every item, or only the Blocked ones. */
 export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
   if (s.view === 'all') return s.items;
+  if (s.view === 'inbox') return s.items.filter((i) => i.stage === 'needs_you');
   const blocked = new Set(s.blocked.map((b) => b.id));
   return s.items.filter((i) => blocked.has(i.id));
 }
@@ -74,6 +75,12 @@ export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query
 /** The rows the list shows, in the order j and k walk. */
 export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>): ItemRow[] {
   return flatten(visible(s));
+}
+
+/** The marked items the view shows now. A bulk action never reaches an item a search or filter hides. */
+export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'>): ItemRow[] {
+  const marked = new Set(s.marked);
+  return shownRows(s).filter((i) => marked.has(i.id));
 }
 
 export type Direction = 'up' | 'down' | 'left' | 'right';

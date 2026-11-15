@@ -21,13 +21,21 @@ export type CommandId =
   | 'density'
   | 'theme'
   | 'view-all'
-  | 'view-blocked';
+  | 'view-inbox'
+  | 'view-blocked'
+  | 'mark'
+  | 'markAll'
+  | 'clearMarks'
+  | 'accept'
+  | 'closeItems'
+  | 'undo'
+  | 'signIn';
 
 export interface Command {
   id: CommandId;
   /** What the palette and the overlay show. */
   label: string;
-  group: 'Navigation' | 'View' | 'General';
+  group: 'Navigation' | 'View' | 'Actions' | 'General';
   /** Key chords as shown to people: `Mod` is Cmd on a Mac and Ctrl elsewhere. Empty for palette-only commands. */
   keys: string[];
 }
@@ -45,6 +53,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'open', label: 'Open the selected item', group: 'Navigation', keys: ['Enter'] },
   { id: 'close', label: 'Close, or clear the search', group: 'Navigation', keys: ['Escape'] },
   { id: 'view-all', label: 'Show all work', group: 'View', keys: [] },
+  { id: 'view-inbox', label: 'Show what needs you', group: 'View', keys: [] },
   { id: 'view-blocked', label: 'Show blocked work', group: 'View', keys: [] },
   { id: 'layout', label: 'Switch list and board', group: 'View', keys: ['V'] },
   { id: 'filter', label: 'Filter items', group: 'View', keys: ['F'] },
@@ -52,6 +61,13 @@ export const COMMANDS: readonly Command[] = [
   { id: 'saveView', label: 'Save this view', group: 'View', keys: [] },
   { id: 'density', label: 'Switch comfortable and compact density', group: 'View', keys: [] },
   { id: 'theme', label: 'Switch light and dark theme', group: 'View', keys: [] },
+  { id: 'mark', label: 'Select or unselect the item', group: 'Actions', keys: ['X'] },
+  { id: 'markAll', label: 'Select every item shown', group: 'Actions', keys: [] },
+  { id: 'clearMarks', label: 'Clear the selection', group: 'Actions', keys: [] },
+  { id: 'accept', label: 'Accept the selected items', group: 'Actions', keys: [] },
+  { id: 'closeItems', label: 'Close the selected items', group: 'Actions', keys: [] },
+  { id: 'undo', label: 'Undo the last tier change', group: 'Actions', keys: ['Mod+Z'] },
+  { id: 'signIn', label: 'Sign in to the tracker', group: 'Actions', keys: [] },
 ];
 
 /** The first chord bound to a command, for labels outside the palette and the overlay. */

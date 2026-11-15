@@ -4,6 +4,14 @@
 import type { BlockedRow, ItemRow } from './fold.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
+import { putWrite, type Write, type Writes } from './writes.ts';
+
+/** The viewer's sign-in to the tracker, which every write needs. The token itself is held in main.ts only. */
+export type TrackerState =
+  | { kind: 'signed-out' }
+  | { kind: 'checking' }
+  | { kind: 'signed-in'; person: string }
+  | { kind: 'refused'; reason: string };
 
 export type Connection =
   | { kind: 'setup' }
@@ -44,13 +52,24 @@ export interface ViewState {
   density: Density;
   /** This viewer's saved views, from local storage. */
   saved: SavedView[];
+  /** Items picked for a bulk action, in the order they were picked. */
+  marked: string[];
+  writes: Writes;
+  tracker: TrackerState;
+  /** The text of each open question by its offset, read from the record as it was folded. */
+  questions: ReadonlyMap<number, string>;
 }
 
 export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; questions?: ReadonlyMap<number, string> }
+  /** Marks or unmarks one item for a bulk action. */
+  | { type: 'mark'; id: string }
+  | { type: 'marks'; ids: string[] }
+  | { type: 'write'; write: Write }
+  | { type: 'tracker'; tracker: TrackerState }
   | { type: 'view'; view: View }
   | { type: 'query'; query: string }
   | { type: 'select'; id: string | null }
@@ -70,7 +89,23 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, connection: a.connection, synced: s.synced || a.connection.kind === 'live' };
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
-      return { ...s, items: a.items, blocked: a.blocked, overlaps: a.overlaps };
+      // A mark on an item the log no longer has would act on nothing.
+      return {
+        ...s,
+        items: a.items,
+        blocked: a.blocked,
+        overlaps: a.overlaps,
+        questions: a.questions ?? s.questions,
+        marked: s.marked.filter((id) => a.items.some((i) => i.id === id)),
+      };
+    case 'mark':
+      return { ...s, marked: s.marked.includes(a.id) ? s.marked.filter((x) => x !== a.id) : [...s.marked, a.id] };
+    case 'marks':
+      return { ...s, marked: a.ids };
+    case 'write':
+      return { ...s, writes: putWrite(s.writes, a.write) };
+    case 'tracker':
+      return { ...s, tracker: a.tracker };
     case 'view':
       return { ...s, view: a.view };
     case 'query':

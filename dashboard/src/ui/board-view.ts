@@ -37,7 +37,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }), h('span', { class: 'card-mark', hidden: true }, 'Selected'));
       cards.set(id, a);
     }
     const t = a.querySelector('.card-title')!;
@@ -85,6 +85,10 @@ export function boardView(on: ListHandlers, announce: Announce) {
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
+        // Marked in text as well as the border, so it does not rest on colour.
+        const marked = s.marked.includes(id);
+        a.toggleAttribute('data-marked', marked);
+        a.querySelector<HTMLElement>('.card-mark')!.hidden = !marked;
         // Same text flag as the list row, so the board says it too.
         const flag = a.querySelector<HTMLElement>('.row-flag')!;
         const text = flagText(s.overlaps.get(id));

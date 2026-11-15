@@ -31,7 +31,7 @@ export function fixtureLog() {
     agent({ kind: 'claimed', item, attempt: 1, deadline_ms: at + 3_600_000 });
     if (stage === 'held') continue;
     if (stage === 'needs_you') {
-      agent({ kind: 'question', item, attempt: 1, text: { text: 'Which client saw it?' } });
+      agent({ kind: 'question', item, attempt: 1, text: { text: 'Which client saw it?' }, options: ['Rust client', 'Python client'], default: 'Rust client' });
       continue;
     }
     agent({ kind: 'done', item, attempt: 1, cost_micros: 1_250_000 });

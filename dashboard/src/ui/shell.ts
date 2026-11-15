@@ -9,9 +9,11 @@ import { h, kbd } from './dom.ts';
 import { filterBar, type FilterHandlers } from './filter-bar.ts';
 import { itemList, type ListHandlers } from './item-list.ts';
 import { itemPanel } from './item-panel.ts';
+import { bulkBar } from './bulk-bar.ts';
+import type { WriteHandlers } from './item-actions.ts';
 import { statusBar } from './status-bar.ts';
 
-export interface ShellHandlers extends ListHandlers, FilterHandlers {
+export interface ShellHandlers extends ListHandlers, FilterHandlers, WriteHandlers {
   query(text: string): void;
   /** Opens a saved view by its query string. */
   openView(search: string): void;
@@ -19,10 +21,13 @@ export interface ShellHandlers extends ListHandlers, FilterHandlers {
   closeItem(): void;
   palette(): void;
   help(): void;
+  /** Forgets the tracker token in this tab. */
+  signOut(): void;
 }
 
 const VIEWS: readonly [View, string][] = [
   ['all', 'All work'],
+  ['inbox', 'Needs you'],
   ['blocked', 'Blocked'],
 ];
 
@@ -54,6 +59,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   const list = itemList(on, board, announce);
   const filters = filterBar(on, mac);
   const panel = itemPanel(on);
+  const writes = bulkBar(on);
   const status = statusBar();
   const search = h('input', {
     id: 'search',
@@ -81,6 +87,10 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     return { view, label, a, count };
   });
   const savedList = h('ul', { class: 'nav saved', 'aria-label': 'Saved views' });
+  // Who the writes are made as, and the way to stop: one button, so the focus stays on it either way.
+  const who = h('p', { class: 'account-who muted small' });
+  let signedIn = false;
+  const account = h('button', { type: 'button', class: 'button ghost account-button', onclick: () => (setMenu(false), signedIn ? on.signOut() : on.signIn()) }, 'Sign in');
   const heading = h('h1', {}, 'All work');
   // Below 720 px the sidebar is a drawer behind this button, so Commands and
   // Shortcuts stay in the same place on every screen (WCAG 3.2.6).
@@ -126,7 +136,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   document.addEventListener('click', (e) => {
     if (menu.getAttribute('aria-expanded') === 'true' && !sidebar.contains(e.target as Node) && e.target !== menu) setMenu(false);
   });
-  const main = h('main', { id: 'work', tabindex: '-1', 'aria-labelledby': 'work-title' }, h('h2', { id: 'work-title', class: 'sr-only' }, 'Work list'), filters.el, list.el, announcer);
+  const main = h('main', { id: 'work', tabindex: '-1', 'aria-labelledby': 'work-title' }, h('h2', { id: 'work-title', class: 'sr-only' }, 'Work list'), filters.el, writes.el, list.el, announcer);
   let savedShown = '';
   page.append(
     h('header', { class: 'topbar' },
@@ -147,6 +157,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     h('h2', { class: 'nav-title', id: 'saved-title' }, 'Saved views'),
     savedList,
     h('div', { class: 'sidebar-foot' },
+      h('div', { class: 'account' }, who, account),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.palette()) }, 'Commands', kbd(displayChord(chordFor('palette'), mac))),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.help()) }, 'Shortcuts', kbd(displayChord(chordFor('help'), mac))),
     ),
@@ -180,12 +191,13 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   };
 
   return {
+    writes,
     search,
     list,
     panel,
     filters,
     /** A starting name for Save view: the active filters and search in words. */
-    suggestName: (s: ViewState) => [s.view === 'blocked' ? 'Blocked' : '', summary(s.filters), s.query && `“${s.query}”`, s.layout === 'board' ? 'board' : ''].filter(Boolean).join(', '),
+    suggestName: (s: ViewState) => [s.view === 'blocked' ? 'Blocked' : s.view === 'inbox' ? 'Needs you' : '', summary(s.filters), s.query && `“${s.query}”`, s.layout === 'board' ? 'board' : ''].filter(Boolean).join(', '),
     menuOpen: () => menu.getAttribute('aria-expanded') === 'true',
     /**
      * After a saved-view change: focus `name`'s Edit button (`edit`) or its link, else Save
@@ -202,6 +214,11 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     main,
     render(s: ViewState) {
       renderSaved(s.saved);
+      signedIn = s.tracker.kind === 'signed-in';
+      const whoText = s.tracker.kind === 'signed-in' ? `Signed in as ${s.tracker.person}` : s.tracker.kind === 'checking' ? 'Checking the token…' : 'Not signed in to the tracker';
+      if (who.textContent !== whoText) who.textContent = whoText;
+      const label = signedIn ? 'Sign out' : 'Sign in';
+      if (account.textContent !== label) account.textContent = label;
       const named = s.saved.find((v) => sameView(s, decodeView(v.search)));
       for (const n of nav) {
         const total = inScope({ ...s, view: n.view }).length;
@@ -219,6 +236,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
         else a.removeAttribute('aria-current');
       }
       filters.render(s);
+      writes.render(s);
       if (search.value !== s.query) search.value = s.query;
       status.render(s);
       list.render(s);

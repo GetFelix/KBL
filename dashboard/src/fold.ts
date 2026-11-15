@@ -15,12 +15,34 @@ export interface ItemRow {
   id: string;
   title: string;
   stage: string;
-  /** Null or absent unless the log recorded it: the tier from triage or acceptance. */
+  /** Null or absent unless the log recorded it: the tier from acceptance or a tier change. */
   tier?: number | null;
+  /** The tier triage proposed, which an accept without a tier takes. */
+  proposed_tier?: number | null;
   /** The upstream source, such as `github`, from the item's target or its root's import. */
   source?: string | null;
   /** The repository the work lands in, such as `GetFelix/KBL`. */
   repo?: string | null;
+  /** Why the item waits on a person (`question`, `check_failed`, ...), or null. */
+  needs?: string | null;
+  /** The offset of its open question, with the options and default that question offers. */
+  question?: number | null;
+  options?: string[] | null;
+  default?: string | null;
+  /** What triage could not settle (`scope`, `repo`, `acceptance`) when the open question is triage's. */
+  unclear?: string | null;
+  /** True for an item with no parent. */
+  root?: boolean;
+}
+
+/** The inline text of a `question` record, so the panel can show what was asked. An artifact's text is not in the record. */
+export function questionText(payload: Uint8Array): string | null {
+  try {
+    const r = JSON.parse(new TextDecoder().decode(payload)) as { kind?: unknown; text?: { text?: unknown } };
+    return r.kind === 'question' && typeof r.text?.text === 'string' ? r.text.text : null;
+  } catch {
+    return null;
+  }
 }
 
 export function items(fold: Fold): ItemRow[] {

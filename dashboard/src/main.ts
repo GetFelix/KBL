@@ -6,18 +6,21 @@
 import './ui/tokens.css';
 import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
-import { blocked, items, type Fold } from './fold.ts';
+import { blocked, items, questionText, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
-import { boardEdge, flatten, move, moveBoard, shownRows, visible } from './list.ts';
+import { boardEdge, flatten, markedShown, move, moveBoard, shownRows, visible } from './list.ts';
 import { adviceFor, createStore, fromAddress, toAddress, type Density, type View, type ViewState } from './state.ts';
 import { deleteView, parseSaved, renameView, saveView, type SavedView } from './views.ts';
 import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
 import { viewDialog } from './ui/view-dialog.ts';
+import { confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
+import { Tracker } from './tracker.ts';
+import { CAN, canUndo, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -58,9 +61,112 @@ const initial: ViewState = {
   selected: address.open,
   density: stored(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable',
   saved: parseSaved(stored(VIEWS_KEY) ?? null),
+  marked: [],
+  writes: NO_WRITES,
+  tracker: { kind: 'signed-out' },
+  questions: new Map(),
   theme: themeParam === 'light' || themeParam === 'dark' ? themeParam : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
 };
 const store = createStore(initial);
+
+// The viewer's tracker token lives here only: never in the address, storage or the store.
+let tracker: Tracker | null = null;
+const team = q.get('team');
+let batches = 0;
+let writeIds = 0;
+
+/** What an action applies to: the marked items, else the selected one. */
+const targets = (): string[] => {
+  const s = store.get();
+  const marked = markedShown(s);
+  if (marked.length) return marked.map((i) => i.id);
+  // As open and mark: a selection the view no longer shows is not acted on.
+  return s.selected && shownRows(s).some((r) => r.id === s.selected) ? [s.selected] : [];
+};
+
+/**
+ * Sends one write per item, in order, each as its own record. One at a time so a bulk
+ * action never takes more of the team's in-flight slots than one person clicking.
+ */
+async function send(kind: WriteKind, jobs: Job[]) {
+  const batch = ++batches;
+  const list = jobs.map((j) => ({ id: ++writeIds, batch, kind, item: j.item, status: 'pending' as const, undo: j.undo, noUndo: j.noUndo }));
+  for (const w of list) store.dispatch({ type: 'write', write: w });
+  for (const [i, j] of jobs.entries()) {
+    const w = list[i];
+    if (typeof j.req === 'string') {
+      store.dispatch({ type: 'write', write: { ...w, status: 'refused', reason: j.req, why: undefined, undo: undefined } });
+      continue;
+    }
+    const t = tracker;
+    const o = t ? await t.write(j.req) : { status: 'failed' as const, reason: 'Not signed in to the tracker.' };
+    if (o.status === 'ok') store.dispatch({ type: 'write', write: { ...w, status: 'ok' } });
+    else {
+      store.dispatch({ type: 'write', write: { ...w, status: o.status, reason: o.reason, why: o.status === 'refused' ? o.why : undefined, undo: undefined } });
+      if (o.status === 'refused' && o.signedOut && t === tracker) {
+        tracker = null;
+        store.dispatch({ type: 'tracker', tracker: { kind: 'refused', reason: o.reason } });
+      }
+    }
+  }
+}
+
+const write = (ids: string[], args: WriteArgs) => {
+  const s = store.get();
+  // Checked against the log as it is now: a confirm dialog may have been open while someone else acted.
+  const jobs = jobsFor(ids, args, s.items, s.writes);
+  if (!jobs.length) return;
+  // Marks are done with once their action is sent, as in GitHub.
+  if (s.marked.length && ids.every((id) => s.marked.includes(id)) && ids.length > 0) store.dispatch({ type: 'marks', ids: [] });
+  void send(args.kind, jobs);
+};
+
+const undoLast = () => {
+  const s = store.get();
+  const batch = s.writes.list.filter((w) => w.batch === s.writes.last);
+  if (!canUndo(batch, s.items)) return;
+  const done = batch.filter((w) => w.status === 'ok' && w.undo);
+  void send('undo', done.map((w) => ({ item: w.item, req: undoRequest(w.undo!, s.items) })));
+};
+
+const signIn = async (token: string): Promise<string | null> => {
+  const before = store.get().tracker;
+  store.dispatch({ type: 'tracker', tracker: { kind: 'checking' } });
+  const t = new Tracker((url, init) => fetch(url, init), token, team);
+  const me = await t.me();
+  if ('person' in me) {
+    const reason =
+      !team && me.teams.length > 1
+        ? `You are in ${me.teams.length} teams; open the page with ?team= naming one (${me.teams.join(', ')}).`
+        : team && !me.teams.includes(team)
+          ? `You are not in the team ${team}; open the page with ?team= naming one of yours (${me.teams.join(', ')}).`
+          : null;
+    if (reason) {
+      store.dispatch({ type: 'tracker', tracker: tracker && before.kind === 'signed-in' ? before : { kind: 'refused', reason } });
+      return reason;
+    }
+    tracker = t;
+    store.dispatch({ type: 'tracker', tracker: { kind: 'signed-in', person: me.person } });
+    return null;
+  }
+  const reason = me.status === 'refused' ? `${me.reason} (${me.why})` : me.status === 'failed' ? me.reason : 'The tracker answered without a person.';
+  // A bad second token leaves a working sign-in as it was.
+  store.dispatch({ type: 'tracker', tracker: tracker && before.kind === 'signed-in' ? before : { kind: 'refused', reason } });
+  return reason;
+};
+
+// Drops the token from memory. A write still in flight finishes; the next one is not sent.
+const signOut = () => {
+  tracker = null;
+  store.dispatch({ type: 'tracker', tracker: { kind: 'signed-out' } });
+};
+
+const confirmKind = (kind: ConfirmKind, ids: string[]) => {
+  const s = store.get();
+  if (s.tracker.kind !== 'signed-in') return signInBox.open();
+  const list = s.items.filter((i) => ids.includes(i.id) && CAN[kind](i));
+  if (list.length) confirm.open(kind, list);
+};
 
 const openItem = (id: string) => {
   store.dispatch({ type: 'open', id });
@@ -124,6 +230,7 @@ const run = (id: CommandId): void => {
       if (document.activeElement === ui.search) ui.search.blur();
       if (s.open) closeItem();
       else if (s.query) store.dispatch({ type: 'query', query: '' });
+      else if (s.marked.length) store.dispatch({ type: 'marks', ids: [] });
       return;
     case 'theme':
       return store.dispatch({ type: 'theme', theme: s.theme === 'dark' ? 'light' : 'dark' });
@@ -149,8 +256,24 @@ const run = (id: CommandId): void => {
       return store.dispatch({ type: 'density', density });
     }
     case 'view-all':
+    case 'view-inbox':
     case 'view-blocked':
-      return showView(id === 'view-all' ? 'all' : 'blocked');
+      return showView(id === 'view-all' ? 'all' : id === 'view-inbox' ? 'inbox' : 'blocked');
+    case 'mark':
+      if (s.selected && shownRows(s).some((r) => r.id === s.selected)) store.dispatch({ type: 'mark', id: s.selected });
+      return;
+    case 'markAll':
+      return store.dispatch({ type: 'marks', ids: shownRows(s).map((r) => r.id) });
+    case 'clearMarks':
+      return store.dispatch({ type: 'marks', ids: [] });
+    case 'accept':
+      return confirmKind('accept', targets());
+    case 'closeItems':
+      return confirmKind('close', targets());
+    case 'undo':
+      return undoLast();
+    case 'signIn':
+      return signInBox.open();
   }
 };
 
@@ -178,6 +301,21 @@ const ui = shell(
     query: (text) => store.dispatch({ type: 'query', query: text }),
     palette: () => run('palette'),
     help: () => run('help'),
+    mark: (id) => store.dispatch({ type: 'mark', id }),
+    signIn: () => signInBox.open(),
+    signOut,
+    confirm: confirmKind,
+    setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
+    answer: (item, question, text, chosen) => write([item], { kind: 'answer', question, text, chosen }),
+    undo: undoLast,
+    dismiss: () => {
+      ui.writes.dismiss(store.get().writes.last);
+      paint(store.get());
+    },
+    clearMarks: () => {
+      store.dispatch({ type: 'marks', ids: [] });
+      ui.main.focus();
+    },
   },
   mac,
 );
@@ -220,7 +358,9 @@ const views = viewDialog({
     ui.focusSaved(next[at]?.name ?? null, false);
   },
 });
-document.body.append(palette.el, help.el, views.el);
+const confirm = confirmDialog(write);
+const signInBox = signInDialog(signIn);
+document.body.append(palette.el, help.el, views.el, confirm.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -247,7 +387,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || views.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || views.isOpen() || confirm.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;
@@ -256,6 +396,8 @@ document.addEventListener('keydown', (e) => {
   if (!id) return;
   // Enter on a focused link or button is that control's own click.
   if (id === 'open' && (inText || t instanceof HTMLAnchorElement || t instanceof HTMLButtonElement)) return;
+  // In a field, Mod+Z is the field's own undo.
+  if (id === 'undo' && inText) return;
   e.preventDefault();
   run(id);
 });
@@ -266,8 +408,14 @@ async function main() {
   if (!room || !token) return;
   await init();
   const fold = new Folder();
+  const questions = new Map<number, string>();
   const sink: Fold = {
-    apply: (o, p) => fold.apply(o, p),
+    apply: (o, p) => {
+      const ok = fold.apply(o, p);
+      const text = ok ? questionText(p) : null;
+      if (text !== null) questions.set(o, text);
+      return ok;
+    },
     newer: () => fold.newer(),
     at: () => fold.at(),
     stateJson: () => fold.state_json(),
@@ -282,7 +430,7 @@ async function main() {
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink) });
+      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
     });
   };
   let cursor = 0;
@@ -305,7 +453,7 @@ async function main() {
         },
         onLive: () => {
           delay = 1000;
-          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink) });
+          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
         },
       });
