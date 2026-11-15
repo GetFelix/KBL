@@ -172,6 +172,7 @@ try {
     check(await page.eval(`document.querySelector('.spend-total').textContent.startsWith('$')`), `${theme}: spend shows a total`);
     check(await page.eval(`/lower bound/.test(document.querySelector('.spend-note').textContent)`), `${theme}: spend says it is a lower bound`);
     check(await page.eval(`document.querySelectorAll('#spend-roots ~ table tbody tr').length > 0 && document.querySelectorAll('#spend-repos ~ table tbody tr').length > 0`), `${theme}: spend lists roots and repos`);
+    check(await page.eval(`document.querySelector('#spend-tiers ~ table tbody tr[data-key=fast] td')?.textContent === '$0.15'`), `${theme}: spend lists the reviewer tier from the fixture's review`);
     check(await focused('dialog.spend button'), `${theme}: the spend dialog takes focus`);
     await axe(`spend ${theme}`);
     await shoot(`spend-${theme}`);
@@ -316,8 +317,8 @@ try {
   await page.eval(`(() => { const s = document.querySelector('#filter-repo'); s.value = 'GetFelix/felix'; s.dispatchEvent(new Event('change')); return true; })()`);
   await page.waitFor(`location.search.includes('repo=GetFelix')`);
   const repoRows = await page.eval(`document.querySelectorAll('.row').length`);
-  check(repoRows === 5, `a repo filter keeps only that repo's items (${repoRows})`);
-  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 5 of 14: Repo GetFelix/felix'`), 'the summary says what the filters hide');
+  check(repoRows === 7, `a repo filter keeps only that repo's items (${repoRows})`);
+  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 7 of 16: Repo GetFelix/felix'`), 'the summary says what the filters hide');
   await press(page, 'k', MOD);
   for (const ch of 'tier: 2') await press(page, ch);
   await press(page, 'Enter');
@@ -331,7 +332,7 @@ try {
   check(await page.eval(`[...document.querySelectorAll('.empty button')].map((b) => b.textContent).join(',') === 'Clear search,Clear filters'`), 'no match inside filters offers Clear search and Clear filters');
   await press(page, 'Escape');
   await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent === 'Clear filters').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 14 && !location.search.includes('tier=')`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 16 && !location.search.includes('tier=')`);
   check(true, 'Clear filters shows everything and clears the address');
 
   // Saved views: from the address, to the sidebar, rename, delete, and back from storage.
@@ -357,7 +358,7 @@ try {
   await page.waitFor(`document.querySelector('.saved-row a')?.textContent === 'Urgent GitHub'`);
   check(await focused('.saved-row button[aria-label="Edit view Urgent GitHub"]'), 'Edit renames a view and the focus is back on its Edit button');
   await page.eval(`document.querySelector('.nav a').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 14`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 16`);
   check(await page.eval(`document.querySelector('.nav a').getAttribute('aria-current') === 'page' && !document.querySelector('.saved-row a').hasAttribute('aria-current')`), 'All work resets the view');
   await page.eval(`document.querySelector('.saved-row a').click(); true`);
   await page.waitFor(`document.querySelectorAll('.card').length === 6`);
@@ -523,6 +524,9 @@ try {
   await page.waitFor(`document.querySelector('.status')?.textContent.includes('Reading history')`);
   check(true, 'the status says it is reading history');
   await shoot('loading-dark');
+  await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Spend').click()`);
+  check(await page.eval(`document.querySelector('dialog.spend').open && /Still reading/.test(document.querySelector('dialog.spend [role=status]')?.textContent ?? '')`), 'Spend before the history is read says it is still reading, not an empty total');
+  await press(page, 'Escape');
 
   await open(connected, { mode: 'forbidden' });
   await page.waitFor(`document.querySelector('.status')?.dataset.tone === 'error'`);

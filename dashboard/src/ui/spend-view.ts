@@ -31,9 +31,18 @@ export function spendView(on: SpendHandlers) {
   return {
     el: m.el,
     isOpen: m.isOpen,
-    /** Draws the tables and opens the dialog; if it is already open, a live record redraws it in place. */
-    open(spend: Spend, items: readonly ItemRow[], s: ViewState) {
+    /** Draws the tables, or a loading note when `spend` is null, and opens the dialog; if it is already open, a live record redraws it in place. */
+    open(spend: Spend | null, items: readonly ItemRow[], s: ViewState) {
       const wasOpen = m.isOpen();
+      if (spend === null) {
+        m.body.replaceChildren(
+          h('header', { class: 'dialog-head' }, h('h2', {}, 'Spend'), close),
+          h('p', { class: 'muted', role: 'status' }, 'Still reading the history. Spend appears when it is loaded.'),
+        );
+        if (wasOpen) return;
+        m.open();
+        return close.focus();
+      }
       const t = tables(spend, items);
       const named = (r: SpendRow) => [r.label, r.hint ? h('span', { class: 'muted' }, ` ${r.hint}`) : null];
       const text = (r: SpendRow) => h('span', {}, ...named(r));

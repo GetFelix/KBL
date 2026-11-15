@@ -202,7 +202,7 @@ const run = (id: CommandId): void => {
     case 'help':
       return help.open();
     case 'spend':
-      return readSpend ? spendBox.open(readSpend(), s.items, s) : undefined;
+      return showSpend();
     case 'search':
       ui.search.focus();
       return ui.search.select();
@@ -343,6 +343,11 @@ const help = helpView(mac);
 // Set once the fold exists; Spend does nothing before then.
 let readSpend: (() => ReturnType<typeof spend>) | null = null;
 const spendBox = spendView({ open: openItem });
+// Spend of a log still being read would be a partial total, so the dialog waits for live and fills in then.
+const showSpend = () => {
+  const s = store.get();
+  spendBox.open(s.connection.kind === 'live' && readSpend ? readSpend() : null, s.items, s);
+};
 // Another tab may have changed the views since this one read them: every write starts
 // from what storage holds now, and a change made elsewhere shows up here as it lands.
 const currentSaved = (): SavedView[] => {
@@ -452,7 +457,7 @@ async function main() {
     requestAnimationFrame(() => {
       queued = false;
       store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
-      if (spendBox.isOpen()) spendBox.open(spend(sink), store.get().items, store.get());
+      if (spendBox.isOpen()) showSpend();
     });
   };
   let cursor = 0;
@@ -477,6 +482,7 @@ async function main() {
           delay = 1000;
           store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
+          if (spendBox.isOpen()) showSpend();
         },
       });
     } catch (e) {
