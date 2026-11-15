@@ -1,0 +1,1 @@
+Redaction now cuts a private key whose line breaks were stripped, PGP `PRIVATE KEY BLOCK` keys, the `Proc-Type:`, `DEK-Info:` and armor lines before a key body, key bodies whose line breaks are written as `\u000a` or `%0A`, secrets right after a URL-encoded byte such as `%20` or `%3D`, and two AWS access key ids joined by one byte. Records already on the log are unchanged.
