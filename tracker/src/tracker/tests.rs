@@ -1358,6 +1358,31 @@ async fn ingest_writing_a_context_entry_again_unchanged_logs_nothing() {
 }
 
 #[tokio::test]
+async fn ingest_takes_back_an_entry_an_agent_wrote_even_with_the_same_text() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    let same = Content::Text("the body".into());
+    t.context_add(&agent("w1"), &item("a1"), key("issue"), same.clone())
+        .await
+        .unwrap();
+    let context = WorkRecord::Context {
+        item: item("a1"),
+        entry: key("issue"),
+        text: same,
+    };
+    let before = fake.log().len();
+    t.ingest_record(key("ingest-gh"), context.clone())
+        .await
+        .unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+    // Ingest's own now, so the same text again is not logged.
+    t.ingest_record(key("ingest-gh"), context).await.unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+}
+
+#[tokio::test]
 async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
     let fake = Fake::default();
     let t = start(&fake).await;
