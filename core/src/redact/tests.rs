@@ -688,3 +688,224 @@ fn authorization_and_bearer_placeholders_in_prose_and_code_stay() {
         "headers.set('authorization', 'Basic [redacted]')"
     );
 }
+
+#[test]
+fn a_short_first_body_line_with_no_end_is_cut() {
+    let first = &BODY[..48];
+    let text = format!("-----BEGIN PRIVATE KEY-----\n{first}\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+    // A word, a hash and a sentence are not key material.
+    for line in [
+        "Done",
+        "abcdefabcdefabcdefabcdefabcdefabcdef0123",
+        "ThisIsAVeryLongCamelCaseIdentifierName",
+    ] {
+        let text = format!("-----BEGIN PRIVATE KEY-----\n{line}\nok");
+        assert_eq!(redact(&text), format!("[redacted]\n{line}\nok"), "{line}");
+    }
+}
+
+#[test]
+fn an_openssh_body_and_a_blank_line_with_no_end_are_cut() {
+    let line = format!("{BODY}AB12cd");
+    let text = format!("-----BEGIN OPENSSH PRIVATE KEY-----\n{line}\n{line}\nAB12cd==\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+    let text = format!("-----BEGIN PRIVATE KEY-----\n\n{BODY}\nAB12cd==\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+    // A blank line then prose is still prose; a line over 70 is not a body.
+    let text = "-----BEGIN PRIVATE KEY-----\n\nthanks, done\nok";
+    assert_eq!(redact(text), "[redacted]\n\nthanks, done\nok");
+    let long = format!("{BODY}{BODY}");
+    let text = format!("-----BEGIN PRIVATE KEY-----\n{long}\nok");
+    assert_eq!(redact(&text), format!("[redacted]\n{long}\nok"));
+}
+
+#[test]
+fn double_escaped_and_continued_bodies_are_cut() {
+    let short = "AB12cd==";
+    for (text, want) in [
+        (
+            format!(
+                "\"-----BEGIN PRIVATE KEY-----\\\\n{BODY}\\\\n{short}\\\\n-----END PRIVATE KEY-----\\\\n\" x"
+            ),
+            "\"[redacted]\\\\n\" x",
+        ),
+        (
+            format!(
+                "\"-----BEGIN PRIVATE KEY-----\\n\\\n    {BODY}\\n\\\n    {short}\\n\\\n    -----END PRIVATE KEY-----\" x"
+            ),
+            "\"[redacted]\" x",
+        ),
+    ] {
+        assert_eq!(redact(&text), want, "{text}");
+    }
+}
+
+#[test]
+fn a_bearer_in_an_escaped_json_header_is_cut() {
+    let text = r#"{\"Authorization\": \"Bearer AbCdEfGhIjKlMnOpQrStUv\"}"#;
+    assert_eq!(
+        redact(text),
+        r#"{\"Authorization\": \"Bearer [redacted]\"}"#
+    );
+    assert!(untouched(
+        r#"\"note\": \"Bearer authentication/authorization-flow\""#
+    ));
+}
+
+#[test]
+fn stuck_aws_ids_and_jwts_are_cut_whole() {
+    let id = fake("AKIA", "A1B2", 4);
+    assert_eq!(redact(&format!("k={id}{id} z")), "k=[redacted] z");
+    assert_eq!(redact(&format!("k={id}{id}{id} z")), "k=[redacted] z");
+    // A longer run is a name, not ids.
+    assert!(untouched(&format!("feature/{id}EXAMPLE1")));
+
+    let jwt = |sig: &str| format!("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.{sig}");
+    let sig = "AbCdEfGhIjKlMnOpQrSt";
+    let text = format!("t={}{} z", jwt(sig), jwt(sig));
+    assert_eq!(redact(&text), "t=[redacted] z");
+    // A JWT followed by a dotted word is still just the JWT.
+    let text = format!("t={}.next z", jwt(sig));
+    assert_eq!(redact(&text), "t=[redacted].next z");
+}
+
+#[test]
+fn slack_d_cookies_are_cut() {
+    let cookie = fake("xoxd-", "Ab3x%2BQ9Zk", 6);
+    assert_eq!(redact(&format!("d={cookie}; x")), "d=[redacted]; x");
+    assert!(untouched(
+        "branch xoxd-rotate-the-cookie-store-before-release"
+    ));
+    assert!(untouched("xoxd-short"));
+}
+
+#[test]
+fn new_shapes_stay_linear() {
+    let mb = 10 * 1024 * 1024;
+    let inputs = [
+        "AKIAA1B2C3D4E5F6A1B2".repeat(mb / 20),
+        "xoxd-".repeat(mb / 5),
+        format!("xoxd-{}", "a1%2B".repeat(mb / 5)),
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.AbCdEfGhIjKlMnOpQrStAbCdEfeyJ".repeat(mb / 64),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\n\n".repeat(mb / 2)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\\\n".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\r".repeat(mb / 2)),
+        format!("-----BEGIN PRIVATE KEY-----\\n\\\n{}", " ".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "A".repeat(mb)),
+        "-----BEGIN PRIVATE KEY-----\n\n".repeat(mb / 29),
+        "\\\"Authorization\\\": \\\"".repeat(mb / 24),
+    ];
+    for text in inputs {
+        let start = Instant::now();
+        let _ = redact(&text);
+        let took = start.elapsed();
+        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
+    }
+}
+
+fn mixed(n: usize) -> String {
+    "aB3xQ9Zk".repeat(n / 8 + 1)[..n].to_string()
+}
+
+#[test]
+fn first_line_length_boundaries_with_no_end() {
+    let hdr = "-----BEGIN PRIVATE KEY-----";
+    // 31 bytes is a word or hash, kept; 32 bytes of mixed classes is a key.
+    let l31 = mixed(31);
+    assert_eq!(
+        redact(&format!("{hdr}\n{l31}\nok")),
+        format!("[redacted]\n{l31}\nok")
+    );
+    assert_eq!(
+        redact(&format!("{hdr}\n{}\nok", mixed(32))),
+        "[redacted]\nok"
+    );
+    // Current behaviour: a 32 to 63 byte line with 3 classes is cut. That
+    // over-redacts one line after a key header, it never leaks one.
+    assert_eq!(
+        redact(&format!("{hdr}\n{}\nok", mixed(63))),
+        "[redacted]\nok"
+    );
+}
+
+#[test]
+fn full_line_length_boundaries_with_no_end() {
+    let hdr = "-----BEGIN PRIVATE KEY-----";
+    // Current behaviour: 64 to 71 bytes count as a body line, 72 does not.
+    for n in [64, 65, 70, 71] {
+        let text = format!("{hdr}\n{}\nAB12cd==\nok", mixed(n));
+        assert_eq!(redact(&text), "[redacted]\nok", "{n}");
+    }
+    let l72 = mixed(72);
+    assert_eq!(
+        redact(&format!("{hdr}\n{l72}\nok")),
+        format!("[redacted]\n{l72}\nok")
+    );
+    // A diff marker makes a 70 byte line 71 on the page.
+    let text = format!("{hdr}\n-{}\n-AB12cd==\nok", mixed(70));
+    assert_eq!(redact(&text), "[redacted]\nok");
+}
+
+#[test]
+fn a_continued_body_with_crlf_is_cut() {
+    let text = format!(
+        "\"-----BEGIN PRIVATE KEY-----\\n\\\r\n    {BODY}\\n\\\r\n    AB12cd==\\n\\\r\n    -----END PRIVATE KEY-----\" x"
+    );
+    assert_eq!(redact(&text), "\"[redacted]\" x");
+}
+
+#[test]
+fn stuck_asia_ids_mixed_ids_and_three_jwts_are_cut_whole() {
+    let asia = fake("ASIA", "A1B2", 4);
+    let akia = fake("AKIA", "A1B2", 4);
+    assert_eq!(redact(&format!("k={asia}{asia} z")), "k=[redacted] z");
+    assert_eq!(redact(&format!("k={akia}{asia} z")), "k=[redacted] z");
+    assert_eq!(redact(&format!("k={asia}{akia}{asia} z")), "k=[redacted] z");
+    let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.AbCdEfGhIjKlMnOpQrSt";
+    assert_eq!(redact(&format!("t={jwt}{jwt}{jwt} z")), "t=[redacted] z");
+}
+
+#[test]
+fn deeper_escaping_and_continuations_are_cut_whole() {
+    let end = "-----END PRIVATE KEY-----";
+    let short = "AB12cd==";
+    let bs = |n: usize| "\\".repeat(n);
+    // Line breaks escaped one to four levels deep (`\n`, `\\n`, `\\\n`, `\\\\n`).
+    for depth in 1..=4 {
+        let nl = format!("{}n", bs(depth));
+        let text = format!("x \"-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}{short}{nl}{end}{nl}\" y");
+        assert_eq!(
+            redact(&text),
+            format!("x \"[redacted]{nl}\" y"),
+            "depth {depth}"
+        );
+        // The same with no END line.
+        let text = format!("x \"-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}{short}{nl}\" y");
+        assert!(!redact(&text).contains(BODY), "depth {depth} no end");
+    }
+    // A Rust `\n\` continuation, plain, JSON-encoded, and with CRLF.
+    for cont in [
+        "\\n\\\n    ".to_string(),
+        "\\\\n\\\\\\n    ".to_string(),
+        "\\r\\n\\\n    ".to_string(),
+        "\\\\r\\\\n\\\\\\n    ".to_string(),
+        "\\n\\\r\n    ".to_string(),
+        "\\\n    ".to_string(),
+    ] {
+        let text = format!("\"-----BEGIN PRIVATE KEY-----{cont}{BODY}{cont}{short}{cont}{end}\" x");
+        assert_eq!(redact(&text), "\"[redacted]\" x", "{cont:?}");
+    }
+    // Five levels of escaping is sixteen backslashes.
+    let nl = format!("{}n", bs(16));
+    let text = format!("-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}{short}{nl}{end}ok");
+    assert_eq!(redact(&text), "[redacted]ok");
+}
+
+#[test]
+fn slack_c_tokens_are_cut() {
+    let tok = fake("xoxc-", "1234567890-", 1) + &fake("", "Ab3x9Zk2", 8);
+    assert_eq!(redact(&format!("c={tok} z")), "c=[redacted] z");
+    assert!(untouched("xoxc-short"));
+}
