@@ -221,6 +221,10 @@ fn adversarial_input_stays_linear() {
             "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-\n".repeat(400)
         )
         .repeat(mb / 16_000),
+        format!("-----BEGIN RSA PRIVATE KEY-----{}", " ".repeat(mb)),
+        "-----BEGIN RSA PRIVATE KEY-----\n    > ".repeat(mb / 38),
+        format!("-----BEGIN RSA PRIVATE KEY----- {}", "A ".repeat(mb / 2)),
+        "xoxe.xoxb-".repeat(mb / 10),
         format!("sk-{}", "a-".repeat(mb / 2)),
         "\\n".repeat(mb / 2),
         "A".repeat(mb),
@@ -462,4 +466,89 @@ fn key_markers_in_code_are_not_a_block() {
         "------BEGIN OPENSSH PRIVATE KEY-----\n-{line}\n-AB==\n------END OPENSSH PRIVATE KEY-----\n"
     );
     assert_eq!(redact(&text), "-[redacted]\n");
+}
+
+#[test]
+fn an_indented_or_quoted_key_is_cut_whole() {
+    let line = fake("MIIE", "q9Zx", 15);
+    let short = "AB12cd==";
+    let key = |pre: &str, sep: &str| {
+        format!(
+            "{pre}-----BEGIN PRIVATE KEY-----{sep}{pre}{line}{sep}{pre}{short}{sep}{pre}-----END PRIVATE KEY-----"
+        )
+    };
+    // A YAML block scalar.
+    let text = format!("tls.key: |\n{}\nnext: 1", key("    ", "\n"));
+    assert_eq!(redact(&text), "tls.key: |\n    [redacted]\nnext: 1");
+    // A diff of one, a quoted reply, a tab-indented one.
+    for pre in ["+    ", "> ", "\t", "-  "] {
+        let text = format!("{}\n fn f() {{}}", key(pre, "\n"));
+        assert_eq!(
+            redact(&text),
+            format!("{pre}[redacted]\n fn f() {{}}"),
+            "{pre:?}"
+        );
+    }
+    // Newlines turned into spaces.
+    let text = format!("KEY=\"{}\" rest", key("", " "));
+    assert_eq!(redact(&text), "KEY=\"[redacted]\" rest");
+    // Cut off before its `END`: the indented and space-split lines still go.
+    let text = format!("  -----BEGIN PRIVATE KEY-----\n  {line}\n  {short}\nnext: 1");
+    assert_eq!(redact(&text), "  [redacted]\nnext: 1");
+    let text = format!("KEY=\"-----BEGIN PRIVATE KEY----- {line} {short}");
+    assert_eq!(redact(&text), "KEY=\"[redacted]");
+    // Prose after a header is not a body.
+    let text = "the -----BEGIN PRIVATE KEY----- line starts it";
+    assert_eq!(redact(text), "the [redacted] line starts it");
+}
+
+#[test]
+fn legacy_and_rotated_slack_tokens_are_cut() {
+    for secret in [
+        fake("xoxb-4159162725-", "abcdEFGH", 3),
+        fake("xoxe.xoxp-1-", "Mi0yLTE5Nz", 12),
+        fake("xoxe.xoxb-1-", "Mi0yLTE5Nz", 12),
+        fake("xoxe-1-", "My1xTj3Q", 10),
+    ] {
+        let text = format!("env: X={secret} done");
+        assert_eq!(redact(&text), "env: X=[redacted] done", "{secret}");
+    }
+    for text in [
+        "git checkout xoxb-2-migration-of-legacy-tokens",
+        "xoxe-1-refresh-handling",
+        "xoxb-12-tokens",
+    ] {
+        assert!(untouched(text), "{text}");
+    }
+}
+
+#[test]
+fn authorization_in_code_is_a_header() {
+    let basic = "dXNlcjpwYXNz";
+    for (before, after) in [
+        ("headers[\"Authorization\"] = \"", "\""),
+        ("req.header(\"Authorization\", \"", "\")"),
+        (".header(AUTHORIZATION, \"", "\")"),
+        ("{'authorization': '", "'}"),
+    ] {
+        let text = format!("{before}Basic {basic}{after}");
+        assert_eq!(redact(&text), format!("{before}Basic [redacted]{after}"));
+    }
+    // A bearer token without digits is still a token in a header.
+    let t = "abcdefghijKLMNOPqrstuvwx-yz";
+    let text = format!(".header(\"Authorization\", \"Bearer {t}\")");
+    assert_eq!(
+        redact(&text),
+        ".header(\"Authorization\", \"Bearer [redacted]\")"
+    );
+    let text = format!("Authorization: Bearer {t}");
+    assert_eq!(redact(&text), "Authorization: Bearer [redacted]");
+    // In prose it is not.
+    for text in [
+        "authorization Basic Requirements",
+        "the Bearer abcdefghijKLMNOPqrstuvwx-yz is prose",
+        "see authorization; Bearer authentication/authorization-flow",
+    ] {
+        assert!(untouched(text), "{text}");
+    }
 }

@@ -88,35 +88,39 @@ fn random_run(t: &[u8]) -> bool {
     })
 }
 
-/// Slack tokens are numeric ids then a secret, joined by `-`:
-/// `xoxb-<team>-<bot>-<secret>`, `xapp-<n>-<app>-<ts>-<secret>`.
-/// `xoxb-slackbot-tools` is a repo.
+/// Slack tokens are a numeric id, perhaps more ids, then a secret, joined
+/// by `-`: `xoxb-<team>-<bot>-<secret>`, `xoxb-<team>-<secret>`,
+/// `xapp-<n>-<app>-<ts>-<secret>`, `xoxe-1-<secret>`. The ids have no lower
+/// case and the secret is at least 12 bytes of mixed classes, so
+/// `xoxb-slackbot-tools` and `xoxb-2-migration-of-legacy-tokens` are names.
 fn slack_token(t: &[u8]) -> bool {
-    let mut segs = t.split(|b| *b == b'-');
-    segs.next()
-        .is_some_and(|s| !s.is_empty() && s.iter().all(u8::is_ascii_digit))
-        && segs.clone().count() >= 2
-        && segs.all(|s| !s.is_empty())
-}
-
-/// Whether the bytes before a scheme end in an `Authorization` header name,
-/// as in `Authorization: ` or `"authorization": "`.
-fn authorization(before: &[u8]) -> bool {
-    fn trim(s: &[u8]) -> &[u8] {
-        let n = s
-            .iter()
-            .rev()
-            .take_while(|b| b.is_ascii_whitespace() || **b == b'"' || **b == b'\'')
-            .count();
-        &s[..s.len() - n]
-    }
-    let s = trim(&before[before.len().saturating_sub(48)..]);
-    let Some(s) = s.strip_suffix(b":").or_else(|| s.strip_suffix(b"=")) else {
+    let Some(cut) = t.iter().rposition(|b| *b == b'-') else {
         return false;
     };
-    let s = trim(s);
+    let secret = &t[cut + 1..];
+    let mut ids = t[..cut].split(|b| *b == b'-');
+    ids.next()
+        .is_some_and(|s| !s.is_empty() && s.iter().all(u8::is_ascii_digit))
+        && ids.all(|s| !s.is_empty() && !s.iter().any(u8::is_ascii_lowercase))
+        && secret.len() >= 12
+        && classes(secret) >= 2
+}
+
+/// Whether the bytes before a scheme end in an `Authorization` header name
+/// and a `:`, `=` or `,`, as in `Authorization: `, `"authorization": "`,
+/// `headers["Authorization"] = "` or `.header(AUTHORIZATION, "`.
+fn authorization(before: &[u8]) -> bool {
+    let w = &before[before.len().saturating_sub(48)..];
+    let gap = w
+        .iter()
+        .rev()
+        .take_while(|b| b.is_ascii_whitespace() || b"\"'`[]():=,>".contains(b))
+        .count();
+    let (s, gap) = w.split_at(w.len() - gap);
     let name = b"authorization";
-    s.len() >= name.len() && s[s.len() - name.len()..].eq_ignore_ascii_case(name)
+    gap.iter().any(|b| b":=,".contains(b))
+        && s.len() >= name.len()
+        && s[s.len() - name.len()..].eq_ignore_ascii_case(name)
 }
 
 /// `Basic` credentials are base64 of `user:pass`, padded to a multiple of 4
@@ -132,10 +136,11 @@ fn basic(before: &[u8], t: &[u8], _: &[u8]) -> bool {
     shape && (authorization(before) || t.iter().any(|b| b.is_ascii_digit() || b"+/=".contains(b)))
 }
 
-/// A bearer token has digits: `Bearer authentication/authorization-flow` is
-/// prose.
-fn bearer_value(_: &[u8], t: &[u8], _: &[u8]) -> bool {
-    t.iter().any(u8::is_ascii_digit) && t.iter().any(u8::is_ascii_alphabetic)
+/// Outside an `Authorization` header a bearer token needs a digit:
+/// `Bearer authentication/authorization-flow` is prose.
+fn bearer_value(before: &[u8], t: &[u8], _: &[u8]) -> bool {
+    t.iter().any(u8::is_ascii_alphabetic)
+        && (authorization(before) || t.iter().any(u8::is_ascii_digit))
 }
 
 /// Whether a `token=` at the end of `before` is a URL query parameter, as in
@@ -216,6 +221,10 @@ const SHAPES: &[Shape] = &[
     // Slack app, bot, user and refresh tokens. The check reads the start of
     // the tail, so a later prefix inside a failed one can still match and the
     // tail is bounded instead.
+    // Rotated tokens first, so the cut starts at `xoxe.`.
+    slack_shape("xoxe.xoxb-", 10),
+    slack_shape("xoxe.xoxp-", 10),
+    slack_shape("xoxe-", 10),
     slack_shape("xapp-", 20),
     slack_shape("xoxa-", 10),
     slack_shape("xoxb-", 10),
@@ -248,6 +257,8 @@ const MAX_KEY_LABEL: usize = 32;
 /// Furthest an `END` line may be from its `BEGIN`. An 8192-bit RSA key is
 /// under 7 KiB.
 const MAX_KEY_BODY: usize = 16 * 1024;
+/// Longest indentation or quote prefix read on a line of a PEM body.
+const MAX_PEM_PREFIX: usize = 32;
 /// Length of a full line of a PEM body.
 const PEM_LINE: usize = 64;
 /// Longest body line taken inside a block; OpenSSH keys use 70.
@@ -545,60 +556,105 @@ fn private_key(text: &str, i: usize, ends: &mut NextEnd) -> Option<usize> {
     Some(body + pem_lines(&text.as_bytes()[body..]) - i)
 }
 
-/// Whether `s`, from the end of a key's header to its `END`, is lines of
-/// base64, each perhaps after a diff marker. Stops at the first byte that
-/// is not, so a `BEGIN` inside a failed body is not read twice.
+/// Whether `s`, from the end of a key's header to its `END`, is runs of
+/// base64 split by line breaks or spaces (a key pasted on one line). A line
+/// may start with indentation, a diff marker or a `>` quote. Stops at the
+/// first byte that is none of these, so a `BEGIN` inside a failed body is
+/// not read twice.
 fn pem_body(s: &[u8]) -> bool {
     let mut at = 0;
-    let mut lines = 0;
+    let mut runs = 0;
+    let mut line_start = true;
     while at < s.len() {
         if let Some(br) = line_break(&s[at..]) {
             at += br;
+            line_start = true;
             continue;
         }
         // `+` is base64 already.
-        if matches!(s[at], b'-' | b' ') {
+        if matches!(s[at], b' ' | b'\t') || (line_start && matches!(s[at], b'-' | b'>')) {
             at += 1;
+            continue;
         }
         let n = s[at..]
             .iter()
             .take(MAX_PEM_LINE + 1)
             .take_while(|b| base64(**b))
             .count();
-        at += n;
-        if n > MAX_PEM_LINE || (at < s.len() && line_break(&s[at..]).is_none()) {
+        if n == 0 || n > MAX_PEM_LINE {
             return false;
         }
-        lines += usize::from(n > 0);
+        at += n;
+        line_start = false;
+        runs += 1;
     }
-    lines > 0
+    runs > 0
 }
 
-/// How many bytes of `s` are line breaks (real or JSON-escaped) each followed
-/// by a line of base64: full lines, then at most one short last line.
+/// How many bytes of `s` are base64 lines after a key's header, each after a
+/// line break (real or JSON-escaped) and perhaps a line prefix: full lines,
+/// then at most one short last line. A key pasted on one line has its full
+/// lines split by spaces instead; a short run after a space counts only
+/// after a full one, so prose after a header is left.
 fn pem_lines(s: &[u8]) -> usize {
     let mut at = 0;
+    let mut full = false;
     while at < MAX_KEY_BODY {
-        let Some(br) = line_break(&s[at..]) else {
+        let (gap, newline) = pem_gap(&s[at..]);
+        if gap == 0 {
             break;
-        };
-        let line = s[at + br..]
+        }
+        let start = at + gap;
+        let line = s[start..]
             .iter()
             .take(PEM_LINE + 2)
             .take_while(|b| base64(**b))
             .count();
-        let next = at + br + line;
-        let ends_line = next == s.len() || line_break(&s[next..]).is_some();
+        let next = start + line;
         // A diff marker makes a full line one longer.
-        if line == 0 || line > PEM_LINE + 1 || !ends_line {
+        if line == 0 || line > PEM_LINE + 1 {
+            break;
+        }
+        // A full line may also end at a space, as in a key pasted on one line.
+        let (n, br) = pem_gap(&s[next..]);
+        let ends_line = br || next + n == s.len() || (n > 0 && line >= PEM_LINE);
+        if !ends_line || (!newline && line < PEM_LINE && !full) {
             break;
         }
         at = next;
         if line < PEM_LINE {
             break;
         }
+        full = true;
     }
     at
+}
+
+/// The gap before the next run of a PEM body: spaces or tabs, then perhaps
+/// a line break and a line prefix (indentation, a `>` quote, a `-` diff
+/// marker, or a `+` one followed by a space). Whether it held a line break.
+fn pem_gap(s: &[u8]) -> (usize, bool) {
+    let blank = |b: &u8| matches!(*b, b' ' | b'\t');
+    let spaces = s
+        .iter()
+        .take(MAX_PEM_PREFIX)
+        .take_while(|b| blank(b))
+        .count();
+    let Some(br) = line_break(&s[spaces..]) else {
+        return (spaces, false);
+    };
+    let from = spaces + br;
+    let prefix = s[from..]
+        .iter()
+        .enumerate()
+        .take(MAX_PEM_PREFIX)
+        .take_while(|&(k, b)| {
+            blank(b)
+                || matches!(*b, b'>' | b'-')
+                || (*b == b'+' && s.get(from + k + 1).is_some_and(blank))
+        })
+        .count();
+    (from + prefix, true)
 }
 
 fn line_break(s: &[u8]) -> Option<usize> {
