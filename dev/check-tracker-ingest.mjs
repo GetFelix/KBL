@@ -101,7 +101,6 @@ const tree = () =>
   workLog()
     .filter((r) => r.item === root || r.parent === root || r.item?.startsWith(`${root}-`))
     .map((r) => (r.kind === "context" ? `context:${r.item}:${r.entry}:${JSON.stringify(r.text)}` : `${r.kind}:${r.item}`));
-const contextOnly = (records) => records.every((k) => k.startsWith("context:"));
 
 await startTracker(tokens);
 try {
@@ -133,12 +132,10 @@ try {
   check(imports().length === 1, `${UPSTREAM} is still imported once after a poll with no saved state`);
   const after = tree();
   const added = after.slice(first.length);
-  check(added.length === 2, "a poll with no saved state added exactly the two context records");
+  check(added.length === 0, "a poll with no saved state wrote nothing, since the context text is unchanged");
   check(
-    JSON.stringify(after.slice(0, first.length)) === JSON.stringify(first) &&
-      contextOnly(added) &&
-      added.every((k) => first.includes(k)),
-    "a poll with no saved state kept one import, accept, triage and augment, and only added the two context records",
+    JSON.stringify(after) === JSON.stringify(first),
+    "a poll with no saved state kept one import, accept, triage and augment and added no context records",
   );
 } finally {
   // The root and its triage and augment items are ready; later checks on this stack must not be handed them.
