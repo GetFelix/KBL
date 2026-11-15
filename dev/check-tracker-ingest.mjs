@@ -3,9 +3,10 @@
 //   1. the first poll imports the issue as a root, accepts it and posts its
 //      triage and augment items;
 //   2. two more polls of the same listing write nothing;
-//   3. a poll after ingest's saved state is lost finds the root: it imports and
-//      admits nothing again, and only rewrites the issue's two context entries
-//      with the same text.
+//   3. a poll after ingest's saved state is lost re-sends Proposed and Imported;
+//      the tracker's keyed dedup rejects them, so the log still holds exactly one
+//      import, accept, triage and augment, and gains only the issue's two context
+//      records, with the same text.
 // It closes the root at the end. Claiming each item once is dev/check-tracker-claims.mjs.
 //
 //   cargo build -p kbl-tool -p kbl-tracker -p kbl-ingest && node dev/check-tracker-ingest.mjs
@@ -126,20 +127,22 @@ try {
   // 3. Ingest loses its saved state, as after a restart with a lost save.
   const saved = await ingestCall("GET", "/v1/ingest/state/github");
   await ingestCall("PUT", "/v1/ingest/state/github", { state: null, version: saved.version });
+  const cleared = await ingestCall("GET", "/v1/ingest/state/github");
+  check(cleared.state == null, "ingest's saved state is empty before the poll");
   await pollOnce();
   check(imports().length === 1, `${UPSTREAM} is still imported once after a poll with no saved state`);
   const after = tree();
   const added = after.slice(first.length);
+  check(added.length === 2, "a poll with no saved state added exactly the two context records");
   check(
     JSON.stringify(after.slice(0, first.length)) === JSON.stringify(first) &&
       contextOnly(added) &&
       added.every((k) => first.includes(k)),
-    "a poll with no saved state admitted nothing again, and only rewrote context entries with the same text",
+    "a poll with no saved state kept one import, accept, triage and augment, and only added the two context records",
   );
-
-  // The root and its triage and augment items are ready; later checks on this stack must not be handed them.
-  await personCall("tok-gab", "/v1/work/close", { item: root });
 } finally {
+  // The root and its triage and augment items are ready; later checks on this stack must not be handed them.
+  if (root) await personCall("tok-gab", "/v1/work/close", { item: root });
   killAll();
   github.close();
 }
