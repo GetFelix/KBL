@@ -602,7 +602,8 @@ async fn a_revoke_written_while_the_org_lease_was_away_holds_after_the_retake() 
         .await
         .unwrap();
     o.org.lease_lost.store(false, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // The other tracker's entry stands for one ttl; the retake waits it out.
+    tokio::time::sleep(Duration::from_secs(20)).await;
     assert_eq!(next_as(&o.app, &token).await, StatusCode::UNAUTHORIZED);
     assert_eq!(next_as(&o.app, "tok-w1").await, StatusCode::OK);
 }

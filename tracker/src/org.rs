@@ -260,7 +260,10 @@ impl<B: Broker> Org<B> {
             // Taking it back means another tracker may have written meanwhile.
             return match self.take_lease().await {
                 Ok(true) => true,
-                Ok(false) => false,
+                Ok(false) => {
+                    eprintln!("kbl-tracker: another tracker took the org writer lease");
+                    false
+                }
                 Err(e) => {
                     eprintln!("kbl-tracker: could not take the org writer lease: {e:#}");
                     false
