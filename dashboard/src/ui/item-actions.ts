@@ -150,7 +150,9 @@ export function itemActions(on: WriteHandlers) {
         }
         // The control that had the focus is gone (the item moved stage, say); keep it in the actions.
         if (hadFocus !== null && !el.contains(document.activeElement)) {
-          const same = hadFocus ? el.querySelector<HTMLElement>(`[data-focus="${hadFocus}"]`) : null;
+          // Flag and Unflag swap places: the focus follows the toggle.
+          const toggled = ({ flag: 'unflag', unflag: 'flag' } as Record<string, string>)[hadFocus] ?? hadFocus;
+          const same = hadFocus ? (el.querySelector<HTMLElement>(`[data-focus="${hadFocus}"]`) ?? el.querySelector<HTMLElement>(`[data-focus="${toggled}"]`)) : null;
           (same ?? head).focus({ preventScroll: true });
         }
       }

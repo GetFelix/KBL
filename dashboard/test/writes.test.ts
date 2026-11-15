@@ -219,6 +219,8 @@ test('a flag on an item that changed since is refused unsent, and the refusal re
   assert.match(stale.req as string, /already flagged/);
   const [again] = jobsFor(['a'], { kind: 'unflag' }, [was], NO_WRITES);
   assert.match(again.req as string, /not flagged/);
+  const closed = item({ id: 'a', stage: 'closed', accepted: true, flagged: true });
+  assert.doesNotMatch(jobsFor(['a'], { kind: 'flag' }, [closed], NO_WRITES)[0].req as string, /already flagged/);
   const [ok] = jobsFor(['a'], { kind: 'flag' }, [was], NO_WRITES);
   assert.deepEqual(ok.req, { path: '/v1/work/flag', body: { item: 'a' } });
 });

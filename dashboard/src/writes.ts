@@ -228,7 +228,7 @@ function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly Ite
   const now = items.find((i) => i.id === id);
   if (!now) return `${id} is no longer in the log.`;
   if (CAN[kind](now)) return null;
-  if (kind === 'flag' && now.flagged) return `${id} is already flagged, so nothing was sent.`;
+  if (kind === 'flag' && OPEN(now) && now.flagged) return `${id} is already flagged, so nothing was sent.`;
   if (kind === 'unflag' && OPEN(now)) return `${id} is not flagged now, so nothing was sent.`;
   return `${id} changed since: it is ${now.stage.replaceAll('_', ' ')} now, so nothing was sent.`;
 }
