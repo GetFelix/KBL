@@ -80,6 +80,9 @@ pub(crate) struct Settings {
     /// Dies after the first delivery is polled and before `claimed` is written.
     /// For the dev-stack check.
     pub(crate) crash_after_poll: bool,
+    /// Dies after a terminal record is written and before the answer. For the
+    /// dev-stack check that a retried call is replayed.
+    pub(crate) crash_after_done: bool,
     /// Reviewer tier names, one ready lane each. The first reads a request
     /// first and the last gives the final review.
     pub(crate) review_tiers: Vec<String>,
@@ -149,6 +152,15 @@ impl std::fmt::Display for Error {
             Error::Felix(e) => write!(f, "Felix failed: {e:#}"),
         }
     }
+}
+
+/// Which claim a terminal call is for. The claim's offset names one claim;
+/// an attempt number is shared by every claim of a retried attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Which {
+    Attempt(u32),
+    /// The offset of the claim's `claimed` record.
+    Claim(u64),
 }
 
 /// One agent's delivery of one ready record.
@@ -379,14 +391,47 @@ struct Recall {
     /// for an edge, and one from a prerequisite, an answer or anyone else's
     /// link is never ingest's to remove.
     ingest_edges: HashSet<(ItemId, ItemId)>,
+    /// The claims of each attempt and how each ended, so a terminal call
+    /// retried after a lost answer can be told what it already wrote. A retry
+    /// after a release or lapse claims the same attempt number again.
+    attempts: HashMap<(ItemId, u32), Vec<ClaimLog>>,
+    /// The attempt each `claimed` record is in, by its offset.
+    claims: HashMap<u64, (ItemId, u32)>,
+}
+
+/// One `claimed` record and the record that ended it.
+struct ClaimLog {
+    offset: u64,
+    by: Key,
+    ended: Option<Ended>,
+}
+
+/// The record that ended a claim.
+struct Ended {
+    offset: u64,
+    kind: &'static str,
+    /// What a `prerequisite` named, so a retry naming another is not replayed.
+    prerequisite: Option<ItemId>,
+    actor: Actor,
+    by: Key,
 }
 
 impl Recall {
     /// `created` says the record made an edge that was not there before it.
-    fn remember(&mut self, offset: u64, logged: &WorkLogged, me: &Key, created: bool) {
+    fn remember(
+        &mut self,
+        offset: u64,
+        logged: &WorkLogged,
+        me: &Key,
+        created: bool,
+        rejected: bool,
+    ) {
         let record = &logged.record;
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
+        }
+        if !rejected {
+            self.attempt(offset, logged);
         }
         match record {
             WorkRecord::Linked { item, to } => {
@@ -414,6 +459,91 @@ impl Recall {
             _ => {}
         }
         remember(&mut self.texts, offset, record);
+    }
+
+    fn attempt(&mut self, offset: u64, logged: &WorkLogged) {
+        let (item, attempt, ends) = match &logged.record {
+            WorkRecord::Claimed { item, attempt, .. } => (item, *attempt, false),
+            WorkRecord::Done { item, attempt, .. }
+            | WorkRecord::Released { item, attempt, .. }
+            | WorkRecord::GaveUp { item, attempt, .. } => (item, *attempt, true),
+            // A triage prerequisite leaves the claim going on.
+            WorkRecord::Prerequisite {
+                item,
+                attempt,
+                triage: None,
+                ..
+            } => (item, *attempt, true),
+            _ => return,
+        };
+        let claims = self.attempts.entry((item.clone(), attempt)).or_default();
+        if !ends {
+            self.claims.insert(offset, (item.clone(), attempt));
+            claims.push(ClaimLog {
+                offset,
+                by: logged.by.clone(),
+                ended: None,
+            });
+        } else if let Some(c) = claims.last_mut().filter(|c| c.ended.is_none()) {
+            c.ended = Some(Ended {
+                offset,
+                kind: logged.record.kind(),
+                prerequisite: match &logged.record {
+                    WorkRecord::Prerequisite { prerequisite, .. } => Some(prerequisite.clone()),
+                    _ => None,
+                },
+                actor: logged.actor,
+                by: logged.by.clone(),
+            });
+        }
+    }
+
+    /// The offset of the newest `claimed` record of `attempt`.
+    fn claimed(&self, item: &ItemId, attempt: u32) -> Option<u64> {
+        let claims = self.attempts.get(&(item.clone(), attempt))?;
+        claims.last().map(|c| c.offset)
+    }
+
+    /// The offset of the record that ended the claim `which` names, if `agent`
+    /// itself wrote it as `kind`. By attempt, that is `agent`'s latest claim of
+    /// it. A record the tracker or a person wrote, such as `released lapsed`, is
+    /// not the agent's outcome.
+    fn ended_by(
+        &self,
+        item: &ItemId,
+        which: Which,
+        agent: &AgentName,
+        kind: &str,
+        prerequisite: Option<&ItemId>,
+    ) -> Option<u64> {
+        let mine = |c: &&ClaimLog| c.by.as_str() == agent.as_str();
+        let claim = match which {
+            Which::Attempt(a) => self
+                .attempts
+                .get(&(item.clone(), a))?
+                .iter()
+                .rev()
+                .find(mine)?,
+            Which::Claim(at) => {
+                let key = self.claims.get(&at).filter(|(i, _)| i == item)?;
+                self.attempts.get(key)?.iter().find(|c| c.offset == at)?
+            }
+        };
+        let ended = claim.ended.as_ref()?;
+        let theirs = ended.kind == kind
+            && ended.prerequisite.as_ref() == prerequisite
+            && ended.actor == Actor::Agent
+            && ended.by.as_str() == agent.as_str();
+        theirs.then_some(ended.offset)
+    }
+
+    /// Whether the claim `agent` holds on `attempt` is not the one `which` names.
+    fn other_claim(&self, item: &ItemId, attempt: u32, which: Option<Which>) -> bool {
+        match which {
+            None => false,
+            Some(Which::Attempt(a)) => a != attempt,
+            Some(Which::Claim(at)) => self.claimed(item, attempt) != Some(at),
+        }
     }
 }
 
@@ -586,7 +716,7 @@ impl<B: Broker> Tracker<B> {
                 self.resume_recover(agent, &mut delivery).await?;
                 if let Some(d) = delivery.as_ref() {
                     let core = self.0.core.lock().await;
-                    return Ok(claimed(&core.state, d, true));
+                    return Ok(claimed(&core, d, true));
                 }
                 let held = self.0.core.lock().await.state.held_by(agent.as_str());
                 if let Some((item, _)) = held {
@@ -601,7 +731,7 @@ impl<B: Broker> Tracker<B> {
                 }
                 self.sync_ready().await;
                 if let Some(d) = self.try_claim(agent, &lanes).await? {
-                    let reply = claimed(&self.0.core.lock().await.state, &d, false);
+                    let reply = claimed(&*self.0.core.lock().await, &d, false);
                     *delivery = Some(d);
                     return Ok(reply);
                 }
@@ -716,11 +846,14 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
+        which: Option<Which>,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
+            which,
+            "done",
             |attempt| WorkRecord::Done {
                 item: item.clone(),
                 attempt,
@@ -738,12 +871,15 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
+        which: Option<Which>,
         reason: Option<String>,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
+            which,
+            "released",
             |attempt| WorkRecord::Released {
                 item: item.clone(),
                 attempt,
@@ -762,12 +898,15 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
+        which: Option<Which>,
         reason: String,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
+            which,
+            "gave_up",
             |attempt| WorkRecord::GaveUp {
                 item: item.clone(),
                 attempt,
@@ -1513,11 +1652,15 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Shared tail of complete, release and give_up: write the record the fold
-    /// accepts, then settle the delivery.
+    /// accepts, then settle the delivery. With `attempt`, a call whose claim
+    /// already ended answers with the record that ended it, if this agent wrote
+    /// it for that attempt as `kind`: the retry of a call whose answer was lost.
     async fn finish(
         &self,
         agent: &AgentName,
         item: &ItemId,
+        which: Option<Which>,
+        kind: &'static str,
         record: impl FnOnce(u32) -> WorkRecord,
         reply: Value,
     ) -> Result<Value, Error> {
@@ -1525,15 +1668,29 @@ impl<B: Broker> Tracker<B> {
         let slot = self.slot(agent);
         let mut delivery = slot.lock().await;
         if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
-            return Err(lapsed(item));
+            let core = self.0.core.lock().await;
+            self.recall_current()?;
+            return replay(&core, agent, item, which, kind, reply).ok_or_else(|| lapsed(item));
         }
         let mut ops = Vec::new();
         let mut marked = false;
+        let offset;
         {
             let mut core = self.0.core.lock().await;
-            let attempt = holding(&core, delivery.as_ref(), agent, item)?;
+            let held = match holding(&core, delivery.as_ref(), agent, item) {
+                Ok(held) if core.recall.other_claim(item, held, which) => Err(lapsed(item)),
+                held => held,
+            };
+            let held = match held {
+                Ok(held) => held,
+                Err(e) => {
+                    self.recall_current()?;
+                    return replay(&core, agent, item, which, kind, reply).ok_or(e);
+                }
+            };
             core.published.remove(item);
-            self.append(&mut core, Actor::Agent, agent_key(agent), record(attempt))
+            offset = self
+                .append(&mut core, Actor::Agent, agent_key(agent), record(held))
                 .await?;
             let ready = core.state.stage(item) == Some(Stage::Ready);
             if !ready {
@@ -1554,12 +1711,28 @@ impl<B: Broker> Tracker<B> {
             }
         }
         drop(delivery);
+        if self.0.settings.crash_after_done {
+            std::process::exit(70);
+        }
         let settled = self.settle(item, ops, marked).await;
         let warning = settled
             .err()
             .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"));
         self.sync_ready().await;
+        let mut reply = reply;
+        reply["offset"] = offset.into();
         Ok(with_warning(reply, warning))
+    }
+
+    /// Called under `core` before a replay. A write whose reply was lost leaves
+    /// the state showing its record but the claim index without it, until the
+    /// rebuild; a retry that passed `begin` before then must not be told `lost`.
+    fn recall_current(&self) -> Result<(), Error> {
+        let lease = self.lease();
+        if lease.stale || lease.retaken {
+            return Err(Error::Unavailable("the state is being rebuilt".into()));
+        }
+        Ok(())
     }
 
     /// The fold is the truth for holds. If it no longer shows `agent` holding what
@@ -1979,7 +2152,8 @@ impl<B: Broker> Tracker<B> {
         {
             Ok(ConditionalWrite::Written { offset }) => {
                 core.tail = offset + 1;
-                core.recall.remember(offset, &logged, &self.0.me, absent);
+                core.recall
+                    .remember(offset, &logged, &self.0.me, absent, false);
                 Ok(offset)
             }
             // The record was applied above, so the state is rebuilt, and the
@@ -2097,7 +2271,9 @@ impl<B: Broker> Tracker<B> {
             let absent = edge_absent(&state, &rec.record);
             state.apply(*offset, rec);
             let created = absent && !edge_absent(&state, &rec.record);
-            recall.remember(*offset, rec, &self.0.me, created);
+            // The append path remembers only what the fold took; so does a rebuild.
+            let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
+            recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
         Ok((state, recall, tail))
     }
@@ -2259,6 +2435,29 @@ fn holding(
     }
 }
 
+/// The answer to a terminal call retried after its record landed: `reply`
+/// with the offset of the record that ended `attempt`, when `agent` wrote it as
+/// `kind`. Without an attempt nothing is replayed, as for an older `kbl-mcp`.
+fn replay(
+    core: &Core,
+    agent: &AgentName,
+    item: &ItemId,
+    which: Option<Which>,
+    kind: &str,
+    mut reply: Value,
+) -> Option<Value> {
+    // A prerequisite's answer names what it waits on; the retry must name the same.
+    let prerequisite = reply["prerequisite"]
+        .as_str()
+        .and_then(|p| ItemId::new(p).ok());
+    let offset = core
+        .recall
+        .ended_by(item, which?, agent, kind, prerequisite.as_ref())?;
+    reply["offset"] = offset.into();
+    reply["replayed"] = true.into();
+    Some(reply)
+}
+
 fn lapsed(item: &ItemId) -> Error {
     Error::Lost(format!(
         "your claim on {item} lapsed and may have gone to another agent. Stop working on it; use work_next for new work"
@@ -2271,7 +2470,8 @@ fn restarted(item: &ItemId) -> Error {
     ))
 }
 
-fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
+fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
+    let state = &core.state;
     let item = state.items.get(&delivery.item);
     // A review reads its root's request. A fix a review asked for lands on that
     // request's branch, so its author goes on from there.
@@ -2287,6 +2487,8 @@ fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
         "claimed": true,
         "resumed": resumed,
         "attempt": delivery.attempt,
+        // The `claimed` record's offset.
+        "offset": core.recall.claimed(&delivery.item, delivery.attempt),
         "item": {
             "id": delivery.item,
             "title": item.map(|i| i.title.as_str()),

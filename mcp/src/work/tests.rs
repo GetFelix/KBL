@@ -23,6 +23,15 @@ impl Fake {
             .filter(|(p, _)| p == path)
             .count()
     }
+
+    fn bodies(&self, path: &str) -> Vec<Value> {
+        let s = self.0.lock().unwrap();
+        s.calls
+            .iter()
+            .filter(|(p, _)| p == path)
+            .map(|(_, b)| b.clone())
+            .collect()
+    }
 }
 
 impl TrackerApi for Fake {
@@ -30,13 +39,16 @@ impl TrackerApi for Fake {
         let mut s = self.0.lock().unwrap();
         s.calls.push((path.to_owned(), body));
         match path {
-            "/v1/work/next" => Ok(json!({ "claimed": true, "item": { "id": "a1" }, "attempt": 1 })),
+            "/v1/work/next" => {
+                Ok(json!({ "claimed": true, "item": { "id": "a1" }, "attempt": 1, "offset": 7 }))
+            }
             "/v1/work/extend" => match s.extend {
                 Some("lost") => Err(CallError::Lost("lapsed".into())),
                 Some("down") => Err(CallError::Down("no tracker".into())),
                 _ => Ok(json!({ "item": "a1" })),
             },
             _ => match s.complete {
+                Some("down") => Err(CallError::Down("no answer".into())),
                 Some("refused") => Err(CallError::Refused("open_children".into())),
                 Some("held") => Ok(json!({ "item": "r1", "status": "waiting", "claim": "held" })),
                 _ => Ok(json!({ "item": "a1", "status": "done" })),
@@ -169,4 +181,40 @@ async fn a_prerequisite_from_triage_keeps_the_claim_extended() {
     let seen = fake.calls("/v1/work/extend");
     tokio::time::sleep(Duration::from_secs(65)).await;
     assert!(fake.calls("/v1/work/extend") > seen);
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_calls_send_the_claims_attempt_so_a_retry_can_be_replayed() {
+    let fake = Fake::default();
+    let w = work(&fake);
+    w.next(None).await.unwrap();
+    fake.0.lock().unwrap().complete = Some("down");
+    assert!(w.complete("a1", json!({})).await.is_err());
+    fake.0.lock().unwrap().complete = None;
+    w.complete("a1", json!({})).await.unwrap();
+    let sent = fake.bodies("/v1/work/complete");
+    assert_eq!(sent.len(), 2);
+    assert!(
+        sent.iter().all(|b| b["attempt"] == 1 && b["claim"] == 7),
+        "{sent:?}"
+    );
+    for path in ["/v1/work/release", "/v1/work/post"] {
+        w.next(None).await.unwrap();
+        if path == "/v1/work/release" {
+            w.release("a1", None, json!({})).await.unwrap();
+        } else {
+            w.finish_post("a1", json!({ "item": "a1" })).await.unwrap();
+        }
+        assert_eq!(fake.bodies(path)[0]["attempt"], 1, "{path}");
+        assert_eq!(fake.bodies(path)[0]["claim"], 7, "{path}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_terminal_call_for_an_item_not_held_sends_no_attempt() {
+    let fake = Fake::default();
+    let w = work(&fake);
+    w.complete("a1", json!({})).await.unwrap();
+    let sent = &fake.bodies("/v1/work/complete")[0];
+    assert!(sent.get("attempt").is_none() && sent.get("claim").is_none());
 }

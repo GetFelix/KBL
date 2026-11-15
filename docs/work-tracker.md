@@ -178,16 +178,34 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 
 | Call | Token | Does |
 |---|---|---|
-| `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item. An agent that already holds one gets it again, marked `resumed` |
+| `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item, its `attempt` and the `claimed` record's `offset`. An agent that already holds one gets it again, marked `resumed` |
 | `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed; `503` means the tracker could not confirm its lease, so call again. After a `stale_claim` that check renews the lease, possibly twice and behind a renewal already running, each lease call giving up after 3 seconds, so with a slow Felix the `503` can take tens of seconds |
-| `POST /v1/work/complete` `{item, usage}` | agent | Writes `done`, then acks |
-| `POST /v1/work/release` `{item, reason, usage}` | agent | Writes `released`, then hands the delivery back |
-| `POST /v1/work/give_up` `{item, reason, usage}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
+| `POST /v1/work/complete` `{item, claim?, attempt?, usage}` | agent | Writes `done`, then acks. Answers with the record's `offset`. A retry that lands while the tracker rebuilds after a lost reply gets `503`, so call again |
+| `POST /v1/work/release` `{item, claim?, attempt?, reason, usage}` | agent | Writes `released`, then hands the delivery back. Answers with the record's `offset` |
+| `POST /v1/work/give_up` `{item, claim?, attempt?, reason, usage}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries. Answers with the record's `offset` |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
+
+A call that ends a claim (`complete`, `release`, `give_up`, and a
+`prerequisite` post that ends it) can be retried safely when its answer was
+lost, for example because the tracker died after writing the record. Send
+`claim`, the `offset` from the claim's answer, as `kbl-mcp` does (it also
+sends `attempt`). If that claim already ended with the same kind of record,
+written by this agent (for a prerequisite, naming the same item), the tracker
+writes nothing and answers as the first call did, with `replayed: true` and
+the record's `offset`. A `claim` that is not the one the agent holds never
+ends the claim it holds now, so a retry after the agent claimed the same item
+again cannot end the new claim. Anything else is `lost` (or not held) and
+writes nothing: a claim the tracker released as `lapsed`, another agent's
+claim, or another kind of record.
+
+Without `claim`, `attempt` does the same for the agent's latest claim of that
+attempt. An attempt number is shared by every claim of a retried attempt, so
+it cannot tell an old claim from a new one of the same attempt. Without
+either, as from an older `kbl-mcp`, a retry is never replayed.
 
 Every work and ingest route is also served under `/v1/teams/{team}/`, for
 example `/v1/teams/default/work/next`. See [Which team a call is for](#teams).

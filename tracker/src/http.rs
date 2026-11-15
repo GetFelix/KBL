@@ -32,7 +32,9 @@ use crate::config::Caller;
 use crate::felix::Broker;
 use crate::org::OrgUnavailable;
 use crate::teams::Teams;
-use crate::tracker::{Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer};
+use crate::tracker::{
+    Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
+};
 
 mod agents;
 mod ingest;
@@ -281,6 +283,12 @@ struct ItemBody {
 #[derive(Deserialize)]
 struct CompleteBody {
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
+    /// The offset of the claim's `claimed` record, from the claim's reply. It
+    /// names the claim exactly, and wins over `attempt`.
+    claim: Option<u64>,
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
     usage: Vec<Usage>,
@@ -291,6 +299,12 @@ struct CompleteBody {
 #[derive(Deserialize)]
 struct ReleaseBody {
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
+    /// The offset of the claim's `claimed` record, from the claim's reply. It
+    /// names the claim exactly, and wins over `attempt`.
+    claim: Option<u64>,
     reason: Option<String>,
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
@@ -302,12 +316,22 @@ struct ReleaseBody {
 #[derive(Deserialize)]
 struct GiveUpBody {
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
+    /// The offset of the claim's `claimed` record, from the claim's reply. It
+    /// names the claim exactly, and wins over `attempt`.
+    claim: Option<u64>,
     reason: String,
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
     usage: Vec<Usage>,
     /// Replaced by `usage`: refused, so an agent built for it learns why.
     cost_micros: Option<u64>,
+}
+
+fn claim_of(claim: Option<u64>, attempt: Option<u32>) -> Option<Which> {
+    claim.map(Which::Claim).or(attempt.map(Which::Attempt))
 }
 
 /// The usage a claim end reports. A cost above 0 is refused rather than
@@ -339,6 +363,12 @@ struct RecordBody {
 struct PostBody {
     /// The item the agent holds.
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
+    /// The offset of the claim's `claimed` record, from the claim's reply. It
+    /// names the claim exactly, and wins over `attempt`.
+    claim: Option<u64>,
     key: Key,
     work: String,
     #[serde(default)]
@@ -554,7 +584,11 @@ async fn complete<B: Broker>(call: Call<B>, Json(body): Json<CompleteBody>) -> R
         Err(e) => return reply(Err(e)),
     };
     match call.agent() {
-        Ok(a) => reply(call.tracker().complete(&a, &body.item, usage).await),
+        Ok(a) => reply(
+            call.tracker()
+                .complete(&a, &body.item, claim_of(body.claim, body.attempt), usage)
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }
@@ -567,7 +601,13 @@ async fn release<B: Broker>(call: Call<B>, Json(body): Json<ReleaseBody>) -> Res
     match call.agent() {
         Ok(a) => reply(
             call.tracker()
-                .release(&a, &body.item, body.reason, usage)
+                .release(
+                    &a,
+                    &body.item,
+                    claim_of(body.claim, body.attempt),
+                    body.reason,
+                    usage,
+                )
                 .await,
         ),
         Err(d) => denied(d),
@@ -582,7 +622,13 @@ async fn give_up<B: Broker>(call: Call<B>, Json(body): Json<GiveUpBody>) -> Resp
     match call.agent() {
         Ok(a) => reply(
             call.tracker()
-                .give_up(&a, &body.item, body.reason, usage)
+                .give_up(
+                    &a,
+                    &body.item,
+                    claim_of(body.claim, body.attempt),
+                    body.reason,
+                    usage,
+                )
                 .await,
         ),
         Err(d) => denied(d),
@@ -622,7 +668,15 @@ async fn work_post<B: Broker>(call: Call<B>, Json(b): Json<PostBody>) -> Respons
         };
         return reply(
             call.tracker()
-                .prerequisite(&a, &b.item, b.key, which, b.done_when, usage)
+                .prerequisite(
+                    &a,
+                    &b.item,
+                    claim_of(b.claim, b.attempt),
+                    b.key,
+                    which,
+                    b.done_when,
+                    usage,
+                )
                 .await,
         );
     }
