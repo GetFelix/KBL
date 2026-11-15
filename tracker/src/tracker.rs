@@ -972,8 +972,19 @@ impl<B: Broker> Tracker<B> {
             // landed after another tracker held the lease: a retake.
             retaken |= valid_until <= Instant::now();
             put = self
-                .io(None, self.0.broker.lease_put(holder, ttl, Some(ours)))
+                .io(
+                    None,
+                    self.0.broker.lease_put(holder.clone(), ttl, Some(ours)),
+                )
                 .await;
+            // The entry we read can run out before this put lands. With our view
+            // run out nobody may hold it now, so take it with Absent.
+            if matches!(put, Ok(None)) && valid_until <= Instant::now() {
+                retaken = true;
+                put = self
+                    .io(None, self.0.broker.lease_put(holder, ttl, None))
+                    .await;
+            }
         }
         let mut core = self.0.core.lock().await;
         match put {

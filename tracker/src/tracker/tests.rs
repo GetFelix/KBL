@@ -68,6 +68,10 @@ struct Net {
     lose_lease_reply: u32,
     /// Reads of the lease key fail.
     fail_lease_get: bool,
+    /// The entry runs out right after the next read of the lease key.
+    expire_after_lease_get: bool,
+    /// Reads of the lease key see its holder at this older version.
+    lagging_lease_get: Option<u64>,
     /// The next nack waits for `open_gate` before it lands.
     gate_nack: bool,
     /// The next read waits for `open_gate` before it reads.
@@ -240,6 +244,18 @@ impl Fake {
 
     fn fail_lease_gets(&self, fail: bool) {
         self.net.lock().unwrap().fail_lease_get = fail;
+    }
+
+    fn expire_lease_after_next_get(&self) {
+        self.net.lock().unwrap().expire_after_lease_get = true;
+    }
+
+    fn lease_gets_lag_at(&self, version: Option<u64>) {
+        self.net.lock().unwrap().lagging_lease_get = version;
+    }
+
+    fn lease_version(&self) -> Option<u64> {
+        self.net.lock().unwrap().lease.as_ref().map(|(_, v)| *v)
     }
 
     fn lose_next_lease_reply(&self) {
@@ -554,7 +570,14 @@ impl Broker for Fake {
         if net.lease_expires && net.lease_until.is_none_or(|t| t <= now) {
             net.lease = None;
         }
-        Ok(net.lease.clone())
+        let read = match (net.lease.clone(), net.lagging_lease_get) {
+            (Some((holder, _)), Some(old)) => Some((holder, old)),
+            (lease, _) => lease,
+        };
+        if std::mem::take(&mut net.expire_after_lease_get) {
+            net.lease = None;
+        }
+        Ok(read)
     }
 
     async fn cursor_get(&self, name: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
@@ -3010,4 +3033,62 @@ async fn a_retake_adopted_whose_renewal_reply_is_lost_still_reads_what_another_w
     t.renew_lease().await;
     assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+}
+
+/// A tracker whose renewal landed with its reply lost and could not read the
+/// entry back, then whose view ran out: Felix holds the entry for it at a
+/// version it never heard of.
+async fn ahead_of_our_view(fake: &Fake, ttl: Duration) -> Tracker<Fake> {
+    let t = start_with(
+        fake,
+        Settings {
+            lease_ttl: ttl,
+            ..settings()
+        },
+    )
+    .await;
+    fake.lose_next_lease_reply();
+    fake.fail_lease_gets(true);
+    t.renew_lease().await;
+    fake.fail_lease_gets(false);
+    assert!(!t.0.core.lock().await.fenced);
+    tokio::time::advance(ttl + Duration::from_secs(1)).await;
+    t
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_adopted_entry_that_runs_out_before_the_renewal_is_taken_again() {
+    let fake = Fake::default();
+    let t = ahead_of_our_view(&fake, Duration::from_secs(3)).await;
+    // The read finds the entry ours, and it runs out before the put by it lands.
+    fake.expire_lease_after_next_get();
+    t.renew_lease().await;
+    let core = t.0.core.lock().await;
+    assert!(!core.fenced, "fenced though nobody holds the lease");
+    assert!(
+        core.retaken,
+        "a lease taken back with Absent was not a retake"
+    );
+    assert!(core.stale);
+    drop(core);
+    assert!(fake.lease_is_held());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lagging_read_of_our_entry_is_refused_and_writes_nothing() {
+    let fake = Fake::default();
+    let t = ahead_of_our_view(&fake, Duration::from_secs(3)).await;
+    let entry = fake.lease_version();
+    // The read sees our token at a version older than the entry.
+    fake.lease_gets_lag_at(Some(entry.unwrap() - 2));
+    t.renew_lease().await;
+    assert!(t.0.core.lock().await.fenced);
+    assert_eq!(
+        fake.lease_version(),
+        entry,
+        "a stale version or Absent landed"
+    );
+    let err = t.person_record(key("gab"), imported("c1")).await;
+    assert!(err.is_err(), "a fenced tracker wrote");
+    assert_eq!(imports_of(&fake, "c1"), 0);
 }
