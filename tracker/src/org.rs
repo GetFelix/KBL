@@ -14,7 +14,7 @@ use kbl_core::org_fold::{Applied, OrgState, Principal};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use crate::felix::Broker;
+use crate::felix::{Broker, ConditionalWrite};
 
 /// How long the org lease may stay lost before the process exits. Past it,
 /// revocations would stop taking effect.
@@ -24,6 +24,9 @@ pub(crate) const ORG_LEASE_GRACE: Duration = Duration::from_secs(60);
 /// still stands, so the lease must outlast it plus some clock skew.
 const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
 const LEASE_SKEW: Duration = Duration::from_secs(1);
+
+/// How many times an org write reads the log again after Felix refused it.
+const ORG_WRITE_TRIES: usize = 3;
 
 /// A Felix call with a time limit, so a hung call cannot outlast the lease or
 /// hold the org lock for good.
@@ -56,6 +59,33 @@ struct Core {
     lease: Option<Lease>,
     /// The state may not match the log; read it again before the next write.
     stale: bool,
+    /// The offset after the last committed record read, skipped offsets
+    /// included (a new shard leader's generation start). Never taken from a
+    /// refusal, whose tail counts offsets claimed but not yet committed.
+    tail: u64,
+    /// Counts conditional writes Felix refused. One past `confirmed` means
+    /// another tracker may hold the lease: no write until a renewal says not.
+    refusals: u64,
+    /// `refusals` as of the last renewal Felix granted by version.
+    confirmed: u64,
+}
+
+impl Core {
+    /// The refusals a lease put sent now answers for: only those whose state
+    /// was read again before it. A grant before the read says nothing about
+    /// records that land during it.
+    fn answerable(&self) -> u64 {
+        if self.stale {
+            self.confirmed
+        } else {
+            self.refusals
+        }
+    }
+
+    /// Where the next record must land for the log to be the one folded.
+    fn next(&self) -> u64 {
+        self.at.map_or(0, |a| a + 1).max(self.tail)
+    }
 }
 
 struct View {
@@ -96,6 +126,9 @@ impl<B: Broker> Org<B> {
                 at: None,
                 lease: None,
                 stale: true,
+                tail: 0,
+                refusals: 0,
+                confirmed: 0,
             }),
             view: RwLock::new(View {
                 state: OrgState::default(),
@@ -158,6 +191,14 @@ impl<B: Broker> Org<B> {
         (FELIX_TIMEOUT + LEASE_SKEW).min(self.lease_ttl / 2)
     }
 
+    /// Whether a write sent now lands while both the lease that let the call
+    /// in and the current one still stand.
+    fn has_room(&self, core: &Core, let_in_until: Option<Instant>) -> bool {
+        let by = Instant::now() + self.write_margin();
+        let_in_until.is_some_and(|t| t > by)
+            && core.lease.as_ref().is_some_and(|l| l.valid_until > by)
+    }
+
     fn publish_view(&self, core: &Core) {
         let mut view = self.view.write().expect("org view lock");
         view.state = core.state.clone();
@@ -183,48 +224,78 @@ impl<B: Broker> Org<B> {
         record: OrgRecord,
     ) -> Result<(Applied, Option<u64>), OrgError> {
         let mut core = self.core.lock().await;
-        if !core
-            .lease
-            .as_ref()
-            .is_some_and(|l| l.valid_until > Instant::now() + self.write_margin())
-        {
+        // Every write must land while the lease that let this call in still
+        // stands. That also bounds how long the core lock keeps renew() out.
+        let let_in_until = core.lease.as_ref().map(|l| l.valid_until);
+        if !self.has_room(&core, let_in_until) {
             return Err(OrgError::Unavailable(
                 "this tracker does not hold the org writer lease".into(),
             ));
         }
+        // Read first, then check the lease: Felix granting the version after
+        // the read means no other tracker wrote since.
         if core.stale {
             self.refresh(&mut core)
                 .await
                 .map_err(|e| OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}")))?;
         }
-        let logged = OrgLogged::new(now_ms(), by, record);
-        match core.state.check(&logged) {
-            Err(why) => return Err(OrgError::Refused(why.why())),
-            Ok(Applied::Unchanged) => return Ok((Applied::Unchanged, None)),
-            Ok(Applied::Changed) => {}
+        if core.refusals > core.confirmed {
+            self.confirm_lease(&mut core).await?;
         }
-        let guess = core.at.map_or(0, |a| a + 1);
-        match timed(self.broker.publish(ORG_EVENTS, logged.encode())).await {
-            Ok(offset) => {
-                // Checked above against the same state, so this applies.
-                let _ = core.state.apply(&logged);
-                core.at = Some(offset);
-                if offset != guess {
-                    // Another writer got in: read now, or tokens are refused
-                    // until the next renewal.
-                    core.stale = true;
-                    self.refresh_or_log(&mut core).await;
+        // Conditional on the tail: if another tracker took the lease and wrote,
+        // Felix refuses this, whatever this tracker's clock says.
+        for _ in 0..ORG_WRITE_TRIES {
+            let logged = OrgLogged::new(now_ms(), by.clone(), record.clone());
+            match core.state.check(&logged) {
+                Err(why) => return Err(OrgError::Refused(why.why())),
+                Ok(Applied::Unchanged) => return Ok((Applied::Unchanged, None)),
+                Ok(Applied::Changed) => {}
+            }
+            if !self.has_room(&core, let_in_until) {
+                return Err(OrgError::Unavailable(
+                    "the org writer lease ran short during this write; try again".into(),
+                ));
+            }
+            let expected = core.next();
+            match timed(
+                self.broker
+                    .publish_if(ORG_EVENTS, logged.encode(), expected),
+            )
+            .await
+            {
+                Ok(ConditionalWrite::Written { offset }) => {
+                    // Checked above against the same state, so this applies.
+                    let _ = core.state.apply(&logged);
+                    core.at = Some(offset);
+                    core.tail = offset + 1;
+                    self.publish_view(&core);
+                    return Ok((Applied::Changed, Some(offset)));
                 }
-                self.publish_view(&core);
-                Ok((Applied::Changed, Some(offset)))
-            }
-            Err(e) => {
-                core.stale = true;
-                self.publish_lease(&core);
-                self.refresh_or_log(&mut core).await;
-                Err(OrgError::Felix(e))
+                Ok(ConditionalWrite::Refused { .. }) => {
+                    // Another writer got in, or a new shard leader moved the
+                    // tail. Only a renewal by version tells which: retrying on
+                    // a lost lease would land after the new holder's record.
+                    core.stale = true;
+                    core.refusals += 1;
+                    self.publish_lease(&core);
+                    self.refresh(&mut core).await.map_err(|e| {
+                        OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}"))
+                    })?;
+                    self.confirm_lease(&mut core).await?;
+                }
+                // A lost reply may have been a refusal: check the lease too.
+                Err(e) => {
+                    core.stale = true;
+                    core.refusals += 1;
+                    self.publish_lease(&core);
+                    self.refresh_or_log(&mut core).await;
+                    return Err(OrgError::Felix(e));
+                }
             }
         }
+        Err(OrgError::Unavailable(format!(
+            "{ORG_EVENTS} kept moving under this write; try again"
+        )))
     }
 
     /// Renews the org lease, and takes it back when it was lost. Returns when
@@ -264,8 +335,12 @@ impl<B: Broker> Org<B> {
         match renewed {
             Some((_, Ok(true))) => true,
             Some((false, Ok(false))) => {
-                eprintln!("kbl-tracker: another tracker took the org writer lease");
                 let mut core = self.core.lock().await;
+                // A write's lease check may have renewed it meanwhile.
+                if core.lease.as_ref().map(|l| l.version) != lease.map(|(v, _)| v) {
+                    return core.lease.is_some();
+                }
+                eprintln!("kbl-tracker: another tracker took the org writer lease");
                 core.lease = None;
                 self.publish_lease(&core);
                 false
@@ -296,8 +371,40 @@ impl<B: Broker> Org<B> {
         }
     }
 
+    /// Renews the lease by version, with the core lock held, so no write goes
+    /// out until Felix says this tracker still holds it. A refusal leaves the
+    /// lease to `maintain`: it may be a concurrent renewal that bumped the
+    /// version, and writes stay refused until a renewal confirms it.
+    async fn confirm_lease(&self, core: &mut Core) -> Result<(), OrgError> {
+        let Some(version) = core.lease.as_ref().map(|l| l.version) else {
+            return Err(OrgError::Unavailable(
+                "this tracker does not hold the org writer lease".into(),
+            ));
+        };
+        let started = Instant::now();
+        let put = timed(self.broker.lease_put(
+            self.holder.as_bytes().to_vec(),
+            self.lease_ttl,
+            Some(version),
+        ))
+        .await
+        .map_err(|e| OrgError::Unavailable(format!("checking the org writer lease: {e:#}")))?;
+        let Some(version) = put else {
+            return Err(OrgError::Unavailable(
+                "another tracker may hold the org writer lease".into(),
+            ));
+        };
+        core.lease = Some(Lease {
+            version,
+            valid_until: started + self.lease_ttl,
+        });
+        core.confirmed = core.refusals;
+        Ok(())
+    }
+
     /// Renews the lease by `version`. False when Felix no longer has it.
     async fn renew_by(&self, version: u64) -> Result<bool> {
+        let refusals = self.core.lock().await.answerable();
         let started = Instant::now();
         let put = timed(self.broker.lease_put(
             self.holder.as_bytes().to_vec(),
@@ -313,6 +420,7 @@ impl<B: Broker> Org<B> {
             version,
             valid_until: started + self.lease_ttl,
         });
+        core.confirmed = core.confirmed.max(refusals);
         if core.stale {
             self.refresh_or_log(&mut core).await;
         }
@@ -321,6 +429,7 @@ impl<B: Broker> Org<B> {
     }
 
     async fn take_lease(&self) -> Result<bool> {
+        let refusals = self.core.lock().await.answerable();
         let started = Instant::now();
         let put = timed(self.broker.lease_put(
             self.holder.as_bytes().to_vec(),
@@ -337,7 +446,11 @@ impl<B: Broker> Org<B> {
                     version,
                     valid_until: started + self.lease_ttl,
                 });
+                core.confirmed = core.confirmed.max(refusals);
                 core.stale = true;
+                // The grant came before the read, so a renewal by version must
+                // follow it before the next write.
+                core.refusals += 1;
                 self.refresh_or_log(&mut core).await;
                 true
             }
@@ -353,20 +466,23 @@ impl<B: Broker> Org<B> {
     }
 
     async fn refresh(&self, core: &mut Core) -> Result<()> {
-        let (state, at) = self.read().await?;
+        let (state, at, tail) = self.read().await?;
         core.state = state;
         core.at = at;
+        // Assigned, not raised: a shard failover can lower the tip.
+        core.tail = tail;
         core.stale = false;
         self.publish_view(core);
         Ok(())
     }
 
-    /// The fold of the whole log. A record of a newer format stops the read:
+    /// The fold of the whole log, and its committed tip. A record of a newer format stops the read:
     /// folding past it would give tables its writer did not mean.
-    async fn read(&self) -> Result<(OrgState, Option<u64>)> {
+    async fn read(&self) -> Result<(OrgState, Option<u64>, u64)> {
         let mut state = OrgState::default();
         let mut at = None;
-        for (offset, payload) in timed(self.broker.read_from(ORG_EVENTS, 0)).await? {
+        let (records, tail) = timed(self.broker.read_to_tip(ORG_EVENTS, 0)).await?;
+        for (offset, payload) in records {
             at = Some(offset);
             match read(&payload) {
                 Ok(logged) => {
@@ -378,7 +494,7 @@ impl<B: Broker> Org<B> {
                 Err(e) => eprintln!("kbl-tracker: {ORG_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
-        Ok((state, at))
+        Ok((state, at, tail))
     }
 }
 

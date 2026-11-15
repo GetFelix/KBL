@@ -14,9 +14,24 @@ enum Slot {
     Acked,
 }
 
+impl Net {
+    /// The offset the stream's next record gets, in flight ones counted.
+    fn next_offset(&self, stream: &str) -> u64 {
+        let last = |m: &HashMap<String, Vec<(u64, Vec<u8>)>>| {
+            m.get(stream)
+                .and_then(|v| v.iter().map(|(o, _)| o + 1).max())
+                .unwrap_or(0)
+        };
+        last(&self.streams).max(last(&self.in_flight))
+    }
+}
+
 #[derive(Default)]
 struct Net {
     streams: HashMap<String, Vec<(u64, Vec<u8>)>>,
+    /// Records another writer was given offsets for that are not committed
+    /// yet: Felix's tail counts them, reads do not show them.
+    in_flight: HashMap<String, Vec<(u64, Vec<u8>)>>,
     slots: HashMap<(String, u64), Slot>,
     /// How many times each record has been handed out.
     tries: HashMap<(String, u64), u32>,
@@ -149,11 +164,32 @@ impl Fake {
             }
             *left -= 1;
         }
-        let log = net.streams.entry(stream.to_owned()).or_default();
-        let offset = log.len() as u64;
-        log.push((offset, payload));
+        let offset = net.next_offset(stream);
+        net.streams
+            .entry(stream.to_owned())
+            .or_default()
+            .push((offset, payload));
         net.calls.push(format!("publish {stream}"));
         Ok((offset, std::mem::take(&mut net.gate_publish)))
+    }
+
+    /// Another writer is given the next offset; the record is not committed yet.
+    fn claim_in_flight(&self, stream: &str, payload: Vec<u8>) {
+        let mut net = self.net.lock().unwrap();
+        let offset = net.next_offset(stream);
+        net.in_flight
+            .entry(stream.to_owned())
+            .or_default()
+            .push((offset, payload));
+    }
+
+    /// The in-flight records commit, in offset order.
+    fn land_in_flight(&self, stream: &str) {
+        let mut net = self.net.lock().unwrap();
+        let landed = net.in_flight.remove(stream).unwrap_or_default();
+        let log = net.streams.entry(stream.to_owned()).or_default();
+        log.extend(landed);
+        log.sort_by_key(|(o, _)| *o);
     }
 
     fn lift_publish_budget(&self) {
@@ -333,6 +369,26 @@ impl Broker for Fake {
             self.gate.notified().await;
         }
         Ok(offset)
+    }
+
+    async fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> anyhow::Result<ConditionalWrite> {
+        // The reply is lost, whatever Felix did.
+        if self.net.lock().unwrap().fail_publish_on.as_deref() == Some(stream) {
+            anyhow::bail!("the broker is down");
+        }
+        // Like Felix: refused unless it would land at the stream's next
+        // offset, which counts offsets given out but not yet committed.
+        let tail = self.net.lock().unwrap().next_offset(stream);
+        if expected != tail {
+            return Ok(ConditionalWrite::Refused { tail });
+        }
+        let offset = self.publish(stream, payload).await?;
+        Ok(ConditionalWrite::Written { offset })
     }
 
     async fn read_from(&self, stream: &str, from: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
@@ -2537,4 +2593,291 @@ async fn a_rebuild_that_read_before_a_retake_stays_stale() {
     let core = t.0.core.lock().await;
     assert!(core.stale);
     assert!(core.retaken);
+}
+
+fn imported(id: &str) -> WorkRecord {
+    WorkRecord::Imported {
+        item: item(id),
+        source: "gh".into(),
+        upstream_id: id.into(),
+        title: "t".into(),
+    }
+}
+
+fn imports_of(fake: &Fake, id: &str) -> usize {
+    fake.log()
+        .iter()
+        .filter(|l| matches!(&l.record, WorkRecord::Imported { item: i, .. } if i == &item(id)))
+        .count()
+}
+
+/// While `t` was paused, another tracker took the lease.
+async fn another_takes_the_lease(fake: &Fake) {
+    fake.expire_lease();
+    let theirs = fake
+        .lease_put(b"other".to_vec(), Duration::from_secs(15), None)
+        .await
+        .unwrap();
+    assert!(theirs.is_some());
+}
+
+#[tokio::test]
+async fn a_write_felix_refused_moves_on_once_the_log_is_read_again() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    // A record this tracker did not write, with the lease still its own.
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    assert!(matches!(
+        t.person_record(key("gab"), imported("b1")).await,
+        Err(Error::Unavailable(_))
+    ));
+    // The next call checks the lease, rebuilds, and sees b1.
+    let _ = t.person_record(key("gab"), imported("b1")).await;
+    assert_eq!(imports_of(&fake, "b1"), 1, "b1 was imported twice");
+    t.person_record(key("gab"), imported("c1")).await.unwrap();
+    assert_eq!(imports_of(&fake, "c1"), 1);
+}
+
+#[tokio::test]
+async fn a_stale_team_writer_stays_out_after_felix_refuses_it() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    another_takes_the_lease(&fake).await;
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    // Our view of the lease still stands, so only Felix can stop these.
+    for _ in 0..3 {
+        assert!(matches!(
+            t.person_record(key("gab"), imported("c1")).await,
+            Err(Error::Unavailable(_))
+        ));
+    }
+    assert_eq!(
+        imports_of(&fake, "c1"),
+        0,
+        "a tracker without the lease appended after the new holder's record"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusal_tail_does_not_skip_another_writers_record_in_flight() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    // Another tracker took the lease and was given the next offset for b1,
+    // then lost the lease before b1 committed.
+    another_takes_the_lease(&fake).await;
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.claim_in_flight(WORK_EVENTS, theirs.encode());
+    fake.expire_lease();
+    assert!(matches!(
+        t.person_record(key("gab"), imported("c1")).await,
+        Err(Error::Unavailable(_))
+    ));
+    // Past our view of the lease: the next call takes it again and rebuilds.
+    tokio::time::advance(Duration::from_secs(16)).await;
+    assert!(matches!(
+        t.person_record(key("gab"), imported("c1")).await,
+        Err(Error::Unavailable(_))
+    ));
+    assert_eq!(imports_of(&fake, "c1"), 0, "c1 skipped b1's offset");
+    fake.land_in_flight(WORK_EVENTS);
+    t.person_record(key("gab"), imported("c1")).await.unwrap();
+    let order: Vec<String> = fake
+        .log()
+        .iter()
+        .filter_map(|l| match &l.record {
+            WorkRecord::Imported { item, .. } => Some(item.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(order, ["a1", "b1", "c1"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_sweep_stops_after_felix_refuses_one_of_its_writes() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    seed(&t, "a2", 2).await;
+    claim(&t, "w1").await;
+    claim(&t, "w2").await;
+    pass(&t, VIS + Duration::from_secs(1)).await;
+    // A record lands that this tracker has not read.
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    t.sweep().await;
+    let released = fake
+        .log()
+        .iter()
+        .filter(|l| l.record.kind() == "released")
+        .count();
+    assert_eq!(
+        released, 0,
+        "the sweep appended on a state its refused write had changed"
+    );
+}
+
+#[tokio::test]
+async fn a_lost_reply_to_a_write_also_checks_the_lease() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    another_takes_the_lease(&fake).await;
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    // Felix refused it, but the answer never came back.
+    fake.fail_publishes_to(Some(WORK_EVENTS));
+    assert!(t.person_record(key("gab"), imported("c1")).await.is_err());
+    fake.fail_publishes_to(None);
+    assert!(matches!(
+        t.person_record(key("gab"), imported("c1")).await,
+        Err(Error::Unavailable(_))
+    ));
+    assert_eq!(imports_of(&fake, "c1"), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn after_a_refusal_the_lease_is_checked_after_the_rebuild_reads_the_log() {
+    // The rebuild takes most of the 15 s lease, or this tracker's clock stood
+    // still while it ran (a paused process, a sleeping laptop).
+    for pause in [Duration::from_secs(9), Duration::ZERO] {
+        let fake = Fake::default();
+        let t = start(&fake).await;
+        seed(&t, "a1", 2).await;
+        // A record this tracker did not write, with the lease still its own.
+        let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+        fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+        assert!(t.person_record(key("gab"), imported("c1")).await.is_err());
+        fake.hold_next_read();
+        let writing = tokio::spawn({
+            let t = t.clone();
+            async move { t.person_record(key("gab"), imported("c1")).await }
+        });
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+        // While the rebuild waits on Felix, another tracker takes the lease
+        // and writes; the rebuild then reads that record.
+        tokio::time::advance(pause).await;
+        another_takes_the_lease(&fake).await;
+        let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b2"));
+        fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+        fake.open_gate();
+        let r = writing.await.unwrap();
+        assert!(matches!(r, Err(Error::Unavailable(_))), "{pause:?}: {r:?}");
+        assert_eq!(
+            imports_of(&fake, "c1"),
+            0,
+            "{pause:?}: appended after the new holder's record"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_caller_past_begin_does_not_write_before_the_lease_is_confirmed() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    // A record this tracker did not write, with the lease still its own.
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    assert!(t.person_record(key("gab"), imported("c1")).await.is_err());
+    // One call rebuilds and waits on its lease check. Our clock stands still.
+    fake.hold_next_lease_put();
+    let checking = tokio::spawn({
+        let t = t.clone();
+        async move { t.person_record(key("gab"), imported("c1")).await }
+    });
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!t.0.core.lock().await.stale, "the rebuild has not run");
+    another_takes_the_lease(&fake).await;
+    // Another call already past begin(), such as the sweep, appends now.
+    let mut core = t.0.core.lock().await;
+    let r = t
+        .append(&mut core, Actor::Person, key("gab"), imported("e1"))
+        .await;
+    drop(core);
+    assert!(matches!(r, Err(Error::Unavailable(_))), "{r:?}");
+    fake.open_gate();
+    assert!(checking.await.unwrap().is_err());
+    assert_eq!(
+        imports_of(&fake, "e1"),
+        0,
+        "appended while another tracker held the lease"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retaken_lease_is_confirmed_after_the_rebuild_reads_the_log() {
+    let ttl = Duration::from_secs(3);
+    let fake = Fake::default();
+    fake.lease_expires();
+    let t = start_with(
+        &fake,
+        Settings {
+            lease_ttl: ttl,
+            ..settings()
+        },
+    )
+    .await;
+    seed(&t, "a1", 2).await;
+    tokio::time::advance(Duration::from_secs(4)).await;
+    t.renew_lease().await;
+    assert!(t.0.core.lock().await.retaken);
+    // The rebuild after the retake reads while our clock stands still. Another
+    // tracker takes the lease and writes; the read then sees its record.
+    fake.hold_next_read();
+    let writing = tokio::spawn({
+        let t = t.clone();
+        async move { t.person_record(key("gab"), imported("c1")).await }
+    });
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    another_takes_the_lease(&fake).await;
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    fake.open_gate();
+    let r = writing.await.unwrap();
+    assert!(matches!(r, Err(Error::Unavailable(_))), "{r:?}");
+    assert_eq!(
+        imports_of(&fake, "c1"),
+        0,
+        "appended after the new holder's record"
+    );
+}
+
+#[tokio::test]
+async fn the_lease_taken_at_start_is_confirmed_after_the_read() {
+    let fake = Fake::default();
+    // The read after the lease is granted is where our clock stands still,
+    // and another tracker takes the lease and writes.
+    fake.hold_next_lease_put();
+    let starting = tokio::spawn(Tracker::start(fake.reconnect(), settings()));
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    fake.hold_next_read();
+    fake.open_gate();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    another_takes_the_lease(&fake).await;
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    fake.open_gate();
+    let t = starting.await.unwrap().unwrap();
+    let r = t.person_record(key("gab"), imported("c1")).await;
+    assert!(matches!(r, Err(Error::Unavailable(_))), "{r:?}");
+    assert_eq!(
+        imports_of(&fake, "c1"),
+        0,
+        "appended after the new holder's record"
+    );
 }

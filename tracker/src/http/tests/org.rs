@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 
 use kbl_core::codec::Codec;
-use kbl_core::org::{OrgLogged, OrgRecord, TokenHash};
+use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgRecord, TokenHash};
+use kbl_core::org_fold::Applied;
 use kbl_core::work::WORK_EVENTS;
 
 use super::*;
-use crate::org::Org;
+use crate::org::{Org, OrgError};
 use crate::teams::{OrgSide, Starter};
 
 /// A tracker with teams on: `default` adopted, `tok-ops` its org admin and
@@ -730,4 +731,215 @@ async fn an_org_lease_our_view_says_lapsed_is_renewed_while_felix_still_has_it()
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert!(org.writable(), "the retake was refused by our own entry");
     maintain.abort();
+}
+
+fn team_created(team: &str) -> OrgRecord {
+    OrgRecord::TeamCreated {
+        team: name(team),
+        display_name: None,
+        adopted: false,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_org_writer_stays_out_after_felix_refuses_it() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.fences.store(true, Ordering::SeqCst);
+    let stale = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    // While this tracker was paused, another took the lease and created beta.
+    broker.lease_lost.store(true, Ordering::SeqCst);
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
+    // Alpha is still new after a reread, so only the lease check stops it.
+    for _ in 0..2 {
+        assert!(matches!(
+            stale
+                .append(Key::new("ops").unwrap(), team_created("alpha"))
+                .await,
+            Err(OrgError::Unavailable(_))
+        ));
+    }
+    assert_eq!(
+        broker.log.lock().unwrap().len(),
+        1,
+        "a tracker without the lease appended after the new holder's record"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_retry_does_not_skip_another_writers_record_in_flight() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.fences.store(true, Ordering::SeqCst);
+    let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    // Offset 0 is given out to a record that has not committed.
+    broker.in_flight.store(1, Ordering::SeqCst);
+    assert!(matches!(
+        org.append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await,
+        Err(OrgError::Unavailable(_))
+    ));
+    assert!(
+        broker.log.lock().unwrap().is_empty(),
+        "alpha skipped the offset in flight"
+    );
+    // It commits, and the next write lands after it.
+    broker.in_flight.store(0, Ordering::SeqCst);
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
+    let (applied, offset) = org
+        .append(Key::new("ops").unwrap(), team_created("alpha"))
+        .await
+        .unwrap();
+    assert_eq!((applied, offset), (Applied::Changed, Some(1)));
+}
+
+/// The org log as written, by team created.
+fn org_teams(broker: &Quiet) -> Vec<String> {
+    broker
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(_, p)| match OrgLogged::decode(p).unwrap().record {
+            OrgRecord::TeamCreated { team, .. } => Some(team.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The reread takes most of the 15 s lease, or this tracker's clock stood
+/// still while it ran (a paused process, a sleeping laptop).
+const PAUSES: [Duration; 2] = [Duration::from_secs(9), Duration::ZERO];
+
+#[tokio::test(start_paused = true)]
+async fn an_org_retry_checks_the_lease_after_it_reads_the_log() {
+    for pause in PAUSES {
+        let broker = Quiet::default();
+        broker.keeps.store(true, Ordering::SeqCst);
+        broker.fences.store(true, Ordering::SeqCst);
+        let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+            .await
+            .unwrap();
+        // A record this tracker did not write, with the lease still its own,
+        // so the first try is refused and the lease would be confirmed.
+        let beta = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+        broker.publish(ORG_EVENTS, beta.encode()).await.unwrap();
+        let gamma = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("gamma"));
+        *broker.slow_read.lock().unwrap() = Some((pause, Some(gamma.encode())));
+        let r = org
+            .append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await;
+        assert!(
+            matches!(r, Err(OrgError::Unavailable(_))),
+            "{pause:?}: {r:?}"
+        );
+        assert_eq!(org_teams(&broker), ["beta", "gamma"], "{pause:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_write_after_a_failed_one_checks_the_lease_after_it_reads_the_log() {
+    for pause in PAUSES {
+        let broker = Quiet::default();
+        broker.keeps.store(true, Ordering::SeqCst);
+        broker.fences.store(true, Ordering::SeqCst);
+        let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+            .await
+            .unwrap();
+        // The write's answer is lost and so is the read after it, so the next
+        // write starts stale with the lease unconfirmed.
+        broker.fail_publish.store(true, Ordering::SeqCst);
+        broker.fail_next_read.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            org.append(Key::new("ops").unwrap(), team_created("alpha"))
+                .await,
+            Err(OrgError::Felix(_))
+        ));
+        broker.fail_publish.store(false, Ordering::SeqCst);
+        let gamma = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("gamma"));
+        *broker.slow_read.lock().unwrap() = Some((pause, Some(gamma.encode())));
+        let r = org
+            .append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await;
+        assert!(
+            matches!(r, Err(OrgError::Unavailable(_))),
+            "{pause:?}: {r:?}"
+        );
+        assert_eq!(org_teams(&broker), ["gamma"], "{pause:?}");
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_write_gives_up_once_the_lease_it_started_on_runs_short() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.fences.store(true, Ordering::SeqCst);
+    let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    let beta = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, beta.encode()).await.unwrap();
+    // The reread after the refusal takes 9 s of the 15 s lease. The renewal
+    // after it succeeds, but the lease that let the write in is nearly gone,
+    // and the core lock has kept renew() out that long.
+    *broker.slow_read.lock().unwrap() = Some((Duration::from_secs(9), None));
+    let r = org
+        .append(Key::new("ops").unwrap(), team_created("alpha"))
+        .await;
+    assert!(matches!(r, Err(OrgError::Unavailable(_))), "{r:?}");
+    assert_eq!(org_teams(&broker), ["beta"]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retaken_org_lease_is_confirmed_after_the_read() {
+    for pause in PAUSES {
+        let broker = Quiet::default();
+        broker.keeps.store(true, Ordering::SeqCst);
+        broker.fences.store(true, Ordering::SeqCst);
+        broker.lease_expires.store(true, Ordering::SeqCst);
+        let org = Arc::new(
+            Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+                .await
+                .unwrap(),
+        );
+        // Confirmed once, so only the retake below leaves the lease unconfirmed.
+        assert!(
+            org.append(Key::new("ops").unwrap(), team_created("beta"))
+                .await
+                .is_ok()
+        );
+        // The lease lapses, and the retake's read is where another tracker
+        // takes it and writes.
+        tokio::time::advance(Duration::from_secs(16)).await;
+        let gamma = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("gamma"));
+        *broker.slow_read.lock().unwrap() = Some((pause, Some(gamma.encode())));
+        let maintain = tokio::spawn({
+            let org = org.clone();
+            async move { org.maintain().await }
+        });
+        for _ in 0..100 {
+            if broker.slow_read.lock().unwrap().is_none() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(broker.slow_read.lock().unwrap().is_none(), "no retake");
+        // The read holds the core lock, so this returns once it is done.
+        let _ = org.state().await;
+        let r = org
+            .append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await;
+        maintain.abort();
+        assert!(
+            matches!(r, Err(OrgError::Unavailable(_))),
+            "{pause:?}: {r:?}"
+        );
+        assert_eq!(org_teams(&broker), ["beta", "gamma"], "{pause:?}");
+    }
 }

@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
+pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
     AckMode, BrokerError, CacheCondition, Client, ClientConfig, CursorErrorReason, ErrorCode,
     GroupMember, GroupPollOptions, GroupRecord, StartPosition, SubscribeCursorError,
@@ -64,11 +65,25 @@ pub(crate) enum ExtendError {
 /// One page of a stream, and the offset after it (none at the tip).
 pub(crate) type Page = (Vec<(u64, Vec<u8>)>, Option<u64>);
 
+/// Records read, and the committed tip after them.
+pub(crate) type ToTip = (Vec<(u64, Vec<u8>)>, u64);
+
 /// What the claim path needs from Felix, so its rules can be tested without a
 /// broker. Every stream has one shard.
 pub(crate) trait Broker: Clone + Send + Sync + 'static {
     /// Publishes and returns the offset the record landed at.
     fn publish(&self, stream: &str, payload: Vec<u8>) -> impl Future<Output = Result<u64>> + Send;
+
+    /// Publishes only if the record would land at `expected`, the stream's
+    /// next offset: nothing was appended since the caller read its tail.
+    /// Felix makes the check where it assigns offsets, so a writer that lost
+    /// its lease cannot append behind a newer writer's back.
+    fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> impl Future<Output = Result<ConditionalWrite>> + Send;
 
     /// Every committed record from `from`, oldest first. Offsets can skip.
     fn read_from(
@@ -76,6 +91,18 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         stream: &str,
         from: u64,
     ) -> impl Future<Output = Result<Vec<(u64, Vec<u8>)>>> + Send;
+
+    /// Every committed record from `from`, and the offset after the last
+    /// committed one. That tip can pass the last record read: offsets that
+    /// hold no record, like a shard leader's generation start, are skipped.
+    /// It never counts an offset claimed but not yet committed.
+    fn read_to_tip(&self, stream: &str, from: u64) -> impl Future<Output = Result<ToTip>> + Send {
+        async move {
+            let records = self.read_from(stream, from).await?;
+            let tip = records.last().map_or(from, |(o, _)| o + 1);
+            Ok((records, tip))
+        }
+    }
 
     /// One page of committed records from `from`, oldest first, and the
     /// offset to read next, or none at the tip. A caller that stops early
@@ -440,31 +467,52 @@ impl Broker for Felix {
         self.forget_main(done).await
     }
 
-    async fn read_from(&self, stream: &str, from: u64) -> Result<Vec<(u64, Vec<u8>)>> {
+    async fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> Result<ConditionalWrite> {
         let done = async {
             let client = self.main().await?;
-            let mut out = Vec::new();
-            let mut from = from;
-            loop {
+            placed(|| {
+                client.publish_if(
+                    self.tenant(),
+                    self.namespace(),
+                    stream,
+                    None,
+                    vec![payload.clone()],
+                    expected,
+                )
+            })
+            .await
+            .with_context(|| format!("publish to {stream}"))
+        }
+        .await;
+        self.forget_main(done).await
+    }
+
+    async fn read_from(&self, stream: &str, from: u64) -> Result<Vec<(u64, Vec<u8>)>> {
+        Ok(self.read_to_tip(stream, from).await?.0)
+    }
+
+    async fn read_to_tip(&self, stream: &str, from: u64) -> Result<ToTip> {
+        let done = async {
+            let client = self.main().await?;
+            let client = &client;
+            pages_to_tip(stream, from, |from| async move {
                 let page = placed(|| {
                     client.read(self.tenant(), self.namespace(), stream, 0, from, None, 0)
                 })
-                .await
-                .with_context(|| format!("read {stream} from offset {from}"))?;
-                if page.records.is_empty() {
-                    return Ok(out);
-                }
-                out.extend(
-                    page.records
-                        .into_iter()
-                        .map(|r| (r.offset, r.payload.to_vec())),
-                );
-                anyhow::ensure!(
-                    page.next_offset > from,
-                    "reading {stream} did not advance past offset {from}"
-                );
-                from = page.next_offset;
-            }
+                .await?;
+                let records = page
+                    .records
+                    .into_iter()
+                    .map(|r| (r.offset, r.payload.to_vec()))
+                    .collect();
+                Ok((records, page.next_offset))
+            })
+            .await
         }
         .await;
         self.forget_main(done).await
@@ -721,6 +769,35 @@ where
 }
 
 /// Whether Felix refused a read because the offset is past the stream's tail.
+/// Reads pages from `from` until an empty one: the records, and the committed
+/// tip. `read` returns a page's records and the offset after it. The empty
+/// page's offset can pass the last record, when a new shard leader's
+/// generation start took the offsets after it.
+async fn pages_to_tip<F, Fut>(stream: &str, from: u64, mut read: F) -> Result<ToTip>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: Future<Output = Result<(Vec<(u64, Vec<u8>)>, u64)>>,
+{
+    let mut out = Vec::new();
+    let mut from = from;
+    loop {
+        let (records, next) = match read(from).await {
+            Ok(page) => page,
+            Err(e) if past_the_tail(&e) => return Ok((out, from)),
+            Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+        };
+        if records.is_empty() {
+            return Ok((out, from.max(next)));
+        }
+        out.extend(records);
+        anyhow::ensure!(
+            next > from,
+            "reading {stream} did not advance past offset {from}"
+        );
+        from = next;
+    }
+}
+
 fn past_the_tail(err: &anyhow::Error) -> bool {
     err.downcast_ref::<SubscribeCursorError>()
         .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
