@@ -790,6 +790,8 @@ fn new_shapes_stay_linear() {
         "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.AbCdEfGhIjKlMnOpQrStAbCdEfeyJ".repeat(mb / 64),
         format!("-----BEGIN PRIVATE KEY-----{}", "\n\n".repeat(mb / 2)),
         format!("-----BEGIN PRIVATE KEY-----{}", "\\\\n".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\r".repeat(mb / 2)),
         format!("-----BEGIN PRIVATE KEY-----\\n\\\n{}", " ".repeat(mb)),
         format!("-----BEGIN PRIVATE KEY-----\n{}", "A".repeat(mb)),
         "-----BEGIN PRIVATE KEY-----\n\n".repeat(mb / 29),
@@ -895,10 +897,10 @@ fn deeper_escaping_and_continuations_are_cut_whole() {
         let text = format!("\"-----BEGIN PRIVATE KEY-----{cont}{BODY}{cont}{short}{cont}{end}\" x");
         assert_eq!(redact(&text), "\"[redacted]\" x", "{cont:?}");
     }
-    // Past the bound it is not read as a break: the header goes, the body stays.
-    let nl = format!("{}n", bs(12));
-    let text = format!("-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}ok");
-    assert!(redact(&text).contains(BODY));
+    // Five levels of escaping is sixteen backslashes.
+    let nl = format!("{}n", bs(16));
+    let text = format!("-----BEGIN PRIVATE KEY-----{nl}{BODY}{nl}{short}{nl}{end}ok");
+    assert_eq!(redact(&text), "[redacted]ok");
 }
 
 #[test]

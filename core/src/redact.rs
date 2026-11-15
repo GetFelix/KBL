@@ -782,11 +782,8 @@ fn line_break(s: &[u8]) -> Option<usize> {
     Some(one)
 }
 
-/// Longest run of backslashes read as escaping in front of a line break.
-const MAX_ESCAPES: usize = 8;
-
 /// A line break as text carries it: a real one, `\n` or `\r\n` with any
-/// bounded depth of escaping (JSON inside JSON), or backslash then a real
+/// depth of escaping (JSON inside JSON), or backslash then a real
 /// newline.
 fn escaped_break(s: &[u8]) -> Option<usize> {
     if s.starts_with(b"\r\n") {
@@ -795,14 +792,9 @@ fn escaped_break(s: &[u8]) -> Option<usize> {
     if s.starts_with(b"\n") {
         return Some(1);
     }
-    let slashes = |s: &[u8]| {
-        s.iter()
-            .take(MAX_ESCAPES + 1)
-            .take_while(|b| **b == b'\\')
-            .count()
-    };
+    let slashes = |s: &[u8]| s.iter().take_while(|b| **b == b'\\').count();
     let bs = slashes(s);
-    if bs == 0 || bs > MAX_ESCAPES {
+    if bs == 0 {
         return None;
     }
     let rest = &s[bs..];
@@ -814,7 +806,7 @@ fn escaped_break(s: &[u8]) -> Option<usize> {
     }
     if rest.first() == Some(&b'r') {
         let more = slashes(&rest[1..]);
-        if more > 0 && more <= MAX_ESCAPES && rest.get(1 + more) == Some(&b'n') {
+        if more > 0 && rest.get(1 + more) == Some(&b'n') {
             return Some(bs + 1 + more + 1);
         }
     }
