@@ -1,5 +1,5 @@
 {
- "core/src/redact.rs:1031": "pub fn redact_record(record: &mut WorkRecord) {",
+ "core/src/redact.rs:1057": "pub fn redact_record(record: &mut WorkRecord) {",
  "core/src/work_fold.rs:652": "if to <= log || rec.v != to {",
  "core/src/work_fold.rs:657": "if rec.v > log {",
  "core/src/work_fold.rs:928": "if it.flagged && it.hold.is_none() {",

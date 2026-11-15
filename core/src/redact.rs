@@ -727,7 +727,11 @@ fn pem_body(s: &[u8]) -> bool {
             continue;
         }
         // `+` is base64 already.
-        if matches!(s[at], b' ' | b'\t') || (line_start && matches!(s[at], b'-' | b'>')) {
+        if let Some(n) = body_space(&s[at..]) {
+            at += n;
+            continue;
+        }
+        if line_start && matches!(s[at], b'-' | b'>') {
             at += 1;
             continue;
         }
@@ -816,11 +820,12 @@ fn pem_lines(s: &[u8], head: usize) -> usize {
 /// marker, or a `+` one followed by a space). Whether it held a line break.
 fn pem_gap(s: &[u8]) -> (usize, bool) {
     let blank = |b: &u8| matches!(*b, b' ' | b'\t');
-    let spaces = s
-        .iter()
-        .take(MAX_PEM_PREFIX)
-        .take_while(|b| blank(b))
-        .count();
+    let mut spaces = 0;
+    while spaces < MAX_PEM_PREFIX
+        && let Some(n) = body_space(&s[spaces..])
+    {
+        spaces += n;
+    }
     let Some(br) = line_break(&s[spaces..]) else {
         return (spaces, false);
     };
@@ -864,7 +869,7 @@ fn armor(s: &[u8]) -> usize {
         let mut v = name;
         let mut nested = false;
         while v < name + MAX_ARMOR_LINE && v < line.len() && line_break(&line[v..]).is_none() {
-            nested |= line[v] == b'-' && key_header(&line[v..]).is_some();
+            nested |= line[v] == b'-' && starts_word(line, v) && key_header(&line[v..]).is_some();
             v += match line[v] {
                 b'\\' => line[v..].iter().take_while(|b| **b == b'\\').count(),
                 _ => 1,
@@ -904,16 +909,37 @@ fn encoded_base64(s: &[u8]) -> bool {
         )
 }
 
-/// A `/` escaped as JSON escapes it, at any depth: `\/`, `\\\/`. An even
-/// run of backslashes is backslashes, so the `/` after it is not escaped.
-fn escaped_slash(s: &[u8]) -> Option<usize> {
+/// A space or tab between the runs of a key body, or `%20` in a URL-encoded
+/// one.
+fn body_space(s: &[u8]) -> Option<usize> {
+    match s.first()? {
+        b' ' | b'\t' => Some(1),
+        b'%' if s.get(1..3) == Some(b"20") => Some(3),
+        _ => None,
+    }
+}
+
+/// A base64 byte JSON escaped, at any depth: `/` as `\/` or `\\\/`, and
+/// `+`, `/` or `=` as `\u002b`, `\u002f` or `\u003d`. An even run of
+/// backslashes before `/` is backslashes, so that `/` is not escaped.
+fn escaped_base64(s: &[u8]) -> Option<usize> {
     let bs = s.iter().take_while(|b| **b == b'\\').count();
-    (bs % 2 == 1 && s.get(bs) == Some(&b'/')).then_some(bs + 1)
+    if bs == 0 {
+        return None;
+    }
+    if bs % 2 == 1 && s.get(bs) == Some(&b'/') {
+        return Some(bs + 1);
+    }
+    let code = s.get(bs..bs + 5)?;
+    [b"u002b", b"u002f", b"u003d"]
+        .iter()
+        .any(|c| code.eq_ignore_ascii_case(*c))
+        .then_some(bs + 5)
 }
 
 /// The bytes and the base64 characters of the run at the start of `s`, at
-/// most `max` characters, reading `%2B`, `%2F`, `%3D` and an escaped `/` as
-/// one each.
+/// most `max` characters, reading `%2B`, `%2F`, `%3D` and a JSON-escaped
+/// base64 byte as one each.
 fn base64_run(s: &[u8], max: usize) -> (usize, usize) {
     let (mut at, mut n) = (0, 0);
     while n < max {
@@ -921,7 +947,7 @@ fn base64_run(s: &[u8], max: usize) -> (usize, usize) {
             at += 1;
         } else if encoded_base64(&s[at..]) {
             at += 3;
-        } else if let Some(k) = escaped_slash(&s[at..]) {
+        } else if let Some(k) = escaped_base64(&s[at..]) {
             at += k;
         } else {
             break;

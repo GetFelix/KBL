@@ -1196,3 +1196,73 @@ fn encoded_headers_escaped_slashes_and_long_armor_stay_linear() {
         assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
     }
 }
+
+#[test]
+fn a_url_encoded_key_on_one_line_is_cut() {
+    let line = "MIIEq9Zx%2BIIEq9Zx%2FIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9Zx";
+    let begin = "-----BEGIN%20PRIVATE%20KEY-----";
+    let end = "-----END%20PRIVATE%20KEY-----";
+    let text = format!("k={begin}%20{line}%20{line}%20AB12cd%3D%3D%20{end}&x");
+    assert_eq!(redact(&text), "k=[redacted]&x");
+    let text = format!("k={begin}%20{line}%20{line}%20AB12cd%3D%3D&x");
+    assert!(!redact(&text).contains("Zx%2B"), "{}", redact(&text));
+    // Words after an encoded header are not a body.
+    assert_eq!(
+        redact(&format!("q={begin}%20and%20more%20text")),
+        "q=[redacted]%20and%20more%20text"
+    );
+}
+
+#[test]
+fn unicode_escaped_base64_bytes_are_read_in_a_body() {
+    for (plus, slash, eq, nl) in [
+        ("\\u002b", "\\u002f", "\\u003d", "\\n"),
+        ("\\u002B", "\\u002F", "\\u003D", "\\n"),
+        ("\\\\u002b", "\\\\u002f", "\\\\u003d", "\\\\n"),
+    ] {
+        let line = slashed("/").replace('/', slash).replace('+', plus);
+        let text = format!(
+            "{{\"k\":\"-----BEGIN PRIVATE KEY-----{nl}{line}{nl}AB12cd{eq}{eq}{nl}-----END PRIVATE KEY-----{nl}\"}}"
+        );
+        assert_eq!(
+            redact(&text),
+            format!("{{\"k\":\"[redacted]{nl}\"}}"),
+            "{plus}"
+        );
+        let text = format!("{{\"k\":\"-----BEGIN PRIVATE KEY-----{nl}{line}{nl}{line}{nl}AB12\"}}");
+        assert!(!redact(&text).contains("IIEq9Zx"), "{plus} no end");
+    }
+    // Other `\u` escapes still end a run.
+    let text = "\"-----BEGIN PRIVATE KEY-----\\nsrc\\u0020pem.rs\\nok\"";
+    assert_eq!(redact(text), "\"[redacted]\\nsrc\\u0020pem.rs\\nok\"");
+}
+
+#[test]
+fn a_header_stuck_to_a_word_in_armor_does_not_end_it() {
+    let pgp = "PGP PRIVATE KEY BLOCK-----";
+    let text = format!(
+        "-----BEGIN {pgp}\nComment: see x-----BEGIN PRIVATE KEY-----\nVersion: 1\n\n{BODY}\nAB12cd==\n-----END {pgp}\nok"
+    );
+    assert_eq!(redact(&text), "[redacted]\nok");
+}
+
+#[test]
+fn encoded_gaps_and_unicode_escapes_stay_linear() {
+    let mb = 10 * 1024 * 1024;
+    let inputs = [
+        format!("-----BEGIN PRIVATE KEY-----{}", "%20".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "AB%20".repeat(mb / 5)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "\\u002b".repeat(mb / 6)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}u002", "\\".repeat(mb)),
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}",
+            "A: x-----BEGIN PRIVATE KEY-----\n".repeat(mb / 32)
+        ),
+    ];
+    for text in inputs {
+        let start = Instant::now();
+        let _ = redact(&text);
+        let took = start.elapsed();
+        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
+    }
+}
