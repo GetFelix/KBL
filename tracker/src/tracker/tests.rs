@@ -1321,6 +1321,43 @@ async fn ingest_writes_upstream_records_as_the_tracker_under_its_own_name() {
 }
 
 #[tokio::test]
+async fn ingest_writing_a_context_entry_again_unchanged_logs_nothing() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let ingest = |r| {
+        let t = &t;
+        async move { t.ingest_record(key("ingest-gh"), r).await }
+    };
+    let imported = WorkRecord::Imported {
+        item: item("r1"),
+        source: "github".into(),
+        upstream_id: "GetFelix/felix#1".into(),
+        title: "a bug".into(),
+    };
+    ingest(imported).await.unwrap();
+    let context = |body: &str| WorkRecord::Context {
+        item: item("r1"),
+        entry: key("issue"),
+        text: Content::Text(body.into()),
+    };
+    let first = ingest(context("the body")).await.unwrap();
+    let before = fake.log().len();
+    let again = ingest(context("the body")).await.unwrap();
+    assert_eq!(fake.log().len(), before);
+    assert_eq!(again["offset"], first["offset"]);
+    // The texts come back from the log on a restart.
+    let t = start(&fake).await;
+    t.ingest_record(key("ingest-gh"), context("the body"))
+        .await
+        .unwrap();
+    assert_eq!(fake.log().len(), before);
+    t.ingest_record(key("ingest-gh"), context("an edit"))
+        .await
+        .unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+}
+
+#[tokio::test]
 async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
     let fake = Fake::default();
     let t = start(&fake).await;
