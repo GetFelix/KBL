@@ -335,10 +335,33 @@ if it is still in the lane, is acked when it is delivered.
 A sweep (every few seconds) writes `released` with the reason `lapsed` for a
 hold whose delivery the tracker no longer has, or that has not been extended
 for the visibility period, so the item is Ready without another agent having to
-poll. After a restart the tracker takes back, for each agent the log shows
-holding, the delivery Felix still has for that name; if it is not there the
-hold is released at once. Until then `work_next` answers that the agent has no
-current claim.
+poll.
+
+After a restart the tracker takes back, for each agent the log shows holding,
+the delivery Felix still has for that name. It polls the lane the item was
+published on, where Felix hands a member its own deliveries before new work,
+and stops at the first record that is the agent's item or another Ready item.
+Other lanes are polled only when the item was not found there.
+
+Each poll that hands out a record counts as a delivery attempt in Felix, and
+Felix dead-letters a record after five. So:
+
+- Each restart costs every held item one attempt (taking it back is a
+  redelivery). A hold survives four restarts; the fifth dead-letters its record.
+- The backlog of Ready records costs nothing when the held item is found.
+- When an agent's delivery is gone, the first Ready record of each lane polled
+  costs one attempt, once.
+
+If Felix answers that the delivery is not there, the hold is released at once,
+and until then `work_next` answers that the agent has no current claim.
+
+If a poll fails instead, for example during a ready-lane failover, the hold is
+kept. The tracker tries again in the background after each sweep, and on the
+agent's next `work_next` or `extend`, skipping the lanes that already answered.
+Those calls answer 502 while Felix still fails, so the agent calls again rather
+than stopping work. A hold the tracker could not look for is freed one
+visibility period after the first failure, when Felix has let the delivery lapse
+as well.
 
 The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third

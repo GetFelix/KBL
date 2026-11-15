@@ -13,7 +13,7 @@
 //! Every Felix call has a timeout.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -220,6 +220,18 @@ struct Core {
     /// `work_next` that passed the token check before the revoke cannot claim
     /// after the revoke has released the agent's holds.
     revoked: HashSet<AgentName>,
+    /// Agents whose delivery a takeover could not look for because Felix failed,
+    /// with when the sweep may free their hold anyway: one visibility after the
+    /// first failure, when Felix has let the delivery lapse too.
+    recovering: HashMap<String, Recovering>,
+}
+
+/// A hold whose delivery a takeover could not look for yet.
+struct Recovering {
+    /// When the sweep may free the hold anyway.
+    until: Instant,
+    /// The lanes already searched, one bit per tier.
+    searched: u8,
 }
 
 impl Core {
@@ -464,6 +476,8 @@ struct Inner<B> {
     next_delivery: AtomicU64,
     /// Counts the hand-backs that have ended. See `Core::handed_back`.
     settles: AtomicU64,
+    /// A round of `retry_recovering` is running.
+    retrying: AtomicBool,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -493,6 +507,7 @@ impl<B: Broker> Tracker<B> {
             stamp: AtomicU64::new(now_micros()),
             next_delivery: AtomicU64::new(1),
             settles: AtomicU64::new(0),
+            retrying: AtomicBool::new(false),
         }));
         // Read once before taking the lease: a build that cannot read the log
         // must not hold the lease and keep a build that can from starting.
@@ -548,6 +563,7 @@ impl<B: Broker> Tracker<B> {
             {
                 let mut delivery = slot.lock().await;
                 self.reconcile(agent, &mut delivery).await;
+                self.resume_recover(agent, &mut delivery).await?;
                 if let Some(d) = delivery.as_ref() {
                     let core = self.0.core.lock().await;
                     return Ok(claimed(&core.state, d, true));
@@ -586,6 +602,7 @@ impl<B: Broker> Tracker<B> {
         if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
             return Err(lapsed(item));
         }
+        self.resume_recover(agent, &mut delivery).await?;
         let Some(d) = delivery.as_ref().filter(|d| &d.item == item) else {
             let core = self.0.core.lock().await;
             return Err(match core.state.items.get(item) {
@@ -765,6 +782,7 @@ impl<B: Broker> Tracker<B> {
         if self.begin().await.is_err() {
             return;
         }
+        self.retry_recovering();
         let visibility = self.0.settings.visibility;
         // The lock is taken per hold, so one slow append does not keep it for the rest.
         let lapsed: Vec<ItemId> = {
@@ -1547,64 +1565,173 @@ impl<B: Broker> Tracker<B> {
     /// Takes back the delivery Felix still holds for `agent`, whose first poll on
     /// its connection reclaims it. Any other delivery the agent had is handed back.
     async fn recover(&self, agent: &AgentName) {
-        let Some((item, attempt)) = self.0.core.lock().await.state.held_by(agent.as_str()) else {
-            return;
-        };
         let slot = self.slot(agent);
         let mut delivery = slot.lock().await;
+        self.recover_into(agent, &mut delivery).await;
+    }
+
+    /// `recover` with the agent's slot already locked. A poll that fails leaves
+    /// the hold recovering, so the sweep keeps it until one visibility after the
+    /// first failure; only an answer from Felix shows the delivery is gone.
+    async fn recover_into(&self, agent: &AgentName, delivery: &mut Option<Delivery>) {
+        let held = self.0.core.lock().await.state.held_by(agent.as_str());
+        let Some((item, attempt)) = held.filter(|_| delivery.is_none()) else {
+            self.0.core.lock().await.recovering.remove(agent.as_str());
+            return;
+        };
         // The broker reclaims in a connection's first poll, so that poll goes to
-        // the tier the item was published on.
-        let first = {
+        // the tier the item was published on. Lanes an earlier try already
+        // searched are skipped: polling them again would cost their head record
+        // another attempt.
+        let (first, mut searched) = {
             let core = self.0.core.lock().await;
-            core.state
+            let first = core
+                .state
                 .items
                 .get(&item)
                 .and_then(|i| self.0.settings.lane(i))
-                .unwrap_or(DEFAULT_TIER)
+                .unwrap_or(DEFAULT_TIER);
+            let searched = core
+                .recovering
+                .get(agent.as_str())
+                .map_or(0, |r| r.searched);
+            (first, searched)
         };
         let mut others = Vec::new();
-        for tier in std::iter::once(first).chain((0..LANES).filter(|t| *t != first)) {
+        let mut failed = false;
+        let tiers: Vec<u8> = std::iter::once(first)
+            .chain((0..LANES).filter(|t| *t != first))
+            .filter(|t| searched & (1 << t) == 0)
+            .collect();
+        'tiers: for tier in tiers {
             let stream = ready_stream(tier);
             // Bounded, in case the broker keeps handing records back.
             for _ in 0..64 {
-                let Ok(Some(record)) = self
+                let polled = self
                     .io(
                         Some(agent.as_str()),
                         self.0
                             .broker
                             .poll(&stream, agent.as_str(), self.0.settings.visibility),
                     )
-                    .await
-                else {
-                    break;
-                };
-                match ReadyRecord::decode(&record.payload) {
-                    Ok(ready) if ready.item == item && delivery.is_none() => {
-                        let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
-                        let mut core = self.0.core.lock().await;
-                        core.live.insert(item.clone(), (ready.tier, ready.stamp));
-                        core.published.remove(&item);
-                        core.owner.insert(
-                            item.clone(),
-                            Owner {
-                                agent: agent.clone(),
-                                id,
-                                last_extended: Instant::now(),
-                            },
-                        );
-                        *delivery = Some(Delivery {
-                            id,
-                            item: item.clone(),
-                            attempt,
-                            tier,
-                            record,
-                        });
+                    .await;
+                let record = match polled {
+                    Ok(Some(record)) => record,
+                    Ok(None) => break,
+                    Err(_) => {
+                        failed = true;
+                        break 'tiers;
                     }
-                    _ => others.push(Op::Nack(stream.clone(), agent.clone(), record)),
+                };
+                let ready = ReadyRecord::decode(&record.payload);
+                let mut core = self.0.core.lock().await;
+                if let Ok(ready) = &ready
+                    && ready.item == item
+                    // A revoke or a person may have ended the hold during the poll.
+                    && core.state.held_by(agent.as_str()) == Some((item.clone(), attempt))
+                {
+                    let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
+                    core.live.insert(item.clone(), (ready.tier, ready.stamp));
+                    core.published.remove(&item);
+                    core.owner.insert(
+                        item.clone(),
+                        Owner {
+                            agent: agent.clone(),
+                            id,
+                            last_extended: Instant::now(),
+                        },
+                    );
+                    *delivery = Some(Delivery {
+                        id,
+                        item: item.clone(),
+                        attempt,
+                        tier,
+                        record,
+                    });
+                    break 'tiers;
                 }
+                // Felix hands back a member's own claims before new work, so a
+                // record of the item or of a claimable one means nothing of ours
+                // is left on this tier. Polling on would cost every Ready record
+                // an attempt.
+                let done = ready.as_ref().is_ok_and(|r| {
+                    r.item == item || core.state.stage(&r.item) == Some(Stage::Ready)
+                });
+                drop(core);
+                others.push(Op::Nack(stream.clone(), agent.clone(), record));
+                if done {
+                    break;
+                }
+            }
+            searched |= 1 << tier;
+        }
+        {
+            let mut core = self.0.core.lock().await;
+            if failed && delivery.is_none() {
+                let until = Instant::now() + self.0.settings.visibility;
+                let r = core
+                    .recovering
+                    .entry(agent.as_str().to_owned())
+                    .or_insert(Recovering { until, searched: 0 });
+                r.searched = searched;
+            } else {
+                core.recovering.remove(agent.as_str());
             }
         }
         self.run(others).await.ok();
+    }
+
+    /// Starts `recover` again, on a task of its own, for every agent whose
+    /// recover failed and whose hold has not run out. The sweep does not wait
+    /// for it: a lane that hangs must not hold up the lease renewal behind the
+    /// sweep. One round runs at a time.
+    fn retry_recovering(&self) {
+        if self.0.retrying.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let me = self.clone();
+        tokio::spawn(async move {
+            let agents: Vec<AgentName> = {
+                let mut core = me.0.core.lock().await;
+                let now = Instant::now();
+                core.recovering.retain(|_, r| now < r.until);
+                core.recovering
+                    .keys()
+                    .filter_map(|a| AgentName::new(a.as_str()).ok())
+                    .collect()
+            };
+            let mut tries = tokio::task::JoinSet::new();
+            for agent in agents {
+                let me = me.clone();
+                tries.spawn(async move { me.recover(&agent).await });
+            }
+            while tries.join_next().await.is_some() {}
+            me.0.retrying.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// For an agent whose recover failed: tries again, and errs while Felix still
+    /// fails, so the agent calls again instead of hearing its claim is lost.
+    async fn resume_recover(
+        &self,
+        agent: &AgentName,
+        delivery: &mut Option<Delivery>,
+    ) -> Result<(), Error> {
+        let pending = |core: &Core| {
+            core.recovering
+                .get(agent.as_str())
+                .is_some_and(|r| Instant::now() < r.until)
+        };
+        if delivery.is_some() || !pending(&*self.0.core.lock().await) {
+            return Ok(());
+        }
+        self.recover_into(agent, delivery).await;
+        if delivery.is_none() && pending(&*self.0.core.lock().await) {
+            return Err(Error::Felix(anyhow::anyhow!(
+                "the tracker could not yet take back your claim after a restart; call again"
+            )));
+        }
+        Ok(())
     }
 
     // ---- ready records ----
@@ -1975,6 +2102,14 @@ impl<B: Broker> Tracker<B> {
 /// Whether the hold on `item` has no delivery behind it, or was last extended
 /// a visibility period ago.
 fn expired(core: &Core, item: &ItemId, now: Instant, visibility: Duration) -> bool {
+    let holder = core.state.items.get(item).and_then(|i| i.hold.as_ref());
+    if holder.is_some_and(|h| {
+        core.recovering
+            .get(h.by.as_str())
+            .is_some_and(|r| now < r.until)
+    }) {
+        return false;
+    }
     core.owner
         .get(item)
         .is_none_or(|o| now.duration_since(o.last_extended) >= visibility)

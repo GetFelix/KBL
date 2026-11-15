@@ -56,6 +56,9 @@ struct Net {
     lease_lag: Duration,
     /// Polls by this member never answer.
     hang_member: Option<String>,
+    /// Polls of every stream that starts with this fail, as during a
+    /// ready-lane failover.
+    fail_polls: Option<String>,
     /// Members whose connection has dropped: their calls fail until it is forgotten.
     dead: HashSet<String>,
     forgets: Vec<Option<String>>,
@@ -89,7 +92,8 @@ const ATTEMPT_BOUND: u32 = 5;
 
 /// An in-memory Felix: streams, and a consumer group per ready stream. A `Fake`
 /// is one tracker's connection; `reconnect` is a restarted tracker. Only a
-/// member's first poll on a connection reclaims what Felix still holds for it.
+/// member's first poll of a lane on a connection reclaims what Felix still
+/// holds for it there.
 #[derive(Clone, Default)]
 pub(super) struct Fake {
     net: Arc<StdMutex<Net>>,
@@ -283,6 +287,23 @@ impl Fake {
         self.net.lock().unwrap().fail_reads = fail;
     }
 
+    pub(super) fn fail_polls(&self, streams: Option<&str>) {
+        self.net.lock().unwrap().fail_polls = streams.map(str::to_owned);
+    }
+
+    /// How many times Felix has handed out each record of `stream`, by offset.
+    pub(super) fn tries(&self, stream: &str) -> Vec<(u64, u32)> {
+        let net = self.net.lock().unwrap();
+        let mut tries: Vec<(u64, u32)> = net
+            .tries
+            .iter()
+            .filter(|((s, _), _)| s == stream)
+            .map(|((_, o), n)| (*o, *n))
+            .collect();
+        tries.sort();
+        tries
+    }
+
     fn hang(&self, member: Option<&str>) {
         self.net.lock().unwrap().hang_member = member.map(str::to_owned);
     }
@@ -332,7 +353,12 @@ impl Fake {
     }
 
     fn poll_sync(&self, stream: &str, member: &str) -> Option<GroupRecord> {
-        let reclaim = self.polled.lock().unwrap().insert(member.to_owned());
+        // Like Felix: a reclaim is per lane, once per connection.
+        let reclaim = self
+            .polled
+            .lock()
+            .unwrap()
+            .insert(format!("{member} {stream}"));
         let mut net = self.net.lock().unwrap();
         let offsets: Vec<u64> = net
             .streams
@@ -353,11 +379,11 @@ impl Fake {
             let key = (stream.to_owned(), offset);
             match net.slots.get(&key).cloned().unwrap_or(Slot::Pending) {
                 Slot::Leased(m) if reclaim && m == member => {
-                    pick = Some((offset, false));
+                    pick = Some(offset);
                     break;
                 }
                 Slot::Pending if pick.is_none() => {
-                    pick = Some((offset, true));
+                    pick = Some(offset);
                     // A reclaim looks at the whole stream before it takes new work.
                     if !reclaim {
                         break;
@@ -366,12 +392,11 @@ impl Fake {
                 _ => {}
             }
         }
-        let (offset, fresh) = pick?;
+        let offset = pick?;
         let key = (stream.to_owned(), offset);
+        // Felix counts a reclaim as an attempt too.
         let tries = net.tries.entry(key.clone()).or_insert(0);
-        if fresh {
-            *tries += 1;
-        }
+        *tries += 1;
         let n = *tries;
         net.slots.insert(key, Slot::Leased(member.to_owned()));
         let payload = net.streams[stream]
@@ -458,6 +483,9 @@ impl Broker for Fake {
         }
         if self.net.lock().unwrap().dead.contains(member) {
             anyhow::bail!("the connection dropped");
+        }
+        if (self.net.lock().unwrap().fail_polls.as_deref()).is_some_and(|p| stream.starts_with(p)) {
+            anyhow::bail!("the ready lane is failing over");
         }
         let polled = self.poll_sync(stream, member);
         if polled.is_some() {
@@ -606,7 +634,11 @@ impl Broker for Fake {
         net.forgets.push(member.map(str::to_owned));
         if let Some(m) = member {
             net.dead.remove(m);
-            self.polled.lock().unwrap().remove(m);
+            let prefix = format!("{m} ");
+            self.polled
+                .lock()
+                .unwrap()
+                .retain(|p| !p.starts_with(&prefix));
         }
     }
 
@@ -2088,6 +2120,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 }
 
 mod races;
+mod recover;
 mod retry;
 mod review;
 
