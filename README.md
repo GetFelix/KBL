@@ -308,6 +308,7 @@ node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
 node dev/check-death.mjs                     # kills workers holding tasks, restarts one, and finishes a task twice
 node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
 node dev/check-tracker-triage.mjs            # a scripted agent answers four triage items; a person acts on two (needs the tracker built too)
+node dev/check-tracker-ingest.mjs            # kbl-ingest polls one issue from a stand-in GitHub again and again, and after losing its state, and imports it once
 kbl-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
 
