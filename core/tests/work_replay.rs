@@ -208,3 +208,63 @@ fn an_old_log_has_no_flagged_items() {
         assert!(!serde_json::to_string(&s).unwrap().contains("flagged"));
     }
 }
+
+/// A log raised to format 8: a cost reported before the raise stands, usage
+/// after it is priced when it folds, an unknown model costs the floor until a
+/// person prices it, and a later price leaves history alone. Its folded state
+/// is pinned in `wasm/golden/format_8.state.json`.
+#[test]
+fn usage_is_priced_from_format_8_and_reported_costs_still_fold() {
+    use kbl_core::work_fold::fold;
+    let log: Vec<_> = include_str!("work_format_8.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let cost = |s: &State, id: &str| s.items[&ItemId::new(id).unwrap()].cost_micros;
+    let why = |s: &State| -> Vec<(u64, Reject)> {
+        s.rejections.iter().map(|r| (r.offset, r.why)).collect()
+    };
+
+    // A claim stamped 8 before the raise is refused; the legacy cost stands.
+    let before = fold(&log[..5]);
+    assert_eq!(why(&before), [(4, Reject::Format)]);
+    assert_eq!(cost(&before, "r1"), 300_000);
+
+    // 20k input at $3/M and 4k output at $15/M, over the floor.
+    let priced = fold(&log[..10]);
+    assert_eq!(cost(&priced, "r1"), 300_000 + 120_000);
+
+    // Nothing prices `new-model` or `credits` yet: the floor is charged.
+    let unpriced = fold(&log[..14]);
+    assert_eq!(cost(&unpriced, "r2"), 100_000);
+    assert_eq!(
+        unpriced.unpriced_models().into_iter().collect::<Vec<_>>(),
+        ["credits", "new-model"]
+    );
+
+    let end = fold(&log);
+    // The price draws the rest: 100k tokens at $2/M.
+    assert_eq!(cost(&end, "r2"), 200_000);
+    assert_eq!(
+        end.unpriced_models().into_iter().collect::<Vec<_>>(),
+        ["credits"]
+    );
+    // A later price for `m` does not reprice r1.
+    assert_eq!(cost(&end, "r1"), 420_000);
+    assert_eq!(
+        why(&end),
+        [
+            (4, Reject::Format),
+            (15, Reject::ActorNotAllowed),
+            (20, Reject::BadUsage)
+        ]
+    );
+    let spend = end.spend();
+    assert_eq!(spend.by_model["m"].cost_micros, 120_000);
+    assert_eq!(spend.by_model["credits"].aic_milli, 1_500);
+    assert!(spend.by_model["credits"].unpriced);
+    // The stored state reads back with the prices and waiting usage in it.
+    let back: State = serde_json::from_value(serde_json::to_value(&end).unwrap()).unwrap();
+    assert_eq!(back, end);
+}

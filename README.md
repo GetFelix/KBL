@@ -38,6 +38,7 @@ work on a backlog that never ends:
 - **People and agents don't overwrite each other.** Items are keys written with `cache_put_if` at the version read, so a stale write is refused.
 - **One log is the record.** `work.events` holds every import, claim, decision and refusal in order, with the broker's record of who wrote it. The queue, an item's history and the replay are folds of it.
 - **Budgets hold under a race.** A root's budget only decreases, and a create over it is refused.
+- **Spend is usage, priced by the tracker.** Agents report the tokens or AI credits each model used; people keep the price table, and a model with no price is charged the floor until it gets one ([cost and spend](docs/work-tracker.md#cost-and-spend)).
 - **Agents stay in their lane.** Each agent has its own token and reaches work only through the tracker, which is the only writer of `work.events`, the ready streams and the item keys.
 
 ## What you will be able to do

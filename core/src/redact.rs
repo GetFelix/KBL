@@ -70,18 +70,21 @@ fn classes(s: &[u8]) -> usize {
 
 /// An access key id is exactly 16 upper case letters or digits after the
 /// prefix: `feature/AKIA...EXAMPLE1` is a branch name. Two ids stuck
-/// together are 36 bytes: the first's 16, then a whole second id.
+/// together are the first's 16 bytes, perhaps one joining byte, then a whole
+/// second id; the rest of the run goes with them.
 fn aws_id(t: &[u8]) -> bool {
     let id = |t: &[u8]| {
         t.len() == 16
             && t.iter()
                 .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
     };
+    let second = |r: &[u8]| {
+        r.len() >= 20 && (r.starts_with(b"AKIA") || r.starts_with(b"ASIA")) && id(&r[4..20])
+    };
     id(t)
-        || (t.len() == 36
+        || (t.len() >= 36
             && id(&t[..16])
-            && (t[16..].starts_with(b"AKIA") || t[16..].starts_with(b"ASIA"))
-            && id(&t[20..]))
+            && (second(&t[16..]) || (t.len() == MAX_AWS && second(&t[17..]))))
 }
 
 /// A generated credential has a long run of letters and digits mixed:
@@ -259,8 +262,8 @@ const fn slack_shape(prefix: &'static str, min_tail: usize) -> Shape {
     }
 }
 
-/// An id and a second whole id stuck to it; one more byte than that is not.
-const MAX_AWS: usize = 36;
+/// An id, one joining byte and a second whole id.
+const MAX_AWS: usize = 37;
 
 const SHAPES: &[Shape] = &[
     // GitHub tokens and fine-grained tokens.
@@ -327,9 +330,14 @@ const SHAPES: &[Shape] = &[
 
 const KEY_BEGIN: &str = "-----BEGIN ";
 const KEY_END: &str = "-----END ";
-const KEY_TAIL: &str = "PRIVATE KEY-----";
-/// Longest label before `PRIVATE KEY-----`, as in `ENCRYPTED ` or `OPENSSH `.
+/// What ends a private key's header, after a label such as `RSA ` or `PGP `.
+const KEY_TAILS: [&str; 2] = ["PRIVATE KEY-----", "PRIVATE KEY BLOCK-----"];
+/// Longest label before a key tail, as in `ENCRYPTED ` or `OPENSSH `.
 const MAX_KEY_LABEL: usize = 32;
+/// Most `Name: value` lines read after a key header (`Proc-Type:`,
+/// `DEK-Info:`, or a PGP `Comment:`), and the longest one.
+const MAX_ARMOR_LINES: usize = 16;
+const MAX_ARMOR_LINE: usize = 256;
 /// Furthest an `END` line may be from its `BEGIN`. An 8192-bit RSA key is
 /// under 7 KiB.
 const MAX_KEY_BODY: usize = 16 * 1024;
@@ -344,8 +352,6 @@ const MIN_PEM_RUN: usize = 32;
 const PEM_LINE: usize = 64;
 /// Longest full line of a body with no `END`; OpenSSH keys use 70.
 const MAX_PEM_LINE_FULL: usize = 70;
-/// Longest body line taken inside a block.
-const MAX_PEM_LINE: usize = 80;
 /// How far a URL's userinfo is looked for after `://`.
 const MAX_USERINFO: usize = 256;
 
@@ -409,8 +415,9 @@ fn cut(text: &str, shapes: bool) -> Cow<'_, str> {
 }
 
 /// Whether a secret may start at `i`. `disk-...` is not an `sk-` key, but a
-/// `-` (a removed diff line), `_` (`TOKEN_ghp_...`) or a JSON escape
-/// (`\nghp_...`, `"ghp_...`) may come before one.
+/// `-` (a removed diff line), `_` (`TOKEN_ghp_...`), a JSON escape
+/// (`\nghp_...`, `"ghp_...`) or a URL-encoded byte (`%20ghp_...`,
+/// `d%3Dxoxd-...`) may come before one.
 fn starts_word(bytes: &[u8], i: usize) -> bool {
     let Some(prev) = i.checked_sub(1).map(|p| bytes[p]) else {
         return true;
@@ -422,7 +429,9 @@ fn starts_word(bytes: &[u8], i: usize) -> bool {
     let unicode = i >= 6
         && &bytes[i - 6..i - 4] == b"\\u"
         && bytes[i - 4..i].iter().all(u8::is_ascii_hexdigit);
-    escape || unicode
+    let encoded =
+        i >= 3 && bytes[i - 3] == b'%' && bytes[i - 2..i].iter().all(u8::is_ascii_hexdigit);
+    escape || unicode || encoded
 }
 
 /// Where a scan is. A pattern whose tail ran to `dead[k]` and failed also
@@ -631,22 +640,22 @@ fn private_key(text: &str, i: usize, ends: &mut NextEnd) -> Option<usize> {
     let header = text.as_bytes()[i..].strip_prefix(KEY_BEGIN.as_bytes())?;
     // A key label is short; looking further would make a long line of
     // `-----BEGIN ` quadratic.
-    let near = &header[..header.len().min(MAX_KEY_LABEL + KEY_TAIL.len())];
-    let label = near
-        .windows(KEY_TAIL.len())
-        .position(|w| w == KEY_TAIL.as_bytes())?;
-    let label = &near[..label];
+    let (label, key_tail) = KEY_TAILS.iter().find_map(|t| {
+        let near = &header[..header.len().min(MAX_KEY_LABEL + t.len())];
+        let at = near.windows(t.len()).position(|w| w == t.as_bytes())?;
+        Some((&near[..at], t.as_bytes()))
+    })?;
     if label.iter().any(|b| *b == b'\n' || *b == b'\\') {
         return None;
     }
-    let body = i + KEY_BEGIN.len() + label.len() + KEY_TAIL.len();
+    let body = i + KEY_BEGIN.len() + label.len() + key_tail.len();
     if let Some(e) = ends.from(text, body).filter(|e| e - body <= MAX_KEY_BODY) {
         let tail = &text.as_bytes()[e + KEY_END.len()..];
         if tail.starts_with(label)
-            && tail[label.len()..].starts_with(KEY_TAIL.as_bytes())
+            && tail[label.len()..].starts_with(key_tail)
             && pem_body(&text.as_bytes()[body..e])
         {
-            return Some(e + KEY_END.len() + label.len() + KEY_TAIL.len() - i);
+            return Some(e + KEY_END.len() + label.len() + key_tail.len() - i);
         }
     }
     Some(body + pem_lines(&text.as_bytes()[body..]) - i)
@@ -656,9 +665,10 @@ fn private_key(text: &str, i: usize, ends: &mut NextEnd) -> Option<usize> {
 /// base64 split by line breaks or spaces (a key pasted on one line). A line
 /// may start with indentation, a diff marker or a `>` quote. Stops at the
 /// first byte that is none of these, so a `BEGIN` inside a failed body is
-/// not read twice. At least one run must be [`MIN_PEM_RUN`] long.
+/// not read twice. At least one run must be [`MIN_PEM_RUN`] long. A run may
+/// be the whole body, as in a key with its line breaks stripped.
 fn pem_body(s: &[u8]) -> bool {
-    let mut at = 0;
+    let mut at = armor(s);
     let mut long = false;
     let mut line_start = true;
     while at < s.len() {
@@ -672,15 +682,11 @@ fn pem_body(s: &[u8]) -> bool {
             at += 1;
             continue;
         }
-        let n = s[at..]
-            .iter()
-            .take(MAX_PEM_LINE + 1)
-            .take_while(|b| base64(**b))
-            .count();
-        if n == 0 || n > MAX_PEM_LINE {
+        let (bytes, n) = base64_run(&s[at..], usize::MAX);
+        if n == 0 {
             return false;
         }
-        at += n;
+        at += bytes;
         line_start = false;
         long |= n >= MIN_PEM_RUN;
     }
@@ -693,25 +699,37 @@ fn pem_body(s: &[u8]) -> bool {
 /// lines split by spaces instead. The first line must be full unless an
 /// `END` follows it, so a short reply or diff line after a header is left.
 /// A line may also end at a closing quote, as in `K="-----BEGIN ... AB12=="`.
+/// A run stuck to the header is a body with its line breaks stripped, and
+/// goes whole when it is longer than a line.
 fn pem_lines(s: &[u8]) -> usize {
-    let mut at = 0;
+    let (stuck_bytes, stuck) = base64_run(s, usize::MAX);
+    if stuck > MAX_PEM_LINE_FULL + 1 {
+        return stuck_bytes;
+    }
+    let head = armor(s);
+    let mut at = head;
     let mut full = false;
     while at < MAX_KEY_BODY {
         let (mut gap, _) = pem_gap(&s[at..]);
-        if gap == 0 {
+        if gap == 0 && !(at == 0 && stuck > 0) {
             break;
         }
         // One blank line is allowed between the header and the body.
-        if at == 0 && line_break(&s[gap..]).is_some() {
-            gap += pem_gap(&s[gap..]).0;
+        let plus = diff_plus(&s[at + gap..]);
+        if at == head && line_break(&s[at + gap + plus..]).is_some() {
+            gap += plus + pem_gap(&s[at + gap + plus..]).0;
         }
         let start = at + gap;
-        let line = s[start..]
-            .iter()
-            .take(MAX_PEM_LINE_FULL + 2)
-            .take_while(|b| base64(**b))
-            .count();
-        let next = start + line;
+        let (bytes, line) = base64_run(&s[start..], MAX_PEM_LINE_FULL + 2);
+        let next = start + bytes;
+        // A first line longer than any line, and mixed, is a body with its
+        // line breaks stripped.
+        if at == head && line > MAX_PEM_LINE_FULL + 1 {
+            let (all, _) = base64_run(&s[start..], usize::MAX);
+            if classes(&s[start..start + all]) >= 3 {
+                return start + all;
+            }
+        }
         // A diff marker makes a full line one longer.
         if line == 0 || line > MAX_PEM_LINE_FULL + 1 {
             break;
@@ -721,7 +739,9 @@ fn pem_lines(s: &[u8]) -> usize {
         let after = &s[next..];
         let closes =
             after.first().is_some_and(|b| b"\"'`".contains(b)) || after.starts_with(b"\\\"");
-        let padded = s[next - 1] == b'=' && n > 0;
+        let padded = (s[next - 1] == b'='
+            || (next >= 3 && s[next - 3..next].eq_ignore_ascii_case(b"%3D")))
+            && n > 0;
         let ends_line =
             br || closes || next + n == s.len() || (n > 0 && line >= PEM_LINE) || (full && padded);
         // A short first line is a key's when it is long and mixed enough that
@@ -739,7 +759,8 @@ fn pem_lines(s: &[u8]) -> usize {
         }
         full = true;
     }
-    at
+    // Armor with no body after it is prose that looks like a header.
+    if at == head { 0 } else { at }
 }
 
 /// The gap before the next run of a PEM body: spaces or tabs, then perhaps
@@ -769,6 +790,85 @@ fn pem_gap(s: &[u8]) -> (usize, bool) {
     (from + prefix, true)
 }
 
+/// How many bytes of `s` are `Name: value` lines after a key's header, up to
+/// the blank line that must follow them, or 0. Legacy encrypted PEM keys
+/// and PGP armor carry these before the body.
+fn armor(s: &[u8]) -> usize {
+    let mut at = 0;
+    for _ in 0..MAX_ARMOR_LINES {
+        let (gap, br) = pem_gap(&s[at..]);
+        let line = &s[at + gap..];
+        // An added diff line's `+` is stuck to the name.
+        let plus = diff_plus(line);
+        let name = line[plus..]
+            .iter()
+            .take(MAX_ARMOR_LINE)
+            .take_while(|b| b.is_ascii_alphanumeric() || **b == b'-')
+            .count();
+        let name = plus + name;
+        if !br || name == plus || !line[name..].starts_with(b": ") {
+            break;
+        }
+        // A run of backslashes that is not a break is skipped whole, so no
+        // line reads a long run twice.
+        let mut v = name;
+        while v < name + MAX_ARMOR_LINE && v < line.len() && line_break(&line[v..]).is_none() {
+            v += match line[v] {
+                b'\\' => line[v..].iter().take_while(|b| **b == b'\\').count(),
+                _ => 1,
+            };
+        }
+        if line_break(&line[v.min(line.len())..]).is_none() {
+            break;
+        }
+        at += gap + v;
+    }
+    let (gap, br) = pem_gap(&s[at..]);
+    let blank = at + gap + diff_plus(&s[at + gap..]);
+    if at > 0 && br && line_break(&s[blank..]).is_some() {
+        at
+    } else {
+        0
+    }
+}
+
+/// 1 when `s` starts with a `+` that is not base64 of the line after it: a
+/// diff marker before a name or a blank line.
+fn diff_plus(s: &[u8]) -> usize {
+    usize::from(
+        s.first() == Some(&b'+')
+            && s.get(1)
+                .is_some_and(|b| b.is_ascii_alphabetic() || line_break(&s[1..]).is_some()),
+    )
+}
+
+/// `%2B`, `%2F` or `%3D` at the start of `s`: a base64 byte URL-encoded.
+fn encoded_base64(s: &[u8]) -> bool {
+    s.len() >= 3
+        && s[0] == b'%'
+        && matches!(
+            (s[1], s[2].to_ascii_uppercase()),
+            (b'2', b'B' | b'F') | (b'3', b'D')
+        )
+}
+
+/// The bytes and the base64 characters of the run at the start of `s`, at
+/// most `max` characters, reading `%2B`, `%2F` and `%3D` as one each.
+fn base64_run(s: &[u8], max: usize) -> (usize, usize) {
+    let (mut at, mut n) = (0, 0);
+    while n < max {
+        if s.get(at).is_some_and(|b| base64(*b)) {
+            at += 1;
+        } else if encoded_base64(&s[at..]) {
+            at += 3;
+        } else {
+            break;
+        }
+        n += 1;
+    }
+    (at, n)
+}
+
 fn line_break(s: &[u8]) -> Option<usize> {
     let one = escaped_break(s)?;
     // `\n\` then a real newline continues a Rust string: one break, not two.
@@ -782,15 +882,25 @@ fn line_break(s: &[u8]) -> Option<usize> {
     Some(one)
 }
 
-/// A line break as text carries it: a real one, `\n` or `\r\n` with any
-/// depth of escaping (JSON inside JSON), or backslash then a real
-/// newline.
+/// A line break as text carries it: a real one, `\n`, `\r\n`, `\u000a` or
+/// `\u000d\u000a` with any depth of escaping (JSON inside JSON), backslash
+/// then a real newline, or URL-encoded as `%0A` or `%0D%0A`.
 fn escaped_break(s: &[u8]) -> Option<usize> {
     if s.starts_with(b"\r\n") {
         return Some(2);
     }
     if s.starts_with(b"\n") {
         return Some(1);
+    }
+    let lf = |s: &[u8], code: &[u8]| {
+        s.get(..code.len())
+            .is_some_and(|h| h.eq_ignore_ascii_case(code))
+    };
+    if lf(s, b"%0A") {
+        return Some(3);
+    }
+    if lf(s, b"%0D%0A") {
+        return Some(6);
     }
     let slashes = |s: &[u8]| s.iter().take_while(|b| **b == b'\\').count();
     let bs = slashes(s);
@@ -803,6 +913,15 @@ fn escaped_break(s: &[u8]) -> Option<usize> {
     }
     if rest.starts_with(b"\n") || rest.first() == Some(&b'n') {
         return Some(bs + 1);
+    }
+    if lf(rest, b"u000a") {
+        return Some(bs + 5);
+    }
+    if lf(rest, b"u000d") {
+        let more = slashes(&rest[5..]);
+        if more > 0 && lf(&rest[5 + more..], b"u000a") {
+            return Some(bs + 5 + more + 5);
+        }
     }
     if rest.first() == Some(&b'r') {
         let more = slashes(&rest[1..]);
@@ -966,6 +1085,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::AttemptClosed { .. }
         | WorkRecord::TierChanged { .. }
         | WorkRecord::BudgetSet { .. }
+        | WorkRecord::PriceSet { .. }
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::FormatRaised { .. }
         | WorkRecord::Refused { .. }

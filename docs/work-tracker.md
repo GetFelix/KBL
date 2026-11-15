@@ -44,7 +44,7 @@ operations as MCP tools in `kbl-mcp` for agents:
 | `work_rules` | Reads the standing rules in effect for the held item. Read-only |
 | `work_progress` | Records a plan, a branch or a PR |
 | `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
-| `work_complete` / `work_release` | Finishes the item or hands it back. Completing reports the attempt's cost |
+| `work_complete` / `work_release` | Finishes the item or hands it back, with the `usage` each model used (see [Cost and spend](#cost-and-spend)) |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
 | `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on` and `split`, or `unclear`. Work the item needs from another repo is posted first, with `work_post`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
@@ -180,9 +180,9 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 |---|---|---|
 | `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item. An agent that already holds one gets it again, marked `resumed` |
 | `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed |
-| `POST /v1/work/complete` `{item, cost_micros}` | agent | Writes `done`, then acks |
-| `POST /v1/work/release` `{item, reason, cost_micros}` | agent | Writes `released`, then hands the delivery back |
-| `POST /v1/work/give_up` `{item, reason, cost_micros}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
+| `POST /v1/work/complete` `{item, usage}` | agent | Writes `done`, then acks |
+| `POST /v1/work/release` `{item, reason, usage}` | agent | Writes `released`, then hands the delivery back |
+| `POST /v1/work/give_up` `{item, reason, usage}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
@@ -284,6 +284,7 @@ record if the fold accepts it:
 | `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
+| `POST /v1/work/prices` `{model, unit, price_micros, effective_from_ms?}` | `price_set`: the price of one unit of a model from now, or from a later time. See [Cost and spend](#cost-and-spend) |
 | `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` (`text` is a string) | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |
 | `POST /v1/work/flag` `{item}` | `flagged` with `flagged: true`: the item moves to Needs you and is not handed out. See [Flagging an item for a person](#flagging-an-item-for-a-person) |
 | `POST /v1/work/unflag` `{item}` | `flagged` with `flagged: false`: the item leaves Needs you, unless it waits there for another reason |
@@ -334,10 +335,33 @@ if it is still in the lane, is acked when it is delivered.
 A sweep (every few seconds) writes `released` with the reason `lapsed` for a
 hold whose delivery the tracker no longer has, or that has not been extended
 for the visibility period, so the item is Ready without another agent having to
-poll. After a restart the tracker takes back, for each agent the log shows
-holding, the delivery Felix still has for that name; if it is not there the
-hold is released at once. Until then `work_next` answers that the agent has no
-current claim.
+poll.
+
+After a restart the tracker takes back, for each agent the log shows holding,
+the delivery Felix still has for that name. It polls the lane the item was
+published on, where Felix hands a member its own deliveries before new work,
+and stops at the first record that is the agent's item or another Ready item.
+Other lanes are polled only when the item was not found there.
+
+Each poll that hands out a record counts as a delivery attempt in Felix, and
+Felix dead-letters a record after five. So:
+
+- Each restart costs every held item one attempt (taking it back is a
+  redelivery). A hold survives four restarts; the fifth dead-letters its record.
+- The backlog of Ready records costs nothing when the held item is found.
+- When an agent's delivery is gone, the first Ready record of each lane polled
+  costs one attempt, once.
+
+If Felix answers that the delivery is not there, the hold is released at once,
+and until then `work_next` answers that the agent has no current claim.
+
+If a poll fails instead, for example during a ready-lane failover, the hold is
+kept. The tracker tries again in the background after each sweep, and on the
+agent's next `work_next` or `extend`, skipping the lanes that already answered.
+Those calls answer 502 while Felix still fails, so the agent calls again rather
+than stopping work. A hold the tracker could not look for is freed one
+visibility period after the first failure, when Felix has let the delivery lapse
+as well.
 
 The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third
@@ -1015,9 +1039,9 @@ neither takes the question's `default`. The fold then does two things:
   again.
 
 Asking ends the attempt's hold once answered, so `work_ask` takes the
-attempt's `cost_micros` since its claim or its last ask, and the fold charges
-it then, like a release does. A later release or give-up reports only the cost
-spent after the ask, so nothing is charged twice. The cost floor applies to
+attempt's `usage` since its claim or its last ask, and the fold charges
+it then, like a release does. A later release or give-up reports only the usage
+since the ask, so nothing is charged twice. The cost floor applies to
 each ask as to each claim end, so a claim that asks and then ends pays the
 floor twice. A resume item sits one level below the asking item and obeys the root's
 depth cap (`too_deep`). If the asking item was never accepted, as with an
@@ -1366,7 +1390,7 @@ slipping by.
   After that the item goes to Needs you. A redo starts a new attempt, at most
   three per item, with at most two attempts open at once; a person closes
   one to open another. Every attempt draws its cost from the root, at least a floor for each
-  claim end and each ask (see Cost below).
+  claim end and each ask (see [Cost and spend](#cost-and-spend)).
   Finishing an attempt of a fix leaves it in review, so it can still be
   redone. It closes when a person or upstream sync records the merge or closes it.
 - **Closure.** A parent cannot complete while its children are open. Closing
@@ -1379,39 +1403,107 @@ slipping by.
 Budgets are enforced by a compare-and-set on the budget key (`cache_put_if`),
 not by counters, because Felix has no bounded add (gap 42).
 
-**Cost.** Agents report what a claim cost (`cost_micros`, in millionths of a
-dollar) when they complete, release, give up, ask or file a prerequisite. The
-tracker cannot check that number, so it charges each of those at least a
-floor: `KBL_COST_FLOOR_MICROS`, 100000 ($0.10) by default. A lapsed claim is
-charged the floor too. An agent that reports nothing still spends its root's
-cost budget, so the default $10 budget allows about 100 charges per tree. The
-budget is checked when a claim is made, so claims already in flight can still
-finish and be charged after it reaches 0. A report above the floor is charged
-as reported. Set the floor to 0 to charge only what agents report. The
-setting is one for the whole tracker process; with [teams](#teams) each team's
-tracker charges it against its own trees and budgets.
+### Cost and spend
 
-The floor is applied when the record is written: the record carries the
-charged cost, and the fold reads it as before. Under `kbl-run` the reported
-figure is measured spend, and a measured figure below the floor is raised to
-it like any other.
+Agents report what they used, not what it cost. Each report names the model
+and counts usage in the unit the agent is billed in. The tracker turns that
+into cost with a price table that people keep, so a new model or a price
+change needs no change to the log.
 
-**Spend.** The charged costs add up on the item that took the claim, so spend
-is a read of the fold, not a separate record. `kbl-tool work spend` folds
+**Usage.** `work_complete`, `work_release`, `work_ask` and a `prerequisite`
+post take `usage`, a list with one entry per model the attempt used since its
+claim or its last ask:
+
+```json
+{"usage": [
+  {"model": "claude-opus-5-5", "unit": "tokens", "input": 20000, "output": 4000,
+   "cache_read": 150000, "cache_write": 8000},
+  {"model": "gpt-6", "unit": "aic", "milli": 1500}
+]}
+```
+
+`tokens` counts input, output, cache-read and cache-write tokens; leave out
+what you did not use. `aic` counts AI credits in thousandths, so 1.5 credits is
+1500. A report holds at most 16 entries and names each model once. A model name
+is up to 100 letters, digits and `.-_:/@`. An entry that used nothing is left
+out. `cost_micros` is no longer read: a report that sends one above 0 is refused
+with a message that says to send `usage`. An older `kbl-mcp` sends 0, which
+passes and is charged the floor, so the tracker can be upgraded first.
+
+**Prices.** A person sets the price of one unit of one model with
+`POST /v1/work/prices`, which writes a `price_set` record:
+
+```bash
+curl -X POST "$KBL/v1/work/prices" -H "Authorization: Bearer $PERSON_TOKEN" \
+  -d '{"model": "claude-opus-5-5", "unit": "input", "price_micros": 15000000}'
+```
+
+`unit` is `input`, `output`, `cache_read` or `cache_write`, priced in millionths
+of a dollar per million tokens, or `aic`, priced in millionths of a dollar per
+credit. The example is $15 per million input tokens. A price takes effect when
+it is written, or at `effective_from_ms` if that is later. It cannot reach back:
+an `effective_from_ms` before the tracker's clock is refused with `bad_price`,
+so leave it out for "now". Prices are never edited: a new `price_set` for the
+same model and unit takes over from its time on. The tracker fetches no prices
+from vendors.
+
+**How a report is charged.** The fold prices each report when it folds it,
+with the prices in effect at the time the report was written. A later price
+change does not reprice history. The report is charged its priced usage, or
+the floor if that is more: `KBL_COST_FLOOR_MICROS`, 100000 ($0.10) by default,
+which the tracker writes on the record as `floor_micros`. Usage is the agent's
+word, so the floor is what bounds a tree's cost: an agent that reports nothing
+still spends its root's budget, and the default $10 budget allows about 100
+charges per tree. A lapsed or revoked claim is charged the floor. Set the floor
+to 0 to charge only priced usage. The setting is one for the whole tracker
+process; with [teams](#teams) each team's tracker charges it against its own
+trees and budgets.
+
+**A model with no price.** Usage of a model or unit that has no price is
+recorded, not refused, and never guessed. Until a price exists the report is
+charged its floor (or its priced usage, if that is more), so work goes on. The
+model is listed in `unpriced` in the spend view, so a person sees it needs a
+price. When a person sets one that takes effect at once, the fold prices the
+waiting usage with it and draws the difference from the root's budget. A price
+set for a later time prices only usage from that time on. At most 32 models may
+wait for a price at once; a report that would add another is refused with
+`bad_usage` until a person prices some.
+
+**Budgets.** A root's cost budget is in the same derived cost, in millionths of
+a dollar, and is shared by every model and unit in the tree. The budget is
+checked when a claim is made, so claims already in flight can still finish and
+be charged after it reaches 0.
+
+**Older logs.** All of this is [format 8](upgrades.md#formats). On a log below
+it the tracker writes each report as before, with the floor as its
+`cost_micros`, and drops the usage. Records from before the raise keep the
+`cost_micros` they carry, which counts toward spend and budgets as it always
+did.
+
+**Spend.** The charges add up on the item that took the claim, so spend is a
+read of the fold, not a separate record. `kbl-tool work spend` folds
 `work.events` and prints the total, in millionths of a dollar, per root (the
 root and everything under it), per reviewer tier (reviews only) and per repo
 (`source:repo` of the item's root, so a review counts where the request it
-reads lands). The wasm fold exposes the same numbers via
-`Folder.spend_json()`, and the dashboard's Spend dialog shows it per root, reviewer
-tier and repo. Spend is a lower bound: a lapsed claim is charged only the
-floor, not what it really spent, and a reported cost is the agent's own word.
+reads lands). `by_model` gives each model's usage and the cost of its priced
+part. The total can be more than their sum: a report charged its floor adds
+what the floor came to above its priced usage, and costs reported before
+format 8 count only in the total. `unpriced` names the models still waiting for a price. The
+wasm fold exposes the same numbers via `Folder.spend_json()`, and the dashboard's
+Spend dialog shows them per root, reviewer tier, repo and model.
+
+With input priced at $15 and output at $75 per million tokens, 20000 input
+and 4000 output tokens cost $0.30 + $0.30:
 
 ```bash
 kbl-tool work spend
 # {"total_micros": 1400000,
 #  "by_root": {"g3f9a1c0d2b7e4a65": 1400000},
 #  "by_review_tier": {"deep": 300000, "fast": 100000},
-#  "by_repo": {"github:GetFelix/felix": 1400000}}
+#  "by_repo": {"github:GetFelix/felix": 1400000},
+#  "by_model": {"claude-opus-5-5": {"input": 20000, "output": 4000, "cache_read": 0,
+#     "cache_write": 0, "aic_milli": 0, "cost_micros": 600000, "unpriced": false}},
+#  "unpriced": []}
 ```
 
 ## The dashboard

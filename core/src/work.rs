@@ -47,8 +47,97 @@ pub const FORMAT_V6: u32 = 6;
 /// Needs you.
 pub const FORMAT_V7: u32 = 7;
 
+/// The format that records spend as usage per model (`usage`, `floor_micros`)
+/// and prices it from `price_set` records, instead of a reported `cost_micros`.
+pub const FORMAT_V8: u32 = 8;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V7;
+pub const FORMAT: u32 = FORMAT_V8;
+
+/// Usage entries one report may carry: one per model.
+pub const MAX_USAGE_ENTRIES: usize = 16;
+
+/// What one model used during an attempt, in the unit its agent is billed in.
+/// The agent reports it and the tracker cannot verify it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "unit", rename_all = "snake_case")]
+pub enum Usage {
+    Tokens {
+        model: String,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        input: u64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        output: u64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        cache_read: u64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        cache_write: u64,
+    },
+    /// AI credits, in thousandths of a credit.
+    Aic { model: String, milli: u64 },
+}
+
+impl Usage {
+    pub fn model(&self) -> &str {
+        match self {
+            Usage::Tokens { model, .. } | Usage::Aic { model, .. } => model,
+        }
+    }
+
+    /// Each unit this entry used, with its count.
+    pub fn amounts(&self) -> Vec<(PriceUnit, u64)> {
+        match self {
+            Usage::Tokens {
+                input,
+                output,
+                cache_read,
+                cache_write,
+                ..
+            } => vec![
+                (PriceUnit::Input, *input),
+                (PriceUnit::Output, *output),
+                (PriceUnit::CacheRead, *cache_read),
+                (PriceUnit::CacheWrite, *cache_write),
+            ],
+            Usage::Aic { milli, .. } => vec![(PriceUnit::Aic, *milli)],
+        }
+    }
+}
+
+/// The cost fields of a record that ends or pauses a claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Charge<'a> {
+    /// A cost the agent reported, below format 8.
+    pub cost_micros: u64,
+    pub usage: &'a [Usage],
+    pub floor_micros: u64,
+}
+
+/// What a `price_set` prices. Token units are priced per million tokens,
+/// `aic` per credit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PriceUnit {
+    Input,
+    Output,
+    CacheRead,
+    CacheWrite,
+    Aic,
+}
+
+impl PriceUnit {
+    /// The cost in micros of `amount` at `price_micros`, rounded up so many
+    /// small reports cannot each round to nothing. `amount` is in tokens, or
+    /// in thousandths of a credit for `aic`.
+    pub fn cost_micros(self, amount: u64, price_micros: u64) -> u64 {
+        let per = match self {
+            PriceUnit::Aic => 1_000u128,
+            _ => 1_000_000u128,
+        };
+        let cost = (u128::from(amount) * u128::from(price_micros)).div_ceil(per);
+        u64::try_from(cost).unwrap_or(u64::MAX)
+    }
+}
 
 /// The ready stream for a lane. Lanes `0..TIERS` are the priority tiers
 /// `work_next` polls from `p0` up. The lanes after them are one per reviewer
@@ -522,6 +611,12 @@ pub enum WorkRecord {
         /// What the attempt cost so far, charged like a release.
         #[serde(default)]
         cost_micros: u64,
+        /// What each model used. From format 8 cost is derived from it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        usage: Vec<Usage>,
+        /// The least this report is charged, set by the tracker.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        floor_micros: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         triage: Option<ItemId>,
     },
@@ -564,6 +659,12 @@ pub enum WorkRecord {
         attempt: u32,
         #[serde(default)]
         cost_micros: u64,
+        /// What each model used. From format 8 cost is derived from it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        usage: Vec<Usage>,
+        /// The least this report is charged, set by the tracker.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        floor_micros: u64,
     },
     Released {
         item: ItemId,
@@ -572,6 +673,12 @@ pub enum WorkRecord {
         reason: Option<String>,
         #[serde(default)]
         cost_micros: u64,
+        /// What each model used. From format 8 cost is derived from it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        usage: Vec<Usage>,
+        /// The least this report is charged, set by the tracker.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        floor_micros: u64,
     },
     GaveUp {
         item: ItemId,
@@ -579,6 +686,12 @@ pub enum WorkRecord {
         reason: String,
         #[serde(default)]
         cost_micros: u64,
+        /// What each model used. From format 8 cost is derived from it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        usage: Vec<Usage>,
+        /// The least this report is charged, set by the tracker.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        floor_micros: u64,
     },
     /// The holder asks a person; the item waits in Needs you.
     Question {
@@ -595,6 +708,12 @@ pub enum WorkRecord {
         /// answer ends the hold, so a later release cannot report it.
         #[serde(default, skip_serializing_if = "is_zero")]
         cost_micros: u64,
+        /// What each model used. From format 8 cost is derived from it.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        usage: Vec<Usage>,
+        /// The least this report is charged, set by the tracker.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        floor_micros: u64,
     },
     /// `question` is the offset of the `question` record it answers. An agent
     /// may answer only while it holds a `question` work item under `item`.
@@ -729,6 +848,18 @@ pub enum WorkRecord {
         cost_left_micros: u64,
         redos_per_item: u8,
     },
+    /// Prices one unit of a model from `effective_from_ms` (the record's own
+    /// time when left out). Only a person may. Prices are never edited: a later
+    /// record for the same model and unit takes over from its time on, and usage
+    /// is priced with the price in effect when it was logged.
+    PriceSet {
+        model: String,
+        unit: PriceUnit,
+        /// Micros per million tokens, or per credit for `aic`.
+        price_micros: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effective_from_ms: Option<u64>,
+    },
     /// Upstream's view of the pull request in the item's `pr`: its phase,
     /// reviews and checks. Only upstream sync writes it, on roots.
     PrStatus { item: ItemId, status: PrSnapshot },
@@ -812,6 +943,7 @@ impl WorkRecord {
             WorkRecord::TierChanged { .. } => "tier_changed",
             WorkRecord::Edited { .. } => "edited",
             WorkRecord::BudgetSet { .. } => "budget_set",
+            WorkRecord::PriceSet { .. } => "price_set",
             WorkRecord::PrStatus { .. } => "pr_status",
             WorkRecord::SourceStalled { .. } => "source_stalled",
             WorkRecord::RulesSet { .. } => "rules_set",
@@ -865,6 +997,7 @@ impl WorkRecord {
                 root.as_ref()
             }
             WorkRecord::SourceStalled { .. }
+            | WorkRecord::PriceSet { .. }
             | WorkRecord::FormatRaised { .. }
             | WorkRecord::Unknown => None,
         }
@@ -879,6 +1012,95 @@ impl WorkRecord {
         }
     }
 
+    /// What a record that ends or pauses a claim reports it cost.
+    pub fn charge(&self) -> Option<Charge<'_>> {
+        match self {
+            WorkRecord::Done {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::Released {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::GaveUp {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::Question {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::Prerequisite {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            } => Some(Charge {
+                cost_micros: *cost_micros,
+                usage,
+                floor_micros: *floor_micros,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Fits a report's cost fields to a log at `format`. Below format 8 a
+    /// reader does not read usage, so the floor is carried as `cost_micros`
+    /// and the usage is dropped. Answers whether the usage was kept.
+    pub fn fit_charge(&mut self, format: u32) -> bool {
+        if format >= FORMAT_V8 {
+            return true;
+        }
+        match self {
+            WorkRecord::Done {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::Released {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::GaveUp {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::Question {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            }
+            | WorkRecord::Prerequisite {
+                cost_micros,
+                usage,
+                floor_micros,
+                ..
+            } => {
+                let kept = usage.is_empty();
+                *cost_micros = (*cost_micros).max(*floor_micros);
+                *floor_micros = 0;
+                usage.clear();
+                kept
+            }
+            _ => true,
+        }
+    }
+
     /// The lowest format whose readers fold this record as this build does.
     /// A kind, or a use of a field, that an older fold would skip or ignore
     /// answers with the format that introduced it.
@@ -890,6 +1112,13 @@ impl WorkRecord {
             WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V2),
             WorkRecord::ReturnedToScope { .. } => FORMAT_V2,
             WorkRecord::Flagged { .. } => FORMAT_V7,
+            WorkRecord::PriceSet { .. } => FORMAT_V8,
+            r if r
+                .charge()
+                .is_some_and(|c| !c.usage.is_empty() || c.floor_micros > 0) =>
+            {
+                FORMAT_V8
+            }
             WorkRecord::Prerequisite {
                 triage: Some(_), ..
             } => FORMAT_V3,

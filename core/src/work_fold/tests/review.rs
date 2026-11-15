@@ -564,6 +564,8 @@ fn spend_sums_claim_costs_per_root_reviewer_tier_and_repo() {
             attempt: 1,
             reason: None,
             cost_micros: 300,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     l.tracker(WorkRecord::Imported {

@@ -291,6 +291,8 @@ async fn a_label_removed_while_an_agent_holds_the_item_stops_it_after_the_attemp
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     let s = rig.tracker.state();
@@ -1635,6 +1637,8 @@ impl Rig {
                 item: item.clone(),
                 attempt: 1,
                 cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: 0,
             },
         );
     }
@@ -2141,6 +2145,8 @@ impl Rig {
                 new: None,
                 done_when: kbl_core::work::DoneWhen::Released,
                 cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: 0,
                 triage: None,
             },
         );
@@ -2708,6 +2714,8 @@ async fn prerequisite_rig_until(
             }),
             done_when,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
             triage: None,
         },
     );

@@ -69,7 +69,7 @@ try {
       for (;;) {
         const reply = await who.tool("work_next", { wait_seconds: 2 });
         if (!reply.claimed) return;
-        await who.tool("work_complete", { item: reply.item.id, cost_micros: 1000 });
+        await who.tool("work_complete", { item: reply.item.id, usage: [{ model: "scripted", unit: "tokens", input: 1000 }] });
         finished.push({ item: reply.item.id, by: who.name });
       }
     }),

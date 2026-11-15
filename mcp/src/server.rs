@@ -167,8 +167,10 @@ struct WorkExtendArgs {
 struct WorkCompleteArgs {
     /// The id of the item you hold.
     item: String,
-    /// What this attempt cost, in millionths of a dollar. The tracker cannot verify it, so it
-    /// charges at least its cost floor.
+    /// What each model used during this attempt, one entry per model. The tracker prices it
+    /// and charges at least its cost floor.
+    usage: Option<Vec<UsageArg>>,
+    /// Not read any more: sending it is refused. Report `usage` instead.
     cost_micros: Option<u64>,
 }
 
@@ -178,8 +180,10 @@ struct WorkReleaseArgs {
     item: String,
     /// Why you are handing it back.
     reason: Option<String>,
-    /// What this attempt cost, in millionths of a dollar. The tracker charges at least its
-    /// cost floor.
+    /// What each model used during this attempt, one entry per model. The tracker prices it
+    /// and charges at least its cost floor.
+    usage: Option<Vec<UsageArg>>,
+    /// Not read any more: sending it is refused. Report `usage` instead.
     cost_micros: Option<u64>,
 }
 
@@ -206,8 +210,10 @@ struct WorkPostArgs {
     existing: Option<String>,
     /// `prerequisite` only: `merged` (the default) or `released`, for work you need shipped in a release.
     done_when: Option<String>,
-    /// `prerequisite` only: what this attempt cost so far, in millionths of a dollar. The
-    /// tracker charges at least its cost floor.
+    /// `prerequisite` only: what each model used so far, one entry per model. The tracker
+    /// prices it and charges at least its cost floor.
+    usage: Option<Vec<UsageArg>>,
+    /// Not read any more: sending it is refused. Report `usage` instead.
     cost_micros: Option<u64>,
 }
 
@@ -277,6 +283,35 @@ struct RevertCheckArg {
     passed_with_fix: bool,
 }
 
+/// What one model used, in the unit your agent is billed in.
+#[derive(Deserialize, Serialize, JsonSchema)]
+struct UsageArg {
+    /// The model id as your vendor names it.
+    model: String,
+    /// `tokens` or `aic` (AI credits).
+    unit: String,
+    /// `tokens` only: input tokens, not counting cache reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input: Option<u64>,
+    /// `tokens` only: output tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<u64>,
+    /// `tokens` only: input tokens read from a prompt cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_read: Option<u64>,
+    /// `tokens` only: input tokens written to a prompt cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_write: Option<u64>,
+    /// `aic` only: credits used, in thousandths (1.5 credits is 1500).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    milli: Option<u64>,
+}
+
+/// The cost fields of a report, as the tracker takes them.
+fn charge(usage: Option<Vec<UsageArg>>, cost_micros: Option<u64>) -> Value {
+    json!({ "usage": usage.unwrap_or_default(), "cost_micros": cost_micros })
+}
+
 #[derive(Deserialize, Serialize, JsonSchema)]
 struct EvidenceArg {
     /// The stream. Only `work.events` is taken.
@@ -317,8 +352,10 @@ struct WorkAskArgs {
     options: Option<Vec<String>>,
     /// The option taken when the person answers without choosing. Must be one of `options`.
     default: Option<String>,
-    /// What this attempt has cost so far, in micro-dollars. Report it here: the answer ends your hold.
-    /// The tracker charges at least its cost floor.
+    /// What each model used so far, one entry per model. Report it here: the answer ends your
+    /// hold. The tracker prices it and charges at least its cost floor.
+    usage: Option<Vec<UsageArg>>,
+    /// Not read any more: sending it is refused. Report `usage` instead.
     cost_micros: Option<u64>,
 }
 
@@ -529,14 +566,14 @@ impl Server {
     }
 
     #[tool(
-        description = "Finish the item you hold and report what the attempt cost. It is refused while the item has open children."
+        description = "Finish the item you hold and report what each model used. It is refused while the item has open children."
     )]
     async fn work_complete(
         &self,
         Parameters(a): Parameters<WorkCompleteArgs>,
     ) -> Result<String, String> {
         self.work()?
-            .complete(&a.item, a.cost_micros.unwrap_or(0))
+            .complete(&a.item, charge(a.usage, a.cost_micros))
             .await
     }
 
@@ -548,12 +585,12 @@ impl Server {
         Parameters(a): Parameters<WorkReleaseArgs>,
     ) -> Result<String, String> {
         self.work()?
-            .release(&a.item, a.reason, a.cost_micros.unwrap_or(0))
+            .release(&a.item, a.reason, charge(a.usage, a.cost_micros))
             .await
     }
 
     #[tool(
-        description = "Create work under the item you hold: split, augment, question or test, live at once and counted against the root's budget. Use `proposal` for a bug or task outside this item; a person decides whether it becomes work. Use `prerequisite` when you cannot go on until work in another repo is done: give target_source, target_repo, title and why, or `existing` for an item that is already there. It ends your claim as blocked without costing a try, and the item comes back to Ready when the work is done (`done_when`: merged or released). While you hold a triage item, a `prerequisite` is for the item you are triaging: that item waits, you keep your claim and `cost_micros` is ignored (report the cost when you complete), so post what it needs from other repos before you answer with work_triage. Sending the same key again is safe."
+        description = "Create work under the item you hold: split, augment, question or test, live at once and counted against the root's budget. Use `proposal` for a bug or task outside this item; a person decides whether it becomes work. Use `prerequisite` when you cannot go on until work in another repo is done: give target_source, target_repo, title and why, or `existing` for an item that is already there. It ends your claim as blocked without costing a try, and the item comes back to Ready when the work is done (`done_when`: merged or released). While you hold a triage item, a `prerequisite` is for the item you are triaging: that item waits, you keep your claim and `usage` is ignored (report it when you complete), so post what it needs from other repos before you answer with work_triage. Sending the same key again is safe."
     )]
     async fn work_post(&self, Parameters(a): Parameters<WorkPostArgs>) -> Result<String, String> {
         let item = self.item_or_held(a.item).await?;
@@ -586,7 +623,8 @@ impl Server {
                     "target_source": a.target_source, "target_repo": a.target_repo,
                     "why": why, "evidence": evidence, "existing": a.existing,
                     "done_when": a.done_when.unwrap_or_else(|| "merged".into()),
-                    "cost_micros": a.cost_micros.unwrap_or(0),
+                    "usage": a.usage.unwrap_or_default(),
+                    "cost_micros": a.cost_micros,
                 }),
             )
             .await
@@ -732,7 +770,8 @@ impl Server {
                     "text": text,
                     "options": a.options.unwrap_or_default(),
                     "default": a.default,
-                    "cost_micros": a.cost_micros.unwrap_or(0),
+                    "usage": a.usage.unwrap_or_default(),
+                    "cost_micros": a.cost_micros,
                 }),
             )
             .await?;

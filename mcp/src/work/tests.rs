@@ -68,7 +68,7 @@ async fn completing_stops_the_extensions() {
     let w = work(&fake);
     w.next(None).await.unwrap();
     tokio::time::sleep(Duration::from_secs(35)).await;
-    w.complete("a1", 0).await.unwrap();
+    w.complete("a1", json!({})).await.unwrap();
     tokio::time::sleep(Duration::from_secs(120)).await;
     assert_eq!(fake.calls("/v1/work/extend"), 1);
 }
@@ -79,7 +79,7 @@ async fn a_refused_complete_keeps_the_claim_alive() {
     let w = work(&fake);
     w.next(None).await.unwrap();
     fake.0.lock().unwrap().complete = Some("refused");
-    assert!(w.complete("a1", 0).await.is_err());
+    assert!(w.complete("a1", json!({})).await.is_err());
     tokio::time::sleep(Duration::from_secs(65)).await;
     assert_eq!(fake.calls("/v1/work/extend"), 2);
 }
