@@ -4,6 +4,8 @@ export interface Fold {
   apply(offset: number, payload: Uint8Array): boolean;
   /** The format of the record that stopped the fold because it is newer than this build reads, else 0. */
   newer(): number;
+  /** The log's format so far. */
+  format(): number;
   at(): number;
   stateJson(): string;
   itemsJson(): string;
@@ -33,6 +35,12 @@ export interface ItemRow {
   unclear?: string | null;
   /** True for an item with no parent. */
   root?: boolean;
+  /** A person accepted it. Only an accepted item can be flagged. */
+  accepted?: boolean;
+  /** A person flagged it for a person, whatever else it waits on. */
+  flagged?: boolean;
+  /** The log's format when the page read it, the same for every row. A log below 7 refuses flags. */
+  format?: number;
 }
 
 /** The inline text of a `question` record, so the panel can show what was asked. An artifact's text is not in the record. */
@@ -46,7 +54,8 @@ export function questionText(payload: Uint8Array): string | null {
 }
 
 export function items(fold: Fold): ItemRow[] {
-  return JSON.parse(fold.itemsJson()) as ItemRow[];
+  const format = fold.format();
+  return (JSON.parse(fold.itemsJson()) as ItemRow[]).map((i) => ({ ...i, format }));
 }
 
 /** Where an item's work lands, such as `github` and `GetFelix/felix-gateway`. */

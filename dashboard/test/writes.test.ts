@@ -3,9 +3,9 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { acceptTier, CAN, canUndo, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import { acceptTier, CAN, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
-const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, ...o });
+const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
 test('each action is offered only where the fold would take it', () => {
   const triage = item({ id: 't', stage: 'triage', tier: null });
@@ -191,4 +191,69 @@ test('a write is checked against the log when it is sent, not when its dialog op
   // An item with a write in flight is left out.
   const busy = putWrite(NO_WRITES, { id: 1, batch: 1, kind: 'tier', item: 'c', status: 'pending' });
   assert.deepEqual(jobsFor(['c'], { kind: 'tier', tier: 0 }, now, busy), []);
+});
+
+test('flag and unflag are offered only where the fold would take them', () => {
+  const ready = item({ id: 'r', accepted: true });
+  const flagged = item({ id: 'f', stage: 'needs_you', needs: 'flagged', accepted: true, flagged: true });
+  // Flagged but waiting for a question: the question shows, yet the flag can still be cleared.
+  const both = item({ id: 'b', stage: 'needs_you', needs: 'question', accepted: true, flagged: true });
+  const triage = item({ id: 't', stage: 'triage', accepted: false });
+  const done = item({ id: 'd', stage: 'done', accepted: true, flagged: true });
+  assert.deepEqual([ready, flagged, both, triage, done].map((i) => CAN.flag(i)), [true, false, false, false, false]);
+  assert.deepEqual([ready, flagged, both, triage, done].map((i) => CAN.unflag(i)), [false, true, true, false, false]);
+});
+
+test('flag and unflag are the tracker person routes, with no confirm', () => {
+  assert.deepEqual(request('a', { kind: 'flag' }), { path: '/v1/work/flag', body: { item: 'a' } });
+  assert.deepEqual(request('a', { kind: 'unflag' }), { path: '/v1/work/unflag', body: { item: 'a' } });
+  assert.equal(route('/v1/work/flag', 'ops'), '/v1/teams/ops/work/flag');
+  assert.equal(UNDO.flag, null);
+  assert.equal(UNDO.unflag, null);
+});
+
+test('a flag on an item that changed since is refused unsent, and the refusal reads in words', () => {
+  const was = item({ id: 'a', accepted: true });
+  const now = item({ id: 'a', stage: 'needs_you', needs: 'flagged', accepted: true, flagged: true });
+  const [stale] = jobsFor(['a'], { kind: 'flag' }, [now], NO_WRITES);
+  assert.match(stale.req as string, /already flagged/);
+  const [again] = jobsFor(['a'], { kind: 'unflag' }, [was], NO_WRITES);
+  assert.match(again.req as string, /not flagged/);
+  const closed = item({ id: 'a', stage: 'closed', accepted: true, flagged: true });
+  assert.doesNotMatch(jobsFor(['a'], { kind: 'flag' }, [closed], NO_WRITES)[0].req as string, /already flagged/);
+  const [ok] = jobsFor(['a'], { kind: 'flag' }, [was], NO_WRITES);
+  assert.deepEqual(ok.req, { path: '/v1/work/flag', body: { item: 'a' } });
+});
+
+test('the tracker’s no_change and not_accepted refusals show with their code', () => {
+  const o = outcome(409, { error: 'the fold refused the record: nothing to change', why: 'no_change' });
+  assert.deepEqual(o, { status: 'refused', why: 'no_change', reason: 'the fold refused the record: nothing to change' });
+  const line = summary([{ id: 1, batch: 1, kind: 'flag', item: 'a', status: 'refused', reason: (o as { reason: string }).reason, why: 'no_change' }]);
+  assert.equal(line.tone, 'error');
+  assert.match(line.text, /a: refused, the fold refused the record: nothing to change \(no_change\)/);
+  assert.equal(summary([{ id: 1, batch: 1, kind: 'unflag', item: 'a', status: 'ok' }]).text, 'Unflagged a.');
+});
+
+test('flag and unflag are hidden on a log below format 7', () => {
+  const old = { format: 6 };
+  assert.equal(CAN.flag(item({ id: 'r', accepted: true, ...old })), false);
+  assert.equal(CAN.unflag(item({ id: 'f', accepted: true, flagged: true, ...old })), false);
+  assert.equal(logTakesFlags([item({ id: 'a', ...old })]), false);
+  assert.equal(logTakesFlags([item({ id: 'a' })]), true);
+  // Other writes do not depend on the format.
+  assert.equal(CAN.close(item({ id: 'c', ...old })), true);
+});
+
+test('a refusal for the log format says how to fix it', () => {
+  const w: Write = { item: 'a', kind: 'flag', batch: 1, status: 'refused', reason: 'raw', why: 'format' } as Write;
+  const line = summary([w]);
+  assert.match(line.text, /raise the log to format 7 to use Needs-you flags/);
+  assert.doesNotMatch(line.text, /\(format\)/);
+});
+
+test('acting on part of the selection keeps the other marks', () => {
+  assert.deepEqual(marksAfter(['a', 'b', 'c'], ['a', 'b']), ['c']);
+  assert.deepEqual(marksAfter(['a', 'b'], ['a', 'b']), []);
+  assert.deepEqual(marksAfter(['a', 'b'], ['z']), ['a', 'b']);
+  assert.deepEqual(marksAfter(['a'], []), ['a']);
 });

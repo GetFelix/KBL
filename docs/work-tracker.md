@@ -404,8 +404,11 @@ on the log.
   item nobody has accepted: it waits for a person in Triage already. A closed
   item is refused with `closed`. Reopening an item clears the flag.
 - A finished attempt on a flagged item shows in Needs you, not In review,
-  until the flag is cleared. The dashboard shows the reason but has no
-  unflag button yet; use `POST /v1/work/unflag`.
+  until the flag is cleared.
+- The dashboard has Flag for a person and Unflag in the item panel and the
+  bulk bar, and palette commands for both. They send these routes with your
+  token and ask no confirm, since each takes the other back; a refusal such
+  as `no_change` shows with the tracker's reason.
 - `flagged` is a record of [format 7](upgrades.md#formats). Until a person
   raises the log to 7, both calls are refused with `format`.
 
