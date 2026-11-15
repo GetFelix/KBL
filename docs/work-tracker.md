@@ -341,7 +341,9 @@ current claim.
 
 The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third
-of it. A team whose tracker cannot renew answers 503 on its routes, stops
+of it, starting as soon as the team serves. Teams start one after another, so a
+team's lease can run out before it serves; the tracker then takes it again,
+unless another tracker took it meanwhile. A team whose tracker cannot renew answers 503 on its routes, stops
 renewing after ten seconds, and checks the lease before each append. The
 process exits when no team holds its lease; with one team, that is ten
 seconds after it lost it. This narrows the window in

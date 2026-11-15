@@ -32,6 +32,9 @@ struct Net {
     /// The writer lease key: holder and version, while it is live.
     lease: Option<(Vec<u8>, u64)>,
     lease_versions: u64,
+    /// The lease key runs out after its time to live, as Felix's does.
+    lease_expires: bool,
+    lease_until: Option<tokio::time::Instant>,
     /// Polls by this member never answer.
     hang_member: Option<String>,
     /// Members whose connection has dropped: their calls fail until it is forgotten.
@@ -200,6 +203,10 @@ impl Fake {
     }
 
     /// The lease key's time to live passes.
+    fn lease_expires(&self) {
+        self.net.lock().unwrap().lease_expires = true;
+    }
+
     fn expire_lease(&self) {
         self.net.lock().unwrap().lease = None;
     }
@@ -406,12 +413,16 @@ impl Broker for Fake {
     async fn lease_put(
         &self,
         holder: Vec<u8>,
-        _ttl: Duration,
+        ttl: Duration,
         expect: Option<u64>,
     ) -> anyhow::Result<Option<u64>> {
         let mut net = self.net.lock().unwrap();
         if net.fail_lease {
             anyhow::bail!("the broker is down");
+        }
+        let now = tokio::time::Instant::now();
+        if net.lease_expires && net.lease_until.is_none_or(|t| t <= now) {
+            net.lease = None;
         }
         let ok = match (&net.lease, expect) {
             (None, None) => true,
@@ -424,6 +435,7 @@ impl Broker for Fake {
         net.lease_versions += 1;
         let v = net.lease_versions;
         net.lease = Some((holder, v));
+        net.lease_until = Some(now + ttl);
         Ok(Some(v))
     }
 
@@ -2263,4 +2275,63 @@ async fn revoking_an_agent_releases_only_its_holds_and_stops_its_claims() {
         claimed_id(&claim(&t, "w3").await).as_deref(),
         Some(w1.as_str())
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_team_lease_is_renewed_as_soon_as_serving_starts() {
+    let ttl = Duration::from_secs(3);
+    // Starting the later teams took most of this team's lease, or all of it.
+    for took in [Duration::from_secs(2), Duration::from_secs(4)] {
+        let fake = Fake::default();
+        fake.lease_expires();
+        let t = start_with(
+            &fake,
+            Settings {
+                lease_ttl: ttl,
+                ..settings()
+            },
+        )
+        .await;
+        tokio::time::advance(took).await;
+        let maintain = tokio::spawn({
+            let t = t.clone();
+            async move { t.maintain().await }
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            unavailable(&*t.0.core.lock().await, t.lease_margin()).is_none(),
+            "not writable right after serving began, {took:?} in"
+        );
+        seed(&t, "a1", 2).await;
+        maintain.abort();
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lapsed_team_lease_is_not_taken_from_a_live_holder() {
+    let ttl = Duration::from_secs(3);
+    let fake = Fake::default();
+    fake.lease_expires();
+    let t = start_with(
+        &fake,
+        Settings {
+            lease_ttl: ttl,
+            ..settings()
+        },
+    )
+    .await;
+    tokio::time::advance(Duration::from_secs(4)).await;
+    // Another tracker took the lease once this one's ran out.
+    let other = Tracker::start(
+        fake.reconnect(),
+        Settings {
+            lease_ttl: ttl,
+            ..settings()
+        },
+    )
+    .await
+    .unwrap();
+    t.renew_lease().await;
+    assert!(t.0.core.lock().await.fenced);
+    assert!(unavailable(&*other.0.core.lock().await, other.lease_margin()).is_none());
 }

@@ -822,7 +822,8 @@ impl<B: Broker> Tracker<B> {
         let every = self.0.settings.lease_ttl / 3;
         let mut fenced_since: Option<Instant> = None;
         loop {
-            tokio::time::sleep(every).await;
+            // Renew first: the teams start one after another, so serving can
+            // begin late in this team's lease or after it ran out.
             self.renew_lease().await;
             self.sweep().await;
             self.0.broker.close_idle(MEMBER_IDLE).await;
@@ -835,6 +836,7 @@ impl<B: Broker> Tracker<B> {
             } else {
                 fenced_since = None;
             }
+            tokio::time::sleep(every).await;
         }
     }
 
@@ -870,9 +872,21 @@ impl<B: Broker> Tracker<B> {
     }
 
     pub(crate) async fn renew_lease(&self) {
-        let Some(version) = self.0.core.lock().await.lease.as_ref().map(|l| l.version) else {
+        let Some((version, valid_until)) = self
+            .0
+            .core
+            .lock()
+            .await
+            .lease
+            .as_ref()
+            .map(|l| (l.version, l.valid_until))
+        else {
             return;
         };
+        // Felix compares a version against the live entry, so a lease that ran
+        // out (the teams took long to start) is taken again, not renewed.
+        let expired = valid_until <= Instant::now();
+        let expect = (!expired).then_some(version);
         let started = Instant::now();
         let put = self
             .io(
@@ -880,7 +894,7 @@ impl<B: Broker> Tracker<B> {
                 self.0.broker.lease_put(
                     self.0.holder.as_bytes().to_vec(),
                     self.0.settings.lease_ttl,
-                    Some(version),
+                    expect,
                 ),
             )
             .await;
@@ -892,6 +906,10 @@ impl<B: Broker> Tracker<B> {
                     valid_until: started + self.0.settings.lease_ttl,
                 });
                 core.fenced = false;
+                // Another tracker may have held it and written meanwhile.
+                if expired {
+                    core.stale = true;
+                }
             }
             // Someone else holds it now.
             Ok(None) => {

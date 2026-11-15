@@ -1,0 +1,1 @@
+A tracker with several teams renews each team's writer lease as soon as the team starts serving, instead of a third of a lease later, and takes it again at once when it ran out while later teams started. Before, the renewal of a lapsed lease was refused, the team was fenced and restarted (#239).
