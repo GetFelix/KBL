@@ -1015,6 +1015,11 @@ fn encoded_breaks_armor_and_stripped_keys_stay_linear() {
         format!("-----BEGIN PRIVATE KEY-----{}", "%0D%0A".repeat(mb / 6)),
         "%20ghp_".repeat(mb / 7),
         "AKIAA1B2C3D4E5F6A1B2x".repeat(mb / 21),
+        format!("-----BEGIN PRIVATE KEY-----{}", "%2B".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "%2Ba".repeat(mb / 4)),
+        format!("-----BEGIN PRIVATE KEY-----\nA: {}", "\\x".repeat(mb / 2)),
+        "+-----BEGIN PRIVATE KEY-----\n+A: b\n+".repeat(mb / 38),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "ab".repeat(mb / 2)),
     ];
     for text in inputs {
         let start = Instant::now();
