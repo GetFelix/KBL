@@ -103,7 +103,7 @@ it, so an item someone else changed meanwhile is refused unsent, with the reason
 (`?view=inbox`) lists what waits on a person and why. Flag and Unflag sit in the panel's actions and the bulk bar,
 and as palette commands (`Flag the selected items for a person`, `Unflag the selected items`) for the marked
 items, else the selected one. They have no confirm and no key, because each takes the other back. A refusal such as
-`no_change` (it was already so) shows in the activity line with the tracker's words. Undo (`Ctrl+Z`) still
+`no_change` (it was already so) shows in the activity line with the tracker's words. Undo (`Cmd+Z` on a Mac, `Ctrl+Z` elsewhere) still
 covers tier changes only.
 
 ## How it follows the log

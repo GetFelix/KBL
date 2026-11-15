@@ -47,6 +47,22 @@ export function acceptTier(picked: string): number | null {
   return picked === '' ? null : Number(picked);
 }
 
+/** The first log format that takes `flagged` records. */
+export const FLAG_FORMAT = 7;
+const FLAGGABLE_LOG = (i: ItemRow) => (i.format ?? 0) >= FLAG_FORMAT;
+
+/** Whether the log is at a format that takes flags. The palette lists the flag commands only then. */
+export const logTakesFlags = (items: readonly ItemRow[]) => items.some(FLAGGABLE_LOG);
+export const FLAG_COMMANDS: ReadonlySet<string> = new Set(['flag', 'unflag']);
+
+/**
+ * The marks left once an action went to `ids`. Acting on marked items spends their marks, as in GitHub;
+ * a mark on an item the action did not reach stays. An action on items outside the selection leaves it alone.
+ */
+export function marksAfter(marked: readonly string[], ids: readonly string[]): string[] {
+  return ids.length > 0 && ids.every((id) => marked.includes(id)) ? marked.filter((id) => !ids.includes(id)) : [...marked];
+}
+
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
@@ -58,8 +74,9 @@ export const CAN: Readonly<Record<Exclude<WriteKind, 'undo'>, (i: ItemRow) => bo
   close: OPEN,
   answer: (i) => (i.needs === 'question' || i.needs === 'unclear') && i.question != null,
   // The fold refuses a flag on an item nobody accepted (it waits in Triage already) and a repeat of either.
-  flag: (i) => OPEN(i) && i.accepted === true && i.flagged !== true,
-  unflag: (i) => OPEN(i) && i.flagged === true,
+  // A log below format 7 refuses every `flagged` record, so neither button shows there.
+  flag: (i) => FLAGGABLE_LOG(i) && OPEN(i) && i.accepted === true && i.flagged !== true,
+  unflag: (i) => FLAGGABLE_LOG(i) && OPEN(i) && i.flagged === true,
 };
 
 export const CLOSE_WHY = [
@@ -298,6 +315,9 @@ export function summary(batch: readonly Write[]): { text: string; tone: 'busy' |
   const noUndo = new Map<string, string[]>();
   for (const x of batch) if (x.status === 'ok' && x.noUndo) noUndo.set(x.noUndo, [...(noUndo.get(x.noUndo) ?? []), x.item]);
   for (const [why, ids] of noUndo) parts.push(`No undo for ${items(ids)}: ${why}`);
-  for (const x of bad) parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'failed'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
+  for (const x of bad) {
+    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${FLAG_FORMAT} to use Needs-you flags.`);
+    else parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'failed'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
+  }
   return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.filter((x) => x.status === 'ok' && x.undo).length };
 }

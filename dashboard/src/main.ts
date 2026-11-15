@@ -20,7 +20,7 @@ import { shell } from './ui/shell.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { Tracker } from './tracker.ts';
-import { CAN, canUndo, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
+import { CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -117,7 +117,9 @@ const write = (ids: string[], args: WriteArgs) => {
   const jobs = jobsFor(ids, args, s.items, s.writes);
   if (!jobs.length) return;
   // Marks are done with once their action is sent, as in GitHub.
-  if (s.marked.length && ids.every((id) => s.marked.includes(id)) && ids.length > 0) store.dispatch({ type: 'marks', ids: [] });
+  // Marks on items the action did not apply to stay, so the rest of the selection is still there to act on.
+  const rest = marksAfter(s.marked, ids);
+  if (rest.length !== s.marked.length) store.dispatch({ type: 'marks', ids: rest });
   void send(args.kind, jobs);
 };
 
@@ -273,7 +275,8 @@ const run = (id: CommandId): void => {
     case 'flag':
     case 'unflag': {
       if (s.tracker.kind !== 'signed-in') return signInBox.open();
-      const ids = s.items.filter((i) => targets().includes(i.id) && CAN[id](i)).map((i) => i.id);
+      const picked = targets();
+      const ids = s.items.filter((i) => picked.includes(i.id) && CAN[id](i)).map((i) => i.id);
       return ids.length ? write(ids, { kind: id }) : undefined;
     }
     case 'undo':
@@ -424,6 +427,7 @@ async function main() {
       return ok;
     },
     newer: () => fold.newer(),
+    format: () => fold.format(),
     at: () => fold.at(),
     stateJson: () => fold.state_json(),
     itemsJson: () => fold.items_json(),

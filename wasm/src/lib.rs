@@ -69,6 +69,12 @@ impl Folder {
         self.newer.unwrap_or(0)
     }
 
+    /// The log's format so far: the highest a record may have. The page hides
+    /// the writes a log below that format would refuse.
+    pub fn format(&self) -> u32 {
+        self.state.format()
+    }
+
     /// The last offset applied, or -1 before the first.
     pub fn at(&self) -> f64 {
         self.state.at.map_or(-1.0, |at| at as f64)

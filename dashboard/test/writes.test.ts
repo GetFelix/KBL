@@ -3,9 +3,9 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { acceptTier, CAN, canUndo, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import { acceptTier, CAN, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
-const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, ...o });
+const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
 test('each action is offered only where the fold would take it', () => {
   const triage = item({ id: 't', stage: 'triage', tier: null });
@@ -232,4 +232,28 @@ test('the tracker’s no_change and not_accepted refusals show with their code',
   assert.equal(line.tone, 'error');
   assert.match(line.text, /a: refused, the fold refused the record: nothing to change \(no_change\)/);
   assert.equal(summary([{ id: 1, batch: 1, kind: 'unflag', item: 'a', status: 'ok' }]).text, 'Unflagged a.');
+});
+
+test('flag and unflag are hidden on a log below format 7', () => {
+  const old = { format: 6 };
+  assert.equal(CAN.flag(item({ id: 'r', accepted: true, ...old })), false);
+  assert.equal(CAN.unflag(item({ id: 'f', accepted: true, flagged: true, ...old })), false);
+  assert.equal(logTakesFlags([item({ id: 'a', ...old })]), false);
+  assert.equal(logTakesFlags([item({ id: 'a' })]), true);
+  // Other writes do not depend on the format.
+  assert.equal(CAN.close(item({ id: 'c', ...old })), true);
+});
+
+test('a refusal for the log format says how to fix it', () => {
+  const w: Write = { item: 'a', kind: 'flag', batch: 1, status: 'refused', reason: 'raw', why: 'format' } as Write;
+  const line = summary([w]);
+  assert.match(line.text, /raise the log to format 7 to use Needs-you flags/);
+  assert.doesNotMatch(line.text, /\(format\)/);
+});
+
+test('acting on part of the selection keeps the other marks', () => {
+  assert.deepEqual(marksAfter(['a', 'b', 'c'], ['a', 'b']), ['c']);
+  assert.deepEqual(marksAfter(['a', 'b'], ['a', 'b']), []);
+  assert.deepEqual(marksAfter(['a', 'b'], ['z']), ['a', 'b']);
+  assert.deepEqual(marksAfter(['a'], []), ['a']);
 });
