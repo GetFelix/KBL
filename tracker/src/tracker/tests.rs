@@ -64,6 +64,10 @@ struct Net {
     gate_publish: bool,
     /// The next lease put waits for the gate before it reaches the key.
     gate_lease: bool,
+    /// The next lease put lands, but its reply is lost.
+    lose_lease_reply: bool,
+    /// Reads of the lease key fail.
+    fail_lease_get: bool,
     /// The next nack waits for `open_gate` before it lands.
     gate_nack: bool,
     /// The next read waits for `open_gate` before it reads.
@@ -232,6 +236,14 @@ impl Fake {
 
     fn lease_puts(&self) -> u32 {
         self.net.lock().unwrap().lease_puts
+    }
+
+    fn fail_lease_gets(&self, fail: bool) {
+        self.net.lock().unwrap().fail_lease_get = fail;
+    }
+
+    fn lose_next_lease_reply(&self) {
+        self.net.lock().unwrap().lose_lease_reply = true;
     }
 
     fn hold_next_lease_put(&self) {
@@ -526,7 +538,22 @@ impl Broker for Fake {
         let v = net.lease_versions;
         net.lease = Some((holder, v));
         net.lease_until = Some(now + ttl + net.lease_lag);
+        if std::mem::take(&mut net.lose_lease_reply) {
+            anyhow::bail!("Felix did not answer in time");
+        }
         Ok(Some(v))
+    }
+
+    async fn lease_get(&self) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        let mut net = self.net.lock().unwrap();
+        if net.fail_lease || net.fail_lease_get {
+            anyhow::bail!("the broker is down");
+        }
+        let now = tokio::time::Instant::now();
+        if net.lease_expires && net.lease_until.is_none_or(|t| t <= now) {
+            net.lease = None;
+        }
+        Ok(net.lease.clone())
     }
 
     async fn cursor_get(&self, name: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
@@ -2880,4 +2907,88 @@ async fn the_lease_taken_at_start_is_confirmed_after_the_read() {
         0,
         "appended after the new holder's record"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_renewal_that_landed_with_its_reply_lost_does_not_fence_the_holder() {
+    let fake = Fake::default();
+    fake.lease_expires();
+    let t = start(&fake).await;
+    t.renew_lease().await;
+    fake.lose_next_lease_reply();
+    t.renew_lease().await;
+    // Felix has the version the lost reply carried; ours is the one before.
+    t.renew_lease().await;
+    assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
+    t.person_record(key("gab"), imported("c1")).await.unwrap();
+    assert_eq!(imports_of(&fake, "c1"), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lease_taken_at_start_whose_reply_was_lost_is_held() {
+    let fake = Fake::default();
+    fake.lease_expires();
+    fake.lose_next_lease_reply();
+    let t = Tracker::start(fake.reconnect(), settings())
+        .await
+        .expect("the start gave up on a lease it holds");
+    t.renew_lease().await;
+    assert!(!t.0.core.lock().await.fenced);
+    t.person_record(key("gab"), imported("c1")).await.unwrap();
+    assert_eq!(imports_of(&fake, "c1"), 1);
+}
+
+/// A tracker whose lease ran out while another held it, wrote, and stopped.
+async fn lapsed_while_another_wrote(fake: &Fake, ttl: Duration) -> Tracker<Fake> {
+    let short = || Settings {
+        lease_ttl: ttl,
+        ..settings()
+    };
+    fake.lease_expires();
+    let first = start_with(fake, short()).await;
+    tokio::time::advance(ttl + Duration::from_secs(1)).await;
+    let second = Tracker::start(fake.reconnect(), short()).await.unwrap();
+    second.renew_lease().await;
+    seed(&second, "a1", 2).await;
+    tokio::time::advance(ttl + Duration::from_secs(1)).await;
+    first
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retake_that_landed_with_its_reply_lost_reads_what_another_wrote() {
+    let fake = Fake::default();
+    let t = lapsed_while_another_wrote(&fake, Duration::from_secs(3)).await;
+    fake.lose_next_lease_reply();
+    t.renew_lease().await;
+    t.renew_lease().await;
+    assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retake_adopted_a_round_late_still_reads_what_another_wrote() {
+    let fake = Fake::default();
+    let t = lapsed_while_another_wrote(&fake, Duration::from_secs(3)).await;
+    // The retake lands with its reply lost, and the lease key cannot be read.
+    fake.lose_next_lease_reply();
+    fake.fail_lease_gets(true);
+    t.renew_lease().await;
+    fake.fail_lease_gets(false);
+    // The next round finds the entry ours at a version it never heard of.
+    t.renew_lease().await;
+    let core = t.0.core.lock().await;
+    assert!(!core.fenced, "the holder fenced itself");
+    assert!(core.retaken, "an entry taken back was adopted as a renewal");
+    drop(core);
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_entry_held_by_another_tracker_is_not_adopted() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    t.renew_lease().await;
+    another_takes_the_lease(&fake).await;
+    t.renew_lease().await;
+    assert!(t.0.core.lock().await.fenced);
 }

@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use crate::felix::{Broker, ConditionalWrite, ExtendError};
+use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
 mod reads;
@@ -489,7 +489,7 @@ impl<B: Broker> Tracker<B> {
             renewing: Mutex::new(()),
             settings,
             me: Key::new("tracker").expect("a valid key"),
-            holder: format!("tracker-{}-{}", std::process::id(), now_micros()),
+            holder: holder_token()?,
             stamp: AtomicU64::new(now_micros()),
             next_delivery: AtomicU64::new(1),
             settles: AtomicU64::new(0),
@@ -891,11 +891,24 @@ impl<B: Broker> Tracker<B> {
                         None,
                     ),
                 )
-                .await?;
-            if let Some(version) = put {
+                .await;
+            let held = match put {
+                Ok(Some(version)) => Some((version, started + self.0.settings.lease_ttl)),
+                // The put may have landed with its reply lost. When it is ours we
+                // do not know when it was granted, so our view has run out and
+                // the first renewal goes by version.
+                put => match self.our_lease().await {
+                    Some(version) => Some((version, Instant::now())),
+                    None => {
+                        put?;
+                        None
+                    }
+                },
+            };
+            if let Some((version, valid_until)) = held {
                 self.0.core.lock().await.lease = Some(LeaseHeld {
                     version,
-                    valid_until: started + self.0.settings.lease_ttl,
+                    valid_until,
                 });
                 return Ok(());
             }
@@ -936,12 +949,30 @@ impl<B: Broker> Tracker<B> {
                 self.0.broker.lease_put(holder.clone(), ttl, Some(version)),
             )
             .await;
-        // Judged after the refusal: the put can land after our view ran out.
-        // Absent cannot take a live entry, so trying it early is safe.
-        if matches!(put, Ok(None)) && valid_until <= Instant::now() {
-            retaken = true;
+        // A put of ours that landed with its reply lost left the entry at a
+        // version we never heard of: adopt it and renew by it.
+        let mut adopted = None;
+        if !matches!(put, Ok(Some(_))) {
+            if let Some(ours) = self.our_lease().await.filter(|&v| v != version) {
+                adopted = Some(ours);
+            // Judged after the refusal: the put can land after our view ran out.
+            // Absent cannot take a live entry, so trying it early is safe.
+            } else if matches!(put, Ok(None)) && valid_until <= Instant::now() {
+                retaken = true;
+                put = self
+                    .io(None, self.0.broker.lease_put(holder.clone(), ttl, None))
+                    .await;
+                if !matches!(put, Ok(Some(_))) {
+                    adopted = self.our_lease().await;
+                }
+            }
+        }
+        if let Some(ours) = adopted {
+            // With our view run out the entry may come from an Absent put that
+            // landed after another tracker held the lease: a retake.
+            retaken |= valid_until <= Instant::now();
             put = self
-                .io(None, self.0.broker.lease_put(holder, ttl, None))
+                .io(None, self.0.broker.lease_put(holder, ttl, Some(ours)))
                 .await;
         }
         let mut core = self.0.core.lock().await;
@@ -969,7 +1000,34 @@ impl<B: Broker> Tracker<B> {
                 core.fenced = true;
             }
             // A blip: the lease stands until its own expiry passes.
-            Err(e) => eprintln!("kbl-tracker: could not renew the writer lease: {e:#}"),
+            Err(e) => {
+                eprintln!("kbl-tracker: could not renew the writer lease: {e:#}");
+                if let Some(ours) = adopted
+                    && core.lease.is_some()
+                {
+                    // Our view still bounds the entry: whatever landed was sent
+                    // after it began.
+                    core.lease = Some(LeaseHeld {
+                        version: ours,
+                        valid_until,
+                    });
+                    if retaken {
+                        core.stale = true;
+                        core.retaken = true;
+                        core.retakes += 1;
+                        core.refusals += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The version of the lease entry when it holds this tracker's name. A
+    /// failed read is no answer.
+    async fn our_lease(&self) -> Option<u64> {
+        match self.io(None, self.0.broker.lease_get()).await {
+            Ok(Some((holder, version))) if holder == self.0.holder.as_bytes() => Some(version),
+            _ => None,
         }
     }
 

@@ -943,3 +943,123 @@ async fn a_retaken_org_lease_is_confirmed_after_the_read() {
         assert_eq!(org_teams(&broker), ["beta", "gamma"], "{pause:?}");
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_org_renewal_that_landed_with_its_reply_lost_keeps_the_lease() {
+    let ttl = Duration::from_secs(15);
+    let broker = Quiet::default();
+    broker.lease_expires.store(true, Ordering::SeqCst);
+    let org = Arc::new(
+        Org::start(broker.clone(), ttl, Duration::ZERO)
+            .await
+            .unwrap(),
+    );
+    let renewing = org.clone();
+    let maintain = tokio::spawn(async move { renewing.maintain().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    broker.lose_lease_reply.store(true, Ordering::SeqCst);
+    // One round loses its reply, the next renews by a version Felix moved past.
+    tokio::time::sleep(ttl / 3 + Duration::from_millis(100)).await;
+    assert!(!broker.lose_lease_reply.load(Ordering::SeqCst));
+    tokio::time::sleep(ttl / 3).await;
+    assert!(org.writable(), "the holder dropped a lease it holds");
+    maintain.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_lease_check_that_landed_with_its_reply_lost_lets_the_write_in() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    // A failed write leaves the lease to be checked by the next one.
+    broker.fail_publish.store(true, Ordering::SeqCst);
+    let ops = || Key::new("ops").unwrap();
+    assert!(org.append(ops(), team_created("alpha")).await.is_err());
+    broker.fail_publish.store(false, Ordering::SeqCst);
+    broker.lose_lease_reply.store(true, Ordering::SeqCst);
+    org.append(ops(), team_created("alpha"))
+        .await
+        .expect("the write was refused on a lease this tracker holds");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_lease_taken_at_start_whose_reply_was_lost_is_held() {
+    let ttl = Duration::from_secs(15);
+    let broker = Quiet::default();
+    broker.lose_lease_reply.store(true, Ordering::SeqCst);
+    let org = Arc::new(
+        Org::start(broker, ttl, Duration::ZERO)
+            .await
+            .expect("the start gave up on a lease it holds"),
+    );
+    let renewing = org.clone();
+    let maintain = tokio::spawn(async move { renewing.maintain().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(org.writable());
+    maintain.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_retake_that_landed_with_its_reply_lost_is_held() {
+    let ttl = Duration::from_secs(3);
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.lease_expires.store(true, Ordering::SeqCst);
+    let org = Arc::new(
+        Org::start(broker.clone(), ttl, Duration::ZERO)
+            .await
+            .unwrap(),
+    );
+    // The lease ran out; meanwhile another tracker held it and created beta.
+    tokio::time::advance(ttl + Duration::from_secs(1)).await;
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
+    broker.lose_lease_reply.store(true, Ordering::SeqCst);
+    let renewing = org.clone();
+    let maintain = tokio::spawn(async move { renewing.maintain().await });
+    // Well inside the entry's time to live, which our own retake started.
+    tokio::time::sleep(ttl / 2).await;
+    assert!(org.writable(), "the retake was refused by our own entry");
+    maintain.abort();
+    // The retake read what the other tracker wrote.
+    assert!(matches!(
+        org.append(Key::new("ops").unwrap(), team_created("beta"))
+            .await,
+        Ok((Applied::Unchanged, None))
+    ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_retake_adopted_a_round_late_reads_what_another_wrote() {
+    let ttl = Duration::from_secs(3);
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.lease_expires.store(true, Ordering::SeqCst);
+    let org = Arc::new(
+        Org::start(broker.clone(), ttl, Duration::ZERO)
+            .await
+            .unwrap(),
+    );
+    tokio::time::advance(ttl + Duration::from_secs(1)).await;
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
+    // The retake lands with its reply lost, and the lease key cannot be read.
+    broker.lose_lease_reply.store(true, Ordering::SeqCst);
+    broker.fail_lease_get.store(true, Ordering::SeqCst);
+    let renewing = org.clone();
+    let maintain = tokio::spawn(async move { renewing.maintain().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(!broker.lose_lease_reply.load(Ordering::SeqCst));
+    broker.fail_lease_get.store(false, Ordering::SeqCst);
+    // The next round finds the entry ours at a version it never heard of.
+    tokio::time::sleep(ttl / 3).await;
+    assert!(org.writable(), "the retake was refused by our own entry");
+    maintain.abort();
+    assert!(matches!(
+        org.append(Key::new("ops").unwrap(), team_created("beta"))
+            .await,
+        Ok((Applied::Unchanged, None))
+    ));
+}

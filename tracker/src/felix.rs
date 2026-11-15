@@ -23,6 +23,15 @@ use serde_json::{Value, json};
 const LEASE_CACHE: &str = "work.tracker";
 const LEASE_KEY: &str = "writer";
 
+/// A lease holder name no other tracker can have: a tracker that reads the
+/// lease entry back takes it as its own only when the bytes match.
+pub(crate) fn holder_token() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| anyhow::anyhow!("drawing a lease holder name: {e}"))?;
+    let nonce: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("tracker-{}-{nonce}", std::process::id()))
+}
+
 /// What a connection is for: one team's namespace, or the org's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -153,6 +162,9 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         ttl: Duration,
         expect: Option<u64>,
     ) -> impl Future<Output = Result<Option<u64>>> + Send;
+
+    /// The writer lease key's live entry: its holder and version.
+    fn lease_get(&self) -> impl Future<Output = Result<Option<(Vec<u8>, u64)>>> + Send;
 
     /// The value ingest keeps under `name` and its version.
     fn cursor_get(
@@ -677,6 +689,19 @@ impl Broker for Felix {
                 )
                 .await?;
             Ok(put.applied.then_some(put.version).flatten())
+        }
+        .await;
+        self.forget_main(done).await
+    }
+
+    async fn lease_get(&self) -> Result<Option<(Vec<u8>, u64)>> {
+        let done = async {
+            let got = self
+                .main()
+                .await?
+                .cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, LEASE_KEY)
+                .await?;
+            Ok(got.map(|v| (v.value.to_vec(), v.version)))
         }
         .await;
         self.forget_main(done).await
