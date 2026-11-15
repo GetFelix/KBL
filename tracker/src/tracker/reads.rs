@@ -1,6 +1,8 @@
 //! What a person reads through the tracker: the items as the fold sees them,
 //! and the records about one item.
 
+use std::collections::HashMap;
+
 use kbl_core::names::ItemId;
 use kbl_core::work::{WORK_EVENTS, WorkRecord, read};
 use kbl_core::work_fold::Stage;
@@ -11,6 +13,9 @@ use crate::felix::Broker;
 
 /// Most records one history answer carries. `next` names where to go on.
 pub(crate) const HISTORY_PAGE: usize = 500;
+
+/// Most records one history answer reads, matching or not.
+pub(crate) const HISTORY_SCAN: usize = 20_000;
 
 impl<B: Broker> Tracker<B> {
     /// Every item, or those in `stage`, in id order.
@@ -63,49 +68,67 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// The records on `work.events` about `id`, oldest first, from offset
-    /// `from`: those that name it, and links that point at it. A record the
-    /// fold refused on replay carries `rejected`.
+    /// `from`: those that name it, and records that point at it (links,
+    /// prerequisites, a triage answer that calls it a duplicate). A record
+    /// the fold refused on replay carries `rejected`. `next` is where to go
+    /// on: after [`HISTORY_PAGE`] records, or after [`HISTORY_SCAN`] scanned.
     pub(crate) async fn history(&self, id: &ItemId, from: u64) -> Result<Value, Error> {
         self.begin().await?;
-        if !self.0.core.lock().await.state.items.contains_key(id) {
-            return Err(unknown_item());
-        }
-        let log = self
-            .io(None, self.0.broker.read_from(WORK_EVENTS, from))
-            .await
-            .map_err(Error::Felix)?;
-        let rejected: std::collections::HashMap<u64, _> = {
+        let (rejected, at): (HashMap<u64, _>, _) = {
             let core = self.0.core.lock().await;
-            core.state
-                .rejections
-                .iter()
-                .map(|r| (r.offset, r.why))
-                .collect()
+            if !core.state.items.contains_key(id) {
+                return Err(unknown_item());
+            }
+            let rejected = core.state.rejections.iter().map(|r| (r.offset, r.why));
+            (rejected.collect(), core.state.at)
         };
         let mut records = Vec::new();
+        let mut scanned = 0;
+        let mut cursor = Some(from);
         let mut next = None;
-        for (offset, payload) in log.into_iter().filter(|(o, _)| *o >= from) {
-            // A record this build cannot read is skipped here as on replay;
-            // the fold that serves the item stopped at it already.
-            let Ok(rec) = read(&payload) else { continue };
-            let about = rec.record.item() == Some(id)
-                || matches!(&rec.record,
-                    WorkRecord::Linked { to, .. } | WorkRecord::Unlinked { to, .. } if to == id);
-            if !about {
-                continue;
+        // Read page by page, so a long log costs one bounded answer at a time.
+        'pages: while let Some(at_offset) = cursor {
+            let (page, after) = self
+                .io(None, self.0.broker.read_page(WORK_EVENTS, at_offset))
+                .await
+                .map_err(Error::Felix)?;
+            for (offset, payload) in page.into_iter().filter(|(o, _)| *o >= from) {
+                if records.len() == HISTORY_PAGE || scanned == HISTORY_SCAN {
+                    next = Some(offset);
+                    break 'pages;
+                }
+                scanned += 1;
+                // Malformed and newer records are both left out; the state
+                // the other calls serve stopped at a newer one already.
+                let Ok(rec) = read(&payload) else { continue };
+                if !about(&rec.record, id) {
+                    continue;
+                }
+                let mut v = json!({ "offset": offset, "record": rec });
+                if let Some(why) = rejected.get(&offset) {
+                    v["rejected"] = json!(why);
+                }
+                records.push(v);
             }
-            if records.len() == HISTORY_PAGE {
-                next = Some(offset);
-                break;
-            }
-            let mut v = json!({ "offset": offset, "record": rec });
-            if let Some(why) = rejected.get(&offset) {
-                v["rejected"] = json!(why);
-            }
-            records.push(v);
+            cursor = after;
         }
-        Ok(json!({ "records": records, "next": next }))
+        Ok(json!({ "records": records, "next": next, "at": at }))
     }
+}
+
+/// Whether `record` is about `id`: it names it, or points at it.
+fn about(record: &WorkRecord, id: &ItemId) -> bool {
+    record.item() == Some(id)
+        || match record {
+            WorkRecord::Linked { to, .. } | WorkRecord::Unlinked { to, .. } => to == id,
+            WorkRecord::Prerequisite {
+                prerequisite,
+                triage,
+                ..
+            } => prerequisite == id || triage.as_ref() == Some(id),
+            WorkRecord::Triaged { duplicate_of, .. } => duplicate_of.as_ref() == Some(id),
+            _ => false,
+        }
 }
 
 fn unknown_item() -> Error {
@@ -113,3 +136,6 @@ fn unknown_item() -> Error {
         why: "unknown_item".into(),
     }
 }
+
+#[cfg(test)]
+mod tests;

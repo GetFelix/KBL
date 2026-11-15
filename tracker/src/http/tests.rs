@@ -346,6 +346,10 @@ async fn a_person_reads_items_one_item_and_its_history() {
         (Some("a1"), Some("ready"))
     );
 
+    // A record about another item that points at a1 is in a1's history too.
+    let link = json!({ "record": { "kind": "linked", "item": "a2", "to": "a1" } });
+    let (status, reply) = call(&app, "/v1/work/records", Some("tok-gab"), link).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
     let (status, h) = get_json(&app, "/v1/work/items/a1/history", Some("tok-gab")).await;
     assert_eq!(status, StatusCode::OK, "{h}");
     let kinds: Vec<&str> = h["records"]
@@ -354,7 +358,7 @@ async fn a_person_reads_items_one_item_and_its_history() {
         .iter()
         .map(|r| r["record"]["kind"].as_str().unwrap())
         .collect();
-    assert_eq!(kinds, ["imported", "accepted", "human_input"]);
+    assert_eq!(kinds, ["imported", "accepted", "human_input", "linked"]);
     assert_eq!(h["records"][2]["record"]["by"], "gab");
     assert_eq!(h["next"], Value::Null);
     // From an offset on, the older records are left out.
@@ -365,7 +369,7 @@ async fn a_person_reads_items_one_item_and_its_history() {
         Some("tok-gab"),
     )
     .await;
-    assert_eq!(later["records"].as_array().unwrap().len(), 2);
+    assert_eq!(later["records"].as_array().unwrap().len(), 3);
 
     let (status, missing) = get_json(&app, "/v1/work/items/zz/history", Some("tok-gab")).await;
     assert_eq!(

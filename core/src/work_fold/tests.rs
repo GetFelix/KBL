@@ -1275,8 +1275,15 @@ fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
 #[test]
 fn a_flagged_item_is_not_claimed_and_a_reopen_unflags_it() {
     let mut l = Log::default();
-    accepted_root(&mut l, "r1");
+    l.person(imported("t1"));
     l.person(WorkRecord::FormatRaised { to: 7 });
+    // Not accepted: it waits for a person in Triage already.
+    l.person(WorkRecord::Flagged {
+        item: id("t1"),
+        flagged: true,
+    });
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NoChange);
+    accepted_root(&mut l, "r1");
     l.person(WorkRecord::Flagged {
         item: id("r1"),
         flagged: true,

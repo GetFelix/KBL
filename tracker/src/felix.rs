@@ -60,6 +60,9 @@ pub(crate) enum ExtendError {
     Failed(anyhow::Error),
 }
 
+/// One page of a stream, and the offset after it (none at the tip).
+pub(crate) type Page = (Vec<(u64, Vec<u8>)>, Option<u64>);
+
 /// What the claim path needs from Felix, so its rules can be tested without a
 /// broker. Every stream has one shard.
 pub(crate) trait Broker: Clone + Send + Sync + 'static {
@@ -72,6 +75,13 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         stream: &str,
         from: u64,
     ) -> impl Future<Output = Result<Vec<(u64, Vec<u8>)>>> + Send;
+
+    /// One page of committed records from `from`, oldest first, and the
+    /// offset to read next, or none at the tip. A caller that stops early
+    /// does not read the rest of the stream.
+    fn read_page(&self, stream: &str, from: u64) -> impl Future<Output = Result<Page>> + Send {
+        async move { Ok((self.read_from(stream, from).await?, None)) }
+    }
 
     /// Takes at most one record for `member` without waiting. The first poll
     /// of a member reclaims what Felix still holds for that name, so each
@@ -454,6 +464,31 @@ impl Broker for Felix {
                 );
                 from = page.next_offset;
             }
+        }
+        .await;
+        self.forget_main(done).await
+    }
+
+    async fn read_page(&self, stream: &str, from: u64) -> Result<Page> {
+        let done = async {
+            let client = self.main().await?;
+            let page =
+                placed(|| client.read(self.tenant(), self.namespace(), stream, 0, from, None, 0))
+                    .await
+                    .with_context(|| format!("read {stream} from offset {from}"))?;
+            if page.records.is_empty() {
+                return Ok((Vec::new(), None));
+            }
+            anyhow::ensure!(
+                page.next_offset > from,
+                "reading {stream} did not advance past offset {from}"
+            );
+            let records = page
+                .records
+                .into_iter()
+                .map(|r| (r.offset, r.payload.to_vec()))
+                .collect();
+            Ok((records, Some(page.next_offset)))
         }
         .await;
         self.forget_main(done).await

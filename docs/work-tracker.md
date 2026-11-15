@@ -294,9 +294,10 @@ A person's token can also read the team's work. These calls write nothing:
 |---|---|
 | `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
-| `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and links that point at it. At most 500 per answer; `next` is the offset to pass as `?from=` for the rest, or null. A record the fold refused carries `rejected` with the reason |
+| `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
 
 An unknown item answers `409` with `why: unknown_item`, like the agent calls.
+A path that is not a valid item id is a `400`.
 The other calls in this section follow the same rules as the agent tools: the
 fold checks each record before it is appended, and a refusal is a `409` with a
 `why`.
@@ -361,10 +362,13 @@ call.
 
 #### Flagging an item for a person
 
-`POST /v1/work/flag` moves an open item to Needs you by hand, for example to
-hold it while you think it over, or because it needs something only a person
-can give. Agents do not get it from `work_next` until a person calls
-`POST /v1/work/unflag`. Its reason in Needs you is `flagged`.
+`POST /v1/work/flag` moves an open, accepted item to Needs you by hand, when
+it needs something only a person can give before an agent works on it.
+Agents do not get it from `work_next` until a person calls
+`POST /v1/work/unflag`. Its reason in Needs you is `flagged`. It is the
+opposite of parking on the dashboard, which takes an item out of your queue:
+a flag puts it in, in front of every person in the team, and it is a record
+on the log.
 
 - If an agent holds the item, the agent keeps it. The item stops in Needs you
   once the attempt finishes or is released.
@@ -372,8 +376,12 @@ can give. Agents do not get it from `work_next` until a person calls
   budget), that reason is the one shown. Unflag clears only the flag; the
   other reason still needs its own answer.
 - Flagging a flagged item, or unflagging one that is not flagged, is refused
-  with `no_change`, so a call that moved nothing says so. A closed item is
-  refused with `closed`. Reopening an item clears the flag.
+  with `no_change`, so a call that moved nothing says so. So is flagging an
+  item nobody has accepted: it waits for a person in Triage already. A closed
+  item is refused with `closed`. Reopening an item clears the flag.
+- A finished attempt on a flagged item shows in Needs you, not In review,
+  until the flag is cleared. The dashboard shows the reason but has no
+  unflag button yet; use `POST /v1/work/unflag`.
 - `flagged` is a record of [format 7](upgrades.md#formats). Until a person
   raises the log to 7, both calls are refused with `format`.
 

@@ -1798,8 +1798,9 @@ impl State {
                     return Err(Reject::Closed);
                 }
                 // Refused rather than kept as a no-op, so "move it out" on an item
-                // that waits for another reason says it did nothing.
-                if it.flagged == *flagged {
+                // that waits for another reason says it did nothing. An item nobody
+                // accepted waits for a person in Triage already.
+                if it.flagged == *flagged || (*flagged && !it.accepted) {
                     return Err(Reject::NoChange);
                 }
                 it.flagged = *flagged;
