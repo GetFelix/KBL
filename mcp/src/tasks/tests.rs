@@ -736,6 +736,21 @@ async fn artifact_text_refuses_bytes_that_do_not_hash_to_the_id() {
 }
 
 #[tokio::test]
+async fn long_text_is_redacted_before_it_is_stored() {
+    let fake = Fake::default();
+    let t = tasks(&fake);
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "s".repeat(36));
+    let body = format!("{secret}\n{}", "x".repeat(5000));
+    let Ok(Content::Artifact(id)) = t.content(body).await else {
+        panic!("over 4 KiB should be an artifact")
+    };
+    let want = format!("[redacted]\n{}", "x".repeat(5000));
+    assert_eq!(id, kbl_core::artifact::ArtifactId::of(want.as_bytes()));
+    assert_eq!(t.artifact_text(id.as_str()).await, want);
+}
+
+#[tokio::test]
 async fn a_claimed_task_body_must_hash_to_its_artifact_id() {
     let fake = Fake::default();
     let t = tasks(&fake);

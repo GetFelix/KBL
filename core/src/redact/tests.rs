@@ -24,6 +24,20 @@ fn known_shapes_are_cut() {
 }
 
 #[test]
+fn a_secret_on_a_removed_diff_line_is_cut() {
+    let text = format!("-{}\n+ok", fake("ghp_", "d", 36));
+    assert_eq!(redact(&text), "-[redacted]\n+ok");
+    let text = "------BEGIN RSA PRIVATE KEY-----\n-MIIE\n------END RSA PRIVATE KEY-----\n+x";
+    assert_eq!(redact(text), "-[redacted]\n+x");
+}
+
+#[test]
+fn a_long_line_of_key_headers_is_not_a_key() {
+    let text = "-----BEGIN X".repeat(50_000);
+    assert!(matches!(redact(&text), Cow::Borrowed(_)));
+}
+
+#[test]
 fn bearer_keeps_the_scheme() {
     let text = format!("Authorization: Bearer {}", fake("", "aZ9.", 6));
     assert_eq!(redact(&text), "Authorization: Bearer [redacted]");

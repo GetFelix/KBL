@@ -134,6 +134,8 @@ const KEY_BEGIN: &str = "-----BEGIN ";
 const KEY_END: &str = "-----END ";
 const KEY_TAIL: &str = "PRIVATE KEY-----";
 const BEARER: &str = "Bearer ";
+/// Longest label before `PRIVATE KEY-----`, as in `ENCRYPTED ` or `OPENSSH `.
+const MAX_KEY_LABEL: usize = 32;
 
 /// `text` with every known secret replaced by [`REDACTED`]. Borrowed when
 /// nothing matched.
@@ -144,9 +146,10 @@ pub fn redact(text: &str) -> Cow<'_, str> {
     let mut copied = 0;
     let mut i = 0;
     while i < bytes.len() {
-        // A secret starts a word: `disk-...` is not an `sk-` key. Every
-        // pattern starts with an ASCII byte, which is a char boundary.
-        if !bytes[i].is_ascii() || (i > 0 && token(bytes[i - 1])) {
+        // A secret starts a word: `disk-...` is not an `sk-` key. A `-` may
+        // come before it, as on a removed line of a diff. Every pattern
+        // starts with an ASCII byte, which is a char boundary.
+        if !bytes[i].is_ascii() || (i > 0 && word(bytes[i - 1])) {
             i += 1;
             continue;
         }
@@ -191,11 +194,16 @@ fn after_prefix(s: &str, prefix: &str, min_tail: usize, tail: fn(u8) -> bool) ->
 /// `s` when the block is cut off.
 fn private_key(s: &str) -> Option<usize> {
     let header = s.strip_prefix(KEY_BEGIN)?;
-    let line = header.find('\n').map_or(header, |n| &header[..n]);
-    if !line.trim_end().ends_with(KEY_TAIL) {
+    // A key label is short; looking further would make a long line of
+    // `-----BEGIN ` quadratic.
+    let near = &header.as_bytes()[..header.len().min(MAX_KEY_LABEL + KEY_TAIL.len())];
+    let label = near
+        .windows(KEY_TAIL.len())
+        .position(|w| w == KEY_TAIL.as_bytes())?;
+    if near[..label].contains(&b'\n') {
         return None;
     }
-    let body = KEY_BEGIN.len() + line.len();
+    let body = KEY_BEGIN.len() + label + KEY_TAIL.len();
     let end = s[body..].find(KEY_END).and_then(|e| {
         let at = body + e;
         s[at..].find(KEY_TAIL).map(|t| at + t + KEY_TAIL.len())
@@ -215,9 +223,9 @@ fn redact_content(c: &mut Content) {
     }
 }
 
-/// Redacts the free text an agent reports in a decision, step, edit or
-/// progress note. Other kinds are left as they are. Artifacts are stored
-/// before the record is written, so the writer redacts their text itself.
+/// Redacts the free text of a record an agent writes. Names, keys, options
+/// and offsets are left as they are. Artifacts are stored before the record
+/// is written, so the writer redacts their text itself.
 pub fn redact_record(record: &mut WorkRecord) {
     match record {
         WorkRecord::Decision {
@@ -241,6 +249,19 @@ pub fn redact_record(record: &mut WorkRecord) {
         }
         WorkRecord::Edit { hunk, .. } => redact_content(hunk),
         WorkRecord::Progress { note, .. } => redact_content(note),
+        WorkRecord::Context { text, .. }
+        | WorkRecord::Question { text, .. }
+        | WorkRecord::Answer { text, .. } => redact_content(text),
+        WorkRecord::Finding {
+            title, scenario, ..
+        } => {
+            redact_in(title);
+            redact_in(scenario);
+        }
+        WorkRecord::ReviewVerdict { why, .. }
+        | WorkRecord::Triaged { why, .. }
+        | WorkRecord::GaveUp { reason: why, .. } => redact_in(why),
+        WorkRecord::Released { reason, .. } => reason.iter_mut().for_each(redact_in),
         _ => {}
     }
 }

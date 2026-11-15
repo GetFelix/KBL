@@ -5,6 +5,7 @@
 //! reported on stderr and does not fail the tool: the claim or the result it
 //! describes already happened, and failing would tell the model it did not.
 
+use std::borrow::Cow;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,6 +15,7 @@ use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, Key, Resources, TaskId, WORKERS_GROUP};
 use kbl_core::record::{Logged, Record};
+use kbl_core::redact::redact;
 use kbl_core::stored::TaskResult;
 use kbl_core::task::{self, Task, TaskReadError};
 use serde_json::{Value, json};
@@ -485,7 +487,13 @@ impl<B: Backend> Tasks<B> {
     }
 
     /// Short text stays inline; longer text becomes an artifact.
+    /// Redacted here as well as by the tracker: long text becomes an
+    /// artifact before the tracker sees it.
     pub(crate) async fn content(&self, text: String) -> Result<Content, String> {
+        let text = match redact(&text) {
+            Cow::Borrowed(_) => text,
+            Cow::Owned(r) => r,
+        };
         let (content, stored) = Content::from_text(text);
         if let Some((_, bytes)) = stored {
             self.store(bytes).await?;

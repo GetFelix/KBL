@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, Resources, RunId};
-use kbl_core::redact::redact;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
@@ -780,10 +779,8 @@ impl Server {
     }
 
     /// Short text stays in the record; longer text is stored as an artifact first.
-    /// Redacted here as well as by the tracker: long text becomes an
-    /// artifact before the tracker sees it.
     async fn content(&self, text: String) -> Result<Content, String> {
-        self.tasks.content(redact(&text).into_owned()).await
+        self.tasks.content(text).await
     }
 
     /// Replaces each `{"artifact": id}` in a reply with the text it names.
