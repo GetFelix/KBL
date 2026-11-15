@@ -361,7 +361,7 @@ Each tracker names itself with a random token drawn at start, so it never
 mistakes another tracker's entry for its own. If its view of the lease had
 already run out, the entry may come from a retake that landed after another
 tracker held the lease, so the tracker treats it as a retake: it reads the log
-again and renews by version before it writes. This holds for team and org
+again and confirms the lease by version after the read before it writes. This holds for team and org
 leases, and for the lease taken at start.
 
 A tracker paused past its lease can wake up still believing it holds it, so

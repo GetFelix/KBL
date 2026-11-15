@@ -461,8 +461,10 @@ impl<B: Broker> Org<B> {
             Err(e) => {
                 // Our view still bounds the entry: whatever landed was sent
                 // after it began.
+                // Unless a write's lease check moved it meanwhile.
                 if let Some(ours) = adopted
                     && let Some(lease) = self.core.lock().await.lease.as_mut()
+                    && lease.version == version
                 {
                     lease.version = ours;
                 }
@@ -495,12 +497,12 @@ impl<B: Broker> Org<B> {
         ))
         .await;
         let held = match put {
-            Ok(Some(version)) => Some((version, started + self.lease_ttl)),
+            Ok(Some(version)) => Some((version, started + self.lease_ttl, false)),
             // The put may have landed with its reply lost. When it is ours we
             // do not know when it was granted, so our view has run out and
             // the next renewal goes by version.
             put => match self.ours().await {
-                Some(version) => Some((version, Instant::now())),
+                Some(version) => Some((version, Instant::now(), true)),
                 None => {
                     put?;
                     None
@@ -508,7 +510,7 @@ impl<B: Broker> Org<B> {
             },
         };
         Ok(match held {
-            Some((version, valid_until)) => {
+            Some((version, valid_until, adopted)) => {
                 // Another tracker may have written, a revoke among it, while
                 // this one did not hold the lease: read before serving tokens.
                 let mut core = self.core.lock().await;
@@ -522,6 +524,12 @@ impl<B: Broker> Org<B> {
                 // follow it before the next write.
                 core.refusals += 1;
                 self.refresh_or_log(&mut core).await;
+                drop(core);
+                // An adopted grant has no known start, so renew by version
+                // now rather than refuse writes until the next round.
+                if adopted && let Err(e) = self.renew_by(version).await {
+                    eprintln!("kbl-tracker: could not renew the org writer lease: {e:#}");
+                }
                 true
             }
             None => false,

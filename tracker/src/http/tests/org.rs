@@ -958,7 +958,8 @@ async fn an_org_renewal_that_landed_with_its_reply_lost_keeps_the_lease() {
     let maintain = tokio::spawn(async move { renewing.maintain().await });
     tokio::time::sleep(Duration::from_millis(10)).await;
     broker.lose_lease_reply.store(true, Ordering::SeqCst);
-    // One round loses its reply, the next renews by a version Felix moved past.
+    // The renewal lands with its reply lost; it finds the entry ours and
+    // renews by the version it never heard of.
     tokio::time::sleep(ttl / 3 + Duration::from_millis(100)).await;
     assert!(!broker.lose_lease_reply.load(Ordering::SeqCst));
     tokio::time::sleep(ttl / 3).await;
@@ -1053,7 +1054,7 @@ async fn an_org_retake_adopted_a_round_late_reads_what_another_wrote() {
     tokio::time::sleep(Duration::from_millis(10)).await;
     assert!(!broker.lose_lease_reply.load(Ordering::SeqCst));
     broker.fail_lease_get.store(false, Ordering::SeqCst);
-    // The next round finds the entry ours at a version it never heard of.
+    // The next round's renewal is refused and finds the entry ours.
     tokio::time::sleep(ttl / 3).await;
     assert!(org.writable(), "the retake was refused by our own entry");
     maintain.abort();

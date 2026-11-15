@@ -64,8 +64,8 @@ struct Net {
     gate_publish: bool,
     /// The next lease put waits for the gate before it reaches the key.
     gate_lease: bool,
-    /// The next lease put lands, but its reply is lost.
-    lose_lease_reply: bool,
+    /// The next this many lease puts land, but their replies are lost.
+    lose_lease_reply: u32,
     /// Reads of the lease key fail.
     fail_lease_get: bool,
     /// The next nack waits for `open_gate` before it lands.
@@ -243,7 +243,7 @@ impl Fake {
     }
 
     fn lose_next_lease_reply(&self) {
-        self.net.lock().unwrap().lose_lease_reply = true;
+        self.net.lock().unwrap().lose_lease_reply += 1;
     }
 
     fn hold_next_lease_put(&self) {
@@ -538,7 +538,8 @@ impl Broker for Fake {
         let v = net.lease_versions;
         net.lease = Some((holder, v));
         net.lease_until = Some(now + ttl + net.lease_lag);
-        if std::mem::take(&mut net.lose_lease_reply) {
+        if net.lose_lease_reply > 0 {
+            net.lose_lease_reply -= 1;
             anyhow::bail!("Felix did not answer in time");
         }
         Ok(Some(v))
@@ -2915,9 +2916,9 @@ async fn a_renewal_that_landed_with_its_reply_lost_does_not_fence_the_holder() {
     fake.lease_expires();
     let t = start(&fake).await;
     t.renew_lease().await;
+    // The renewal lands with its reply lost; it finds the entry ours and
+    // renews by the version it never heard of.
     fake.lose_next_lease_reply();
-    t.renew_lease().await;
-    // Felix has the version the lost reply carried; ours is the one before.
     t.renew_lease().await;
     assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
     t.person_record(key("gab"), imported("c1")).await.unwrap();
@@ -2991,4 +2992,22 @@ async fn an_entry_held_by_another_tracker_is_not_adopted() {
     another_takes_the_lease(&fake).await;
     t.renew_lease().await;
     assert!(t.0.core.lock().await.fenced);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retake_adopted_whose_renewal_reply_is_lost_still_reads_what_another_wrote() {
+    let fake = Fake::default();
+    let t = lapsed_while_another_wrote(&fake, Duration::from_secs(3)).await;
+    // The retake and the renewal by its adopted version both lose their replies.
+    fake.lose_next_lease_reply();
+    fake.lose_next_lease_reply();
+    t.renew_lease().await;
+    {
+        let core = t.0.core.lock().await;
+        assert!(core.retaken, "an entry taken back was adopted as a renewal");
+        assert!(core.stale);
+    }
+    t.renew_lease().await;
+    assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
 }
