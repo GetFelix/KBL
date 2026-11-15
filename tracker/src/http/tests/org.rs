@@ -602,7 +602,8 @@ async fn a_revoke_written_while_the_org_lease_was_away_holds_after_the_retake() 
         .await
         .unwrap();
     o.org.lease_lost.store(false, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_secs(5)).await;
+    // The other tracker's entry stands for one ttl; the retake waits it out.
+    tokio::time::sleep(Duration::from_secs(20)).await;
     assert_eq!(next_as(&o.app, &token).await, StatusCode::UNAUTHORIZED);
     assert_eq!(next_as(&o.app, "tok-w1").await, StatusCode::OK);
 }
@@ -674,4 +675,43 @@ async fn a_name_revoked_minted_then_put_in_the_token_file_lists_once() {
     assert_eq!(rows.len(), 1, "{body}");
     assert_eq!(rows[0]["token_file"], true);
     assert_eq!(rows[0]["revoked_minted"], true);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_team_list_says_whether_an_org_write_would_be_let_in() {
+    let o = org_app().await;
+    let (_, body) = get_json(&o.app, "/v1/org/teams", Some("tok-ops")).await;
+    assert_eq!(body["org_writable"], true, "{body}");
+    o.org.lease_lost.store(true, Ordering::SeqCst);
+    let teams = o.teams.clone();
+    let _maintain = tokio::spawn(async move { teams.maintain().await });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let (_, body) = get_json(&o.app, "/v1/org/teams", Some("tok-ops")).await;
+    assert_eq!(body["org_writable"], false, "{body}");
+    let (status, body) = create(&o.app, Some("tok-ops"), "alpha").await;
+    assert_eq!(
+        (status, why(&body)),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("org_unavailable"))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_org_lease_is_renewed_as_soon_as_serving_starts() {
+    let ttl = Duration::from_secs(3);
+    // Starting the teams took most of the lease, or all of it.
+    for took in [Duration::from_secs(2), Duration::from_secs(4)] {
+        let broker = Quiet::default();
+        broker.lease_expires.store(true, Ordering::SeqCst);
+        let org = Arc::new(Org::start(broker, ttl, Duration::ZERO).await.unwrap());
+        tokio::time::advance(took).await;
+        assert!(!org.writable());
+        let renewing = org.clone();
+        let maintain = tokio::spawn(async move { renewing.maintain().await });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            org.writable(),
+            "not writable right after serving began, {took:?} in"
+        );
+        maintain.abort();
+    }
 }

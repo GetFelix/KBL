@@ -42,10 +42,8 @@ const exchange = async (sub, body) =>
       })
     ).json()
   ).felix_token;
-const listTeams = async () => {
-  const { body } = await api("GET", "/v1/org/teams", "tok-ops");
-  return Array.isArray(body) ? body : (body.teams ?? []);
-};
+const teamList = async () => (await api("GET", "/v1/org/teams", "tok-ops")).body;
+const listTeams = async () => (await teamList()).teams ?? [];
 // Waits a few seconds for each of `names` to be listed and serving.
 async function allServing(names) {
   for (let tries = 0; tries < 20; tries++) {
@@ -54,6 +52,15 @@ async function allServing(names) {
     await sleep(500);
   }
   return listTeams();
+}
+// A tracker that is serving may not hold the org writer lease yet, and a team
+// create then answers 503 org_unavailable.
+async function orgWritable() {
+  for (let tries = 0; tries < 20; tries++) {
+    if ((await teamList()).org_writable === true) return true;
+    await sleep(500);
+  }
+  return false;
 }
 const serves = (teams, name) => teams.some((t) => t.team === name && t.serving);
 
@@ -66,6 +73,7 @@ check(
   teams.some((t) => t.team === "default" && t.adopted && t.serving),
   "the stack's first team is listed as adopted and serving",
 );
+check(await orgWritable(), "the tracker holds the org writer lease");
 
 for (const team of ["alpha", "beta"]) {
   const made = run(TOOL, ["team", "create", team], ops);

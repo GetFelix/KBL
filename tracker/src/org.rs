@@ -144,6 +144,20 @@ impl<B: Broker> Org<B> {
         Ok(view.state.who(token))
     }
 
+    /// Whether the lease is held with room for a write to land, and the log was
+    /// read since it was taken. False is a hint, not a refusal: a write after a
+    /// failed read may still get in by reading first.
+    pub(crate) fn writable(&self) -> bool {
+        let view = self.view.read().expect("org view lock");
+        view.held_until
+            .is_some_and(|t| t > Instant::now() + self.write_margin())
+    }
+
+    /// How long the lease must still stand for a write to be let in.
+    fn write_margin(&self) -> Duration {
+        (FELIX_TIMEOUT + LEASE_SKEW).min(self.lease_ttl / 2)
+    }
+
     fn publish_view(&self, core: &Core) {
         let mut view = self.view.write().expect("org view lock");
         view.state = core.state.clone();
@@ -169,11 +183,10 @@ impl<B: Broker> Org<B> {
         record: OrgRecord,
     ) -> Result<(Applied, Option<u64>), OrgError> {
         let mut core = self.core.lock().await;
-        let margin = (FELIX_TIMEOUT + LEASE_SKEW).min(self.lease_ttl / 2);
         if !core
             .lease
             .as_ref()
-            .is_some_and(|l| l.valid_until > Instant::now() + margin)
+            .is_some_and(|l| l.valid_until > Instant::now() + self.write_margin())
         {
             return Err(OrgError::Unavailable(
                 "this tracker does not hold the org writer lease".into(),
@@ -219,24 +232,38 @@ impl<B: Broker> Org<B> {
     pub(crate) async fn maintain(&self) {
         let mut lost_since: Option<Instant> = None;
         loop {
-            tokio::time::sleep(self.lease_ttl / 3).await;
+            // Renew first: starting the teams can take longer than the lease
+            // stands, and until a renewal the tracker refuses org writes.
             let held = self.renew().await;
             if held {
                 lost_since = None;
             } else if lost_since.get_or_insert_with(Instant::now).elapsed() >= ORG_LEASE_GRACE {
                 return;
             }
+            tokio::time::sleep(self.lease_ttl / 3).await;
         }
     }
 
     /// Whether the lease is held after this renewal or retake.
     async fn renew(&self) -> bool {
-        let expect = self.core.lock().await.lease.as_ref().map(|l| l.version);
+        // Felix compares a version against the live entry, so a lease that ran
+        // out (the teams took long to start) is taken again, not renewed.
+        let expect = self
+            .core
+            .lock()
+            .await
+            .lease
+            .as_ref()
+            .filter(|l| l.valid_until > Instant::now())
+            .map(|l| l.version);
         let Some(version) = expect else {
             // Taking it back means another tracker may have written meanwhile.
             return match self.take_lease().await {
                 Ok(true) => true,
-                Ok(false) => false,
+                Ok(false) => {
+                    eprintln!("kbl-tracker: another tracker took the org writer lease");
+                    false
+                }
                 Err(e) => {
                     eprintln!("kbl-tracker: could not take the org writer lease: {e:#}");
                     false

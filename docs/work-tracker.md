@@ -672,7 +672,7 @@ with the record's offset.
 | Call | Role | Records |
 |---|---|---|
 | `GET /v1/me` | Any person | Nothing. Answers the person's teams and role in each |
-| `GET /v1/org/teams` | `org_admin` | Nothing. Every team, whether it was adopted, and whether it is serving. Built |
+| `GET /v1/org/teams` | `org_admin` | Nothing. Every team, whether it was adopted, and whether it is serving. Also `org_writable`, see below. Built |
 | `POST /v1/org/teams` `{team, display_name?}` | `org_admin` | `team_created`. The tracker then creates the team's streams and group if they are missing, takes its lease and serves it. Answers `{team, created, offset, serving}`; a team already on the log answers `created: false`. Built |
 | `POST /v1/teams/{team}/members` `{person, role, repos?, subject?}` | Team `admin` | `person_added` for a new person, with a new token answered once; then `role_granted`. `repos` narrows the role to some of the team's repos |
 | `DELETE /v1/teams/{team}/members/{person}` | Team `admin` | `role_revoked` |
@@ -683,6 +683,8 @@ with the record's offset.
 | `POST /v1/teams/{team}/ingest` `{name}` | Team `admin` | `ingest_added`, with a new token answered once |
 | `POST /v1/teams/{team}/grants` `{from_team, agents?, repos?, max_pending?}` | Team `admin` of the receiving team | `grant_added`: agents of `from_team` may file prerequisites here |
 | `DELETE /v1/teams/{team}/grants/{from_team}` | Team `admin` | `grant_removed`. Proposals already filed stay |
+
+`org_writable` on `GET /v1/org/teams` says whether this tracker holds the org writer lease and has read `org.events` since taking it. While it is `false`, a team create or an agent add or revoke will most likely answer `503` with `org_unavailable`, so a script that starts the tracker waits for `true` first, as `dev/check-teams.mjs` does.
 
 `org_admin` passes every team role check. `kbl-tool team create`,
 `member add`, `agent add` and the rest call these routes; `team create` and
