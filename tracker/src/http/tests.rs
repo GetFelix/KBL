@@ -262,6 +262,30 @@ async fn a_persons_note_is_a_human_input() {
 }
 
 #[tokio::test]
+async fn a_token_pasted_in_a_note_is_cut_before_the_write() {
+    let felix = Quiet::default();
+    felix.keeps.store(true, Ordering::SeqCst);
+    let tokens = r#"{"agents":{},"people":{"tok-gab":"gab"},"ingest":{}}"#;
+    let one = team("default", felix.clone(), tokens, 64).await;
+    let app = router(Arc::new(Teams::new(vec![one]).unwrap()));
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "n".repeat(36));
+    let note = json!({ "item": "a1", "text": { "text": format!("use {secret}") } });
+    let (status, _) = call(&app, "/v1/work/note", Some("tok-gab"), note).await;
+    assert_eq!(status, StatusCode::OK);
+    let log: Vec<String> = felix
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, p)| String::from_utf8_lossy(p).into_owned())
+        .collect();
+    assert!(log.iter().any(|p| p.contains("use [redacted]")), "{log:?}");
+    assert!(!log.iter().any(|p| p.contains(&secret)));
+}
+
+#[tokio::test]
 async fn a_lost_claim_is_a_conflict_with_a_reason() {
     let app = app().await;
     let (status, reply) = call(

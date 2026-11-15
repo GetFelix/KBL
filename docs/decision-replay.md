@@ -189,9 +189,10 @@ which feeds the trust numbers on the metrics tab.
   replacement for reading the diff.
 - Secrets in tool output would end up in the log. The tracker replaces known
   secret shapes with `[redacted]` in the free text of every record an agent
-  writes, and `kbl-mcp` does the same before it stores an artifact (see
-  [Running the tracker](work-tracker.md#running-the-tracker)). A secret with
-  no known shape gets through, and artifacts follow the run's grants.
+  writes and in a person's note, and `kbl-mcp` does the same before it stores
+  an artifact (see [Running the tracker](work-tracker.md#running-the-tracker)).
+  A secret with no known shape gets through, such as an AWS secret access key
+  or a plain password, and artifacts follow the run's grants.
 
 ## Order
 

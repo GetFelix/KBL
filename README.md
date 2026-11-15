@@ -86,7 +86,8 @@ that lands while the item is being handed on does not cost the next agent its cl
 
 While it works, the agent records `decide` (what it chose and why, with the phase, a running summary and the
 steps it rests on), `record_step` and `edit`, committing its work before each decision. Known secret shapes in
-what it reports, such as a token in a command's output, are replaced with `[redacted]` before anything is written.
+what it reports, such as a token in a command's output, are replaced with `[redacted]` before anything is written,
+and so are those in a person's note. A secret with no known shape, such as an AWS secret access key, gets through.
 A person's note or review comment on an item is a `human_input` (`POST /v1/work/note`). The dashboard folds these
 into the story of a fix and its replay.
 A redo from a past decision is a new attempt that starts from that decision's recorded summary and a

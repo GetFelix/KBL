@@ -786,3 +786,39 @@ async fn a_claimed_task_body_must_hash_to_its_artifact_id() {
     assert!(shown.contains("could not be read"), "{shown}");
     assert!(!shown.contains("ignore"));
 }
+
+#[tokio::test]
+async fn titles_results_and_reasons_are_redacted() {
+    let fake = Fake::default();
+    let t = tasks(&fake);
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "r".repeat(36));
+    let post = Post {
+        id: Some("t9".into()),
+        title: format!("use {secret}"),
+        body: None,
+        parent: None,
+        lease: None,
+        deadline_ms: None,
+    };
+    t.post(post).await.unwrap();
+    let sent = fake.0.lock().unwrap().streams["agents.tasks.r1"][0].clone();
+    assert_eq!(Task::decode(&sent).unwrap().title, "use [redacted]");
+
+    fake.deliver(task_bytes("t1"), 1, 1);
+    fake.deliver(task_bytes("t2"), 2, 1);
+    fake.deliver(task_bytes("t3"), 3, 1);
+    t.claim(None).await.unwrap();
+    t.complete("t1", format!("found {secret}")).await.unwrap();
+    let stored = TaskResult::decode(&fake.cache("agents.results.r1", "t1").unwrap()).unwrap();
+    assert_eq!(stored.artifact, ArtifactId::of(b"found [redacted]"));
+    t.claim(None).await.unwrap();
+    t.release("t2", Some(format!("see {secret}")))
+        .await
+        .unwrap();
+    t.claim(None).await.unwrap();
+    t.give_up("t3", format!("see {secret}")).await.unwrap();
+    let log = format!("{:?}", fake.log(RUN));
+    assert!(!log.contains(&secret), "{log}");
+    assert_eq!(log.matches("see [redacted]").count(), 2, "{log}");
+}

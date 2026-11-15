@@ -814,14 +814,16 @@ async fn person_answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> R
 }
 
 /// A person's note, review comment or priority change, as `human_input`. The
-/// log records which person wrote it.
+/// log records which person wrote it. People paste tokens too, so the text
+/// is redacted like an agent's.
 async fn note<B: Broker>(call: Call<B>, Json(b): Json<NoteBody>) -> Response {
-    let record = WorkRecord::HumanInput {
+    let mut record = WorkRecord::HumanInput {
         item: b.item,
         attempt: b.attempt,
         input: b.input,
         text: b.text,
     };
+    kbl_core::redact::redact_record(&mut record);
     as_person(&call, record).await
 }
 
