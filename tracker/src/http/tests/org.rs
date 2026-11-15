@@ -715,3 +715,19 @@ async fn the_org_lease_is_renewed_as_soon_as_serving_starts() {
         maintain.abort();
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn an_org_lease_our_view_says_lapsed_is_renewed_while_felix_still_has_it() {
+    let ttl = Duration::from_secs(3);
+    let broker = Quiet::default();
+    broker.lease_expires.store(true, Ordering::SeqCst);
+    *broker.lease_lag.lock().unwrap() = Duration::from_millis(200);
+    let org = Arc::new(Org::start(broker, ttl, Duration::ZERO).await.unwrap());
+    // Past the tracker's view of the lease, inside Felix's.
+    tokio::time::advance(ttl + Duration::from_millis(100)).await;
+    let renewing = org.clone();
+    let maintain = tokio::spawn(async move { renewing.maintain().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(org.writable(), "the retake was refused by our own entry");
+    maintain.abort();
+}

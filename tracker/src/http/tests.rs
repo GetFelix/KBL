@@ -27,6 +27,9 @@ struct Quiet {
     /// A renewal by version is refused once the lease has run out, as Felix does.
     lease_expires: Arc<AtomicBool>,
     lease_until: Arc<StdMutex<Option<tokio::time::Instant>>>,
+    /// How much longer than its time to live the entry stands: Felix starts it
+    /// when the request lands, after the tracker started its own clock.
+    lease_lag: Arc<StdMutex<Duration>>,
     /// Bumped on every grant, as Felix does.
     lease_version: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -99,7 +102,7 @@ impl Broker for Quiet {
         if self.lease_lost.load(Ordering::SeqCst) {
             return Ok(None);
         }
-        *until = Some(now + ttl);
+        *until = Some(now + ttl + *self.lease_lag.lock().unwrap());
         Ok(Some(self.lease_version.fetch_add(1, Ordering::SeqCst) + 1))
     }
     async fn forget(&self, _: Option<&str>) {}

@@ -35,6 +35,9 @@ struct Net {
     /// The lease key runs out after its time to live, as Felix's does.
     lease_expires: bool,
     lease_until: Option<tokio::time::Instant>,
+    /// How much longer than its time to live the entry stands: Felix starts it
+    /// when the request lands, after the tracker started its own clock.
+    lease_lag: Duration,
     /// Polls by this member never answer.
     hang_member: Option<String>,
     /// Members whose connection has dropped: their calls fail until it is forgotten.
@@ -205,6 +208,11 @@ impl Fake {
     /// The lease key's time to live passes.
     fn lease_expires(&self) {
         self.net.lock().unwrap().lease_expires = true;
+    }
+
+    /// The lease key stands `lag` past the tracker's view of it.
+    fn lease_lags(&self, lag: Duration) {
+        self.net.lock().unwrap().lease_lag = lag;
     }
 
     fn expire_lease(&self) {
@@ -435,7 +443,7 @@ impl Broker for Fake {
         net.lease_versions += 1;
         let v = net.lease_versions;
         net.lease = Some((holder, v));
-        net.lease_until = Some(now + ttl);
+        net.lease_until = Some(now + ttl + net.lease_lag);
         Ok(Some(v))
     }
 
@@ -2334,4 +2342,70 @@ async fn a_lapsed_team_lease_is_not_taken_from_a_live_holder() {
     t.renew_lease().await;
     assert!(t.0.core.lock().await.fenced);
     assert!(unavailable(&*other.0.core.lock().await, other.lease_margin()).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lease_our_view_says_lapsed_is_renewed_while_felix_still_has_it() {
+    let ttl = Duration::from_secs(3);
+    let fake = Fake::default();
+    fake.lease_expires();
+    fake.lease_lags(Duration::from_millis(200));
+    let t = start_with(
+        &fake,
+        Settings {
+            lease_ttl: ttl,
+            ..settings()
+        },
+    )
+    .await;
+    // Past the tracker's view of the lease, inside Felix's.
+    tokio::time::advance(ttl + Duration::from_millis(100)).await;
+    t.renew_lease().await;
+    let core = t.0.core.lock().await;
+    assert!(!core.fenced);
+    assert!(unavailable(&core, t.lease_margin()).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retaken_team_lease_rebuilds_from_what_another_tracker_wrote() {
+    let ttl = Duration::from_secs(3);
+    let short = || Settings {
+        lease_ttl: ttl,
+        ..settings()
+    };
+    let fake = Fake::default();
+    fake.lease_expires();
+    let first = start_with(&fake, short()).await;
+    tokio::time::advance(Duration::from_secs(4)).await;
+    // Another tracker held the lease after the first's ran out, wrote, and stopped.
+    let second = Tracker::start(fake.reconnect(), short()).await.unwrap();
+    seed(&second, "a1", 2).await;
+    tokio::time::advance(Duration::from_secs(4)).await;
+    first.renew_lease().await;
+    assert_eq!(
+        claimed_id(&claim(&first, "w1").await).as_deref(),
+        Some("a1")
+    );
+}
+
+#[tokio::test]
+async fn an_append_on_a_state_that_may_miss_records_is_refused() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let before = fake.log().len();
+    let mut core = t.0.core.lock().await;
+    // A renewal retook the lease between two appends of one call.
+    core.stale = true;
+    let record = WorkRecord::Imported {
+        item: item("b1"),
+        source: "gh".into(),
+        upstream_id: "b1".into(),
+        title: "t".into(),
+    };
+    assert!(matches!(
+        t.append(&mut core, Actor::Person, key("gab"), record).await,
+        Err(Error::Unavailable(_))
+    ));
+    drop(core);
+    assert_eq!(fake.log().len(), before);
 }

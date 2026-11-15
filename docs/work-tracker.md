@@ -342,12 +342,15 @@ current claim.
 The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third
 of it, starting as soon as the team serves. Teams start one after another, so a
-team's lease can run out before it serves; the tracker then takes it again,
-unless another tracker took it meanwhile. A team whose tracker cannot renew answers 503 on its routes, stops
-renewing after ten seconds, and checks the lease before each append. The
-process exits when no team holds its lease; with one team, that is ten
-seconds after it lost it. This narrows the window in
-which a second tracker could write but does not close it: that needs an append
+team's lease can lapse (run out without a renewal) before it serves. The
+tracker then renews it by version if Felix still has its entry, and otherwise
+takes it again, unless another tracker took it meanwhile. After taking it
+again, the tracker rebuilds its state from the log before it writes, since the
+other tracker may have written. A team whose tracker cannot renew answers 503
+on its routes, stops renewing after ten seconds, and checks the lease before
+each append. The process exits when no team holds its lease; with one team,
+that is ten seconds after it lost it. This narrows the window in which a
+second tracker could write but does not close it: that needs an append
 conditioned on the lease key's version, which Felix does not offer yet
 (felix#1051).
 

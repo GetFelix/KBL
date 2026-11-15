@@ -883,31 +883,37 @@ impl<B: Broker> Tracker<B> {
         else {
             return;
         };
-        // Felix compares a version against the live entry, so a lease that ran
-        // out (the teams took long to start) is taken again, not renewed.
+        // Felix compares a version against the live entry. Our view of the lease
+        // starts before the request, so Felix's entry outlives it by up to a
+        // request's latency: renew by version first, even past our expiry, and
+        // take the lease again with Absent only once Felix's entry is gone.
         let expired = valid_until <= Instant::now();
-        let expect = (!expired).then_some(version);
+        let mut retaken = false;
         let started = Instant::now();
-        let put = self
+        let holder = self.0.holder.as_bytes().to_vec();
+        let ttl = self.0.settings.lease_ttl;
+        let mut put = self
             .io(
                 None,
-                self.0.broker.lease_put(
-                    self.0.holder.as_bytes().to_vec(),
-                    self.0.settings.lease_ttl,
-                    expect,
-                ),
+                self.0.broker.lease_put(holder.clone(), ttl, Some(version)),
             )
             .await;
+        if expired && matches!(put, Ok(None)) {
+            retaken = true;
+            put = self
+                .io(None, self.0.broker.lease_put(holder, ttl, None))
+                .await;
+        }
         let mut core = self.0.core.lock().await;
         match put {
             Ok(Some(version)) => {
                 core.lease = Some(LeaseHeld {
                     version,
-                    valid_until: started + self.0.settings.lease_ttl,
+                    valid_until: started + ttl,
                 });
                 core.fenced = false;
                 // Another tracker may have held it and written meanwhile.
-                if expired {
+                if retaken {
                     core.stale = true;
                 }
             }
@@ -1579,6 +1585,11 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<u64, Error> {
         if let Some(why) = unavailable(core, self.lease_margin()) {
             return Err(Error::Unavailable(why));
+        }
+        // A renewal between two appends of one call can retake the lease, and
+        // the state may then miss another tracker's records.
+        if core.stale {
+            return Err(Error::Unavailable("the state is being rebuilt".into()));
         }
         // A kind this build does not know decodes to `unknown`. Logging it
         // would put a record on the log that says nothing.
