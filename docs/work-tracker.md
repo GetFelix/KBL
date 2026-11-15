@@ -341,20 +341,29 @@ current claim.
 
 The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third
-of it. A team whose tracker cannot renew answers 503 on its routes, stops
-renewing after ten seconds, and checks the lease before each append. The
-process exits when no team holds its lease; with one team, that is ten
-seconds after it lost it.
+of it, starting as soon as the team serves. Teams start one after another, so a
+team's lease can lapse (run out without a renewal) before it serves. The
+tracker then renews its own entry if Felix still has it, and otherwise
+takes it again, unless another tracker took it meanwhile. After taking it
+again, the tracker rebuilds its state from the log before it writes, since the
+other tracker may have written. A team whose tracker cannot renew answers 503
+on its routes, stops renewing after ten seconds, and checks the lease before
+each append. The process exits when no team holds its lease; with one team,
+that is ten seconds after it lost it.
 
-The lease alone cannot stop a tracker that was paused past its lease and
-wakes up thinking it still holds it. Felix does: every append names the offset
-it expects to land at, the one after the last record this tracker read, and
-Felix refuses it if anything else was appended since. A refused team write
-answers 503 ("try again"); the tracker rebuilds its state from the log first,
-so the retry sees the other tracker's records. An org write reads the log
-again and retries by itself, up to three times. A new shard leader also moves
-the next offset forward when it starts, so the first write after a failover
-can be refused once.
+A tracker paused past its lease can wake up still believing it holds it, so
+the lease is not enough on its own. Every append also names the offset it
+expects to land at, the one after the last committed record this tracker read,
+and Felix refuses it if anything else was given that offset first. After a
+refusal the tracker writes nothing more until Felix renews its lease by
+version. If another tracker holds the lease, the renewal fails and the tracker
+stops writing. If the lease is still its own (a new shard leader moved the
+offset, say), it reads the log again and the write can go through. A refused
+team write answers 503 ("try again"). An org write checks the lease, reads the
+log and retries by itself, up to three times. The next offset always comes
+from a read of committed records, never from the refusal: the refusal's tail
+counts offsets given to records that are not committed yet, and writing past
+one would skip a record the tracker never read.
 
 The tracker keeps no Felix call under its main lock, and every call has a
 10 second limit, so one slow call stalls the agent that made it and nobody

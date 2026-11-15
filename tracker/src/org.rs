@@ -59,9 +59,15 @@ struct Core {
     lease: Option<Lease>,
     /// The state may not match the log; read it again before the next write.
     stale: bool,
-    /// The stream's next offset as Felix last named it in a refusal. It moves
-    /// past `at` when a new shard leader writes its generation-start record.
+    /// The offset after the last committed record read, skipped offsets
+    /// included (a new shard leader's generation start). Never taken from a
+    /// refusal, whose tail counts offsets claimed but not yet committed.
     tail: u64,
+    /// Counts conditional writes Felix refused. One past `confirmed` means
+    /// another tracker may hold the lease: no write until a renewal says not.
+    refusals: u64,
+    /// `refusals` as of the last renewal Felix granted by version.
+    confirmed: u64,
 }
 
 impl Core {
@@ -110,6 +116,8 @@ impl<B: Broker> Org<B> {
                 lease: None,
                 stale: true,
                 tail: 0,
+                refusals: 0,
+                confirmed: 0,
             }),
             view: RwLock::new(View {
                 state: OrgState::default(),
@@ -206,6 +214,9 @@ impl<B: Broker> Org<B> {
                 "this tracker does not hold the org writer lease".into(),
             ));
         }
+        if core.refusals > core.confirmed {
+            self.confirm_lease(&mut core).await?;
+        }
         if core.stale {
             self.refresh(&mut core)
                 .await
@@ -231,15 +242,18 @@ impl<B: Broker> Org<B> {
                     // Checked above against the same state, so this applies.
                     let _ = core.state.apply(&logged);
                     core.at = Some(offset);
+                    core.tail = offset + 1;
                     self.publish_view(&core);
                     return Ok((Applied::Changed, Some(offset)));
                 }
-                Ok(ConditionalWrite::Refused { tail }) => {
+                Ok(ConditionalWrite::Refused { .. }) => {
                     // Another writer got in, or a new shard leader moved the
-                    // tail: read up to it and check the record again.
+                    // tail. Only a renewal by version tells which: retrying on
+                    // a lost lease would land after the new holder's record.
                     core.stale = true;
-                    core.tail = core.tail.max(tail);
+                    core.refusals += 1;
                     self.publish_lease(&core);
+                    self.confirm_lease(&mut core).await?;
                     self.refresh(&mut core).await.map_err(|e| {
                         OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}"))
                     })?;
@@ -276,19 +290,47 @@ impl<B: Broker> Org<B> {
 
     /// Whether the lease is held after this renewal or retake.
     async fn renew(&self) -> bool {
-        // Felix compares a version against the live entry, so a lease that ran
-        // out (the teams took long to start) is taken again, not renewed.
-        let expect = self
+        let lease = self
             .core
             .lock()
             .await
             .lease
             .as_ref()
-            .filter(|l| l.valid_until > Instant::now())
-            .map(|l| l.version);
-        let Some(version) = expect else {
-            // Taking it back means another tracker may have written meanwhile.
-            return match self.take_lease().await {
+            .map(|l| (l.version, l.valid_until <= Instant::now()));
+        // Felix compares a version against the live entry. Our view of the lease
+        // starts before the request, so Felix's entry outlives it by up to a
+        // request's latency: renew by version first, even past our expiry, and
+        // take the lease again only once Felix's entry is gone.
+        let renewed = match lease {
+            Some((version, expired)) => Some((expired, self.renew_by(version).await)),
+            None => None,
+        };
+        match renewed {
+            Some((_, Ok(true))) => true,
+            Some((false, Ok(false))) => {
+                let mut core = self.core.lock().await;
+                // A write's lease check may have renewed it meanwhile.
+                if core.lease.as_ref().map(|l| l.version) != lease.map(|(v, _)| v) {
+                    return core.lease.is_some();
+                }
+                eprintln!("kbl-tracker: another tracker took the org writer lease");
+                core.lease = None;
+                self.publish_lease(&core);
+                false
+            }
+            // A blip: the lease stands until its own expiry passes.
+            Some((_, Err(e))) => {
+                eprintln!("kbl-tracker: could not renew the org writer lease: {e:#}");
+                self.core
+                    .lock()
+                    .await
+                    .lease
+                    .as_ref()
+                    .is_some_and(|l| l.valid_until > Instant::now())
+            }
+            // Lost or lapsed. Taking it back means another tracker may have
+            // written meanwhile.
+            None | Some((true, Ok(false))) => match self.take_lease().await {
                 Ok(true) => true,
                 Ok(false) => {
                     eprintln!("kbl-tracker: another tracker took the org writer lease");
@@ -298,7 +340,19 @@ impl<B: Broker> Org<B> {
                     eprintln!("kbl-tracker: could not take the org writer lease: {e:#}");
                     false
                 }
-            };
+            },
+        }
+    }
+
+    /// Renews the lease by version, with the core lock held, so no write goes
+    /// out until Felix says this tracker still holds it. A refusal leaves the
+    /// lease to `maintain`: it may be a concurrent renewal that bumped the
+    /// version, and writes stay refused until a renewal confirms it.
+    async fn confirm_lease(&self, core: &mut Core) -> Result<(), OrgError> {
+        let Some(version) = core.lease.as_ref().map(|l| l.version) else {
+            return Err(OrgError::Unavailable(
+                "this tracker does not hold the org writer lease".into(),
+            ));
         };
         let started = Instant::now();
         let put = timed(self.broker.lease_put(
@@ -306,37 +360,50 @@ impl<B: Broker> Org<B> {
             self.lease_ttl,
             Some(version),
         ))
-        .await;
+        .await
+        .map_err(|e| OrgError::Unavailable(format!("checking the org writer lease: {e:#}")))?;
+        let Some(version) = put else {
+            return Err(OrgError::Unavailable(
+                "another tracker may hold the org writer lease".into(),
+            ));
+        };
+        core.lease = Some(Lease {
+            version,
+            valid_until: started + self.lease_ttl,
+        });
+        core.confirmed = core.refusals;
+        Ok(())
+    }
+
+    /// Renews the lease by `version`. False when Felix no longer has it.
+    async fn renew_by(&self, version: u64) -> Result<bool> {
+        let refusals = self.core.lock().await.refusals;
+        let started = Instant::now();
+        let put = timed(self.broker.lease_put(
+            self.holder.as_bytes().to_vec(),
+            self.lease_ttl,
+            Some(version),
+        ))
+        .await?;
+        let Some(version) = put else {
+            return Ok(false);
+        };
         let mut core = self.core.lock().await;
-        match put {
-            Ok(Some(version)) => {
-                core.lease = Some(Lease {
-                    version,
-                    valid_until: started + self.lease_ttl,
-                });
-                if core.stale {
-                    self.refresh_or_log(&mut core).await;
-                }
-                self.publish_lease(&core);
-                true
-            }
-            Ok(None) => {
-                eprintln!("kbl-tracker: another tracker took the org writer lease");
-                core.lease = None;
-                self.publish_lease(&core);
-                false
-            }
-            // A blip: the lease stands until its own expiry passes.
-            Err(e) => {
-                eprintln!("kbl-tracker: could not renew the org writer lease: {e:#}");
-                core.lease
-                    .as_ref()
-                    .is_some_and(|l| l.valid_until > Instant::now())
-            }
+        core.lease = Some(Lease {
+            version,
+            valid_until: started + self.lease_ttl,
+        });
+        // Sent after those refusals, so Felix answered for them.
+        core.confirmed = core.confirmed.max(refusals);
+        if core.stale {
+            self.refresh_or_log(&mut core).await;
         }
+        self.publish_lease(&core);
+        Ok(true)
     }
 
     async fn take_lease(&self) -> Result<bool> {
+        let refusals = self.core.lock().await.refusals;
         let started = Instant::now();
         let put = timed(self.broker.lease_put(
             self.holder.as_bytes().to_vec(),
@@ -353,6 +420,7 @@ impl<B: Broker> Org<B> {
                     version,
                     valid_until: started + self.lease_ttl,
                 });
+                core.confirmed = core.confirmed.max(refusals);
                 core.stale = true;
                 self.refresh_or_log(&mut core).await;
                 true
@@ -369,20 +437,23 @@ impl<B: Broker> Org<B> {
     }
 
     async fn refresh(&self, core: &mut Core) -> Result<()> {
-        let (state, at) = self.read().await?;
+        let (state, at, tail) = self.read().await?;
         core.state = state;
         core.at = at;
+        // Assigned, not raised: a shard failover can lower the tip.
+        core.tail = tail;
         core.stale = false;
         self.publish_view(core);
         Ok(())
     }
 
-    /// The fold of the whole log. A record of a newer format stops the read:
+    /// The fold of the whole log, and its committed tip. A record of a newer format stops the read:
     /// folding past it would give tables its writer did not mean.
-    async fn read(&self) -> Result<(OrgState, Option<u64>)> {
+    async fn read(&self) -> Result<(OrgState, Option<u64>, u64)> {
         let mut state = OrgState::default();
         let mut at = None;
-        for (offset, payload) in timed(self.broker.read_from(ORG_EVENTS, 0)).await? {
+        let (records, tail) = timed(self.broker.read_to_tip(ORG_EVENTS, 0)).await?;
+        for (offset, payload) in records {
             at = Some(offset);
             match read(&payload) {
                 Ok(logged) => {
@@ -394,7 +465,7 @@ impl<B: Broker> Org<B> {
                 Err(e) => eprintln!("kbl-tracker: {ORG_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
-        Ok((state, at))
+        Ok((state, at, tail))
     }
 }
 

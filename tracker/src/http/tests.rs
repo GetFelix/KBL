@@ -28,10 +28,16 @@ struct Quiet {
     /// A renewal by version is refused once the lease has run out, as Felix does.
     lease_expires: Arc<AtomicBool>,
     lease_until: Arc<StdMutex<Option<tokio::time::Instant>>>,
+    /// How much longer than its time to live the entry stands: Felix starts it
+    /// when the request lands, after the tracker started its own clock.
+    lease_lag: Arc<StdMutex<Duration>>,
     /// Bumped on every grant, as Felix does.
     lease_version: Arc<std::sync::atomic::AtomicU64>,
     /// A conditional publish is refused unless it names the next offset.
     fences: Arc<AtomicBool>,
+    /// Offsets another writer was given whose records are not committed yet:
+    /// Felix's tail counts them, reads do not show them.
+    in_flight: Arc<std::sync::atomic::AtomicU64>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
@@ -61,7 +67,8 @@ impl Broker for Quiet {
         payload: Vec<u8>,
         expected: u64,
     ) -> anyhow::Result<ConditionalWrite> {
-        let tail = self.published.lock().unwrap().len() as u64;
+        let tail =
+            self.published.lock().unwrap().len() as u64 + self.in_flight.load(Ordering::SeqCst);
         if self.fences.load(Ordering::SeqCst) && expected != tail {
             return Ok(ConditionalWrite::Refused { tail });
         }
@@ -115,7 +122,11 @@ impl Broker for Quiet {
         if self.lease_lost.load(Ordering::SeqCst) {
             return Ok(None);
         }
-        *until = Some(now + ttl);
+        // Felix refuses a version that is not the live entry's.
+        if expect.is_some_and(|v| v != self.lease_version.load(Ordering::SeqCst)) {
+            return Ok(None);
+        }
+        *until = Some(now + ttl + *self.lease_lag.lock().unwrap());
         Ok(Some(self.lease_version.fetch_add(1, Ordering::SeqCst) + 1))
     }
     async fn forget(&self, _: Option<&str>) {}

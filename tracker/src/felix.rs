@@ -65,6 +65,9 @@ pub(crate) enum ExtendError {
 /// One page of a stream, and the offset after it (none at the tip).
 pub(crate) type Page = (Vec<(u64, Vec<u8>)>, Option<u64>);
 
+/// Records read, and the committed tip after them.
+pub(crate) type ToTip = (Vec<(u64, Vec<u8>)>, u64);
+
 /// What the claim path needs from Felix, so its rules can be tested without a
 /// broker. Every stream has one shard.
 pub(crate) trait Broker: Clone + Send + Sync + 'static {
@@ -88,6 +91,18 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         stream: &str,
         from: u64,
     ) -> impl Future<Output = Result<Vec<(u64, Vec<u8>)>>> + Send;
+
+    /// Every committed record from `from`, and the offset after the last
+    /// committed one. That tip can pass the last record read: offsets that
+    /// hold no record, like a shard leader's generation start, are skipped.
+    /// It never counts an offset claimed but not yet committed.
+    fn read_to_tip(&self, stream: &str, from: u64) -> impl Future<Output = Result<ToTip>> + Send {
+        async move {
+            let records = self.read_from(stream, from).await?;
+            let tip = records.last().map_or(from, |(o, _)| o + 1);
+            Ok((records, tip))
+        }
+    }
 
     /// One page of committed records from `from`, oldest first, and the
     /// offset to read next, or none at the tip. A caller that stops early
@@ -478,18 +493,26 @@ impl Broker for Felix {
     }
 
     async fn read_from(&self, stream: &str, from: u64) -> Result<Vec<(u64, Vec<u8>)>> {
+        Ok(self.read_to_tip(stream, from).await?.0)
+    }
+
+    async fn read_to_tip(&self, stream: &str, from: u64) -> Result<ToTip> {
         let done = async {
             let client = self.main().await?;
             let mut out = Vec::new();
             let mut from = from;
             loop {
-                let page = placed(|| {
+                let page = match placed(|| {
                     client.read(self.tenant(), self.namespace(), stream, 0, from, None, 0)
                 })
                 .await
-                .with_context(|| format!("read {stream} from offset {from}"))?;
+                {
+                    Ok(page) => page,
+                    Err(e) if past_the_tail(&e) => return Ok((out, from)),
+                    Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+                };
                 if page.records.is_empty() {
-                    return Ok(out);
+                    return Ok((out, from.max(page.next_offset)));
                 }
                 out.extend(
                     page.records

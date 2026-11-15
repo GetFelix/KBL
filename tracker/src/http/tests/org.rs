@@ -8,7 +8,7 @@ use kbl_core::org_fold::Applied;
 use kbl_core::work::WORK_EVENTS;
 
 use super::*;
-use crate::org::Org;
+use crate::org::{Org, OrgError};
 use crate::teams::{OrgSide, Starter};
 
 /// A tracker with teams on: `default` adopted, `tok-ops` its org admin and
@@ -718,29 +718,83 @@ async fn the_org_lease_is_renewed_as_soon_as_serving_starts() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_stale_org_writer_cannot_append_past_a_newer_ones_record() {
+async fn an_org_lease_our_view_says_lapsed_is_renewed_while_felix_still_has_it() {
+    let ttl = Duration::from_secs(3);
+    let broker = Quiet::default();
+    broker.lease_expires.store(true, Ordering::SeqCst);
+    *broker.lease_lag.lock().unwrap() = Duration::from_millis(200);
+    let org = Arc::new(Org::start(broker, ttl, Duration::ZERO).await.unwrap());
+    // Past the tracker's view of the lease, inside Felix's.
+    tokio::time::advance(ttl + Duration::from_millis(100)).await;
+    let renewing = org.clone();
+    let maintain = tokio::spawn(async move { renewing.maintain().await });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(org.writable(), "the retake was refused by our own entry");
+    maintain.abort();
+}
+
+fn team_created(team: &str) -> OrgRecord {
+    OrgRecord::TeamCreated {
+        team: name(team),
+        display_name: None,
+        adopted: false,
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_org_writer_stays_out_after_felix_refuses_it() {
     let broker = Quiet::default();
     broker.keeps.store(true, Ordering::SeqCst);
     broker.fences.store(true, Ordering::SeqCst);
     let stale = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
         .await
         .unwrap();
-    let alpha = || OrgRecord::TeamCreated {
-        team: name("alpha"),
-        display_name: None,
-        adopted: false,
-    };
-    // While this tracker was paused, another took the lease and created alpha.
-    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), alpha());
+    // While this tracker was paused, another took the lease and created beta.
+    broker.lease_lost.store(true, Ordering::SeqCst);
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
     broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
-    let (applied, offset) = stale
-        .append(Key::new("ops").unwrap(), alpha())
-        .await
-        .unwrap();
-    assert_eq!((applied, offset), (Applied::Unchanged, None));
+    // Alpha is still new after a reread, so only the lease check stops it.
+    for _ in 0..2 {
+        assert!(matches!(
+            stale
+                .append(Key::new("ops").unwrap(), team_created("alpha"))
+                .await,
+            Err(OrgError::Unavailable(_))
+        ));
+    }
     assert_eq!(
         broker.log.lock().unwrap().len(),
         1,
-        "alpha was created twice"
+        "a tracker without the lease appended after the new holder's record"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_org_retry_does_not_skip_another_writers_record_in_flight() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.fences.store(true, Ordering::SeqCst);
+    let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    // Offset 0 is given out to a record that has not committed.
+    broker.in_flight.store(1, Ordering::SeqCst);
+    assert!(matches!(
+        org.append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await,
+        Err(OrgError::Unavailable(_))
+    ));
+    assert!(
+        broker.log.lock().unwrap().is_empty(),
+        "alpha skipped the offset in flight"
+    );
+    // It commits, and the next write lands after it.
+    broker.in_flight.store(0, Ordering::SeqCst);
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
+    let (applied, offset) = org
+        .append(Key::new("ops").unwrap(), team_created("alpha"))
+        .await
+        .unwrap();
+    assert_eq!((applied, offset), (Applied::Changed, Some(1)));
 }
