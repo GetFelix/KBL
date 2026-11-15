@@ -1569,6 +1569,9 @@ impl<B: Broker> Tracker<B> {
         // Every route (agent, person, ingest) ends here, so one check bounds them all.
         tools::check_sizes(&record)?;
         canonical_pr(&core.state, &mut record);
+        if actor == Actor::Agent {
+            kbl_core::redact::redact_record(&mut record);
+        }
         let logged = WorkLogged::new(now_ms(), by, actor, record);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied. It can skip (generation starts), which the check below catches.

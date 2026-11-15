@@ -513,6 +513,64 @@ async fn a_decision_needs_phase_so_far_why_and_commit_and_cannot_cite_the_future
 }
 
 #[tokio::test]
+async fn secrets_in_what_an_agent_reports_are_redacted_before_the_write() {
+    let (fake, t) = held().await;
+    let (a, a1) = (agent("w1"), item("a1"));
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "x".repeat(36));
+    let mut d = decide_args();
+    d.so_far = format!("the token {secret} is in the env");
+    let decided = t.decide(&a, &a1, d).await.unwrap();
+    let WorkRecord::Decision { so_far, .. } = fake.log().pop().unwrap().record else {
+        panic!("not a decision")
+    };
+    assert_eq!(so_far, "the token [redacted] is in the env");
+    t.record_step(&a, &a1, "env".into(), 0, text(&format!("GH={secret}")))
+        .await
+        .unwrap();
+    let WorkRecord::Step { output, .. } = fake.log().pop().unwrap().record else {
+        panic!("not a step")
+    };
+    assert_eq!(output, text("GH=[redacted]"));
+    let at = decided["offset"].as_u64().unwrap();
+    t.edit(&a, &a1, "x.rs".into(), text(&format!("+{secret}")), at)
+        .await
+        .unwrap();
+    let WorkRecord::Edit { hunk, .. } = fake.log().pop().unwrap().record else {
+        panic!("not an edit")
+    };
+    assert_eq!(hunk, text("+[redacted]"));
+}
+
+#[tokio::test]
+async fn a_token_in_a_persons_answer_is_cut_before_the_write() {
+    let (fake, t) = held().await;
+    let (a, a1) = (agent("w1"), item("a1"));
+    let q = t
+        .ask(&a, &a1, text("which key?"), vec![], None, 0)
+        .await
+        .unwrap()["offset"]
+        .as_u64()
+        .unwrap();
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "y".repeat(36));
+    t.person_answer(
+        key("gab"),
+        &a1,
+        Some(q),
+        text(&format!("use {secret}")),
+        vec![],
+        Reply::default(),
+    )
+    .await
+    .unwrap();
+    let WorkRecord::Answer { text: said, .. } = fake.log().pop().unwrap().record else {
+        panic!("not an answer")
+    };
+    assert_eq!(said, text("use [redacted]"));
+}
+
+#[tokio::test]
 async fn evidence_must_cite_a_record_of_the_same_tree() {
     let (fake, t) = held().await;
     let a = agent("w1");

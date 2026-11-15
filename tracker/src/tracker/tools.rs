@@ -11,6 +11,7 @@
 use kbl_core::artifact::{ArtifactId, INLINE_LIMIT};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::redact::redact;
 use kbl_core::work::{
     Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FindingVerdict, MAX_ASK_OPTION_LEN,
     MAX_ASK_OPTIONS, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO,
@@ -699,6 +700,8 @@ impl<B: Broker> Tracker<B> {
             split,
         } = answer;
         bounded("why", &why, MAX_FIELD)?;
+        // Compared with the standing answer, which was stored redacted.
+        let why = redact(&why).into_owned();
         triage_lists(&depends_on, &split)?;
         self.begin().await?;
         let reply = {
@@ -880,18 +883,17 @@ impl<B: Broker> Tracker<B> {
             Some((target, title)) => Then::Prerequisite { target, title },
             None => Then::Resume,
         };
-        self.person_record(
-            person,
-            WorkRecord::Answer {
-                item: item.clone(),
-                question,
-                text,
-                evidence,
-                chosen,
-                then: Some(then),
-            },
-        )
-        .await
+        let mut record = WorkRecord::Answer {
+            item: item.clone(),
+            question,
+            text,
+            evidence,
+            chosen,
+            then: Some(then),
+        };
+        // People paste tokens too. `chosen` is cut the same way the options were.
+        kbl_core::redact::redact_record(&mut record);
+        self.person_record(person, record).await
     }
 
     /// Writes a record that names the attempt the agent is on, found from the log.

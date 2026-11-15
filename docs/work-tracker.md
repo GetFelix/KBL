@@ -256,6 +256,20 @@ Text in a record stays inline up to 4 KiB. Longer text is an artifact the
 caller stored first and names by its hash; `kbl-mcp` does that for the
 agent, and the tracker refuses long inline text.
 
+**Secrets are cut out.** Tool output and diffs can carry a token the agent
+read from its environment. Before any record an agent writes reaches the log,
+the tracker replaces anything in its free text shaped like a known secret with
+`[redacted]`: GitHub, GitLab, Slack, Google, npm and Stripe tokens, model
+provider keys, AWS access key IDs, JWTs, `Bearer` and `Basic` credentials,
+`token=` and `access_token=` values, the user and password in a URL, and a PEM
+private key block. A person's note gets the same treatment, since people paste
+tokens too. `kbl-mcp` does the same before it stores long text as an artifact,
+a task's result, or a task's title or release reason. A secret with no
+recognisable shape is not caught: an AWS secret access key is 40 characters
+with no prefix, and so are many passwords. The match can also cut a name that
+looks enough like a token, such as a branch `xoxb-2-RotateTokensV2x`. An
+agent's grants should not include secrets it does not need.
+
 The dashboard's actions are routes with a person's token. Each appends one
 record if the fold accepts it:
 
@@ -266,6 +280,7 @@ record if the fold accepts it:
 | `POST /v1/work/proposals/reject` `{item}` | `rejected`, for an item nobody has accepted |
 | `POST /v1/work/questions/answer` `{item, text?, chosen?, moves_to?, question?, evidence?}` | `answer`. The question defaults to the open one. `moves_to` is `{source, repo, title}` |
 | `POST /v1/work/tier` `{item, tier}` | `tier_changed`. A ready item is published again on its new tier |
+| `POST /v1/work/note` `{item, text, attempt?, input?}` (`text` is `{"text": ...}`) | `human_input`: a note, a review comment, an answer or a priority change, with the person who wrote it. `input` is `note` (the default), `review_comment`, `answer` or `priority_change`; it only labels the note, and a tier changes through `/v1/work/tier`. `attempt` ties it to one attempt; without it the note is on the item. A redo names one of these as its note. Known secret shapes in `text` are replaced with `[redacted]` |
 | `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |

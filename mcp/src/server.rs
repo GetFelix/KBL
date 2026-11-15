@@ -655,10 +655,10 @@ impl Server {
     }
 
     #[tool(
-        description = "Record a decision before you act on it: the phase, what you know so far, what you chose and why, and the commit you stand on. A person can fork a redo from it. Answers with the decision's offset, which an edit cites."
+        description = "Record a decision before you act on it: the phase, what you know so far, what you chose and why, and the commit you stand on. Commit your work first: a person can fork a redo from this decision, and it starts from that commit. Answers with the decision's offset, which an edit cites."
     )]
     async fn decide(&self, Parameters(a): Parameters<DecideArgs>) -> Result<String, String> {
-        check_phase(&a.phase)?;
+        check_decision(&a.phase, &a.so_far, &a.why, &a.commit)?;
         let item = self.item_or_held(a.item).await?;
         let evidence = serde_json::to_value(a.evidence.unwrap_or_default()).unwrap_or(Value::Null);
         let reply = self
@@ -814,6 +814,26 @@ fn check_phase(phase: &str) -> Result<(), String> {
             PHASES.join(", ")
         ))
     }
+}
+
+/// A redo starts from a decision's `so_far` and `commit`, so neither may be blank.
+/// A blank `so_far` or `commit` is refused with the tracker's own
+/// `refused: missing_field`, so callers see one answer whichever side checks.
+fn check_decision(phase: &str, so_far: &str, why: &str, commit: &str) -> Result<(), String> {
+    check_phase(phase)?;
+    if so_far.trim().is_empty() {
+        return Err("refused: missing_field: so_far is needed".into());
+    }
+    if why.trim().is_empty() {
+        return Err("why is needed".into());
+    }
+    if commit.trim().is_empty() {
+        return Err(
+            "refused: missing_field: commit is needed; commit your work first, a redo starts from it"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn check_one_of(name: &str, value: &str, allowed: &[&str]) -> Result<(), String> {

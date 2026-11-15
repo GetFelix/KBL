@@ -8,6 +8,7 @@
 //! The count lives in this process: if the failed write was its last, nothing
 //! reports the gap.
 
+use std::borrow::Cow;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -17,6 +18,7 @@ use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, Key, Resources, TaskId, WORKERS_GROUP};
 use kbl_core::record::{ClaimLostCause, Logged, Record};
+use kbl_core::redact::redact;
 use kbl_core::stored::TaskResult;
 use kbl_core::task::{self, Task, TaskReadError};
 use serde_json::{Value, json};
@@ -115,7 +117,8 @@ impl<B: Backend> Tasks<B> {
         }))
     }
 
-    pub(crate) async fn post(&self, post: Post) -> Result<String, String> {
+    pub(crate) async fn post(&self, mut post: Post) -> Result<String, String> {
+        post.title = redacted(post.title);
         let given = post.id.is_some();
         let id = match post.id {
             Some(id) => TaskId::new(id),
@@ -336,7 +339,7 @@ impl<B: Backend> Tasks<B> {
         // only the first write lands. The delivery is no longer ours to ack.
         let claim_lost = h.health.lock().expect("health lock").lost;
         let (id, offset, attempt) = (h.task.id.clone(), h.record.offset, h.attempt);
-        let artifact = self.store(result.into_bytes()).await?;
+        let artifact = self.store(redacted(result).into_bytes()).await?;
         let value = TaskResult {
             attempt,
             agent: self.0.agent.clone(),
@@ -437,7 +440,7 @@ impl<B: Backend> Tasks<B> {
             task: h.task.id.clone(),
             offset: h.record.offset,
             attempt: h.attempt,
-            reason,
+            reason: reason.map(redacted),
         })
         .await;
         Ok(with_warning(
@@ -469,7 +472,7 @@ impl<B: Backend> Tasks<B> {
             task: h.task.id.clone(),
             offset: h.record.offset,
             attempt: h.attempt,
-            reason,
+            reason: redacted(reason),
         })
         .await;
         Ok(with_warning(
@@ -502,8 +505,10 @@ impl<B: Backend> Tasks<B> {
     }
 
     /// Short text stays inline; longer text becomes an artifact.
+    /// Redacted here as well as by the tracker: long text becomes an
+    /// artifact before the tracker sees it.
     pub(crate) async fn content(&self, text: String) -> Result<Content, String> {
-        let (content, stored) = Content::from_text(text);
+        let (content, stored) = Content::from_text(redacted(text));
         if let Some((_, bytes)) = stored {
             self.store(bytes).await?;
         }
@@ -587,7 +592,8 @@ impl<B: Backend> Tasks<B> {
             op: op.into(),
             resource: resource.into(),
             key: key.map(str::to_owned),
-            error: format!("{error:#}"),
+            // Felix and decode errors can quote what an agent sent.
+            error: redacted(format!("{error:#}")),
         })
         .await;
     }
@@ -624,7 +630,7 @@ impl<B: Backend> Tasks<B> {
         eprintln!("kbl-mcp: could not write to the run log: {error:#}");
         let mut gap = self.0.unlogged.lock().expect("unlogged lock");
         let total = gap.as_ref().map_or(0, |(n, _)| *n) + count;
-        *gap = Some((total, format!("{error:#}")));
+        *gap = Some((total, redacted(format!("{error:#}"))));
     }
 }
 
@@ -651,6 +657,15 @@ fn lost(held: &mut Option<Held>) -> Option<String> {
          use task_claim for new work",
         h.task.id
     ))
+}
+
+/// `text` with known secrets cut. Everything an agent hands this server is
+/// stored or logged where other agents and people read it.
+fn redacted(text: String) -> String {
+    match redact(&text) {
+        Cow::Borrowed(_) => text,
+        Cow::Owned(r) => r,
+    }
 }
 
 fn with_warning(mut reply: Value, warning: Option<&str>) -> String {

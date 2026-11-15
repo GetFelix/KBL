@@ -245,6 +245,47 @@ async fn only_a_person_token_appends_records() {
 }
 
 #[tokio::test]
+async fn a_persons_note_is_a_human_input() {
+    let app = app().await;
+    let imported = json!({ "record": { "kind": "imported", "item": "a1", "source": "gh", "upstream_id": "1", "title": "t" } });
+    call(&app, "/v1/work/records", Some("tok-gab"), imported).await;
+    let note = json!({ "item": "a1", "input": "review_comment", "text": { "text": "why not the client?" } });
+    let (status, reply) = call(&app, "/v1/work/note", Some("tok-gab"), note).await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("human_input"))
+    );
+    // A note on an item that does not exist is refused by the fold.
+    let missing = json!({ "item": "zz", "text": { "text": "x" } });
+    let (status, _) = call(&app, "/v1/work/note", Some("tok-gab"), missing).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_token_pasted_in_a_note_is_cut_before_the_write() {
+    let felix = Quiet::default();
+    felix.keeps.store(true, Ordering::SeqCst);
+    let tokens = r#"{"agents":{},"people":{"tok-gab":"gab"},"ingest":{}}"#;
+    let one = team("default", felix.clone(), tokens, 64).await;
+    let app = router(Arc::new(Teams::new(vec![one]).unwrap()));
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "n".repeat(36));
+    let note = json!({ "item": "a1", "text": { "text": format!("use {secret}") } });
+    let (status, _) = call(&app, "/v1/work/note", Some("tok-gab"), note).await;
+    assert_eq!(status, StatusCode::OK);
+    let log: Vec<String> = felix
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, p)| String::from_utf8_lossy(p).into_owned())
+        .collect();
+    assert!(log.iter().any(|p| p.contains("use [redacted]")), "{log:?}");
+    assert!(!log.iter().any(|p| p.contains(&secret)));
+}
+
+#[tokio::test]
 async fn a_lost_claim_is_a_conflict_with_a_reason() {
     let app = app().await;
     let (status, reply) = call(
@@ -349,6 +390,10 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
             json!({ "item": "a1", "text": { "text": "x" } }),
         ),
         ("/v1/work/tier", json!({ "item": "a1", "tier": 1 })),
+        (
+            "/v1/work/note",
+            json!({ "item": "a1", "text": { "text": "x" } }),
+        ),
         ("/v1/work/close", json!({ "item": "a1" })),
         ("/v1/work/unlink", json!({ "item": "a1", "to": "a2" })),
         (
