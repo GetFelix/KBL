@@ -10,8 +10,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use felix_client::{
-    AckMode, BrokerError, CacheCondition, Client, ClientConfig, ErrorCode, GroupMember,
-    GroupPollOptions, GroupRecord, StartPosition, quic_client_config, root_store_from_pem_file,
+    AckMode, BrokerError, CacheCondition, Client, ClientConfig, CursorErrorReason, ErrorCode,
+    GroupMember, GroupPollOptions, GroupRecord, StartPosition, SubscribeCursorError,
+    quic_client_config, root_store_from_pem_file,
 };
 use kbl_core::org::{ORG_EVENTS, ORG_TRACKER_CACHE};
 use kbl_core::work::{LANES, READY_GROUP, WORK_EVENTS, ready_stream};
@@ -472,10 +473,17 @@ impl Broker for Felix {
     async fn read_page(&self, stream: &str, from: u64) -> Result<Page> {
         let done = async {
             let client = self.main().await?;
-            let page =
-                placed(|| client.read(self.tenant(), self.namespace(), stream, 0, from, None, 0))
-                    .await
-                    .with_context(|| format!("read {stream} from offset {from}"))?;
+            let page = match placed(|| {
+                client.read(self.tenant(), self.namespace(), stream, 0, from, None, 0)
+            })
+            .await
+            {
+                Ok(page) => page,
+                // Felix refuses an offset past its tail; nothing is there yet,
+                // and the connection is fine.
+                Err(e) if past_the_tail(&e) => return Ok((Vec::new(), None)),
+                Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+            };
             if page.records.is_empty() {
                 return Ok((Vec::new(), None));
             }
@@ -712,6 +720,12 @@ where
     }
 }
 
+/// Whether Felix refused a read because the offset is past the stream's tail.
+fn past_the_tail(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<SubscribeCursorError>()
+        .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
+}
+
 fn is_not_ready(err: &anyhow::Error) -> bool {
     let text = format!("{err:#}");
     NOT_READY.iter().any(|marker| text.contains(marker))
@@ -736,3 +750,6 @@ fn string(body: &Value, field: &str) -> Result<String> {
         .map(str::to_owned)
         .with_context(|| format!("the reply has no `{field}`"))
 }
+
+#[cfg(test)]
+mod tests;

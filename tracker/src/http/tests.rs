@@ -371,6 +371,20 @@ async fn a_person_reads_items_one_item_and_its_history() {
     .await;
     assert_eq!(later["records"].as_array().unwrap().len(), 3);
 
+    // The team form serves the same answers: the outer route's params must
+    // not reach the inner route's `Path`.
+    for (short, long) in [
+        ("/v1/work/items/a1", "/v1/teams/default/work/items/a1"),
+        (
+            "/v1/work/items/a1/history",
+            "/v1/teams/default/work/items/a1/history",
+        ),
+    ] {
+        let (status, in_team) = get_json(&app, long, Some("tok-gab")).await;
+        assert_eq!(status, StatusCode::OK, "{long}: {in_team}");
+        assert_eq!(in_team, get_json(&app, short, Some("tok-gab")).await.1);
+    }
+
     let (status, missing) = get_json(&app, "/v1/work/items/zz/history", Some("tok-gab")).await;
     assert_eq!(
         (status, missing["why"].as_str()),

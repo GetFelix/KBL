@@ -113,7 +113,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
 /// work and ingest routes have a team form; the agent routes exist only here.
-async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, mut req: Request) -> Response {
+async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, req: Request) -> Response {
     // The raw path, so a percent-encoded segment reaches the inner route as sent.
     let path = req.uri().path().to_owned();
     let Some((team, rest)) = path
@@ -136,8 +136,17 @@ async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, mut req: Request) ->
     let Ok(uri) = target.parse::<Uri>() else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    req.extensions_mut().insert(TeamPath(team.to_owned()));
+    // A fresh request: the outer route's `team` and `rest` params sit in the
+    // extensions, and axum adds the inner route's to them, so a `Path` there
+    // would see three.
+    let team = TeamPath(team.to_owned());
+    let (parts, body) = req.into_parts();
+    let mut req = Request::new(body);
+    *req.method_mut() = parts.method;
     *req.uri_mut() = uri;
+    *req.version_mut() = parts.version;
+    *req.headers_mut() = parts.headers;
+    req.extensions_mut().insert(team);
     match work.oneshot(req).await {
         Ok(res) => res,
         Err(never) => match never {},

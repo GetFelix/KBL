@@ -52,7 +52,7 @@ Two more parties are outside KBL and can still steer it:
 ## Trust boundaries
 
 1. **Agent to tracker.** The bearer token names the caller
-   (`tracker/src/http.rs:158`). The name and role on a record come from the
+   (`tracker/src/http.rs:167`). The name and role on a record come from the
    token, never from the body (`tracker/src/tracker.rs:1289`). The attempt
    number comes from the hold, never from the body
    (`tracker/src/tracker/tools.rs:1022`, `tracker/src/tracker.rs:1287`).
@@ -92,7 +92,7 @@ Every route but `/healthz` needs a bearer token. A wrong kind of token gets
 
 ### Agent routes
 
-All of them need an agent token (`tracker/src/http.rs:218`).
+All of them need an agent token (`tracker/src/http.rs:227`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
@@ -114,12 +114,12 @@ All of them need an agent token (`tracker/src/http.rs:218`).
 | `/v1/work/step` | `command`, `exit_code`, `output` | Claim a command passed | Holder only (`core/src/work_fold.rs:1656`). Sizes (`tracker/src/tracker/tools.rs:1235`). 500 per attempt (`core/src/work_fold.rs:1658`). A step is the agent's word. Check results come from ingest, never from steps |
 | `/v1/work/edit` | `file`, `hunk`, `decision` | Tie an edit to another attempt's decision | Holder only (`core/src/work_fold.rs:1669`). The decision is one of this attempt's (`core/src/work_fold.rs:1671`). Sizes (`tracker/src/tracker/tools.rs:1236`). 500 per attempt (`core/src/work_fold.rs:1674`) |
 | `/v1/work/ask` | `text`, `options`, `default`, `cost_micros` | Flood Needs you; report no cost | Holder only (`core/src/work_fold.rs:1532`). At most 8 options of 200 bytes (`tracker/src/tracker/tools.rs:1045`). 20 per attempt (`core/src/work_fold.rs:1535`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:700`); a report above it is the agent's word; the item total saturates (`core/src/work_fold.rs:1484`) |
-| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:751`) and the fold refuses it from an agent (`core/src/work_fold.rs:2614`). Must hold a question item under `item` (`core/src/work_fold.rs:2762`). Only the open question (`core/src/work_fold.rs:1561`). `chosen` is one of the options (`core/src/work_fold.rs:1569`). 10 per attempt (`core/src/work_fold.rs:1577`). The resume item obeys the depth limit (`core/src/work_fold.rs:2605`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:249`) |
+| `/v1/work/answer` | `item`, `question`, `text`, `chosen`, `evidence`, `moves_to` | Answer a question nobody asked it; move work to another repo | `moves_to` is refused (`tracker/src/http.rs:760`) and the fold refuses it from an agent (`core/src/work_fold.rs:2614`). Must hold a question item under `item` (`core/src/work_fold.rs:2762`). Only the open question (`core/src/work_fold.rs:1561`). `chosen` is one of the options (`core/src/work_fold.rs:1569`). 10 per attempt (`core/src/work_fold.rs:1577`). The resume item obeys the depth limit (`core/src/work_fold.rs:2605`). Evidence target: a `work.events` record of the same tree, or the record its context entry says made the item; another stream is refused (`tracker/src/tracker.rs:249`) |
 | `/v1/work/rules/read` | `item` | Read rules of work it does not hold | Holder only (`tracker/src/tracker/tools.rs:517`) |
 
 ### Person routes
 
-All of them need a person token (`tracker/src/http.rs:227`). An agent or
+All of them need a person token (`tracker/src/http.rs:236`). An agent or
 ingest token gets 403. The fold then checks the record, and sizes are checked
 in `check_sizes` (`tracker/src/tracker/tools.rs:1157`).
 
@@ -131,14 +131,14 @@ in `check_sizes` (`tracker/src/tracker/tools.rs:1157`).
 | `/v1/work/proposals/reject` | `rejected` | Only a proposal never accepted (`core/src/work_fold.rs:1770`) |
 | `/v1/work/questions/answer` | `answer` | Only the open question; a `moves_to` target and title are bounded (`core/src/work_fold.rs:2620`). Evidence as for an agent's answer. Known secret shapes redacted from the text, choice and title (`tracker/src/tracker/tools.rs:895`) |
 | `/v1/work/tier` | `tier_changed` | Tier 0 to 3, item open (`core/src/work_fold.rs:1925`) |
-| `/v1/work/note` | `human_input` | Item exists; an `attempt` must be one of the item's (`core/src/work_fold.rs:1684`). Text inline up to 4 KiB (`tracker/src/tracker/tools.rs:1190`). Known secret shapes redacted (`tracker/src/http.rs:832`) |
+| `/v1/work/note` | `human_input` | Item exists; an `attempt` must be one of the item's (`core/src/work_fold.rs:1684`). Text inline up to 4 KiB (`tracker/src/tracker/tools.rs:1190`). Known secret shapes redacted (`tracker/src/http.rs:841`) |
 | `/v1/work/close` | `closed` | Item exists (`core/src/work_fold.rs:1742`) |
 | `/v1/work/unlink` | `unlinked` | Item exists (`core/src/work_fold.rs:1304`) |
 | `/v1/work/budget` | `budget_set` | Person only in the fold too (`core/src/work_fold.rs:1851`) |
 | `/v1/work/rules` | `rules_set` | Person only in the fold too (`core/src/work_fold.rs:1869`). 8 KiB of text, 20 checks of 500 bytes, 500 scopes (`core/src/work_fold.rs:1878`). The tracker never runs a check; the agent does |
 | `/v1/work/flag`, `/v1/work/unflag` | `flagged` | Person only in the fold too, item open and accepted, and the flag must change (`core/src/work_fold.rs:1792`). Format 7, so refused until a person raises the log. A held item stops only once its holder finishes or releases (`core/src/work_fold.rs:811`) |
-| `GET /v1/work/items`, `GET /v1/work/items/{item}` | None: reads the fold | A person sees every item of the team, as the dashboard does from `work.events` (`tracker/src/http.rs:919`) |
-| `GET /v1/work/items/{item}/history` | None: reads `work.events` | Records about the item, at most 500 per answer and 20,000 read, page by page from Felix (`tracker/src/tracker/reads.rs:15`). Agent text was redacted before it was logged; a person's own records are shown as written |
+| `GET /v1/work/items`, `GET /v1/work/items/{item}` | None: reads the fold | A person sees every item of the team, as the dashboard does from `work.events` (`tracker/src/http.rs:928`) |
+| `GET /v1/work/items/{item}/history` | None: reads `work.events` | Records about the item, at most 500 per answer and 20,000 read, page by page from Felix (`tracker/src/tracker/reads.rs:15`). Payloads come back as logged, with no redaction at read time. Secrets and agent text are cut only in records written since the log started redacting, so older records return as written. The same person can already read `work.events` itself, so this shows nothing new |
 
 ### The dashboard
 
@@ -172,13 +172,13 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs:38`).
 Every route above acts in one team, the team of the token, and only reaches
 that team's tracker: its fold, its lease and its Felix connections
 (`tracker/src/teams.rs`). The team comes from the token's entry, never from the
-body (`tracker/src/http.rs:158`). Today there is one team, `KBL_NAMESPACE`,
+body (`tracker/src/http.rs:167`). Today there is one team, `KBL_NAMESPACE`,
 and the token file's callers belong to it.
 
 | Route | Fields the caller controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:129`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:170`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
-| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:239`) |
+| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:129`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:179`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
+| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:248`) |
 | `GET /v1/org/teams`, `POST /v1/org/teams` | `team`, `display_name` on `POST` | Create a team, or adopt a namespace that already holds another team's data; list the org's teams | Org admin only: a person of the token file. An agent or ingest token gets `403` with `org_admin_required` before the body is read, and the body is capped at 4 KiB (`tracker/src/http/org.rs`). The name follows the key rule and is not `kbl`. A name already on `org.events` writes nothing and answers `created: false`. The tracker only serves the namespace: Felix grants on it come from `kbl-tool team create`, run with the org admin's own Felix sign-in. Without `KBL_ORG_NAMESPACE` it answers `404` with `teams_off` |
 
 A person token in more than one team gets `400` with `team_required` on a path
@@ -291,7 +291,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `updated` | Tracker, person | Open roots only (`core/src/work_fold.rs:2284`) |
 | `left_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2284`) |
 | `returned_to_scope` | Tracker, person | Open roots only (`core/src/work_fold.rs:2287`). Format 2, so refused until a person raises the log (`core/src/work_fold.rs:551`) |
-| `flagged` | Person | Open items only, and only a change (`core/src/work_fold.rs:1792`). Format 7, so refused until a person raises the log (`core/src/work_fold.rs:551`). A reopen clears it |
+| `flagged` | Person | Open, accepted items only, and only a change (`core/src/work_fold.rs:1803`). Format 7, so refused until a person raises the log (`core/src/work_fold.rs:551`). A reopen clears it |
 | `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs:1816`). Ingest reopens only what it closed. It keeps release waits and clears the item's release, so a waiter waits for the next release |
 | `attempt_closed` | Tracker, person | `core/src/work_fold.rs:1834` |
 | `tier_changed` | Person | `core/src/work_fold.rs:1922` |
@@ -402,7 +402,7 @@ each token and never a token. A format above the build's stops the reader.
 | Forged artifacts and statuses | Bytes under another id; a green check; an approval; a release | Hash check on read; statuses come from ingest only; `shipped` is not an agent's |
 | Merges into other branches | Merge into a side branch and report the item merged | A merge counts only into the default branch, by someone else |
 | Budget escapes | Free questions, free prerequisites, resume work past the depth limit | Cost is charged on ask and prerequisite; depth applies to resume work. Every claim end and ask is charged at least the tracker's floor, so an agent that reports nothing still spends the root's cost budget |
-| Secrets in what an agent reports | A token from the environment in a step's output or a diff hunk, kept on the log for as long as the item | Known secret shapes are replaced with `[redacted]` by the tracker in the free text of every record an agent writes (`tracker/src/tracker.rs:1574`) and of a person's note (`tracker/src/http.rs:832`) or answer (`tracker/src/tracker/tools.rs:895`), and by `kbl-mcp` before it stores an artifact (`mcp/src/tasks.rs:511`), a task result (`mcp/src/tasks.rs:342`) or a task title (`mcp/src/tasks.rs:121`). Every record kind's fields are sorted into redacted and structured, with no default (`core/src/redact.rs:742`); a progress record's `pr` and `branch` are keys the fold matches on, so only URL userinfo is cut from them. Each shape is matched on what a real one looks like, not its prefix alone, because a cut word in a record is lost for good. What still goes through: a secret with no known prefix, such as an AWS secret access key; `Bearer` followed by two spaces or a tab; quoted assignments such as `TOKEN="..."` and `"token": "..."`; `password=`; `token=` outside a URL query unless the value has a long run of mixed letters and digits; the body of a legacy encrypted PEM key with `Proc-Type` headers, or of one whose lines start with anything but indentation, `>`, `+` or `-`, such as `# ` or `//` comments (its header line is cut); a `Bearer` token with no digits outside an `Authorization` header, or inside one when it reads as a call, a path or words joined by `-`; a PEM body indented more than 128 bytes with no `END` line; a Slack token whose secret is under 12 bytes or of one character class |
+| Secrets in what an agent reports | A token from the environment in a step's output or a diff hunk, kept on the log for as long as the item | Known secret shapes are replaced with `[redacted]` by the tracker in the free text of every record an agent writes (`tracker/src/tracker.rs:1574`) and of a person's note (`tracker/src/http.rs:841`) or answer (`tracker/src/tracker/tools.rs:895`), and by `kbl-mcp` before it stores an artifact (`mcp/src/tasks.rs:511`), a task result (`mcp/src/tasks.rs:342`) or a task title (`mcp/src/tasks.rs:121`). Every record kind's fields are sorted into redacted and structured, with no default (`core/src/redact.rs:742`); a progress record's `pr` and `branch` are keys the fold matches on, so only URL userinfo is cut from them. Each shape is matched on what a real one looks like, not its prefix alone, because a cut word in a record is lost for good. What still goes through: a secret with no known prefix, such as an AWS secret access key; `Bearer` followed by two spaces or a tab; quoted assignments such as `TOKEN="..."` and `"token": "..."`; `password=`; `token=` outside a URL query unless the value has a long run of mixed letters and digits; the body of a legacy encrypted PEM key with `Proc-Type` headers, or of one whose lines start with anything but indentation, `>`, `+` or `-`, such as `# ` or `//` comments (its header line is cut); a `Bearer` token with no digits outside an `Authorization` header, or inside one when it reads as a call, a path or words joined by `-`; a PEM body indented more than 128 bytes with no `END` line; a Slack token whose secret is under 12 bytes or of one character class |
 | Forged webhooks | Wake ingest in a loop | Signature and spacing. A captured body can be replayed under a new delivery id, and it only wakes the poll |
 
 ## Gaps

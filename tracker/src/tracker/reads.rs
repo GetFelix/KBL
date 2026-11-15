@@ -73,6 +73,17 @@ impl<B: Broker> Tracker<B> {
     /// the fold refused on replay carries `rejected`. `next` is where to go
     /// on: after [`HISTORY_PAGE`] records, or after [`HISTORY_SCAN`] scanned.
     pub(crate) async fn history(&self, id: &ItemId, from: u64) -> Result<Value, Error> {
+        self.history_capped(id, from, HISTORY_PAGE, HISTORY_SCAN)
+            .await
+    }
+
+    async fn history_capped(
+        &self,
+        id: &ItemId,
+        from: u64,
+        most: usize,
+        scan: usize,
+    ) -> Result<Value, Error> {
         self.begin().await?;
         let (rejected, at): (HashMap<u64, _>, _) = {
             let core = self.0.core.lock().await;
@@ -93,7 +104,7 @@ impl<B: Broker> Tracker<B> {
                 .await
                 .map_err(Error::Felix)?;
             for (offset, payload) in page.into_iter().filter(|(o, _)| *o >= from) {
-                if records.len() == HISTORY_PAGE || scanned == HISTORY_SCAN {
+                if records.len() == most || scanned == scan {
                     next = Some(offset);
                     break 'pages;
                 }
