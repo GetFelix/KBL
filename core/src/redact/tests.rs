@@ -1061,3 +1061,138 @@ fn reviewed_variants_of_the_new_shapes_are_cut() {
         assert_eq!(redact(&text), "\"[redacted]", "{gap:?}");
     }
 }
+
+#[test]
+fn url_encoded_key_headers_are_cut() {
+    let line = "MIIEq9Zx%2BIIEq9Zx%2FIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9Zx";
+    for sp in ["%20", "+"] {
+        let begin = format!("-----BEGIN{sp}RSA{sp}PRIVATE{sp}KEY-----");
+        let end = format!("-----END{sp}RSA{sp}PRIVATE{sp}KEY-----");
+        let text = format!("k={begin}%0A{line}%0AAB12cd%3D%3D%0A{end}&x=1");
+        assert_eq!(redact(&text), "k=[redacted]&x=1", "{sp}");
+        let text = format!("k={begin}%0A{line}%0A{line}%0AAB12cd%3D%3D&x=1");
+        assert!(!redact(&text).contains("Zx%2B"), "{sp} no end");
+        assert_eq!(redact(&format!("q={begin}&x")), "q=[redacted]&x", "{sp}");
+        let pgp = format!("-----BEGIN{sp}PGP{sp}PRIVATE{sp}KEY{sp}BLOCK-----");
+        assert_eq!(redact(&format!("q={pgp}&x")), "q=[redacted]&x", "{sp}");
+    }
+    // A header and an END encoded differently are one key.
+    let text =
+        format!("-----BEGIN%20PRIVATE%20KEY-----\n{BODY}\nAB12cd==\n-----END PRIVATE KEY-----\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+}
+
+#[test]
+fn url_encoded_look_alikes_stay() {
+    for text in [
+        "-----BEGIN+PUBLIC+KEY-----",
+        "-----BEGIN%20CERTIFICATE-----",
+        "a+-----BEGIN+-----+b",
+        "-----BEGIN%2PRIVATE%20KEY-----",
+        "-----BEGIN__PRIVATE_KEY-----",
+        "q=-----BEGIN%20PRIVATE%20KEYS",
+    ] {
+        assert!(untouched(text), "{text}");
+    }
+}
+
+/// A full body line with `/` in it, escaped as JSON escapes it.
+fn slashed(escape: &str) -> String {
+    "MIIEq9Zx/IIEq9Zx+IIEq9Zx/IIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9Zx".replace('/', escape)
+}
+
+#[test]
+fn slash_escaped_bodies_are_cut() {
+    // JSON, and JSON inside JSON.
+    for (esc, nl) in [("\\/", "\\n"), ("\\\\\\/", "\\\\n")] {
+        let line = slashed(esc);
+        let text = format!(
+            "{{\"k\":\"-----BEGIN PRIVATE KEY-----{nl}{line}{nl}AB12{esc}d=={nl}-----END PRIVATE KEY-----{nl}\"}}"
+        );
+        assert_eq!(
+            redact(&text),
+            format!("{{\"k\":\"[redacted]{nl}\"}}"),
+            "{esc}"
+        );
+        let text = format!(
+            "{{\"k\":\"-----BEGIN PRIVATE KEY-----{nl}{line}{nl}{line}{nl}AB12{esc}d==\"}}"
+        );
+        assert!(
+            !redact(&text).contains("IIEq9Zx"),
+            "{esc} no end: {}",
+            redact(&text)
+        );
+        // A stripped body.
+        let text = format!("\"-----BEGIN PRIVATE KEY-----{line}{line}{line}AB12\"");
+        assert_eq!(redact(&text), "\"[redacted]\"", "{esc} stripped");
+    }
+}
+
+#[test]
+fn escaped_slashes_after_a_header_that_are_not_a_body_stay() {
+    let text = "\"-----BEGIN PRIVATE KEY-----\\nsrc\\/pem.rs\\nok\"";
+    assert_eq!(redact(text), "\"[redacted]\\nsrc\\/pem.rs\\nok\"");
+    // An even run of backslashes is a backslash, then a `/`.
+    let line = slashed("\\\\/");
+    let text = format!("\"-----BEGIN PRIVATE KEY-----\\n{line}\\nok\"");
+    assert!(redact(&text).contains(&line), "{}", redact(&text));
+}
+
+#[test]
+fn long_pgp_armor_is_cut_whole() {
+    let pgp = "PGP PRIVATE KEY BLOCK-----";
+    for n in [17, 40, 400] {
+        let armor: String = (0..n).map(|k| format!("Comment: note {k}\n")).collect();
+        let text =
+            format!("a\n-----BEGIN {pgp}\n{armor}\n{BODY}\nAB12cd==\n=Xy9Z\n-----END {pgp}\nb");
+        assert_eq!(redact(&text), "a\n[redacted]\nb", "{n}");
+        let text = format!("-----BEGIN {pgp}\n{armor}\n{BODY}\n{BODY}\nAB12cd==\nok");
+        assert_eq!(redact(&text), "[redacted]\nok", "{n} no end");
+    }
+}
+
+#[test]
+fn long_header_like_lines_then_prose_lose_only_the_header() {
+    let lines: String = (0..30).map(|k| format!("Field-{k}: value\n")).collect();
+    let text = format!("-----BEGIN RSA PRIVATE KEY-----\n{lines}\nthanks\nok");
+    assert_eq!(redact(&text), format!("[redacted]\n{lines}\nthanks\nok"));
+    // A key header inside an armor value ends the armor there.
+    let text = format!(
+        "-----BEGIN PRIVATE KEY-----\nA: b\nC: -----BEGIN PRIVATE KEY-----\nD: e\n\n{BODY}\nAB12cd==\nok"
+    );
+    assert_eq!(redact(&text), "[redacted]\nA: b\nC: [redacted]\nok");
+}
+
+#[test]
+fn encoded_headers_escaped_slashes_and_long_armor_stay_linear() {
+    let mb = 10 * 1024 * 1024;
+    let inputs = [
+        "-----BEGIN%20PRIVATE%20KEY-----".repeat(mb / 31),
+        "-----BEGIN+PRIVATE+KEY-----".repeat(mb / 27),
+        format!("-----BEGIN%20{}", "%20".repeat(mb / 3)),
+        format!("-----BEGIN+{}", "+".repeat(mb)),
+        "-----BEGIN%20PRIVATE%20KEY-----%0A".repeat(mb / 34),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\/".repeat(mb / 2)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "\\/".repeat(mb / 2)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}/", "\\".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "a\\/".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "A: b\n".repeat(mb / 5)),
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}",
+            "A: -----BEGIN PRIVATE KEY-----\n".repeat(mb / 31)
+        ),
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}",
+            "A: x -----BEGIN PRIVATE KEY----- -----BEGIN PRIVATE KEY-----\n".repeat(mb / 62)
+        ),
+        "-----BEGIN PRIVATE KEY-----\nA: b\nA: b\nA: b\n\n".repeat(mb / 44),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "A: b\n".repeat(mb / 10))
+            + &"-----END PRIVATE KEY-----".repeat(mb / 50),
+    ];
+    for text in inputs {
+        let start = Instant::now();
+        let _ = redact(&text);
+        let took = start.elapsed();
+        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
+    }
+}
