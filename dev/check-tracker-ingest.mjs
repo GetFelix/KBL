@@ -6,7 +6,7 @@
 //   3. a poll after ingest's saved state is lost finds the root: it imports and
 //      admits nothing again, and only rewrites the issue's two context entries
 //      with the same text.
-// Claiming each item once is dev/check-tracker-claims.mjs.
+// It closes the root at the end. Claiming each item once is dev/check-tracker-claims.mjs.
 //
 //   cargo build -p kbl-tool -p kbl-tracker -p kbl-ingest && node dev/check-tracker-ingest.mjs
 import { spawn } from "node:child_process";
@@ -18,6 +18,7 @@ import {
   check,
   giveUpAfter,
   killAll,
+  personCall,
   startTracker,
   TRACKER_URL,
   workLog,
@@ -27,7 +28,7 @@ const INGEST = process.env.KBL_INGEST || "target/debug/kbl-ingest";
 // A repo of its own, so records from an earlier run on the same stack do not count.
 const REPO = `check/ingest-${Date.now().toString(36)}`;
 const UPSTREAM = `${REPO}#812`;
-const tokens = { ingest: { "tok-ingest": "ingest" } };
+const tokens = { people: { "tok-gab": "gab" }, ingest: { "tok-ingest": "ingest" } };
 
 giveUpAfter(120, "the ingest check");
 
@@ -135,6 +136,9 @@ try {
       added.every((k) => first.includes(k)),
     "a poll with no saved state admitted nothing again, and only rewrote context entries with the same text",
   );
+
+  // The root and its triage and augment items are ready; later checks on this stack must not be handed them.
+  await personCall("tok-gab", "/v1/work/close", { item: root });
 } finally {
   killAll();
   github.close();
