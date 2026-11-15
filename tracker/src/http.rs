@@ -281,6 +281,9 @@ struct ItemBody {
 #[derive(Deserialize)]
 struct CompleteBody {
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
     usage: Vec<Usage>,
@@ -291,6 +294,9 @@ struct CompleteBody {
 #[derive(Deserialize)]
 struct ReleaseBody {
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
     reason: Option<String>,
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
@@ -302,6 +308,9 @@ struct ReleaseBody {
 #[derive(Deserialize)]
 struct GiveUpBody {
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
     reason: String,
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
@@ -339,6 +348,9 @@ struct RecordBody {
 struct PostBody {
     /// The item the agent holds.
     item: ItemId,
+    /// The attempt the claim was on, from the claim's reply. With it a retry
+    /// after the record landed answers `replayed: true`.
+    attempt: Option<u32>,
     key: Key,
     work: String,
     #[serde(default)]
@@ -554,7 +566,11 @@ async fn complete<B: Broker>(call: Call<B>, Json(body): Json<CompleteBody>) -> R
         Err(e) => return reply(Err(e)),
     };
     match call.agent() {
-        Ok(a) => reply(call.tracker().complete(&a, &body.item, usage).await),
+        Ok(a) => reply(
+            call.tracker()
+                .complete(&a, &body.item, body.attempt, usage)
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }
@@ -567,7 +583,7 @@ async fn release<B: Broker>(call: Call<B>, Json(body): Json<ReleaseBody>) -> Res
     match call.agent() {
         Ok(a) => reply(
             call.tracker()
-                .release(&a, &body.item, body.reason, usage)
+                .release(&a, &body.item, body.attempt, body.reason, usage)
                 .await,
         ),
         Err(d) => denied(d),
@@ -582,7 +598,7 @@ async fn give_up<B: Broker>(call: Call<B>, Json(body): Json<GiveUpBody>) -> Resp
     match call.agent() {
         Ok(a) => reply(
             call.tracker()
-                .give_up(&a, &body.item, body.reason, usage)
+                .give_up(&a, &body.item, body.attempt, body.reason, usage)
                 .await,
         ),
         Err(d) => denied(d),
@@ -622,7 +638,7 @@ async fn work_post<B: Broker>(call: Call<B>, Json(b): Json<PostBody>) -> Respons
         };
         return reply(
             call.tracker()
-                .prerequisite(&a, &b.item, b.key, which, b.done_when, usage)
+                .prerequisite(&a, &b.item, b.attempt, b.key, which, b.done_when, usage)
                 .await,
         );
     }

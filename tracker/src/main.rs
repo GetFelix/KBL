@@ -107,6 +107,9 @@ struct Cli {
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
+    /// Exit after logging a terminal record and before answering. For the dev-stack check.
+    #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_DONE", hide = true)]
+    crash_after_done: bool,
 }
 
 fn main() -> Result<()> {
@@ -187,7 +190,8 @@ fn target(cli: &Cli, namespace: &str) -> Target {
 fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> {
     let ttl = Duration::from_millis(cli.lease_ttl_ms);
     let visibility = Duration::from_millis(cli.claim_visibility_ms);
-    let (crash_after_poll, review_tiers) = (cli.crash_after_poll, cli.review_tiers.clone());
+    let (crash_after_poll, crash_after_done) = (cli.crash_after_poll, cli.crash_after_done);
+    let review_tiers = cli.review_tiers.clone();
     // One floor for every team; each team's tracker charges it against its own fold.
     let cost_floor_micros = cli.cost_floor_micros;
     let base = target(cli, "");
@@ -205,6 +209,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             // Long enough for a killed tracker's lease to run out.
             lease_wait: ttl * 2,
             crash_after_poll,
+            crash_after_done,
             review_tiers: review_tiers.clone(),
             cost_floor_micros,
         };

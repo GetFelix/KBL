@@ -39,6 +39,8 @@ struct Net {
     /// Every broker call that changes something, in order.
     calls: Vec<String>,
     fail_publish_on: Option<String>,
+    /// The next conditional publish to this stream lands, and its reply is lost.
+    lose_publish_reply: Option<String>,
     /// Publishes to the stream that still succeed, then every one fails.
     publish_budget: Option<(String, u32)>,
     fail_reads: bool,
@@ -211,6 +213,10 @@ impl Fake {
 
     fn fail_publishes_to_after(&self, stream: &str, ok: u32) {
         self.net.lock().unwrap().publish_budget = Some((stream.to_owned(), ok));
+    }
+
+    pub(super) fn lose_next_publish_reply(&self, stream: &str) {
+        self.net.lock().unwrap().lose_publish_reply = Some(stream.to_owned());
     }
 
     fn fail_publishes_to(&self, stream: Option<&str>) {
@@ -442,6 +448,13 @@ impl Broker for Fake {
             return Ok(ConditionalWrite::Refused { tail });
         }
         let offset = self.publish(stream, payload).await?;
+        let lost = {
+            let mut net = self.net.lock().unwrap();
+            net.lose_publish_reply.take_if(|s| s == stream).is_some()
+        };
+        if lost {
+            anyhow::bail!("the reply was lost");
+        }
         Ok(ConditionalWrite::Written { offset })
     }
 
@@ -688,6 +701,7 @@ pub(super) fn settings() -> Settings {
         lease_ttl: Duration::from_secs(15),
         lease_wait: Duration::ZERO,
         crash_after_poll: false,
+        crash_after_done: false,
         review_tiers: default_review_tiers(),
         cost_floor_micros: 0,
     }
@@ -800,7 +814,7 @@ async fn done_is_written_before_the_ack() {
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
     let reply = t
-        .complete(&agent("w1"), &item("a1"), Vec::new())
+        .complete(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
     assert_eq!(reply["status"], "done");
@@ -854,13 +868,14 @@ async fn below_format_8_a_claim_is_charged_the_floor_and_usage_is_dropped() {
     let t = start_with(&fake, floor(500)).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
         .await
         .unwrap();
     claim(&t, "w1").await;
     t.give_up(
         &agent("w1"),
         &item("a1"),
+        None,
         "stuck".into(),
         vec![tokens("m", 9)],
     )
@@ -903,15 +918,20 @@ async fn from_format_8_usage_is_priced_and_floored() {
         seed(&t, id, 2).await;
     }
     claim(&t, "w1").await;
-    t.complete(&agent("w1"), &item("a1"), vec![tokens("m", 1_000_000)])
+    t.complete(
+        &agent("w1"),
+        &item("a1"),
+        None,
+        vec![tokens("m", 1_000_000)],
+    )
+    .await
+    .unwrap();
+    claim(&t, "w1").await;
+    t.complete(&agent("w1"), &item("a2"), None, vec![tokens("m", 10)])
         .await
         .unwrap();
     claim(&t, "w1").await;
-    t.complete(&agent("w1"), &item("a2"), vec![tokens("m", 10)])
-        .await
-        .unwrap();
-    claim(&t, "w1").await;
-    t.complete(&agent("w1"), &item("a3"), vec![tokens("unknown", 10)])
+    t.complete(&agent("w1"), &item("a3"), None, vec![tokens("unknown", 10)])
         .await
         .unwrap();
     let log = fake.log();
@@ -982,7 +1002,8 @@ async fn a_dead_agents_item_goes_to_another_after_visibility() {
     ));
     // Finishing after a takeover is a lost claim too, same as extending.
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
+        t.complete(&agent("w1"), &item("a1"), None, Vec::new())
+            .await,
         Err(Error::Lost(_))
     ));
 }
@@ -993,13 +1014,19 @@ async fn an_item_the_agent_released_is_handed_out_again() {
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), Some("stuck".into()), Vec::new())
-        .await
-        .unwrap();
+    t.release(
+        &agent("w1"),
+        &item("a1"),
+        None,
+        Some("stuck".into()),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
     assert!(fake.calls().contains(&"nack work.ready.p2".to_owned()));
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
     // The second release uses the item's second try; the item then waits for a person.
-    t.release(&agent("w2"), &item("a1"), None, Vec::new())
+    t.release(&agent("w2"), &item("a1"), None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w1").await), None);
@@ -1080,7 +1107,7 @@ async fn the_work_next_reply_carries_the_work_loop() {
         text.contains("work_next again") && text.contains("asked to stop"),
         "{text}"
     );
-    t.complete(&agent("w1"), &item("a1"), Vec::new())
+    t.complete(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
     let empty = claim(&t, "w1").await;
@@ -1124,7 +1151,7 @@ async fn a_restart_takes_back_the_deliveries_felix_still_holds_for_each_agent() 
     );
     assert_eq!(fake.kinds().iter().filter(|k| *k == "claimed").count(), 2);
     second
-        .complete(&agent("w1"), &item("a1"), Vec::new())
+        .complete(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
@@ -1236,18 +1263,20 @@ async fn a_stale_holders_late_calls_cannot_settle_the_next_holders_delivery() {
         Err(Error::Lost(_))
     ));
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
+        t.complete(&agent("w1"), &item("a1"), None, Vec::new())
+            .await,
         Err(Error::Lost(_))
     ));
     assert!(matches!(
-        t.release(&agent("w1"), &item("a1"), None, Vec::new()).await,
+        t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+            .await,
         Err(Error::Lost(_))
     ));
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Leased("w2".into()));
     let acks_after = fake.calls().iter().filter(|c| c.starts_with("ack")).count();
     assert_eq!(acks_before, acks_after);
     // And w2 can still finish.
-    t.complete(&agent("w2"), &item("a1"), Vec::new())
+    t.complete(&agent("w2"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
@@ -1261,7 +1290,7 @@ async fn a_failed_reload_does_not_empty_the_state_and_nothing_is_served_until_it
     claim(&t, "w1").await;
     fake.fail_publishes_to(Some(WORK_EVENTS));
     assert!(
-        t.complete(&agent("w1"), &item("a1"), Vec::new())
+        t.complete(&agent("w1"), &item("a1"), None, Vec::new())
             .await
             .is_err()
     );
@@ -1273,12 +1302,13 @@ async fn a_failed_reload_does_not_empty_the_state_and_nothing_is_served_until_it
         Err(Error::Unavailable(_))
     ));
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
+        t.complete(&agent("w1"), &item("a1"), None, Vec::new())
+            .await,
         Err(Error::Unavailable(_))
     ));
     fake.fail_reads(false);
     // Rebuilt from the log: the item is still w1's, and finishes once.
-    t.complete(&agent("w1"), &item("a1"), Vec::new())
+    t.complete(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
     assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 1);
@@ -1301,7 +1331,7 @@ async fn one_hung_felix_call_stalls_only_that_agent() {
         tokio::task::yield_now().await;
         // Others carry on while w1's poll hangs.
         assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a2"));
-        t.complete(&agent("w3"), &item("a1"), Vec::new())
+        t.complete(&agent("w3"), &item("a1"), None, Vec::new())
             .await
             .unwrap();
         seed(&t, "a3", 2).await;
@@ -1326,7 +1356,7 @@ async fn a_dropped_connection_does_not_cost_a_live_agent_its_claim() {
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Leased("w1".into()));
     // Settling reconnects too.
     fake.drop_connection("w1");
-    t.complete(&agent("w1"), &item("a1"), Vec::new())
+    t.complete(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
@@ -1406,7 +1436,9 @@ async fn a_tracker_that_lost_the_lease_serves_and_writes_nothing() {
     first.renew_lease().await;
     let before = fake.log().len();
     assert!(matches!(
-        first.complete(&agent("w1"), &item("a1"), Vec::new()).await,
+        first
+            .complete(&agent("w1"), &item("a1"), None, Vec::new())
+            .await,
         Err(Error::Unavailable(_))
     ));
     assert!(matches!(
@@ -1481,7 +1513,8 @@ async fn a_person_closing_a_held_item_ends_the_agents_claim_and_settles_the_deli
     ));
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
     assert!(matches!(
-        t.complete(&agent("w1"), &item("a1"), Vec::new()).await,
+        t.complete(&agent("w1"), &item("a1"), None, Vec::new())
+            .await,
         Err(Error::Lost(_))
     ));
     assert_eq!(fake.kinds().iter().filter(|k| *k == "done").count(), 0);
@@ -1521,14 +1554,14 @@ async fn a_failed_write_is_rebuilt_from_the_log_not_trusted() {
     fake.fail_publishes_to(Some(WORK_EVENTS));
     // The fold accepted `done` in memory, but the write failed.
     assert!(
-        t.complete(&agent("w1"), &item("a1"), Vec::new())
+        t.complete(&agent("w1"), &item("a1"), None, Vec::new())
             .await
             .is_err()
     );
     fake.fail_publishes_to(None);
     // The next call reloads, so the item is still held and can be finished.
     assert!(
-        t.complete(&agent("w1"), &item("a1"), Vec::new())
+        t.complete(&agent("w1"), &item("a1"), None, Vec::new())
             .await
             .is_ok()
     );
@@ -1543,7 +1576,7 @@ async fn a_record_the_fold_refuses_is_not_appended() {
     let before = fake.log().len();
     // An agent that holds nothing cannot finish the item.
     let err = t
-        .complete(&agent("w1"), &item("a1"), Vec::new())
+        .complete(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap_err();
     assert!(matches!(err, Error::NotHeld(_)));
@@ -1916,7 +1949,7 @@ async fn fixed(t: &Tracker<Fake>, pr: Option<&str>) {
     )
     .await
     .unwrap();
-    t.complete(&agent("w1"), &item("a1"), Vec::new())
+    t.complete(&agent("w1"), &item("a1"), None, Vec::new())
         .await
         .unwrap();
 }
@@ -2121,6 +2154,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 
 mod races;
 mod recover;
+mod replay;
 mod retry;
 mod review;
 
@@ -2220,19 +2254,31 @@ async fn no_route_writes_an_oversized_string() {
     .unwrap();
     claim(&t, "w1").await;
     let err = t
-        .release(&agent("w1"), &item("big"), Some(big.clone()), Vec::new())
+        .release(
+            &agent("w1"),
+            &item("big"),
+            None,
+            Some(big.clone()),
+            Vec::new(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
     let err = t
-        .give_up(&agent("w1"), &item("big"), big, Vec::new())
+        .give_up(&agent("w1"), &item("big"), None, big, Vec::new())
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
     // The claim stands: nothing above changed it.
-    t.release(&agent("w1"), &item("big"), Some("short".into()), Vec::new())
-        .await
-        .unwrap();
+    t.release(
+        &agent("w1"),
+        &item("big"),
+        None,
+        Some("short".into()),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test(start_paused = true)]
@@ -2316,7 +2362,7 @@ async fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
     t.context_add(&agent("w1"), &item("a1"), key("w1-note"), text("x"))
         .await
         .unwrap();
-    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
         .await
         .unwrap();
     claim(&t, "w2").await;
@@ -2338,7 +2384,7 @@ async fn a_long_hold_does_not_make_the_record_look_old_after_a_release() {
         pass(&t, VIS / 2).await;
         t.extend(&agent("w1"), &item("a1")).await.unwrap();
     }
-    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(fake.ready_count("work.ready.p2"), 1);
@@ -2354,7 +2400,7 @@ async fn a_record_adopted_after_a_restart_is_published_again_once_dead_lettered(
     // The new tracker takes back w1's delivery and so adopts its record.
     let t = start(&fake).await;
     t.extend(&agent("w1"), &item("a1")).await.unwrap();
-    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
         .await
         .unwrap();
     fake.dead_letter("work.ready.p2", 0);

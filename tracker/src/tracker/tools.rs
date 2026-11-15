@@ -21,7 +21,7 @@ use kbl_core::work::{
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-use super::{Core, Error, Tracker, agent_key, holds};
+use super::{Core, Error, Tracker, agent_key, holds, replay};
 use crate::felix::Broker;
 
 /// Longest title, command, file name or reason an agent may write.
@@ -164,10 +164,12 @@ impl<B: Broker> Tracker<B> {
     ///
     /// From a held triage item, the item under triage waits instead and the
     /// claim goes on, so the work is found before anyone builds.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn prerequisite(
         &self,
         agent: &AgentName,
         item: &ItemId,
+        attempt: Option<u32>,
         key: Key,
         which: Prereq,
         done_when: DoneWhen,
@@ -250,7 +252,17 @@ impl<B: Broker> Tracker<B> {
                     return Ok(reply(false));
                 }
             }
-            held(&core, agent, item)?;
+            let current = held(&core, agent, item);
+            // A retry of the post that ended this attempt, after its answer was lost.
+            if under.is_none()
+                && current
+                    .as_ref()
+                    .map_or(true, |h| attempt.is_some_and(|w| w != *h))
+                && let Some(r) = replay(&core, agent, item, attempt, "prerequisite", reply(created))
+            {
+                return Ok(r);
+            }
+            current?;
             if under.is_some() {
                 if &prerequisite == item {
                     return Err(Error::Invalid(format!(
@@ -332,7 +344,9 @@ impl<B: Broker> Tracker<B> {
             "item": item, "status": "blocked",
             "prerequisite": prerequisite, "created": created
         });
-        let result = self.finish(agent, item, record, reply).await;
+        let result = self
+            .finish(agent, item, attempt, "prerequisite", record, reply)
+            .await;
         if let Err(Error::Refused { why }) = &result {
             let mut core = self.0.core.lock().await;
             self.note_refusal(&mut core, agent, item, "prerequisite", why)

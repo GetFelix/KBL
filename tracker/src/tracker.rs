@@ -77,6 +77,9 @@ pub(crate) struct Settings {
     /// Dies after the first delivery is polled and before `claimed` is written.
     /// For the dev-stack check.
     pub(crate) crash_after_poll: bool,
+    /// Dies after a terminal record is written and before the answer. For the
+    /// dev-stack check that a retried call is replayed.
+    pub(crate) crash_after_done: bool,
     /// Reviewer tier names, one ready lane each. The first reads a request
     /// first and the last gives the final review.
     pub(crate) review_tiers: Vec<String>,
@@ -362,6 +365,25 @@ struct Recall {
     /// for an edge, and one from a prerequisite, an answer or anyone else's
     /// link is never ingest's to remove.
     ingest_edges: HashSet<(ItemId, ItemId)>,
+    /// The claims of each attempt and how each ended, so a terminal call
+    /// retried after a lost answer can be told what it already wrote. A retry
+    /// after a release or lapse claims the same attempt number again.
+    attempts: HashMap<(ItemId, u32), Vec<ClaimLog>>,
+}
+
+/// One `claimed` record and the record that ended it.
+struct ClaimLog {
+    offset: u64,
+    by: Key,
+    ended: Option<Ended>,
+}
+
+/// The record that ended a claim.
+struct Ended {
+    offset: u64,
+    kind: &'static str,
+    actor: Actor,
+    by: Key,
 }
 
 impl Recall {
@@ -371,6 +393,7 @@ impl Recall {
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
         }
+        self.attempt(offset, logged);
         match record {
             WorkRecord::Linked { item, to } => {
                 let edge = (item.clone(), to.clone());
@@ -397,6 +420,61 @@ impl Recall {
             _ => {}
         }
         remember(&mut self.texts, offset, record);
+    }
+
+    fn attempt(&mut self, offset: u64, logged: &WorkLogged) {
+        let (item, attempt, ends) = match &logged.record {
+            WorkRecord::Claimed { item, attempt, .. } => (item, *attempt, false),
+            WorkRecord::Done { item, attempt, .. }
+            | WorkRecord::Released { item, attempt, .. }
+            | WorkRecord::GaveUp { item, attempt, .. } => (item, *attempt, true),
+            // A triage prerequisite leaves the claim going on.
+            WorkRecord::Prerequisite {
+                item,
+                attempt,
+                triage: None,
+                ..
+            } => (item, *attempt, true),
+            _ => return,
+        };
+        let claims = self.attempts.entry((item.clone(), attempt)).or_default();
+        if !ends {
+            claims.push(ClaimLog {
+                offset,
+                by: logged.by.clone(),
+                ended: None,
+            });
+        } else if let Some(c) = claims.last_mut().filter(|c| c.ended.is_none()) {
+            c.ended = Some(Ended {
+                offset,
+                kind: logged.record.kind(),
+                actor: logged.actor,
+                by: logged.by.clone(),
+            });
+        }
+    }
+
+    /// The offset of the newest `claimed` record of `attempt`.
+    fn claimed(&self, item: &ItemId, attempt: u32) -> Option<u64> {
+        let claims = self.attempts.get(&(item.clone(), attempt))?;
+        claims.last().map(|c| c.offset)
+    }
+
+    /// The offset of the record that ended `agent`'s latest claim of `attempt`,
+    /// if `agent` itself wrote it as `kind`. A record the tracker or a person
+    /// wrote, such as `released lapsed`, is not the agent's outcome.
+    fn ended_by(&self, item: &ItemId, attempt: u32, agent: &AgentName, kind: &str) -> Option<u64> {
+        let claims = self.attempts.get(&(item.clone(), attempt))?;
+        let ended = claims
+            .iter()
+            .rev()
+            .find(|c| c.by.as_str() == agent.as_str())?
+            .ended
+            .as_ref()?;
+        let theirs = ended.kind == kind
+            && ended.actor == Actor::Agent
+            && ended.by.as_str() == agent.as_str();
+        theirs.then_some(ended.offset)
     }
 }
 
@@ -566,7 +644,7 @@ impl<B: Broker> Tracker<B> {
                 self.resume_recover(agent, &mut delivery).await?;
                 if let Some(d) = delivery.as_ref() {
                     let core = self.0.core.lock().await;
-                    return Ok(claimed(&core.state, d, true));
+                    return Ok(claimed(&core, d, true));
                 }
                 let held = self.0.core.lock().await.state.held_by(agent.as_str());
                 if let Some((item, _)) = held {
@@ -581,7 +659,7 @@ impl<B: Broker> Tracker<B> {
                 }
                 self.sync_ready().await;
                 if let Some(d) = self.try_claim(agent, &lanes).await? {
-                    let reply = claimed(&self.0.core.lock().await.state, &d, false);
+                    let reply = claimed(&*self.0.core.lock().await, &d, false);
                     *delivery = Some(d);
                     return Ok(reply);
                 }
@@ -686,11 +764,14 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
+        attempt: Option<u32>,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
+            attempt,
+            "done",
             |attempt| WorkRecord::Done {
                 item: item.clone(),
                 attempt,
@@ -708,12 +789,15 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
+        attempt: Option<u32>,
         reason: Option<String>,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
+            attempt,
+            "released",
             |attempt| WorkRecord::Released {
                 item: item.clone(),
                 attempt,
@@ -732,12 +816,15 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
+        attempt: Option<u32>,
         reason: String,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
+            attempt,
+            "gave_up",
             |attempt| WorkRecord::GaveUp {
                 item: item.clone(),
                 attempt,
@@ -1432,11 +1519,15 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Shared tail of complete, release and give_up: write the record the fold
-    /// accepts, then settle the delivery.
+    /// accepts, then settle the delivery. With `attempt`, a call whose claim
+    /// already ended answers with the record that ended it, if this agent wrote
+    /// it for that attempt as `kind`: the retry of a call whose answer was lost.
     async fn finish(
         &self,
         agent: &AgentName,
         item: &ItemId,
+        attempt: Option<u32>,
+        kind: &'static str,
         record: impl FnOnce(u32) -> WorkRecord,
         reply: Value,
     ) -> Result<Value, Error> {
@@ -1444,15 +1535,25 @@ impl<B: Broker> Tracker<B> {
         let slot = self.slot(agent);
         let mut delivery = slot.lock().await;
         if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
-            return Err(lapsed(item));
+            let core = self.0.core.lock().await;
+            return replay(&core, agent, item, attempt, kind, reply).ok_or_else(|| lapsed(item));
         }
         let mut ops = Vec::new();
         let mut marked = false;
+        let offset;
         {
             let mut core = self.0.core.lock().await;
-            let attempt = holding(&core, delivery.as_ref(), agent, item)?;
+            let held = match (holding(&core, delivery.as_ref(), agent, item), attempt) {
+                (Ok(held), Some(want)) if held != want => Err(lapsed(item)),
+                (held, _) => held,
+            };
+            let held = match held {
+                Ok(held) => held,
+                Err(e) => return replay(&core, agent, item, attempt, kind, reply).ok_or(e),
+            };
             core.published.remove(item);
-            self.append(&mut core, Actor::Agent, agent_key(agent), record(attempt))
+            offset = self
+                .append(&mut core, Actor::Agent, agent_key(agent), record(held))
                 .await?;
             let ready = core.state.stage(item) == Some(Stage::Ready);
             if !ready {
@@ -1473,11 +1574,16 @@ impl<B: Broker> Tracker<B> {
             }
         }
         drop(delivery);
+        if self.0.settings.crash_after_done {
+            std::process::exit(70);
+        }
         let settled = self.settle(item, ops, marked).await;
         let warning = settled
             .err()
             .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"));
         self.sync_ready().await;
+        let mut reply = reply;
+        reply["offset"] = offset.into();
         Ok(with_warning(reply, warning))
     }
 
@@ -2155,6 +2261,23 @@ fn holding(
     }
 }
 
+/// The answer to a terminal call retried after its record landed: `reply`
+/// with the offset of the record that ended `attempt`, when `agent` wrote it as
+/// `kind`. Without an attempt nothing is replayed, as for an older `kbl-mcp`.
+fn replay(
+    core: &Core,
+    agent: &AgentName,
+    item: &ItemId,
+    attempt: Option<u32>,
+    kind: &str,
+    mut reply: Value,
+) -> Option<Value> {
+    let offset = core.recall.ended_by(item, attempt?, agent, kind)?;
+    reply["offset"] = offset.into();
+    reply["replayed"] = true.into();
+    Some(reply)
+}
+
 fn lapsed(item: &ItemId) -> Error {
     Error::Lost(format!(
         "your claim on {item} lapsed and may have gone to another agent. Stop working on it; use work_next for new work"
@@ -2167,7 +2290,8 @@ fn restarted(item: &ItemId) -> Error {
     ))
 }
 
-fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
+fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
+    let state = &core.state;
     let item = state.items.get(&delivery.item);
     // A review reads its root's request. A fix a review asked for lands on that
     // request's branch, so its author goes on from there.
@@ -2183,6 +2307,8 @@ fn claimed(state: &State, delivery: &Delivery, resumed: bool) -> Value {
         "claimed": true,
         "resumed": resumed,
         "attempt": delivery.attempt,
+        // The `claimed` record's offset.
+        "offset": core.recall.claimed(&delivery.item, delivery.attempt),
         "item": {
             "id": delivery.item,
             "title": item.map(|i| i.title.as_str()),

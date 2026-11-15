@@ -91,6 +91,9 @@ impl TrackerApi for Http {
 /// The one item this agent holds, and the loop that keeps its claim alive.
 struct Held {
     item: String,
+    /// The attempt the claim is on. Terminal calls send it so a retry after a
+    /// lost answer is replayed rather than told the claim is lost.
+    attempt: Option<u64>,
     extender: JoinHandle<()>,
     health: Arc<StdMutex<Health>>,
 }
@@ -177,6 +180,7 @@ impl<T: TrackerApi> Work<T> {
             ));
             *held = Some(Held {
                 item: item.to_owned(),
+                attempt: reply["attempt"].as_u64(),
                 extender,
                 health,
             });
@@ -232,12 +236,13 @@ impl<T: TrackerApi> Work<T> {
 
     /// Calls the tracker, then stops extending the claim if the item is settled
     /// or gone. A refusal or an outage leaves the claim held, so the agent can try again.
-    async fn finish(&self, path: &str, body: Value, item: &str) -> Result<String, String> {
+    async fn finish(&self, path: &str, mut body: Value, item: &str) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
-        let risk = held
-            .as_ref()
-            .filter(|h| h.item == item)
-            .and_then(|h| at_risk(&h.health));
+        let ours = held.as_ref().filter(|h| h.item == item);
+        let risk = ours.and_then(|h| at_risk(&h.health));
+        if let Some(attempt) = ours.and_then(|h| h.attempt) {
+            body["attempt"] = attempt.into();
+        }
         let result = self.0.api.call(path, body).await;
         let settled = match &result {
             Ok(reply) => reply["claim"] != "held",
