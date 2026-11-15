@@ -2585,7 +2585,7 @@ async fn the_team_lease_is_renewed_as_soon_as_serving_starts() {
         });
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(
-            unavailable(&*t.0.core.lock().await, t.lease_margin()).is_none(),
+            unavailable(&t.lease(), t.lease_margin()).is_none(),
             "not writable right after serving began, {took:?} in"
         );
         seed(&t, "a1", 2).await;
@@ -2618,8 +2618,8 @@ async fn a_lapsed_team_lease_is_not_taken_from_a_live_holder() {
     .await
     .unwrap();
     t.renew_lease().await;
-    assert!(t.0.core.lock().await.fenced);
-    assert!(unavailable(&*other.0.core.lock().await, other.lease_margin()).is_none());
+    assert!(t.lease().fenced);
+    assert!(unavailable(&other.lease(), other.lease_margin()).is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -2639,9 +2639,9 @@ async fn a_lease_our_view_says_lapsed_is_renewed_while_felix_still_has_it() {
     // Past the tracker's view of the lease, inside Felix's.
     tokio::time::advance(ttl + Duration::from_millis(100)).await;
     t.renew_lease().await;
-    let core = t.0.core.lock().await;
-    assert!(!core.fenced);
-    assert!(unavailable(&core, t.lease_margin()).is_none());
+    let lease = t.lease();
+    assert!(!lease.fenced);
+    assert!(unavailable(&lease, t.lease_margin()).is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -2671,10 +2671,13 @@ async fn an_append_on_a_state_that_may_miss_records_is_refused() {
     let fake = Fake::default();
     let t = start(&fake).await;
     let before = fake.log().len();
-    let mut core = t.0.core.lock().await;
     // A renewal retook the lease after the call's rebuild.
-    core.stale = true;
-    core.retaken = true;
+    {
+        let mut lease = t.lease();
+        lease.stale = true;
+        lease.retaken = true;
+    }
+    let mut core = t.0.core.lock().await;
     let record = WorkRecord::Imported {
         item: item("b1"),
         source: "gh".into(),
@@ -2708,7 +2711,7 @@ async fn two_renewals_at_once_do_not_fence_the_holder() {
     fake.open_gate();
     slow.await.unwrap();
     fast.await.unwrap();
-    assert!(!t.0.core.lock().await.fenced);
+    assert!(!t.lease().fenced);
 }
 
 #[tokio::test(start_paused = true)]
@@ -2735,9 +2738,9 @@ async fn a_lease_that_runs_out_while_the_renewal_is_in_flight_is_taken_again() {
     tokio::time::advance(Duration::from_millis(100)).await;
     fake.open_gate();
     renew.await.unwrap();
-    let core = t.0.core.lock().await;
-    assert!(!core.fenced);
-    assert!(core.retaken);
+    let lease = t.lease();
+    assert!(!lease.fenced);
+    assert!(lease.retaken);
     assert!(fake.lease_is_held());
 }
 
@@ -2746,7 +2749,7 @@ async fn calls_queued_behind_a_renewal_do_not_renew_again() {
     let fake = Fake::default();
     let t = start(&fake).await;
     // The lease is near its end, so every call renews before serving.
-    t.0.core.lock().await.lease.as_mut().unwrap().valid_until = Instant::now();
+    t.lease().held.as_mut().unwrap().valid_until = Instant::now();
     let before = fake.lease_puts();
     fake.hold_next_lease_put();
     let calls: Vec<_> = (0..4)
@@ -2769,7 +2772,7 @@ async fn calls_queued_behind_a_renewal_do_not_renew_again() {
 async fn a_rebuild_that_read_before_a_retake_stays_stale() {
     let fake = Fake::default();
     let t = start(&fake).await;
-    t.0.core.lock().await.stale = true;
+    t.lease().stale = true;
     fake.hold_next_read();
     let rebuild = tokio::spawn({
         let t = t.clone();
@@ -2780,18 +2783,18 @@ async fn a_rebuild_that_read_before_a_retake_stays_stale() {
     }
     {
         // A renewal retakes the lease while the rebuild reads.
-        let mut core = t.0.core.lock().await;
-        core.retaken = true;
-        core.retakes += 1;
+        let mut lease = t.lease();
+        lease.retaken = true;
+        lease.retakes += 1;
     }
     fake.open_gate();
     rebuild.await.unwrap().unwrap();
-    let core = t.0.core.lock().await;
-    assert!(core.stale);
-    assert!(core.retaken);
+    let lease = t.lease();
+    assert!(lease.stale);
+    assert!(lease.retaken);
 }
 
-fn imported(id: &str) -> WorkRecord {
+pub(super) fn imported(id: &str) -> WorkRecord {
     WorkRecord::Imported {
         item: item(id),
         source: "gh".into(),
@@ -2991,7 +2994,7 @@ async fn a_caller_past_begin_does_not_write_before_the_lease_is_confirmed() {
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }
-    assert!(!t.0.core.lock().await.stale, "the rebuild has not run");
+    assert!(!t.lease().stale, "the rebuild has not run");
     another_takes_the_lease(&fake).await;
     // Another call already past begin(), such as the sweep, appends now.
     let mut core = t.0.core.lock().await;
@@ -3025,7 +3028,7 @@ async fn a_retaken_lease_is_confirmed_after_the_rebuild_reads_the_log() {
     seed(&t, "a1", 2).await;
     tokio::time::advance(Duration::from_secs(4)).await;
     t.renew_lease().await;
-    assert!(t.0.core.lock().await.retaken);
+    assert!(t.lease().retaken);
     // The rebuild after the retake reads while our clock stands still. Another
     // tracker takes the lease and writes; the read then sees its record.
     fake.hold_next_read();
@@ -3088,7 +3091,7 @@ async fn a_renewal_that_landed_with_its_reply_lost_does_not_fence_the_holder() {
     // renews by the version it never heard of.
     fake.lose_next_lease_reply();
     t.renew_lease().await;
-    assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
+    assert!(!t.lease().fenced, "the holder fenced itself");
     t.person_record(key("gab"), imported("c1")).await.unwrap();
     assert_eq!(imports_of(&fake, "c1"), 1);
 }
@@ -3102,7 +3105,7 @@ async fn a_lease_taken_at_start_whose_reply_was_lost_is_held() {
         .await
         .expect("the start gave up on a lease it holds");
     t.renew_lease().await;
-    assert!(!t.0.core.lock().await.fenced);
+    assert!(!t.lease().fenced);
     t.person_record(key("gab"), imported("c1")).await.unwrap();
     assert_eq!(imports_of(&fake, "c1"), 1);
 }
@@ -3130,7 +3133,7 @@ async fn a_retake_that_landed_with_its_reply_lost_reads_what_another_wrote() {
     fake.lose_next_lease_reply();
     t.renew_lease().await;
     t.renew_lease().await;
-    assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
+    assert!(!t.lease().fenced, "the holder fenced itself");
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
 }
 
@@ -3145,10 +3148,14 @@ async fn a_retake_adopted_a_round_late_still_reads_what_another_wrote() {
     fake.fail_lease_gets(false);
     // The next round finds the entry ours at a version it never heard of.
     t.renew_lease().await;
-    let core = t.0.core.lock().await;
-    assert!(!core.fenced, "the holder fenced itself");
-    assert!(core.retaken, "an entry taken back was adopted as a renewal");
-    drop(core);
+    {
+        let lease = t.lease();
+        assert!(!lease.fenced, "the holder fenced itself");
+        assert!(
+            lease.retaken,
+            "an entry taken back was adopted as a renewal"
+        );
+    }
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
 }
 
@@ -3159,7 +3166,7 @@ async fn an_entry_held_by_another_tracker_is_not_adopted() {
     t.renew_lease().await;
     another_takes_the_lease(&fake).await;
     t.renew_lease().await;
-    assert!(t.0.core.lock().await.fenced);
+    assert!(t.lease().fenced);
 }
 
 #[tokio::test(start_paused = true)]
@@ -3171,12 +3178,15 @@ async fn a_retake_adopted_whose_renewal_reply_is_lost_still_reads_what_another_w
     fake.lose_next_lease_reply();
     t.renew_lease().await;
     {
-        let core = t.0.core.lock().await;
-        assert!(core.retaken, "an entry taken back was adopted as a renewal");
-        assert!(core.stale);
+        let lease = t.lease();
+        assert!(
+            lease.retaken,
+            "an entry taken back was adopted as a renewal"
+        );
+        assert!(lease.stale);
     }
     t.renew_lease().await;
-    assert!(!t.0.core.lock().await.fenced, "the holder fenced itself");
+    assert!(!t.lease().fenced, "the holder fenced itself");
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
 }
 
@@ -3196,7 +3206,7 @@ async fn ahead_of_our_view(fake: &Fake, ttl: Duration) -> Tracker<Fake> {
     fake.fail_lease_gets(true);
     t.renew_lease().await;
     fake.fail_lease_gets(false);
-    assert!(!t.0.core.lock().await.fenced);
+    assert!(!t.lease().fenced);
     tokio::time::advance(ttl + Duration::from_secs(1)).await;
     t
 }
@@ -3208,14 +3218,14 @@ async fn an_adopted_entry_that_runs_out_before_the_renewal_is_taken_again() {
     // The read finds the entry ours, and it runs out before the put by it lands.
     fake.expire_lease_after_next_get();
     t.renew_lease().await;
-    let core = t.0.core.lock().await;
-    assert!(!core.fenced, "fenced though nobody holds the lease");
+    let lease = t.lease();
+    assert!(!lease.fenced, "fenced though nobody holds the lease");
     assert!(
-        core.retaken,
+        lease.retaken,
         "a lease taken back with Absent was not a retake"
     );
-    assert!(core.stale);
-    drop(core);
+    assert!(lease.stale);
+    drop(lease);
     assert!(fake.lease_is_held());
 }
 
@@ -3227,7 +3237,7 @@ async fn a_lagging_read_of_our_entry_is_refused_and_writes_nothing() {
     // The read sees our token at a version older than the entry.
     fake.lease_gets_lag_at(Some(entry.unwrap() - 2));
     t.renew_lease().await;
-    assert!(t.0.core.lock().await.fenced);
+    assert!(t.lease().fenced);
     assert_eq!(
         fake.lease_version(),
         entry,

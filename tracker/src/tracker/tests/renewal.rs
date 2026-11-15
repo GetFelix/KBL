@@ -25,10 +25,43 @@ async fn the_lease_is_renewed_on_time_while_a_sweep_call_hangs() {
             "the lease ran out {second} s into a hung sweep"
         );
         assert!(
-            unavailable(&*t.0.core.lock().await, t.lease_margin()).is_none(),
+            unavailable(&t.lease(), t.lease_margin()).is_none(),
             "not writable {second} s into a hung sweep"
         );
     }
+    maintain.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_lease_is_renewed_on_time_while_an_append_hangs() {
+    let fake = Fake::default();
+    fake.lease_expires();
+    let t = start(&fake).await;
+    let maintain = tokio::spawn({
+        let t = t.clone();
+        async move { t.maintain().await }
+    });
+    // Just before a renewal is due, an append holds the state over a write
+    // Felix never answers, until the Felix timeout.
+    tokio::time::sleep(Duration::from_millis(4900)).await;
+    fake.hang_publishes_to(Some(WORK_EVENTS));
+    let append = tokio::spawn({
+        let t = t.clone();
+        async move { t.person_record(key("gab"), imported("b1")).await }
+    });
+    let puts = fake.lease_puts();
+    for tenth in 1..=150 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if tenth == 10 {
+            assert!(fake.lease_puts() > puts, "no renewal while an append hangs");
+        }
+        assert!(fake.lease_is_held(), "the lease ran out {tenth}00 ms in");
+        assert!(
+            unavailable(&t.lease(), t.lease_margin()).is_none(),
+            "not writable {tenth}00 ms into a hung append"
+        );
+    }
+    assert!(append.await.unwrap().is_err());
     maintain.abort();
 }
 
@@ -43,7 +76,7 @@ async fn a_hung_lease_put_gives_up_before_the_next_renewal_is_due() {
         "a hung lease put held the renewal past the next one's turn"
     );
     t.renew_lease().await;
-    assert!(unavailable(&*t.0.core.lock().await, t.lease_margin()).is_none());
+    assert!(unavailable(&t.lease(), t.lease_margin()).is_none());
 }
 
 #[tokio::test(start_paused = true)]
@@ -125,10 +158,39 @@ async fn a_refusal_the_entry_cannot_be_read_against_does_not_fence() {
     tokio::time::advance(Duration::from_secs(1)).await;
     // Refused by the old version, and the entry, ours, cannot be read.
     t.renew_lease().await;
-    assert!(!t.0.core.lock().await.fenced, "fenced on an unread refusal");
+    assert!(!t.lease().fenced, "fenced on an unread refusal");
     fake.fail_lease_gets(false);
     t.renew_lease().await;
-    let core = t.0.core.lock().await;
-    assert!(!core.fenced);
-    assert!(unavailable(&core, t.lease_margin()).is_none());
+    let lease = t.lease();
+    assert!(!lease.fenced);
+    assert!(unavailable(&lease, t.lease_margin()).is_none());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lease_retaken_while_confirming_a_refused_extension_is_unavailable() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    tokio::time::advance(Duration::from_secs(6)).await;
+    fake.extends_are_stale(true);
+    fake.hold_extends();
+    let extend = tokio::spawn({
+        let t = t.clone();
+        async move { t.extend(&agent("w1"), &item("a1")).await }
+    });
+    tokio::task::yield_now().await;
+    // The extension is refused once our view has run out and Felix's entry is
+    // gone: the confirming renewal takes the lease again with Absent, and
+    // another tracker may have served the claim in the gap.
+    tokio::time::advance(Duration::from_millis(9500)).await;
+    fake.expire_lease();
+    fake.open_gate();
+    let r = extend.await.unwrap();
+    assert!(matches!(r, Err(Error::Unavailable(_))), "{r:?}");
+    assert!(
+        t.lease().retaken,
+        "the renewal did not take the lease again"
+    );
+    assert!(fake.lease_is_held());
 }
