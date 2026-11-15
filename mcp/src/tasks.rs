@@ -4,6 +4,9 @@
 //! Every step goes on the run log, refusals included. A failed log write is
 //! reported on stderr and does not fail the tool: the claim or the result it
 //! describes already happened, and failing would tell the model it did not.
+//! The next write that lands is a `refused` record counting what is missing.
+//! The count lives in this process: if the failed write was its last, nothing
+//! reports the gap.
 
 use std::borrow::Cow;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -14,7 +17,7 @@ use kbl_core::artifact::{ArtifactId, PART_SIZE};
 use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, Key, Resources, TaskId, WORKERS_GROUP};
-use kbl_core::record::{Logged, Record};
+use kbl_core::record::{ClaimLostCause, Logged, Record};
 use kbl_core::redact::redact;
 use kbl_core::stored::TaskResult;
 use kbl_core::task::{self, Task, TaskReadError};
@@ -67,6 +70,8 @@ struct Inner<B> {
     held: Mutex<Option<Held>>,
     visibility: Duration,
     extend_every: Duration,
+    /// Run log writes that failed since one last landed, and the latest error.
+    unlogged: StdMutex<Option<(u32, String)>>,
 }
 
 pub(crate) struct Tasks<B>(Arc<Inner<B>>);
@@ -108,6 +113,7 @@ impl<B: Backend> Tasks<B> {
             held: Mutex::new(None),
             visibility,
             extend_every,
+            unlogged: StdMutex::new(None),
         }))
     }
 
@@ -220,7 +226,18 @@ impl<B: Backend> Tasks<B> {
                     return Err(format!("{error}. It was handed back for a newer worker"));
                 }
                 Err(e) => {
+                    // Logged only once the dead-letter holds, or a refused one
+                    // would claim it and every redelivery would repeat it.
                     self.dead_letter(record.offset).await?;
+                    // No task id to log it under, so the group offset names it.
+                    let key = record.offset.to_string();
+                    self.refuse(
+                        "task_read",
+                        &stream,
+                        Some(&key),
+                        &anyhow::anyhow!("dead-lettered, not a task: {e}"),
+                    )
+                    .await;
                     return Err(format!(
                         "dead-lettered the record at offset {}, which is not a task: {e}",
                         record.offset
@@ -575,21 +592,45 @@ impl<B: Backend> Tasks<B> {
             op: op.into(),
             resource: resource.into(),
             key: key.map(str::to_owned),
-            error: format!("{error:#}"),
+            // Felix and decode errors can quote what an agent sent.
+            error: redacted(format!("{error:#}")),
         })
         .await;
     }
 
+    /// A failed write does not fail the tool: the step it records has already
+    /// happened. The next write that lands says how many records are missing,
+    /// placed ahead of it, so under a concurrent keepalive write the position is approximate.
     async fn log(&self, record: Record) {
-        let logged = Logged::new(
-            now_ms(),
-            Key::new(self.0.agent.as_str()).expect("an agent name is a key"),
-            record,
-        );
         let stream = self.0.resources.log();
-        if let Err(e) = self.0.backend.publish(&stream, logged.encode()).await {
-            eprintln!("kbl-mcp: could not write to the run log: {e:#}");
+        let agent = Key::new(self.0.agent.as_str()).expect("an agent name is a key");
+        let write = |record: Record| {
+            let payload = Logged::new(now_ms(), agent.clone(), record).encode();
+            self.0.backend.publish(&stream, payload)
+        };
+        let gap = self.0.unlogged.lock().expect("unlogged lock").take();
+        if let Some((missed, error)) = gap {
+            let note = Record::Refused {
+                op: "run_log".into(),
+                resource: stream.clone(),
+                key: None,
+                error: format!("{missed} earlier record(s) were not written: {error}"),
+            };
+            if let Err(e) = write(note).await {
+                self.missed(missed + 1, &e);
+                return;
+            }
         }
+        if let Err(e) = write(record).await {
+            self.missed(1, &e);
+        }
+    }
+
+    fn missed(&self, count: u32, error: &anyhow::Error) {
+        eprintln!("kbl-mcp: could not write to the run log: {error:#}");
+        let mut gap = self.0.unlogged.lock().expect("unlogged lock");
+        let total = gap.as_ref().map_or(0, |(n, _)| *n) + count;
+        *gap = Some((total, redacted(format!("{error:#}"))));
     }
 }
 
@@ -685,12 +726,13 @@ impl<B: Backend> Claim for TaskClaim<B> {
             .await;
     }
 
-    async fn lost(&self) {
+    async fn lost(&self, cause: ClaimLostCause) {
         self.tasks
             .log(Record::TaskClaimLost {
                 task: self.task.clone(),
                 offset: self.record.offset,
                 attempt: self.attempt,
+                cause: Some(cause),
             })
             .await;
     }

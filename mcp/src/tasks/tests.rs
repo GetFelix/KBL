@@ -358,6 +358,13 @@ async fn a_stale_claim_is_logged_and_the_next_call_says_it_was_lost() {
     assert_eq!(fake.calls("extend").len(), 1, "no more extending once lost");
     let kinds = fake.kinds(RUN);
     assert_eq!(&kinds[kinds.len() - 2..], ["refused", "task_claim_lost"]);
+    assert!(matches!(
+        fake.log(RUN).last(),
+        Some(Record::TaskClaimLost {
+            cause: Some(ClaimLostCause::Stale),
+            ..
+        })
+    ));
 
     // Any other task call reports the loss once and lets go of the task.
     assert!(t.release("t1", None).await.unwrap_err().contains("lapsed"));
@@ -411,6 +418,13 @@ async fn a_hung_extend_counts_as_a_failure_and_loses_the_claim() {
     // Each try takes 30 s to wait and 30 s to time out: lost on the second.
     tokio::time::sleep(Duration::from_secs(125)).await;
     assert!(fake.kinds(RUN).contains(&"task_claim_lost"));
+    assert!(fake.log(RUN).iter().any(|r| matches!(
+        r,
+        Record::TaskClaimLost {
+            cause: Some(ClaimLostCause::Silent),
+            ..
+        }
+    )));
     assert_eq!(fake.calls("extend").len(), 2);
 }
 
@@ -496,6 +510,64 @@ async fn a_record_that_is_not_a_task_is_dead_lettered_and_reported() {
     let err = tasks(&fake).claim(None).await.unwrap_err();
     assert!(err.contains("permission denied"), "{err}");
     assert!(fake.kinds(RUN).contains(&"refused"));
+    assert!(
+        fake.log(RUN)
+            .iter()
+            .filter(|r| matches!(r,
+                Record::Refused { error, .. } if error.contains("dead-lettered, not a task")))
+            .count()
+            == 1,
+        "logged a dead-letter that was refused"
+    );
+}
+
+#[tokio::test]
+async fn an_undecodable_record_shows_on_the_run_log_by_its_offset() {
+    let fake = Fake::default();
+    fake.deliver(b"not json".to_vec(), 7, 1);
+    tasks(&fake).claim(None).await.unwrap_err();
+    match &fake.log(RUN)[..] {
+        [Record::Refused { op, key, error, .. }] => {
+            assert_eq!(op, "task_read");
+            assert_eq!(key.as_deref(), Some("7"));
+            assert!(error.contains("dead-lettered"), "{error}");
+        }
+        other => panic!("expected one refused record, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_failed_run_log_write_is_counted_by_the_next_one_that_lands() {
+    let fake = Fake::default();
+    let t = tasks(&fake);
+    fake.fail_on("publish");
+    t.log(Record::RunEnded {
+        outcome: "a".into(),
+    })
+    .await;
+    t.log(Record::RunEnded {
+        outcome: "b".into(),
+    })
+    .await;
+    assert!(fake.kinds(RUN).is_empty());
+    fake.0.lock().unwrap().fail = None;
+    t.log(Record::RunEnded {
+        outcome: "c".into(),
+    })
+    .await;
+    match &fake.log(RUN)[..] {
+        [Record::Refused { op, error, .. }, Record::RunEnded { .. }] => {
+            assert_eq!(op, "run_log");
+            assert!(error.starts_with("2 earlier record(s)"), "{error}");
+        }
+        other => panic!("expected the gap note then the record, got {other:?}"),
+    }
+    // Said once.
+    t.log(Record::RunEnded {
+        outcome: "d".into(),
+    })
+    .await;
+    assert_eq!(fake.kinds(RUN).len(), 3);
 }
 
 #[tokio::test]
@@ -821,4 +893,28 @@ async fn titles_results_and_reasons_are_redacted() {
     let log = format!("{:?}", fake.log(RUN));
     assert!(!log.contains(&secret), "{log}");
     assert_eq!(log.matches("see [redacted]").count(), 2, "{log}");
+}
+
+#[tokio::test]
+async fn refused_and_gap_records_are_redacted() {
+    let fake = Fake::default();
+    let t = tasks(&fake);
+    // Built at run time so no secret scanner mistakes this file for a leak.
+    let secret = format!("ghp_{}", "q".repeat(36));
+    t.refuse(
+        "task_read",
+        RUN,
+        Some("7"),
+        &anyhow::anyhow!("bad {secret}"),
+    )
+    .await;
+    t.missed(1, &anyhow::anyhow!("write {secret}"));
+    t.log(Record::RunEnded {
+        outcome: "c".into(),
+    })
+    .await;
+    let log = format!("{:?}", fake.log(RUN));
+    assert!(!log.contains(&secret), "{log}");
+    assert!(log.contains("bad [redacted]"), "{log}");
+    assert!(log.contains("write [redacted]"), "{log}");
 }

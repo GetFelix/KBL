@@ -234,23 +234,23 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_release` | `/v1/work/release` | Tracker row |
 | `work_post` | `/v1/work/post` | Tracker row |
 | `work_link` | `/v1/work/link` | Tracker row |
-| `work_context` | `/v1/work/context` and `/v1/work/context/add` | Tracker rows. Artifacts are shown only if the bytes hash to the id (`mcp/src/tasks.rs:511`) |
+| `work_context` | `/v1/work/context` and `/v1/work/context/add` | Tracker rows. Artifacts are shown only if the bytes hash to the id (`mcp/src/tasks.rs:528`) |
 | `work_progress` | `/v1/work/progress` | Tracker row |
 | `work_finding` | `/v1/work/finding` | Tracker row. The tool also limits `severity` and `verdict` to their words (`mcp/src/server.rs:772`) |
 | `work_triage` | `/v1/work/triage` | Tracker row. The tool limits `unclear` to its three words |
 | `work_verdict` | `/v1/work/verdict` | Tracker row. The tool limits `verdict` to merge or block |
-| `decide` | `/v1/work/decide` | Tracker row. Known secret patterns are cut before long text is stored as an artifact (`mcp/src/tasks.rs:494`) |
-| `record_step` | `/v1/work/step` | Tracker row. Known secret patterns are cut before long text is stored as an artifact (`mcp/src/tasks.rs:494`) |
-| `edit` | `/v1/work/edit` | Tracker row. Known secret patterns are cut before long text is stored as an artifact (`mcp/src/tasks.rs:494`) |
+| `decide` | `/v1/work/decide` | Tracker row. Known secret patterns are cut before long text is stored as an artifact (`mcp/src/tasks.rs:511`) |
+| `record_step` | `/v1/work/step` | Tracker row. Known secret patterns are cut before long text is stored as an artifact (`mcp/src/tasks.rs:511`) |
+| `edit` | `/v1/work/edit` | Tracker row. Known secret patterns are cut before long text is stored as an artifact (`mcp/src/tasks.rs:511`) |
 | `work_ask` | `/v1/work/ask` | Tracker row |
 | `work_answer` | `/v1/work/answer` | Tracker row |
 | `work_rules` | `/v1/work/rules/read` | Tracker row |
 | `run_info` | Nothing | Reads its own settings |
-| `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/KBL/issues/29)). Known secret patterns are cut from the title and body (`mcp/src/tasks.rs:115`) |
-| `task_claim` | The run's `workers` group | Felix hands a task to one member. An artifact body is shown only if its bytes hash to the id (`mcp/src/tasks.rs:511`). The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs:267`, [#39](https://github.com/GetFelix/KBL/issues/39)). A task of a format newer than the worker reads is handed back, not run (`mcp/src/tasks.rs:209`); a writer in the run can post one, and each hand-back uses a delivery until Felix dead-letters it |
-| `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Known secret patterns are cut from the result (`mcp/src/tasks.rs:325`) |
-| `task_release` | The `workers` group and run log | `kbl-mcp` only releases the task it holds (`mcp/src/tasks.rs:596`). In Felix: **None** (#29). Known secret patterns are cut from the reason (`mcp/src/tasks.rs:426`) |
-| `task_give_up` | The `workers` group and run log | Same, and the reason too (`mcp/src/tasks.rs:458`) |
+| `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/KBL/issues/29)). Known secret patterns are cut from the title and body (`mcp/src/tasks.rs:121`) |
+| `task_claim` | The run's `workers` group | Felix hands a task to one member. An artifact body is shown only if its bytes hash to the id (`mcp/src/tasks.rs:528`). The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs:284`, [#39](https://github.com/GetFelix/KBL/issues/39)). A task of a format newer than the worker reads is handed back, not run (`mcp/src/tasks.rs:215`); a writer in the run can post one, and each hand-back uses a delivery until Felix dead-letters it. Known secret patterns are cut from the error text of every `refused` record, the dead-letter and run log gap notes included (`mcp/src/tasks.rs:596`) |
+| `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Known secret patterns are cut from the result (`mcp/src/tasks.rs:342`) |
+| `task_release` | The `workers` group and run log | `kbl-mcp` only releases the task it holds (`mcp/src/tasks.rs:637`). In Felix: **None** (#29). Known secret patterns are cut from the reason (`mcp/src/tasks.rs:443`) |
+| `task_give_up` | The `workers` group and run log | Same, and the reason too (`mcp/src/tasks.rs:475`) |
 
 ## Records on work.events
 
@@ -398,7 +398,7 @@ each token and never a token. A format above the build's stops the reader.
 | Forged artifacts and statuses | Bytes under another id; a green check; an approval; a release | Hash check on read; statuses come from ingest only; `shipped` is not an agent's |
 | Merges into other branches | Merge into a side branch and report the item merged | A merge counts only into the default branch, by someone else |
 | Budget escapes | Free questions, free prerequisites, resume work past the depth limit | Cost is charged on ask and prerequisite; depth applies to resume work. Every claim end and ask is charged at least the tracker's floor, so an agent that reports nothing still spends the root's cost budget |
-| Secrets in what an agent reports | A token from the environment in a step's output or a diff hunk, kept on the log for as long as the item | Known secret shapes are replaced with `[redacted]` by the tracker in the free text of every record an agent writes (`tracker/src/tracker.rs:1573`) and of a person's note (`tracker/src/http.rs:826`), and by `kbl-mcp` before it stores an artifact (`mcp/src/tasks.rs:494`), a task result (`mcp/src/tasks.rs:325`) or a task title (`mcp/src/tasks.rs:115`). Every record kind's fields are sorted into redacted and structured, with no default (`core/src/redact.rs:495`). A secret with no known prefix goes through, such as an AWS secret access key |
+| Secrets in what an agent reports | A token from the environment in a step's output or a diff hunk, kept on the log for as long as the item | Known secret shapes are replaced with `[redacted]` by the tracker in the free text of every record an agent writes (`tracker/src/tracker.rs:1573`) and of a person's note (`tracker/src/http.rs:826`), and by `kbl-mcp` before it stores an artifact (`mcp/src/tasks.rs:511`), a task result (`mcp/src/tasks.rs:342`) or a task title (`mcp/src/tasks.rs:121`). Every record kind's fields are sorted into redacted and structured, with no default (`core/src/redact.rs:495`). A secret with no known prefix goes through, such as an AWS secret access key |
 | Forged webhooks | Wake ingest in a loop | Signature and spacing. A captured body can be replayed under a new delivery id, and it only wakes the poll |
 
 ## Gaps

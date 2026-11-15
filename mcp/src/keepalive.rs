@@ -6,6 +6,8 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
+use kbl_core::record::ClaimLostCause;
+
 use crate::felix::ExtendError;
 
 /// Extensions in a row that may fail before the model is warned its claim is at risk.
@@ -38,7 +40,7 @@ pub(crate) trait Claim: Send + Sync + 'static {
     /// An extension failed.
     fn failed(&self, error: &anyhow::Error) -> impl Future<Output = ()> + Send;
     /// The claim is gone.
-    fn lost(&self) -> impl Future<Output = ()> + Send;
+    fn lost(&self, cause: ClaimLostCause) -> impl Future<Output = ()> + Send;
 }
 
 /// Extends the claim until this loop is aborted or the claim is lost.
@@ -54,7 +56,7 @@ pub(crate) async fn keep_alive<C: Claim>(
         let extended = tokio::time::timeout(every, claim.extend())
             .await
             .unwrap_or_else(|_| Err(ExtendError::Failed(anyhow::anyhow!("the extend timed out"))));
-        let gone = match extended {
+        let cause = match extended {
             Ok(visible) => {
                 {
                     let mut h = health.lock().expect("health lock");
@@ -62,7 +64,7 @@ pub(crate) async fn keep_alive<C: Claim>(
                     h.last_ok = Instant::now();
                 }
                 claim.extended(visible).await;
-                false
+                None
             }
             Err(e) => {
                 claim.failed(e.error()).await;
@@ -70,12 +72,18 @@ pub(crate) async fn keep_alive<C: Claim>(
                 h.failures += 1;
                 // Lapsed or handed out again, or too long without a working
                 // extension for the claim to still stand.
-                matches!(e, ExtendError::Stale(_)) || h.last_ok.elapsed() >= visibility
+                if matches!(e, ExtendError::Stale(_)) {
+                    Some(ClaimLostCause::Stale)
+                } else if h.last_ok.elapsed() >= visibility {
+                    Some(ClaimLostCause::Silent)
+                } else {
+                    None
+                }
             }
         };
-        if gone {
+        if let Some(cause) = cause {
             health.lock().expect("health lock").lost = true;
-            claim.lost().await;
+            claim.lost(cause).await;
             return;
         }
     }

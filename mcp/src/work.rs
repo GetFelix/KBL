@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use kbl_core::record::ClaimLostCause;
+
 use crate::felix::ExtendError;
 use crate::keepalive::{self, Claim, Health, at_risk};
 
@@ -285,7 +287,7 @@ impl<T: TrackerApi> Claim for WorkClaim<T> {
         eprintln!("kbl-mcp: extending {} failed: {error:#}", self.item);
     }
 
-    async fn lost(&self) {
+    async fn lost(&self, _cause: ClaimLostCause) {
         eprintln!("kbl-mcp: the claim on {} is lost", self.item);
     }
 }

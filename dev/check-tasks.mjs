@@ -4,7 +4,7 @@
 // at once. Each agent is its own kbl-mcp process, as under an MCP host.
 //
 //   cargo build -p kbl-mcp -p kbl-tool && node dev/check-tasks.mjs
-import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, killAll, sleep } from "./lib/stack.mjs";
+import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, killAll, runLog, sleep } from "./lib/stack.mjs";
 
 const RUN = `tasks-${Date.now().toString(36)}`;
 const TASKS = 8;
@@ -94,6 +94,10 @@ try {
   );
   const lateCopy = await taker.tool("task_complete", { task: "lapse", result: "second" });
   check(lateCopy.status === "duplicate", "w8's later result was a duplicate");
+  // The fallback (no extension worked for a visibility window) also fires here,
+  // so the record's cause says which path found the loss.
+  const lostRecord = runLog(RUN).find((r) => r.kind === "task_claim_lost" && r.task === "lapse");
+  check(lostRecord?.cause === "stale", "the loss was read from Felix's typed stale_claim, not the silence fallback");
   planner.kill();
 } finally {
   killAll();
