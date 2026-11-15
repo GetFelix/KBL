@@ -258,8 +258,10 @@ impl<B: Broker> Org<B> {
                         OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}"))
                     })?;
                 }
+                // A lost reply may have been a refusal: check the lease too.
                 Err(e) => {
                     core.stale = true;
+                    core.refusals += 1;
                     self.publish_lease(&core);
                     self.refresh_or_log(&mut core).await;
                     return Err(OrgError::Felix(e));

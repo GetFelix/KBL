@@ -377,6 +377,10 @@ impl Broker for Fake {
         payload: Vec<u8>,
         expected: u64,
     ) -> anyhow::Result<ConditionalWrite> {
+        // The reply is lost, whatever Felix did.
+        if self.net.lock().unwrap().fail_publish_on.as_deref() == Some(stream) {
+            anyhow::bail!("the broker is down");
+        }
         // Like Felix: refused unless it would land at the stream's next
         // offset, which counts offsets given out but not yet committed.
         let tail = self.net.lock().unwrap().next_offset(stream);
@@ -2715,4 +2719,23 @@ async fn the_sweep_stops_after_felix_refuses_one_of_its_writes() {
         released, 0,
         "the sweep appended on a state its refused write had changed"
     );
+}
+
+#[tokio::test]
+async fn a_lost_reply_to_a_write_also_checks_the_lease() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    another_takes_the_lease(&fake).await;
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    // Felix refused it, but the answer never came back.
+    fake.fail_publishes_to(Some(WORK_EVENTS));
+    assert!(t.person_record(key("gab"), imported("c1")).await.is_err());
+    fake.fail_publishes_to(None);
+    assert!(matches!(
+        t.person_record(key("gab"), imported("c1")).await,
+        Err(Error::Unavailable(_))
+    ));
+    assert_eq!(imports_of(&fake, "c1"), 0);
 }

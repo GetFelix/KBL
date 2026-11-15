@@ -62,8 +62,9 @@ Two more parties are outside KBL and can still steer it:
    `core/src/work_fold.rs` is a check on every route. A writer lease keeps a
    second tracker from writing (`tracker/src/tracker.rs:1614`), and every
    append is conditional on the offset it expects, so a tracker that lost the
-   lease cannot append after the new holder's records. After a refusal it
-   writes again only once Felix renews its lease by version. Residual: a stale
+   lease cannot append after the new holder's records. After a refusal, or a
+   write whose answer was lost, it writes again only once Felix renews its
+   lease by version. Residual: a stale
    holder's write still lands if the new holder has written nothing since. The
    new holder's next write is then refused and it reads the stale record
    before writing, so the record is not lost, but it takes effect without the
@@ -103,7 +104,7 @@ All of them need an agent token (`tracker/src/http.rs:227`).
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
 | `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs:528`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs:1357`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs:962`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs:997`, `tracker/src/tracker.rs:1037`) and the fold refuses the claim too (`core/src/work_fold.rs:1362`) |
-| `/v1/work/extend` | `item` | Keep another agent's claim alive, or its own after losing it | Must own the delivery and the hold (`tracker/src/tracker.rs:1888`, `tracker/src/tracker.rs:1895`) |
+| `/v1/work/extend` | `item` | Keep another agent's claim alive, or its own after losing it | Must own the delivery and the hold (`tracker/src/tracker.rs:1890`, `tracker/src/tracker.rs:1897`) |
 | `/v1/work/complete` | `item`, `cost_micros` | Finish work it does not hold; finish over open children; report no cost | Holder only (`tracker/src/tracker.rs:1339`, `core/src/work_fold.rs:1453`). Open children refuse it (`core/src/work_fold.rs:1458`). A fix is not closed by `done`; a merge or a person closes it. Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:720`); a report above it is the agent's word; the item total saturates (`core/src/work_fold.rs:1484`) |
 | `/v1/work/release` | `item`, `reason`, `cost_micros` | Release another's work; write a huge record | Holder only (`core/src/work_fold.rs:1498`). Two claims per attempt (`core/src/work_fold.rs:1344`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1255`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:720`); a report above it is the agent's word |
 | `/v1/work/give_up` | `item`, `reason`, `cost_micros` | Same as release | Holder only (`core/src/work_fold.rs:1514`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs:1255`). Cost: charged at least the floor, `KBL_COST_FLOOR_MICROS` (`tracker/src/tracker.rs:720`); a report above it is the agent's word |

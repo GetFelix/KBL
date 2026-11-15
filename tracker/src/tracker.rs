@@ -1675,8 +1675,10 @@ impl<B: Broker> Tracker<B> {
                     "{WORK_EVENTS} moved under this write; try again"
                 )))
             }
+            // A lost reply may have been a refusal: check the lease too.
             Err(e) => {
                 core.stale = true;
+                core.refusals += 1;
                 Err(Error::Felix(e))
             }
         }
