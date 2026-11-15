@@ -1113,12 +1113,14 @@ impl<B: Broker> Tracker<B> {
     async fn confirm_lease(&self) -> bool {
         let asked = Instant::now();
         let ttl = self.0.settings.lease_ttl;
+        // Counted, not just flagged: another call's rebuild clears `retaken`.
+        let retakes = self.lease().retakes;
         // A renewal already in flight was sent too early to count, so a second
         // one may be needed. One sent after `asked` by another caller counts.
         for _ in 0..2 {
             self.renew_lease().await;
             let lease = self.lease();
-            if lease.fenced || lease.retaken {
+            if lease.fenced || lease.retaken || lease.retakes != retakes {
                 return false;
             }
             if lease

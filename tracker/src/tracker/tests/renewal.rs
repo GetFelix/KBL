@@ -194,3 +194,36 @@ async fn a_lease_retaken_while_confirming_a_refused_extension_is_unavailable() {
     );
     assert!(fake.lease_is_held());
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_retake_during_confirmation_counts_after_a_rebuild_clears_it() {
+    let fake = Fake::default();
+    fake.lease_expires();
+    let t = start(&fake).await;
+    // Our view and Felix's entry have both run out.
+    tokio::time::advance(Duration::from_secs(16)).await;
+    // A renewal sent before the confirmation is asked for retakes the lease,
+    // and another call rebuilds at once, clearing `retaken`.
+    fake.hold_next_lease_put();
+    let early = tokio::spawn({
+        let t = t.clone();
+        async move {
+            t.renew_lease().await;
+            t.rebuild().await.unwrap();
+            assert!(!t.lease().retaken);
+        }
+    });
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_millis(1)).await;
+    let confirm = tokio::spawn({
+        let t = t.clone();
+        async move { t.confirm_lease().await }
+    });
+    tokio::task::yield_now().await;
+    fake.open_gate();
+    early.await.unwrap();
+    assert!(
+        !confirm.await.unwrap(),
+        "confirmed a lease that lapsed after the extension was refused"
+    );
+}

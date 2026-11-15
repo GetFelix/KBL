@@ -179,7 +179,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | Call | Token | Does |
 |---|---|---|
 | `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item. An agent that already holds one gets it again, marked `resumed` |
-| `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed; `503` means the tracker could not confirm its lease, so call again. With Felix not answering, the extend and the lease check can take up to about 40 seconds before that `503` |
+| `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed; `503` means the tracker could not confirm its lease, so call again. After a `stale_claim` that check renews the lease, possibly twice and behind a renewal already running, each lease call giving up after 3 seconds, so with a slow Felix the `503` can take tens of seconds |
 | `POST /v1/work/complete` `{item, usage}` | agent | Writes `done`, then acks |
 | `POST /v1/work/release` `{item, reason, usage}` | agent | Writes `released`, then hands the delivery back |
 | `POST /v1/work/give_up` `{item, reason, usage}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
