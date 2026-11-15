@@ -1321,6 +1321,68 @@ async fn ingest_writes_upstream_records_as_the_tracker_under_its_own_name() {
 }
 
 #[tokio::test]
+async fn ingest_writing_a_context_entry_again_unchanged_logs_nothing() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let ingest = |r| {
+        let t = &t;
+        async move { t.ingest_record(key("ingest-gh"), r).await }
+    };
+    let imported = WorkRecord::Imported {
+        item: item("r1"),
+        source: "github".into(),
+        upstream_id: "GetFelix/felix#1".into(),
+        title: "a bug".into(),
+    };
+    ingest(imported).await.unwrap();
+    let context = |body: &str| WorkRecord::Context {
+        item: item("r1"),
+        entry: key("issue"),
+        text: Content::Text(body.into()),
+    };
+    let first = ingest(context("the body")).await.unwrap();
+    let before = fake.log().len();
+    let again = ingest(context("the body")).await.unwrap();
+    assert_eq!(fake.log().len(), before);
+    assert_eq!(again["offset"], first["offset"]);
+    // The texts come back from the log on a restart.
+    let t = start(&fake).await;
+    t.ingest_record(key("ingest-gh"), context("the body"))
+        .await
+        .unwrap();
+    assert_eq!(fake.log().len(), before);
+    t.ingest_record(key("ingest-gh"), context("an edit"))
+        .await
+        .unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+}
+
+#[tokio::test]
+async fn ingest_takes_back_an_entry_an_agent_wrote_even_with_the_same_text() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    let same = Content::Text("the body".into());
+    t.context_add(&agent("w1"), &item("a1"), key("issue"), same.clone())
+        .await
+        .unwrap();
+    let context = WorkRecord::Context {
+        item: item("a1"),
+        entry: key("issue"),
+        text: same,
+    };
+    let before = fake.log().len();
+    t.ingest_record(key("ingest-gh"), context.clone())
+        .await
+        .unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+    // Ingest's own now, so the same text again is not logged.
+    t.ingest_record(key("ingest-gh"), context).await.unwrap();
+    assert_eq!(fake.log().len(), before + 1);
+}
+
+#[tokio::test]
 async fn ingest_cannot_write_what_a_person_or_an_agent_writes() {
     let fake = Fake::default();
     let t = start(&fake).await;

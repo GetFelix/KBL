@@ -147,6 +147,17 @@ impl<B: Broker> Tracker<B> {
                     _ => {}
                 }
             }
+            // Ingest that lost its saved state writes every open root's entries
+            // again. The same text over an entry no agent owns changes nothing a
+            // read shows, so it is not logged.
+            if let WorkRecord::Context { item, entry, text } = &record
+                && let Some(it) = core.state.items.get(item)
+                && let Some(&at) = it.context.get(entry)
+                && !it.context_agents.contains_key(entry)
+                && core.recall.texts.get(&at) == Some(text)
+            {
+                return Ok(json!({ "kind": kind, "offset": at, "unchanged": true }));
+            }
             let opened = match &record {
                 WorkRecord::PrStatus { item, status } if status.phase == PrPhase::Open => {
                     Some((item.clone(), status.pr.clone()))
