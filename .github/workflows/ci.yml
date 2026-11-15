@@ -117,6 +117,10 @@ jobs:
         run: |
           cargo build -p kbl-tool -p kbl-mcp -p kbl-tracker
           node dev/check-tracker-claims.mjs
+      - name: Poll one issue again and again, and import it once
+        run: |
+          cargo build -p kbl-ingest
+          node dev/check-tracker-ingest.mjs
       - name: Run the work tools against Felix
         run: node dev/check-tracker-work.mjs
       - name: Create teams and keep them apart

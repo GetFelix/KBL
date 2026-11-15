@@ -437,7 +437,9 @@ What it does with GitHub:
 
 - **Cursor.** Each repo has its own cursor. Issues and comments are listed
   `since` that repo's cursor, oldest first. Re-listing is safe, because each
-  step is idempotent. A repo that answers 403 or 404 (removed, renamed, or the
+  step is idempotent: an issue listed again, or listed after ingest lost its
+  saved state, is imported once (`dev/check-tracker-ingest.mjs` runs this
+  against the dev stack). A repo that answers 403 or 404 (removed, renamed, or the
   App lost access) keeps its cursor and stalls only itself: the tracker gets a
   `source_stalled` record, shown in Needs you for that source, and a second
   record when the repo can be read again. State saved with the older single
