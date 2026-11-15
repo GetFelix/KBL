@@ -84,18 +84,24 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("r1"),
             attempt: 2,
             cost_micros: 1_250_000,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
         WorkRecord::Released {
             item: item("r1"),
             attempt: 1,
             reason: Some("claim lapsed".into()),
             cost_micros: 30_000,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
         WorkRecord::GaveUp {
             item: item("r1"),
             attempt: 1,
             reason: "cannot reproduce".into(),
             cost_micros: 400_000,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
         WorkRecord::Question {
             item: item("r1"),
@@ -104,6 +110,8 @@ fn every_record() -> Vec<WorkRecord> {
             options: vec![],
             default: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
         WorkRecord::Answer {
             item: item("r1"),
@@ -259,6 +267,8 @@ fn every_record() -> Vec<WorkRecord> {
             }),
             done_when: DoneWhen::Released,
             cost_micros: 25_000,
+            usage: Vec::new(),
+            floor_micros: 0,
             triage: None,
         },
         WorkRecord::Prerequisite {
@@ -269,6 +279,8 @@ fn every_record() -> Vec<WorkRecord> {
             new: None,
             done_when: DoneWhen::Merged,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
             triage: None,
         },
         WorkRecord::Shipped {
@@ -291,6 +303,8 @@ fn every_record() -> Vec<WorkRecord> {
             options: vec!["rust".into(), "python".into()],
             default: Some("rust".into()),
             cost_micros: 25_000,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
         WorkRecord::Answer {
             item: item("r1"),
@@ -358,6 +372,8 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("rv"),
             attempt: 1,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
         WorkRecord::PrStatus {
             item: item("rv"),
@@ -412,6 +428,8 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("v1"),
             attempt: 1,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
         WorkRecord::Claimed {
             item: item("v2"),
@@ -505,6 +523,8 @@ fn a_logged_record_carries_the_principal_and_role() {
             item: item("r1"),
             attempt: 1,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     assert_eq!(

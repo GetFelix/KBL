@@ -23,7 +23,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
     Actor, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS,
-    WORK_EVENTS, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
+    Usage, WORK_EVENTS, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
 use serde_json::{Value, json};
@@ -80,7 +80,7 @@ pub(crate) struct Settings {
     /// Reviewer tier names, one ready lane each. The first reads a request
     /// first and the last gives the final review.
     pub(crate) review_tiers: Vec<String>,
-    /// The least a claim is charged, whatever the agent reports. Reported cost
+    /// The least a claim is charged, whatever usage the agent reports. Usage
     /// is the agent's word, so this is what bounds a tree's cost.
     pub(crate) cost_floor_micros: u64,
 }
@@ -663,24 +663,25 @@ impl<B: Broker> Tracker<B> {
         })
     }
 
-    /// Writes `done`, then acks the delivery. `cost_micros` is what the agent
-    /// reports; the record carries at least the cost floor.
+    /// Writes `done`, then acks the delivery. `usage` is what the agent
+    /// reports; the fold prices it and charges at least the cost floor.
     pub(crate) async fn complete(
         &self,
         agent: &AgentName,
         item: &ItemId,
-        cost_micros: u64,
+        usage: Vec<Usage>,
     ) -> Result<Value, Error> {
-        let cost_micros = self.charge(cost_micros);
         self.finish(
             agent,
             item,
             |attempt| WorkRecord::Done {
                 item: item.clone(),
                 attempt,
-                cost_micros,
+                cost_micros: 0,
+                usage,
+                floor_micros: self.floor(),
             },
-            json!({ "item": item, "status": "done", "cost_micros": cost_micros }),
+            json!({ "item": item, "status": "done" }),
         )
         .await
     }
@@ -691,9 +692,8 @@ impl<B: Broker> Tracker<B> {
         agent: &AgentName,
         item: &ItemId,
         reason: Option<String>,
-        cost_micros: u64,
+        usage: Vec<Usage>,
     ) -> Result<Value, Error> {
-        let cost_micros = self.charge(cost_micros);
         self.finish(
             agent,
             item,
@@ -701,7 +701,9 @@ impl<B: Broker> Tracker<B> {
                 item: item.clone(),
                 attempt,
                 reason,
-                cost_micros,
+                cost_micros: 0,
+                usage,
+                floor_micros: self.floor(),
             },
             json!({ "item": item, "status": "released" }),
         )
@@ -714,9 +716,8 @@ impl<B: Broker> Tracker<B> {
         agent: &AgentName,
         item: &ItemId,
         reason: String,
-        cost_micros: u64,
+        usage: Vec<Usage>,
     ) -> Result<Value, Error> {
-        let cost_micros = self.charge(cost_micros);
         self.finish(
             agent,
             item,
@@ -724,17 +725,19 @@ impl<B: Broker> Tracker<B> {
                 item: item.clone(),
                 attempt,
                 reason,
-                cost_micros,
+                cost_micros: 0,
+                usage,
+                floor_micros: self.floor(),
             },
             json!({ "item": item, "status": "gave_up" }),
         )
         .await
     }
 
-    /// What a claim is charged for a reported cost. The floor is applied when
-    /// the record is written, so every reader folds the charged cost as is.
-    pub(crate) fn charge(&self, reported_micros: u64) -> u64 {
-        reported_micros.max(self.0.settings.cost_floor_micros)
+    /// The least a report is charged. It goes on the record, so every reader
+    /// folds the same charge whatever the tracker is configured with later.
+    pub(crate) fn floor(&self) -> u64 {
+        self.0.settings.cost_floor_micros
     }
 
     /// Appends a record on behalf of a person, if the fold accepts it.
@@ -795,7 +798,9 @@ impl<B: Broker> Tracker<B> {
                 attempt,
                 reason: Some("lapsed".into()),
                 // Letting a claim lapse must not be a way to work for free.
-                cost_micros: self.charge(0),
+                cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: self.floor(),
             };
             if self
                 .append(&mut core, Actor::Tracker, self.0.me.clone(), released)
@@ -839,7 +844,9 @@ impl<B: Broker> Tracker<B> {
                 item: item.clone(),
                 attempt,
                 reason: Some("revoked".into()),
-                cost_micros: self.charge(0),
+                cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: self.floor(),
             };
             self.append(&mut core, Actor::Tracker, self.0.me.clone(), record)
                 .await?;
@@ -1314,7 +1321,9 @@ impl<B: Broker> Tracker<B> {
                     item: item.clone(),
                     attempt: hold.attempt,
                     reason: Some("lapsed".into()),
-                    cost_micros: self.charge(0),
+                    cost_micros: 0,
+                    usage: Vec::new(),
+                    floor_micros: self.floor(),
                 };
                 if let Err(e) = self
                     .append(core, Actor::Tracker, self.0.me.clone(), lapse)
@@ -1722,6 +1731,8 @@ impl<B: Broker> Tracker<B> {
         // Every route (agent, person, ingest) ends here, so one check bounds them all.
         tools::check_sizes(&record)?;
         canonical_pr(&core.state, &mut record);
+        // A log below format 8 cannot carry usage: its report is charged the floor.
+        record.fit_charge(core.state.format());
         if actor == Actor::Agent {
             kbl_core::redact::redact_record(&mut record);
         }

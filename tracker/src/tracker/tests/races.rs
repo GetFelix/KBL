@@ -44,7 +44,9 @@ async fn a_release_that_races_a_claim_does_not_evict_the_next_holder() {
     let polled = poll_early(&t, &fake, "w2");
     // w1 wakes and releases before w2's poll reaches the claim step. Its nack
     // puts the record back, w2's lease included.
-    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     assert_eq!(fake.slot(READY, 0), Slot::Pending);
     assert!(!claim_late(&t, "w2", polled).await);
     // The record comes round to the next poll.
@@ -68,6 +70,8 @@ async fn a_delivery_dropped_on_a_holders_next_call_does_not_evict_the_next_holde
             attempt: 1,
             reason: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     )
     .await
@@ -93,7 +97,7 @@ async fn release_with_a_slow_nack(
     fake.hold_next_nack();
     let releasing = tokio::spawn({
         let t = t.clone();
-        async move { t.release(&agent("w1"), &item("a1"), None, 0).await }
+        async move { t.release(&agent("w1"), &item("a1"), None, Vec::new()).await }
     });
     for _ in 0..1000 {
         if in_flight(t).await {
@@ -201,7 +205,9 @@ async fn a_hand_back_mark_does_not_outlive_its_item() {
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    t.release(&agent("w1"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     assert!(t.0.core.lock().await.handed_back.contains_key(&item("a1")));
     // A person closes the item while it waits in Ready.
     t.person_record(
@@ -223,7 +229,10 @@ async fn a_settle_that_panics_still_ends_the_hand_back() {
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
     fake.panic_on_next_nack();
-    let done = t.release(&agent("w1"), &item("a1"), None, 0).await.unwrap();
+    let done = t
+        .release(&agent("w1"), &item("a1"), None, Vec::new())
+        .await
+        .unwrap();
     assert!(done.to_string().contains("not settled"), "{done}");
     settled(&t).await;
     // The nack never landed, so the record comes round once its lease lapses.

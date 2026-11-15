@@ -16,7 +16,7 @@ use kbl_core::work::{
     Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FindingVerdict, MAX_ASK_OPTION_LEN,
     MAX_ASK_OPTIONS, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO,
     MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity,
-    Target, Then, Unclear, WorkKind, WorkRecord,
+    Target, Then, Unclear, Usage, WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -171,7 +171,7 @@ impl<B: Broker> Tracker<B> {
         key: Key,
         which: Prereq,
         done_when: DoneWhen,
-        cost_micros: u64,
+        usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         let (prerequisite, new) = match which {
             Prereq::New {
@@ -298,6 +298,8 @@ impl<B: Broker> Tracker<B> {
                     new,
                     done_when,
                     cost_micros: 0,
+                    usage: Vec::new(),
+                    floor_micros: 0,
                     triage: Some(item.clone()),
                 };
                 // Appended under the lock the caps were checked under: this
@@ -310,7 +312,6 @@ impl<B: Broker> Tracker<B> {
                 return Ok(reply);
             }
         }
-        let cost_micros = self.charge(cost_micros);
         let record = {
             let prerequisite = prerequisite.clone();
             let item = item.clone();
@@ -321,7 +322,9 @@ impl<B: Broker> Tracker<B> {
                 key,
                 new,
                 done_when,
-                cost_micros,
+                cost_micros: 0,
+                usage,
+                floor_micros: self.floor(),
                 triage: None,
             }
         };
@@ -531,18 +534,19 @@ impl<B: Broker> Tracker<B> {
         text: Content,
         options: Vec<String>,
         default: Option<String>,
-        cost_micros: u64,
+        usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
         check_options(&options, default.as_deref())?;
-        let cost_micros = self.charge(cost_micros);
         self.held_write(agent, item, "ask", |attempt| WorkRecord::Question {
             item: item.clone(),
             attempt,
             text,
             options,
             default,
-            cost_micros,
+            cost_micros: 0,
+            usage,
+            floor_micros: self.floor(),
         })
         .await
     }

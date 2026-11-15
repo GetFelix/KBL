@@ -1048,3 +1048,41 @@ async fn a_token_names_one_caller_across_teams() {
     ];
     assert!(Teams::new(twice).is_err());
 }
+
+#[tokio::test]
+async fn a_reported_cost_is_refused_with_what_to_send_instead() {
+    let app = app().await;
+    let (status, reply) = call(
+        &app,
+        "/v1/work/complete",
+        Some("tok-w1"),
+        json!({ "item": "a1", "cost_micros": 5 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{reply}");
+    assert!(reply.to_string().contains("usage"), "{reply}");
+}
+
+#[tokio::test]
+async fn only_a_person_sets_a_price_once_the_log_is_at_format_8() {
+    let app = kept().await;
+    let price = json!({ "model": "m", "unit": "input", "price_micros": 3_000_000 });
+    assert_eq!(
+        call(&app, "/v1/work/prices", Some("tok-w1"), price.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), price.clone()).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("format"))
+    );
+    raise_to(&app, 8).await;
+    let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), price).await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("price_set")),
+        "{reply}"
+    );
+}

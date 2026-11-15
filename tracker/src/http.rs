@@ -19,8 +19,8 @@ use axum::{Json, Router};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, RevertCheck,
-    Severity, Target, Unclear, WorkRecord,
+    CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, PriceUnit,
+    RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
 };
 use kbl_core::work_fold::Stage;
 use serde::Deserialize;
@@ -102,6 +102,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/close", post(close::<B>))
         .route("/v1/work/unlink", post(unlink::<B>))
         .route("/v1/work/budget", post(budget::<B>))
+        .route("/v1/work/prices", post(price::<B>))
         .route("/v1/work/rules", post(rules::<B>))
         .route("/v1/work/rules/read", post(rules_read::<B>))
         .route("/v1/work/flag", post(flag::<B>))
@@ -280,24 +281,52 @@ struct ItemBody {
 #[derive(Deserialize)]
 struct CompleteBody {
     item: ItemId,
+    /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
-    cost_micros: u64,
+    usage: Vec<Usage>,
+    /// Replaced by `usage`: refused, so an agent built for it learns why.
+    cost_micros: Option<u64>,
 }
 
 #[derive(Deserialize)]
 struct ReleaseBody {
     item: ItemId,
     reason: Option<String>,
+    /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
-    cost_micros: u64,
+    usage: Vec<Usage>,
+    /// Replaced by `usage`: refused, so an agent built for it learns why.
+    cost_micros: Option<u64>,
 }
 
 #[derive(Deserialize)]
 struct GiveUpBody {
     item: ItemId,
     reason: String,
+    /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
-    cost_micros: u64,
+    usage: Vec<Usage>,
+    /// Replaced by `usage`: refused, so an agent built for it learns why.
+    cost_micros: Option<u64>,
+}
+
+/// The usage a claim end reports. A `cost_micros` is refused rather than
+/// dropped, so an agent still sending it is told what to send instead.
+fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {
+    match cost_micros {
+        None => Ok(usage),
+        Some(_) => Err(Error::Invalid(
+            "cost_micros is no longer read: report `usage`, one entry per model, and the tracker prices it".into(),
+        )),
+    }
+}
+
+#[derive(Deserialize)]
+struct PriceBody {
+    model: String,
+    unit: PriceUnit,
+    price_micros: u64,
+    effective_from_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -326,8 +355,11 @@ struct PostBody {
     #[serde(default)]
     done_when: DoneWhen,
     /// What the attempt cost so far.
+    /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
-    cost_micros: u64,
+    usage: Vec<Usage>,
+    /// Replaced by `usage`: refused, so an agent built for it learns why.
+    cost_micros: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -516,21 +548,25 @@ async fn extend<B: Broker>(call: Call<B>, Json(body): Json<ItemBody>) -> Respons
 }
 
 async fn complete<B: Broker>(call: Call<B>, Json(body): Json<CompleteBody>) -> Response {
+    let usage = match usage_of(body.usage, body.cost_micros) {
+        Ok(u) => u,
+        Err(e) => return reply(Err(e)),
+    };
     match call.agent() {
-        Ok(a) => reply(
-            call.tracker()
-                .complete(&a, &body.item, body.cost_micros)
-                .await,
-        ),
+        Ok(a) => reply(call.tracker().complete(&a, &body.item, usage).await),
         Err(d) => denied(d),
     }
 }
 
 async fn release<B: Broker>(call: Call<B>, Json(body): Json<ReleaseBody>) -> Response {
+    let usage = match usage_of(body.usage, body.cost_micros) {
+        Ok(u) => u,
+        Err(e) => return reply(Err(e)),
+    };
     match call.agent() {
         Ok(a) => reply(
             call.tracker()
-                .release(&a, &body.item, body.reason, body.cost_micros)
+                .release(&a, &body.item, body.reason, usage)
                 .await,
         ),
         Err(d) => denied(d),
@@ -538,10 +574,14 @@ async fn release<B: Broker>(call: Call<B>, Json(body): Json<ReleaseBody>) -> Res
 }
 
 async fn give_up<B: Broker>(call: Call<B>, Json(body): Json<GiveUpBody>) -> Response {
+    let usage = match usage_of(body.usage, body.cost_micros) {
+        Ok(u) => u,
+        Err(e) => return reply(Err(e)),
+    };
     match call.agent() {
         Ok(a) => reply(
             call.tracker()
-                .give_up(&a, &body.item, body.reason, body.cost_micros)
+                .give_up(&a, &body.item, body.reason, usage)
                 .await,
         ),
         Err(d) => denied(d),
@@ -561,6 +601,10 @@ async fn work_post<B: Broker>(call: Call<B>, Json(b): Json<PostBody>) -> Respons
         Err(d) => return denied(d),
     };
     if b.work == "prerequisite" {
+        let usage = match usage_of(b.usage, b.cost_micros) {
+            Ok(u) => u,
+            Err(e) => return reply(Err(e)),
+        };
         let which = match (b.existing, b.target_source, b.target_repo, b.why) {
             (Some(id), None, None, None) if b.title.is_empty() => Prereq::Existing(id),
             (None, Some(source), Some(repo), Some(why)) => Prereq::New {
@@ -577,7 +621,7 @@ async fn work_post<B: Broker>(call: Call<B>, Json(b): Json<PostBody>) -> Respons
         };
         return reply(
             call.tracker()
-                .prerequisite(&a, &b.item, b.key, which, b.done_when, b.cost_micros)
+                .prerequisite(&a, &b.item, b.key, which, b.done_when, usage)
                 .await,
         );
     }
@@ -737,15 +781,22 @@ struct AskBody {
     options: Vec<String>,
     default: Option<String>,
     /// What the attempt cost so far. Asking ends the hold, so this is the last chance to report it.
+    /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
-    cost_micros: u64,
+    usage: Vec<Usage>,
+    /// Replaced by `usage`: refused, so an agent built for it learns why.
+    cost_micros: Option<u64>,
 }
 
 async fn ask<B: Broker>(call: Call<B>, Json(b): Json<AskBody>) -> Response {
+    let usage = match usage_of(b.usage, b.cost_micros) {
+        Ok(u) => u,
+        Err(e) => return reply(Err(e)),
+    };
     match call.agent() {
         Ok(a) => reply(
             call.tracker()
-                .ask(&a, &b.item, b.text, b.options, b.default, b.cost_micros)
+                .ask(&a, &b.item, b.text, b.options, b.default, usage)
                 .await,
         ),
         Err(d) => denied(d),
@@ -873,6 +924,16 @@ async fn budget<B: Broker>(call: Call<B>, Json(b): Json<BudgetBody>) -> Response
         max_depth: b.max_depth,
         cost_left_micros: b.cost_left_micros,
         redos_per_item: b.redos_per_item,
+    };
+    as_person(&call, record).await
+}
+
+async fn price<B: Broker>(call: Call<B>, Json(b): Json<PriceBody>) -> Response {
+    let record = WorkRecord::PriceSet {
+        model: b.model,
+        unit: b.unit,
+        price_micros: b.price_micros,
+        effective_from_ms: b.effective_from_ms,
     };
     as_person(&call, record).await
 }

@@ -78,6 +78,8 @@ impl Log {
                 item: id(item),
                 attempt: 1,
                 cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: 0,
             },
         );
     }
@@ -232,6 +234,8 @@ fn a_held_item_with_an_open_question_still_goes_first() {
             options: vec![],
             default: None,
             cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
         },
     );
     assert_eq!(l.overlaps(), [overlap("r2", "r1", &["a.rs"])]);
