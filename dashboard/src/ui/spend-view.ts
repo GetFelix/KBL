@@ -12,15 +12,15 @@ export interface SpendHandlers {
   open(id: string): void;
 }
 
-function section(title: string, id: string, first: string, list: SpendRow[], empty: string, cell: (r: SpendRow) => Node): Node {
+function section(title: string, id: string, first: string, list: SpendRow[], empty: string, cell: (r: SpendRow) => Node, share = true): Node {
   return h('section', {},
     h('h3', { id }, title),
     list.length === 0
       ? h('p', { class: 'muted' }, empty)
       : h('table', { class: 'spend-table', 'aria-labelledby': id },
-          h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, first), h('th', { scope: 'col', class: 'num' }, 'Spent'), h('th', { scope: 'col', class: 'num' }, 'Share'))),
+          h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, first), h('th', { scope: 'col', class: 'num' }, 'Spent'), share ? h('th', { scope: 'col', class: 'num' }, 'Share') : null)),
           h('tbody', {}, ...list.map((r) =>
-            h('tr', { 'data-key': r.key }, h('th', { scope: 'row' }, cell(r)), h('td', { class: 'num' }, dollars(r.micros)), h('td', { class: 'num muted' }, `${r.percent}%`)))),
+            h('tr', { 'data-key': r.key }, h('th', { scope: 'row' }, cell(r)), h('td', { class: 'num' }, dollars(r.micros)), share ? h('td', { class: 'num muted' }, `${r.percent}%`) : null))),
         ),
   );
 }
@@ -31,7 +31,9 @@ export function spendView(on: SpendHandlers) {
   return {
     el: m.el,
     isOpen: m.isOpen,
+    /** Draws the tables and opens the dialog; if it is already open, a live record redraws it in place. */
     open(spend: Spend, items: readonly ItemRow[], s: ViewState) {
+      const wasOpen = m.isOpen();
       const t = tables(spend, items);
       const named = (r: SpendRow) => [r.label, r.hint ? h('span', { class: 'muted' }, ` ${r.hint}`) : null];
       const text = (r: SpendRow) => h('span', {}, ...named(r));
@@ -52,9 +54,10 @@ export function spendView(on: SpendHandlers) {
         h('p', { class: 'spend-total' }, h('strong', {}, dollars(t.total)), ' spent on claims'),
         h('p', { class: 'muted small spend-note' }, 'A lower bound: a claim that lapsed recorded no cost, so it is not counted here.'),
         section('Per root', 'spend-roots', 'Root', t.roots, 'No claim has recorded a cost yet.', root),
-        section('Per reviewer tier', 'spend-tiers', 'Tier', t.tiers, 'No review has recorded a cost yet.', text),
+        section('Per reviewer tier (reviews only)', 'spend-tiers', 'Tier', t.tiers, 'No review has recorded a cost yet.', text, false),
         section('Per repo', 'spend-repos', 'Repo', t.repos, 'No repo has recorded a cost yet.', text),
       );
+      if (wasOpen) return;
       m.open();
       close.focus();
     },

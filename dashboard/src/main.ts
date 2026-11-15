@@ -452,6 +452,7 @@ async function main() {
     requestAnimationFrame(() => {
       queued = false;
       store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
+      if (spendBox.isOpen()) spendBox.open(spend(sink), store.get().items, store.get());
     });
   };
   let cursor = 0;

@@ -1,5 +1,5 @@
 // What claims cost, shaped for the Spend dialog. The numbers are the fold's `spend()`
-// and nothing is estimated here. See docs/work-tracker.md "Spend". No DOM here.
+// and nothing is estimated here. See docs/work-tracker.md "Where work comes from, and its bounds". No DOM here.
 import type { Fold, ItemRow } from './fold.ts';
 
 /** The fold's spend, in millionths of a dollar. */
@@ -38,9 +38,9 @@ export interface SpendTables {
 
 const FORMAT = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/** Millionths of a dollar as text. Under a cent it keeps up to four decimals, so a small claim is not shown as nothing. */
+/** Millionths of a dollar as text. Under a cent it keeps up to four decimals, and under a hundredth of a cent it says `<$0.0001`, so a small claim is not shown as nothing. */
 export function dollars(micros: number): string {
-  if (micros > 0 && micros < 10_000) return `$${(micros / 1e6).toFixed(4).replace(/0+$/, '')}`;
+  if (micros > 0 && micros < 10_000) return micros < 100 ? '<$0.0001' : `$${(micros / 1e6).toFixed(4).replace(/0+$/, '')}`;
   return `$${FORMAT.format(micros / 1e6)}`;
 }
 

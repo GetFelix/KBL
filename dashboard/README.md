@@ -151,8 +151,8 @@ in the status line.
 | `Ctrl+Z` (`Cmd+Z` on a Mac) | Undo the last tier change (in a text field, the field's own undo) |
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
-palette and the `?` overlay all read it. Theme, density and Spend are in the palette
-only. Clear filters and Save view are buttons above the work as well as palette commands, and the palette also
+palette and the `?` overlay all read it. Theme and density are in the palette
+only; Spend is in the palette and the sidebar. Clear filters and Save view are buttons above the work as well as palette commands, and the palette also
 has one entry per filter value and per saved view.
 
 ## Views

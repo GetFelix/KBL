@@ -61,6 +61,8 @@ test('dollars shows cents, thousands, and sub-cent amounts', () => {
   assert.equal(dollars(1_234_567_000), '$1,234.57');
   assert.equal(dollars(400), '$0.0004');
   assert.equal(dollars(9_999), '$0.01');
+  assert.equal(dollars(1), '<$0.0001');
+  assert.equal(dollars(100), '$0.0001');
 });
 
 test('Spend is a palette command, so keyboard users reach it', () => {
