@@ -3,11 +3,13 @@
 //   1. the first poll imports the issue as a root, accepts it and posts its
 //      triage and augment items;
 //   2. two more polls of the same listing write nothing;
-//   3. a poll after ingest's saved state is lost finds the root and writes nothing.
+//   3. a poll after ingest's saved state is lost finds the root: it imports and
+//      admits nothing again, and only rewrites the issue's two context entries
+//      with the same text.
 // Claiming each item once is dev/check-tracker-claims.mjs.
 //
 //   cargo build -p kbl-tool -p kbl-tracker -p kbl-ingest && node dev/check-tracker-ingest.mjs
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -69,12 +71,14 @@ writeFileSync(
   }),
 );
 
-function pollOnce() {
-  const run = spawnSync(INGEST, ["--config", configFile, "--once"], {
+// Async, so the stand-in GitHub on this process's event loop can answer.
+async function pollOnce() {
+  const child = spawn(INGEST, ["--config", configFile, "--once"], {
     env: { ...process.env, KBL_CHECK_INGEST_TOKEN: "tok-ingest", KBL_CHECK_GITHUB_TOKEN: "unused" },
     stdio: ["ignore", "inherit", "inherit"],
   });
-  if (run.status !== 0) throw new Error(`kbl-ingest --once exited with ${run.status}`);
+  const code = await new Promise((resolve) => child.on("exit", resolve));
+  if (code !== 0) throw new Error(`kbl-ingest --once exited with ${code}`);
 }
 
 async function ingestCall(method, path, body) {
@@ -89,17 +93,19 @@ async function ingestCall(method, path, body) {
 }
 
 let root;
-// Every record of the root's tree, as kind:item.
+const imports = () => workLog().filter((r) => r.kind === "imported" && r.upstream_id === UPSTREAM);
+// Every record of the root's tree, as kind:item, with a context record's entry and text.
 const tree = () =>
   workLog()
     .filter((r) => r.item === root || r.parent === root || r.item?.startsWith(`${root}-`))
-    .map((r) => `${r.kind}:${r.item}`);
+    .map((r) => (r.kind === "context" ? `context:${r.item}:${r.entry}:${JSON.stringify(r.text)}` : `${r.kind}:${r.item}`));
+const contextOnly = (records) => records.every((k) => k.startsWith("context:"));
 
 await startTracker(tokens);
 try {
   // 1. The first poll.
-  pollOnce();
-  const imported = workLog().filter((r) => r.kind === "imported" && r.upstream_id === UPSTREAM);
+  await pollOnce();
+  const imported = imports();
   check(imported.length === 1, `${UPSTREAM} was imported once`);
   root = imported[0].item;
   const first = tree();
@@ -111,15 +117,24 @@ try {
   );
 
   // 2. The same listing twice more.
-  pollOnce();
-  pollOnce();
+  await pollOnce();
+  await pollOnce();
+  check(imports().length === 1, `${UPSTREAM} is still imported once after two more polls`);
   check(JSON.stringify(tree()) === JSON.stringify(first), "two more polls of the same issue wrote nothing");
 
   // 3. Ingest loses its saved state, as after a restart with a lost save.
   const saved = await ingestCall("GET", "/v1/ingest/state/github");
   await ingestCall("PUT", "/v1/ingest/state/github", { state: null, version: saved.version });
-  pollOnce();
-  check(JSON.stringify(tree()) === JSON.stringify(first), "a poll with no saved state found the root and wrote nothing");
+  await pollOnce();
+  check(imports().length === 1, `${UPSTREAM} is still imported once after a poll with no saved state`);
+  const after = tree();
+  const added = after.slice(first.length);
+  check(
+    JSON.stringify(after.slice(0, first.length)) === JSON.stringify(first) &&
+      contextOnly(added) &&
+      added.every((k) => first.includes(k)),
+    "a poll with no saved state admitted nothing again, and only rewrote context entries with the same text",
+  );
 } finally {
   killAll();
   github.close();
