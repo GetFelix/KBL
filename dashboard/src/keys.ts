@@ -28,6 +28,8 @@ export type CommandId =
   | 'clearMarks'
   | 'accept'
   | 'closeItems'
+  | 'flag'
+  | 'unflag'
   | 'undo'
   | 'signIn';
 
@@ -66,6 +68,8 @@ export const COMMANDS: readonly Command[] = [
   { id: 'clearMarks', label: 'Clear the selection', group: 'Actions', keys: [] },
   { id: 'accept', label: 'Accept the selected items', group: 'Actions', keys: [] },
   { id: 'closeItems', label: 'Close the selected items', group: 'Actions', keys: [] },
+  { id: 'flag', label: 'Flag the selected items for a person', group: 'Actions', keys: [] },
+  { id: 'unflag', label: 'Unflag the selected items', group: 'Actions', keys: [] },
   { id: 'undo', label: 'Undo the last tier change', group: 'Actions', keys: ['Mod+Z'] },
   { id: 'signIn', label: 'Sign in to the tracker', group: 'Actions', keys: [] },
 ];

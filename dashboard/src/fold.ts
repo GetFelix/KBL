@@ -33,6 +33,10 @@ export interface ItemRow {
   unclear?: string | null;
   /** True for an item with no parent. */
   root?: boolean;
+  /** A person accepted it. Only an accepted item can be flagged. */
+  accepted?: boolean;
+  /** A person flagged it for a person, whatever else it waits on. */
+  flagged?: boolean;
 }
 
 /** The inline text of a `question` record, so the panel can show what was asked. An artifact's text is not in the record. */

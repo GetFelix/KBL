@@ -13,15 +13,19 @@ export function bulkBar(on: WriteHandlers) {
   const setTier = h('button', { type: 'button', class: 'button small' }, 'Set tier');
   const accept = h('button', { type: 'button', class: 'button small' });
   const close = h('button', { type: 'button', class: 'button small danger' });
+  const flag = h('button', { type: 'button', class: 'button small' });
+  const unflag = h('button', { type: 'button', class: 'button small' });
   const clear = h('button', { type: 'button', class: 'button ghost small', onclick: on.clearMarks }, 'Clear selection');
   const signIn = h('button', { type: 'button', class: 'button small', onclick: on.signIn }, 'Sign in to act');
-  let ids = { tier: [] as string[], accept: [] as string[], close: [] as string[] };
+  let ids = { tier: [] as string[], accept: [] as string[], close: [] as string[], flag: [] as string[], unflag: [] as string[] };
   setTier.addEventListener('click', () => ids.tier.length && on.setTier(ids.tier, Number(tier.value)));
   accept.addEventListener('click', () => ids.accept.length && on.confirm('accept', ids.accept));
   close.addEventListener('click', () => ids.close.length && on.confirm('close', ids.close));
+  flag.addEventListener('click', () => ids.flag.length && on.flag(ids.flag, true));
+  unflag.addEventListener('click', () => ids.unflag.length && on.flag(ids.unflag, false));
   const bar = h('section', { class: 'bulk', 'aria-label': 'Selected items', hidden: true },
     count,
-    h('label', { for: 'bulk-tier', class: 'inline-label' }, 'Tier'), tier, setTier, accept, close, signIn, clear);
+    h('label', { for: 'bulk-tier', class: 'inline-label' }, 'Tier'), tier, setTier, accept, close, flag, unflag, signIn, clear);
 
   const text = h('p', { class: 'activity-text', role: 'status' });
   const undo = h('button', { type: 'button', class: 'button small', onclick: on.undo }, 'Undo');
@@ -42,13 +46,19 @@ export function bulkBar(on: WriteHandlers) {
         tier: marked.filter(CAN.tier).map((i) => i.id),
         accept: marked.filter(CAN.accept).map((i) => i.id),
         close: marked.filter(CAN.close).map((i) => i.id),
+        flag: marked.filter(CAN.flag).map((i) => i.id),
+        unflag: marked.filter(CAN.unflag).map((i) => i.id),
       };
       count.textContent = `${marked.length} selected`;
       accept.textContent = `Accept ${ids.accept.length}…`;
       close.textContent = `Close ${ids.close.length}…`;
+      flag.textContent = `Flag ${ids.flag.length}`;
+      unflag.textContent = `Unflag ${ids.unflag.length}`;
       // A button for an action none of the marked items allow would only be refused.
       accept.hidden = !signedIn || ids.accept.length === 0;
       close.hidden = !signedIn || ids.close.length === 0;
+      flag.hidden = !signedIn || ids.flag.length === 0;
+      unflag.hidden = !signedIn || ids.unflag.length === 0;
       for (const e of [tier, setTier, bar.querySelector('label')!]) (e as HTMLElement).hidden = !signedIn || ids.tier.length === 0;
       signIn.hidden = signedIn;
 

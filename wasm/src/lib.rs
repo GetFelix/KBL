@@ -86,7 +86,8 @@ impl Folder {
     /// root's target or import. `needs` says why the item waits on a person;
     /// `question` is the offset of its open question, with that question's `options`
     /// and `default`, and `unclear` (`scope`, `repo` or `acceptance`) when it is
-    /// triage's. `root` is true for an item with no parent.
+    /// triage's. `root` is true for an item with no parent. `accepted` and `flagged` say
+    /// whether a person accepted it and whether one flagged it for a person.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
         let items: Vec<_> = self
@@ -113,6 +114,8 @@ impl Folder {
                     "default": i.open_question.and(i.ask.as_ref()).and_then(|a| a.default.as_ref()),
                     "unclear": i.open_question.and(i.ask.as_ref()).and_then(|a| a.unclear),
                     "root": i.parent.is_none(),
+                    "accepted": i.accepted,
+                    "flagged": i.flagged,
                 })
             })
             .collect();

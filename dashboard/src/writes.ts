@@ -4,7 +4,7 @@
 // own token, so the page can never do more than the person could with curl.
 import type { ItemRow } from './fold.ts';
 
-export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'undo';
+export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'undo';
 
 export interface Request {
   path: string;
@@ -57,6 +57,9 @@ export const CAN: Readonly<Record<Exclude<WriteKind, 'undo'>, (i: ItemRow) => bo
   tier: OPEN,
   close: OPEN,
   answer: (i) => (i.needs === 'question' || i.needs === 'unclear') && i.question != null,
+  // The fold refuses a flag on an item nobody accepted (it waits in Triage already) and a repeat of either.
+  flag: (i) => OPEN(i) && i.accepted === true && i.flagged !== true,
+  unflag: (i) => OPEN(i) && i.flagged === true,
 };
 
 export const CLOSE_WHY = [
@@ -70,7 +73,9 @@ export type WriteArgs =
   | { kind: 'reject' }
   | { kind: 'tier'; tier: number }
   | { kind: 'close'; why: CloseWhy }
-  | { kind: 'answer'; question: number; text: string; chosen: string | null };
+  | { kind: 'answer'; question: number; text: string; chosen: string | null }
+  | { kind: 'flag' }
+  | { kind: 'unflag' };
 
 /** A route under the viewer's team when the address names one (`/v1/teams/{team}/work/...`). */
 export function route(path: string, team: string | null): string {
@@ -87,6 +92,10 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/tier', body: { item, tier: a.tier } };
     case 'close':
       return { path: '/v1/work/close', body: { item, why: a.why } };
+    case 'flag':
+      return { path: '/v1/work/flag', body: { item } };
+    case 'unflag':
+      return { path: '/v1/work/unflag', body: { item } };
     case 'answer': {
       const body: Record<string, unknown> = { item, question: a.question };
       // The tracker reads `text` as content: inline text is `{ text }`, never a bare string.
@@ -146,6 +155,9 @@ export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> =
   reject: 'A rejected proposal stays rejected; nothing reopens it.',
   close: 'Closing cancels the item’s open children. A root can be reopened, but it goes back to Triage and its children stay cancelled.',
   answer: 'An answer starts the work that resumes from it.',
+  // Each takes the other back, so neither asks first.
+  flag: null,
+  unflag: null,
 };
 
 export interface Undo {
@@ -216,6 +228,8 @@ function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly Ite
   const now = items.find((i) => i.id === id);
   if (!now) return `${id} is no longer in the log.`;
   if (CAN[kind](now)) return null;
+  if (kind === 'flag' && now.flagged) return `${id} is already flagged, so nothing was sent.`;
+  if (kind === 'unflag' && OPEN(now)) return `${id} is not flagged now, so nothing was sent.`;
   return `${id} changed since: it is ${now.stage.replaceAll('_', ' ')} now, so nothing was sent.`;
 }
 
@@ -257,6 +271,8 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
   tier: ['Setting the tier of', 'Set the tier of'],
   close: ['Closing', 'Closed'],
   answer: ['Answering', 'Answered'],
+  flag: ['Flagging', 'Flagged'],
+  unflag: ['Unflagging', 'Unflagged'],
   undo: ['Undoing the tier change on', 'Undid the tier change on'],
 };
 

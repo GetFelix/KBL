@@ -270,6 +270,12 @@ const run = (id: CommandId): void => {
       return confirmKind('accept', targets());
     case 'closeItems':
       return confirmKind('close', targets());
+    case 'flag':
+    case 'unflag': {
+      if (s.tracker.kind !== 'signed-in') return signInBox.open();
+      const ids = s.items.filter((i) => targets().includes(i.id) && CAN[id](i)).map((i) => i.id);
+      return ids.length ? write(ids, { kind: id }) : undefined;
+    }
     case 'undo':
       return undoLast();
     case 'signIn':
@@ -306,6 +312,7 @@ const ui = shell(
     signOut,
     confirm: confirmKind,
     setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
+    flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
     answer: (item, question, text, chosen) => write([item], { kind: 'answer', question, text, chosen }),
     undo: undoLast,
     dismiss: () => {

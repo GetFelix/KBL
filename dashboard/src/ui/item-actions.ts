@@ -11,6 +11,8 @@ export interface WriteHandlers {
   /** Asks to confirm, then sends. `ids` is one item from the panel or the marked items. */
   confirm(kind: 'accept' | 'reject' | 'close', ids: string[]): void;
   setTier(ids: string[], tier: number): void;
+  /** Flags the items for a person, or clears the flag. Neither asks first: each takes the other back. */
+  flag(ids: string[], flagged: boolean): void;
   answer(item: string, question: number, text: string, chosen: string | null): void;
   undo(): void;
   dismiss(): void;
@@ -43,6 +45,8 @@ const PENDING: Record<WriteKind, string> = {
   tier: 'Setting the tier…',
   close: 'Closing…',
   answer: 'Sending the answer…',
+  flag: 'Flagging…',
+  unflag: 'Unflagging…',
   undo: 'Undoing…',
 };
 
@@ -124,7 +128,10 @@ export function itemActions(on: WriteHandlers) {
             kinds.includes(kind) ? h('button', { type: 'button', class: cls, 'data-focus': kind, onclick: guard(() => current(), id, () => on.confirm(kind, [id])) }, label) : null;
           if (kinds.includes('tier')) tier = tierSelect('panel-tier', shownTier(item));
           const parts: (HTMLElement | null)[] = [head,
-            h('div', { class: 'action-row' }, button('accept', 'Accept…', 'button primary'), button('reject', 'Reject…', 'button danger'), button('close', 'Close…', 'button danger')),
+            h('div', { class: 'action-row' }, button('accept', 'Accept…', 'button primary'), button('reject', 'Reject…', 'button danger'), button('close', 'Close…', 'button danger'),
+              ...(['flag', 'unflag'] as const).map((k) => kinds.includes(k)
+                ? h('button', { type: 'button', class: 'button', 'data-focus': k, title: k === 'flag' ? 'Move it to Needs you and keep agents off it' : 'Take it out of Needs you', onclick: guard(() => current(), id, () => on.flag([id], k === 'flag')) }, k === 'flag' ? 'Flag for a person' : 'Unflag')
+                : null)),
             tier
               ? h('div', { class: 'action-row' },
                   h('label', { for: 'panel-tier', class: 'inline-label' }, 'Tier'),

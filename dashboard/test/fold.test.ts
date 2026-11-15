@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { blocked, waitsOn, type Fold } from '../src/fold.ts';
+import { blocked, waitsOn, type Fold, type ItemRow } from '../src/fold.ts';
 import { MAX_FILES, MAX_NOTES, overlapNotes } from '../src/overlap.ts';
 
 // Built by `npm run wasm`.
@@ -29,7 +29,7 @@ test('items lists each item with its stage', () => {
   const rec = (o: object) => new TextEncoder().encode(JSON.stringify({ at_ms: 1, by: 'gabriel', actor: 'person', ...o }));
   fold.apply(0, rec({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'a#1', title: 'first' }));
   assert.deepEqual(JSON.parse(fold.items_json()), [
-    { id: 'r1', title: 'first', stage: 'triage', tier: null, proposed_tier: null, source: 'github', repo: null, needs: null, question: null, options: null, default: null, unclear: null, root: true },
+    { id: 'r1', title: 'first', stage: 'triage', tier: null, proposed_tier: null, source: 'github', repo: null, needs: null, question: null, options: null, default: null, unclear: null, root: true, accepted: false, flagged: false },
   ]);
   fold.apply(1, rec({ kind: 'accepted', item: 'r1', tier: 1 }));
   assert.equal(JSON.parse(fold.items_json())[0].stage, 'ready');
@@ -146,4 +146,18 @@ test('a card holds at most MAX_NOTES notes of at most MAX_FILES paths', () => {
   assert.equal(card.notes[0].files.length, MAX_FILES);
   assert.equal(card.notes[0].moreFiles, 3);
   assert.equal(notes.get('r1')!.notes.length, 1);
+});
+
+test('items say whether a person accepted and flagged them', () => {
+  const fold = new Folder();
+  fold.apply(0, rec(imp('r1', 'github', 'a#1')));
+  assert.deepEqual(JSON.parse(fold.items_json()).map((i: ItemRow) => [i.accepted, i.flagged]), [[false, false]]);
+  fold.apply(1, rec({ kind: 'accepted', item: 'r1', tier: 1 }));
+  // A flag is a format 7 record: the log is raised first.
+  fold.apply(2, rec({ v: 7, kind: 'format_raised', to: 7 }));
+  fold.apply(3, rec({ v: 7, kind: 'flagged', item: 'r1', flagged: true }));
+  const [r1] = JSON.parse(fold.items_json());
+  assert.deepEqual([r1.accepted, r1.flagged, r1.needs, r1.stage], [true, true, 'flagged', 'needs_you']);
+  fold.apply(4, rec({ v: 7, kind: 'flagged', item: 'r1', flagged: false }));
+  assert.deepEqual([JSON.parse(fold.items_json())[0].flagged, JSON.parse(fold.items_json())[0].needs], [false, null]);
 });

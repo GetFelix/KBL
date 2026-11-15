@@ -87,6 +87,8 @@ to the tracker. A person token in several teams needs `&team=<team>` in the addr
 | Reject | Proposed | `POST /v1/work/proposals/reject` | No. Asks to confirm |
 | Set tier | Open work | `POST /v1/work/tier` | Yes, once the change is on the log and while the tier is still the one set: a new `tier_changed` back. A first tier on an item that had none cannot be undone, and the activity line says so |
 | Close | Open work | `POST /v1/work/close` (`dismissed` or `completed`) | No: open children are cancelled. Asks to confirm |
+| Flag for a person | Accepted, open work not already flagged | `POST /v1/work/flag` | Yes, by Unflag: nothing asks first. The item moves to Needs you with the reason "A person moved it here" and agents are not handed it |
+| Unflag | Flagged work | `POST /v1/work/unflag` | Yes, by Flag. It clears only the flag: an item that also waits on a question or a failed check stays in Needs you for that |
 | Answer | An open question | `POST /v1/work/questions/answer` | No: the answer starts the resumed work. Pick an option or write an answer, not both |
 
 Claiming is not offered: it is an agent's, and the fold refuses `claimed` from a person.
@@ -98,7 +100,11 @@ bulk bar acts on the marked items the view shows, one call per item, then clears
 too. An accept starts from the item's tier, or the tier triage proposed, and sends the tier the confirm shows (none
 if it showed none); a bulk accept keeps each item's own tier unless you pick one. A confirm checks each item again when you send
 it, so an item someone else changed meanwhile is refused unsent, with the reason. The Needs you view
-(`?view=inbox`) lists what waits on a person and why.
+(`?view=inbox`) lists what waits on a person and why. Flag and Unflag sit in the panel's actions and the bulk bar,
+and as palette commands (`Flag the selected items for a person`, `Unflag the selected items`) for the marked
+items, else the selected one. They have no confirm and no key, because each takes the other back. A refusal such as
+`no_change` (it was already so) shows in the activity line with the tracker's words. Undo (`Ctrl+Z`) still
+covers tier changes only.
 
 ## How it follows the log
 
