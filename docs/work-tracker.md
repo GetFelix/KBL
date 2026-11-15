@@ -346,7 +346,8 @@ team's lease can lapse (run out without a renewal) before it serves. The
 tracker then renews its own entry if Felix still has it, and otherwise
 takes it again, unless another tracker took it meanwhile. After taking it
 again, the tracker rebuilds its state from the log before it writes, since the
-other tracker may have written. A team whose tracker cannot renew answers 503
+other tracker may have written, and then renews the lease by version, so the
+grant comes after the read. The same holds for the lease taken at start. A team whose tracker cannot renew answers 503
 on its routes, stops renewing after ten seconds, and checks the lease before
 each append. The process exits when no team holds its lease; with one team,
 that is ten seconds after it lost it.
@@ -356,9 +357,11 @@ the lease is not enough on its own. Every append also names the offset it
 expects to land at, the one after the last committed record this tracker read,
 and Felix refuses it if anything else was given that offset first. After a
 refusal, or a write whose answer was lost, the tracker reads the log again and
-then writes nothing more until Felix grants it the lease: a renewal by version,
-or taking the lease again once its entry is gone, both count. The grant must
-come after the read, so no other tracker can have written in between. If
+then writes nothing more until Felix renews its lease by version. The renewal
+must come after the read, so no other tracker can have written in between.
+Taking the lease again does not count: that grant comes before the read, so the
+tracker reads and then renews by version. Until then no write goes out, even
+from a call that started before the refusal. If
 another tracker holds the lease, the grant fails and the tracker stops
 writing. If the lease is still its own (a new shard leader moved the offset,
 say), the write can go through. A refused team write answers 503 ("try

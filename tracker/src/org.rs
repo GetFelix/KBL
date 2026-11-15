@@ -448,6 +448,9 @@ impl<B: Broker> Org<B> {
                 });
                 core.confirmed = core.confirmed.max(refusals);
                 core.stale = true;
+                // The grant came before the read, so a renewal by version must
+                // follow it before the next write.
+                core.refusals += 1;
                 self.refresh_or_log(&mut core).await;
                 true
             }

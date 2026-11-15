@@ -504,6 +504,9 @@ impl<B: Broker> Tracker<B> {
             core.state = state;
             core.recall = recall;
             core.tail = tail;
+            // Like a retake: the lease was granted before the read, so it is
+            // confirmed by version before the first write.
+            core.refusals = 1;
         }
         let holders: Vec<AgentName> = {
             let core = tracker.0.core.lock().await;
@@ -950,11 +953,14 @@ impl<B: Broker> Tracker<B> {
                 });
                 core.fenced = false;
                 core.confirmed = core.confirmed.max(refusals);
-                // Another tracker may have held it and written meanwhile.
+                // Another tracker may have held it and written meanwhile. Counted
+                // as a refusal: the grant came before the rebuild reads, so a
+                // renewal by version must confirm the lease after it.
                 if retaken {
                     core.stale = true;
                     core.retaken = true;
                     core.retakes += 1;
+                    core.refusals += 1;
                 }
             }
             // Someone else holds it now.
@@ -1631,6 +1637,13 @@ impl<B: Broker> Tracker<B> {
         // log may not, so an append on it could land on another writer's record.
         if core.retaken || core.stale {
             return Err(Error::Unavailable("the state is being rebuilt".into()));
+        }
+        // A caller past begin() can get here after another call's rebuild and
+        // before its lease check, while another tracker may hold the lease.
+        if core.refusals > core.confirmed {
+            return Err(Error::Unavailable(
+                "checking the writer lease after a refused write".into(),
+            ));
         }
         // A kind this build does not know decodes to `unknown`. Logging it
         // would put a record on the log that says nothing.

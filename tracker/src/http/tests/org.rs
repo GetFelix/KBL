@@ -895,3 +895,51 @@ async fn an_org_write_gives_up_once_the_lease_it_started_on_runs_short() {
     assert!(matches!(r, Err(OrgError::Unavailable(_))), "{r:?}");
     assert_eq!(org_teams(&broker), ["beta"]);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_retaken_org_lease_is_confirmed_after_the_read() {
+    for pause in PAUSES {
+        let broker = Quiet::default();
+        broker.keeps.store(true, Ordering::SeqCst);
+        broker.fences.store(true, Ordering::SeqCst);
+        broker.lease_expires.store(true, Ordering::SeqCst);
+        let org = Arc::new(
+            Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+                .await
+                .unwrap(),
+        );
+        // Confirmed once, so only the retake below leaves the lease unconfirmed.
+        assert!(
+            org.append(Key::new("ops").unwrap(), team_created("beta"))
+                .await
+                .is_ok()
+        );
+        // The lease lapses, and the retake's read is where another tracker
+        // takes it and writes.
+        tokio::time::advance(Duration::from_secs(16)).await;
+        let gamma = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("gamma"));
+        *broker.slow_read.lock().unwrap() = Some((pause, Some(gamma.encode())));
+        let maintain = tokio::spawn({
+            let org = org.clone();
+            async move { org.maintain().await }
+        });
+        for _ in 0..100 {
+            if broker.slow_read.lock().unwrap().is_none() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        assert!(broker.slow_read.lock().unwrap().is_none(), "no retake");
+        // The read holds the core lock, so this returns once it is done.
+        let _ = org.state().await;
+        let r = org
+            .append(Key::new("ops").unwrap(), team_created("alpha"))
+            .await;
+        maintain.abort();
+        assert!(
+            matches!(r, Err(OrgError::Unavailable(_))),
+            "{pause:?}: {r:?}"
+        );
+        assert_eq!(org_teams(&broker), ["beta", "gamma"], "{pause:?}");
+    }
+}
