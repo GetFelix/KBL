@@ -198,9 +198,9 @@ written by this agent (for a prerequisite, naming the same item), the tracker
 writes nothing and answers as the first call did, with `replayed: true` and
 the record's `offset`. A `claim` that is not the one the agent holds never
 ends the claim it holds now, so a retry after the agent claimed the same item
-again cannot end the new claim. Anything else answers as without `claim`: a
-claim the tracker released as `lapsed`, another agent's claim, or another kind
-of record is still `lost` (or not held).
+again cannot end the new claim. Anything else is `lost` (or not held) and
+writes nothing: a claim the tracker released as `lapsed`, another agent's
+claim, or another kind of record.
 
 Without `claim`, `attempt` does the same for the agent's latest claim of that
 attempt. An attempt number is shared by every claim of a retried attempt, so

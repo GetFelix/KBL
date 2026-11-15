@@ -48,29 +48,35 @@ async fn end(
 
 #[tokio::test]
 async fn each_terminal_call_retried_after_it_landed_is_replayed() {
-    for how in ["done", "released", "gave_up"] {
+    for (how, by_claim) in [
+        ("done", false),
+        ("released", false),
+        ("gave_up", false),
+        ("done", true),
+        ("released", true),
+        ("gave_up", true),
+    ] {
         let fake = Fake::default();
         let t = start(&fake).await;
         seed(&t, "a1", 2).await;
         let attempt = claim_attempt(&t, &fake, "w1").await;
-        let first = end(&t, how, "w1", Some(Which::Attempt(attempt)))
-            .await
-            .unwrap();
+        let which = if by_claim {
+            Which::Claim(last(&fake))
+        } else {
+            Which::Attempt(attempt)
+        };
+        let first = end(&t, how, "w1", Some(which)).await.unwrap();
         let at = last(&fake);
         assert_eq!(first["offset"], at, "{how}");
         assert!(first.get("replayed").is_none(), "{how}");
         let kinds = fake.kinds();
-        let again = end(&t, how, "w1", Some(Which::Attempt(attempt)))
-            .await
-            .unwrap();
+        let again = end(&t, how, "w1", Some(which)).await.unwrap();
         assert_eq!(again["replayed"], true, "{how}");
         assert_eq!(again["offset"], at, "{how}");
         assert_eq!(again["status"], first["status"], "{how}");
         // A tracker that starts on the log after a crash answers the same.
         let t = start(&fake).await;
-        let again = end(&t, how, "w1", Some(Which::Attempt(attempt)))
-            .await
-            .unwrap();
+        let again = end(&t, how, "w1", Some(which)).await.unwrap();
         assert_eq!(
             (&again["replayed"], &again["offset"]),
             (&json!(true), &json!(at)),
@@ -82,24 +88,29 @@ async fn each_terminal_call_retried_after_it_landed_is_replayed() {
 
 #[tokio::test]
 async fn a_call_whose_write_landed_but_whose_reply_was_lost_is_replayed() {
-    for how in ["done", "released", "gave_up"] {
+    for (how, by_claim) in [
+        ("done", false),
+        ("released", false),
+        ("gave_up", false),
+        ("done", true),
+        ("released", true),
+        ("gave_up", true),
+    ] {
         let fake = Fake::default();
         let t = start(&fake).await;
         seed(&t, "a1", 2).await;
         let attempt = claim_attempt(&t, &fake, "w1").await;
+        let which = if by_claim {
+            Which::Claim(last(&fake))
+        } else {
+            Which::Attempt(attempt)
+        };
         fake.lose_next_publish_reply(WORK_EVENTS);
-        assert!(
-            end(&t, how, "w1", Some(Which::Attempt(attempt)))
-                .await
-                .is_err(),
-            "{how}"
-        );
+        assert!(end(&t, how, "w1", Some(which)).await.is_err(), "{how}");
         let at = last(&fake);
         assert_eq!(fake.kinds().last().map(String::as_str), Some(how));
         // The tracker still has the delivery; the retry settles it and answers.
-        let again = end(&t, how, "w1", Some(Which::Attempt(attempt)))
-            .await
-            .unwrap();
+        let again = end(&t, how, "w1", Some(which)).await.unwrap();
         assert_eq!(
             (&again["replayed"], &again["offset"]),
             (&json!(true), &json!(at)),

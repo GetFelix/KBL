@@ -378,6 +378,8 @@ struct Recall {
     /// retried after a lost answer can be told what it already wrote. A retry
     /// after a release or lapse claims the same attempt number again.
     attempts: HashMap<(ItemId, u32), Vec<ClaimLog>>,
+    /// The attempt each `claimed` record is in, by its offset.
+    claims: HashMap<u64, (ItemId, u32)>,
 }
 
 /// One `claimed` record and the record that ended it.
@@ -459,6 +461,7 @@ impl Recall {
         };
         let claims = self.attempts.entry((item.clone(), attempt)).or_default();
         if !ends {
+            self.claims.insert(offset, (item.clone(), attempt));
             claims.push(ClaimLog {
                 offset,
                 by: logged.by.clone(),
@@ -504,12 +507,10 @@ impl Recall {
                 .iter()
                 .rev()
                 .find(mine)?,
-            Which::Claim(at) => self
-                .attempts
-                .iter()
-                .filter(|((i, _), _)| i == item)
-                .flat_map(|(_, claims)| claims)
-                .find(|c| c.offset == at)?,
+            Which::Claim(at) => {
+                let key = self.claims.get(&at).filter(|(i, _)| i == item)?;
+                self.attempts.get(key)?.iter().find(|c| c.offset == at)?
+            }
         };
         let ended = claim.ended.as_ref()?;
         let theirs = ended.kind == kind

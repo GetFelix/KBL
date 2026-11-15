@@ -3081,6 +3081,7 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
             Vec::new(),
         )
     };
+    let claimed_at = fake.kinds().iter().rposition(|k| k == "claimed").unwrap() as u64;
     let first = ask(Some(crate::tracker::Which::Attempt(1))).await.unwrap();
     let at = fake.log().len() as u64 - 1;
     assert_eq!(first["offset"], at);
@@ -3088,6 +3089,13 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
     let again = ask(Some(crate::tracker::Which::Attempt(1))).await.unwrap();
     assert_eq!(again["replayed"], true);
     assert_eq!(again["offset"], at);
+    let again = ask(Some(crate::tracker::Which::Claim(claimed_at)))
+        .await
+        .unwrap();
+    assert_eq!(
+        (&again["replayed"], &again["offset"]),
+        (&json!(true), &json!(at))
+    );
     assert_eq!(fake.kinds(), kinds);
     // A retry naming other work is not the call that landed.
     import(&t, "f3", "GetFelix/felix-gateway#5").await;
