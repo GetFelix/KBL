@@ -1020,6 +1020,35 @@ fn encoded_breaks_armor_and_stripped_keys_stay_linear() {
         format!("-----BEGIN PRIVATE KEY-----\nA: {}", "\\x".repeat(mb / 2)),
         "+-----BEGIN PRIVATE KEY-----\n+A: b\n+".repeat(mb / 38),
         format!("-----BEGIN PRIVATE KEY-----\n{}", "ab".repeat(mb / 2)),
+        "-----BEGIN%20PRIVATE%20KEY-----".repeat(mb / 31),
+        "-----BEGIN+PRIVATE+KEY-----".repeat(mb / 27),
+        format!("-----BEGIN%20{}", "%20".repeat(mb / 3)),
+        format!("-----BEGIN+{}", "+".repeat(mb)),
+        "-----BEGIN%20PRIVATE%20KEY-----%0A".repeat(mb / 34),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\/".repeat(mb / 2)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "\\/".repeat(mb / 2)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}/", "\\".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "a\\/".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "A: b\n".repeat(mb / 5)),
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}",
+            "A: -----BEGIN PRIVATE KEY-----\n".repeat(mb / 31)
+        ),
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}",
+            "A: x -----BEGIN PRIVATE KEY----- -----BEGIN PRIVATE KEY-----\n".repeat(mb / 62)
+        ),
+        "-----BEGIN PRIVATE KEY-----\nA: b\nA: b\nA: b\n\n".repeat(mb / 44),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "A: b\n".repeat(mb / 10))
+            + &"-----END PRIVATE KEY-----".repeat(mb / 50),
+        format!("-----BEGIN PRIVATE KEY-----{}", "%20".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "AB%20".repeat(mb / 5)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "\\u002b".repeat(mb / 6)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}u002", "\\".repeat(mb)),
+        format!(
+            "-----BEGIN PRIVATE KEY-----\n{}",
+            "A: x-----BEGIN PRIVATE KEY-----\n".repeat(mb / 32)
+        ),
     ];
     for text in inputs {
         let start = Instant::now();
@@ -1164,40 +1193,6 @@ fn long_header_like_lines_then_prose_lose_only_the_header() {
 }
 
 #[test]
-fn encoded_headers_escaped_slashes_and_long_armor_stay_linear() {
-    let mb = 10 * 1024 * 1024;
-    let inputs = [
-        "-----BEGIN%20PRIVATE%20KEY-----".repeat(mb / 31),
-        "-----BEGIN+PRIVATE+KEY-----".repeat(mb / 27),
-        format!("-----BEGIN%20{}", "%20".repeat(mb / 3)),
-        format!("-----BEGIN+{}", "+".repeat(mb)),
-        "-----BEGIN%20PRIVATE%20KEY-----%0A".repeat(mb / 34),
-        format!("-----BEGIN PRIVATE KEY-----{}", "\\/".repeat(mb / 2)),
-        format!("-----BEGIN PRIVATE KEY-----\n{}", "\\/".repeat(mb / 2)),
-        format!("-----BEGIN PRIVATE KEY-----\n{}/", "\\".repeat(mb)),
-        format!("-----BEGIN PRIVATE KEY-----\n{}", "a\\/".repeat(mb / 3)),
-        format!("-----BEGIN PRIVATE KEY-----\n{}", "A: b\n".repeat(mb / 5)),
-        format!(
-            "-----BEGIN PRIVATE KEY-----\n{}",
-            "A: -----BEGIN PRIVATE KEY-----\n".repeat(mb / 31)
-        ),
-        format!(
-            "-----BEGIN PRIVATE KEY-----\n{}",
-            "A: x -----BEGIN PRIVATE KEY----- -----BEGIN PRIVATE KEY-----\n".repeat(mb / 62)
-        ),
-        "-----BEGIN PRIVATE KEY-----\nA: b\nA: b\nA: b\n\n".repeat(mb / 44),
-        format!("-----BEGIN PRIVATE KEY-----\n{}", "A: b\n".repeat(mb / 10))
-            + &"-----END PRIVATE KEY-----".repeat(mb / 50),
-    ];
-    for text in inputs {
-        let start = Instant::now();
-        let _ = redact(&text);
-        let took = start.elapsed();
-        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
-    }
-}
-
-#[test]
 fn a_url_encoded_key_on_one_line_is_cut() {
     let line = "MIIEq9Zx%2BIIEq9Zx%2FIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9Zx";
     let begin = "-----BEGIN%20PRIVATE%20KEY-----";
@@ -1244,25 +1239,4 @@ fn a_header_stuck_to_a_word_in_armor_does_not_end_it() {
         "-----BEGIN {pgp}\nComment: see x-----BEGIN PRIVATE KEY-----\nVersion: 1\n\n{BODY}\nAB12cd==\n-----END {pgp}\nok"
     );
     assert_eq!(redact(&text), "[redacted]\nok");
-}
-
-#[test]
-fn encoded_gaps_and_unicode_escapes_stay_linear() {
-    let mb = 10 * 1024 * 1024;
-    let inputs = [
-        format!("-----BEGIN PRIVATE KEY-----{}", "%20".repeat(mb / 3)),
-        format!("-----BEGIN PRIVATE KEY-----\n{}", "AB%20".repeat(mb / 5)),
-        format!("-----BEGIN PRIVATE KEY-----\n{}", "\\u002b".repeat(mb / 6)),
-        format!("-----BEGIN PRIVATE KEY-----\n{}u002", "\\".repeat(mb)),
-        format!(
-            "-----BEGIN PRIVATE KEY-----\n{}",
-            "A: x-----BEGIN PRIVATE KEY-----\n".repeat(mb / 32)
-        ),
-    ];
-    for text in inputs {
-        let start = Instant::now();
-        let _ = redact(&text);
-        let took = start.elapsed();
-        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
-    }
 }
