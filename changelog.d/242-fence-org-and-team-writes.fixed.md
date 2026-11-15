@@ -1,0 +1,1 @@
+Org and team writes are conditional on the offset they expect to land at, so a tracker that lost its lease while paused can no longer append after the new holder's records. A refused team write answers 503 and the retry sees the other tracker's records; an org write reads the log again and retries by itself (#242).

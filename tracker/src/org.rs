@@ -14,7 +14,7 @@ use kbl_core::org_fold::{Applied, OrgState, Principal};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use crate::felix::Broker;
+use crate::felix::{Broker, ConditionalWrite};
 
 /// How long the org lease may stay lost before the process exits. Past it,
 /// revocations would stop taking effect.
@@ -24,6 +24,9 @@ pub(crate) const ORG_LEASE_GRACE: Duration = Duration::from_secs(60);
 /// still stands, so the lease must outlast it plus some clock skew.
 const FELIX_TIMEOUT: Duration = Duration::from_secs(10);
 const LEASE_SKEW: Duration = Duration::from_secs(1);
+
+/// How many times an org write reads the log again after Felix refused it.
+const ORG_WRITE_TRIES: usize = 3;
 
 /// A Felix call with a time limit, so a hung call cannot outlast the lease or
 /// hold the org lock for good.
@@ -56,6 +59,16 @@ struct Core {
     lease: Option<Lease>,
     /// The state may not match the log; read it again before the next write.
     stale: bool,
+    /// The stream's next offset as Felix last named it in a refusal. It moves
+    /// past `at` when a new shard leader writes its generation-start record.
+    tail: u64,
+}
+
+impl Core {
+    /// Where the next record must land for the log to be the one folded.
+    fn next(&self) -> u64 {
+        self.at.map_or(0, |a| a + 1).max(self.tail)
+    }
 }
 
 struct View {
@@ -96,6 +109,7 @@ impl<B: Broker> Org<B> {
                 at: None,
                 lease: None,
                 stale: true,
+                tail: 0,
             }),
             view: RwLock::new(View {
                 state: OrgState::default(),
@@ -197,34 +211,50 @@ impl<B: Broker> Org<B> {
                 .await
                 .map_err(|e| OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}")))?;
         }
-        let logged = OrgLogged::new(now_ms(), by, record);
-        match core.state.check(&logged) {
-            Err(why) => return Err(OrgError::Refused(why.why())),
-            Ok(Applied::Unchanged) => return Ok((Applied::Unchanged, None)),
-            Ok(Applied::Changed) => {}
-        }
-        let guess = core.at.map_or(0, |a| a + 1);
-        match timed(self.broker.publish(ORG_EVENTS, logged.encode())).await {
-            Ok(offset) => {
-                // Checked above against the same state, so this applies.
-                let _ = core.state.apply(&logged);
-                core.at = Some(offset);
-                if offset != guess {
-                    // Another writer got in: read now, or tokens are refused
-                    // until the next renewal.
-                    core.stale = true;
-                    self.refresh_or_log(&mut core).await;
+        // Conditional on the tail: if another tracker took the lease and wrote,
+        // Felix refuses this, whatever this tracker's clock says.
+        for _ in 0..ORG_WRITE_TRIES {
+            let logged = OrgLogged::new(now_ms(), by.clone(), record.clone());
+            match core.state.check(&logged) {
+                Err(why) => return Err(OrgError::Refused(why.why())),
+                Ok(Applied::Unchanged) => return Ok((Applied::Unchanged, None)),
+                Ok(Applied::Changed) => {}
+            }
+            let expected = core.next();
+            match timed(
+                self.broker
+                    .publish_if(ORG_EVENTS, logged.encode(), expected),
+            )
+            .await
+            {
+                Ok(ConditionalWrite::Written { offset }) => {
+                    // Checked above against the same state, so this applies.
+                    let _ = core.state.apply(&logged);
+                    core.at = Some(offset);
+                    self.publish_view(&core);
+                    return Ok((Applied::Changed, Some(offset)));
                 }
-                self.publish_view(&core);
-                Ok((Applied::Changed, Some(offset)))
-            }
-            Err(e) => {
-                core.stale = true;
-                self.publish_lease(&core);
-                self.refresh_or_log(&mut core).await;
-                Err(OrgError::Felix(e))
+                Ok(ConditionalWrite::Refused { tail }) => {
+                    // Another writer got in, or a new shard leader moved the
+                    // tail: read up to it and check the record again.
+                    core.stale = true;
+                    core.tail = core.tail.max(tail);
+                    self.publish_lease(&core);
+                    self.refresh(&mut core).await.map_err(|e| {
+                        OrgError::Unavailable(format!("reading {ORG_EVENTS}: {e:#}"))
+                    })?;
+                }
+                Err(e) => {
+                    core.stale = true;
+                    self.publish_lease(&core);
+                    self.refresh_or_log(&mut core).await;
+                    return Err(OrgError::Felix(e));
+                }
             }
         }
+        Err(OrgError::Unavailable(format!(
+            "{ORG_EVENTS} kept moving under this write; try again"
+        )))
     }
 
     /// Renews the org lease, and takes it back when it was lost. Returns when

@@ -303,6 +303,27 @@ impl Broker for Fake {
         Ok(offset)
     }
 
+    async fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> anyhow::Result<ConditionalWrite> {
+        // Like Felix: refused unless it would land at the stream's next offset.
+        let tail = self
+            .net
+            .lock()
+            .unwrap()
+            .streams
+            .get(stream)
+            .map_or(0, |v| v.len() as u64);
+        if expected != tail {
+            return Ok(ConditionalWrite::Refused { tail });
+        }
+        let offset = self.publish(stream, payload).await?;
+        Ok(ConditionalWrite::Written { offset })
+    }
+
     async fn read_from(&self, stream: &str, from: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
         let net = self.net.lock().unwrap();
         if net.fail_reads {
@@ -2263,4 +2284,32 @@ async fn revoking_an_agent_releases_only_its_holds_and_stops_its_claims() {
         claimed_id(&claim(&t, "w3").await).as_deref(),
         Some(w1.as_str())
     );
+}
+
+#[tokio::test]
+async fn a_stale_team_writer_cannot_append_past_a_newer_ones_record() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let b1 = || WorkRecord::Imported {
+        item: item("b1"),
+        source: "gh".into(),
+        upstream_id: "b1".into(),
+        title: "t".into(),
+    };
+    // While this tracker was paused, another took the lease and imported b1.
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, b1());
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    assert!(matches!(
+        t.person_record(key("gab"), b1()).await,
+        Err(Error::Unavailable(_))
+    ));
+    // The next call rebuilds first and sees b1.
+    let _ = t.person_record(key("gab"), b1()).await;
+    let imports = fake
+        .log()
+        .iter()
+        .filter(|l| l.record.kind() == "imported")
+        .count();
+    assert_eq!(imports, 2, "b1 was imported twice");
 }

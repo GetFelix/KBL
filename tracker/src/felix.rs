@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use bytes::Bytes;
+pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
     AckMode, BrokerError, CacheCondition, Client, ClientConfig, CursorErrorReason, ErrorCode,
     GroupMember, GroupPollOptions, GroupRecord, StartPosition, SubscribeCursorError,
@@ -69,6 +70,17 @@ pub(crate) type Page = (Vec<(u64, Vec<u8>)>, Option<u64>);
 pub(crate) trait Broker: Clone + Send + Sync + 'static {
     /// Publishes and returns the offset the record landed at.
     fn publish(&self, stream: &str, payload: Vec<u8>) -> impl Future<Output = Result<u64>> + Send;
+
+    /// Publishes only if the record would land at `expected`, the stream's
+    /// next offset: nothing was appended since the caller read its tail.
+    /// Felix makes the check where it assigns offsets, so a writer that lost
+    /// its lease cannot append behind a newer writer's back.
+    fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> impl Future<Output = Result<ConditionalWrite>> + Send;
 
     /// Every committed record from `from`, oldest first. Offsets can skip.
     fn read_from(
@@ -435,6 +447,31 @@ impl Broker for Felix {
             .await
             .with_context(|| format!("publish to {stream}"))?;
             offset.context("the broker did not report an offset")
+        }
+        .await;
+        self.forget_main(done).await
+    }
+
+    async fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> Result<ConditionalWrite> {
+        let done = async {
+            let client = self.main().await?;
+            placed(|| {
+                client.publish_if(
+                    self.tenant(),
+                    self.namespace(),
+                    stream,
+                    None,
+                    vec![payload.clone()],
+                    expected,
+                )
+            })
+            .await
+            .with_context(|| format!("publish to {stream}"))
         }
         .await;
         self.forget_main(done).await

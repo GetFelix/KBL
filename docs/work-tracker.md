@@ -344,10 +344,17 @@ the `work.tracker` cache, written with a time to live and renewed every third
 of it. A team whose tracker cannot renew answers 503 on its routes, stops
 renewing after ten seconds, and checks the lease before each append. The
 process exits when no team holds its lease; with one team, that is ten
-seconds after it lost it. This narrows the window in
-which a second tracker could write but does not close it: that needs an append
-conditioned on the lease key's version, which Felix does not offer yet
-(felix#1051).
+seconds after it lost it.
+
+The lease alone cannot stop a tracker that was paused past its lease and
+wakes up thinking it still holds it. Felix does: every append names the offset
+it expects to land at, the one after the last record this tracker read, and
+Felix refuses it if anything else was appended since. A refused team write
+answers 503 ("try again"); the tracker rebuilds its state from the log first,
+so the retry sees the other tracker's records. An org write reads the log
+again and retries by itself, up to three times. A new shard leader also moves
+the next offset forward when it starts, so the first write after a failover
+can be refused once.
 
 The tracker keeps no Felix call under its main lock, and every call has a
 10 second limit, so one slow call stalls the agent that made it and nobody

@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use kbl_core::codec::Codec;
-use kbl_core::org::{OrgLogged, OrgRecord, TokenHash};
+use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgRecord, TokenHash};
+use kbl_core::org_fold::Applied;
 use kbl_core::work::WORK_EVENTS;
 
 use super::*;
@@ -714,4 +715,32 @@ async fn the_org_lease_is_renewed_as_soon_as_serving_starts() {
         );
         maintain.abort();
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stale_org_writer_cannot_append_past_a_newer_ones_record() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.fences.store(true, Ordering::SeqCst);
+    let stale = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    let alpha = || OrgRecord::TeamCreated {
+        team: name("alpha"),
+        display_name: None,
+        adopted: false,
+    };
+    // While this tracker was paused, another took the lease and created alpha.
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), alpha());
+    broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
+    let (applied, offset) = stale
+        .append(Key::new("ops").unwrap(), alpha())
+        .await
+        .unwrap();
+    assert_eq!((applied, offset), (Applied::Unchanged, None));
+    assert_eq!(
+        broker.log.lock().unwrap().len(),
+        1,
+        "alpha was created twice"
+    );
 }

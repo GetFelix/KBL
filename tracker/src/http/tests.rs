@@ -8,6 +8,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::config::Tokens;
+use crate::felix::ConditionalWrite;
 use crate::teams::Team;
 
 mod org;
@@ -29,6 +30,8 @@ struct Quiet {
     lease_until: Arc<StdMutex<Option<tokio::time::Instant>>>,
     /// Bumped on every grant, as Felix does.
     lease_version: Arc<std::sync::atomic::AtomicU64>,
+    /// A conditional publish is refused unless it names the next offset.
+    fences: Arc<AtomicBool>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
@@ -51,6 +54,19 @@ impl Broker for Quiet {
             self.log.lock().unwrap().push((offset, payload));
         }
         Ok(offset)
+    }
+    async fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> anyhow::Result<ConditionalWrite> {
+        let tail = self.published.lock().unwrap().len() as u64;
+        if self.fences.load(Ordering::SeqCst) && expected != tail {
+            return Ok(ConditionalWrite::Refused { tail });
+        }
+        let offset = self.publish(stream, payload).await?;
+        Ok(ConditionalWrite::Written { offset })
     }
     async fn read_from(&self, _: &str, _: u64) -> anyhow::Result<Vec<(u64, Vec<u8>)>> {
         Ok(self.log.lock().unwrap().clone())

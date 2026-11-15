@@ -30,7 +30,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-use crate::felix::{Broker, ExtendError};
+use crate::felix::{Broker, ConditionalWrite, ExtendError};
 
 mod ingest;
 mod reads;
@@ -175,6 +175,10 @@ struct LeaseHeld {
 #[derive(Default)]
 struct Core {
     state: State,
+    /// The lowest offset `work.events`' next record can land at: past the last
+    /// record read, skipped ones included, or what Felix named in a refusal
+    /// (a new shard leader's generation start moves it past the last record).
+    tail: u64,
     /// The ready record each item is waiting on: tier and stamp.
     live: HashMap<ItemId, (u8, u64)>,
     /// Since when each Ready item's `live` record has stood, and how often it was
@@ -466,11 +470,12 @@ impl<B: Broker> Tracker<B> {
         // must not hold the lease and keep a build that can from starting.
         tracker.read_state().await?;
         tracker.acquire_lease().await?;
-        let (state, recall) = tracker.read_state().await?;
+        let (state, recall, tail) = tracker.read_state().await?;
         {
             let mut core = tracker.0.core.lock().await;
             core.state = state;
             core.recall = recall;
+            core.tail = tail;
         }
         let holders: Vec<AgentName> = {
             let core = tracker.0.core.lock().await;
@@ -1575,8 +1580,8 @@ impl<B: Broker> Tracker<B> {
         }
         let logged = WorkLogged::new(now_ms(), by, actor, record);
         // The tracker is the only writer, so the next offset is the one after the
-        // last applied. It can skip (generation starts), which the check below catches.
-        let guess = core.state.at.map_or(0, |a| a + 1);
+        // last applied, or past it when a generation start moved the tail.
+        let guess = core.state.at.map_or(0, |a| a + 1).max(core.tail);
         // Only for a writer the fold lets act, so no one else learns which tree a record is in.
         if core.state.may_cite(&logged).is_ok() {
             evidence_in_tree(core, &logged.record, guess)?;
@@ -1592,19 +1597,29 @@ impl<B: Broker> Tracker<B> {
                 .unwrap_or_else(|| "invalid".into());
             return Err(Error::Refused { why });
         }
-        // TODO(felix#1051): make this append conditional on the lease key's version
-        // once Felix can; until then the lease check above narrows the window in
-        // which a tracker that lost the lease can still write, but does not close it.
+        // Conditional on the tail: if another tracker took the lease and wrote,
+        // Felix refuses this, whatever this tracker's clock says.
         match self
-            .io(None, self.0.broker.publish(WORK_EVENTS, logged.encode()))
+            .io(
+                None,
+                self.0
+                    .broker
+                    .publish_if(WORK_EVENTS, logged.encode(), guess),
+            )
             .await
         {
-            Ok(offset) => {
-                if offset != guess {
-                    core.stale = true;
-                }
+            Ok(ConditionalWrite::Written { offset }) => {
                 core.recall.remember(offset, &logged, &self.0.me, absent);
                 Ok(offset)
+            }
+            // The record was applied above, so the state is rebuilt before the
+            // next call, up to the tail Felix named.
+            Ok(ConditionalWrite::Refused { tail }) => {
+                core.stale = true;
+                core.tail = core.tail.max(tail);
+                Err(Error::Unavailable(format!(
+                    "{WORK_EVENTS} moved under this write; try again"
+                )))
             }
             Err(e) => {
                 core.stale = true;
@@ -1643,24 +1658,28 @@ impl<B: Broker> Tracker<B> {
         }
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
-        let (state, recall) = self
+        let (state, recall, tail) = self
             .read_state()
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
         let mut core = self.0.core.lock().await;
         core.state = state;
         core.recall = recall;
+        core.tail = core.tail.max(tail);
         core.stale = false;
         Ok(())
     }
 
-    /// The fold of every record in `work.events`.
-    async fn read_state(&self) -> anyhow::Result<(State, Recall)> {
+    /// The fold of every record in `work.events`, and the offset after the
+    /// last one read, skipped payloads included.
+    async fn read_state(&self) -> anyhow::Result<(State, Recall, u64)> {
         let mut entries = Vec::new();
+        let mut tail = 0;
         for (offset, payload) in self
             .io(None, self.0.broker.read_from(WORK_EVENTS, 0))
             .await?
         {
+            tail = offset + 1;
             match read(&payload) {
                 Ok(rec) => entries.push((offset, rec)),
                 // Folding past a record of a newer format would give a state its
@@ -1679,7 +1698,7 @@ impl<B: Broker> Tracker<B> {
             let created = absent && !edge_absent(&state, &rec.record);
             recall.remember(*offset, rec, &self.0.me, created);
         }
-        Ok((state, recall))
+        Ok((state, recall, tail))
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {
