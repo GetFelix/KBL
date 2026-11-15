@@ -510,6 +510,15 @@ async fn a_record_that_is_not_a_task_is_dead_lettered_and_reported() {
     let err = tasks(&fake).claim(None).await.unwrap_err();
     assert!(err.contains("permission denied"), "{err}");
     assert!(fake.kinds(RUN).contains(&"refused"));
+    assert!(
+        fake.log(RUN)
+            .iter()
+            .filter(|r| matches!(r,
+                Record::Refused { error, .. } if error.contains("dead-lettered, not a task")))
+            .count()
+            == 1,
+        "logged a dead-letter that was refused"
+    );
 }
 
 #[tokio::test]
@@ -532,7 +541,6 @@ async fn a_failed_run_log_write_is_counted_by_the_next_one_that_lands() {
     let fake = Fake::default();
     let t = tasks(&fake);
     fake.fail_on("publish");
-    // Posting writes a task, then logs it; the log write fails.
     t.log(Record::RunEnded {
         outcome: "a".into(),
     })

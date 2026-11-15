@@ -33,6 +33,9 @@ pub enum ClaimLostCause {
     Stale,
     /// No extension worked for a whole visibility window.
     Silent,
+    /// A cause a later version wrote.
+    #[serde(other)]
+    Unknown,
 }
 
 /// An agent and its role, as listed when a run starts.

@@ -222,6 +222,15 @@ fn a_claim_lost_record_carries_its_cause_and_reads_without_one() {
     let bytes = lost.encode();
     assert!(String::from_utf8_lossy(&bytes).contains(r#""cause":"stale""#));
     assert_eq!(Record::decode(&bytes).unwrap(), lost);
+    let newer =
+        br#"{"kind":"task_claim_lost","task":"t-01","offset":12,"attempt":1,"cause":"later"}"#;
+    assert!(matches!(
+        Record::decode(newer).unwrap(),
+        Record::TaskClaimLost {
+            cause: Some(ClaimLostCause::Unknown),
+            ..
+        }
+    ));
     let old = br#"{"kind":"task_claim_lost","task":"t-01","offset":12,"attempt":1}"#;
     assert!(matches!(
         Record::decode(old).unwrap(),

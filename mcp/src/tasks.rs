@@ -5,6 +5,8 @@
 //! reported on stderr and does not fail the tool: the claim or the result it
 //! describes already happened, and failing would tell the model it did not.
 //! The next write that lands is a `refused` record counting what is missing.
+//! The count lives in this process: if the failed write was its last, nothing
+//! reports the gap.
 
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -221,6 +223,9 @@ impl<B: Backend> Tasks<B> {
                     return Err(format!("{error}. It was handed back for a newer worker"));
                 }
                 Err(e) => {
+                    // Logged only once the dead-letter holds, or a refused one
+                    // would claim it and every redelivery would repeat it.
+                    self.dead_letter(record.offset).await?;
                     // No task id to log it under, so the group offset names it.
                     let key = record.offset.to_string();
                     self.refuse(
@@ -230,7 +235,6 @@ impl<B: Backend> Tasks<B> {
                         &anyhow::anyhow!("dead-lettered, not a task: {e}"),
                     )
                     .await;
-                    self.dead_letter(record.offset).await?;
                     return Err(format!(
                         "dead-lettered the record at offset {}, which is not a task: {e}",
                         record.offset
@@ -589,7 +593,8 @@ impl<B: Backend> Tasks<B> {
     }
 
     /// A failed write does not fail the tool: the step it records has already
-    /// happened. The next write that lands says how many records are missing.
+    /// happened. The next write that lands says how many records are missing,
+    /// placed ahead of it, so under a concurrent keepalive write the position is approximate.
     async fn log(&self, record: Record) {
         let stream = self.0.resources.log();
         let agent = Key::new(self.0.agent.as_str()).expect("an agent name is a key");
