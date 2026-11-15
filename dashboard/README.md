@@ -14,7 +14,7 @@ note in the panel, with the suggested link ([Files that overlap](../docs/work-tr
 
 Spend (sidebar button, or `Show spend` in the palette) lists what claims cost per root, reviewer tier and repo, largest
 first, from the fold's `spend_json()` ([Spend](../docs/work-tracker.md#where-work-comes-from-and-its-bounds)). The figures are what each claim
-reported, never an estimate, so the total is a lower bound: a claim that lapsed recorded no cost. A root links to its
+reported, never an estimate, so the total is a lower bound: a lapsed claim is charged only the cost floor, and a reported cost is the agent's own word. A root links to its
 item. A table with nothing recorded says so.
 
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a

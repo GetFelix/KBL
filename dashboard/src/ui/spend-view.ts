@@ -61,7 +61,7 @@ export function spendView(on: SpendHandlers) {
       m.body.replaceChildren(
         h('header', { class: 'dialog-head' }, h('h2', {}, 'Spend'), close),
         h('p', { class: 'spend-total' }, h('strong', {}, dollars(t.total)), ' spent on claims'),
-        h('p', { class: 'muted small spend-note' }, 'A lower bound: a claim that lapsed recorded no cost, so it is not counted here.'),
+        h('p', { class: 'muted small spend-note' }, 'A lower bound: a lapsed claim is charged only the cost floor, not what it really spent, and a reported cost is the agent\'s own word.'),
         section('Per root', 'spend-roots', 'Root', t.roots, 'No claim has recorded a cost yet.', root),
         section('Per reviewer tier (reviews only)', 'spend-tiers', 'Tier', t.tiers, 'No review has recorded a cost yet.', text, false),
         section('Per repo', 'spend-repos', 'Repo', t.repos, 'No repo has recorded a cost yet.', text),
