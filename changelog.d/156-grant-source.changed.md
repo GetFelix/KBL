@@ -1,0 +1,1 @@
+A grant in the tracker's token file names a source as well as a repo, as `source:owner/repo` (for example `github:GetFelix/felix-gateway`). A prerequisite or a linked item must match both, so a grant no longer reaches a repo of the same name in another source. A bare `owner/repo` grant is refused at startup.

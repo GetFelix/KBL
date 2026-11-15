@@ -1,0 +1,23 @@
+{
+  "url": "https://api.github.com/repos/GetFelix/felix/issues/812",
+  "repository_url": "https://api.github.com/repos/GetFelix/felix",
+  "html_url": "https://github.com/GetFelix/felix/issues/812",
+  "number": 812,
+  "title": "Reads miss a fresh write",
+  "user": { "login": "alice", "type": "User" },
+  "labels": [
+    { "id": 1, "name": "agent-ok", "color": "0e8a16" },
+    { "id": 2, "name": "p1", "color": "d93f0b" }
+  ],
+  "state": "open",
+  "state_reason": null,
+  "assignees": [],
+  "milestone": null,
+  "type": { "name": "Bug" },
+  "comments": 0,
+  "created_at": "2026-11-09T09:00:00Z",
+  "updated_at": "2026-11-10T10:00:00Z",
+  "closed_at": null,
+  "author_association": "MEMBER",
+  "body": "A read right after a write can return the old value.\n\nRepro: write k=1, read k."
+}

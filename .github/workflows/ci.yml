@@ -1,0 +1,182 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A merge's run on main is never cancelled by the next merge.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/lint.mjs
+      # Every route, tool and record kind has a row in docs/threat-model.md.
+      - run: node scripts/check-threat-model.mjs
+      - run: node --test dev/lib/script.test.mjs dev/lib/agents.test.mjs
+      # Malformed changelog fragments, and the assembler's own tests.
+      - run: python3 scripts/changelog_assemble.py --check
+      - run: python3 -m unittest scripts/test_changelog_assemble.py
+      # The fixtures are generated; the committed files must match the script.
+      - run: python3 prototype/make-intake-fixture.py
+      - run: python3 prototype/make-demo-fixture.py
+      - run: git diff --exit-code -- prototype
+
+  intake:
+    name: intake frame
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-intake.mjs
+
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  dashboard:
+    name: dashboard build (wasm, tsc, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - id: bindgen
+        run: echo "version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
+      - name: Install the wasm-bindgen CLI at the locked version
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
+      - run: npm ci
+        working-directory: dashboard
+      - run: npm run wasm
+        working-directory: dashboard
+      - run: npm run typecheck
+        working-directory: dashboard
+      - run: npm test
+        working-directory: dashboard
+      - run: npm run build
+        working-directory: dashboard
+      - name: Keyboard flows and axe-core in headless Chrome
+        run: npm run check
+        working-directory: dashboard
+
+  stack:
+    name: dev stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: dev/up.sh
+      - run: node dev/check.mjs
+      - name: Create a run, then refuse the same id again
+        run: |
+          cargo build -p kbl-tool
+          tool=target/debug/kbl-tool
+          "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2
+          if "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2; then
+            echo "a second create of the same run succeeded" >&2
+            exit 1
+          fi
+      - name: Start kbl-mcp and list its tools
+        run: |
+          cargo build -p kbl-mcp
+          node dev/check-mcp.mjs
+      - name: Run the task tools against Felix
+        run: node dev/check-tasks.mjs
+      - name: Run the tracker's claim path against Felix
+        run: |
+          cargo build -p kbl-tool -p kbl-mcp -p kbl-tracker
+          node dev/check-tracker-claims.mjs
+      - name: Poll one issue again and again, and import it once
+        run: |
+          cargo build -p kbl-ingest
+          node dev/check-tracker-ingest.mjs
+      - name: Run the work tools against Felix
+        run: node dev/check-tracker-work.mjs
+      - name: Create teams and keep them apart
+        run: |
+          cargo build -p kbl-tool --example raw_felix
+          node dev/check-teams.mjs
+      - name: Run review as work against Felix
+        run: node dev/check-tracker-review.mjs
+      - name: Run triage as work against Felix
+        run: node dev/check-tracker-triage.mjs
+      - name: Run three agent sessions from the launcher until the queue is empty
+        run: node dev/check-agents.mjs
+      - name: Upgrade from the previous build and back, over one log
+        env:
+          # The previous build is the commit this change is based on, until there are releases.
+          PREVIOUS: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          # A commit between the previous build and this one may declare that
+          # the two cannot run together (see docs/upgrades.md).
+          git fetch --unshallow origin 2>/dev/null || git fetch origin
+          git fetch origin "$PREVIOUS"
+          if declared=$(git log "$PREVIOUS..HEAD" --format=%B | grep -m1 '^Upgrade-Break:'); then
+            echo "Skipping the upgrade check. $declared"
+            exit 0
+          fi
+          git worktree add ../previous "$PREVIOUS"
+          # Builds from before the rename have agents-tracker and felix-mcp.
+          if grep -q '^name = "kbl-tracker"' ../previous/tracker/Cargo.toml; then
+            TRACKER=kbl-tracker; MCP=kbl-mcp
+          else
+            TRACKER=agents-tracker; MCP=felix-mcp
+          fi
+          cargo build --manifest-path ../previous/Cargo.toml --target-dir target/previous -p "$TRACKER" -p "$MCP"
+          KBL_TRACKER_OLD="target/previous/debug/$TRACKER" KBL_MCP_OLD="target/previous/debug/$MCP" \
+            node dev/check-upgrade.mjs
+      - name: Run a scripted job twice from one seed
+        run: node dev/check-scripted.mjs
+      - name: Kill workers holding tasks
+        run: node dev/check-death.mjs
+      - name: Dead-letter a poison task
+        run: node dev/check-poison.mjs
+      - if: failure()
+        run: docker compose -f dev/compose.yml logs
+      - if: always()
+        run: dev/down.sh
+
+  # The one check branch protection requires.
+  ci-ok:
+    name: CI ok
+    if: always()
+    needs: [lint, intake, rust, dashboard, stack]
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          test "${{ needs.lint.result }}" = success
+          test "${{ needs.intake.result }}" = success
+          test "${{ needs.rust.result }}" = success
+          test "${{ needs.dashboard.result }}" = success
+          test "${{ needs.stack.result }}" = success

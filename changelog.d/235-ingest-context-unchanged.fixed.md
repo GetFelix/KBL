@@ -1,0 +1,1 @@
+An ingest worker that lost its saved state no longer appends two context records for every open root. The tracker answers a `context` from ingest whose text matches what the entry already holds, on an entry no agent wrote, with `unchanged: true` and logs nothing (#235). Nothing in the fold changes, so old logs replay as before.

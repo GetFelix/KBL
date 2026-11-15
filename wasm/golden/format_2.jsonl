@@ -1,0 +1,11 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"first bug"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"second bug"}
+{"at_ms":1030,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":2}
+{"at_ms":1040,"by":"ingest","actor":"tracker","kind":"left_scope","item":"r1"}
+{"at_ms":1050,"by":"ingest","actor":"tracker","kind":"left_scope","item":"r2"}
+{"v":2,"at_ms":1060,"by":"ingest","actor":"tracker","kind":"returned_to_scope","item":"r1"}
+{"v":2,"at_ms":1070,"by":"gabriel","actor":"person","kind":"format_raised","to":2}
+{"v":2,"at_ms":1080,"by":"ingest","actor":"tracker","kind":"returned_to_scope","item":"r1"}
+{"v":2,"at_ms":1090,"by":"gabriel","actor":"person","kind":"returned_to_scope","item":"r2"}
+{"at_ms":1100,"by":"ingest","actor":"tracker","kind":"left_scope","item":"r1"}

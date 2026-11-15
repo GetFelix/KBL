@@ -1,0 +1,1 @@
+Pull requests add a file under `changelog.d/` instead of editing `CHANGELOG.md`, so they stop conflicting on the same lines. `scripts/changelog_assemble.py` folds the fragments into `## Unreleased` at release time, and CI validates them.

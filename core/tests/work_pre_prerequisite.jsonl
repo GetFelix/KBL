@@ -1,0 +1,12 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"first bug"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":91020}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"proposed","item":"c1","parent":"r1","key":"a","work":"split","title":"reader side"}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"proposed","item":"c2","parent":"r1","key":"b","work":"split","title":"writer side"}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"linked","item":"c2","to":"c1"}
+{"at_ms":1060,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"second bug"}
+{"at_ms":1070,"by":"gabriel","actor":"person","kind":"accepted","item":"r2"}
+{"at_ms":1080,"by":"gabriel","actor":"person","kind":"linked","item":"r2","to":"r1"}
+{"at_ms":1090,"by":"w1","actor":"agent","kind":"linked","item":"c1","to":"r2"}
+{"at_ms":1100,"by":"gabriel","actor":"person","kind":"closed","item":"c1","why":"completed"}
+{"at_ms":1110,"by":"gabriel","actor":"person","kind":"closed","item":"r1","why":"merged"}

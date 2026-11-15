@@ -1,0 +1,26 @@
+{"kind":"run_started","goal":"Review PR #482","budget_micros":10000000,"agents":[{"name":"planner","role":"planner"},{"name":"w1","role":"reviewer"}]}
+{"kind":"run_ended","outcome":"review posted"}
+{"kind":"agent_up","agent":"w1","role":"reviewer","model":"small","presence":4}
+{"kind":"agent_gone","agent":"w6","presence":9}
+{"kind":"task_posted","task":"t-01","parent":"plan-1","title":"src/main.rs","offset":0}
+{"kind":"task_claimed","task":"t-01","offset":12,"attempt":1,"deadline_ms":1800000090000}
+{"kind":"task_extended","task":"t-01","offset":12,"attempt":1,"deadline_ms":1800000120000}
+{"kind":"task_released","task":"t-01","offset":12,"attempt":1,"reason":"binary file"}
+{"kind":"task_released","task":"t-02","offset":12,"attempt":2}
+{"kind":"task_done","task":"t-01","offset":12,"attempt":1,"result":"b-pMPtBKlaPaFKnSNcg9hovtfA9Fz38_qnUe6PUFmNIhE"}
+{"kind":"task_duplicate","task":"t-01","offset":12,"attempt":2,"result":"b-CJABo1Z5oz7z2wyjUNubmi8BNuDjJ1d7BLO5gSdHCWE"}
+{"kind":"task_dead","task":"t-31","offset":12,"attempt":2,"reason":"given up after 2 attempts"}
+{"kind":"board_put","key":"w3-notes","version":12,"prev":9,"value":{"text":"uses a fixed window"}}
+{"kind":"board_conflict","key":"shared-api","found":14,"value":{"artifact":"b-vlT9eDb_aQAzTzh1x0_OsKvDSl7PlW9zydeAf1gq4zU"}}
+{"kind":"lease_taken","key":"shared-limiter-clock","version":20,"ttl_ms":30000}
+{"kind":"lease_renewed","key":"shared-limiter-clock","version":23,"prev":20,"ttl_ms":30000}
+{"kind":"lease_released","key":"shared-api","version":23}
+{"kind":"lease_lost","key":"shared-limiter-clock","version":23,"holder":"w6"}
+{"kind":"message","to":"w5","corr":"m-12","offset":8,"text":{"text":"does middleware key on it?"}}
+{"kind":"model_started","agent":"planner","task":"plan-1","reserve_micros":600000}
+{"kind":"model_call","agent":"planner","task":"plan-1","prompt":"b-zwcZTuIy61MeFfaQAA0ZhG3qac8FUEeCZYr8-suSKKI","response":"b-qfSz0ipSP9raQchcF1QlvNFbMrTND1TZQzrM1S1xlaE","tokens":18400,"cost_micros":420000}
+{"kind":"budget_exhausted","agent":"w2","task":"t-09","reserve_micros":600000}
+{"kind":"refund_unconfirmed","agent":"w2","micros":120000}
+{"kind":"refused","op":"board_put","resource":"agents.board.r-7f3a","key":"plan-review","error":"Forbidden: no grant on plan-*"}
+{"kind":"refused","op":"publish","resource":"agents.tasks.r-7f3a","error":"Forbidden"}
+{"kind":"task_claim_lost","task":"t-01","offset":12,"attempt":1}

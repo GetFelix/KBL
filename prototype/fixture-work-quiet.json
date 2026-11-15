@@ -1,0 +1,37 @@
+{
+ "title": "A quiet morning",
+ "scope": "GetFelix/felix",
+ "now": 400000,
+ "viewer": "dana",
+ "people": ["dana", "kim"],
+ "settings": {"reviewCap": 6},
+ "sources": {"github": {"label": "GitHub", "tag": "GH", "scope": "GetFelix/felix"}},
+ "agents": ["w1", "w2", "w3"],
+ "items": {
+  "gh-901": {"source": "github", "ref": "#901", "title": "Consumer lag metric is off by one after a rebalance", "class": "bug"},
+  "gh-902": {"source": "github", "ref": "#902", "title": "Document the retention sweep interval", "class": "docs"},
+  "gh-903": {"source": "github", "ref": "#903", "title": "Cache counter overflows after 2^31 increments", "class": "bug"},
+  "gh-904": {"source": "github", "ref": "#904", "title": "Flaky test in the segment index rebuild", "class": "test"},
+  "gh-905": {"source": "github", "ref": "#905", "title": "Reject a publish with an unknown flag bit", "class": "bug"}
+ },
+ "records": [
+  {"o": 0, "t": 100000, "kind": "imported", "item": "gh-901"},
+  {"o": 1, "t": 101000, "kind": "triaged", "item": "gh-901", "tier": 1, "by": "dana"},
+  {"o": 2, "t": 110000, "kind": "imported", "item": "gh-902"},
+  {"o": 3, "t": 111000, "kind": "triaged", "item": "gh-902", "tier": 3, "by": "dana"},
+  {"o": 4, "t": 120000, "kind": "imported", "item": "gh-903"},
+  {"o": 5, "t": 121000, "kind": "triaged", "item": "gh-903", "tier": 0, "by": "dana"},
+  {"o": 6, "t": 130000, "kind": "imported", "item": "gh-904"},
+  {"o": 7, "t": 131000, "kind": "triaged", "item": "gh-904", "tier": 2, "by": "dana"},
+  {"o": 8, "t": 140000, "kind": "imported", "item": "gh-905"},
+  {"o": 9, "t": 141000, "kind": "triaged", "item": "gh-905", "tier": 1, "by": "dana"},
+  {"o": 10, "t": 300000, "kind": "claimed", "item": "gh-905", "agent": "w2", "run": "r-gh905"},
+  {"o": 11, "t": 330000, "kind": "pr_opened", "item": "gh-905", "pr": 2301, "add": 41, "del": 6, "files": 3, "ci": "pass", "agent": "w2", "reviewer": "dana"},
+  {"o": 12, "t": 350000, "kind": "approved", "item": "gh-905", "by": "dana"},
+  {"o": 13, "t": 352000, "kind": "done", "item": "gh-905", "agent": "w2", "pr": 2301},
+  {"o": 14, "t": 360000, "kind": "claimed", "item": "gh-903", "agent": "w1", "run": "r-gh903"},
+  {"o": 15, "t": 380000, "kind": "pr_opened", "item": "gh-903", "pr": 2304, "add": 18, "del": 4, "files": 2, "ci": "pass", "agent": "w1", "reviewer": "kim"},
+  {"o": 16, "t": 385000, "kind": "claimed", "item": "gh-901", "agent": "w3", "run": "r-gh901"},
+  {"o": 17, "t": 392000, "kind": "claimed", "item": "gh-904", "agent": "w2", "run": "r-gh904"}
+ ]
+}

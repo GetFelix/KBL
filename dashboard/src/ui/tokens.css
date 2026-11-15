@@ -1,0 +1,94 @@
+/* Design tokens: every colour, space, type size and radius the dashboard uses.
+   Components read these and nothing else. Colours are the style frame's
+   (prototype/intake-frame.html) and docs/brand/story.md; text pairs meet 4.5:1 and
+   UI edges 3:1 in both themes, checked by the axe run in check/a11y.mjs. */
+:root {
+  color-scheme: dark;
+  --bg: #080d13;
+  --panel: #0d141c;
+  --raised: #121c26;
+  --hover: #17242f;
+  --line: rgba(160, 200, 220, 0.11);
+  --line-strong: rgba(160, 200, 220, 0.42);
+  --text: #e6eef4;
+  --muted: #9aabb9;
+  --accent: #c86a1e;
+  --accent-ink: #e89a5a;
+  --accent-soft: rgba(200, 106, 30, 0.16);
+  --on-accent: #14171c;
+  --danger: #ff8a8a;
+  --warn: #ffd04d;
+  --ok: #7fd1a8;
+  --focus: #e89a5a;
+  --scrim: rgba(3, 6, 10, 0.6);
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --weight-medium: 500;
+  --weight-bold: 600;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  --row-height: 36px;
+  --card-pad: var(--space-3);
+  --card-gap: var(--space-2);
+  --column-width: 272px;
+  --target-min: 24px;
+  --control-sm: 28px;
+  --control-md: 36px;
+  --filter-max: 14rem;
+  --sidebar-width: 224px;
+  --palette-width: 560px;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --speed: 120ms;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f3f6f9;
+  --panel: #ffffff;
+  --raised: #ffffff;
+  --hover: #eaf2f6;
+  --line: rgba(20, 50, 70, 0.1);
+  --line-strong: rgba(20, 50, 70, 0.45);
+  --text: #0e1a24;
+  --muted: #4f6170;
+  --accent: #a4520f;
+  --accent-ink: #8f470c;
+  --accent-soft: rgba(164, 82, 15, 0.12);
+  --on-accent: #ffffff;
+  --danger: #b42828;
+  --warn: #6e5f00;
+  --ok: #1d6b45;
+  --focus: #8f470c;
+  --scrim: rgba(14, 26, 36, 0.35);
+  --shadow: 0 12px 40px rgba(14, 26, 36, 0.18);
+}
+
+/* Compact density: tighter rows and cards, never under the 24 px target size. */
+:root[data-density='compact'] {
+  --row-height: 28px;
+  --card-pad: var(--space-2);
+  --card-gap: var(--space-1);
+  --column-width: 240px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --speed: 0ms;
+  }
+}

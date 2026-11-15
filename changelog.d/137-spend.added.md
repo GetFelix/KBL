@@ -1,0 +1,1 @@
+`kbl-tool work spend` prints what claims cost, summed per root, reviewer tier and repo. The numbers come from the fold, so no new record and no format raise; the wasm fold exposes the same numbers via `Folder.spend_json()`. Spend is a lower bound, because a lapsed claim records no cost.

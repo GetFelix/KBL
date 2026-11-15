@@ -1,0 +1,1 @@
+Redaction now cuts a key with no `END` whose first body line is short, OpenSSH 70-column and blank-line-led bodies, double-escaped and `\n\`-continued bodies, a digit-free Bearer in an escaped JSON header, stuck-together AKIA ids and JWTs, and `xoxd-` cookies. Records already on the log are unchanged. The edge cases left are listed in the threat model.

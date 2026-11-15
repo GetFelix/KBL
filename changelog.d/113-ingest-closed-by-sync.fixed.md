@@ -1,0 +1,1 @@
+Whether ingest closed a root is now read from the log (`closed_by_sync` on `GET /v1/ingest/roots`) instead of ingest's saved state, so a close whose save failed or whose poll crashed no longer stops the root reopening with its issue.
