@@ -55,5 +55,16 @@ export function fixtureLog() {
   // Two items in one repo that name the same files, so the overlap note and flags show.
   rec({ kind: 'context', item: 'gh-2219', entry: 'files', text: { text: 'core/src/retention.rs\ncore/src/segment/' } });
   rec({ kind: 'context', item: 'gh-2215', entry: 'files', text: { text: 'core/src/segment/reader.rs\ncore/src/publish.rs' } });
+  // A fixed issue with a first-pass review by another agent (an author never reviews their own work),
+  // so Spend has a reviewer tier. It has tier 3, which no other fixture item uses.
+  const pr = 'GetFelix/felix#2300';
+  rec({ kind: 'imported', item: 'gh-2300', source: 'github', title: 'Reads after a restart skip the cache', upstream_id: pr, actor: 'tracker', by: 'ingest' });
+  rec({ kind: 'accepted', item: 'gh-2300', tier: 3 });
+  agent({ kind: 'claimed', item: 'gh-2300', attempt: 1, deadline_ms: at + 3_600_000 });
+  agent({ kind: 'progress', item: 'gh-2300', attempt: 1, note: { text: 'fixed' }, pr });
+  agent({ kind: 'done', item: 'gh-2300', attempt: 1, cost_micros: 600_000 });
+  rec({ kind: 'proposed', item: 'rev-2300', parent: 'gh-2300', key: 'review-2300', work: 'review', title: 'Review the cache fix', review: { pass: 'first', tier: 'fast', pr }, actor: 'tracker', by: 'ingest' });
+  rec({ kind: 'claimed', item: 'rev-2300', attempt: 1, deadline_ms: at + 3_600_000, actor: 'agent', by: 'agent-2' });
+  rec({ kind: 'done', item: 'rev-2300', attempt: 1, cost_micros: 150_000, actor: 'agent', by: 'agent-2' });
   return log;
 }
