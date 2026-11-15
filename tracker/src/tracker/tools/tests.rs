@@ -3081,11 +3081,11 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
             Vec::new(),
         )
     };
-    let first = ask(Some(1)).await.unwrap();
+    let first = ask(Some(crate::tracker::Which::Attempt(1))).await.unwrap();
     let at = fake.log().len() as u64 - 1;
     assert_eq!(first["offset"], at);
     let kinds = fake.kinds();
-    let again = ask(Some(1)).await.unwrap();
+    let again = ask(Some(crate::tracker::Which::Attempt(1))).await.unwrap();
     assert_eq!(again["replayed"], true);
     assert_eq!(again["offset"], at);
     assert_eq!(fake.kinds(), kinds);
@@ -3095,7 +3095,7 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
         .prerequisite(
             &w1,
             &a1,
-            Some(1),
+            Some(crate::tracker::Which::Attempt(1)),
             key("k"),
             Prereq::Existing(item("f3")),
             DoneWhen::Merged,
@@ -3116,7 +3116,7 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
         .prerequisite(
             &w1,
             &a1,
-            Some(1),
+            Some(crate::tracker::Which::Attempt(1)),
             key("k2"),
             new,
             DoneWhen::Merged,
@@ -3125,6 +3125,9 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
         .await;
     assert!(matches!(other, Err(Error::NotHeld(_))));
     // Another attempt, or no attempt at all, is not the call that landed.
-    assert!(matches!(ask(Some(2)).await, Err(Error::NotHeld(_))));
+    assert!(matches!(
+        ask(Some(crate::tracker::Which::Attempt(2))).await,
+        Err(Error::NotHeld(_))
+    ));
     assert!(matches!(ask(None).await, Err(Error::NotHeld(_))));
 }

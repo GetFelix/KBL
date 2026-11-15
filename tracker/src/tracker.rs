@@ -151,6 +151,15 @@ impl std::fmt::Display for Error {
     }
 }
 
+/// Which claim a terminal call is for. The claim's offset names one claim;
+/// an attempt number is shared by every claim of a retried attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Which {
+    Attempt(u32),
+    /// The offset of the claim's `claimed` record.
+    Claim(u64),
+}
+
 /// One agent's delivery of one ready record.
 struct Delivery {
     /// Names this delivery among all the deliveries of the same item.
@@ -475,29 +484,48 @@ impl Recall {
         claims.last().map(|c| c.offset)
     }
 
-    /// The offset of the record that ended `agent`'s latest claim of `attempt`,
-    /// if `agent` itself wrote it as `kind`. A record the tracker or a person
-    /// wrote, such as `released lapsed`, is not the agent's outcome.
+    /// The offset of the record that ended the claim `which` names, if `agent`
+    /// itself wrote it as `kind`. By attempt, that is `agent`'s latest claim of
+    /// it. A record the tracker or a person wrote, such as `released lapsed`, is
+    /// not the agent's outcome.
     fn ended_by(
         &self,
         item: &ItemId,
-        attempt: u32,
+        which: Which,
         agent: &AgentName,
         kind: &str,
         prerequisite: Option<&ItemId>,
     ) -> Option<u64> {
-        let claims = self.attempts.get(&(item.clone(), attempt))?;
-        let ended = claims
-            .iter()
-            .rev()
-            .find(|c| c.by.as_str() == agent.as_str())?
-            .ended
-            .as_ref()?;
+        let mine = |c: &&ClaimLog| c.by.as_str() == agent.as_str();
+        let claim = match which {
+            Which::Attempt(a) => self
+                .attempts
+                .get(&(item.clone(), a))?
+                .iter()
+                .rev()
+                .find(mine)?,
+            Which::Claim(at) => self
+                .attempts
+                .iter()
+                .filter(|((i, _), _)| i == item)
+                .flat_map(|(_, claims)| claims)
+                .find(|c| c.offset == at)?,
+        };
+        let ended = claim.ended.as_ref()?;
         let theirs = ended.kind == kind
             && ended.prerequisite.as_ref() == prerequisite
             && ended.actor == Actor::Agent
             && ended.by.as_str() == agent.as_str();
         theirs.then_some(ended.offset)
+    }
+
+    /// Whether the claim `agent` holds on `attempt` is not the one `which` names.
+    fn other_claim(&self, item: &ItemId, attempt: u32, which: Option<Which>) -> bool {
+        match which {
+            None => false,
+            Some(Which::Attempt(a)) => a != attempt,
+            Some(Which::Claim(at)) => self.claimed(item, attempt) != Some(at),
+        }
     }
 }
 
@@ -787,13 +815,13 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
-        attempt: Option<u32>,
+        which: Option<Which>,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
-            attempt,
+            which,
             "done",
             |attempt| WorkRecord::Done {
                 item: item.clone(),
@@ -812,14 +840,14 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
-        attempt: Option<u32>,
+        which: Option<Which>,
         reason: Option<String>,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
-            attempt,
+            which,
             "released",
             |attempt| WorkRecord::Released {
                 item: item.clone(),
@@ -839,14 +867,14 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
-        attempt: Option<u32>,
+        which: Option<Which>,
         reason: String,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
         self.finish(
             agent,
             item,
-            attempt,
+            which,
             "gave_up",
             |attempt| WorkRecord::GaveUp {
                 item: item.clone(),
@@ -1549,7 +1577,7 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
-        attempt: Option<u32>,
+        which: Option<Which>,
         kind: &'static str,
         record: impl FnOnce(u32) -> WorkRecord,
         reply: Value,
@@ -1559,20 +1587,20 @@ impl<B: Broker> Tracker<B> {
         let mut delivery = slot.lock().await;
         if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
             let core = self.0.core.lock().await;
-            return replay(&core, agent, item, attempt, kind, reply).ok_or_else(|| lapsed(item));
+            return replay(&core, agent, item, which, kind, reply).ok_or_else(|| lapsed(item));
         }
         let mut ops = Vec::new();
         let mut marked = false;
         let offset;
         {
             let mut core = self.0.core.lock().await;
-            let held = match (holding(&core, delivery.as_ref(), agent, item), attempt) {
-                (Ok(held), Some(want)) if held != want => Err(lapsed(item)),
-                (held, _) => held,
+            let held = match holding(&core, delivery.as_ref(), agent, item) {
+                Ok(held) if core.recall.other_claim(item, held, which) => Err(lapsed(item)),
+                held => held,
             };
             let held = match held {
                 Ok(held) => held,
-                Err(e) => return replay(&core, agent, item, attempt, kind, reply).ok_or(e),
+                Err(e) => return replay(&core, agent, item, which, kind, reply).ok_or(e),
             };
             core.published.remove(item);
             offset = self
@@ -2294,7 +2322,7 @@ fn replay(
     core: &Core,
     agent: &AgentName,
     item: &ItemId,
-    attempt: Option<u32>,
+    which: Option<Which>,
     kind: &str,
     mut reply: Value,
 ) -> Option<Value> {
@@ -2304,7 +2332,7 @@ fn replay(
         .and_then(|p| ItemId::new(p).ok());
     let offset = core
         .recall
-        .ended_by(item, attempt?, agent, kind, prerequisite.as_ref())?;
+        .ended_by(item, which?, agent, kind, prerequisite.as_ref())?;
     reply["offset"] = offset.into();
     reply["replayed"] = true.into();
     Some(reply)

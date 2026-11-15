@@ -94,6 +94,9 @@ struct Held {
     /// The attempt the claim is on. Terminal calls send it so a retry after a
     /// lost answer is replayed rather than told the claim is lost.
     attempt: Option<u64>,
+    /// The offset of the claim's `claimed` record, which names this claim
+    /// exactly: a retried attempt reuses its number.
+    claim: Option<u64>,
     extender: JoinHandle<()>,
     health: Arc<StdMutex<Health>>,
 }
@@ -181,6 +184,7 @@ impl<T: TrackerApi> Work<T> {
             *held = Some(Held {
                 item: item.to_owned(),
                 attempt: reply["attempt"].as_u64(),
+                claim: reply["offset"].as_u64(),
                 extender,
                 health,
             });
@@ -240,8 +244,13 @@ impl<T: TrackerApi> Work<T> {
         let mut held = self.0.held.lock().await;
         let ours = held.as_ref().filter(|h| h.item == item);
         let risk = ours.and_then(|h| at_risk(&h.health));
-        if let Some(attempt) = ours.and_then(|h| h.attempt) {
-            body["attempt"] = attempt.into();
+        if let Some(h) = ours {
+            if let Some(attempt) = h.attempt {
+                body["attempt"] = attempt.into();
+            }
+            if let Some(claim) = h.claim {
+                body["claim"] = claim.into();
+            }
         }
         let result = self.0.api.call(path, body).await;
         let settled = match &result {

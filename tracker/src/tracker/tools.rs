@@ -21,7 +21,7 @@ use kbl_core::work::{
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 
-use super::{Core, Error, Tracker, agent_key, holds, replay};
+use super::{Core, Error, Tracker, Which, agent_key, holds, replay};
 use crate::felix::Broker;
 
 /// Longest title, command, file name or reason an agent may write.
@@ -169,7 +169,7 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
-        attempt: Option<u32>,
+        claim: Option<Which>,
         key: Key,
         which: Prereq,
         done_when: DoneWhen,
@@ -257,8 +257,8 @@ impl<B: Broker> Tracker<B> {
             if under.is_none()
                 && current
                     .as_ref()
-                    .map_or(true, |h| attempt.is_some_and(|w| w != *h))
-                && let Some(r) = replay(&core, agent, item, attempt, "prerequisite", reply(created))
+                    .map_or(true, |h| core.recall.other_claim(item, *h, claim))
+                && let Some(r) = replay(&core, agent, item, claim, "prerequisite", reply(created))
             {
                 return Ok(r);
             }
@@ -345,7 +345,7 @@ impl<B: Broker> Tracker<B> {
             "prerequisite": prerequisite, "created": created
         });
         let result = self
-            .finish(agent, item, attempt, "prerequisite", record, reply)
+            .finish(agent, item, claim, "prerequisite", record, reply)
             .await;
         if let Err(Error::Refused { why }) = &result {
             let mut core = self.0.core.lock().await;
