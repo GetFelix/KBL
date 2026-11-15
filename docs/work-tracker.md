@@ -1489,7 +1489,8 @@ reads lands). `by_model` gives each model's usage and the cost of its priced
 part. The total can be more than their sum: a report charged its floor adds
 what the floor came to above its priced usage, and costs reported before
 format 8 count only in the total. `unpriced` names the models still waiting for a price. The
-wasm fold exposes the same numbers via `Folder.spend_json()`.
+wasm fold exposes the same numbers via `Folder.spend_json()`, and the dashboard's
+Spend dialog shows them per root, reviewer tier, repo and model.
 
 With input priced at $15 and output at $75 per million tokens, 20000 input
 and 4000 output tokens cost $0.30 + $0.30:

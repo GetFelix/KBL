@@ -55,5 +55,28 @@ export function fixtureLog() {
   // Two items in one repo that name the same files, so the overlap note and flags show.
   rec({ kind: 'context', item: 'gh-2219', entry: 'files', text: { text: 'core/src/retention.rs\ncore/src/segment/' } });
   rec({ kind: 'context', item: 'gh-2215', entry: 'files', text: { text: 'core/src/segment/reader.rs\ncore/src/publish.rs' } });
+  // A fixed issue with a first-pass review by another agent (an author never reviews their own work),
+  // so Spend has a reviewer tier. It has tier 3, which no other fixture item uses.
+  const pr = 'GetFelix/felix#2300';
+  rec({ kind: 'imported', item: 'gh-2300', source: 'github', title: 'Reads after a restart skip the cache', upstream_id: pr, actor: 'tracker', by: 'ingest' });
+  rec({ kind: 'accepted', item: 'gh-2300', tier: 3 });
+  agent({ kind: 'claimed', item: 'gh-2300', attempt: 1, deadline_ms: at + 3_600_000 });
+  agent({ kind: 'progress', item: 'gh-2300', attempt: 1, note: { text: 'fixed' }, pr });
+  agent({ kind: 'done', item: 'gh-2300', attempt: 1, cost_micros: 600_000 });
+  rec({ kind: 'proposed', item: 'rev-2300', parent: 'gh-2300', key: 'review-2300', work: 'review', title: 'Review the cache fix', review: { pass: 'first', tier: 'fast', pr }, actor: 'tracker', by: 'ingest' });
+  rec({ kind: 'claimed', item: 'rev-2300', attempt: 1, deadline_ms: at + 3_600_000, actor: 'agent', by: 'agent-2' });
+  rec({ kind: 'done', item: 'rev-2300', attempt: 1, cost_micros: 150_000, actor: 'agent', by: 'agent-2' });
+  // From here the log is format 8: usage per model, priced from the table. One model is priced and one is not.
+  rec({ v: 8, kind: 'format_raised', to: 8 });
+  rec({ v: 8, kind: 'price_set', model: 'claude-opus-5-5', unit: 'input', price_micros: 15_000_000 });
+  rec({ v: 8, kind: 'price_set', model: 'claude-opus-5-5', unit: 'output', price_micros: 75_000_000 });
+  const usage = (item, title, usage) => {
+    rec({ v: 8, kind: 'imported', item, source: 'ado', title, upstream_id: item });
+    rec({ v: 8, kind: 'accepted', item, tier: 3 });
+    agent({ v: 8, kind: 'claimed', item, attempt: 1, deadline_ms: at + 3_600_000 });
+    agent({ v: 8, kind: 'done', item, attempt: 1, cost_micros: 0, usage, floor_micros: 100_000 });
+  };
+  usage('ado-4400', 'Trim the retry log', [{ unit: 'tokens', model: 'claude-opus-5-5', input: 20_000, output: 4_000 }]);
+  usage('ado-4401', 'Pin the lint config', [{ unit: 'aic', model: 'gpt-6', milli: 1_500 }]);
   return log;
 }

@@ -191,5 +191,5 @@ Each phase is one PR.
 3. **Writes** (done): accept, reject, tier, close and answer through the tracker's person routes with the
    viewer's token, multi-select with bulk actions, undo for tier changes, the Needs you inbox, and the
    3.3.x form criteria. Claim stays with agents, since the fold refuses it from a person.
-4. **Spend and settings**: spend per root, tier and repo ([#219](https://github.com/GetFelix/KBL/issues/219)),
-   settings with shortcut remapping.
+4. **Spend and settings**: spend per root, tier, repo and model (done, [#219](https://github.com/GetFelix/KBL/issues/219): a
+   dialog from the sidebar or the palette, read from the fold), settings with shortcut remapping.
