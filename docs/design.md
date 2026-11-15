@@ -167,7 +167,7 @@ only speak for the agent that wrote it.
 | `agent_gone` | `kbl-mcp` (planner) | Which agent, the presence version that expired |
 | `task_posted` | `kbl-mcp` (planner) | Task id, parent, title, tasks stream offset |
 | `task_claimed`, `task_extended`, `task_released` | `kbl-mcp` | Task id, tasks stream offset, attempt, deadline |
-| `task_claim_lost` | `kbl-mcp` | Task id, offset, attempt: the claim lapsed or was handed out again while the worker held the task |
+| `task_claim_lost` | `kbl-mcp` | Task id, offset, attempt, cause: the claim lapsed or was handed out again while the worker held the task. `stale` is Felix's `stale_claim` refusal; `silent` is a whole visibility window without a working extension |
 | `task_done`, `task_duplicate` | `kbl-mcp` | Task id, offset, attempt, result artifact; `task_done` is the result that won |
 | `task_dead` | `kbl-mcp` | Task id, offset, reason (attempts used up, or given up) |
 | `board_put`, `board_conflict` | `kbl-mcp` | Key, version written (and the version it was conditioned on) or version found, value (short text or artifact) |
@@ -176,7 +176,7 @@ only speak for the agent that wrote it.
 | `model_started` | `kbl-run` | Task id, the reservation taken |
 | `model_call` | `kbl-run` | Prompt and response artifacts, tokens, cost |
 | `budget_exhausted`, `refund_unconfirmed` | `kbl-run` | The reservation that went over its limit and was added back; a refund that could not be confirmed |
-| `refused` | `kbl-mcp` | The operation, the resource, Felix's error |
+| `refused` | `kbl-mcp` | The operation, the resource, Felix's error. A record that is not a task is dead-lettered and logged here under its group offset as the key. After run log writes fail, the next write that lands is a `refused` with op `run_log` counting the records that are missing |
 
 `core` (`core/src/record.rs`) holds the exact fields. Each line on the log is a JSON object with the writer's time (`at_ms`) and name (`by`) beside the record, whose `kind` is one of the names
 above. A kind this version does not know decodes as `unknown` and a fold skips it. Money is in millionths of a dollar, times are milliseconds since the Unix epoch on the writer's clock, and

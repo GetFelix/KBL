@@ -4,7 +4,7 @@ use kbl_core::artifact::ArtifactId;
 use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, Key, TaskId};
-use kbl_core::record::{AgentSpec, Logged, Record};
+use kbl_core::record::{AgentSpec, ClaimLostCause, Logged, Record};
 use kbl_core::stored::{Presence, TaskResult, lease_holder, lease_value};
 use kbl_core::task::Task;
 
@@ -174,6 +174,7 @@ fn every_record() -> Vec<Record> {
             task: task("t-01"),
             offset: 12,
             attempt: 1,
+            cause: None,
         },
     ]
 }
@@ -208,6 +209,24 @@ fn _every_kind_has_a_sample(r: &Record) -> usize {
         Record::TaskClaimLost { .. } => 23,
         Record::Unknown => 24,
     }
+}
+
+#[test]
+fn a_claim_lost_record_carries_its_cause_and_reads_without_one() {
+    let lost = Record::TaskClaimLost {
+        task: task("t-01"),
+        offset: 12,
+        attempt: 1,
+        cause: Some(ClaimLostCause::Stale),
+    };
+    let bytes = lost.encode();
+    assert!(String::from_utf8_lossy(&bytes).contains(r#""cause":"stale""#));
+    assert_eq!(Record::decode(&bytes).unwrap(), lost);
+    let old = br#"{"kind":"task_claim_lost","task":"t-01","offset":12,"attempt":1}"#;
+    assert!(matches!(
+        Record::decode(old).unwrap(),
+        Record::TaskClaimLost { cause: None, .. }
+    ));
 }
 
 #[test]
