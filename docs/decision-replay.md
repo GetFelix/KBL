@@ -25,7 +25,7 @@ per-attempt detail such as model calls. Three record kinds are added to
 | `decision` | `kbl-mcp` (`decide` tool) | `phase` (understand, reproduce, cause, fix or verify), `so_far` (a short running narrative of the work up to here), the question, the options considered, the one chosen, why, the commit, and the offsets of the steps it rests on. `decide` refuses a call without `phase`, `so_far`, why or the commit |
 | `step` | `kbl-mcp` (`record_step` tool) | Command, exit code, and the output as an artifact |
 | `edit` | `kbl-mcp` (`edit` tool) | File, hunk, and the offset of the decision it carries out |
-| `human_input` | the tracker | An answer, a review comment or a change of priority, with who gave it |
+| `human_input` | the tracker, for a person (`POST /v1/work/note`) | A note, an answer, a review comment or a change of priority, with who gave it |
 
 A decision can carry a **revert check**: the name of a test, whether it failed
 with the fix reverted, and whether it passed with the fix restored. The test
@@ -33,6 +33,11 @@ name is at most 400 bytes. Only a check where both held counts as proof, and
 the attempt keeps the offsets of those decisions (`proven`). The record is
 the agent's claim, as with any evidence. A reviewer who doubts it re-runs the
 test. See [Review as work](work-tracker.md#review-as-work).
+
+`decide` needs the phase, `so_far`, why and the commit, and `kbl-mcp`
+refuses the call before it reaches the tracker when one is blank. The agent
+commits its work before each decision, because a redo restores the code from
+that commit.
 
 An agent calls `decide` at the points that shape a fix: what it believes the
 cause is, which approach it takes, an alternative it rejects, and a change of
@@ -182,8 +187,11 @@ which feeds the trust numbers on the metrics tab.
 - An agent can record a reason that is not its real one. The checks above
   catch some of that, not all. The story is evidence for a reviewer, not a
   replacement for reading the diff.
-- Secrets in tool output would end up in the log. `kbl-mcp` redacts known
-  secret patterns before writing, and artifacts follow the run's grants.
+- Secrets in tool output would end up in the log. The tracker replaces known
+  secret shapes with `[redacted]` in decisions, steps, edits and progress
+  notes, and `kbl-mcp` does the same before it stores an artifact (see
+  [Running the tracker](work-tracker.md#running-the-tracker)). A secret with
+  no known shape gets through, and artifacts follow the run's grants.
 
 ## Order
 

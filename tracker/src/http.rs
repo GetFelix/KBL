@@ -19,8 +19,8 @@ use axum::{Json, Router};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    CloseWhy, DoneWhen, Evidence, FindingVerdict, MergeVerdict, Phase, RevertCheck, Severity,
-    Target, Unclear, WorkRecord,
+    CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, RevertCheck,
+    Severity, Target, Unclear, WorkRecord,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -96,6 +96,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/proposals/edit", post(edit_proposal::<B>))
         .route("/v1/work/proposals/reject", post(reject::<B>))
         .route("/v1/work/questions/answer", post(person_answer::<B>))
+        .route("/v1/work/note", post(note::<B>))
         .route("/v1/work/tier", post(tier::<B>))
         .route("/v1/work/close", post(close::<B>))
         .route("/v1/work/unlink", post(unlink::<B>))
@@ -426,6 +427,20 @@ struct EditProposalBody {
     item: ItemId,
     title: Option<String>,
     tier: Option<u8>,
+}
+
+#[derive(Deserialize)]
+struct NoteBody {
+    item: ItemId,
+    /// The path it steers; none for the item as a whole.
+    attempt: Option<u32>,
+    #[serde(default = "a_note")]
+    input: HumanKind,
+    text: Content,
+}
+
+fn a_note() -> HumanKind {
+    HumanKind::Note
 }
 
 #[derive(Deserialize)]
@@ -796,6 +811,18 @@ async fn person_answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> R
         ),
         Err(d) => denied(d),
     }
+}
+
+/// A person's note, review comment or priority change, as `human_input`. The
+/// log records which person wrote it.
+async fn note<B: Broker>(call: Call<B>, Json(b): Json<NoteBody>) -> Response {
+    let record = WorkRecord::HumanInput {
+        item: b.item,
+        attempt: b.attempt,
+        input: b.input,
+        text: b.text,
+    };
+    as_person(&call, record).await
 }
 
 async fn tier<B: Broker>(call: Call<B>, Json(b): Json<TierBody>) -> Response {

@@ -11,6 +11,7 @@
 use kbl_core::artifact::{ArtifactId, INLINE_LIMIT};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::redact::redact_record;
 use kbl_core::work::{
     Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FindingVerdict, MAX_ASK_OPTION_LEN,
     MAX_ASK_OPTIONS, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO,
@@ -905,8 +906,10 @@ impl<B: Broker> Tracker<B> {
         self.begin().await?;
         let mut core = self.0.core.lock().await;
         let attempt = held(&core, agent, item)?;
+        let mut record = record(attempt);
+        redact_record(&mut record);
         let offset = self
-            .agent_append(&mut core, agent, item, op, record(attempt))
+            .agent_append(&mut core, agent, item, op, record)
             .await?;
         Ok(json!({ "item": item, "attempt": attempt, "offset": offset }))
     }

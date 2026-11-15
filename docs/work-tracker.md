@@ -256,6 +256,14 @@ Text in a record stays inline up to 4 KiB. Longer text is an artifact the
 caller stored first and names by its hash; `kbl-mcp` does that for the
 agent, and the tracker refuses long inline text.
 
+**Secrets are cut out.** Tool output and diffs can carry a token the agent
+read from its environment. Before a decision, step, edit or progress note is
+written, the tracker replaces anything shaped like a known secret with
+`[redacted]`: GitHub, GitLab, Slack, AWS, Google and model provider keys, a
+`Bearer` token, and a PEM private key block. `kbl-mcp` does the same before it
+stores long text as an artifact. A secret with no recognisable shape is not
+caught, so an agent's grants should not include secrets it does not need.
+
 The dashboard's actions are routes with a person's token. Each appends one
 record if the fold accepts it:
 
@@ -266,6 +274,7 @@ record if the fold accepts it:
 | `POST /v1/work/proposals/reject` `{item}` | `rejected`, for an item nobody has accepted |
 | `POST /v1/work/questions/answer` `{item, text?, chosen?, moves_to?, question?, evidence?}` | `answer`. The question defaults to the open one. `moves_to` is `{source, repo, title}` |
 | `POST /v1/work/tier` `{item, tier}` | `tier_changed`. A ready item is published again on its new tier |
+| `POST /v1/work/note` `{item, text, attempt?, input?}` (`text` is `{"text": ...}`) | `human_input`: a note, a review comment, an answer or a priority change, with the person who wrote it. `input` is `note` (the default), `review_comment`, `answer` or `priority_change`. `attempt` ties it to one attempt; without it the note is on the item. A redo names one of these as its note |
 | `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |

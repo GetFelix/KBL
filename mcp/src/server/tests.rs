@@ -49,6 +49,24 @@ fn a_decision_names_one_of_the_five_phases() {
 }
 
 #[test]
+fn a_decision_without_so_far_why_or_commit_is_refused() {
+    assert!(check_decision("fix", "found it", "cheapest", "abc123").is_ok());
+    assert_eq!(
+        check_decision("fix", " ", "cheapest", "abc123").unwrap_err(),
+        "so_far is needed"
+    );
+    assert_eq!(
+        check_decision("fix", "found it", "", "abc123").unwrap_err(),
+        "why is needed"
+    );
+    assert_eq!(
+        check_decision("fix", "found it", "cheapest", "").unwrap_err(),
+        "commit is needed"
+    );
+    assert!(check_decision("guess", "found it", "cheapest", "abc123").is_err());
+}
+
+#[test]
 fn artifacts_in_a_reply_are_swapped_for_their_text() {
     let mut reply = json!({
         "context": [

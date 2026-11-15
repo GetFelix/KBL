@@ -17,6 +17,7 @@
 //! - [`org`]: the records on `org.events`: teams, people, roles, agents, sources, grants, and token hashes.
 //! - [`org_fold`]: the fold from `org.events` to the tables the tracker serves teams from.
 //! - [`legacy_env`]: the old `AGENTS_` variable names, adopted at startup.
+//! - [`redact`]: known secret patterns, cut from what an agent reports before it is written.
 //! - [`stored`]: the values kept in the results, leases and presence caches.
 
 pub mod artifact;
@@ -28,6 +29,7 @@ pub mod org;
 pub mod org_fold;
 pub mod overlap;
 pub mod record;
+pub mod redact;
 pub mod stored;
 pub mod task;
 pub mod work;

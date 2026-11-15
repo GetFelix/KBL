@@ -245,6 +245,23 @@ async fn only_a_person_token_appends_records() {
 }
 
 #[tokio::test]
+async fn a_persons_note_is_a_human_input() {
+    let app = app().await;
+    let imported = json!({ "record": { "kind": "imported", "item": "a1", "source": "gh", "upstream_id": "1", "title": "t" } });
+    call(&app, "/v1/work/records", Some("tok-gab"), imported).await;
+    let note = json!({ "item": "a1", "input": "review_comment", "text": { "text": "why not the client?" } });
+    let (status, reply) = call(&app, "/v1/work/note", Some("tok-gab"), note).await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("human_input"))
+    );
+    // A note on an item that does not exist is refused by the fold.
+    let missing = json!({ "item": "zz", "text": { "text": "x" } });
+    let (status, _) = call(&app, "/v1/work/note", Some("tok-gab"), missing).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn a_lost_claim_is_a_conflict_with_a_reason() {
     let app = app().await;
     let (status, reply) = call(
@@ -349,6 +366,10 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
             json!({ "item": "a1", "text": { "text": "x" } }),
         ),
         ("/v1/work/tier", json!({ "item": "a1", "tier": 1 })),
+        (
+            "/v1/work/note",
+            json!({ "item": "a1", "text": { "text": "x" } }),
+        ),
         ("/v1/work/close", json!({ "item": "a1" })),
         ("/v1/work/unlink", json!({ "item": "a1", "to": "a2" })),
         (
