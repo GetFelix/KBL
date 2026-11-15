@@ -266,8 +266,9 @@ private key block. A person's note gets the same treatment, since people paste
 tokens too. `kbl-mcp` does the same before it stores long text as an artifact,
 a task's result, or a task's title or release reason. A secret with no
 recognisable shape is not caught: an AWS secret access key is 40 characters
-with no prefix, and so are many passwords. An agent's grants should not include
-secrets it does not need.
+with no prefix, and so are many passwords. The match can also cut a name that
+looks enough like a token, such as a branch `xoxb-2-RotateTokensV2x`. An
+agent's grants should not include secrets it does not need.
 
 The dashboard's actions are routes with a person's token. Each appends one
 record if the fold accepts it:

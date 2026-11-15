@@ -817,12 +817,21 @@ fn check_phase(phase: &str) -> Result<(), String> {
 }
 
 /// A redo starts from a decision's `so_far` and `commit`, so neither may be blank.
+/// A blank `so_far` or `commit` is refused with the tracker's own
+/// `refused: missing_field`, so callers see one answer whichever side checks.
 fn check_decision(phase: &str, so_far: &str, why: &str, commit: &str) -> Result<(), String> {
     check_phase(phase)?;
-    for (name, v) in [("so_far", so_far), ("why", why), ("commit", commit)] {
-        if v.trim().is_empty() {
-            return Err(format!("{name} is needed"));
-        }
+    if so_far.trim().is_empty() {
+        return Err("refused: missing_field: so_far is needed".into());
+    }
+    if why.trim().is_empty() {
+        return Err("why is needed".into());
+    }
+    if commit.trim().is_empty() {
+        return Err(
+            "refused: missing_field: commit is needed; commit your work first, a redo starts from it"
+                .into(),
+        );
     }
     Ok(())
 }

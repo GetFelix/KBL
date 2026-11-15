@@ -91,24 +91,33 @@ fn random_run(t: &[u8]) -> bool {
 /// Slack tokens are a numeric id, perhaps more ids, then a secret, joined
 /// by `-`: `xoxb-<team>-<bot>-<secret>`, `xoxb-<team>-<secret>`,
 /// `xapp-<n>-<app>-<ts>-<secret>`, `xoxe-1-<secret>`. The ids have no lower
-/// case and the secret is at least 12 bytes of mixed classes, so
-/// `xoxb-slackbot-tools` and `xoxb-2-migration-of-legacy-tokens` are names.
+/// case, and the secret is the first segment that does: at least 12 bytes
+/// of mixed classes, so `xoxb-slackbot-tools` and
+/// `xoxb-2-migration-of-legacy-tokens` are names. Anything after the secret
+/// (`...-prod`) is cut with it.
 fn slack_token(t: &[u8]) -> bool {
-    let Some(cut) = t.iter().rposition(|b| *b == b'-') else {
-        return false;
-    };
-    let secret = &t[cut + 1..];
-    let mut ids = t[..cut].split(|b| *b == b'-');
-    ids.next()
+    let mut segs = t.split(|b| *b == b'-');
+    if !segs
+        .next()
         .is_some_and(|s| !s.is_empty() && s.iter().all(u8::is_ascii_digit))
-        && ids.all(|s| !s.is_empty() && !s.iter().any(u8::is_ascii_lowercase))
-        && secret.len() >= 12
-        && classes(secret) >= 2
+    {
+        return false;
+    }
+    for seg in segs {
+        if seg.iter().any(u8::is_ascii_lowercase) {
+            return seg.len() >= 12 && classes(seg) >= 2;
+        }
+        if seg.is_empty() {
+            return false;
+        }
+    }
+    false
 }
 
 /// Whether the bytes before a scheme end in an `Authorization` header name
 /// and a `:`, `=` or `,`, as in `Authorization: `, `"authorization": "`,
-/// `headers["Authorization"] = "` or `.header(AUTHORIZATION, "`.
+/// `headers["Authorization"] = "` or `.header(AUTHORIZATION, "`. A `,` needs
+/// a quote too: `authentication, authorization, basic ...` is prose.
 fn authorization(before: &[u8]) -> bool {
     let w = &before[before.len().saturating_sub(48)..];
     let gap = w
@@ -118,7 +127,8 @@ fn authorization(before: &[u8]) -> bool {
         .count();
     let (s, gap) = w.split_at(w.len() - gap);
     let name = b"authorization";
-    gap.iter().any(|b| b":=,".contains(b))
+    let quoted = gap.iter().any(|b| b"\"'`".contains(b));
+    (gap.iter().any(|b| b":=".contains(b)) || (quoted && gap.contains(&b',')))
         && s.len() >= name.len()
         && s[s.len() - name.len()..].eq_ignore_ascii_case(name)
 }
@@ -137,10 +147,24 @@ fn basic(before: &[u8], t: &[u8], _: &[u8]) -> bool {
 }
 
 /// Outside an `Authorization` header a bearer token needs a digit:
-/// `Bearer authentication/authorization-flow` is prose.
-fn bearer_value(before: &[u8], t: &[u8], _: &[u8]) -> bool {
-    t.iter().any(u8::is_ascii_alphabetic)
-        && (authorization(before) || t.iter().any(u8::is_ascii_digit))
+/// `Bearer authentication/authorization-flow` is prose. Inside one, a value
+/// with no digit is still not a token when it is a call or a path
+/// (`bearer tokenProvider.get()`) or words joined by `-`
+/// (`Bearer your-access-token-here`).
+fn bearer_value(before: &[u8], t: &[u8], after: &[u8]) -> bool {
+    if !t.iter().any(u8::is_ascii_alphabetic) {
+        return false;
+    }
+    if t.iter().any(u8::is_ascii_digit) {
+        return true;
+    }
+    // A word is lower case, perhaps capitalised, or all upper case.
+    let word = |w: &[u8]| {
+        w.iter().all(u8::is_ascii_alphabetic)
+            && (w[1..].iter().all(u8::is_ascii_lowercase) || w.iter().all(u8::is_ascii_uppercase))
+    };
+    let words = t.contains(&b'-') && t.split(|b| *b == b'-').all(|w| !w.is_empty() && word(w));
+    authorization(before) && !after.starts_with(b"(") && !dotted_path(t) && !words
 }
 
 /// Whether a `token=` at the end of `before` is a URL query parameter, as in
@@ -257,8 +281,13 @@ const MAX_KEY_LABEL: usize = 32;
 /// Furthest an `END` line may be from its `BEGIN`. An 8192-bit RSA key is
 /// under 7 KiB.
 const MAX_KEY_BODY: usize = 16 * 1024;
-/// Longest indentation or quote prefix read on a line of a PEM body.
-const MAX_PEM_PREFIX: usize = 32;
+/// Longest indentation or quote prefix read on a line of a PEM body. Deeper
+/// than any YAML or JSON nesting seen in practice; a line indented further
+/// is not read as part of a key with no `END`.
+const MAX_PEM_PREFIX: usize = 128;
+/// Shortest base64 run a body between `BEGIN` and `END` must have, so prose
+/// between two marker mentions is not a key.
+const MIN_PEM_RUN: usize = 32;
 /// Length of a full line of a PEM body.
 const PEM_LINE: usize = 64;
 /// Longest body line taken inside a block; OpenSSH keys use 70.
@@ -560,10 +589,10 @@ fn private_key(text: &str, i: usize, ends: &mut NextEnd) -> Option<usize> {
 /// base64 split by line breaks or spaces (a key pasted on one line). A line
 /// may start with indentation, a diff marker or a `>` quote. Stops at the
 /// first byte that is none of these, so a `BEGIN` inside a failed body is
-/// not read twice.
+/// not read twice. At least one run must be [`MIN_PEM_RUN`] long.
 fn pem_body(s: &[u8]) -> bool {
     let mut at = 0;
-    let mut runs = 0;
+    let mut long = false;
     let mut line_start = true;
     while at < s.len() {
         if let Some(br) = line_break(&s[at..]) {
@@ -586,21 +615,22 @@ fn pem_body(s: &[u8]) -> bool {
         }
         at += n;
         line_start = false;
-        runs += 1;
+        long |= n >= MIN_PEM_RUN;
     }
-    runs > 0
+    long
 }
 
 /// How many bytes of `s` are base64 lines after a key's header, each after a
 /// line break (real or JSON-escaped) and perhaps a line prefix: full lines,
 /// then at most one short last line. A key pasted on one line has its full
-/// lines split by spaces instead; a short run after a space counts only
-/// after a full one, so prose after a header is left.
+/// lines split by spaces instead. The first line must be full unless an
+/// `END` follows it, so a short reply or diff line after a header is left.
+/// A line may also end at a closing quote, as in `K="-----BEGIN ... AB12=="`.
 fn pem_lines(s: &[u8]) -> usize {
     let mut at = 0;
     let mut full = false;
     while at < MAX_KEY_BODY {
-        let (gap, newline) = pem_gap(&s[at..]);
+        let (gap, _) = pem_gap(&s[at..]);
         if gap == 0 {
             break;
         }
@@ -617,8 +647,16 @@ fn pem_lines(s: &[u8]) -> usize {
         }
         // A full line may also end at a space, as in a key pasted on one line.
         let (n, br) = pem_gap(&s[next..]);
-        let ends_line = br || next + n == s.len() || (n > 0 && line >= PEM_LINE);
-        if !ends_line || (!newline && line < PEM_LINE && !full) {
+        let after = &s[next..];
+        let closes =
+            after.first().is_some_and(|b| b"\"'`".contains(b)) || after.starts_with(b"\\\"");
+        let padded = s[next - 1] == b'=' && n > 0;
+        let ends_line =
+            br || closes || next + n == s.len() || (n > 0 && line >= PEM_LINE) || (full && padded);
+        let first_short = !full && line < PEM_LINE;
+        // The gap's line prefix takes the dashes of an `END` line.
+        let end_follows = br && n >= 5 && s[next + n - 5..].starts_with(KEY_END.as_bytes());
+        if !ends_line || (first_short && !end_follows) {
             break;
         }
         at = next;

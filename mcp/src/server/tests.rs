@@ -53,16 +53,20 @@ fn a_decision_without_so_far_why_or_commit_is_refused() {
     assert!(check_decision("fix", "found it", "cheapest", "abc123").is_ok());
     assert_eq!(
         check_decision("fix", " ", "cheapest", "abc123").unwrap_err(),
-        "so_far is needed"
+        "refused: missing_field: so_far is needed"
     );
     assert_eq!(
         check_decision("fix", "found it", "", "abc123").unwrap_err(),
         "why is needed"
     );
-    assert_eq!(
-        check_decision("fix", "found it", "cheapest", "").unwrap_err(),
-        "commit is needed"
+    // The tracker's code, so a client matching on `missing_field` sees the
+    // same refusal whether kbl-mcp or the tracker turned it away.
+    let no_commit = check_decision("fix", "found it", "cheapest", "").unwrap_err();
+    assert!(
+        no_commit.starts_with("refused: missing_field"),
+        "{no_commit}"
     );
+    assert!(no_commit.contains("commit your work first"), "{no_commit}");
     assert!(check_decision("guess", "found it", "cheapest", "abc123").is_err());
 }
 

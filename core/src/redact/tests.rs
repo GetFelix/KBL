@@ -11,6 +11,9 @@ fn fake(prefix: &str, tail: &str, n: usize) -> String {
     format!("{prefix}{}", tail.repeat(n))
 }
 
+/// A full line of a PEM body.
+const BODY: &str = "MIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9ZxMIIEq9Zx";
+
 fn untouched(text: &str) -> bool {
     matches!(redact(text), Cow::Borrowed(_))
 }
@@ -48,8 +51,9 @@ fn known_shapes_are_cut() {
 fn a_secret_on_a_removed_diff_line_is_cut() {
     let text = format!("-{}\n+ok", fake("ghp_", "d", 36));
     assert_eq!(redact(&text), "-[redacted]\n+ok");
-    let text = "------BEGIN RSA PRIVATE KEY-----\n-MIIE\n------END RSA PRIVATE KEY-----\n+x";
-    assert_eq!(redact(text), "-[redacted]\n+x");
+    let text =
+        format!("------BEGIN RSA PRIVATE KEY-----\n-{BODY}\n------END RSA PRIVATE KEY-----\n+x");
+    assert_eq!(redact(&text), "-[redacted]\n+x");
 }
 
 #[test]
@@ -66,10 +70,13 @@ fn json_escapes_and_delimiters_start_a_secret() {
         );
     }
     // A key block inside a JSON string, its lines joined by `\n` escapes.
-    let text = "{\"out\":\"-----BEGIN RSA PRIVATE KEY-----\\nMIIE\\nAB==\\n-----END RSA PRIVATE KEY-----\\nok\"}";
-    assert_eq!(redact(text), "{\"out\":\"[redacted]\\nok\"}");
-    let text = "\"a\\n-----BEGIN EC PRIVATE KEY-----\\nMHc\\n-----END EC PRIVATE KEY-----\"";
-    assert_eq!(redact(text), "\"a\\n[redacted]\"");
+    let text = format!(
+        "{{\"out\":\"-----BEGIN RSA PRIVATE KEY-----\\n{BODY}\\nAB==\\n-----END RSA PRIVATE KEY-----\\nok\"}}"
+    );
+    assert_eq!(redact(&text), "{\"out\":\"[redacted]\\nok\"}");
+    let text =
+        format!("\"a\\n-----BEGIN EC PRIVATE KEY-----\\n{BODY}\\n-----END EC PRIVATE KEY-----\"");
+    assert_eq!(redact(&text), "\"a\\n[redacted]\"");
 }
 
 #[test]
@@ -129,11 +136,13 @@ fn url_userinfo_is_cut() {
 
 #[test]
 fn private_key_block_is_cut_whole() {
-    let text = "before\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn\nNzaC1\n-----END OPENSSH PRIVATE KEY-----\nafter";
-    assert_eq!(redact(text), "before\n[redacted]\nafter");
+    let text = format!(
+        "before\n-----BEGIN OPENSSH PRIVATE KEY-----\n{BODY}\nNzaC1\n-----END OPENSSH PRIVATE KEY-----\nafter"
+    );
+    assert_eq!(redact(&text), "before\n[redacted]\nafter");
     // A block cut off by truncated output loses its body lines.
-    let text = "x -----BEGIN RSA PRIVATE KEY-----\nMIIE";
-    assert_eq!(redact(text), "x [redacted]");
+    let text = format!("x -----BEGIN RSA PRIVATE KEY-----\n{BODY}");
+    assert_eq!(redact(&text), "x [redacted]");
     let line = "A".repeat(64);
     let text = format!("-----BEGIN RSA PRIVATE KEY-----\n{line}\n{line}\nAB==\n$ next");
     assert_eq!(redact(&text), "[redacted]\n$ next");
@@ -225,6 +234,16 @@ fn adversarial_input_stays_linear() {
         "-----BEGIN RSA PRIVATE KEY-----\n    > ".repeat(mb / 38),
         format!("-----BEGIN RSA PRIVATE KEY----- {}", "A ".repeat(mb / 2)),
         "xoxe.xoxb-".repeat(mb / 10),
+        format!(
+            "-----BEGIN RSA PRIVATE KEY-----\n{}{BODY}\n",
+            " ".repeat(120)
+        )
+        .repeat(mb / 220),
+        format!(
+            "-----BEGIN RSA PRIVATE KEY-----{}",
+            "\n-----END ".repeat(mb / 10)
+        ),
+        format!("xoxb-1-{}", "A-".repeat(mb / 2)),
         format!("sk-{}", "a-".repeat(mb / 2)),
         "\\n".repeat(mb / 2),
         "A".repeat(mb),
@@ -551,4 +570,113 @@ fn authorization_in_code_is_a_header() {
     ] {
         assert!(untouched(text), "{text}");
     }
+}
+
+#[test]
+fn prose_between_key_markers_is_not_a_body() {
+    let text = "wrap it between -----BEGIN PRIVATE KEY----- and -----END PRIVATE KEY----- markers";
+    assert_eq!(
+        redact(text),
+        "wrap it between [redacted] and -----END PRIVATE KEY----- markers"
+    );
+}
+
+#[test]
+fn a_short_line_after_a_header_is_not_a_body() {
+    for (text, want) in [
+        (
+            "-----BEGIN PRIVATE KEY-----\n> thanks\nok",
+            "[redacted]\n> thanks\nok",
+        ),
+        (
+            "-----BEGIN PRIVATE KEY-----\n- rotate\nok",
+            "[redacted]\n- rotate\nok",
+        ),
+        (
+            "-----BEGIN PRIVATE KEY-----\n    done\nok",
+            "[redacted]\n    done\nok",
+        ),
+        (
+            " let h = 1;\n-// -----BEGIN PRIVATE KEY-----\n-foo\n+bar\n",
+            " let h = 1;\n-// [redacted]\n-foo\n+bar\n",
+        ),
+        (
+            "+const B: &str = -----BEGIN PRIVATE KEY-----\n+    + 1\n",
+            "+const B: &str = [redacted]\n+    + 1\n",
+        ),
+    ] {
+        assert_eq!(redact(text), want, "{text}");
+    }
+}
+
+#[test]
+fn a_one_line_key_ends_at_a_closing_quote() {
+    let short = "AB12cd==";
+    for (text, want) in [
+        (
+            format!("K=\"-----BEGIN PRIVATE KEY----- {BODY} {BODY} {short}\" rest"),
+            "K=\"[redacted]\" rest",
+        ),
+        (
+            format!("K=\"-----BEGIN PRIVATE KEY----- {BODY} {BODY}\" rest"),
+            "K=\"[redacted]\" rest",
+        ),
+        (
+            format!("K='-----BEGIN PRIVATE KEY----- {BODY} {short}' rest"),
+            "K='[redacted]' rest",
+        ),
+        (
+            format!("K=-----BEGIN PRIVATE KEY----- {BODY} {short} and more"),
+            "K=[redacted] and more",
+        ),
+        (
+            format!("{{\"k\":\"-----BEGIN PRIVATE KEY-----\\n{BODY}\\n{short}\"}}"),
+            "{\"k\":\"[redacted]\"}",
+        ),
+        (
+            format!("{{\"k\":\"-----BEGIN PRIVATE KEY----- {BODY} {short}\\\" x\"}}"),
+            "{\"k\":\"[redacted]\\\" x\"}",
+        ),
+    ] {
+        assert_eq!(redact(&text), want, "{text}");
+    }
+    // Prose after a full line stays.
+    let text = format!("K=-----BEGIN PRIVATE KEY----- {BODY} and more");
+    assert_eq!(redact(&text), "K=[redacted] and more");
+}
+
+#[test]
+fn a_deeply_indented_key_without_end_is_cut() {
+    let pad = " ".repeat(40);
+    let text = format!("{pad}-----BEGIN PRIVATE KEY-----\n{pad}{BODY}\n{pad}AB12cd==\nok");
+    assert_eq!(redact(&text), format!("{pad}[redacted]\nok"));
+}
+
+#[test]
+fn a_slack_token_with_a_suffix_is_cut() {
+    let secret = fake("xoxb-123456789012-1234567890123-", "AbCdEfGh", 3);
+    let text = format!("X={secret}-prod done");
+    assert_eq!(redact(&text), "X=[redacted] done");
+    let secret = fake("xoxb-4159162725-", "abcdEFGH", 3);
+    let text = format!("X={secret}-staging-2 done");
+    assert_eq!(redact(&text), "X=[redacted] done");
+}
+
+#[test]
+fn authorization_and_bearer_placeholders_in_prose_and_code_stay() {
+    for text in [
+        "Authentication, authorization, Basic Requirements",
+        "Authorization: Bearer your-access-token-here",
+        "Authorization: Bearer Your-Access-Token-Here",
+        "authorization=bearer authenticationTokenProvider.get()",
+        "authorization: bearer self.tokenProvider.accessToken",
+    ] {
+        assert!(untouched(text), "{text}");
+    }
+    // A real token after a quoted name and a comma is still cut.
+    let text = "headers.set('authorization', 'Basic dXNlcjpwYXNz')";
+    assert_eq!(
+        redact(text),
+        "headers.set('authorization', 'Basic [redacted]')"
+    );
 }
