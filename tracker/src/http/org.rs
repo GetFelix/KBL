@@ -30,7 +30,8 @@ pub(super) struct CreateBody {
     display_name: Option<String>,
 }
 
-/// `GET /v1/org/teams`: every team, and whether it is serving.
+/// `GET /v1/org/teams`: every team, whether it is serving, and whether the
+/// tracker holds the org writer lease, so a team create would be let in.
 pub(super) async fn list_teams<B: Broker>(
     State(app): State<Arc<App<B>>>,
     headers: HeaderMap,
@@ -52,7 +53,7 @@ pub(super) async fn list_teams<B: Broker>(
             })
         })
         .collect();
-    Json(json!({ "teams": teams })).into_response()
+    Json(json!({ "teams": teams, "org_writable": org.org.writable() })).into_response()
 }
 
 /// `POST /v1/org/teams`: writes `team_created` and starts serving the team.
