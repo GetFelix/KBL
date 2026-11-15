@@ -663,6 +663,14 @@ fn a_slack_token_with_a_suffix_is_cut() {
 }
 
 #[test]
+fn a_slack_token_with_no_lower_case_is_cut() {
+    let secret = fake("xoxb-123456789012-1234567890123-", "ABCD0123", 3);
+    assert_eq!(redact(&format!("X={secret} done")), "X=[redacted] done");
+    let secret = fake("xapp-1-A0123BCDE-1234567890123-", "0123ABCD", 4);
+    assert_eq!(redact(&format!("X={secret} done")), "X=[redacted] done");
+}
+
+#[test]
 fn authorization_and_bearer_placeholders_in_prose_and_code_stay() {
     for text in [
         "Authentication, authorization, Basic Requirements",

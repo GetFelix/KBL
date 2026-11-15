@@ -1,5 +1,5 @@
 {
- "core/src/redact.rs:739": "pub fn redact_record(record: &mut WorkRecord) {",
+ "core/src/redact.rs:742": "pub fn redact_record(record: &mut WorkRecord) {",
  "core/src/work_fold.rs:539": "if to <= log || rec.v != to {",
  "core/src/work_fold.rs:544": "if rec.v > log {",
  "core/src/work_fold.rs:1006": "if t.work != WorkKind::Triage || t.parent.as_ref() != Some(item) {",

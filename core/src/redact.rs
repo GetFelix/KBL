@@ -91,8 +91,8 @@ fn random_run(t: &[u8]) -> bool {
 /// Slack tokens are a numeric id, perhaps more ids, then a secret, joined
 /// by `-`: `xoxb-<team>-<bot>-<secret>`, `xoxb-<team>-<secret>`,
 /// `xapp-<n>-<app>-<ts>-<secret>`, `xoxe-1-<secret>`. The ids have no lower
-/// case, and the secret is the first segment that does: at least 12 bytes
-/// of mixed classes, so `xoxb-slackbot-tools` and
+/// case, and the secret is the first segment that does, or the last one when
+/// none does: at least 12 bytes of mixed classes, so `xoxb-slackbot-tools` and
 /// `xoxb-2-migration-of-legacy-tokens` are names. Anything after the secret
 /// (`...-prod`) is cut with it.
 fn slack_token(t: &[u8]) -> bool {
@@ -103,6 +103,7 @@ fn slack_token(t: &[u8]) -> bool {
     {
         return false;
     }
+    let mut last: &[u8] = &[];
     for seg in segs {
         if seg.iter().any(u8::is_ascii_lowercase) {
             return seg.len() >= 12 && classes(seg) >= 2;
@@ -110,8 +111,10 @@ fn slack_token(t: &[u8]) -> bool {
         if seg.is_empty() {
             return false;
         }
+        last = seg;
     }
-    false
+    // A secret with no lower case is the last segment.
+    last.len() >= 12 && classes(last) >= 2
 }
 
 /// Whether the bytes before a scheme end in an `Authorization` header name
