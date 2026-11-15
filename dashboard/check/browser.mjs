@@ -173,9 +173,13 @@ try {
     check(await page.eval(`/lower bound/.test(document.querySelector('.spend-note').textContent)`), `${theme}: spend says it is a lower bound`);
     check(await page.eval(`document.querySelectorAll('#spend-roots ~ table tbody tr').length > 0 && document.querySelectorAll('#spend-repos ~ table tbody tr').length > 0`), `${theme}: spend lists roots and repos`);
     check(await page.eval(`document.querySelector('#spend-tiers ~ table tbody tr[data-key=fast] td')?.textContent === '$0.15'`), `${theme}: spend lists the reviewer tier from the fixture's review`);
+    check(await page.eval(`document.querySelector('#spend-models ~ table tbody tr[data-key="claude-opus-5-5"]')?.textContent === 'claude-opus-5-5tokens20,000 input, 4,000 output$0.60'`), `${theme}: spend lists a priced model with its usage and cost`);
+    check(await page.eval(`(() => { const r = document.querySelector('#spend-models ~ table tbody tr[data-key="gpt-6"]'); return r?.textContent === 'gpt-6AIC1.5 creditsunpriced'; })()`), `${theme}: spend shows an unpriced model as unpriced with its usage, not $0`);
     check(await focused('dialog.spend button'), `${theme}: the spend dialog takes focus`);
     await axe(`spend ${theme}`);
     await shoot(`spend-${theme}`);
+    await page.eval(`document.querySelector('dialog.spend .dialog-body').scrollTop = 1e6`);
+    await shoot(`spend-models-${theme}`);
     await press(page, 'Escape');
     check(!(await page.eval(`document.querySelector('dialog.spend').open`)), `${theme}: Esc closes spend`);
   }
@@ -318,7 +322,7 @@ try {
   await page.waitFor(`location.search.includes('repo=GetFelix')`);
   const repoRows = await page.eval(`document.querySelectorAll('.row').length`);
   check(repoRows === 7, `a repo filter keeps only that repo's items (${repoRows})`);
-  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 7 of 16: Repo GetFelix/felix'`), 'the summary says what the filters hide');
+  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 7 of 18: Repo GetFelix/felix'`), 'the summary says what the filters hide');
   await press(page, 'k', MOD);
   for (const ch of 'tier: 2') await press(page, ch);
   await press(page, 'Enter');
@@ -332,7 +336,7 @@ try {
   check(await page.eval(`[...document.querySelectorAll('.empty button')].map((b) => b.textContent).join(',') === 'Clear search,Clear filters'`), 'no match inside filters offers Clear search and Clear filters');
   await press(page, 'Escape');
   await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent === 'Clear filters').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 16 && !location.search.includes('tier=')`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 18 && !location.search.includes('tier=')`);
   check(true, 'Clear filters shows everything and clears the address');
 
   // Saved views: from the address, to the sidebar, rename, delete, and back from storage.
@@ -358,7 +362,7 @@ try {
   await page.waitFor(`document.querySelector('.saved-row a')?.textContent === 'Urgent GitHub'`);
   check(await focused('.saved-row button[aria-label="Edit view Urgent GitHub"]'), 'Edit renames a view and the focus is back on its Edit button');
   await page.eval(`document.querySelector('.nav a').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 16`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 18`);
   check(await page.eval(`document.querySelector('.nav a').getAttribute('aria-current') === 'page' && !document.querySelector('.saved-row a').hasAttribute('aria-current')`), 'All work resets the view');
   await page.eval(`document.querySelector('.saved-row a').click(); true`);
   await page.waitFor(`document.querySelectorAll('.card').length === 6`);

@@ -45,14 +45,53 @@ test('tables sort largest first, name a root by its title, and split a repo from
 });
 
 test('reviewer tiers are listed as recorded, with their share of the total', () => {
-  const t = tables({ total_micros: 400, by_root: {}, by_review_tier: { fast: 100, deep: 300 }, by_repo: {} }, []);
+  const t = tables({ total_micros: 400, by_root: {}, by_review_tier: { fast: 100, deep: 300 }, by_repo: {}, by_model: {}, unpriced: [] }, []);
   assert.deepEqual(t.tiers.map((r) => [r.label, r.micros, r.percent]), [['deep', 300, 75], ['fast', 100, 25]]);
 });
 
 test('a row that spent anything never rounds to 0 percent, and nothing spent shows none', () => {
-  const t = tables({ total_micros: 100_000, by_root: { a: 99_999, b: 1 }, by_review_tier: {}, by_repo: {} }, []);
+  const t = tables({ total_micros: 100_000, by_root: { a: 99_999, b: 1 }, by_review_tier: {}, by_repo: {}, by_model: {}, unpriced: [] }, []);
   assert.equal(t.roots[1].percent, 1);
-  assert.equal(tables({ total_micros: 0, by_root: {}, by_review_tier: {}, by_repo: {} }, []).total, 0);
+  assert.equal(tables({ total_micros: 0, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: {}, unpriced: [] }, []).total, 0);
+});
+
+/** A format 8 log: opus is priced, `gpt-6` (AI credits) has no price yet, and each report has a 10 cent floor. */
+function priced() {
+  const fold = new Folder();
+  let at = 0;
+  const apply = (o: object) => assert.ok(fold.apply(at++, enc({ v: 8, ...o })));
+  apply({ kind: 'format_raised', to: 8 });
+  apply({ kind: 'price_set', model: 'opus', unit: 'input', price_micros: 15_000_000 });
+  apply({ kind: 'price_set', model: 'opus', unit: 'output', price_micros: 75_000_000 });
+  for (const [item, usage] of [
+    ['r1', { unit: 'tokens', model: 'opus', input: 20_000, output: 4_000 }],
+    ['r2', { unit: 'aic', model: 'gpt-6', milli: 1_500 }],
+  ] as const) {
+    apply({ kind: 'imported', item, source: 'github', upstream_id: `GetFelix/felix#${item.slice(1)}`, title: item, actor: 'tracker', by: 'ingest' });
+    apply({ kind: 'accepted', item, tier: 1 });
+    apply({ actor: 'agent', by: 'w1', kind: 'claimed', item, attempt: 1, deadline_ms: 1800000090000 });
+    apply({ actor: 'agent', by: 'w1', kind: 'done', item, attempt: 1, cost_micros: 0, usage: [usage], floor_micros: 100_000 });
+  }
+  return fold;
+}
+
+test('a priced model shows its usage and derived cost', () => {
+  const t = tables(spend({ spendJson: () => priced().spend_json() }), []);
+  const opus = t.models.find((m) => m.model === 'opus');
+  assert.deepEqual(opus, { model: 'opus', unit: 'tokens', usage: '20,000 input, 4,000 output', micros: 600_000, unpriced: false });
+});
+
+test('an unpriced model shows its usage and no cost, and is never counted as $0', () => {
+  const t = tables(spend({ spendJson: () => priced().spend_json() }), []);
+  const gpt = t.models.find((m) => m.model === 'gpt-6');
+  assert.deepEqual(gpt, { model: 'gpt-6', unit: 'AIC', usage: '1.5 credits', micros: 0, unpriced: true });
+  // The report is charged its floor, so the total is more than the priced sum.
+  assert.equal(t.total, 600_000 + 100_000);
+});
+
+test('a model waiting for a price is listed even without usage detail', () => {
+  const t = tables({ total_micros: 0, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: {}, unpriced: ['x'] }, []);
+  assert.deepEqual(t.models.map((m) => [m.model, m.unpriced, m.usage]), [['x', true, '']]);
 });
 
 test('dollars shows cents, thousands, and sub-cent amounts', () => {

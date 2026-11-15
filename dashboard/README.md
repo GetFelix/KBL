@@ -13,9 +13,11 @@ Two open items whose `files` context entries share a path each get a flag on the
 note in the panel, with the suggested link ([Files that overlap](../docs/work-tracker.md#files-that-overlap)).
 
 Spend (sidebar button, or `Show spend` in the palette) lists what claims cost per root, reviewer tier and repo, largest
-first, from the fold's `spend_json()` ([Spend](../docs/work-tracker.md#where-work-comes-from-and-its-bounds)). The figures are what each claim
-reported, never an estimate, so the total is a lower bound: a lapsed claim is charged only the cost floor, and a reported cost is the agent's own word. A root links to its
-item. A table with nothing recorded says so.
+first, and a By model table with each model's unit, usage and cost. It reads the fold's `spend_json()`
+([Cost and spend](../docs/work-tracker.md#cost-and-spend)). Costs are derived from the usage agents reported and the
+price in effect when each report was written, never estimated here. A model with no price shows "unpriced" with its
+usage, never $0. The total is a lower bound: lapsed claims and unpriced models are charged only the cost floor, and
+reported usage is the agent's own word. A root links to its item. A table with nothing recorded says so.
 
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it

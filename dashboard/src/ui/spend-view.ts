@@ -1,6 +1,6 @@
-// The Spend dialog: what claims cost, per root, reviewer tier and repo. It shows the
-// fold's recorded costs, so the total is a lower bound and the dialog says so.
-import { dollars, tables, type Spend, type SpendRow } from '../spend.ts';
+// The Spend dialog: what claims cost, per root, reviewer tier, repo and model. It shows the
+// fold's derived costs and the usage behind them, so the total is a lower bound and the dialog says so.
+import { dollars, tables, type ModelRow, type Spend, type SpendRow } from '../spend.ts';
 import type { ItemRow } from '../fold.ts';
 import type { ViewState } from '../state.ts';
 import { modal } from './dialog.ts';
@@ -21,6 +21,26 @@ function section(title: string, id: string, first: string, list: SpendRow[], emp
           h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, first), h('th', { scope: 'col', class: 'num' }, 'Spent'), share ? h('th', { scope: 'col', class: 'num' }, 'Share') : null)),
           h('tbody', {}, ...list.map((r) =>
             h('tr', { 'data-key': r.key }, h('th', { scope: 'row' }, cell(r)), h('td', { class: 'num' }, dollars(r.micros)), share ? h('td', { class: 'num muted' }, `${r.percent}%`) : null))),
+        ),
+  );
+}
+
+/** A model's cost, or "unpriced" when it has none to show. A partly priced model shows both. */
+function modelCost(r: ModelRow): Node {
+  if (!r.unpriced) return document.createTextNode(dollars(r.micros));
+  const tag = h('span', { class: 'unpriced' }, 'unpriced');
+  return r.micros > 0 ? h('span', {}, `${dollars(r.micros)} + `, tag) : tag;
+}
+
+function models(list: ModelRow[]): Node {
+  return h('section', {},
+    h('h3', { id: 'spend-models' }, 'By model'),
+    list.length === 0
+      ? h('p', { class: 'muted' }, 'No claim has reported usage yet.')
+      : h('table', { class: 'spend-table models', 'aria-labelledby': 'spend-models' },
+          h('thead', {}, h('tr', {}, ...['Model', 'Unit', 'Usage'].map((c) => h('th', { scope: 'col' }, c)), h('th', { scope: 'col', class: 'num' }, 'Cost'))),
+          h('tbody', {}, ...list.map((r) =>
+            h('tr', { 'data-key': r.model }, h('th', { scope: 'row' }, r.model), h('td', {}, r.unit), h('td', { class: 'usage' }, r.usage || 'none'), h('td', { class: 'num' }, modelCost(r))))),
         ),
   );
 }
@@ -61,10 +81,11 @@ export function spendView(on: SpendHandlers) {
       m.body.replaceChildren(
         h('header', { class: 'dialog-head' }, h('h2', {}, 'Spend'), close),
         h('p', { class: 'spend-total' }, h('strong', {}, dollars(t.total)), ' spent on claims'),
-        h('p', { class: 'muted small spend-note' }, 'A lower bound: a lapsed claim is charged only the cost floor, not what it really spent, and a reported cost is the agent\'s own word.'),
+        h('p', { class: 'muted small spend-note' }, 'A lower bound: lapsed claims and unpriced models are charged only the cost floor, and reported usage is the agent\'s own word.'),
         section('Per root', 'spend-roots', 'Root', t.roots, 'No claim has recorded a cost yet.', root),
         section('Per reviewer tier (reviews only)', 'spend-tiers', 'Tier', t.tiers, 'No review has recorded a cost yet.', text, false),
         section('Per repo', 'spend-repos', 'Repo', t.repos, 'No repo has recorded a cost yet.', text),
+        models(t.models),
       );
       if (wasOpen) return;
       m.open();

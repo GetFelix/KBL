@@ -206,4 +206,8 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .spend-table th, .spend-table td { padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--line); text-align: left; font-weight: normal; }
 .spend-table thead th { color: var(--muted); font-size: var(--text-xs); }
 .spend-table .num { width: 5.5rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.spend-table.models th[scope='row'] { width: 30%; overflow-wrap: anywhere; }
+.spend-table.models td:nth-child(2) { width: 4.5rem; }
+.spend-table .usage { overflow-wrap: anywhere; }
+.spend-table .unpriced { color: var(--warn, var(--muted)); font-style: italic; }
 .spend-table a { color: var(--text); }

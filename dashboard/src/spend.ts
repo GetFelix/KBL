@@ -11,6 +11,23 @@ export interface Spend {
   by_review_tier: Record<string, number>;
   /** Per `source:repo` of the item's root. */
   by_repo: Record<string, number>;
+  /** Usage per model and what its priced part cost. The total is more than their sum by floors. */
+  by_model: Record<string, ModelSpend>;
+  /** Models with usage that has no price yet. */
+  unpriced: string[];
+}
+
+/** One model's usage; `aic_milli` is thousandths of an AI credit. */
+export interface ModelSpend {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+  aic_milli: number;
+  /** The cost of the usage that has a price, in millionths of a dollar. */
+  cost_micros: number;
+  /** Some of the usage has no price yet. */
+  unpriced: boolean;
 }
 
 export function spend(fold: Pick<Fold, 'spendJson'>): Spend {
@@ -29,11 +46,23 @@ export interface SpendRow {
   percent: number;
 }
 
+/** One model of the By model table. `unpriced` models show their usage and no cost. */
+export interface ModelRow {
+  model: string;
+  /** `tokens`, `AIC`, or both. */
+  unit: string;
+  usage: string;
+  /** Cost of the priced part; 0 with `unpriced` means there is no cost to show. */
+  micros: number;
+  unpriced: boolean;
+}
+
 export interface SpendTables {
   total: number;
   roots: SpendRow[];
   tiers: SpendRow[];
   repos: SpendRow[];
+  models: ModelRow[];
 }
 
 const FORMAT = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -50,10 +79,35 @@ function rows(map: Record<string, number>, total: number, describe: (key: string
     .sort((a, b) => b.micros - a.micros || a.key.localeCompare(b.key));
 }
 
-/** The three tables, largest first. A root shows its title when the log has the item, else its id. */
+const COUNT = new Intl.NumberFormat('en-US', { maximumFractionDigits: 3 });
+
+function modelRow(model: string, m: ModelSpend | undefined, waiting: boolean): ModelRow {
+  const parts: string[] = [];
+  const units: string[] = [];
+  if (m) {
+    const tokens = [['input', m.input], ['output', m.output], ['cache read', m.cache_read], ['cache write', m.cache_write]] as const;
+    const used = tokens.filter(([, n]) => n > 0);
+    if (used.length) {
+      units.push('tokens');
+      parts.push(used.map(([name, n]) => `${COUNT.format(n)} ${name}`).join(', '));
+    }
+    if (m.aic_milli > 0) {
+      units.push('AIC');
+      parts.push(`${COUNT.format(m.aic_milli / 1000)} credits`);
+    }
+  }
+  return { model, unit: units.join(' + '), usage: parts.join('; '), micros: m?.cost_micros ?? 0, unpriced: waiting || !!m?.unpriced };
+}
+
+/** The four tables, largest first. A root shows its title when the log has the item, else its id. */
 export function tables(s: Spend, items: readonly ItemRow[]): SpendTables {
   const titles = new Map(items.map((i) => [i.id, i.title]));
   const total = s.total_micros;
+  const byModel = s.by_model ?? {};
+  const waiting = new Set(s.unpriced ?? []);
+  const models = [...new Set([...Object.keys(byModel), ...waiting])]
+    .map((name) => modelRow(name, byModel[name], waiting.has(name)))
+    .sort((a, b) => b.micros - a.micros || a.model.localeCompare(b.model));
   return {
     total,
     roots: rows(s.by_root, total, (id) => ({ label: titles.get(id) ?? id, hint: titles.has(id) ? id : '' })),
@@ -62,5 +116,6 @@ export function tables(s: Spend, items: readonly ItemRow[]): SpendTables {
       const at = key.indexOf(':');
       return at < 0 ? { label: key, hint: '' } : { label: key.slice(at + 1), hint: key.slice(0, at) };
     }),
+    models,
   };
 }

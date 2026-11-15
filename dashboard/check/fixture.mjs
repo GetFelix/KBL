@@ -66,5 +66,17 @@ export function fixtureLog() {
   rec({ kind: 'proposed', item: 'rev-2300', parent: 'gh-2300', key: 'review-2300', work: 'review', title: 'Review the cache fix', review: { pass: 'first', tier: 'fast', pr }, actor: 'tracker', by: 'ingest' });
   rec({ kind: 'claimed', item: 'rev-2300', attempt: 1, deadline_ms: at + 3_600_000, actor: 'agent', by: 'agent-2' });
   rec({ kind: 'done', item: 'rev-2300', attempt: 1, cost_micros: 150_000, actor: 'agent', by: 'agent-2' });
+  // From here the log is format 8: usage per model, priced from the table. One model is priced and one is not.
+  rec({ v: 8, kind: 'format_raised', to: 8 });
+  rec({ v: 8, kind: 'price_set', model: 'claude-opus-5-5', unit: 'input', price_micros: 15_000_000 });
+  rec({ v: 8, kind: 'price_set', model: 'claude-opus-5-5', unit: 'output', price_micros: 75_000_000 });
+  const usage = (item, title, usage) => {
+    rec({ v: 8, kind: 'imported', item, source: 'ado', title, upstream_id: item });
+    rec({ v: 8, kind: 'accepted', item, tier: 3 });
+    agent({ v: 8, kind: 'claimed', item, attempt: 1, deadline_ms: at + 3_600_000 });
+    agent({ v: 8, kind: 'done', item, attempt: 1, cost_micros: 0, usage, floor_micros: 100_000 });
+  };
+  usage('ado-4400', 'Trim the retry log', [{ unit: 'tokens', model: 'claude-opus-5-5', input: 20_000, output: 4_000 }]);
+  usage('ado-4401', 'Pin the lint config', [{ unit: 'aic', model: 'gpt-6', milli: 1_500 }]);
   return log;
 }
