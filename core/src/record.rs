@@ -25,6 +25,19 @@ pub const RUN_LOG_FORMAT_V1: u32 = 1;
 /// The highest run log format this build reads and writes.
 pub const RUN_LOG_FORMAT: u32 = RUN_LOG_FORMAT_V1;
 
+/// How a worker learned its claim was gone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimLostCause {
+    /// Felix refused an extension with its typed `stale_claim` error.
+    Stale,
+    /// No extension worked for a whole visibility window.
+    Silent,
+    /// A cause a later version wrote.
+    #[serde(other)]
+    Unknown,
+}
+
 /// An agent and its role, as listed when a run starts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSpec {
@@ -285,6 +298,9 @@ pub enum Record {
         task: TaskId,
         offset: u64,
         attempt: u32,
+        /// How the worker found out. Absent in records from before this was kept.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<ClaimLostCause>,
     },
     /// A kind this version does not know. A fold skips it.
     #[serde(other)]
