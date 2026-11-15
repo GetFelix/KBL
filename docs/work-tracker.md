@@ -179,7 +179,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | Call | Token | Does |
 |---|---|---|
 | `POST /v1/work/next` `{wait_seconds}` | agent | Polls `p0` to `p3` as the agent, writes `claimed`, answers with the item. An agent that already holds one gets it again, marked `resumed` |
-| `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed |
+| `POST /v1/work/extend` `{item}` | agent | Extends the delivery. `409` with `why: lost` means the claim lapsed; `503` means the tracker could not confirm its lease, so call again. After a `stale_claim` that check renews the lease, possibly twice and behind a renewal already running, each lease call giving up after 3 seconds, so with a slow Felix the `503` can take tens of seconds |
 | `POST /v1/work/complete` `{item, usage}` | agent | Writes `done`, then acks |
 | `POST /v1/work/release` `{item, reason, usage}` | agent | Writes `released`, then hands the delivery back |
 | `POST /v1/work/give_up` `{item, reason, usage}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries |
@@ -312,7 +312,21 @@ tracker writes `released` with the reason `lapsed`, then the new `claimed`.
 The log is the truth for holds. Before each call the tracker checks that the log
 still shows the agent holding the item. If a person closed the item or the
 attempt, or another agent took it, the agent's next `extend`, `complete` or
-`release` answers `lost`. The tracker settles a delivery in Felix only when it
+`release` answers `lost`.
+
+When Felix answers an extend with `stale_claim` (it no longer has the
+delivery), the tracker renews its lease by version before it answers `lost`.
+Felix runs the lease out by its own clock, so a broker whose clock runs fast
+can let another tracker take the lease and the claim while this one still
+believes it holds them. If no renewal sent after the refusal is granted, or the grant retook a lease
+that had run out, the extend answers 503
+and the agent calls again, reaching whichever tracker holds the lease. This
+assumes that over one lease, the clock of the broker holding the lease entry
+runs ahead of the tracker's by less than the margin the tracker keeps before its
+lease runs out, where it stops writing: 7.5 seconds at the default 15-second
+lease.
+
+The tracker settles a delivery in Felix only when it
 still stands behind that exact delivery for that agent, because a group ack
 names an offset, not a delivery: a stale holder's late call cannot ack the next
 holder's.
@@ -365,7 +379,14 @@ as well.
 
 The tracker is the only writer, and it holds that role with a lease: a key in
 the `work.tracker` cache, written with a time to live and renewed every third
-of it, starting as soon as the team serves. Teams start one after another, so a
+of it, starting as soon as the team serves. Renewal runs on its own timer and
+keeps the lease apart from the item state, so neither a sweep nor an append
+waiting on a slow Felix call delays it. Each lease put or read
+gives up after 3 seconds, so one hung put still leaves two more renewals before
+the lease runs out. Writes pause until the next renewal lands, because the
+tracker stops writing when half the lease or less is left. A renewal that Felix
+refuses while the lease entry cannot be read counts as a failed renewal, not a
+lost lease: a slow Felix may have applied an earlier put of ours late. Teams start one after another, so a
 team's lease can lapse (run out without a renewal) before it serves. The
 tracker then renews its own entry if Felix still has it, and otherwise
 takes it again, unless another tracker took it meanwhile. After taking it
