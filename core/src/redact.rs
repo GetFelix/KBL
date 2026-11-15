@@ -69,11 +69,19 @@ fn classes(s: &[u8]) -> usize {
 }
 
 /// An access key id is exactly 16 upper case letters or digits after the
-/// prefix: `feature/AKIA...EXAMPLE1` is a branch name.
+/// prefix: `feature/AKIA...EXAMPLE1` is a branch name. Two ids stuck
+/// together are 36 bytes: the first's 16, then a whole second id.
 fn aws_id(t: &[u8]) -> bool {
-    t.len() == 16
-        && t.iter()
-            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    let id = |t: &[u8]| {
+        t.len() == 16
+            && t.iter()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+    };
+    id(t)
+        || (t.len() == 36
+            && id(&t[..16])
+            && (t[16..].starts_with(b"AKIA") || t[16..].starts_with(b"ASIA"))
+            && id(&t[20..]))
 }
 
 /// A generated credential has a long run of letters and digits mixed:
@@ -86,6 +94,35 @@ fn random_run(t: &[u8]) -> bool {
             && seg.iter().any(u8::is_ascii_digit)
             && seg.iter().any(u8::is_ascii_alphabetic)
     })
+}
+
+/// A `random_run` over a URL-encoded value, where `%2B` is one byte of the
+/// run and not the end of it.
+fn encoded_random_run(t: &[u8]) -> bool {
+    let (mut len, mut digit, mut alpha, mut at) = (0, false, false, 0);
+    while at < t.len() {
+        let b = t[at];
+        let pct = b == b'%'
+            && t.get(at + 1..at + 3)
+                .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit));
+        if pct {
+            at += 3;
+            len += 1;
+        } else if b.is_ascii_alphanumeric() {
+            at += 1;
+            len += 1;
+            digit |= b.is_ascii_digit();
+            alpha |= b.is_ascii_alphabetic();
+        } else {
+            at += 1;
+            (len, digit, alpha) = (0, false, false);
+            continue;
+        }
+        if len >= 16 && digit && alpha {
+            return true;
+        }
+    }
+    false
 }
 
 /// Slack tokens are a numeric id, perhaps more ids, then a secret, joined
@@ -126,7 +163,7 @@ fn authorization(before: &[u8]) -> bool {
     let gap = w
         .iter()
         .rev()
-        .take_while(|b| b.is_ascii_whitespace() || b"\"'`[]():=,>".contains(b))
+        .take_while(|b| b.is_ascii_whitespace() || b"\"'`[]():=,>\\".contains(b))
         .count();
     let (s, gap) = w.split_at(w.len() - gap);
     let name = b"authorization";
@@ -222,6 +259,9 @@ const fn slack_shape(prefix: &'static str, min_tail: usize) -> Shape {
     }
 }
 
+/// An id and a second whole id stuck to it; one more byte than that is not.
+const MAX_AWS: usize = 36;
+
 const SHAPES: &[Shape] = &[
     // GitHub tokens and fine-grained tokens.
     shape("ghp_", 36, alnum),
@@ -264,14 +304,22 @@ const SHAPES: &[Shape] = &[
         min_tail: 16,
         tail: alnum,
         check: aws_id,
-        max_tail: 17,
+        max_tail: MAX_AWS,
     },
     Shape {
         prefix: "ASIA",
         min_tail: 16,
         tail: alnum,
         check: aws_id,
-        max_tail: 17,
+        max_tail: MAX_AWS,
+    },
+    // Slack `d` cookie: URL-encoded base64, so `%2B` splits the runs.
+    Shape {
+        prefix: "xoxd-",
+        min_tail: 32,
+        tail: query_value,
+        check: encoded_random_run,
+        max_tail: usize::MAX,
     },
     shape("AIza", 35, token),
 ];
@@ -293,7 +341,9 @@ const MAX_PEM_PREFIX: usize = 128;
 const MIN_PEM_RUN: usize = 32;
 /// Length of a full line of a PEM body.
 const PEM_LINE: usize = 64;
-/// Longest body line taken inside a block; OpenSSH keys use 70.
+/// Longest full line of a body with no `END`; OpenSSH keys use 70.
+const MAX_PEM_LINE_FULL: usize = 70;
+/// Longest body line taken inside a block.
 const MAX_PEM_LINE: usize = 80;
 /// How far a URL's userinfo is looked for after `://`.
 const MAX_USERINFO: usize = 256;
@@ -508,11 +558,24 @@ fn jwt(s: &[u8]) -> Option<Result<usize, usize>> {
         return Some(Err(head));
     }
     let sig = run(sig_at + 1);
-    Some(if sig >= 16 {
-        Ok(sig_at + 1 + sig)
-    } else {
-        Err(head)
-    })
+    if sig < 16 {
+        return Some(Err(head));
+    }
+    let mut end = sig_at + 1 + sig;
+    let mut last = sig_at + 1;
+    // A second JWT stuck to the first's signature has its header inside the
+    // signature run, so its body and signature follow after a `.`.
+    while s.get(end) == Some(&b'.') && s[last + 16..end].windows(3).any(|w| w == b"eyJ") {
+        let body = run(end + 1);
+        let next = end + 1 + body;
+        let sig = run(next + 1);
+        if s.get(next) != Some(&b'.') || sig < 16 {
+            break;
+        }
+        last = next + 1;
+        end = last + sig;
+    }
+    Some(Ok(end))
 }
 
 /// The userinfo of `scheme://user:pass@`, for the `:` at `i` that starts
@@ -633,19 +696,23 @@ fn pem_lines(s: &[u8]) -> usize {
     let mut at = 0;
     let mut full = false;
     while at < MAX_KEY_BODY {
-        let (gap, _) = pem_gap(&s[at..]);
+        let (mut gap, _) = pem_gap(&s[at..]);
         if gap == 0 {
             break;
+        }
+        // One blank line is allowed between the header and the body.
+        if at == 0 && line_break(&s[gap..]).is_some() {
+            gap += pem_gap(&s[gap..]).0;
         }
         let start = at + gap;
         let line = s[start..]
             .iter()
-            .take(PEM_LINE + 2)
+            .take(MAX_PEM_LINE_FULL + 2)
             .take_while(|b| base64(**b))
             .count();
         let next = start + line;
         // A diff marker makes a full line one longer.
-        if line == 0 || line > PEM_LINE + 1 {
+        if line == 0 || line > MAX_PEM_LINE_FULL + 1 {
             break;
         }
         // A full line may also end at a space, as in a key pasted on one line.
@@ -656,7 +723,10 @@ fn pem_lines(s: &[u8]) -> usize {
         let padded = s[next - 1] == b'=' && n > 0;
         let ends_line =
             br || closes || next + n == s.len() || (n > 0 && line >= PEM_LINE) || (full && padded);
-        let first_short = !full && line < PEM_LINE;
+        // A short first line is a key's when it is long and mixed enough that
+        // no word or hash is: `head -c 40 key.pem`, or a 48-column wrap.
+        let first_short =
+            !full && line < PEM_LINE && !(line >= MIN_PEM_RUN && classes(&s[start..next]) >= 3);
         // The gap's line prefix takes the dashes of an `END` line.
         let end_follows = br && n >= 5 && s[next + n - 5..].starts_with(KEY_END.as_bytes());
         if !ends_line || (first_short && !end_follows) {
@@ -699,10 +769,20 @@ fn pem_gap(s: &[u8]) -> (usize, bool) {
 }
 
 fn line_break(s: &[u8]) -> Option<usize> {
-    ["\r\n", "\n", "\\r\\n", "\\n"]
-        .iter()
-        .find(|b| s.starts_with(b.as_bytes()))
-        .map(|b| b.len())
+    // Escaped once or twice, or the `\n\` that continues a Rust string.
+    [
+        "\r\n",
+        "\n",
+        "\\\\r\\\\n",
+        "\\\\n",
+        "\\n\\\r\n",
+        "\\n\\\n",
+        "\\r\\n",
+        "\\n",
+    ]
+    .iter()
+    .find(|b| s.starts_with(b.as_bytes()))
+    .map(|b| b.len())
 }
 
 fn redact_in(s: &mut String) {

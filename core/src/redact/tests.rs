@@ -688,3 +688,118 @@ fn authorization_and_bearer_placeholders_in_prose_and_code_stay() {
         "headers.set('authorization', 'Basic [redacted]')"
     );
 }
+
+#[test]
+fn a_short_first_body_line_with_no_end_is_cut() {
+    let first = &BODY[..48];
+    let text = format!("-----BEGIN PRIVATE KEY-----\n{first}\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+    // A word, a hash and a sentence are not key material.
+    for line in [
+        "Done",
+        "abcdefabcdefabcdefabcdefabcdefabcdef0123",
+        "ThisIsAVeryLongCamelCaseIdentifierName",
+    ] {
+        let text = format!("-----BEGIN PRIVATE KEY-----\n{line}\nok");
+        assert_eq!(redact(&text), format!("[redacted]\n{line}\nok"), "{line}");
+    }
+}
+
+#[test]
+fn an_openssh_body_and_a_blank_line_with_no_end_are_cut() {
+    let line = format!("{BODY}AB12cd");
+    let text = format!("-----BEGIN OPENSSH PRIVATE KEY-----\n{line}\n{line}\nAB12cd==\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+    let text = format!("-----BEGIN PRIVATE KEY-----\n\n{BODY}\nAB12cd==\nok");
+    assert_eq!(redact(&text), "[redacted]\nok");
+    // A blank line then prose is still prose; a line over 70 is not a body.
+    let text = "-----BEGIN PRIVATE KEY-----\n\nthanks, done\nok";
+    assert_eq!(redact(text), "[redacted]\n\nthanks, done\nok");
+    let long = format!("{BODY}{BODY}");
+    let text = format!("-----BEGIN PRIVATE KEY-----\n{long}\nok");
+    assert_eq!(redact(&text), format!("[redacted]\n{long}\nok"));
+}
+
+#[test]
+fn double_escaped_and_continued_bodies_are_cut() {
+    let short = "AB12cd==";
+    for (text, want) in [
+        (
+            format!(
+                "\"-----BEGIN PRIVATE KEY-----\\\\n{BODY}\\\\n{short}\\\\n-----END PRIVATE KEY-----\\\\n\" x"
+            ),
+            "\"[redacted]\\\\n\" x",
+        ),
+        (
+            format!(
+                "\"-----BEGIN PRIVATE KEY-----\\n\\\n    {BODY}\\n\\\n    {short}\\n\\\n    -----END PRIVATE KEY-----\" x"
+            ),
+            "\"[redacted]\" x",
+        ),
+    ] {
+        assert_eq!(redact(&text), want, "{text}");
+    }
+}
+
+#[test]
+fn a_bearer_in_an_escaped_json_header_is_cut() {
+    let text = r#"{\"Authorization\": \"Bearer AbCdEfGhIjKlMnOpQrStUv\"}"#;
+    assert_eq!(
+        redact(text),
+        r#"{\"Authorization\": \"Bearer [redacted]\"}"#
+    );
+    assert!(untouched(
+        r#"\"note\": \"Bearer authentication/authorization-flow\""#
+    ));
+}
+
+#[test]
+fn stuck_aws_ids_and_jwts_are_cut_whole() {
+    let id = fake("AKIA", "A1B2", 4);
+    assert_eq!(redact(&format!("k={id}{id} z")), "k=[redacted] z");
+    assert_eq!(redact(&format!("k={id}{id}{id} z")), "k=[redacted] z");
+    // A longer run is a name, not ids.
+    assert!(untouched(&format!("feature/{id}EXAMPLE1")));
+    assert!(untouched(&format!("{id}x{id}")));
+
+    let jwt = |sig: &str| format!("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.{sig}");
+    let sig = "AbCdEfGhIjKlMnOpQrSt";
+    let text = format!("t={}{} z", jwt(sig), jwt(sig));
+    assert_eq!(redact(&text), "t=[redacted] z");
+    // A JWT followed by a dotted word is still just the JWT.
+    let text = format!("t={}.next z", jwt(sig));
+    assert_eq!(redact(&text), "t=[redacted].next z");
+}
+
+#[test]
+fn slack_d_cookies_are_cut() {
+    let cookie = fake("xoxd-", "Ab3x%2BQ9Zk", 6);
+    assert_eq!(redact(&format!("d={cookie}; x")), "d=[redacted]; x");
+    assert!(untouched(
+        "branch xoxd-rotate-the-cookie-store-before-release"
+    ));
+    assert!(untouched("xoxd-short"));
+}
+
+#[test]
+fn new_shapes_stay_linear() {
+    let mb = 10 * 1024 * 1024;
+    let inputs = [
+        "AKIAA1B2C3D4E5F6A1B2".repeat(mb / 20),
+        "xoxd-".repeat(mb / 5),
+        format!("xoxd-{}", "a1%2B".repeat(mb / 5)),
+        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.AbCdEfGhIjKlMnOpQrStAbCdEfeyJ".repeat(mb / 64),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\n\n".repeat(mb / 2)),
+        format!("-----BEGIN PRIVATE KEY-----{}", "\\\\n".repeat(mb / 3)),
+        format!("-----BEGIN PRIVATE KEY-----\\n\\\n{}", " ".repeat(mb)),
+        format!("-----BEGIN PRIVATE KEY-----\n{}", "A".repeat(mb)),
+        "-----BEGIN PRIVATE KEY-----\n\n".repeat(mb / 29),
+        "\\\"Authorization\\\": \\\"".repeat(mb / 24),
+    ];
+    for text in inputs {
+        let start = Instant::now();
+        let _ = redact(&text);
+        let took = start.elapsed();
+        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
+    }
+}
