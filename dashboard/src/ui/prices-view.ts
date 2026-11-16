@@ -45,7 +45,7 @@ export function pricesView(on: PricesHandlers) {
 
   // render drops the focused button, so focus goes back to the row's own.
   const focusRow = (model: string, unit: PriceUnit) => {
-    (([...m.body.querySelectorAll('button[data-price-row]')] as HTMLElement[]).find((b) => b.dataset.priceRow === `${model}|${unit}`))?.focus();
+    ((Array.from(m.body.querySelectorAll('button[data-price-row]')) as HTMLElement[]).find((b) => b.dataset.priceRow === `${model}|${unit}`))?.focus();
   };
 
   const render = (spend: Spend) => {
