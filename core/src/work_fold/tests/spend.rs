@@ -19,6 +19,7 @@ fn price(model: &str, unit: PriceUnit, price_micros: u64) -> WorkRecord {
         unit,
         price_micros,
         effective_from_ms: None,
+        as_of: None,
     }
 }
 
@@ -94,6 +95,7 @@ fn a_price_set_for_later_leaves_usage_before_it_on_the_old_price() {
         unit: PriceUnit::Input,
         price_micros: 9_000_000,
         effective_from_ms: Some(1_000_000),
+        as_of: None,
     });
     l.agent("w1", done_with("r1", vec![tokens("m", 100_000, 0)], 0));
     let s = fold(&l.0);
@@ -115,7 +117,14 @@ fn unpriced_usage_costs_the_floor_until_a_price_comes() {
     assert_eq!(s.unpriced_models().into_iter().collect::<Vec<_>>(), ["new"]);
     let spend = s.spend();
     assert!(spend.by_model["new"].unpriced);
-    assert_eq!(spend.unpriced.iter().collect::<Vec<_>>(), ["new"]);
+    assert_eq!(
+        spend
+            .unpriced
+            .iter()
+            .map(|u| u.model.as_str())
+            .collect::<Vec<_>>(),
+        ["new"]
+    );
 
     l.person(price("new", PriceUnit::Input, 2_000_000));
     let s = fold(&l.0);
@@ -208,6 +217,7 @@ fn only_a_person_sets_a_price_and_never_backdated() {
         unit: PriceUnit::Input,
         price_micros: 1,
         effective_from_ms: Some(0),
+        as_of: None,
     });
     let s = fold(&l.0);
     assert_eq!(
@@ -268,6 +278,7 @@ fn a_first_price_set_for_later_leaves_earlier_usage_unpriced() {
         unit: PriceUnit::Input,
         price_micros: 9_000_000,
         effective_from_ms: Some(1_000_000),
+        as_of: None,
     });
     let s = fold(&l.0);
     assert_eq!(s.items[&id("r1")].cost_micros, 0);
@@ -318,6 +329,7 @@ fn prices_in_effect_are_the_latest_that_started() {
         unit: PriceUnit::Input,
         price_micros: 9_000_000,
         effective_from_ms: Some(1_000_000),
+        as_of: None,
     });
     l.person(price("m", PriceUnit::Output, 5_000_000));
     let s = fold(&l.0);
@@ -345,12 +357,76 @@ fn prices_in_effect_are_the_latest_that_started() {
 }
 
 #[test]
-fn spend_lists_the_latest_price_of_each_model_and_unit() {
+fn spend_lists_every_price_set_with_its_start_and_as_of() {
     let mut l = raised();
     l.person(price("m", PriceUnit::Input, 1_000_000));
-    l.person(price("m", PriceUnit::Input, 2_000_000));
+    l.person(WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: 2_000_000,
+        effective_from_ms: Some(u64::MAX / 2),
+        as_of: Some("2026-11-15".into()),
+    });
     let spend = fold(&l.0).spend();
-    assert_eq!(spend.prices.len(), 1);
-    assert_eq!(spend.prices[0].price_micros, 2_000_000);
+    let rows: Vec<_> = spend
+        .prices
+        .iter()
+        .map(|p| {
+            (
+                p.price_micros,
+                p.effective_from_ms == u64::MAX / 2,
+                p.as_of.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (1_000_000, false, None),
+            (2_000_000, true, Some("2026-11-15"))
+        ]
+    );
     assert!(fold(&raised().0).spend().prices.is_empty());
+}
+
+#[test]
+fn a_malformed_as_of_is_refused() {
+    let mut l = raised();
+    l.person(WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: 1,
+        effective_from_ms: None,
+        as_of: Some("last tuesday".into()),
+    });
+    let s = fold(&l.0);
+    assert_eq!(rejected(&s), [Reject::BadPrice]);
+    assert!(s.spend().prices.is_empty());
+}
+
+#[test]
+fn unpriced_names_the_unit_that_waits() {
+    let mut l = raised();
+    l.person(price("m", PriceUnit::Input, 1_000_000));
+    l.agent(
+        "w1",
+        done_with(
+            "r1",
+            vec![Usage::Tokens {
+                model: "m".into(),
+                input: 1_000,
+                output: 1_000,
+                cache_read: 0,
+                cache_write: 0,
+            }],
+            0,
+        ),
+    );
+    let waiting: Vec<_> = fold(&l.0)
+        .spend()
+        .unpriced
+        .into_iter()
+        .map(|u| (u.model, u.unit))
+        .collect();
+    assert_eq!(waiting, [("m".to_owned(), PriceUnit::Output)]);
 }

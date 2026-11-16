@@ -13,18 +13,25 @@ export interface Spend {
   by_repo: Record<string, number>;
   /** Usage per model and what its priced part cost. The total is more than their sum by floors. */
   by_model: Record<string, ModelSpend>;
-  /** Models with usage that has no price yet. */
-  unpriced: string[];
-  /** The latest price per model and unit, with when it started. Absent on an older fold. */
-  prices?: PriceSince[];
+  /** The units of models whose usage has no price yet. */
+  unpriced: ModelUnit[];
+  /** Every price set, by model, unit and start. Absent on an older fold. */
+  prices?: PriceEntry[];
 }
 
-export interface PriceSince {
+export interface ModelUnit {
+  model: string;
+  unit: PriceUnit;
+}
+
+export interface PriceEntry {
   model: string;
   unit: PriceUnit;
   price_micros: number;
-  /** Milliseconds since the epoch. */
-  since_ms: number;
+  /** When it starts, in milliseconds since the epoch. */
+  effective_from_ms: number;
+  /** The vendor day (`YYYY-MM-DD`) an import copied it from; absent for a price a person typed. */
+  as_of?: string;
 }
 
 export type PriceUnit = 'input' | 'output' | 'cache_read' | 'cache_write' | 'aic';
@@ -116,7 +123,7 @@ export function tables(s: Spend, items: readonly ItemRow[]): SpendTables {
   const titles = new Map(items.map((i) => [i.id, i.title]));
   const total = s.total_micros;
   const byModel = s.by_model ?? {};
-  const waiting = new Set(s.unpriced ?? []);
+  const waiting = new Set((s.unpriced ?? []).map((u) => u.model));
   const models = [...new Set([...Object.keys(byModel), ...waiting])]
     .map((name) => modelRow(name, byModel[name], waiting.has(name)))
     .sort((a, b) => b.micros - a.micros || a.model.localeCompare(b.model));
@@ -135,6 +142,8 @@ export function tables(s: Spend, items: readonly ItemRow[]): SpendTables {
 /** A price older than this many days gets a "check pricing" hint. `?price_age_days=N` changes it. */
 export const DEFAULT_PRICE_AGE_DAYS = 90;
 const DAY_MS = 86_400_000;
+/** A day this close to now (or past) is written as now, as the import does: the tracker's clock differs from this one. */
+const NOW_MARGIN_MS = 10 * 60 * 1000;
 
 /** The age in days from the address's `price_age_days`, or the default when it is missing or not a whole number above 0. */
 export function priceAgeDays(raw: string | null): number {
@@ -142,28 +151,144 @@ export function priceAgeDays(raw: string | null): number {
   return n > 0 ? n : DEFAULT_PRICE_AGE_DAYS;
 }
 
-/** The models whose oldest price started more than `ageDays` before `now`, each with that age in whole days. A price set for later is not old. No block, only a hint. */
+/** `YYYY-MM-DD` as milliseconds at 00:00 UTC, or null when it is not a real day. */
+export function dayMs(day: string): number | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const ms = Date.parse(`${day}T00:00:00Z`);
+  return Number.isNaN(ms) || new Date(ms).toISOString().slice(0, 10) !== day ? null : ms;
+}
+
+const WORDS: Record<PriceUnit, [short: string, per: string]> = {
+  input: ['Input', 'million input tokens'],
+  output: ['Output', 'million output tokens'],
+  cache_read: ['Cache read', 'million cache read tokens'],
+  cache_write: ['Cache write', 'million cache write tokens'],
+  aic: ['AI credits', 'AI credit'],
+};
+
+/** The unit's name in a table, such as `Cache read`. */
+export function unitName(unit: PriceUnit): string {
+  return WORDS[unit][0];
+}
+
+/** What a price is per, such as `million input tokens` or `AI credit`. */
+export function unitPer(unit: PriceUnit): string {
+  return WORDS[unit][1];
+}
+
+/** The price in effect at `now` for each model and unit: the latest entry that has started. */
+export function inEffect(s: Pick<Spend, 'prices'>, now: number): Map<string, PriceEntry> {
+  const out = new Map<string, PriceEntry>();
+  for (const p of s.prices ?? []) {
+    const key = `${p.model}\0${p.unit}`;
+    if (p.effective_from_ms <= now && p.effective_from_ms >= (out.get(key)?.effective_from_ms ?? -1)) out.set(key, p);
+  }
+  return out;
+}
+
+/** When a price was current, in ms: the vendor day an import copied it from, else when it started. */
+export function pricedAt(p: PriceEntry): number {
+  return (p.as_of ? dayMs(p.as_of) : null) ?? p.effective_from_ms;
+}
+
+/** Where a price came from, in words. */
+export function sourceText(p: PriceEntry): string {
+  return p.as_of ? `import, as of ${p.as_of}` : 'person';
+}
+
+/** The models whose oldest price in effect was current more than `ageDays` before `now`, each with that age in whole days. A price that has not started is not old. No block, only a hint. */
 export function stalePrices(s: Pick<Spend, 'prices'>, now: number, ageDays: number): Map<string, number> {
   const out = new Map<string, number>();
-  for (const p of s.prices ?? []) {
-    const age = Math.floor((now - p.since_ms) / DAY_MS);
+  for (const p of inEffect(s, now).values()) {
+    const age = Math.floor((now - pricedAt(p)) / DAY_MS);
     if (age > ageDays && age > (out.get(p.model) ?? -1)) out.set(p.model, age);
   }
   return out;
 }
 
-/** The prices a model has, as `input $3 / output $15` per million tokens (credits for `aic`), for the card and the hint. */
-export function priceText(s: Pick<Spend, 'prices'>, model: string): string {
-  const list = (s.prices ?? []).filter((p) => p.model === model);
-  return list.map((p) => `${p.unit.replace('_', ' ')} ${dollars(p.price_micros)}`).join(' / ');
+/** The prices a model has in effect, as `input $3 / output $15` per million tokens (per credit for `aic`), for the hint. */
+export function priceText(s: Pick<Spend, 'prices'>, model: string, now: number): string {
+  return [...inEffect(s, now).values()]
+    .filter((p) => p.model === model)
+    .map((p) => `${unitName(p.unit).toLowerCase()} ${dollars(p.price_micros)}`)
+    .join(' / ');
 }
 
-/** The `POST /v1/work/prices` request for a price typed in dollars (per million tokens, or per credit for `aic`), or why it cannot be sent. */
-export function priceRequest(model: string, unit: PriceUnit, dollarsText: string): { path: string; body: Record<string, unknown> } | string {
+/** One unit of one model on the Models and prices page. Only recorded fields: nothing here is a guess. */
+export interface PriceRow {
+  model: string;
+  unit: PriceUnit;
+  /** In effect now, if any. */
+  current: PriceEntry | null;
+  /** Set for later, soonest first. */
+  scheduled: PriceEntry[];
+  /** Usage accrued in this unit: tokens, or credits for `aic`. 0 when none was reported. */
+  usage: number;
+  /** Usage of this unit is waiting for a price. */
+  waiting: boolean;
+}
+
+export interface PriceModel {
+  model: string;
+  rows: PriceRow[];
+  /** Every price set for the model, oldest start first. */
+  history: PriceEntry[];
+}
+
+const TOKEN_UNITS: PriceUnit[] = ['input', 'output', 'cache_read', 'cache_write'];
+
+function used(m: ModelSpend | undefined, unit: PriceUnit): number {
+  if (!m) return 0;
+  return unit === 'aic' ? m.aic_milli / 1000 : m[unit];
+}
+
+/** Every model seen in recorded usage or given a price, priced or not, with its units. The token units always show so any of them can be priced; credits show when used or priced. */
+export function priceModels(s: Spend, now: number): PriceModel[] {
+  const entries = s.prices ?? [];
+  const current = inEffect(s, now);
+  const waiting = new Set((s.unpriced ?? []).map((u) => `${u.model}\0${u.unit}`));
+  const names = new Set([...Object.keys(s.by_model ?? {}), ...(s.unpriced ?? []).map((u) => u.model), ...entries.map((p) => p.model)]);
+  return [...names].sort().map((model) => {
+    const m = (s.by_model ?? {})[model];
+    const mine = entries.filter((p) => p.model === model);
+    const units = TOKEN_UNITS.concat(used(m, 'aic') > 0 || mine.some((p) => p.unit === 'aic') || waiting.has(`${model}\0aic`) ? ['aic'] : []);
+    return {
+      model,
+      rows: units.map((unit) => ({
+        model,
+        unit,
+        current: current.get(`${model}\0${unit}`) ?? null,
+        scheduled: mine.filter((p) => p.unit === unit && p.effective_from_ms > now).sort((a, b) => a.effective_from_ms - b.effective_from_ms),
+        usage: used(m, unit),
+        waiting: waiting.has(`${model}\0${unit}`),
+      })),
+      history: [...mine].sort((a, b) => a.effective_from_ms - b.effective_from_ms || TOKEN_UNITS.concat(['aic']).indexOf(a.unit) - TOKEN_UNITS.concat(['aic']).indexOf(b.unit)),
+    };
+  });
+}
+
+/** The price typed in dollars as micros, or why it cannot be. 0 is a price: a model that costs nothing is set to 0, not left blank. */
+export function parseDollars(dollarsText: string): number | string {
   const text = dollarsText.trim();
   if (!/^\d+(\.\d{1,6})?$/.test(text)) return 'Type the price in dollars, such as 3 or 0.25.';
   const [whole, frac = ''] = text.split('.');
   const micros = Number(whole) * 1_000_000 + Number(frac.padEnd(6, '0'));
-  if (!Number.isSafeInteger(micros) || micros <= 0) return 'The price must be more than 0.';
-  return { path: '/v1/work/prices', body: { model, unit, price_micros: micros } };
+  return Number.isSafeInteger(micros) ? micros : 'That price is too large.';
+}
+
+/**
+ * The `POST /v1/work/prices` request for a price typed in dollars (per million tokens, or per credit for `aic`),
+ * or why it cannot be sent. `from` is an optional UTC day: one that has not come yet is sent as a price for later,
+ * a day that has passed or is near means now, since a price cannot reach back.
+ */
+export function priceRequest(model: string, unit: PriceUnit, dollarsText: string, from = '', now = Date.now()): { path: string; body: Record<string, unknown> } | string {
+  const micros = parseDollars(dollarsText);
+  if (typeof micros === 'string') return micros;
+  const body: Record<string, unknown> = { model, unit, price_micros: micros };
+  if (from.trim() !== '') {
+    const ms = dayMs(from.trim());
+    if (ms === null) return 'Type the day as YYYY-MM-DD, such as 2026-12-01.';
+    if (ms > now + NOW_MARGIN_MS) body.effective_from_ms = ms;
+  }
+  return { path: '/v1/work/prices', body };
 }

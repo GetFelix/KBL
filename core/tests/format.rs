@@ -884,6 +884,7 @@ fn usage_floors_and_prices_are_format_8() {
         unit: PriceUnit::Aic,
         price_micros: 1,
         effective_from_ms: None,
+        as_of: None,
     };
     assert_eq!(price.format(), FORMAT_V8);
     let rec = WorkLogged::new(7, Key::new("gabriel").unwrap(), Actor::Person, price);

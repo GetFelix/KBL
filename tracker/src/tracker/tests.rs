@@ -921,6 +921,7 @@ async fn from_format_8_usage_is_priced_and_floored() {
             unit: PriceUnit::Input,
             price_micros: 3_000_000,
             effective_from_ms: None,
+            as_of: None,
         },
     )
     .await

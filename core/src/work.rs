@@ -859,6 +859,10 @@ pub enum WorkRecord {
         price_micros: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         effective_from_ms: Option<u64>,
+        /// `YYYY-MM-DD`: the day the price was copied from a vendor. Only an
+        /// import sets it; a price a person typed has none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        as_of: Option<String>,
     },
     /// Upstream's view of the pull request in the item's `pr`: its phase,
     /// reviews and checks. Only upstream sync writes it, on roots.

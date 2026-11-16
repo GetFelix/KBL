@@ -180,8 +180,16 @@ try {
     await shoot(`spend-${theme}`);
     await page.eval(`document.querySelector('dialog.spend .dialog-body').scrollTop = 1e6`);
     await shoot(`spend-models-${theme}`);
+    // Models and prices: reached from Spend, lists every model seen in usage with its unit rows and history.
+    await page.eval(`[...document.querySelectorAll('dialog.spend button')].find((b) => b.textContent === 'Models and prices').click()`);
+    check(await page.eval(`document.querySelector('dialog.prices').open && !document.querySelector('dialog.spend').open`), `${theme}: Models and prices opens from Spend`);
+    check(await page.eval(`!!document.querySelector('dialog.prices section[data-model="claude-opus-5-5"] tr[data-unit=input]') && !!document.querySelector('dialog.prices section[data-model="gpt-6"]')`), `${theme}: the page lists priced and unpriced models seen in usage`);
+    check(await page.eval(`document.querySelector('dialog.prices section[data-model="claude-opus-5-5"] tr[data-unit=input]').textContent.includes('person')`), `${theme}: a price shows its source`);
+    check(await page.eval(`document.querySelector('dialog.prices section[data-model="claude-opus-5-5"] details summary').textContent.startsWith('History')`), `${theme}: each model has its price history`);
+    await axe(`prices ${theme}`);
+    await shoot(`prices-${theme}`);
     await press(page, 'Escape');
-    check(!(await page.eval(`document.querySelector('dialog.spend').open`)), `${theme}: Esc closes spend`);
+    check(!(await page.eval(`document.querySelector('dialog.prices').open`)), `${theme}: Esc closes Models and prices`);
   }
 
   await open(connected);

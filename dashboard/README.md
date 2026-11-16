@@ -21,11 +21,19 @@ reported usage is the agent's own word. A root links to its item.
 
 Models with no price yet are listed in a "Waiting for a price" card at the top of Spend. It is not a Needs-you
 item and blocks nothing: those models are charged the cost floor until a price is set. A person signed in to the
-tracker sets one there (unit and dollars per million tokens, or per credit), which sends `POST /v1/work/prices`;
-everyone else sees that a price is needed. A model whose oldest price started more than 90 days ago shows a
-"check pricing" hint in By model, with the age and prices on hover; `?price_age_days=N` in the address changes the
-90. The hint never blocks anything. Prices come from the fold's `spend_json()` (`prices`), so the page shows only
-what the log recorded. A table with nothing recorded says so.
+tracker sets one there for the unit that waits (dollars per million tokens of that kind, or per credit), which
+sends `POST /v1/work/prices`; everyone else sees that a price is needed. A model whose oldest price in effect was
+current more than 90 days ago (counted from the import's `as_of` day when it has one) shows a "check pricing" hint
+in By model, with the age and prices on hover; `?price_age_days=N` in the address changes the 90. The hint never
+blocks anything. Prices come from the fold's `spend_json()` (`prices`), so the page shows only what the log recorded.
+
+**Models and prices** opens from a button on Spend or from the palette. It lists every model seen in recorded usage,
+priced or not (never a fixed list), one table per model with a row per unit: price in effect, when it started,
+source (an import and its `as_of` day, or a person), usage accrued, and any price set for later. Each model has its
+price history under a "History" disclosure. A signed-in person chooses Set or Change on a row, types dollars and
+optionally a UTC day (a day not yet come is sent as `effective_from_ms`; blank or past means now). Changing a price
+in effect shows `old -> new` and enables Save only after a confirm checkbox; nothing replaces a price silently.
+A price of 0 is allowed, as in the import. A table with nothing recorded says so.
 
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it

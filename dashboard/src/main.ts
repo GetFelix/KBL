@@ -8,7 +8,7 @@ import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { blocked, items, questionText, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
-import { priceAgeDays, priceRequest, spend } from './spend.ts';
+import { priceAgeDays, priceRequest, spend, type PriceUnit } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
@@ -19,6 +19,7 @@ import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
 import { spendView } from './ui/spend-view.ts';
+import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { Tracker } from './tracker.ts';
@@ -203,6 +204,8 @@ const run = (id: CommandId): void => {
       return help.open();
     case 'spend':
       return showSpend();
+    case 'prices':
+      return showPrices();
     case 'search':
       ui.search.focus();
       return ui.search.select();
@@ -342,19 +345,26 @@ const palette = paletteView(
 const help = helpView(mac);
 // Set once the fold exists; Spend does nothing before then.
 let readSpend: (() => ReturnType<typeof spend>) | null = null;
+const setPrice = async (model: string, unit: PriceUnit, dollarsText: string, from = ''): Promise<string | null> => {
+  const req = priceRequest(model, unit, dollarsText, from);
+  if (typeof req === 'string') return req;
+  const o = tracker ? await tracker.write(req) : ({ status: 'failed', reason: 'Not signed in to the tracker.' } as const);
+  return o.status === 'ok' ? null : o.reason;
+};
 const spendBox = spendView({
   open: openItem,
   canSetPrice: () => tracker !== null,
-  setPrice: async (model, unit, dollarsText) => {
-    const req = priceRequest(model, unit, dollarsText);
-    if (typeof req === 'string') return req;
-    const o = tracker ? await tracker.write(req) : ({ status: 'failed', reason: 'Not signed in to the tracker.' } as const);
-    return o.status === 'ok' ? null : o.reason;
-  },
+  setPrice,
+  openPrices: () => showPrices(),
   now: () => Date.now(),
   priceAgeDays: priceAgeDays(q.get('price_age_days')),
 });
+const pricesBox = pricesView({ canSetPrice: () => tracker !== null, setPrice, now: () => Date.now() });
 // Spend of a log still being read would be a partial total, so the dialog waits for live and fills in then.
+const showPrices = () => {
+  const s = store.get();
+  pricesBox.open(s.connection.kind === 'live' && readSpend ? readSpend() : null);
+};
 const showSpend = () => {
   const s = store.get();
   spendBox.open(s.connection.kind === 'live' && readSpend ? readSpend() : null, s.items, s);
@@ -394,7 +404,7 @@ const views = viewDialog({
 });
 const confirm = confirmDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, spendBox.el, views.el, confirm.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, pricesBox.el, views.el, confirm.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -421,7 +431,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || views.isOpen() || confirm.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;
@@ -469,6 +479,7 @@ async function main() {
       queued = false;
       store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
       if (spendBox.isOpen()) showSpend();
+      if (readSpend) pricesBox.refresh(readSpend());
     });
   };
   let cursor = 0;
@@ -494,6 +505,7 @@ async function main() {
           store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();
+          if (readSpend) pricesBox.refresh(readSpend());
         },
       });
     } catch (e) {

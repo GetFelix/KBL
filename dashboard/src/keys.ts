@@ -6,6 +6,7 @@ export type CommandId =
   | 'palette'
   | 'help'
   | 'spend'
+  | 'prices'
   | 'search'
   | 'next'
   | 'previous'
@@ -56,6 +57,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'open', label: 'Open the selected item', group: 'Navigation', keys: ['Enter'] },
   { id: 'close', label: 'Close, or clear the search', group: 'Navigation', keys: ['Escape'] },
   { id: 'spend', label: 'Show spend', group: 'View', keys: [] },
+  { id: 'prices', label: 'Models and prices', group: 'View', keys: [] },
   { id: 'view-all', label: 'Show all work', group: 'View', keys: [] },
   { id: 'view-inbox', label: 'Show what needs you', group: 'View', keys: [] },
   { id: 'view-blocked', label: 'Show blocked work', group: 'View', keys: [] },

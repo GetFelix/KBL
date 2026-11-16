@@ -76,11 +76,11 @@ fn only_a_future_day_is_sent_as_effective_from() {
     let p = plan(&t, &|_| vec![], NOW).unwrap();
     assert_eq!(
         body(&p[0]),
-        json!({"model":"a","unit":"input","price_micros":1})
+        json!({"model":"a","unit":"input","price_micros":1,"as_of":"2026-11-15"})
     );
     assert_eq!(
         body(&p[1]),
-        json!({"model":"b","unit":"input","price_micros":1,"effective_from_ms":4_070_908_800_000u64})
+        json!({"model":"b","unit":"input","price_micros":1,"as_of":"2026-11-15","effective_from_ms":4_070_908_800_000u64})
     );
 }
 

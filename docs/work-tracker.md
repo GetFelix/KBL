@@ -1542,9 +1542,23 @@ is not a Needs-you item. A price set for a later time prices only usage from tha
 wait for a price at once; a report that would add another is refused with
 `bad_usage` until a person prices some.
 
-**Old prices.** The spend view also lists the latest price of each model and unit with
-when it started (`prices`). The dashboard shows "check pricing" next to a model whose
-oldest price is more than 90 days old (`?price_age_days=N` changes it). It is a hint only.
+**Old prices.** The spend view also lists every price set (`prices`): model, unit,
+price, when it starts, and `as_of` when an import recorded the vendor day it copied
+it from. The dashboard shows "check pricing" next to a model whose oldest price in
+effect is more than 90 days old, counted from `as_of` when there is one and from
+the start otherwise (`?price_age_days=N` changes it). It is a hint only.
+
+**Models and prices.** The dashboard's Models and prices page (from Spend, or the
+palette) lists every model seen in recorded usage, priced or not, with each unit's
+price in effect, when it started, where it came from (an import and its `as_of`
+day, or a person), the usage accrued, any price set for later, and the model's
+full price history. A signed-in person sets or changes a price there with the same
+`POST /v1/work/prices`: a day typed in the form that has not come yet is sent as
+`effective_from_ms`, anything else means now. Changing a price in effect shows old
+to new and waits for a confirm; usage already charged keeps its price. A price of
+0 is accepted, by the import and the page alike, for a model that costs nothing.
+The import sends the table's `as_of` with each price (`as_of` on `price_set`, a
+`YYYY-MM-DD` that a person's own price leaves out).
 
 **Budgets.** A root's cost budget is in the same derived cost, in millionths of
 a dollar, and is shared by every model and unit in the tree. The budget is
@@ -1565,7 +1579,7 @@ root and everything under it), per reviewer tier (reviews only) and per repo
 reads lands). `by_model` gives each model's usage and the cost of its priced
 part. The total can be more than their sum: a report charged its floor adds
 what the floor came to above its priced usage, and costs reported before
-format 8 count only in the total. `unpriced` names the models still waiting for a price. The
+format 8 count only in the total. `unpriced` names each model and unit still waiting for a price. The
 wasm fold exposes the same numbers via `Folder.spend_json()`, and the dashboard's
 Spend dialog shows them per root, reviewer tier, repo and model.
 

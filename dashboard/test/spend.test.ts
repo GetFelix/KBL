@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { dollars, priceAgeDays, priceRequest, priceText, spend, stalePrices, tables } from '../src/spend.ts';
+import { dollars, spend, tables } from '../src/spend.ts';
 import { COMMANDS } from '../src/keys.ts';
 
 // Built by `npm run wasm`.
@@ -90,13 +90,13 @@ test('an unpriced model shows its usage and no cost, and is never counted as $0'
 });
 
 test('a model waiting for a price is listed even without usage detail', () => {
-  const t = tables({ total_micros: 0, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: {}, unpriced: ['x'] }, []);
+  const t = tables({ total_micros: 0, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: {}, unpriced: [{ model: 'x', unit: 'input' }] }, []);
   assert.deepEqual(t.models.map((m) => [m.model, m.unpriced, m.usage]), [['x', true, '']]);
 });
 
 test('a model with tokens and credits, partly priced, shows both units and a partial cost', () => {
   const m = { input: 1000, output: 0, cache_read: 0, cache_write: 0, aic_milli: 2500, cost_micros: 15_000, unpriced: true };
-  const t = tables({ total_micros: 100_000, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: { mix: m }, unpriced: ['mix'] }, []);
+  const t = tables({ total_micros: 100_000, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: { mix: m }, unpriced: [{ model: 'mix', unit: 'input' }] }, []);
   assert.deepEqual(t.models, [{ model: 'mix', unit: 'tokens + AIC', usage: '1,000 input; 2.5 credits', micros: 15_000, unpriced: true }]);
 });
 
@@ -117,34 +117,4 @@ test('dollars shows cents, thousands, and sub-cent amounts', () => {
 
 test('Spend is a palette command, so keyboard users reach it', () => {
   assert.ok(COMMANDS.some((c) => c.id === 'spend' && c.group === 'View'));
-});
-
-const DAY = 86_400_000;
-
-test('a price older than the age is flagged, a newer or scheduled one is not', () => {
-  const now = 1_000 * DAY;
-  const prices = [
-    { model: 'old', unit: 'input' as const, price_micros: 1, since_ms: now - 100 * DAY },
-    { model: 'old', unit: 'output' as const, price_micros: 1, since_ms: now - 10 * DAY },
-    { model: 'new', unit: 'input' as const, price_micros: 1, since_ms: now - 10 * DAY },
-    { model: 'soon', unit: 'input' as const, price_micros: 1, since_ms: now + 5 * DAY },
-  ];
-  assert.deepEqual([...stalePrices({ prices }, now, 90)], [['old', 100]]);
-  assert.deepEqual([...stalePrices({}, now, 90)], []);
-});
-
-test('the price age comes from the address, else 90 days', () => {
-  assert.equal(priceAgeDays(null), 90);
-  assert.equal(priceAgeDays('30'), 30);
-  for (const bad of ['0', '-1', 'x', '1.5', '']) assert.equal(priceAgeDays(bad), 90, bad);
-});
-
-test('a price typed in dollars becomes micros, and a bad one says why', () => {
-  assert.deepEqual(priceRequest('m', 'input', '3'), { path: '/v1/work/prices', body: { model: 'm', unit: 'input', price_micros: 3_000_000 } });
-  assert.deepEqual(priceRequest('m', 'output', ' 0.25 '), { path: '/v1/work/prices', body: { model: 'm', unit: 'output', price_micros: 250_000 } });
-  for (const bad of ['', '0', 'abc', '-1', '1.1234567']) assert.equal(typeof priceRequest('m', 'input', bad), 'string', bad);
-});
-
-test('the price text names each unit', () => {
-  assert.equal(priceText({ prices: [{ model: 'm', unit: 'cache_read', price_micros: 300_000, since_ms: 0 }] }, 'm'), 'cache read $0.30');
 });

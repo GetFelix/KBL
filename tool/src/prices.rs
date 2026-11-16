@@ -76,6 +76,8 @@ pub(crate) struct Planned {
     pub(crate) price_micros: u64,
     /// Set only for a day in the future.
     pub(crate) effective_from_ms: Option<u64>,
+    /// The table's `as_of`, recorded with the price.
+    pub(crate) as_of: String,
     pub(crate) step: Step,
 }
 
@@ -176,6 +178,7 @@ pub(crate) fn plan(
                 unit: e.unit,
                 price_micros: e.price_micros,
                 effective_from_ms: from,
+                as_of: table.as_of.clone(),
                 step,
             })
         })
@@ -191,7 +194,7 @@ fn unit_name(unit: PriceUnit) -> String {
 
 /// The `POST /v1/work/prices` body for one planned price.
 pub(crate) fn body(p: &Planned) -> Value {
-    let mut b = json!({ "model": p.model, "unit": p.unit, "price_micros": p.price_micros });
+    let mut b = json!({ "model": p.model, "unit": p.unit, "price_micros": p.price_micros, "as_of": p.as_of });
     if let Some(ms) = p.effective_from_ms {
         b["effective_from_ms"] = json!(ms);
     }
