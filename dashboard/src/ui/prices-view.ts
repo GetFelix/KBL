@@ -136,6 +136,8 @@ export function pricesView(on: PricesHandlers) {
     };
 
     const list = priceModels(spend, now);
+    // A live record redraws the page after a save; the row's button keeps focus across it.
+    const had = (document.activeElement as HTMLElement | null)?.dataset?.priceRow;
     m.body.replaceChildren(
       h('header', { class: 'dialog-head' }, h('h2', {}, 'Models and prices'), close),
       h('p', { class: 'muted small spend-note' }, 'Every model seen in recorded usage, priced or not. A price starts when it is set, or on the day you choose, and never changes what was already charged.'),
@@ -143,6 +145,7 @@ export function pricesView(on: PricesHandlers) {
       ...(list.length === 0 ? [h('p', { class: 'muted' }, 'No model has reported usage yet.')] : list.map(section)),
       status,
     );
+    if (had) focusRow(...(had.split('|') as [string, PriceUnit]));
   };
 
   return {

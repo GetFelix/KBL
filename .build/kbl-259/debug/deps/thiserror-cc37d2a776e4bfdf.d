@@ -1,0 +1,12 @@
+/Volumes/External/worktrees/kbl-259/.build/kbl-259/debug/deps/thiserror-cc37d2a776e4bfdf.d: /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /Volumes/External/worktrees/kbl-259/.build/kbl-259/debug/build/thiserror-399c27fc15e1326b/out/private.rs
+
+/Volumes/External/worktrees/kbl-259/.build/kbl-259/debug/deps/libthiserror-cc37d2a776e4bfdf.rmeta: /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs /Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs /Volumes/External/worktrees/kbl-259/.build/kbl-259/debug/build/thiserror-399c27fc15e1326b/out/private.rs
+
+/Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/lib.rs:
+/Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/aserror.rs:
+/Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/display.rs:
+/Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/var.rs:
+/Volumes/External/cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.21/src/private.rs:
+/Volumes/External/worktrees/kbl-259/.build/kbl-259/debug/build/thiserror-399c27fc15e1326b/out/private.rs:
+
+# env-dep:OUT_DIR=/Volumes/External/worktrees/kbl-259/.build/kbl-259/debug/build/thiserror-399c27fc15e1326b/out

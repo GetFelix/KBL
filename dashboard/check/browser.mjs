@@ -174,7 +174,7 @@ try {
     check(await page.eval(`/lower bound/.test(document.querySelector('.spend-note').textContent)`), `${theme}: spend says it is a lower bound`);
     check(await page.eval(`document.querySelectorAll('#spend-roots ~ table tbody tr').length > 0 && document.querySelectorAll('#spend-repos ~ table tbody tr').length > 0`), `${theme}: spend lists roots and repos`);
     check(await page.eval(`document.querySelector('#spend-tiers ~ table tbody tr[data-key=fast] td')?.textContent === '$0.15'`), `${theme}: spend lists the reviewer tier from the fixture's review`);
-    check(await page.eval(`document.querySelector('#spend-models ~ table tbody tr[data-key="claude-opus-5-5"]')?.textContent === 'claude-opus-5-5tokens20,000 input, 4,000 output$0.60'`), `${theme}: spend lists a priced model with its usage and cost`);
+    check(await page.eval(`document.querySelector('#spend-models ~ table tbody tr[data-key="claude-opus-5-5"]')?.textContent === 'claude-opus-5-5 check pricingtokens20,000 input, 4,000 output$0.60'`), `${theme}: spend lists a priced model with its usage, cost and the stale-price hint (the fixture's prices date from 2023)`);
     check(await page.eval(`(() => { const r = document.querySelector('#spend-models ~ table tbody tr[data-key="gpt-6"]'); return r?.textContent === 'gpt-6AIC1.5 creditsunpriced'; })()`), `${theme}: spend shows an unpriced model as unpriced with its usage, not $0`);
     check(await focused('dialog.spend button'), `${theme}: the spend dialog takes focus`);
     await axe(`spend ${theme}`);
