@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 8.
+is 9.
 
 ### Formats
 
@@ -81,6 +81,7 @@ is 8.
 | 6 | No record or field: `imported` may name an existing open prerequisite that a person accepted after the raise, with an issue in the repo it targets and no upstream issue yet. The item becomes an imported root, so ingest can open the upstream issue for it ([work tracker](work-tracker.md#prerequisites-become-upstream-issues)) | Until the raise, `imported` on an existing item is refused as `duplicate` and the tracker lists no prerequisites for ingest, so nothing is opened. An acceptance from before the raise does not count; a person accepts again |
 | 7 | `flagged`: a person moves an item into or out of Needs you ([work tracker](work-tracker.md#flagging-an-item-for-a-person)) | Until the raise, `POST /v1/work/flag` and `/v1/work/unflag` are refused with `format` |
 | 8 | Spend as usage: `done`, `released`, `gave_up`, `question` and `prerequisite` carry `usage` per model and `floor_micros` instead of a reported `cost_micros`, and `price_set` prices a model's unit ([work tracker](work-tracker.md#cost-and-spend)). The fold prices usage when it folds. From the raise, a report with `cost_micros` above 0 is refused with `bad_usage`; the tracker's routes refuse one above 0 on any format | Until the raise, the tracker writes each report as before, with the floor as its `cost_micros`, and drops the usage it was sent. `POST /v1/work/prices` is refused with `format` |
+| 9 | `price_set` with `as_of`: the day the price table was copied. The fold refuses a day that is not a real `YYYY-MM-DD` as `bad_price` | Until the raise, `POST /v1/work/prices` refuses a price with `as_of` as `format`; a price without it is format 8 and unchanged |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 

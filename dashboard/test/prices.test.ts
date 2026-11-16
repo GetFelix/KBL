@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { dayMs, priceAgeDays, priceModels, priceRequest, priceText, stalePrices, unitPer, type PriceEntry } from '../src/spend.ts';
+import { dayMs, priceAgeDays, priceModels, priceRequest, priceStart, priceText, replacedPrice, samePrice, stalePrices, unitPer, type PriceEntry } from '../src/spend.ts';
 
 const DAY = 86_400_000;
 const entry = (model: string, unit: PriceEntry['unit'], price_micros: number, effective_from_ms: number, as_of?: string): PriceEntry => ({ model, unit, price_micros, effective_from_ms, ...(as_of ? { as_of } : {}) });
@@ -95,4 +95,26 @@ test('the models page lists every model seen in usage or priced, each unit, neve
 test('Models and prices is a palette command, so keyboard users reach it', async () => {
   const { COMMANDS } = await import('../src/keys.ts');
   assert.ok(COMMANDS.some((c: { id: string; group: string }) => c.id === 'prices' && c.group === 'View'));
+});
+
+test('a change replaces the price in effect when it starts, so a later day is compared with the later price', () => {
+  const now = 1_000 * DAY;
+  const prices = [entry('m', 'input', 1, now - 5 * DAY), entry('m', 'input', 2, now + 3 * DAY), entry('m', 'output', 9, now - DAY)];
+  const day = (n: number) => new Date(now + n * DAY).toISOString().slice(0, 10);
+  assert.equal(replacedPrice({ prices }, 'm', 'input', '', now)?.price_micros, 1);
+  assert.equal(replacedPrice({ prices }, 'm', 'input', day(1), now)?.price_micros, 1);
+  assert.equal(replacedPrice({ prices }, 'm', 'input', day(5), now)?.price_micros, 2);
+  assert.equal(replacedPrice({ prices }, 'm', 'cache_read', '', now), null);
+  assert.equal(priceStart('2026-99-99', now), null);
+  assert.equal(replacedPrice({ prices }, 'm', 'input', '2026-99-99', now)?.price_micros, 1);
+});
+
+test('a confirm holds only while the replaced price is the same one', () => {
+  const a = entry('m', 'input', 1, 5);
+  assert.equal(samePrice(a, { ...a }), true);
+  assert.equal(samePrice(null, null), true);
+  assert.equal(samePrice(null, a), false);
+  assert.equal(samePrice(a, null), false);
+  assert.equal(samePrice(a, entry('m', 'input', 2, 5)), false);
+  assert.equal(samePrice(a, entry('m', 'input', 1, 6)), false);
 });

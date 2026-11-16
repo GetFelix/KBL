@@ -276,6 +276,28 @@ export function parseDollars(dollarsText: string): number | string {
   return Number.isSafeInteger(micros) ? micros : 'That price is too large.';
 }
 
+/** When a price typed with this optional UTC day starts: the day if it has not come yet, else now. Null when the day is not a real one. */
+export function priceStart(from: string, now: number): number | null {
+  if (from.trim() === '') return now;
+  const ms = dayMs(from.trim());
+  return ms === null ? null : ms > now + NOW_MARGIN_MS ? ms : now;
+}
+
+/** The price a new one would replace: the one in effect when it starts, which for a later day is not the one in effect now. */
+export function replacedPrice(s: Pick<Spend, 'prices'>, model: string, unit: PriceUnit, from: string, now: number): PriceEntry | null {
+  const at = priceStart(from, now) ?? now;
+  let out: PriceEntry | null = null;
+  for (const p of s.prices ?? []) {
+    if (p.model === model && p.unit === unit && p.effective_from_ms <= at && p.effective_from_ms >= (out?.effective_from_ms ?? -1)) out = p;
+  }
+  return out;
+}
+
+/** Whether two answers to "what would this replace" are the same price, so a confirm of one still holds for the other. */
+export function samePrice(a: PriceEntry | null, b: PriceEntry | null): boolean {
+  return a === null || b === null ? a === b : a.price_micros === b.price_micros && a.effective_from_ms === b.effective_from_ms;
+}
+
 /**
  * The `POST /v1/work/prices` request for a price typed in dollars (per million tokens, or per credit for `aic`),
  * or why it cannot be sent. `from` is an optional UTC day: one that has not come yet is sent as a price for later,

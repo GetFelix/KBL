@@ -51,8 +51,12 @@ pub const FORMAT_V7: u32 = 7;
 /// and prices it from `price_set` records, instead of a reported `cost_micros`.
 pub const FORMAT_V8: u32 = 8;
 
+/// The format from which a `price_set` may carry `as_of`, the day its table
+/// was copied. The fold reads it and refuses a malformed day.
+pub const FORMAT_V9: u32 = 9;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V8;
+pub const FORMAT: u32 = FORMAT_V9;
 
 /// Usage entries one report may carry: one per model.
 pub const MAX_USAGE_ENTRIES: usize = 16;
@@ -1116,6 +1120,7 @@ impl WorkRecord {
             WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V2),
             WorkRecord::ReturnedToScope { .. } => FORMAT_V2,
             WorkRecord::Flagged { .. } => FORMAT_V7,
+            WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,
             WorkRecord::PriceSet { .. } => FORMAT_V8,
             r if r
                 .charge()

@@ -6,4 +6,6 @@ Models and prices page, from Spend or the palette, lists every model seen in rec
 with each unit's price, start, source, usage and history, and lets a person set or change a
 price (a change in effect shows old to new and needs a confirm). The spend view gains
 `prices` (every price set) and `unpriced` now names the unit. `price_set` carries an
-optional `as_of`, which `kbl-tool prices import` fills from the table.
+optional `as_of`, which `kbl-tool prices import` fills from the table; a price with it is
+format 9, one without stays format 8. The page asks again if the price changed under an open
+form, and keeps focus and the saved message through a save.

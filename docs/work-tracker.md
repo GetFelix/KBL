@@ -1517,7 +1517,7 @@ person set it on purpose; `--update` writes it.
 To follow a vendor's price change, edit the table (or your own copy), run the
 import with `--update`, and the new price takes over from that moment. Usage
 already reported keeps the price it was charged at. The import needs the log at
-[format 8](upgrades.md#formats); the tracker refuses it below that. If it stops
+[format 9](upgrades.md#formats), since it sends each table's `as_of`; the tracker refuses it below that. If it stops
 partway, run it again.
 
 **How a report is charged.** The fold prices each report when it folds it,
@@ -1558,7 +1558,7 @@ full price history. A signed-in person sets or changes a price there with the sa
 to new and waits for a confirm; usage already charged keeps its price. A price of
 0 is accepted, by the import and the page alike, for a model that costs nothing.
 The import sends the table's `as_of` with each price (`as_of` on `price_set`, a
-`YYYY-MM-DD` that a person's own price leaves out).
+real `YYYY-MM-DD` day that a person's own price leaves out). A price with `as_of` is [format 9](upgrades.md#formats); one without stays format 8. Two prices with the same start share one `as_of`: the later record's.
 
 **Budgets.** A root's cost budget is in the same derived cost, in millionths of
 a dollar, and is shared by every model and unit in the tree. The budget is

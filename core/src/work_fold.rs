@@ -437,16 +437,36 @@ const MAX_UNPRICED_MODELS: usize = 32;
 /// Longest model name a report or price may carry.
 const MAX_MODEL_LEN: usize = 100;
 
-/// `YYYY-MM-DD`, as an import writes the day it copied prices.
+/// A real calendar day written `YYYY-MM-DD`, as an import writes the day it
+/// copied prices. The tool and the dashboard refuse the same impossible days.
 fn day_ok(d: &str) -> bool {
-    d.len() == 10
+    let shaped = d.len() == 10
         && d.bytes().enumerate().all(|(i, b)| {
             if i == 4 || i == 7 {
                 b == b'-'
             } else {
                 b.is_ascii_digit()
             }
-        })
+        });
+    if !shaped {
+        return false;
+    }
+    let (Ok(y), Ok(m), Ok(day)) = (
+        d[..4].parse::<u32>(),
+        d[5..7].parse::<u32>(),
+        d[8..].parse::<u32>(),
+    ) else {
+        return false;
+    };
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let last = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=last).contains(&day)
 }
 
 /// A model id as vendors write them: letters, digits and `.-_:/@`.
@@ -676,7 +696,8 @@ pub struct State {
     /// Per model and unit, `(effective_from_ms, price_micros)` in effect order.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     prices: BTreeMap<String, BTreeMap<PriceUnit, Vec<(u64, u64)>>>,
-    /// The `as_of` of a price, by model, unit and start.
+    /// The `as_of` of a price, by model, unit and start. Two prices with the
+    /// same start share one note: the later record's wins, as its price does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     price_as_of: BTreeMap<String, BTreeMap<PriceUnit, BTreeMap<u64, String>>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

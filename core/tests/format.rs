@@ -5,7 +5,7 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
-    FORMAT_V8, ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V8, FORMAT_V9, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -891,5 +891,35 @@ fn usage_floors_and_prices_are_format_8() {
     assert_eq!(
         String::from_utf8(rec.encode()).unwrap(),
         r#"{"v":8,"at_ms":7,"by":"gabriel","actor":"person","kind":"price_set","model":"m","unit":"aic","price_micros":1}"#
+    );
+}
+
+/// The fold reads `as_of` on a price, so a format 8 reader would fold it
+/// differently: a price with it is format 9, one without stays format 8.
+#[test]
+fn a_price_with_as_of_is_format_9() {
+    use kbl_core::names::Key;
+    use kbl_core::work::PriceUnit;
+    assert_eq!(FORMAT_V9, 9);
+    assert_eq!(FORMAT, FORMAT_V9);
+    let price = |as_of: Option<&str>| WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Aic,
+        price_micros: 1,
+        effective_from_ms: None,
+        as_of: as_of.map(Into::into),
+    };
+    assert_eq!(price(None).format(), FORMAT_V8);
+    assert_eq!(price(Some("2026-11-15")).format(), FORMAT_V9);
+    let rec = WorkLogged::new(
+        7,
+        Key::new("gabriel").unwrap(),
+        Actor::Person,
+        price(Some("2026-11-15")),
+    );
+    assert!(
+        String::from_utf8(rec.encode())
+            .unwrap()
+            .starts_with(r#"{"v":9,"#)
     );
 }

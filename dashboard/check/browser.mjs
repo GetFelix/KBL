@@ -51,6 +51,7 @@ const fakeGateway = (log, mode) => `(() => {
   const ROUTES = {
     '/v1/work/proposals/accept': (b) => ({ kind: 'accepted', item: b.item, tier: b.tier }),
     '/v1/work/proposals/reject': (b) => ({ kind: 'rejected', item: b.item }),
+    '/v1/work/prices': (b) => ({ v: 8, kind: 'price_set', model: b.model, unit: b.unit, price_micros: b.price_micros, effective_from_ms: b.effective_from_ms }),
     '/v1/work/tier': (b) => ({ kind: 'tier_changed', item: b.item, tier: b.tier }),
     '/v1/work/close': (b) => ({ kind: 'closed', item: b.item, why: b.why }),
     '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: b.text ?? { text: '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
@@ -612,6 +613,34 @@ try {
   await shoot('sign-in-dark');
   await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
   await page.waitFor(`!document.querySelector('.sign-in-dialog').open`);
+  // Changing a price in effect: Save waits for the confirm, and a price changed underneath asks again.
+  const row = `document.querySelector('dialog.prices button[data-price-row="claude-opus-5-5|input"]')`;
+  const saveOff = `document.querySelector('dialog.prices form.price-edit .button:not(.ghost)').disabled`;
+  const typePrice = (v) => page.eval(`(() => { const i = document.querySelector('#price-input'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Spend').click(); [...document.querySelectorAll('dialog.spend button')].find((b) => b.textContent === 'Models and prices').click(); ${row}.click(); true`);
+  check(await focused('#price-input'), 'Change moves focus into the price field');
+  await typePrice('20');
+  check(await page.eval(saveOff), 'Save stays disabled until the confirm is ticked');
+  await page.eval(`document.querySelector('#price-confirm').click(); true`);
+  check(!(await page.eval(saveOff)), 'ticking the confirm enables Save');
+  await page.eval(`document.querySelector('#price-confirm').click(); true`);
+  check(await page.eval(saveOff), 'unticking the confirm disables Save again');
+  await page.eval(`document.querySelector('#price-confirm').click(); window.__push({ v: 8, actor: 'person', by: 'maintainer', at_ms: Date.now(), kind: 'price_set', model: 'claude-opus-5-5', unit: 'input', price_micros: 17_000_000 }); true`);
+  await new Promise((ok) => setTimeout(ok, 300));
+  const calls = await page.eval(`window.__tracker.calls.length`);
+  await page.eval(`document.querySelector('dialog.prices form.price-edit .button:not(.ghost)').click(); true`);
+  check((await page.eval(`window.__tracker.calls.length`)) === calls, 'a price changed underneath is not posted on the old confirm');
+  check(await page.eval(`!document.querySelector('#price-confirm').checked && ${saveOff} && document.querySelector('dialog.prices form.price-edit [role=status]').textContent.includes('$17.00')`), 'it shows the new old-to-new change and asks for the confirm again');
+  await page.eval(`document.querySelector('#price-confirm').click(); document.querySelector('dialog.prices form.price-edit .button:not(.ghost)').click(); true`);
+  await page.waitFor(`window.__tracker.calls.at(-1).url === '/v1/work/prices'`);
+  check(await page.eval(`window.__tracker.calls.at(-1).body.price_micros === 20_000_000`), 'the confirmed change is posted');
+  await new Promise((ok) => setTimeout(ok, 300));
+  check(await page.eval(`document.querySelector('dialog.prices [role=status]:last-child')?.textContent.startsWith('Price set for claude-opus-5-5')`), 'the saved message stays on the page after the redraw');
+  check(await page.eval(`document.activeElement === ${row}`), 'after Save focus returns to the row’s Change button');
+  await page.eval(`${row}.click(); true`);
+  await page.eval(`[...document.querySelectorAll('dialog.prices form.price-edit .button.ghost')].find((b) => b.textContent === 'Cancel').click(); true`);
+  check(await page.eval(`document.activeElement === ${row}`), 'Cancel returns focus to the row’s Change button');
+  await press(page, 'Escape');
   check(await page.eval(`!!document.querySelector('.actions form.answer') && document.querySelector('.answer .question').textContent === 'Which client saw it?'`), 'signed in, a question shows its recorded text and an answer form');
   check(await page.eval(`[...document.querySelectorAll('.answer .choice')].map((c) => c.textContent).join('|') === 'Rust client (the agent’s default)|Python client'`), 'the options come from the question, with its default named');
   await page.eval(`document.querySelector('.answer').requestSubmit(); true`);

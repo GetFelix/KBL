@@ -33,6 +33,13 @@ fn done_with(item: &str, usage: Vec<Usage>, floor_micros: u64) -> WorkRecord {
     }
 }
 
+/// `held_root` on a log raised to format 9, where a price may carry `as_of`.
+fn raised9() -> Log {
+    let mut l = held_root();
+    l.person(WorkRecord::FormatRaised { to: 9 });
+    l
+}
+
 /// `held_root` on a log raised to format 8.
 fn raised() -> Log {
     let mut l = held_root();
@@ -358,7 +365,7 @@ fn prices_in_effect_are_the_latest_that_started() {
 
 #[test]
 fn spend_lists_every_price_set_with_its_start_and_as_of() {
-    let mut l = raised();
+    let mut l = raised9();
     l.person(price("m", PriceUnit::Input, 1_000_000));
     l.person(WorkRecord::PriceSet {
         model: "m".into(),
@@ -391,7 +398,7 @@ fn spend_lists_every_price_set_with_its_start_and_as_of() {
 
 #[test]
 fn a_malformed_as_of_is_refused() {
-    let mut l = raised();
+    let mut l = raised9();
     l.person(WorkRecord::PriceSet {
         model: "m".into(),
         unit: PriceUnit::Input,
@@ -402,6 +409,55 @@ fn a_malformed_as_of_is_refused() {
     let s = fold(&l.0);
     assert_eq!(rejected(&s), [Reject::BadPrice]);
     assert!(s.spend().prices.is_empty());
+}
+
+#[test]
+fn an_impossible_as_of_day_is_refused() {
+    for day in [
+        "2026-99-99",
+        "2026-00-10",
+        "2026-02-29",
+        "2026-04-31",
+        "2026-01-00",
+    ] {
+        let mut l = raised9();
+        l.person(WorkRecord::PriceSet {
+            model: "m".into(),
+            unit: PriceUnit::Input,
+            price_micros: 1,
+            effective_from_ms: None,
+            as_of: Some(day.into()),
+        });
+        assert_eq!(rejected(&fold(&l.0)), [Reject::BadPrice], "{day}");
+    }
+    for day in ["2024-02-29", "2026-12-31", "2000-02-29"] {
+        let mut l = raised9();
+        l.person(WorkRecord::PriceSet {
+            model: "m".into(),
+            unit: PriceUnit::Input,
+            price_micros: 1,
+            effective_from_ms: None,
+            as_of: Some(day.into()),
+        });
+        assert!(rejected(&fold(&l.0)).is_empty(), "{day}");
+    }
+}
+
+#[test]
+fn two_prices_at_one_start_keep_the_later_note() {
+    let at = u64::MAX / 2;
+    let set = |micros, as_of: Option<&str>| WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: micros,
+        effective_from_ms: Some(at),
+        as_of: as_of.map(Into::into),
+    };
+    let mut l = raised9();
+    l.person(set(1, Some("2026-11-01")));
+    l.person(set(2, None));
+    let rows = fold(&l.0).spend().prices;
+    assert!(rows.iter().all(|p| p.as_of.is_none()));
 }
 
 #[test]
