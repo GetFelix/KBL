@@ -1,0 +1,27 @@
+{
+  "as_of": "2026-11-15",
+  "source": "Anthropic first-party API list prices per million tokens, copied by hand from the model overview. Check them against the pricing page before relying on them.",
+  "prices": [
+    {"model": "claude-fable-5-2", "unit": "input", "price_micros": 8000000},
+    {"model": "claude-fable-5-2", "unit": "output", "price_micros": 40000000},
+    {"model": "claude-fable-5-2", "unit": "cache_read", "price_micros": 200000},
+    {"model": "claude-opus-5-5", "unit": "input", "price_micros": 4000000},
+    {"model": "claude-opus-5-5", "unit": "output", "price_micros": 20000000},
+    {"model": "claude-opus-5-5", "unit": "cache_read", "price_micros": 200000},
+    {"model": "claude-opus-5", "unit": "input", "price_micros": 5000000},
+    {"model": "claude-opus-5", "unit": "output", "price_micros": 25000000},
+    {"model": "claude-sonnet-5-5", "unit": "input", "price_micros": 2000000},
+    {"model": "claude-sonnet-5-5", "unit": "output", "price_micros": 10000000},
+    {"model": "claude-sonnet-5-5", "unit": "cache_read", "price_micros": 100000},
+    {"model": "claude-sonnet-5", "unit": "input", "price_micros": 2000000},
+    {"model": "claude-sonnet-5", "unit": "output", "price_micros": 10000000},
+    {"model": "claude-haiku-5-5", "unit": "input", "price_micros": 100000},
+    {"model": "claude-haiku-5-5", "unit": "output", "price_micros": 500000},
+    {"model": "claude-sonnet-4-6", "unit": "input", "price_micros": 3000000},
+    {"model": "claude-sonnet-4-6", "unit": "output", "price_micros": 15000000},
+    {"model": "claude-opus-4-6", "unit": "input", "price_micros": 5000000},
+    {"model": "claude-opus-4-6", "unit": "output", "price_micros": 25000000},
+    {"model": "claude-haiku-4-5", "unit": "input", "price_micros": 1000000},
+    {"model": "claude-haiku-4-5", "unit": "output", "price_micros": 5000000}
+  ]
+}

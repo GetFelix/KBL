@@ -308,3 +308,38 @@ fn an_entry_that_used_nothing_is_left_out() {
     assert!(s.spend().by_model.is_empty());
     assert!(s.unpriced_models().is_empty());
 }
+
+#[test]
+fn prices_in_effect_are_the_latest_that_started() {
+    let mut l = raised();
+    l.person(price("m", PriceUnit::Input, 1_000_000));
+    l.person(WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: 9_000_000,
+        effective_from_ms: Some(1_000_000),
+    });
+    l.person(price("m", PriceUnit::Output, 5_000_000));
+    let s = fold(&l.0);
+    let at = |ms| {
+        s.prices_in_effect(ms)
+            .into_iter()
+            .map(|p| (p.unit, p.price_micros))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        at(u64::MAX),
+        [
+            (PriceUnit::Input, 9_000_000),
+            (PriceUnit::Output, 5_000_000)
+        ]
+    );
+    assert_eq!(
+        at(999_999),
+        [
+            (PriceUnit::Input, 1_000_000),
+            (PriceUnit::Output, 5_000_000)
+        ]
+    );
+    assert_eq!(at(0), []);
+}
