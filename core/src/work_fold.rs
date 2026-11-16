@@ -113,8 +113,9 @@ pub struct Spend {
     pub prices: Vec<PriceInEffect>,
 }
 
-/// A price in effect: the latest `price_set` for a model and unit that has
-/// started.
+/// The latest `price_set` for a model and unit at the time asked about:
+/// `prices_in_effect(now)` is what prices usage now, and `prices_in_effect(u64::MAX)`
+/// is the latest set, including one that has not started yet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceInEffect {
     pub model: String,

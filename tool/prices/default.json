@@ -1,6 +1,6 @@
 {
   "as_of": "2026-11-15",
-  "source": "Anthropic first-party API list prices per million tokens, copied by hand from the model overview. Check them against the pricing page before relying on them.",
+  "source": "Anthropic first-party API list prices per million tokens, copied by hand from the model overview. claude-haiku-5-5 is listed at its price for prompts up to 100K tokens (beyond that it is $0.50 input and $2.50 output per million), and a price here is one number per unit, so longer prompts are undercharged. Check them against the pricing page before relying on them.",
   "prices": [
     {"model": "claude-fable-5-2", "unit": "input", "price_micros": 8000000},
     {"model": "claude-fable-5-2", "unit": "output", "price_micros": 40000000},
@@ -17,6 +17,14 @@
     {"model": "claude-sonnet-5", "unit": "output", "price_micros": 10000000},
     {"model": "claude-haiku-5-5", "unit": "input", "price_micros": 100000},
     {"model": "claude-haiku-5-5", "unit": "output", "price_micros": 500000},
+    {"model": "claude-fable-5-1", "unit": "input", "price_micros": 10000000},
+    {"model": "claude-fable-5-1", "unit": "output", "price_micros": 50000000},
+    {"model": "claude-fable-5", "unit": "input", "price_micros": 10000000},
+    {"model": "claude-fable-5", "unit": "output", "price_micros": 50000000},
+    {"model": "claude-opus-4-8", "unit": "input", "price_micros": 5000000},
+    {"model": "claude-opus-4-8", "unit": "output", "price_micros": 25000000},
+    {"model": "claude-opus-4-7", "unit": "input", "price_micros": 5000000},
+    {"model": "claude-opus-4-7", "unit": "output", "price_micros": 25000000},
     {"model": "claude-sonnet-4-6", "unit": "input", "price_micros": 3000000},
     {"model": "claude-sonnet-4-6", "unit": "output", "price_micros": 15000000},
     {"model": "claude-opus-4-6", "unit": "input", "price_micros": 5000000},

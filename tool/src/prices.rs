@@ -142,10 +142,16 @@ pub(crate) fn parse(text: &str) -> Result<Table> {
     Ok(table)
 }
 
-/// What importing `table` would do against the prices `in_effect` at `now_ms`.
+/// A day this close to now (or past) is written as now. The tracker refuses a
+/// price that starts before its own clock reads, and the two clocks differ.
+const NOW_MARGIN_MS: u64 = 10 * 60 * 1000;
+
+/// What importing `table` would do. `in_effect_at(ms)` is the prices in effect
+/// at `ms`: a price for later is compared with what will be in effect on its
+/// day, so planning it again after it was written finds it already there.
 pub(crate) fn plan(
     table: &Table,
-    in_effect: &[PriceInEffect],
+    in_effect_at: &dyn Fn(u64) -> Vec<PriceInEffect>,
     now_ms: u64,
 ) -> Result<Vec<Planned>> {
     table
@@ -153,10 +159,10 @@ pub(crate) fn plan(
         .iter()
         .map(|e| {
             let from = match &e.effective_from {
-                Some(day) => Some(day_ms(day)?).filter(|ms| *ms > now_ms),
+                Some(day) => Some(day_ms(day)?).filter(|ms| *ms > now_ms + NOW_MARGIN_MS),
                 None => None,
             };
-            let current = in_effect
+            let current = in_effect_at(from.unwrap_or(now_ms))
                 .iter()
                 .find(|p| p.model == e.model && p.unit == e.unit)
                 .map(|p| p.price_micros);
@@ -223,7 +229,7 @@ pub(crate) async fn import(target: crate::felix::Target, args: ImportArgs) -> Re
         .await?;
     let now = crate::now_ms();
     let state = crate::fold_log(&records)?;
-    let planned = plan(&table, &state.prices_in_effect(now), now)?;
+    let planned = plan(&table, &|at| state.prices_in_effect(at), now)?;
 
     println!("prices as of {} ({})", table.as_of, table.source);
     let (mut wrote, mut skipped, mut differs) = (0, 0, 0);

@@ -48,7 +48,7 @@ fn a_price_in_effect_is_skipped_a_new_one_written_a_different_one_listed() {
         in_effect("a", PriceUnit::Input, 10),
         in_effect("a", PriceUnit::Output, 99),
     ];
-    let steps: Vec<_> = plan(&t, &have, NOW)
+    let steps: Vec<_> = plan(&t, &|_| have.to_vec(), NOW)
         .unwrap()
         .into_iter()
         .map(|p| p.step)
@@ -62,7 +62,7 @@ fn a_price_in_effect_is_skipped_a_new_one_written_a_different_one_listed() {
 #[test]
 fn a_differing_price_is_written_only_with_update() {
     let t = table(r#"{"model":"a","unit":"input","price_micros":10}"#);
-    let p = &plan(&t, &[in_effect("a", PriceUnit::Input, 5)], NOW).unwrap()[0];
+    let p = &plan(&t, &|_| vec![in_effect("a", PriceUnit::Input, 5)], NOW).unwrap()[0];
     assert!(!writes(p, false));
     assert!(writes(p, true));
 }
@@ -73,7 +73,7 @@ fn only_a_future_day_is_sent_as_effective_from() {
         r#"{"model":"a","unit":"input","price_micros":1,"effective_from":"2020-01-01"},
            {"model":"b","unit":"input","price_micros":1,"effective_from":"2099-01-01"}"#,
     );
-    let p = plan(&t, &[], NOW).unwrap();
+    let p = plan(&t, &|_| vec![], NOW).unwrap();
     assert_eq!(
         body(&p[0]),
         json!({"model":"a","unit":"input","price_micros":1})
@@ -129,4 +129,43 @@ fn a_bad_table_is_refused() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn a_future_price_already_scheduled_is_skipped_on_the_next_run() {
+    let t = table(r#"{"model":"a","unit":"input","price_micros":7,"effective_from":"2099-01-01"}"#);
+    let day = day_ms("2099-01-01").unwrap();
+    // The price is not in effect now (5 is), but it is on its own day.
+    let at = |ms: u64| {
+        let price = if ms >= day { 7 } else { 5 };
+        vec![in_effect("a", PriceUnit::Input, price)]
+    };
+    let p = plan(&t, &at, NOW).unwrap();
+    assert_eq!(p[0].effective_from_ms, Some(day));
+    assert_eq!(p[0].step, Step::Skip);
+    assert!(!writes(&p[0], true));
+}
+
+#[test]
+fn a_day_just_ahead_of_the_clock_is_written_as_now() {
+    let t = table(r#"{"model":"a","unit":"input","price_micros":1,"effective_from":"2026-11-16"}"#);
+    let midnight = day_ms("2026-11-16").unwrap();
+    let p = plan(&t, &|_| vec![], midnight - 60_000).unwrap();
+    assert_eq!(p[0].effective_from_ms, None);
+    let p = plan(&t, &|_| vec![], midnight - 3_600_000).unwrap();
+    assert_eq!(p[0].effective_from_ms, Some(midnight));
+}
+
+#[test]
+fn the_shipped_table_says_haiku_is_a_tiered_price() {
+    let t = parse(DEFAULT_TABLE).unwrap();
+    assert!(t.source.contains("100K"), "{}", t.source);
+    for m in [
+        "claude-fable-5-1",
+        "claude-fable-5",
+        "claude-opus-4-8",
+        "claude-opus-4-7",
+    ] {
+        assert!(t.prices.iter().any(|e| e.model == m), "{m}");
+    }
 }
