@@ -6,6 +6,7 @@
 
 mod agents;
 mod felix;
+mod prices;
 mod run;
 mod teams;
 
@@ -78,6 +79,9 @@ enum Command {
     /// Work with teams.
     #[command(subcommand)]
     Team(TeamCommand),
+    /// Import prices for the models agents report usage for.
+    #[command(subcommand)]
+    Prices(PricesCommand),
     /// Add, list and revoke a team's agents on the tracker.
     #[command(subcommand)]
     Agent(agents::AgentCommand),
@@ -93,6 +97,12 @@ enum OrgCommand {
 enum TeamCommand {
     /// Create a team's namespace and grants, then ask the tracker to serve it.
     Create(teams::CreateTeamArgs),
+}
+
+#[derive(Subcommand)]
+enum PricesCommand {
+    /// Write `price_set` records from a price table, skipping prices already in effect.
+    Import(prices::ImportArgs),
 }
 
 #[derive(Subcommand)]
@@ -156,6 +166,7 @@ async fn serve() -> Result<()> {
         Command::Work(WorkCommand::Spend) => print_spend(target).await,
         Command::Org(OrgCommand::Init(args)) => teams::org_init(target, args).await,
         Command::Team(TeamCommand::Create(args)) => teams::team_create(target, args).await,
+        Command::Prices(PricesCommand::Import(args)) => prices::import(target, args).await,
         Command::Agent(command) => agents::run(&target.namespace, command).await,
     }
 }
@@ -226,9 +237,14 @@ async fn print_spend(target: Target) -> Result<()> {
     Ok(())
 }
 
-/// The fold's spend over `records`. A record of a newer format than this build
-/// reads stops it, since every total after it would be short.
+/// The fold's spend over `records`.
 fn spend(records: &[(u64, Vec<u8>)]) -> Result<Spend> {
+    Ok(fold_log(records)?.spend())
+}
+
+/// Folds `records`. A record of a newer format than this build reads stops it,
+/// since every total after it would be short.
+fn fold_log(records: &[(u64, Vec<u8>)]) -> Result<State> {
     let mut state = State::default();
     for (offset, payload) in records {
         match read(payload) {
@@ -240,7 +256,7 @@ fn spend(records: &[(u64, Vec<u8>)]) -> Result<Spend> {
             Err(ReadError::Malformed(_)) => {}
         }
     }
-    Ok(state.spend())
+    Ok(state)
 }
 
 fn now_ms() -> u64 {

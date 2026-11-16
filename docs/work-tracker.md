@@ -1486,6 +1486,40 @@ so leave it out for "now". Prices are never edited: a new `price_set` for the
 same model and unit takes over from its time on. The tracker fetches no prices
 from vendors.
 
+**Importing prices.** `kbl-tool prices import` writes `price_set` records from
+a price table, so a fresh install is not empty:
+
+```bash
+export KBL_TRACKER_TOKEN=...          # a person's token; only a person may set a price
+kbl-tool prices import --default      # the table shipped with this build
+kbl-tool prices import my-prices.json --dry-run
+```
+
+`--default` is `tool/prices/default.json`: Anthropic's list prices, dated
+(`as_of`), with `source` saying where they were copied from. A person keeps it
+by hand; nothing fetches it. It prices only what the vendor lists, so a model or
+unit it does not list (`cache_write`, for one) stays unpriced and is charged the
+floor until you add it. Prices are one number per unit, so a vendor's tiers are
+not expressed: `claude-haiku-5-5` is listed at its price for prompts up to 100K
+tokens ($0.10 input, $0.50 output per million; beyond that $0.50 and $2.50), and
+longer prompts are undercharged. Check it against the vendor's pricing page.
+
+A table is JSON: `as_of`, `source`, and `prices`, each with `model`, `unit` and
+`price_micros`, and optionally `effective_from` as `YYYY-MM-DD` (UTC). A day that
+has not come yet is sent as a price for later. A day that has passed, or is
+within ten minutes, means now, because a price cannot reach back and the tool's
+clock and the tracker's differ. The import reads `work.events` first and skips a
+price that is already in effect (a price for later is compared with what is in
+effect on its own day), so running it again writes nothing. A
+price that differs from the one in effect is listed and left alone, in case a
+person set it on purpose; `--update` writes it.
+
+To follow a vendor's price change, edit the table (or your own copy), run the
+import with `--update`, and the new price takes over from that moment. Usage
+already reported keeps the price it was charged at. The import needs the log at
+[format 8](upgrades.md#formats); the tracker refuses it below that. If it stops
+partway, run it again.
+
 **How a report is charged.** The fold prices each report when it folds it,
 with the prices in effect at the time the report was written. A later price
 change does not reprice history. The report is charged its priced usage, or

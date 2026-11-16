@@ -121,3 +121,13 @@ fn agent_list_shows_holds_and_revoked_agents() {
         ["no agents"]
     );
 }
+
+#[test]
+fn prices_import_takes_a_file_or_the_default_not_both_or_neither() {
+    assert!(Cli::try_parse_from(["kbl-tool", "prices", "import", "p.json"]).is_ok());
+    assert!(
+        Cli::try_parse_from(["kbl-tool", "prices", "import", "--default", "--dry-run"]).is_ok()
+    );
+    assert!(Cli::try_parse_from(["kbl-tool", "prices", "import"]).is_err());
+    assert!(Cli::try_parse_from(["kbl-tool", "prices", "import", "p.json", "--default"]).is_err());
+}

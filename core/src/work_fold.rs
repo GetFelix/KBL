@@ -109,6 +109,18 @@ pub struct Spend {
     pub unpriced: BTreeSet<String>,
 }
 
+/// The latest `price_set` for a model and unit at the time asked about:
+/// `prices_in_effect(now)` is what prices usage now, and `prices_in_effect(u64::MAX)`
+/// is the latest set, including one that has not started yet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriceInEffect {
+    pub model: String,
+    pub unit: PriceUnit,
+    pub price_micros: u64,
+    /// When this price took effect, in milliseconds.
+    pub since_ms: u64,
+}
+
 /// One model's usage and what the priced part of it cost.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelSpend {
@@ -402,7 +414,7 @@ const MAX_UNPRICED_MODELS: usize = 32;
 const MAX_MODEL_LEN: usize = 100;
 
 /// A model id as vendors write them: letters, digits and `.-_:/@`.
-fn model_name_ok(m: &str) -> bool {
+pub fn model_name_ok(m: &str) -> bool {
     !m.is_empty()
         && m.len() <= MAX_MODEL_LEN
         && m.bytes()
@@ -1218,6 +1230,26 @@ impl State {
         if let Some(b) = self.budgets.get_mut(root) {
             b.cost_left_micros = b.cost_left_micros.saturating_sub(micros);
         }
+    }
+
+    /// Every price in effect at `at_ms`, by model and unit.
+    pub fn prices_in_effect(&self, at_ms: u64) -> Vec<PriceInEffect> {
+        let mut out = Vec::new();
+        for (model, units) in &self.prices {
+            for (unit, list) in units {
+                if let Some((since_ms, price_micros)) =
+                    list.iter().rev().find(|(from, _)| *from <= at_ms)
+                {
+                    out.push(PriceInEffect {
+                        model: model.clone(),
+                        unit: *unit,
+                        price_micros: *price_micros,
+                        since_ms: *since_ms,
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// The price of one unit of `model` for usage logged at `at_ms`: the latest
