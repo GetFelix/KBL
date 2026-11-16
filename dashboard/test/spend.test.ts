@@ -90,13 +90,13 @@ test('an unpriced model shows its usage and no cost, and is never counted as $0'
 });
 
 test('a model waiting for a price is listed even without usage detail', () => {
-  const t = tables({ total_micros: 0, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: {}, unpriced: ['x'] }, []);
+  const t = tables({ total_micros: 0, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: {}, unpriced: [{ model: 'x', unit: 'input' }] }, []);
   assert.deepEqual(t.models.map((m) => [m.model, m.unpriced, m.usage]), [['x', true, '']]);
 });
 
 test('a model with tokens and credits, partly priced, shows both units and a partial cost', () => {
   const m = { input: 1000, output: 0, cache_read: 0, cache_write: 0, aic_milli: 2500, cost_micros: 15_000, unpriced: true };
-  const t = tables({ total_micros: 100_000, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: { mix: m }, unpriced: ['mix'] }, []);
+  const t = tables({ total_micros: 100_000, by_root: {}, by_review_tier: {}, by_repo: {}, by_model: { mix: m }, unpriced: [{ model: 'mix', unit: 'input' }] }, []);
   assert.deepEqual(t.models, [{ model: 'mix', unit: 'tokens + AIC', usage: '1,000 input; 2.5 credits', micros: 15_000, unpriced: true }]);
 });
 

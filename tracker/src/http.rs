@@ -352,6 +352,7 @@ struct PriceBody {
     unit: PriceUnit,
     price_micros: u64,
     effective_from_ms: Option<u64>,
+    as_of: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -989,6 +990,7 @@ async fn price<B: Broker>(call: Call<B>, Json(b): Json<PriceBody>) -> Response {
         unit: b.unit,
         price_micros: b.price_micros,
         effective_from_ms: b.effective_from_ms,
+        as_of: b.as_of,
     };
     as_person(&call, record).await
 }

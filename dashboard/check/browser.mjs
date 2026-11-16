@@ -51,6 +51,7 @@ const fakeGateway = (log, mode) => `(() => {
   const ROUTES = {
     '/v1/work/proposals/accept': (b) => ({ kind: 'accepted', item: b.item, tier: b.tier }),
     '/v1/work/proposals/reject': (b) => ({ kind: 'rejected', item: b.item }),
+    '/v1/work/prices': (b) => ({ v: 8, kind: 'price_set', model: b.model, unit: b.unit, price_micros: b.price_micros, effective_from_ms: b.effective_from_ms }),
     '/v1/work/tier': (b) => ({ kind: 'tier_changed', item: b.item, tier: b.tier }),
     '/v1/work/close': (b) => ({ kind: 'closed', item: b.item, why: b.why }),
     '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: b.text ?? { text: '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
@@ -173,15 +174,23 @@ try {
     check(await page.eval(`/lower bound/.test(document.querySelector('.spend-note').textContent)`), `${theme}: spend says it is a lower bound`);
     check(await page.eval(`document.querySelectorAll('#spend-roots ~ table tbody tr').length > 0 && document.querySelectorAll('#spend-repos ~ table tbody tr').length > 0`), `${theme}: spend lists roots and repos`);
     check(await page.eval(`document.querySelector('#spend-tiers ~ table tbody tr[data-key=fast] td')?.textContent === '$0.15'`), `${theme}: spend lists the reviewer tier from the fixture's review`);
-    check(await page.eval(`document.querySelector('#spend-models ~ table tbody tr[data-key="claude-opus-5-5"]')?.textContent === 'claude-opus-5-5tokens20,000 input, 4,000 output$0.60'`), `${theme}: spend lists a priced model with its usage and cost`);
+    check(await page.eval(`document.querySelector('#spend-models ~ table tbody tr[data-key="claude-opus-5-5"]')?.textContent === 'claude-opus-5-5 check pricingtokens20,000 input, 4,000 output$0.60'`), `${theme}: spend lists a priced model with its usage, cost and the stale-price hint (the fixture's prices date from 2023)`);
     check(await page.eval(`(() => { const r = document.querySelector('#spend-models ~ table tbody tr[data-key="gpt-6"]'); return r?.textContent === 'gpt-6AIC1.5 creditsunpriced'; })()`), `${theme}: spend shows an unpriced model as unpriced with its usage, not $0`);
     check(await focused('dialog.spend button'), `${theme}: the spend dialog takes focus`);
     await axe(`spend ${theme}`);
     await shoot(`spend-${theme}`);
     await page.eval(`document.querySelector('dialog.spend .dialog-body').scrollTop = 1e6`);
     await shoot(`spend-models-${theme}`);
+    // Models and prices: reached from Spend, lists every model seen in usage with its unit rows and history.
+    await page.eval(`[...document.querySelectorAll('dialog.spend button')].find((b) => b.textContent === 'Models and prices').click()`);
+    check(await page.eval(`document.querySelector('dialog.prices').open && !document.querySelector('dialog.spend').open`), `${theme}: Models and prices opens from Spend`);
+    check(await page.eval(`!!document.querySelector('dialog.prices section[data-model="claude-opus-5-5"] tr[data-unit=input]') && !!document.querySelector('dialog.prices section[data-model="gpt-6"]')`), `${theme}: the page lists priced and unpriced models seen in usage`);
+    check(await page.eval(`document.querySelector('dialog.prices section[data-model="claude-opus-5-5"] tr[data-unit=input]').textContent.includes('person')`), `${theme}: a price shows its source`);
+    check(await page.eval(`document.querySelector('dialog.prices section[data-model="claude-opus-5-5"] details summary').textContent.startsWith('History')`), `${theme}: each model has its price history`);
+    await axe(`prices ${theme}`);
+    await shoot(`prices-${theme}`);
     await press(page, 'Escape');
-    check(!(await page.eval(`document.querySelector('dialog.spend').open`)), `${theme}: Esc closes spend`);
+    check(!(await page.eval(`document.querySelector('dialog.prices').open`)), `${theme}: Esc closes Models and prices`);
   }
 
   await open(connected);
@@ -604,6 +613,34 @@ try {
   await shoot('sign-in-dark');
   await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
   await page.waitFor(`!document.querySelector('.sign-in-dialog').open`);
+  // Changing a price in effect: Save waits for the confirm, and a price changed underneath asks again.
+  const row = `document.querySelector('dialog.prices button[data-price-row="claude-opus-5-5|input"]')`;
+  const saveOff = `document.querySelector('dialog.prices form.price-edit .button:not(.ghost)').disabled`;
+  const typePrice = (v) => page.eval(`(() => { const i = document.querySelector('#price-input'); i.value = ${JSON.stringify(v)}; i.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+  await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Spend').click(); [...document.querySelectorAll('dialog.spend button')].find((b) => b.textContent === 'Models and prices').click(); ${row}.click(); true`);
+  check(await focused('#price-input'), 'Change moves focus into the price field');
+  await typePrice('20');
+  check(await page.eval(saveOff), 'Save stays disabled until the confirm is ticked');
+  await page.eval(`document.querySelector('#price-confirm').click(); true`);
+  check(!(await page.eval(saveOff)), 'ticking the confirm enables Save');
+  await page.eval(`document.querySelector('#price-confirm').click(); true`);
+  check(await page.eval(saveOff), 'unticking the confirm disables Save again');
+  await page.eval(`document.querySelector('#price-confirm').click(); window.__push({ v: 8, actor: 'person', by: 'maintainer', at_ms: Date.now(), kind: 'price_set', model: 'claude-opus-5-5', unit: 'input', price_micros: 17_000_000 }); true`);
+  await new Promise((ok) => setTimeout(ok, 300));
+  const calls = await page.eval(`window.__tracker.calls.length`);
+  await page.eval(`document.querySelector('dialog.prices form.price-edit .button:not(.ghost)').click(); true`);
+  check((await page.eval(`window.__tracker.calls.length`)) === calls, 'a price changed underneath is not posted on the old confirm');
+  check(await page.eval(`!document.querySelector('#price-confirm').checked && ${saveOff} && document.querySelector('dialog.prices form.price-edit [role=status]').textContent.includes('$17.00')`), 'it shows the new old-to-new change and asks for the confirm again');
+  await page.eval(`document.querySelector('#price-confirm').click(); document.querySelector('dialog.prices form.price-edit .button:not(.ghost)').click(); true`);
+  await page.waitFor(`window.__tracker.calls.at(-1).url === '/v1/work/prices'`);
+  check(await page.eval(`window.__tracker.calls.at(-1).body.price_micros === 20_000_000`), 'the confirmed change is posted');
+  await new Promise((ok) => setTimeout(ok, 300));
+  check(await page.eval(`document.querySelector('dialog.prices [role=status]:last-child')?.textContent.startsWith('Price set for claude-opus-5-5')`), 'the saved message stays on the page after the redraw');
+  check(await page.eval(`document.activeElement === ${row}`), 'after Save focus returns to the row’s Change button');
+  await page.eval(`${row}.click(); true`);
+  await page.eval(`[...document.querySelectorAll('dialog.prices form.price-edit .button.ghost')].find((b) => b.textContent === 'Cancel').click(); true`);
+  check(await page.eval(`document.activeElement === ${row}`), 'Cancel returns focus to the row’s Change button');
+  await press(page, 'Escape');
   check(await page.eval(`!!document.querySelector('.actions form.answer') && document.querySelector('.answer .question').textContent === 'Which client saw it?'`), 'signed in, a question shows its recorded text and an answer form');
   check(await page.eval(`[...document.querySelectorAll('.answer .choice')].map((c) => c.textContent).join('|') === 'Rust client (the agent’s default)|Python client'`), 'the options come from the question, with its default named');
   await page.eval(`document.querySelector('.answer').requestSubmit(); true`);

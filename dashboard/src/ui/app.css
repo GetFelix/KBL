@@ -211,3 +211,12 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .spend-table .usage { overflow-wrap: anywhere; }
 .spend-table .unpriced { color: var(--warn, var(--muted)); font-style: italic; }
 .spend-table a { color: var(--text); }
+.price-card { border: 1px solid var(--border, currentColor); border-radius: 6px; padding: 0.75rem 1rem; margin: 0.75rem 0; }
+.price-list { list-style: none; margin: 0.5rem 0 0; padding: 0; display: grid; gap: 0.5rem; }
+.price-list li { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; justify-content: space-between; }
+.price-model { font-family: var(--mono, monospace); }
+.price-form { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+.stale-price { white-space: nowrap; }
+.price-model-section { margin: 1rem 0; }
+.price-edit { border: 1px solid var(--border, currentColor); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+.price-model-section details { margin-top: 0.5rem; }

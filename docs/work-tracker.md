@@ -1517,7 +1517,7 @@ person set it on purpose; `--update` writes it.
 To follow a vendor's price change, edit the table (or your own copy), run the
 import with `--update`, and the new price takes over from that moment. Usage
 already reported keeps the price it was charged at. The import needs the log at
-[format 8](upgrades.md#formats); the tracker refuses it below that. If it stops
+[format 9](upgrades.md#formats), since it sends each table's `as_of`; the tracker refuses it below that. If it stops
 partway, run it again.
 
 **How a report is charged.** The fold prices each report when it folds it,
@@ -1537,10 +1537,28 @@ recorded, not refused, and never guessed. Until a price exists the report is
 charged its floor (or its priced usage, if that is more), so work goes on. The
 model is listed in `unpriced` in the spend view, so a person sees it needs a
 price. When a person sets one that takes effect at once, the fold prices the
-waiting usage with it and draws the difference from the root's budget. A price
-set for a later time prices only usage from that time on. At most 32 models may
+waiting usage with it and draws the difference from the root's budget. The dashboard lists these models in a card on Spend and lets a person set a price there; it
+is not a Needs-you item. A price set for a later time prices only usage from that time on. At most 32 models may
 wait for a price at once; a report that would add another is refused with
 `bad_usage` until a person prices some.
+
+**Old prices.** The spend view also lists every price set (`prices`): model, unit,
+price, when it starts, and `as_of` when an import recorded the vendor day it copied
+it from. The dashboard shows "check pricing" next to a model whose oldest price in
+effect is more than 90 days old, counted from `as_of` when there is one and from
+the start otherwise (`?price_age_days=N` changes it). It is a hint only.
+
+**Models and prices.** The dashboard's Models and prices page (from Spend, or the
+palette) lists every model seen in recorded usage, priced or not, with each unit's
+price in effect, when it started, where it came from (an import and its `as_of`
+day, or a person), the usage accrued, any price set for later, and the model's
+full price history. A signed-in person sets or changes a price there with the same
+`POST /v1/work/prices`: a day typed in the form that has not come yet is sent as
+`effective_from_ms`, anything else means now. Changing a price in effect shows old
+to new and waits for a confirm; usage already charged keeps its price. A price of
+0 is accepted, by the import and the page alike, for a model that costs nothing.
+The import sends the table's `as_of` with each price (`as_of` on `price_set`, a
+real `YYYY-MM-DD` day that a person's own price leaves out). A price with `as_of` is [format 9](upgrades.md#formats); one without stays format 8. Two prices with the same start share one `as_of`: the later record's.
 
 **Budgets.** A root's cost budget is in the same derived cost, in millionths of
 a dollar, and is shared by every model and unit in the tree. The budget is
@@ -1561,7 +1579,7 @@ root and everything under it), per reviewer tier (reviews only) and per repo
 reads lands). `by_model` gives each model's usage and the cost of its priced
 part. The total can be more than their sum: a report charged its floor adds
 what the floor came to above its priced usage, and costs reported before
-format 8 count only in the total. `unpriced` names the models still waiting for a price. The
+format 8 count only in the total. `unpriced` names each model and unit still waiting for a price. The
 wasm fold exposes the same numbers via `Folder.spend_json()`, and the dashboard's
 Spend dialog shows them per root, reviewer tier, repo and model.
 

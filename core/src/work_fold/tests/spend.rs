@@ -19,6 +19,7 @@ fn price(model: &str, unit: PriceUnit, price_micros: u64) -> WorkRecord {
         unit,
         price_micros,
         effective_from_ms: None,
+        as_of: None,
     }
 }
 
@@ -30,6 +31,13 @@ fn done_with(item: &str, usage: Vec<Usage>, floor_micros: u64) -> WorkRecord {
         usage,
         floor_micros,
     }
+}
+
+/// `held_root` on a log raised to format 9, where a price may carry `as_of`.
+fn raised9() -> Log {
+    let mut l = held_root();
+    l.person(WorkRecord::FormatRaised { to: 9 });
+    l
 }
 
 /// `held_root` on a log raised to format 8.
@@ -94,6 +102,7 @@ fn a_price_set_for_later_leaves_usage_before_it_on_the_old_price() {
         unit: PriceUnit::Input,
         price_micros: 9_000_000,
         effective_from_ms: Some(1_000_000),
+        as_of: None,
     });
     l.agent("w1", done_with("r1", vec![tokens("m", 100_000, 0)], 0));
     let s = fold(&l.0);
@@ -115,7 +124,14 @@ fn unpriced_usage_costs_the_floor_until_a_price_comes() {
     assert_eq!(s.unpriced_models().into_iter().collect::<Vec<_>>(), ["new"]);
     let spend = s.spend();
     assert!(spend.by_model["new"].unpriced);
-    assert_eq!(spend.unpriced.iter().collect::<Vec<_>>(), ["new"]);
+    assert_eq!(
+        spend
+            .unpriced
+            .iter()
+            .map(|u| u.model.as_str())
+            .collect::<Vec<_>>(),
+        ["new"]
+    );
 
     l.person(price("new", PriceUnit::Input, 2_000_000));
     let s = fold(&l.0);
@@ -208,6 +224,7 @@ fn only_a_person_sets_a_price_and_never_backdated() {
         unit: PriceUnit::Input,
         price_micros: 1,
         effective_from_ms: Some(0),
+        as_of: None,
     });
     let s = fold(&l.0);
     assert_eq!(
@@ -268,6 +285,7 @@ fn a_first_price_set_for_later_leaves_earlier_usage_unpriced() {
         unit: PriceUnit::Input,
         price_micros: 9_000_000,
         effective_from_ms: Some(1_000_000),
+        as_of: None,
     });
     let s = fold(&l.0);
     assert_eq!(s.items[&id("r1")].cost_micros, 0);
@@ -318,6 +336,7 @@ fn prices_in_effect_are_the_latest_that_started() {
         unit: PriceUnit::Input,
         price_micros: 9_000_000,
         effective_from_ms: Some(1_000_000),
+        as_of: None,
     });
     l.person(price("m", PriceUnit::Output, 5_000_000));
     let s = fold(&l.0);
@@ -342,4 +361,128 @@ fn prices_in_effect_are_the_latest_that_started() {
         ]
     );
     assert_eq!(at(0), []);
+}
+
+#[test]
+fn spend_lists_every_price_set_with_its_start_and_as_of() {
+    let mut l = raised9();
+    l.person(price("m", PriceUnit::Input, 1_000_000));
+    l.person(WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: 2_000_000,
+        effective_from_ms: Some(u64::MAX / 2),
+        as_of: Some("2026-11-15".into()),
+    });
+    let spend = fold(&l.0).spend();
+    let rows: Vec<_> = spend
+        .prices
+        .iter()
+        .map(|p| {
+            (
+                p.price_micros,
+                p.effective_from_ms == u64::MAX / 2,
+                p.as_of.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (1_000_000, false, None),
+            (2_000_000, true, Some("2026-11-15"))
+        ]
+    );
+    assert!(fold(&raised().0).spend().prices.is_empty());
+}
+
+#[test]
+fn a_malformed_as_of_is_refused() {
+    let mut l = raised9();
+    l.person(WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: 1,
+        effective_from_ms: None,
+        as_of: Some("last tuesday".into()),
+    });
+    let s = fold(&l.0);
+    assert_eq!(rejected(&s), [Reject::BadPrice]);
+    assert!(s.spend().prices.is_empty());
+}
+
+#[test]
+fn an_impossible_as_of_day_is_refused() {
+    for day in [
+        "2026-99-99",
+        "2026-00-10",
+        "2026-02-29",
+        "2026-04-31",
+        "2026-01-00",
+    ] {
+        let mut l = raised9();
+        l.person(WorkRecord::PriceSet {
+            model: "m".into(),
+            unit: PriceUnit::Input,
+            price_micros: 1,
+            effective_from_ms: None,
+            as_of: Some(day.into()),
+        });
+        assert_eq!(rejected(&fold(&l.0)), [Reject::BadPrice], "{day}");
+    }
+    for day in ["2024-02-29", "2026-12-31", "2000-02-29"] {
+        let mut l = raised9();
+        l.person(WorkRecord::PriceSet {
+            model: "m".into(),
+            unit: PriceUnit::Input,
+            price_micros: 1,
+            effective_from_ms: None,
+            as_of: Some(day.into()),
+        });
+        assert!(rejected(&fold(&l.0)).is_empty(), "{day}");
+    }
+}
+
+#[test]
+fn two_prices_at_one_start_keep_the_later_note() {
+    let at = u64::MAX / 2;
+    let set = |micros, as_of: Option<&str>| WorkRecord::PriceSet {
+        model: "m".into(),
+        unit: PriceUnit::Input,
+        price_micros: micros,
+        effective_from_ms: Some(at),
+        as_of: as_of.map(Into::into),
+    };
+    let mut l = raised9();
+    l.person(set(1, Some("2026-11-01")));
+    l.person(set(2, None));
+    let rows = fold(&l.0).spend().prices;
+    assert!(rows.iter().all(|p| p.as_of.is_none()));
+}
+
+#[test]
+fn unpriced_names_the_unit_that_waits() {
+    let mut l = raised();
+    l.person(price("m", PriceUnit::Input, 1_000_000));
+    l.agent(
+        "w1",
+        done_with(
+            "r1",
+            vec![Usage::Tokens {
+                model: "m".into(),
+                input: 1_000,
+                output: 1_000,
+                cache_read: 0,
+                cache_write: 0,
+            }],
+            0,
+        ),
+    );
+    let waiting: Vec<_> = fold(&l.0)
+        .spend()
+        .unpriced
+        .into_iter()
+        .map(|u| (u.model, u.unit))
+        .collect();
+    assert_eq!(waiting, [("m".to_owned(), PriceUnit::Output)]);
 }

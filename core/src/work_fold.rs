@@ -104,9 +104,33 @@ pub struct Spend {
     #[serde(default)]
     pub by_model: BTreeMap<String, ModelSpend>,
     /// Models with usage that has no price yet. That usage is charged the
-    /// floor until a `price_set` prices it.
+    /// floor until a `price_set` prices it, with the unit that waits.
     #[serde(default)]
-    pub unpriced: BTreeSet<String>,
+    pub unpriced: BTreeSet<ModelUnit>,
+    /// Every price set, by model, unit and start, so a page can show what is in
+    /// effect, what is scheduled and how it changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prices: Vec<PriceEntry>,
+}
+
+/// A model's unit, as the usage that waits for a price names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ModelUnit {
+    pub model: String,
+    pub unit: PriceUnit,
+}
+
+/// One `price_set` as recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PriceEntry {
+    pub model: String,
+    pub unit: PriceUnit,
+    pub price_micros: u64,
+    /// When it starts, in milliseconds.
+    pub effective_from_ms: u64,
+    /// The vendor day an import copied it from; none for a price a person typed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub as_of: Option<String>,
 }
 
 /// The latest `price_set` for a model and unit at the time asked about:
@@ -413,6 +437,38 @@ const MAX_UNPRICED_MODELS: usize = 32;
 /// Longest model name a report or price may carry.
 const MAX_MODEL_LEN: usize = 100;
 
+/// A real calendar day written `YYYY-MM-DD`, as an import writes the day it
+/// copied prices. The tool and the dashboard refuse the same impossible days.
+fn day_ok(d: &str) -> bool {
+    let shaped = d.len() == 10
+        && d.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        });
+    if !shaped {
+        return false;
+    }
+    let (Ok(y), Ok(m), Ok(day)) = (
+        d[..4].parse::<u32>(),
+        d[5..7].parse::<u32>(),
+        d[8..].parse::<u32>(),
+    ) else {
+        return false;
+    };
+    let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+    let last = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=last).contains(&day)
+}
+
 /// A model id as vendors write them: letters, digits and `.-_:/@`.
 pub fn model_name_ok(m: &str) -> bool {
     !m.is_empty()
@@ -640,6 +696,10 @@ pub struct State {
     /// Per model and unit, `(effective_from_ms, price_micros)` in effect order.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     prices: BTreeMap<String, BTreeMap<PriceUnit, Vec<(u64, u64)>>>,
+    /// The `as_of` of a price, by model, unit and start. Two prices with the
+    /// same start share one note: the later record's wins, as its price does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    price_as_of: BTreeMap<String, BTreeMap<PriceUnit, BTreeMap<u64, String>>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     unpriced: Vec<Unpriced>,
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
@@ -762,9 +822,30 @@ impl State {
     /// Spend per root, reviewer tier and repo. Items that cost nothing are left out.
     pub fn spend(&self) -> Spend {
         let mut s = Spend::default();
+        for (model, units) in &self.prices {
+            for (unit, list) in units {
+                for (from, price_micros) in list {
+                    s.prices.push(PriceEntry {
+                        model: model.clone(),
+                        unit: *unit,
+                        price_micros: *price_micros,
+                        effective_from_ms: *from,
+                        as_of: self
+                            .price_as_of
+                            .get(model)
+                            .and_then(|u| u.get(unit))
+                            .and_then(|d| d.get(from))
+                            .cloned(),
+                    });
+                }
+            }
+        }
         for u in &self.unpriced {
             s.unpriced
-                .extend(u.waiting.iter().map(|(model, _, _)| model.clone()));
+                .extend(u.waiting.iter().map(|(model, unit, _)| ModelUnit {
+                    model: model.clone(),
+                    unit: *unit,
+                }));
         }
         for it in self
             .items
@@ -2121,14 +2202,38 @@ impl State {
                 unit,
                 price_micros,
                 effective_from_ms,
+                as_of,
             } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);
                 }
                 let from = effective_from_ms.unwrap_or(rec.at_ms);
                 // A price never reaches back over usage already logged.
-                if !model_name_ok(model) || from < rec.at_ms {
+                if !model_name_ok(model)
+                    || from < rec.at_ms
+                    || as_of.as_deref().is_some_and(|d| !day_ok(d))
+                {
                     return Err(Reject::BadPrice);
+                }
+                match as_of {
+                    Some(day) => {
+                        self.price_as_of
+                            .entry(model.clone())
+                            .or_default()
+                            .entry(*unit)
+                            .or_default()
+                            .insert(from, day.clone());
+                    }
+                    // A later price at the same start replaces the note too.
+                    None => {
+                        if let Some(notes) = self
+                            .price_as_of
+                            .get_mut(model)
+                            .and_then(|u| u.get_mut(unit))
+                        {
+                            notes.remove(&from);
+                        }
+                    }
                 }
                 let list = self
                     .prices
