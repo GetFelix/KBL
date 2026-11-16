@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -206,11 +206,9 @@ fn non_ascii_around_a_secret() {
     assert_eq!(redact(&text), "\u{e9}t\u{e9} [redacted] \u{1f431}");
 }
 
-#[test]
-fn adversarial_input_stays_linear() {
-    // Each is 10 MB of what would make a scanner backtrack or rescan.
-    let mb = 10 * 1024 * 1024;
-    let inputs = [
+/// Inputs that would make a scanner backtrack or rescan, `mb` bytes each.
+fn adversarial(mb: usize) -> Vec<String> {
+    vec![
         "-----BEGIN RSA PRIVATE KEY-----".repeat(mb / 31),
         "-----BEGIN RSA PRIVATE KEY-----\n-----END EC PRIVATE KEY-----\n".repeat(mb / 60),
         format!("-----BEGIN RSA PRIVATE KEY-----{}", "\n".repeat(mb)),
@@ -247,13 +245,35 @@ fn adversarial_input_stays_linear() {
         format!("sk-{}", "a-".repeat(mb / 2)),
         "\\n".repeat(mb / 2),
         "A".repeat(mb),
-    ];
-    for text in inputs {
-        let start = Instant::now();
-        let _ = redact(&text);
-        let took = start.elapsed();
-        // Generous for a debug build on a loaded runner; quadratic would take hours.
-        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
+    ]
+}
+
+fn time_redact(text: &str) -> Duration {
+    let start = Instant::now();
+    let _ = redact(text);
+    start.elapsed()
+}
+
+#[test]
+fn adversarial_input_stays_linear() {
+    // Compare one input at two sizes so the check does not depend on runner
+    // speed. Linear gives about 4x for 4x the bytes; quadratic gives 16x.
+    let small = adversarial(512 * 1024);
+    let large = adversarial(2 * 1024 * 1024);
+    // Timer noise swamps tiny runs, so the baseline never counts below this.
+    let floor = Duration::from_millis(20);
+    for (s, l) in small.iter().zip(&large) {
+        let _ = time_redact(s);
+        let t_small = time_redact(s).min(time_redact(s)).max(floor);
+        let t_large = time_redact(l);
+        let ratio = t_large.as_secs_f64() / t_small.as_secs_f64();
+        assert!(
+            ratio < 10.0,
+            "{:?} took {t_small:?} then {t_large:?} for 4x the bytes",
+            &s[..20]
+        );
+        // Hang guard only.
+        assert!(t_large.as_secs() < 60, "{:?} took {t_large:?}", &s[..20]);
     }
 }
 
