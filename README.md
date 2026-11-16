@@ -7,6 +7,18 @@
 
 # KBL
 
+<p align="center">
+  <a href="https://github.com/GetFelix/KBL/actions/workflows/ci.yml">
+    <img src="https://github.com/GetFelix/KBL/actions/workflows/ci.yml/badge.svg?branch=main&event=push" alt="CI" />
+  </a>
+  <a href="https://github.com/GetFelix/KBL/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT" />
+  </a>
+  <a href="https://www.rust-lang.org/">
+    <img src="https://img.shields.io/badge/rust%20min-1.97-blue" alt="Minimum supported Rust 1.97" />
+  </a>
+</p>
+
 KBL (Kanban By Log, pronounced Kibble) is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix). It pulls bugs
 in from GitHub, Azure DevOps or Jira, hands each piece of work to one agent, keeps dependencies and priorities,
 and shows the queue in a dashboard. Agents from any vendor take work from it through an MCP server,
