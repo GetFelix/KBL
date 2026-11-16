@@ -1499,13 +1499,18 @@ kbl-tool prices import my-prices.json --dry-run
 (`as_of`), with `source` saying where they were copied from. A person keeps it
 by hand; nothing fetches it. It prices only what the vendor lists, so a model or
 unit it does not list (`cache_write`, for one) stays unpriced and is charged the
-floor until you add it. Check it against the vendor's pricing page.
+floor until you add it. Prices are one number per unit, so a vendor's tiers are
+not expressed: `claude-haiku-5-5` is listed at its price for prompts up to 100K
+tokens ($0.10 input, $0.50 output per million; beyond that $0.50 and $2.50), and
+longer prompts are undercharged. Check it against the vendor's pricing page.
 
 A table is JSON: `as_of`, `source`, and `prices`, each with `model`, `unit` and
 `price_micros`, and optionally `effective_from` as `YYYY-MM-DD` (UTC). A day that
-has not come yet is sent as a price for later. A day that has passed means now,
-because a price cannot reach back. The import reads `work.events` first and
-skips a price that is already in effect, so running it again writes nothing. A
+has not come yet is sent as a price for later. A day that has passed, or is
+within ten minutes, means now, because a price cannot reach back and the tool's
+clock and the tracker's differ. The import reads `work.events` first and skips a
+price that is already in effect (a price for later is compared with what is in
+effect on its own day), so running it again writes nothing. A
 price that differs from the one in effect is listed and left alone, in case a
 person set it on purpose; `--update` writes it.
 
