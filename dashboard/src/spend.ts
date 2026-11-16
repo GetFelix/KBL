@@ -15,7 +15,19 @@ export interface Spend {
   by_model: Record<string, ModelSpend>;
   /** Models with usage that has no price yet. */
   unpriced: string[];
+  /** The latest price per model and unit, with when it started. Absent on an older fold. */
+  prices?: PriceSince[];
 }
+
+export interface PriceSince {
+  model: string;
+  unit: PriceUnit;
+  price_micros: number;
+  /** Milliseconds since the epoch. */
+  since_ms: number;
+}
+
+export type PriceUnit = 'input' | 'output' | 'cache_read' | 'cache_write' | 'aic';
 
 /** One model's usage; `aic_milli` is thousandths of an AI credit. */
 export interface ModelSpend {
@@ -118,4 +130,40 @@ export function tables(s: Spend, items: readonly ItemRow[]): SpendTables {
     }),
     models,
   };
+}
+
+/** A price older than this many days gets a "check pricing" hint. `?price_age_days=N` changes it. */
+export const DEFAULT_PRICE_AGE_DAYS = 90;
+const DAY_MS = 86_400_000;
+
+/** The age in days from the address's `price_age_days`, or the default when it is missing or not a whole number above 0. */
+export function priceAgeDays(raw: string | null): number {
+  const n = raw === null || !/^\d+$/.test(raw) ? 0 : Number(raw);
+  return n > 0 ? n : DEFAULT_PRICE_AGE_DAYS;
+}
+
+/** The models whose oldest price started more than `ageDays` before `now`, each with that age in whole days. A price set for later is not old. No block, only a hint. */
+export function stalePrices(s: Pick<Spend, 'prices'>, now: number, ageDays: number): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const p of s.prices ?? []) {
+    const age = Math.floor((now - p.since_ms) / DAY_MS);
+    if (age > ageDays && age > (out.get(p.model) ?? -1)) out.set(p.model, age);
+  }
+  return out;
+}
+
+/** The prices a model has, as `input $3 / output $15` per million tokens (credits for `aic`), for the card and the hint. */
+export function priceText(s: Pick<Spend, 'prices'>, model: string): string {
+  const list = (s.prices ?? []).filter((p) => p.model === model);
+  return list.map((p) => `${p.unit.replace('_', ' ')} ${dollars(p.price_micros)}`).join(' / ');
+}
+
+/** The `POST /v1/work/prices` request for a price typed in dollars (per million tokens, or per credit for `aic`), or why it cannot be sent. */
+export function priceRequest(model: string, unit: PriceUnit, dollarsText: string): { path: string; body: Record<string, unknown> } | string {
+  const text = dollarsText.trim();
+  if (!/^\d+(\.\d{1,6})?$/.test(text)) return 'Type the price in dollars, such as 3 or 0.25.';
+  const [whole, frac = ''] = text.split('.');
+  const micros = Number(whole) * 1_000_000 + Number(frac.padEnd(6, '0'));
+  if (!Number.isSafeInteger(micros) || micros <= 0) return 'The price must be more than 0.';
+  return { path: '/v1/work/prices', body: { model, unit, price_micros: micros } };
 }

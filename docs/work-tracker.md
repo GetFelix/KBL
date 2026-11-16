@@ -1532,10 +1532,14 @@ recorded, not refused, and never guessed. Until a price exists the report is
 charged its floor (or its priced usage, if that is more), so work goes on. The
 model is listed in `unpriced` in the spend view, so a person sees it needs a
 price. When a person sets one that takes effect at once, the fold prices the
-waiting usage with it and draws the difference from the root's budget. A price
-set for a later time prices only usage from that time on. At most 32 models may
+waiting usage with it and draws the difference from the root's budget. The dashboard lists these models in a card on Spend and lets a person set a price there; it
+is not a Needs-you item. A price set for a later time prices only usage from that time on. At most 32 models may
 wait for a price at once; a report that would add another is refused with
 `bad_usage` until a person prices some.
+
+**Old prices.** The spend view also lists the latest price of each model and unit with
+when it started (`prices`). The dashboard shows "check pricing" next to a model whose
+oldest price is more than 90 days old (`?price_age_days=N` changes it). It is a hint only.
 
 **Budgets.** A root's cost budget is in the same derived cost, in millionths of
 a dollar, and is shared by every model and unit in the tree. The budget is

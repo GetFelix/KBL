@@ -8,7 +8,7 @@ import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { blocked, items, questionText, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
-import { spend } from './spend.ts';
+import { priceAgeDays, priceRequest, spend } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
@@ -342,7 +342,18 @@ const palette = paletteView(
 const help = helpView(mac);
 // Set once the fold exists; Spend does nothing before then.
 let readSpend: (() => ReturnType<typeof spend>) | null = null;
-const spendBox = spendView({ open: openItem });
+const spendBox = spendView({
+  open: openItem,
+  canSetPrice: () => tracker !== null,
+  setPrice: async (model, unit, dollarsText) => {
+    const req = priceRequest(model, unit, dollarsText);
+    if (typeof req === 'string') return req;
+    const o = tracker ? await tracker.write(req) : ({ status: 'failed', reason: 'Not signed in to the tracker.' } as const);
+    return o.status === 'ok' ? null : o.reason;
+  },
+  now: () => Date.now(),
+  priceAgeDays: priceAgeDays(q.get('price_age_days')),
+});
 // Spend of a log still being read would be a partial total, so the dialog waits for live and fills in then.
 const showSpend = () => {
   const s = store.get();

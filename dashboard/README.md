@@ -17,7 +17,15 @@ first, and a By model table with each model's unit, usage and cost. It reads the
 ([Cost and spend](../docs/work-tracker.md#cost-and-spend)). Costs are derived from the usage agents reported and the
 price in effect when each report was written, never estimated here. A model with no price shows "unpriced" with its
 usage, never $0. The total is a lower bound: lapsed claims and unpriced models are charged only the cost floor, and
-reported usage is the agent's own word. A root links to its item. A table with nothing recorded says so.
+reported usage is the agent's own word. A root links to its item.
+
+Models with no price yet are listed in a "Waiting for a price" card at the top of Spend. It is not a Needs-you
+item and blocks nothing: those models are charged the cost floor until a price is set. A person signed in to the
+tracker sets one there (unit and dollars per million tokens, or per credit), which sends `POST /v1/work/prices`;
+everyone else sees that a price is needed. A model whose oldest price started more than 90 days ago shows a
+"check pricing" hint in By model, with the age and prices on hover; `?price_age_days=N` in the address changes the
+90. The hint never blocks anything. Prices come from the fold's `spend_json()` (`prices`), so the page shows only
+what the log recorded. A table with nothing recorded says so.
 
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it

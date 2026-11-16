@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { dollars, spend, tables } from '../src/spend.ts';
+import { dollars, priceAgeDays, priceRequest, priceText, spend, stalePrices, tables } from '../src/spend.ts';
 import { COMMANDS } from '../src/keys.ts';
 
 // Built by `npm run wasm`.
@@ -117,4 +117,34 @@ test('dollars shows cents, thousands, and sub-cent amounts', () => {
 
 test('Spend is a palette command, so keyboard users reach it', () => {
   assert.ok(COMMANDS.some((c) => c.id === 'spend' && c.group === 'View'));
+});
+
+const DAY = 86_400_000;
+
+test('a price older than the age is flagged, a newer or scheduled one is not', () => {
+  const now = 1_000 * DAY;
+  const prices = [
+    { model: 'old', unit: 'input' as const, price_micros: 1, since_ms: now - 100 * DAY },
+    { model: 'old', unit: 'output' as const, price_micros: 1, since_ms: now - 10 * DAY },
+    { model: 'new', unit: 'input' as const, price_micros: 1, since_ms: now - 10 * DAY },
+    { model: 'soon', unit: 'input' as const, price_micros: 1, since_ms: now + 5 * DAY },
+  ];
+  assert.deepEqual([...stalePrices({ prices }, now, 90)], [['old', 100]]);
+  assert.deepEqual([...stalePrices({}, now, 90)], []);
+});
+
+test('the price age comes from the address, else 90 days', () => {
+  assert.equal(priceAgeDays(null), 90);
+  assert.equal(priceAgeDays('30'), 30);
+  for (const bad of ['0', '-1', 'x', '1.5', '']) assert.equal(priceAgeDays(bad), 90, bad);
+});
+
+test('a price typed in dollars becomes micros, and a bad one says why', () => {
+  assert.deepEqual(priceRequest('m', 'input', '3'), { path: '/v1/work/prices', body: { model: 'm', unit: 'input', price_micros: 3_000_000 } });
+  assert.deepEqual(priceRequest('m', 'output', ' 0.25 '), { path: '/v1/work/prices', body: { model: 'm', unit: 'output', price_micros: 250_000 } });
+  for (const bad of ['', '0', 'abc', '-1', '1.1234567']) assert.equal(typeof priceRequest('m', 'input', bad), 'string', bad);
+});
+
+test('the price text names each unit', () => {
+  assert.equal(priceText({ prices: [{ model: 'm', unit: 'cache_read', price_micros: 300_000, since_ms: 0 }] }, 'm'), 'cache read $0.30');
 });

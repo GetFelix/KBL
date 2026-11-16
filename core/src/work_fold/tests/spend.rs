@@ -343,3 +343,14 @@ fn prices_in_effect_are_the_latest_that_started() {
     );
     assert_eq!(at(0), []);
 }
+
+#[test]
+fn spend_lists_the_latest_price_of_each_model_and_unit() {
+    let mut l = raised();
+    l.person(price("m", PriceUnit::Input, 1_000_000));
+    l.person(price("m", PriceUnit::Input, 2_000_000));
+    let spend = fold(&l.0).spend();
+    assert_eq!(spend.prices.len(), 1);
+    assert_eq!(spend.prices[0].price_micros, 2_000_000);
+    assert!(fold(&raised().0).spend().prices.is_empty());
+}

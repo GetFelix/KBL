@@ -107,6 +107,10 @@ pub struct Spend {
     /// floor until a `price_set` prices it.
     #[serde(default)]
     pub unpriced: BTreeSet<String>,
+    /// The latest price per model and unit, with when it started, so a page
+    /// can say which prices are old. A price set for later shows its start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prices: Vec<PriceInEffect>,
 }
 
 /// A price in effect: the latest `price_set` for a model and unit that has
@@ -760,7 +764,10 @@ impl State {
 
     /// Spend per root, reviewer tier and repo. Items that cost nothing are left out.
     pub fn spend(&self) -> Spend {
-        let mut s = Spend::default();
+        let mut s = Spend {
+            prices: self.prices_in_effect(u64::MAX),
+            ..Spend::default()
+        };
         for u in &self.unpriced {
             s.unpriced
                 .extend(u.waiting.iter().map(|(model, _, _)| model.clone()));
