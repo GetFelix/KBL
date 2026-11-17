@@ -12,11 +12,12 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use kbl_core::artifact::ArtifactId;
 use kbl_core::names::ItemId;
 use kbl_core::work::WorkLogged;
-use kbl_core::work_fold::{Anchor, Saved, State};
+use kbl_core::work_fold::{Anchor, Lineage, Saved, State};
 use serde::{Deserialize, Serialize};
 
 use super::request_keys::{Requests, Seen};
@@ -96,6 +97,8 @@ struct Body {
 /// reads the log back. Lives in the core and is touched under its lock.
 pub(super) struct Periodic {
     id: u64,
+    /// The rebuild generation this belongs to; see [`Store::begin_generation`].
+    generation: u64,
     store: Store,
     anchor: Anchor,
     /// Records landed since `anchor`, oldest first. While a save runs this
@@ -107,6 +110,7 @@ pub(super) struct Periodic {
 /// A save in progress: the copy taken at a record boundary.
 pub(super) struct Job {
     id: u64,
+    generation: u64,
     store: Store,
     anchor: Anchor,
     tail: Vec<(u64, WorkLogged)>,
@@ -124,13 +128,19 @@ static PERIODIC_IDS: AtomicU64 = AtomicU64::new(1);
 impl Periodic {
     /// `anchor` is where the chain over `log` stands, as [`Store::save`] left
     /// it. None when saving is off.
-    pub(super) fn new(store: Store, anchor: Anchor, log: &[(u64, WorkLogged)]) -> Option<Self> {
+    pub(super) fn new(
+        store: Store,
+        generation: u64,
+        anchor: Anchor,
+        log: &[(u64, WorkLogged)],
+    ) -> Option<Self> {
         if store.every == 0 {
             return None;
         }
         let from = usize::try_from(anchor.records()).ok()?;
         Some(Self {
             id: PERIODIC_IDS.fetch_add(1, Ordering::Relaxed),
+            generation,
             store,
             tail: log.get(from..)?.to_vec(),
             anchor,
@@ -177,6 +187,7 @@ impl Periodic {
         self.saving = true;
         Some(Job {
             id: self.id,
+            generation: self.generation,
             store: self.store.clone(),
             anchor: self.anchor.clone(),
             tail: std::mem::take(&mut self.tail),
@@ -216,10 +227,12 @@ impl Job {
     }
 
     /// Hashes the records since the anchor, writes the file, and returns the
-    /// extended anchor. Blocking: run it off the async workers.
+    /// extended anchor. Blocking: run it off the async workers. Nothing is
+    /// written if a rebuild started since the job was taken.
     pub(super) fn run(self) -> Option<Anchor> {
         let saved = self.anchor.extend(&self.tail, &self.state)?;
-        self.store.write(&saved, &self.seed.sorted());
+        self.store
+            .write(self.generation, &saved, &self.seed.sorted(), None);
         Some(saved.anchor())
     }
 }
@@ -229,6 +242,43 @@ impl Job {
 pub(super) struct Store {
     dir: PathBuf,
     every: u64,
+    /// The rebuild generation of this folder, shared by every `Store` for it.
+    /// Held while a file is written or pruned, so a rebuild's bump waits out a
+    /// write in flight and no write of an older generation lands after it.
+    gate: Arc<Mutex<u64>>,
+}
+
+/// One gate per folder for the life of the process: each rebuild makes a new
+/// `Store`, and the saves of the one before it must see the bump.
+fn gate_for(dir: &Path) -> Arc<Mutex<u64>> {
+    static GATES: Mutex<Vec<(PathBuf, Arc<Mutex<u64>>)>> = Mutex::new(Vec::new());
+    let mut gates = GATES.lock().unwrap_or_else(PoisonError::into_inner);
+    let dir = &canonical(dir);
+    if let Some((_, g)) = gates.iter().find(|(d, _)| d == dir) {
+        return g.clone();
+    }
+    let g = Arc::new(Mutex::new(0));
+    gates.push((dir.to_owned(), g.clone()));
+    g
+}
+
+/// The folder's path with symlinks and `..` resolved as far as it exists, so
+/// two spellings of one folder share a gate. The folder may not exist yet.
+fn canonical(dir: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = dir;
+    loop {
+        if let Ok(real) = fs::canonicalize(at) {
+            return rest.iter().rev().fold(real, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = parent;
+            }
+            _ => return dir.to_owned(),
+        }
+    }
 }
 
 impl Store {
@@ -239,16 +289,28 @@ impl Store {
         } else {
             settings.team.as_str()
         };
+        let dir = root.join(team);
         Some(Self {
-            dir: root.join(team),
+            gate: gate_for(&dir),
+            dir,
             every: settings.snapshot_every,
         })
+    }
+
+    /// Starts a new rebuild generation and returns it. A save job of an older
+    /// generation writes and prunes nothing from here on: it was taken from a
+    /// state the rebuild replaces. Blocking: waits out a write in flight.
+    pub(super) fn begin_generation(&self) -> u64 {
+        let mut current = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+        *current += 1;
+        *current
     }
 
     /// The newest snapshot that still describes `log`, with the recall that
     /// went with it. Files that do not are logged and left: a short read or a
     /// failover can make the newest ones invalid for a while, and they are
-    /// good again once the log is back. [`Store::prune`] retires them by number.
+    /// good again once the log is back. Files of a log that diverged from the
+    /// one restored are dropped, see [`Store::prune`].
     pub(super) fn restore(&self, log: &[(u64, WorkLogged)]) -> Option<(Saved, Recall)> {
         if fs::symlink_metadata(&self.dir).is_ok_and(|m| m.file_type().is_symlink()) {
             eprintln!(
@@ -260,7 +322,11 @@ impl Store {
         self.clear_temps();
         for path in self.files().into_iter().rev() {
             match read(&path).filter(|b| b.saved.valid(log)) {
-                Some(Body { saved, seed }) => return Some((saved, seed.into_recall())),
+                Some(Body { saved, seed }) => {
+                    let _held = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+                    self.prune(&path, Some(log));
+                    return Some((saved, seed.into_recall()));
+                }
                 None => {
                     eprintln!(
                         "kbl-tracker: snapshot {} does not match work.events; ignored",
@@ -285,6 +351,7 @@ impl Store {
     /// it from the records after it.
     pub(super) fn save(
         &self,
+        generation: u64,
         log: &[(u64, WorkLogged)],
         from: Option<&Saved>,
         state: &State,
@@ -299,18 +366,31 @@ impl Store {
         let Some(saved) = Saved::capture(log, from, state) else {
             return behind();
         };
-        self.write(&saved, &Seed::of(recall));
+        self.write(generation, &saved, &Seed::of(recall), Some(log));
         saved.anchor()
     }
 
-    /// Writes `saved` and drops the files past [`KEEP`].
-    pub(super) fn write(&self, saved: &Saved, seed: &Seed) {
+    /// Writes `saved` and prunes, unless a rebuild began since `generation`.
+    ///
+    /// With the `log` the file was built from, files that log contradicts are
+    /// removed first, see [`Store::prune`].
+    pub(super) fn write(
+        &self,
+        generation: u64,
+        saved: &Saved,
+        seed: &Seed,
+        log: Option<&[(u64, WorkLogged)]>,
+    ) {
+        let held = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
+        if *held != generation {
+            return;
+        }
         let name = format!("{PREFIX}{:020}{SUFFIX}", saved.records());
         let result = prepare(&self.dir)
             .and_then(|()| stage(&self.dir, &name, &encode(saved, seed)))
             .and_then(|tmp| commit(&tmp, &self.dir.join(&name), &self.dir));
         match result {
-            Ok(()) => self.prune(&self.dir.join(&name)),
+            Ok(()) => self.prune(&self.dir.join(&name), log),
             Err(e) => eprintln!(
                 "kbl-tracker: could not save a snapshot in {}: {e}",
                 self.dir.display()
@@ -336,13 +416,39 @@ impl Store {
         files
     }
 
-    /// Keeps the newest [`KEEP`] files by record count, and always `fresh`: after
-    /// retention trims the log the records restart low, and the file just
-    /// written must not lose to stale ones with bigger numbers.
-    fn prune(&self, fresh: &Path) {
-        let files = self.files();
-        let excess = files.len().saturating_sub(KEEP);
-        for old in files.iter().filter(|f| f.as_path() != fresh).take(excess) {
+    /// Drops the files `log` contradicts, then all but the newest [`KEEP`],
+    /// always keeping `fresh`. After retention trims the log, old files carry
+    /// higher record counts than new ones and can never validate again. A file
+    /// the log merely does not reach yet is kept, and so is one that could not
+    /// be read: those only count against the limit, after the verified ones.
+    /// Without a log (a running tracker's save, whose log only grows) only the
+    /// count applies.
+    /// The caller holds the gate.
+    fn prune(&self, fresh: &Path, log: Option<&[(u64, WorkLogged)]>) {
+        for path in self.files() {
+            if path == fresh {
+                continue;
+            }
+            let gone =
+                log.is_some_and(|log| read_lineage(&path).is_some_and(|l| l.diverges_from(log)));
+            if gone {
+                let _ = fs::remove_file(path);
+            }
+        }
+        // Verified files outrank the rest: a file ahead of a short log, or one
+        // that could not be read, must not push a checked file out.
+        let verified = |p: &Path| match log {
+            Some(log) => read_lineage(p).is_some_and(|l| l.within(log)),
+            None => true,
+        };
+        let mut ranked: Vec<_> = self
+            .files()
+            .into_iter()
+            .filter(|f| f.as_path() != fresh)
+            .map(|f| (verified(&f), f))
+            .collect();
+        ranked.sort_by(|a, b| b.cmp(a));
+        for (_, old) in ranked.iter().skip(KEEP.saturating_sub(1)) {
             let _ = fs::remove_file(old);
         }
         self.clear_temps();
@@ -383,6 +489,19 @@ fn read(path: &Path) -> Option<Body> {
         return None;
     }
     serde_json::from_slice(json).ok()
+}
+
+/// The chain points of a file, without its digest check or its state.
+fn read_lineage(path: &Path) -> Option<Lineage> {
+    #[derive(Deserialize)]
+    struct Head {
+        saved: Lineage,
+    }
+    let bytes = fs::read(path).ok()?;
+    let at = bytes.iter().position(|b| *b == b'\n')?;
+    serde_json::from_slice::<Head>(&bytes[at + 1..])
+        .ok()
+        .map(|h| h.saved)
 }
 
 /// Writes `bytes` to a temp file in `dir` and syncs it. Nothing a reader sees
