@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, idToken, killAll, newRunId, sleep } from "./lib/stack.mjs";
+import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, idToken, killAll, newRunId, sleep, whenReady } from "./lib/stack.mjs";
 
 const RUN = newRunId("renewal");
 const CONTROL_PLANE = process.env.KBL_FELIX_CONTROL_PLANE || "http://127.0.0.1:8443";
@@ -47,9 +47,14 @@ await new Promise((resolve) => counter.listen(0, "127.0.0.1", resolve));
 
 try {
   createRun(RUN, "renewal check");
-  const planner = await spawnAgent(await felixToken(), RUN, "planner");
-  await planner.tool("task_post", { title: "long job", body: "outlives the first token", id: "long" });
-  planner.kill();
+  await whenReady("the first task", async () => {
+    const planner = await spawnAgent(await felixToken(), RUN, "planner");
+    try {
+      await planner.tool("task_post", { title: "long job", body: "outlives the first token", id: "long" });
+    } finally {
+      planner.kill();
+    }
+  });
 
   const dir = mkdtempSync(join(tmpdir(), "kbl-renewal-"));
   const file = join(dir, "id-token");

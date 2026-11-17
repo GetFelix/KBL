@@ -221,6 +221,16 @@ instead of running it ([upgrades.md](upgrades.md#a-runs-own-records)).
 **Order.** Felix hands records out in offset order and promises nothing about
 the order they finish in. Tasks that must run in order are one task.
 
+### Acknowledged records stay put
+
+The tracker checks a held claim against where `work.events` ends, not against
+what it holds, so it needs Felix never to cut a record it acknowledged and let
+another writer refill the offset. It requires the stream to be acknowledged
+only once a quorum holds it (`Quorum`, or Raft), or to have one copy, which
+never fails over, and refuses to start otherwise. KBL does not defend against
+Felix losing an acknowledged write. The rules and the startup check are in
+[work-tracker.md](work-tracker.md#what-felix-must-guarantee).
+
 ### Grants
 
 Each agent's principal gets a role made for the run:
@@ -605,6 +615,7 @@ Checked against Felix at `97ef3827` (paths in Felix unless marked) and felix-gat
 9. **felix-gateway drops the broker's append time.** Felix (at `d40db2e4`) stamps every record with its append time by the shard leader's clock: range-read records always carry it (`crates/protocol/felix-wire/src/client/message/fields.rs:192-193`), and subscribed events do when the client asks (`ClientConfig::timestamps`, `crates/sdk/felix-client/src/config.rs:122-126`; `Event::timestamp_micros`, `crates/sdk/felix-client/src/subscribe.rs:235-239`). felix-gateway's `event` and `records` carry only offset and payload (`crates/felix-gateway/src/protocol.rs:195-206, 325-331` in felix-gateway). Records written by agents on different machines then have only their writers' clocks, which skew, so a claim can be drawn before the post it claims. The dashboard orders by offset and clamps writer times to rise with it until the gateway passes the broker's time on.
 
 10. **felix-gateway serves one namespace.** `GATEWAY_NAMESPACE` is set once per gateway process (`docs/configuration.md` in felix-gateway 0.8.0), and a scope's `{scope}` value fills in resource names, not the namespace. A dashboard for several [teams](#teams) needs one gateway per team until a scope can name the namespace.
+11. **No readable ack guarantee.** A stream's definition shows `consistency`, `replication_factor` and `durable`, but not the shard engine or the broker's ack and fsync settings, so the tracker cannot tell a Raft stream's acks are durable and holds it to `Quorum` ([felix#2735](https://github.com/GetFelix/felix/issues/2735)).
 
 **Decisions on the earlier open questions**
 

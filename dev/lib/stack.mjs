@@ -48,9 +48,31 @@ export async function felixToken() {
   return exchanged.felix_token;
 }
 
+// A broker that has just started may not hold its shards' leases yet and
+// refuses with "lease lapsed" until it does, so a call made right after
+// dev/up.sh is tried again for up to two minutes.
+const START_TRIES = 60;
+const START_PAUSE_MS = 2000;
+
 export function createRun(run, goal) {
-  const created = spawnSync(TOOL, ["run", "create", run, "--goal", goal, "--budget-usd", "1"], { stdio: "inherit" });
-  if (created.status !== 0) throw new Error(`could not create run ${run}`);
+  for (let tries = 1; ; tries++) {
+    const created = spawnSync(TOOL, ["run", "create", run, "--goal", goal, "--budget-usd", "1"], { stdio: "inherit" });
+    if (created.status === 0) return;
+    if (tries === START_TRIES) throw new Error(`could not create run ${run}`);
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, START_PAUSE_MS);
+  }
+}
+
+// `call` again until it stops failing, for what a fresh stack answers before its leases are held.
+export async function whenReady(what, call) {
+  for (let tries = 1; ; tries++) {
+    try {
+      return await call();
+    } catch (e) {
+      if (tries === START_TRIES) throw new Error(`${what}: ${e.message}`);
+      await sleep(START_PAUSE_MS);
+    }
+  }
 }
 
 // The run's log as the records it holds, oldest first.

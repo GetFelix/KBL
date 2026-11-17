@@ -178,6 +178,16 @@ pub(crate) enum Which {
     Claim(u64),
 }
 
+/// What `hold_at_tip` found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AtTip {
+    Live,
+    /// The state no longer shows the hold.
+    Gone,
+    /// The log moved past the state, which is being rebuilt.
+    Moved,
+}
+
 /// One agent's delivery of one ready record.
 struct Delivery {
     /// Names this delivery among all the deliveries of the same item.
@@ -815,6 +825,7 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         let lanes = self.review_lanes(reviews)?;
         let deadline = Instant::now() + wait.min(MAX_WAIT);
+        let mut moved = 0;
         loop {
             self.begin().await?;
             let slot = self.slot(agent);
@@ -823,8 +834,11 @@ impl<B: Broker> Tracker<B> {
                 self.reconcile(agent, &mut delivery).await;
                 self.resume_recover(agent, &mut delivery).await?;
                 if let Some(d) = delivery.as_ref() {
-                    let core = self.0.core.lock().await;
-                    return Ok(claimed(&core, d, true));
+                    if let Some(reply) = self.resumed(agent, d, &mut moved).await? {
+                        return Ok(reply);
+                    }
+                    // The log moved past the state: rebuild, which drops a hold that ended.
+                    continue;
                 }
                 let held = self.0.core.lock().await.state.held_by(agent.as_str());
                 if let Some((item, _)) = held {
@@ -877,6 +891,13 @@ impl<B: Broker> Tracker<B> {
         }
         match extended {
             Ok(visible) => {
+                // Checked after Felix's extend, so a log read that fails costs
+                // the agent a retry, not its delivery.
+                if self.hold_at_tip(agent, d).await? == AtTip::Moved {
+                    return Err(Error::Unavailable(format!(
+                        "{WORK_EVENTS} moved past this tracker's state; call again"
+                    )));
+                }
                 // The hold may have been released while Felix was answering.
                 let mut core = self.0.core.lock().await;
                 let ours = core.owner.get(item).is_some_and(|o| o.id == d.id);
@@ -2152,6 +2173,79 @@ impl<B: Broker> Tracker<B> {
         });
     }
 
+    /// The reply that resumes `d`, or none when the log has moved past the
+    /// state and the caller should rebuild and look again. A second move in
+    /// one call errs, so a busy log cannot hold the caller in a loop.
+    async fn resumed(
+        &self,
+        agent: &AgentName,
+        d: &Delivery,
+        moved: &mut u32,
+    ) -> Result<Option<Value>, Error> {
+        match self.hold_at_tip(agent, d).await? {
+            AtTip::Live => return Ok(Some(claimed(&*self.0.core.lock().await, d, true))),
+            // The next round's reconcile drops it.
+            AtTip::Gone => return Ok(None),
+            AtTip::Moved => {}
+        }
+        *moved += 1;
+        if *moved > 1 {
+            return Err(Error::Unavailable(format!(
+                "{WORK_EVENTS} keeps moving under this claim; call again"
+            )));
+        }
+        Ok(None)
+    }
+
+    /// Whether `d`'s hold stands at the tip of the log. The single check
+    /// before a held claim is answered to its agent (a resume, an extension):
+    /// memory misses a release another writer appended after a failover, so
+    /// the log is read from the tail. A tip that moved marks the state
+    /// refused, as a refused write would, so the next call rebuilds and
+    /// confirms the lease. A fresh claim needs no check: its write is
+    /// conditional on the tail.
+    async fn hold_at_tip(&self, agent: &AgentName, d: &Delivery) -> Result<AtTip, Error> {
+        // Assumes the tip read shows every acknowledged write; Felix does not
+        // promise that after a leader is deposed (docs/work-tracker.md).
+        let tail = self.0.core.lock().await.tail;
+        // From one before the tail, so a tip a failover lowered shows too.
+        let (_, tip) = self
+            .io(
+                None,
+                self.0
+                    .broker
+                    .read_to_tip(WORK_EVENTS, tail.saturating_sub(1)),
+            )
+            .await
+            .map_err(|e| {
+                Error::Unavailable(format!("could not check your claim against the log: {e:#}"))
+            })?;
+        let core = self.0.core.lock().await;
+        let mut lease = self.lease();
+        if lease.stale || lease.retaken {
+            return Ok(AtTip::Moved);
+        }
+        // Our own write may land during the read and raise the tail; it was
+        // conditional on the tail, so nothing foreign came before it.
+        let lowered = core.tail == tail && tip < tail;
+        if tip > core.tail || lowered {
+            lease.refused();
+            return Ok(AtTip::Moved);
+        }
+        let ours = core.owner.get(&d.item).is_some_and(|o| o.id == d.id);
+        let shown = core
+            .state
+            .items
+            .get(&d.item)
+            .and_then(|i| i.hold.as_ref())
+            .is_some_and(|h| h.by.as_str() == agent.as_str() && h.attempt == d.attempt);
+        Ok(if ours && shown {
+            AtTip::Live
+        } else {
+            AtTip::Gone
+        })
+    }
+
     /// For an agent whose recover failed: tries again, and errs while Felix still
     /// fails, so the agent calls again instead of hearing its claim is lost.
     async fn resume_recover(
@@ -2468,6 +2562,13 @@ impl<B: Broker> Tracker<B> {
             ))
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
+        // After the read, so a failure leaves the state stale and every call
+        // refused: the tracker serves again once the stream is fixed.
+        self.0.broker.check_acks().await.map_err(|e| {
+            Error::Unavailable(format!(
+                "{e:#}; the tracker is refusing work until it is fixed"
+            ))
+        })?;
         let team = self.0.settings.team.clone();
         metrics::counter!("kbl_tracker_fold_rebuilds_total", "team" => team.clone()).increment(1);
         metrics::histogram!("kbl_tracker_fold_rebuild_seconds", "team" => team)
