@@ -2622,6 +2622,7 @@ impl State {
                 // The tracker only lets go of an agent that stayed away.
                 let away = rec.actor == Actor::Tracker
                     && to.is_none()
+                    && self.items.get(item).is_some_and(|i| i.closed.is_none())
                     && matches!(
                         self.items.get(item).and_then(|i| i.assignee.as_ref()),
                         Some(Assignee::Agent(_))

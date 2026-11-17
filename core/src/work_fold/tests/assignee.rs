@@ -376,3 +376,16 @@ fn an_agent_assignee_needs_a_log_at_format_13() {
     l.agent("w2", claimed("r1", 1));
     assert!(fold(&l.0).items[&id("r1")].hold.is_some());
 }
+
+#[test]
+fn the_tracker_cannot_drop_an_assignee_of_a_closed_item() {
+    let mut l = raised_13();
+    l.person(to(agent("w1")));
+    l.person(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Dismissed,
+    });
+    l.tracker(to(None));
+    assert_eq!(fold(&l.0).items[&id("r1")].assignee, agent("w1"));
+    assert!(last_reject(&l).is_some());
+}

@@ -1674,7 +1674,10 @@ impl<B: Broker> Tracker<B> {
         delivery: &mut Option<Delivery>,
     ) -> bool {
         let mut core = self.0.core.lock().await;
-        if assigned_agent(&core.state, item).map(Key::as_str) != Some(agent.as_str()) {
+        // The hold may have lapsed since `recover` read it.
+        if core.state.held_by(agent.as_str()) != Some((item.clone(), attempt))
+            || assigned_agent(&core.state, item).map(Key::as_str) != Some(agent.as_str())
+        {
             return false;
         }
         let tier = core
@@ -1709,13 +1712,13 @@ impl<B: Broker> Tracker<B> {
     /// Written to the log, so every reader sees why the item moved.
     async fn drop_away_assignees(&self) {
         let away = self.0.settings.assignee_away;
-        let (started, seen) = {
-            let seen = self.0.seen.lock().expect("seen lock");
-            (seen.0, seen.1.clone())
-        };
+        // Read at each check: an agent that calls during a long loop keeps its item.
         let gone = |core: &Core, a: &Key| {
             let revoked = core.revoked.iter().any(|r| r.as_str() == a.as_str());
-            let last = seen.get(a.as_str()).copied().unwrap_or(started);
+            let last = {
+                let seen = self.0.seen.lock().expect("seen lock");
+                seen.1.get(a.as_str()).copied().unwrap_or(seen.0)
+            };
             revoked || last.elapsed() >= away
         };
         let items: Vec<ItemId> = {

@@ -232,3 +232,54 @@ async fn a_record_from_before_a_direct_claim_never_lapses_it() {
     assert!(t.extend(&agent("w1"), &item("a1")).await.is_ok());
     assert_eq!(count(&fake, "nack"), 0);
 }
+
+#[tokio::test]
+async fn a_lapsed_hold_is_not_adopted_as_a_direct_claim() {
+    let fake = Fake::default();
+    let t = at_13(&fake).await;
+    seed(&t, "a1", 2).await;
+    assign(&t, "a1", Some("w1")).await;
+    claim(&t, "w1").await;
+    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+        .await
+        .unwrap();
+    // The hold ended after `recover` read it; the item is still w1's.
+    let mut delivery = None;
+    assert!(
+        !t.adopt_direct(&agent("w1"), &item("a1"), 1, &mut delivery)
+            .await
+    );
+    assert!(delivery.is_none());
+    assert!(!t.0.core.lock().await.owner.contains_key(&item("a1")));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_agent_that_calls_during_the_sweep_keeps_its_assignment() {
+    let fake = Fake::default();
+    let t = at_13(&fake).await;
+    seed(&t, "a1", 2).await;
+    seed(&t, "a2", 2).await;
+    assign(&t, "a1", Some("w1")).await;
+    assign(&t, "a2", Some("w1")).await;
+    pass(&t, AWAY + Duration::from_secs(10)).await;
+    // The first drop waits on the log; w1 calls before the second is checked.
+    fake.hold_next_publish();
+    let sweeping = {
+        let t = t.clone();
+        tokio::spawn(async move { t.drop_away_assignees().await })
+    };
+    tokio::task::yield_now().await;
+    t.0.seen
+        .lock()
+        .unwrap()
+        .1
+        .insert("w1".to_owned(), tokio::time::Instant::now());
+    fake.open_gate();
+    sweeping.await.unwrap();
+    let core = t.0.core.lock().await;
+    let kept = ["a1", "a2"]
+        .iter()
+        .filter(|i| core.state.items[&item(i)].assignee.is_some())
+        .count();
+    assert_eq!(kept, 1);
+}
