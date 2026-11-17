@@ -30,8 +30,8 @@ services:
       # The dev IdP is plain HTTP on the compose network.
       FELIX_CONTROLPLANE_OIDC_ALLOW_INSECURE_HTTP: "true"
       # The broker reads its token once at startup, so the default 15 minutes
-      # would end a dev session early.
-      FELIX_EXCHANGE_TOKEN_TTL_SECONDS: "86400"
+      # would end a dev session early. dev/check-renewal.mjs sets it short.
+      FELIX_EXCHANGE_TOKEN_TTL_SECONDS: "${KBL_DEV_TOKEN_TTL_SECONDS:-86400}"
       RUST_LOG: info
     ports:
       - "127.0.0.1:8443:8443"
@@ -72,6 +72,9 @@ services:
       FELIX_QUIC_LISTENERS: "1"
       # Acknowledge after the write, so an ack carries the record's log offset.
       FELIX_ACK_ON_COMMIT: "true"
+      # With one copy, an acknowledged record must survive a power cut too
+      # (docs/work-tracker.md, "What Felix must guarantee").
+      FELIX_DURABLE_FSYNC_MODE: on_commit
       RUST_LOG: info
     ports:
       - "127.0.0.1:5000:5000/udp"

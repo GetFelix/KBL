@@ -43,7 +43,8 @@
   "let h = t.hold.as_ref().filter(|h| h.by == rec.by)?;"
  ],
  "core/src/work_fold.rs#needs_you": [
-  "if it.flagged && it.hold.is_none() {"
+  "if it.flagged && it.hold.is_none() {",
+  "if matches!(it.assignee, Some(Assignee::Person(_)))"
  ],
  "core/src/work_fold.rs#prerequisite": [
   ".prerequisite_holder(item, attempt, triage, rec)?",
@@ -139,8 +140,8 @@
  "core/src/work_fold/human_wait.rs#KEPT_WAITS": [
   "const KEPT_WAITS: usize = 20_000;"
  ],
- "core/src/work_fold/human_wait.rs#State::queue": [
-  "pub fn queue(&self, now_ms: u64) -> Vec<QueueEntry> {"
+ "core/src/work_fold/trust.rs#summary_trust": [
+  "for p in it.paths.iter().filter(|p| p.done) {"
  ],
  "core/src/work_fold/human_wait.rs#hide_covers": [
   "pub(super) fn hide_covers(&self, id: &ItemId, at_ms: u64, kind: Option<WaitKind>) -> bool {"
@@ -163,7 +164,7 @@
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
  ],
  "ingest/src/sync.rs#announce": [
-  "let allowed = rule.target_repo.iter().chain(rule.components.values());"
+  ".chain(rule.area_paths.values());"
  ],
  "ingest/src/sync.rs#cut": [
   "fn cut(s: &str) -> String {"
@@ -186,9 +187,12 @@
  "ingest/src/sync.rs#park_unmapped": [
   "if rule.target_for(issue).is_some() {"
  ],
- "ingest/src/sync.rs#pull_requests": [
+ "ingest/src/sync.rs#linked_request": [
   "let ours = self.own.contains(&pull.author.to_ascii_lowercase());",
   "let linked = match claimed {"
+ ],
+ "ingest/src/sync.rs#foreign_pull_requests": [
+  ".any(|repo| repo.eq_ignore_ascii_case(&pr.repo));"
  ],
  "ingest/src/sync.rs#write_back": [
   ".filter(|pr| self.may_write_to(&key, pr));"
@@ -198,14 +202,23 @@
   "if delivery.is_some_and(|id| !recent.first_time(id)) {",
   ".is_none_or(|t| now.duration_since(t) >= app.min_gap)"
  ],
+ "mcp/src/credential.rs#exchange_url": [
+  "\"http\" => bail!(\"KBL_FELIX_CONTROL_PLANE must be https unless it is on this machine\"),"
+ ],
+ "mcp/src/credential.rs#http_client": [
+  ".redirect(reqwest::redirect::Policy::none())"
+ ],
+ "mcp/src/credential.rs#read_file": [
+  "if meta.permissions().mode() & 0o077 != 0 {"
+ ],
  "mcp/src/metrics.rs#tool_finished": [
   "let tool = if known {"
  ],
- "mcp/src/person.rs#connect": [
-  "if me[\"person\"].as_str().is_none() {"
- ],
  "mcp/src/person.rs#check": [
   "return Err(format!(\"{extra} is not a parameter of this tool\"));"
+ ],
+ "mcp/src/person.rs#connect": [
+  "if me[\"person\"].as_str().is_none() {"
  ],
  "mcp/src/server.rs#item_or_held": [
   "Some(i) => Ok(i),"
@@ -250,9 +263,8 @@
  "tracker/src/config.rs#parse": [
   "anyhow::ensure!(!token.is_empty(), \"a token is empty\");"
  ],
- "tracker/src/http.rs#person": [
-  "fn person(&self) -> Result<Key, Denied> {",
-  "Err((StatusCode::FORBIDDEN, \"this call is for a person's token\"))"
+ "tracker/src/felix.rs#acks_are_durable": [
+  "if durable && (quorum || copies == Some(1)) {"
  ],
  "tracker/src/http.rs#agent": [
   "fn agent(&self) -> Result<AgentName, Denied> {"
@@ -279,11 +291,18 @@
  "tracker/src/http.rs#observe": [
   ".map(|m| m.as_str().to_owned())"
  ],
+ "tracker/src/http.rs#person": [
+  "fn person(&self) -> Result<Key, Denied> {",
+  "Err((StatusCode::FORBIDDEN, \"this call is for a person's token\"))"
+ ],
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
  ],
+ "tracker/src/http/ingest.rs#load": [
+  "Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),"
+ ],
  "tracker/src/http/ingest.rs#worker": [
-  "fn worker(&self) -> Result<Key, super::Denied> {"
+  "fn worker(&self) -> Result<Worker, super::Denied> {"
  ],
  "tracker/src/main.rs#check_listen": [
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
@@ -313,6 +332,9 @@
   "let held = match holding(&core, delivery.as_ref(), agent, item) {",
   ".append(&mut core, Actor::Agent, agent_key(agent), record(held))"
  ],
+ "tracker/src/tracker.rs#hold_at_tip": [
+  "if tip > core.tail || lowered {"
+ ],
  "tracker/src/tracker.rs#holding": [
   "return if &d.item == item {",
   "Some(i) if holds(i, agent) => Ok(i.hold.as_ref().map_or(1, |h| h.attempt)),"
@@ -333,9 +355,14 @@
  "tracker/src/tracker/ingest.rs#allowed": [
   "fn allowed(record: &WorkRecord) -> bool {"
  ],
- "tracker/src/tracker/ingest.rs#ingest_record": [
+ "tracker/src/tracker/ingest.rs#ingest_roots": [
+  ".filter(|(source, _, _)| only.is_none_or(|o| o == *source))"
+ ],
+ "tracker/src/tracker/ingest.rs#ingest_record_in": [
   "&& text.len() > INLINE_LIMIT",
-  "if !targets(&record)",
+  "if !targets(&record).into_iter().all(reaches) {",
+  "let reaches = |item: &ItemId| match (sources.get(item), source) {",
+  "if source.is_some() && imports.is_some() && imports != source {",
   "if let WorkRecord::Closed {",
   "if let WorkRecord::Shipped { item, .. } = &record {",
   "let ours = core.recall.ingest_edges.contains(&edge);",
@@ -364,7 +391,7 @@
  "tracker/src/tracker/snapshots.rs#restore": [
   "match read(&path).filter(|b| b.saved.valid(log)) {"
  ],
- "tracker/src/tracker/snapshots.rs#save": [
+ "tracker/src/tracker/snapshots.rs#write": [
   ".and_then(|tmp| commit(&tmp, &self.dir.join(&name), &self.dir));"
  ],
  "tracker/src/tracker/tools.rs#check_options": [
@@ -372,8 +399,8 @@
  ],
  "tracker/src/tracker/tools.rs#check_sizes": [
   "pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {",
-  "WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {",
-  "check_content(\"text\", text)",
+  "| WorkRecord::HumanInput { text, .. }",
+  "| WorkRecord::Steered { text, .. } => check_content(\"text\", text),",
   "kbl_core::work::MAX_RULES_TEXT",
   "WorkRecord::Step { output, .. } => check_content(\"output\", output),",
   "WorkRecord::Edit { hunk, .. } => check_content(\"hunk\", hunk),",
@@ -427,5 +454,39 @@
  ],
  "tracker/src/tracker/tools.rs#triage_lists": [
   "if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {"
+ ],
+ "core/src/work_fold/human_wait.rs#State::queue_for": [
+  "Some(Assignee::Person(p)) => Some(p) == viewer,"
+ ],
+ "core/src/work_fold.rs#assign": [
+  "if rec.actor != Actor::Person {",
+  "if !it.accepted {"
+ ],
+ "tracker/src/http.rs#as_person": [
+  "&& !call.teams.is_member(&call.team, to)"
+ ],
+ "ingest/src/ado/transport.rs#Secret": [
+  "pub(crate) enum Secret {"
+ ],
+ "ingest/src/ado/transport.rs#token": [
+  "bail!(\"Entra answered {status} ({code}) to the client credentials sign-in\");"
+ ],
+ "ingest/src/ado.rs#write_back": [
+  "return Err(anyhow!(\"no rule asks for a write to Azure DevOps\").into());"
+ ],
+ "ingest/src/ado.rs#project_of": [
+  "self.project_name(&id.repo)"
+ ],
+ "ingest/src/ado.rs#wiql_date": [
+  "(shaped && head.bytes().filter(u8::is_ascii_digit).count() == 14).then(|| format!(\"{head}Z\"))"
+ ],
+ "ingest/src/config.rs#check_ado": [
+  "fn check_ado(&self, a: &AdoConfig) -> Result<()> {"
+ ],
+ "ingest/src/ado.rs#html_escape": [
+  "fn html_escape(s: &str) -> String {"
+ ],
+ "ingest/src/ado.rs#call": [
+  "if res.status == 203 || (300..400).contains(&res.status) {"
  ]
 }

@@ -111,6 +111,12 @@ impl Kept {
                 input: *input,
                 text: text.clone(),
             },
+            // A note sent to the holder reads as a note on its attempt.
+            WorkRecord::Steered { text, .. } => Kept::Input {
+                by: rec.by.as_str().to_owned(),
+                input: HumanKind::Note,
+                text: text.clone(),
+            },
             _ => return None,
         })
     }
@@ -249,7 +255,7 @@ pub fn accepted(state: &State, offset: u64, rec: &WorkLogged) -> bool {
         WorkRecord::Decision { .. } => in_path(|p| &p.decisions),
         WorkRecord::Step { .. } => in_path(|p| &p.steps),
         WorkRecord::Edit { .. } => in_path(|p| &p.edits),
-        WorkRecord::HumanInput { .. } => {
+        WorkRecord::HumanInput { .. } | WorkRecord::Steered { .. } => {
             item.human_inputs.contains(&offset) || in_path(|p| &p.human_inputs)
         }
         _ => false,

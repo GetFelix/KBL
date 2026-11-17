@@ -158,3 +158,98 @@ fn the_starter_configs_of_kbl_tool_parse() {
     let jira = Config::parse(&fill("jira")).unwrap();
     assert!(jira.jira.is_some());
 }
+
+fn ado(block: &str, rule: &str) -> Result<Config> {
+    Config::parse(&format!(
+        r#"{{"tracker":{{"url":"u","token_env":"T"}},"ado":{block},"rules":[{rule}]}}"#
+    ))
+}
+
+const ADO_RULE: &str = r#"{"name":"r","repo":"contoso/Platform","mode":"admit"}"#;
+
+#[test]
+fn an_ado_worker_signs_in_one_way_and_reads_projects_of_its_organization() {
+    let pat = r#"{"organization":"contoso","pat_env":"P"}"#;
+    let entra = |secret: &str| {
+        format!(
+            r#"{{"organization":"contoso","entra":{{"tenant_id":"t.example","client_id":"c"{secret}}}}}"#
+        )
+    };
+    let c = ado(pat, ADO_RULE).unwrap();
+    assert!(c.rules[0].ado);
+    assert_eq!(c.ado.unwrap().api, "https://dev.azure.com");
+    assert!(ado(r#"{"organization":"contoso","pat_file":"/p"}"#, ADO_RULE).is_ok());
+    assert!(ado(&entra(r#","client_secret_env":"S""#), ADO_RULE).is_ok());
+    assert!(ado(&entra(r#","client_secret_file":"/s""#), ADO_RULE).is_ok());
+    // Exactly one sign-in, and exactly one place for the client secret.
+    assert!(ado(&entra(""), ADO_RULE).is_err());
+    assert!(
+        ado(
+            &entra(r#","client_secret_env":"S","client_secret_file":"/s""#),
+            ADO_RULE
+        )
+        .is_err()
+    );
+    assert!(ado(r#"{"organization":"contoso"}"#, ADO_RULE).is_err());
+    assert!(
+        ado(
+            r#"{"organization":"contoso","pat_env":"P","entra":{"tenant_id":"t","client_id":"c","client_secret_env":"S"}}"#,
+            ADO_RULE
+        )
+        .is_err()
+    );
+    assert!(
+        ado(
+            r#"{"organization":"contoso","pat_env":"P","oauth":1}"#,
+            ADO_RULE
+        )
+        .is_err()
+    );
+    // A tenant is a name, never a path into the token address.
+    let bad_tenant = entra(r#","client_secret_env":"S""#).replace("t.example", "x/../y");
+    assert!(ado(&bad_tenant, ADO_RULE).is_err());
+    // A rule's repo is organization/project; and only one source per worker.
+    assert!(
+        ado(
+            pat,
+            r#"{"name":"r","repo":"other/Platform","mode":"admit"}"#
+        )
+        .is_err()
+    );
+    assert!(ado(pat, r#"{"name":"r","repo":"contoso/a/b","mode":"admit"}"#).is_err());
+    let both = format!(
+        r#"{{"tracker":{{"url":"u","token_env":"T"}},"ado":{pat},"github":{{"token_env":"G"}},"rules":[{ADO_RULE}]}}"#
+    );
+    assert!(Config::parse(&both).is_err());
+}
+
+#[test]
+fn ado_rule_fields_belong_to_ado_and_a_query_path_stays_inside_queries() {
+    let pat = r#"{"organization":"contoso","pat_env":"P"}"#;
+    let rule =
+        |extra: &str| format!(r#"{{"name":"r","repo":"contoso/Platform","mode":"admit",{extra}}}"#);
+    assert!(ado(pat, &rule(r#""ado_query":"Shared Queries/Agent""#)).is_ok());
+    assert!(
+        ado(
+            pat,
+            &rule(r#""ado_query":"0b9e1d3e-7c1a-4f0e-9a52-5f2f0c0d1e11""#)
+        )
+        .is_ok()
+    );
+    assert!(ado(pat, &rule(r#""area_paths":{"Platform\\Storage":"o/r"},"comment":true,"link_pr":true,"transition_on_pr":"Resolved""#)).is_ok());
+    for bad in [
+        r#""ado_query":"../Other""#,
+        r#""ado_query":"Shared Queries/../../x""#,
+        r#""ado_query":" ""#,
+        r#""jql":"labels = x""#,
+        r#""components":{"a":"o/r"}"#,
+        r#""area_paths":{"":"o/r"}"#,
+    ] {
+        assert!(ado(pat, &rule(bad)).is_err(), "{bad}");
+    }
+    // The ADO fields are refused under another source.
+    let gh = r#"[{"name":"r","repo":"o/r","mode":"admit","ado_query":"Q"}]"#;
+    assert!(parse(gh, GH).is_err());
+    let gh = r#"[{"name":"r","repo":"o/r","mode":"admit","area_paths":{"a":"o/r"}}]"#;
+    assert!(parse(gh, GH).is_err());
+}

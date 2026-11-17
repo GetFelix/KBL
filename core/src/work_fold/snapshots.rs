@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::human_wait::Waits;
+use super::trust::MarkTimes;
 use super::{State, Waiting, fold};
 use crate::artifact::ArtifactId;
 use crate::codec::Codec;
@@ -22,7 +23,7 @@ pub const SNAPSHOT_EVERY: u64 = 2_000;
 
 /// Bump when a change to the fold would make an old snapshot differ from a
 /// fold of the same prefix. Snapshots from another revision are dropped.
-pub const FOLD_REV: u32 = 3;
+pub const FOLD_REV: u32 = 4;
 
 /// Every record at an offset up to and including `upto`.
 ///
@@ -53,6 +54,7 @@ pub struct Snapshot {
     pub(in crate::work_fold) state: State,
     waiting: Waiting,
     human_waits: Waits,
+    mark_times: MarkTimes,
     /// What the state's wire form leaves out of each item.
     #[serde(default)]
     left_out: BTreeMap<ItemId, LeftOut>,
@@ -88,6 +90,7 @@ impl Snapshot {
             chain,
             waiting: std::mem::take(&mut state.waiting),
             human_waits: std::mem::take(&mut state.human_waits),
+            mark_times: std::mem::take(&mut state.mark_times),
             state,
         }
     }
@@ -97,6 +100,7 @@ impl Snapshot {
         let mut state = self.state.clone();
         state.waiting = self.waiting.clone();
         state.human_waits = self.human_waits.clone();
+        state.mark_times = self.mark_times.clone();
         for (id, left) in &self.left_out {
             if let Some(item) = state.items.get_mut(id) {
                 item.proposed_from.clone_from(&left.proposed_from);
@@ -145,6 +149,46 @@ struct Link {
     chain: String,
 }
 
+/// How far a hash chain has been taken: the links before it, its head and the
+/// records it covers. A running tracker keeps this instead of the log, and
+/// extends it with the records applied since, so a save hashes only those.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Anchor {
+    links: Vec<Link>,
+    chain: String,
+    records: u64,
+}
+
+impl Anchor {
+    /// Records of the log the chain covers.
+    pub fn records(&self) -> u64 {
+        self.records
+    }
+
+    /// The snapshot of the log up to the last of `tail`, the records that
+    /// follow this anchor, whose fold is `state`. `None` if `tail` is empty or
+    /// `state` does not end at its last record.
+    pub fn extend(&self, tail: &[(u64, WorkLogged)], state: &State) -> Option<Saved> {
+        let (last, _) = tail.last()?;
+        if state.at != Some(*last) {
+            return None;
+        }
+        let mut links = self.links.clone();
+        if self.records > 0 {
+            links.push(Link {
+                records: self.records,
+                chain: self.chain.clone(),
+            });
+        }
+        let records = self.records + tail.len() as u64;
+        let chain = link(&self.chain, tail);
+        Some(Saved {
+            links,
+            snapshot: Snapshot::of(*last, records, chain, state),
+        })
+    }
+}
+
 /// One snapshot kept on its own, for a store that holds only the newest.
 ///
 /// Its chain is built over the links before it, so [`Saved::valid`] hashes
@@ -161,28 +205,19 @@ impl Saved {
     /// A snapshot of all of `log`, whose fold is `state`. `prev` is the saved
     /// snapshot `log` was checked against, if one was.
     pub fn capture(log: &[(u64, WorkLogged)], prev: Option<&Saved>, state: &State) -> Option<Self> {
-        let (last, _) = log.last()?;
-        let records = log.len() as u64;
-        let (links, chain, from) = match prev {
-            Some(p) => {
-                let mut links = p.links.clone();
-                links.push(Link {
-                    records: p.snapshot.records,
-                    chain: p.snapshot.chain.clone(),
-                });
-                (links, p.snapshot.chain.as_str(), p.snapshot.records)
-            }
-            None => (Vec::new(), "", 0),
-        };
-        let from = usize::try_from(from).ok()?;
-        if from >= log.len() || state.at != Some(*last) {
-            return None;
+        let anchor = prev.map_or_else(Anchor::default, Saved::anchor);
+        let from = usize::try_from(anchor.records).ok()?;
+        anchor.extend(log.get(from..)?, state)
+    }
+
+    /// Where the chain stands after this snapshot, for extending it without
+    /// the log.
+    pub fn anchor(&self) -> Anchor {
+        Anchor {
+            links: self.links.clone(),
+            chain: self.snapshot.chain.clone(),
+            records: self.snapshot.records,
         }
-        let chain = link(chain, &log[from..]);
-        Some(Self {
-            links,
-            snapshot: Snapshot::of(*last, records, chain, state),
-        })
     }
 
     /// Whether this is the fold of the first [`Saved::records`] records of `log`.

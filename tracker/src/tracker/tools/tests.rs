@@ -2800,7 +2800,7 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
         Error::Refused { why } => why,
         e => panic!("{e}"),
     };
-    let listed = t.ingest_roots().await.unwrap()["prerequisites"].clone();
+    let listed = t.ingest_roots(None).await.unwrap()["prerequisites"].clone();
     assert_eq!(listed, json!([]), "not accepted yet");
     let err = t
         .ingest_record(key("ingest-gh"), attach("GetFelix/felix-gateway#5"))
@@ -2816,7 +2816,7 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
         },
     )
     .await;
-    let listed = t.ingest_roots().await.unwrap()["prerequisites"].clone();
+    let listed = t.ingest_roots(None).await.unwrap()["prerequisites"].clone();
     assert_eq!(
         listed,
         json!([{
@@ -2833,7 +2833,7 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
     t.ingest_record(key("ingest-gh"), attach("GetFelix/felix-gateway#5"))
         .await
         .unwrap();
-    let roots = t.ingest_roots().await.unwrap();
+    let roots = t.ingest_roots(None).await.unwrap();
     assert_eq!(roots["prerequisites"], json!([]));
     assert!(
         roots["roots"]
@@ -3245,4 +3245,34 @@ async fn texts_past_the_cap_are_read_back_from_the_log() {
     for (n, e) in entries.iter().enumerate().take(4) {
         assert_eq!(e["text"], json!(text(&format!("{n}{}", "x".repeat(100)))));
     }
+}
+
+#[tokio::test]
+async fn a_steer_reads_back_to_the_holder_as_a_note_even_after_a_restart() {
+    let (fake, t) = held().await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 12 })
+        .await
+        .unwrap();
+    let steer = |s: &str| WorkRecord::Steered {
+        item: item("a1"),
+        attempt: 1,
+        text: text(s),
+    };
+    // Too long to keep inline: it needs an artifact, as a note does.
+    let big = "x".repeat(kbl_core::artifact::INLINE_LIMIT + 1);
+    assert_eq!(
+        why(t.person_record(key("gab"), steer(&big)).await),
+        "invalid"
+    );
+    t.person_record(key("gab"), steer("use the writer lock"))
+        .await
+        .unwrap();
+    let check = |v: &Value| {
+        assert_eq!(v["notes"].as_array().unwrap().len(), 1, "{v}");
+        assert_eq!(v["notes"][0]["text"]["text"], "use the writer lock");
+    };
+    check(&t.context_read(&agent("w1"), &item("a1")).await.unwrap());
+    // From the log, not the cache.
+    let t2 = start(&fake).await;
+    check(&t2.context_read(&agent("w1"), &item("a1")).await.unwrap());
 }

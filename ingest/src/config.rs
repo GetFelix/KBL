@@ -11,9 +11,10 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     pub(crate) tracker: TrackerConfig,
-    /// Exactly one of `github` and `jira`: a worker serves one source.
+    /// Exactly one of `github`, `jira` and `ado`: a worker serves one source.
     pub(crate) github: Option<GithubConfig>,
     pub(crate) jira: Option<JiraConfig>,
+    pub(crate) ado: Option<AdoConfig>,
     /// Seconds between polls when no webhook wakes it.
     #[serde(default = "default_poll")]
     pub(crate) poll_seconds: u64,
@@ -74,6 +75,54 @@ pub(crate) struct JiraConfig {
     /// Where the agents' pull requests live, for the link written back.
     #[serde(default = "default_pr_base")]
     pub(crate) pr_url_base: String,
+}
+
+/// How ingest signs in to Azure DevOps. The secret is read from the
+/// environment or a file, never from this config, and only ingest holds it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AdoConfig {
+    /// The Azure DevOps organization. Rule repos are `<organization>/<project>`.
+    pub(crate) organization: String,
+    /// The service address; `dev.azure.com` unless it is a proxy or a server.
+    #[serde(default = "default_ado_api")]
+    pub(crate) api: String,
+    /// Rule-repo project name to the project's real name, for a name that has
+    /// spaces or other characters an item id cannot hold.
+    #[serde(default)]
+    pub(crate) projects: BTreeMap<String, String>,
+    /// Personal access token sign-in. It needs Work Items (Read), and
+    /// (Read & write) only when a rule writes back.
+    pub(crate) pat_env: Option<String>,
+    pub(crate) pat_file: Option<std::path::PathBuf>,
+    /// Microsoft Entra service principal sign-in (client credentials).
+    pub(crate) entra: Option<EntraConfig>,
+    /// Display names the credential writes as.
+    #[serde(default)]
+    pub(crate) own_logins: Vec<String>,
+    /// Where the agents' pull requests live, for the link written back.
+    #[serde(default = "default_pr_base")]
+    pub(crate) pr_url_base: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EntraConfig {
+    pub(crate) tenant_id: String,
+    pub(crate) client_id: String,
+    pub(crate) client_secret_env: Option<String>,
+    pub(crate) client_secret_file: Option<std::path::PathBuf>,
+    /// The sign-in service; `login.microsoftonline.com` unless a sovereign cloud.
+    #[serde(default = "default_authority")]
+    pub(crate) authority: String,
+}
+
+fn default_ado_api() -> String {
+    "https://dev.azure.com".into()
+}
+
+fn default_authority() -> String {
+    "https://login.microsoftonline.com".into()
 }
 
 /// Whether JQL has an ORDER BY outside its quoted strings. Ingest appends
@@ -214,15 +263,27 @@ pub(crate) struct Rule {
     /// listed component with a mapping wins; `target_repo` is the fallback.
     #[serde(default)]
     pub(crate) components: BTreeMap<String, String>,
-    /// Jira: comment on the issue when an agent's pull request is linked.
+    /// Azure DevOps: a saved query, by id or path (`Shared Queries/Agent`),
+    /// that picks the work items. Without it the tag filters above decide.
+    pub(crate) ado_query: Option<String>,
+    /// Azure DevOps: area path to the repository agents work in. An item
+    /// takes the longest listed path that is its area or an ancestor of it;
+    /// `target_repo` is the fallback.
+    #[serde(default)]
+    pub(crate) area_paths: BTreeMap<String, String>,
+    /// Set when the worker's source is Azure DevOps.
+    #[serde(skip)]
+    pub(crate) ado: bool,
+    /// Jira and Azure DevOps: comment on the issue when an agent's pull request is linked.
     #[serde(default)]
     pub(crate) comment: bool,
-    /// Jira: add the pull request as a remote link on the issue.
+    /// Jira and Azure DevOps: add the pull request as a link on the issue.
     #[serde(default)]
     pub(crate) link_pr: bool,
     /// Jira: the workflow transition to apply when a pull request is linked
     /// (for example "In Review") and when it merges (for example "Done").
-    /// Skipped when the workflow does not offer it.
+    /// Skipped when the workflow does not offer it. Azure DevOps: the state
+    /// to set, skipped when the work item's process refuses it.
     pub(crate) transition_on_pr: Option<String>,
     pub(crate) transition_on_merge: Option<String>,
     /// Open roots this rule may have at once.
@@ -256,28 +317,41 @@ impl Config {
     }
 
     pub(crate) fn parse(text: &str) -> Result<Self> {
-        let cfg: Config = serde_json::from_str(text)?;
+        let mut cfg: Config = serde_json::from_str(text)?;
         ensure!(!cfg.rules.is_empty(), "there are no intake rules");
-        match (&cfg.github, &cfg.jira) {
-            (Some(g), None) => ensure!(
+        match (&cfg.github, &cfg.jira, &cfg.ado) {
+            (Some(g), None, None) => ensure!(
                 g.token_file.is_some() || g.app.is_some() || g.token_env.is_some(),
                 "github needs a token_file, an app or a token_env"
             ),
-            (None, Some(j)) => cfg.check_jira(j)?,
-            _ => anyhow::bail!("set exactly one of github and jira"),
+            (None, Some(j), None) => cfg.check_jira(j)?,
+            (None, None, Some(a)) => cfg.check_ado(a)?,
+            _ => anyhow::bail!("set exactly one of github, jira and ado"),
+        }
+        let is_ado = cfg.ado.is_some();
+        for r in &mut cfg.rules {
+            r.ado = is_ado;
         }
         let mut seen = std::collections::HashSet::new();
         for r in &cfg.rules {
             ensure!(seen.insert(&r.name), "rule {:?} is listed twice", r.name);
-            let jira_only = r.jql.is_some()
-                || !r.components.is_empty()
-                || r.comment
+            let write_back = r.comment
                 || r.link_pr
                 || r.transition_on_pr.is_some()
                 || r.transition_on_merge.is_some();
             ensure!(
-                cfg.jira.is_some() || !jira_only,
-                "rule {:?}: jql, components, comment, link_pr and transitions are for jira",
+                cfg.jira.is_some() || (r.jql.is_none() && r.components.is_empty()),
+                "rule {:?}: jql and components are for jira",
+                r.name
+            );
+            ensure!(
+                cfg.ado.is_some() || (r.ado_query.is_none() && r.area_paths.is_empty()),
+                "rule {:?}: ado_query and area_paths are for ado",
+                r.name
+            );
+            ensure!(
+                cfg.github.is_none() || !write_back,
+                "rule {:?}: comment, link_pr and transitions are for jira and ado",
                 r.name
             );
             if let Some(j) = &cfg.jira {
@@ -299,6 +373,31 @@ impl Config {
                     "rule {:?}: repo is {}/PROJECT for this site",
                     r.name,
                     j.site
+                );
+            }
+            if let Some(a) = &cfg.ado {
+                let project = r.repo.strip_prefix(&format!("{}/", a.organization));
+                ensure!(
+                    project.is_some_and(|p| !p.is_empty() && !p.contains('/')),
+                    "rule {:?}: repo is {}/PROJECT for this organization",
+                    r.name,
+                    a.organization
+                );
+                if let Some(q) = &r.ado_query {
+                    ensure!(
+                        !q.trim().is_empty()
+                            && !q.chars().any(char::is_control)
+                            && !q.split('/').any(|seg| seg == ".." || seg == "."),
+                        "rule {:?}: ado_query is a query id or a path such as Shared Queries/Agent",
+                        r.name
+                    );
+                }
+                ensure!(
+                    r.area_paths
+                        .keys()
+                        .all(|k| !k.trim().is_empty() && !k.chars().any(char::is_control)),
+                    "rule {:?}: an area path is not empty",
+                    r.name
                 );
             }
             ensure!(
@@ -329,6 +428,33 @@ impl Config {
                 || (!token && j.email.is_none() && j.oauth_token_file.is_some()),
             "jira signs in with email plus token_env or token_file, or with oauth_token_file"
         );
+        Ok(())
+    }
+
+    fn check_ado(&self, a: &AdoConfig) -> Result<()> {
+        ensure!(
+            !a.organization.is_empty() && !a.organization.contains(['/', '#']),
+            "ado.organization is a plain name"
+        );
+        let pat = a.pat_env.is_some() || a.pat_file.is_some();
+        ensure!(
+            pat != a.entra.is_some(),
+            "ado signs in with pat_env or pat_file, or with entra, not both"
+        );
+        if let Some(e) = &a.entra {
+            ensure!(
+                e.client_secret_env.is_some() != e.client_secret_file.is_some(),
+                "ado.entra needs exactly one of client_secret_env and client_secret_file"
+            );
+            ensure!(
+                !e.tenant_id.is_empty()
+                    && e.tenant_id
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-')),
+                "ado.entra.tenant_id is a tenant id or domain"
+            );
+            ensure!(!e.client_id.is_empty(), "ado.entra.client_id is empty");
+        }
         Ok(())
     }
 

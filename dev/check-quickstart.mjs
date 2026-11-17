@@ -85,7 +85,9 @@ try {
   check((statSync(mcpFile).mode & 0o777) === 0o600, "the generated config is mode 600");
   const server = JSON.parse(readFileSync(mcpFile, "utf8")).mcpServers;
   const { command, env } = Object.values(server)[0];
-  const who = await agent(env.KBL_FELIX_TOKEN, env.KBL_RUN, env.KBL_AGENT, env, command);
+  check(!env.KBL_FELIX_TOKEN && env.KBL_FELIX_ID_TOKEN_FILE && env.KBL_FELIX_CONTROL_PLANE, "the generated config renews from an ID token");
+  check((statSync(env.KBL_FELIX_ID_TOKEN_FILE).mode & 0o777) === 0o600, "the ID token file is mode 600");
+  const who = await agent("", env.KBL_RUN, env.KBL_AGENT, env, command);
   const reply = await who.tool("work_next", { wait_seconds: 10 });
   check(reply.claimed && reply.item.id === item, "kbl-mcp from the generated config claimed the item");
   await who.tool("work_complete", { item });

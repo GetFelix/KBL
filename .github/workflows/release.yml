@@ -1,9 +1,10 @@
 name: Release
 
-# A `v*` tag builds kbl-mcp and kbl-tool for every platform and publishes them
-# as a GitHub release with checksums. A manual run with dry_run builds and
-# uploads the archives as workflow artifacts and creates no release. Run on a
-# branch, it can never release: only a tag ref reaches the publish job.
+# A `v*` tag builds kbl-mcp and kbl-tool for every platform, attests each
+# archive and the checksums, and publishes them as a GitHub release. A manual
+# run with dry_run builds and uploads the archives as workflow artifacts and
+# creates no release. Run on a branch, it can never release: only a tag ref
+# reaches the publish job.
 on:
   push:
     tags:
@@ -28,8 +29,43 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The binaries report the workspace version, so a tag that disagrees with it
+  # would ship archives named for one version that print another.
+  version:
+    name: check the version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a plain tag on main
+        if: github.ref_type == 'tag'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in */*) echo "tag name must not contain a slash"; exit 1;; esac
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "$TAG is not on main"; exit 1; }
+      - name: Tag matches the workspace version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          versions=$(cargo metadata --no-deps --locked --format-version 1 \
+            | jq -r '.packages[].version' | sort -u)
+          [ "$(echo "$versions" | wc -l)" -eq 1 ] \
+            || { echo "workspace crates disagree on the version:"; echo "$versions"; exit 1; }
+          echo "workspace version: $versions"
+          if [ "$IS_TAG" = true ] && [ "$REF_NAME" != "v$versions" ]; then
+            echo "tag $REF_NAME does not match workspace version $versions; bump it first"
+            exit 1
+          fi
+
   build:
     name: build ${{ matrix.target }}
+    needs: version
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -94,30 +130,12 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  publish:
-    name: publish release
+  checksums:
+    name: checksums
     needs: build
-    # Only a tag publishes: a push of it, or a manual run on it with dry_run
-    # off (to retry a release whose publish step failed).
-    if: >-
-      github.ref_type == 'tag' &&
-      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: write
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Require a plain tag on main
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          case "$TAG" in */*) echo "tag name must not contain a slash"; exit 1;; esac
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
-            || { echo "$TAG is not on main"; exit 1; }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist
@@ -128,6 +146,53 @@ jobs:
           sha256sum kbl-*.tar.gz kbl-*.zip > SHA256SUMS
           sha256sum --check SHA256SUMS
           cat SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: SHA256SUMS
+          path: dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  # Signs with the run's OIDC identity, so it is the only job with id-token.
+  # Verify with: gh attestation verify <file> -R GetFelix/KBL
+  attest:
+    name: attest archives
+    needs: checksums
+    if: >-
+      github.ref_type == 'tag' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+
+  publish:
+    name: publish release
+    needs: attest
+    # Only a tag publishes: a push of it, or a manual run on it with dry_run
+    # off (to retry a release whose publish step failed).
+    if: >-
+      github.ref_type == 'tag' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}

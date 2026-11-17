@@ -39,9 +39,10 @@ fn derived(s: &State) -> String {
     let roots: Vec<_> = s.items.keys().cloned().collect();
     let exceed: Vec<_> = roots.iter().map(|r| s.proposals_exceed_budget(r)).collect();
     format!(
-        "{:?}\n{:?}\n{exceed:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        "{:?}\n{:?}\n{exceed:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
         s.waiting,
         s.human_waits,
+        s.summary_trust(0, u64::MAX),
         s.time_to_human_action(0, u64::MAX),
         s.time_to_human_action(35, 75),
         s.queue(0),
@@ -335,6 +336,41 @@ fn restored_review_asks_and_summary_marks_fold_like_fresh_ones() {
     check_every_offset(&with_blanks(&l.0), 4);
 }
 
+/// An assignee and a steer come back from a stored snapshot as a fresh fold
+/// has them, and later records act on them the same.
+#[test]
+fn restored_assignees_and_steers_fold_like_fresh_ones() {
+    use crate::work::Assignee;
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 12 });
+    for item in ["r1", "r2", "r3"] {
+        accepted_root(&mut l, item);
+    }
+    l.person(WorkRecord::Taken { item: id("r1") });
+    l.person(WorkRecord::Reassigned {
+        item: id("r2"),
+        to: Some(Assignee::Person(key("ana"))),
+    });
+    l.agent("w1", claimed("r3", 1));
+    l.person(WorkRecord::Taken { item: id("r3") });
+    l.person(WorkRecord::Steered {
+        item: id("r3"),
+        attempt: 1,
+        text: text("use the writer lock"),
+    });
+    l.person(WorkRecord::Reassigned {
+        item: id("r2"),
+        to: None,
+    });
+    let fresh = fold(&l.0);
+    assert_eq!(fresh.needs_you(&id("r1")), Some(NeedsYou::Taken));
+    assert_eq!(fresh.stage(&id("r2")), Some(Stage::Ready));
+    assert_eq!(fresh.items[&id("r3")].paths[0].human_inputs.len(), 1);
+    assert!(fresh.rejections.is_empty(), "{:?}", fresh.rejections);
+    check_every_offset(&l.0, 3);
+    check_every_offset(&with_blanks(&l.0), 4);
+}
+
 /// One snapshot kept on its own, read back from JSON, is the fold of its
 /// records, derived data included, and an edit anywhere below it fails it.
 #[test]
@@ -375,4 +411,45 @@ fn a_saved_snapshot_read_back_is_the_fold_and_fails_on_an_edit_below_it() {
     assert!(!back.valid(&edited));
     assert!(!back.valid(&log[..log.len() - 1]));
     assert!(first.valid(&log));
+}
+
+/// A running tracker extends a chain from an anchor with only the records
+/// since, without the log before it. The result is the snapshot a capture over
+/// the whole log gives, and an edit below either anchor still fails it.
+#[test]
+fn a_chain_extended_from_an_anchor_equals_a_capture_over_the_log() {
+    let mut l = held_root();
+    propose_n(&mut l, "w1", "a", 2);
+    propose_n(&mut l, "w1", "b", 2);
+    let log = l.0;
+    let (c1, c2) = (log.len() / 3, 2 * log.len() / 3);
+
+    let first = Anchor::default()
+        .extend(&log[..c1], &fold(&log[..c1]))
+        .unwrap();
+    // The second step sees only the records after the first.
+    let second = first
+        .anchor()
+        .extend(&log[c1..c2], &fold(&log[..c2]))
+        .unwrap();
+    let third = second.anchor().extend(&log[c2..], &fold(&log)).unwrap();
+    let whole = Saved::capture(&log, Some(&second), &fold(&log)).unwrap();
+    assert_eq!(third, whole);
+    assert!(third.valid(&log));
+    assert_eq!(third.state(), fold(&log));
+
+    let mut edited = log.clone();
+    edited[1].1 = log[2].1.clone();
+    assert!(!third.valid(&edited));
+    edited = log.clone();
+    edited[c1 + 1].1 = log[c1 + 2].1.clone();
+    assert!(!third.valid(&edited));
+    // A state that is not at the last record is refused.
+    assert!(
+        second
+            .anchor()
+            .extend(&log[c2..], &fold(&log[..c2]))
+            .is_none()
+    );
+    assert!(second.anchor().extend(&[], &fold(&log[..c2])).is_none());
 }

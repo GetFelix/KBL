@@ -1,6 +1,6 @@
 [package]
 name = "kbl-tracker"
-version = "0.0.0"
+version.workspace = true
 description = "The work tracker: the only writer of work.events and the ready streams, and the claim path for agents"
 edition.workspace = true
 rust-version.workspace = true

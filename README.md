@@ -78,10 +78,13 @@ the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be f
    claude --mcp-config .mcp.json --strict-mcp-config
    ```
    Ask Claude Code to call `work_next`. It claims `demo-1`, and the dashboard shows the item held by `agent1`.
-   `connect.mjs` writes the file with mode 600 (it holds the agent's tokens) and with absolute paths, so any directory
-   works. The stack has agents `agent1` to `agent8`, one tracker token each. A Felix token lasts 24 hours and
-   `kbl-mcp` does not renew it: after that, run `node dev/connect.mjs` again and restart the host
-   ([issue 317](https://github.com/GetFelix/KBL/issues/317)).
+   `connect.mjs` writes the file with mode 600 (it holds the agent's tracker token) and with absolute paths, so any
+   directory works. The stack has agents `agent1` to `agent8`, one tracker token each. The agent's ID token goes in
+   `dev/state/agent1.id-token` (mode 600), and the config points `KBL_FELIX_ID_TOKEN_FILE` and
+   `KBL_FELIX_CONTROL_PLANE` at it, so `kbl-mcp` renews its Felix token by itself. The ID token lasts 24 hours: run
+   `node dev/connect.mjs agent1` again to write a new one, and the running `kbl-mcp` picks it up at its next renewal.
+   `--fixed-token` writes a Felix token into the config as `KBL_FELIX_TOKEN` instead; that one is not renewed, so after
+   24 hours run `connect.mjs` again and restart the host.
 The dashboard link works once: the page removes the token from the address, so a reload needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
 4. **Bring in GitHub issues (optional).** Ingest turns the issues carrying one label in one repository into work. Build it, then point it at a repository and a token file (or export `GITHUB_TOKEN`). The token needs read access to that repository's issues:
    ```bash
@@ -208,7 +211,9 @@ dev/down.sh          # stop it and delete its data
 ```
 
 It runs Felix 0.6.2 (a control plane and one broker, with the fleet features that store each record's publisher and allow atomic commits turned on) and
-felix-gateway 0.8.0, plus a stand-in identity provider. The stack keeps nothing between starts, so every `up.sh`
+felix-gateway 0.8.0, plus a stand-in identity provider. The broker acknowledges a record only once it is written and
+fsynced, which the tracker requires of `work.events`: it refuses to start on a stream a failover could cut
+([What Felix must guarantee](docs/work-tracker.md#what-felix-must-guarantee)). The stack keeps nothing between starts, so every `up.sh`
 begins with a new tenant and an empty log.
 
 | What | Where |
@@ -270,7 +275,7 @@ the id cannot be used again, so use a new one.
 
 `kbl-mcp` is the server an agent reaches Felix through. It speaks [MCP](https://modelcontextprotocol.io) over stdio, so
 any MCP host can start it: Claude Code, the Claude Agent SDK, or a host from another vendor. One `kbl-mcp` process
-serves one agent and holds that agent's Felix token, so the agent can do on Felix only what its token allows.
+serves one agent and holds that agent's Felix token (or the ID token it renews one from), so the agent can do on Felix only what its token allows.
 
 `run_info` reports the run, the agent's name and the tenant, and the [task tools](#the-task-tools) post and work tasks.
 On start it connects to the broker, and it exits with the broker's error if the token or address is wrong, so a host
@@ -279,8 +284,9 @@ sees a failed server instead of a list of tools that cannot work.
 ### Getting the binaries
 
 Each [release](https://github.com/GetFelix/KBL/releases) carries `kbl-mcp` and `kbl-tool` for Linux (x86_64,
-aarch64), macOS (aarch64, x86_64) and Windows (x86_64). Download the archive for your platform, check it against
-`SHA256SUMS` from the same release, and put the two binaries on your `PATH`:
+aarch64), macOS (aarch64, x86_64) and Windows (x86_64). Download the archive for your platform, verify it, and put the two
+binaries on your `PATH`. Each archive and `SHA256SUMS` carry a signed attestation of the release workflow that built
+them; `gh attestation verify` (GitHub CLI 2.49 or later) checks it, and `SHA256SUMS` catches a corrupt download:
 
 ```bash
 tag=v0.1.0   # the release you want
@@ -288,6 +294,8 @@ target=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-
 base=https://github.com/GetFelix/KBL/releases/download/$tag
 curl -fLO "$base/kbl-$tag-$target.tar.gz" -O "$base/SHA256SUMS"
 grep "kbl-$tag-$target.tar.gz" SHA256SUMS | shasum -a 256 -c   # on Linux sha256sum -c also works
+gh attestation verify "kbl-$tag-$target.tar.gz" -R GetFelix/KBL
+gh attestation verify SHA256SUMS -R GetFelix/KBL   # the checksums are attested too
 tar -xzf "kbl-$tag-$target.tar.gz"
 kbl-$tag-$target/kbl-mcp --help
 install -m 755 kbl-$tag-$target/kbl-mcp kbl-$tag-$target/kbl-tool /usr/local/bin/   # or any directory on your PATH
@@ -295,7 +303,7 @@ install -m 755 kbl-$tag-$target/kbl-mcp kbl-$tag-$target/kbl-tool /usr/local/bin
 
 On Windows, download `kbl-<tag>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS`, then in PowerShell compare
 `(Get-FileHash kbl-<tag>-x86_64-pc-windows-msvc.zip).Hash` with its line in `SHA256SUMS` and run
-`Expand-Archive kbl-<tag>-x86_64-pc-windows-msvc.zip .`. The binaries are not signed. If macOS refuses one that a
+`Expand-Archive kbl-<tag>-x86_64-pc-windows-msvc.zip .`; `gh attestation verify kbl-<tag>-x86_64-pc-windows-msvc.zip -R GetFelix/KBL` works there too. The binaries themselves are not code-signed. If macOS refuses one that a
 browser downloaded, run `xattr -d com.apple.quarantine` on it (`curl` downloads are not affected). To build from source instead, use `cargo build --release -p kbl-mcp -p kbl-tool`.
 
 With the [dev stack](#running-felix-locally) running, build it and run the check that starts it the way a host would,
@@ -434,20 +442,48 @@ To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mc
 }
 ```
 
-Three variables are required:
+Two variables are required, and one way to authenticate:
 
 | Variable | What |
 |---|---|
 | `KBL_RUN` | The run the agent works in |
 | `KBL_AGENT` | The agent's name in that run, such as `w1` |
-| `KBL_FELIX_TOKEN` | The agent's Felix token for the broker. It is read from the environment only, never from a flag, so it stays out of the process list |
+| `KBL_FELIX_TOKEN` | The agent's Felix token for the broker, used as it is until it expires. It is read from the environment only, never from a flag, so it stays out of the process list |
+
+A Felix token from a production control plane lasts 15 minutes, and a fixed one cannot be replaced while `kbl-mcp`
+runs. To keep an agent working for longer, give it an ID token instead and let it renew its own Felix token. Leave
+`KBL_FELIX_TOKEN` unset and set a control plane and one source for the ID token:
+
+| Variable | What |
+|---|---|
+| `KBL_FELIX_CONTROL_PLANE` | The control plane's address, such as `https://felix.example.com`. Plain `http` is accepted only for this machine, because the ID token goes there as a bearer credential |
+| `KBL_FELIX_ID_TOKEN_FILE` | A file holding the ID token. It must be mode 600 or 400. It is read again on every renewal, so whatever keeps the token fresh only has to rewrite the file |
+| `KBL_FELIX_ID_TOKEN_COMMAND` | A command whose output is the ID token, run through `sh -c` on every renewal (`cmd /C` on Windows). Use it instead of the file when the host can mint one on demand |
+
+The command is passed to `sh -c`, so its text shows in the process list while it runs: put no secret in it, and let it read one from a file or the environment. The mode check applies on Linux and macOS.
+
+Set exactly one of the file and the command, and not `KBL_FELIX_TOKEN` as well. `kbl-mcp` trades the ID token at
+`/v1/tenants/<tenant>/token/exchange` for a token for the broker when it starts, and again once two thirds of that
+token's life has passed, whether or not the agent is busy. The Felix client keeps its publish and cache streams open
+for the life of a connection, and a write the broker forwards to another broker carries the token its stream opened
+with, so after each renewal `kbl-mcp` opens a new connection and switches to it
+([felix issue 2736](https://github.com/GetFelix/felix/issues/2736)). A claim the agent holds keeps standing across the
+switch: Felix ties an ack or an extension to the delivery, not to the connection. If a renewal fails (the control plane is down, the
+ID token expired or was revoked), `kbl-mcp` keeps using the Felix token it has and tries again every few seconds. Once
+that token expires too, calls that open a new stream fail and the error says the control plane refused the ID token.
+Nothing prints a token, the control plane's answer or the command line, and the command's error output is
+discarded.
+
+The ID token itself must outlast the agent's work or be replaced in the file or by the command before then, since
+`kbl-mcp` does not renew that.
 
 The rest are the variables [`kbl-tool`](#creating-a-run) uses, with the same defaults: `KBL_TENANT`,
 `KBL_NAMESPACE`, `KBL_FELIX_BROKER`, `KBL_FELIX_BROKER_NAME` and `KBL_FELIX_CA_FILE`. The default for the
 certificate file is relative to the host's working directory, so give an absolute path when a host starts the server.
 
 Issuing a token per agent is not built yet, so for now `dev/check-mcp.mjs` asks the stand-in identity provider for the
-administrator's.
+administrator's. `node dev/check-renewal.mjs` starts a worker from an ID token file, renews its Felix token every second,
+and checks a claim it holds survives.
 
 ## Developing
 

@@ -186,6 +186,13 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         async { bail!("this broker keeps no ingest cursors") }
     }
 
+    /// Fails when `work.events` is no longer acknowledged durably. Checked on
+    /// every rebuild, because the stream's settings can change or the stream
+    /// be recreated while the tracker runs.
+    fn check_acks(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
+
     /// Drops a connection that failed or timed out, so the next call opens a
     /// new one: `member`'s, or the log's when none.
     fn forget(&self, member: Option<&str>) -> impl Future<Output = ()> + Send;
@@ -283,6 +290,7 @@ pub(crate) struct Felix {
     main: Arc<tokio::sync::Mutex<Option<Conn>>>,
     members: Arc<tokio::sync::Mutex<HashMap<String, Conn>>>,
     lease_cache: &'static str,
+    kind: Kind,
 }
 
 /// Signs in, creates the streams, cache and consumer groups of a team (or of
@@ -311,13 +319,17 @@ pub(crate) async fn connect(target: Target, kind: Kind) -> Result<Felix> {
         session
             .http
             .post(url)
-            .bearer_auth(admin)
+            .bearer_auth(&admin)
             .json(&streams_batch(kind)),
         "create the tracker's streams",
     )
     .await?;
+    if kind == Kind::Team {
+        work_events_acks(&session).await?;
+    }
 
     let felix = Felix {
+        kind,
         session,
         main: Arc::default(),
         members: Arc::default(),
@@ -332,6 +344,49 @@ pub(crate) async fn connect(target: Target, kind: Kind) -> Result<Felix> {
         }
     }
     Ok(felix)
+}
+
+/// Reads `work.events` from the control plane and refuses it unless its acks
+/// are durable.
+async fn work_events_acks(session: &Session) -> Result<()> {
+    let admin = session.exchange("felix-controlplane").await?;
+    let url = format!(
+        "{}/v1/tenants/{}/namespaces/{}/streams/{WORK_EVENTS}",
+        session.target.control_plane, session.target.tenant, session.target.namespace
+    );
+    let stream: Value = send(
+        session.http.get(url).bearer_auth(&admin),
+        "read how work.events is acknowledged",
+    )
+    .await?
+    .json()
+    .await?;
+    acks_are_durable(&stream)
+}
+
+/// Refuses a `work.events` whose acknowledged records a failover could cut.
+/// The claim path trusts an acknowledged record to stay at its offset: a cut
+/// record whose offset another writer refills reads as the same log. That
+/// holds for a durable stream acknowledged by a quorum, and for a durable
+/// stream with one copy, which Felix holds unplaced while its broker is down
+/// rather than failing it over. The control plane does not show a shard's
+/// replication engine, so a stream on Raft is held to the same settings.
+fn acks_are_durable(stream: &Value) -> Result<()> {
+    let durable = stream["durable"].as_bool() == Some(true);
+    let quorum = stream["consistency"].as_str() == Some("Quorum");
+    // A missing count is not one copy.
+    let copies = stream["replication_factor"].as_u64();
+    if durable && (quorum || copies == Some(1)) {
+        return Ok(());
+    }
+    let copies = copies.map_or("unknown".to_owned(), |c| c.to_string());
+    bail!(
+        "{WORK_EVENTS} is acknowledged before a quorum holds it (durable: {durable}, \
+         consistency: {}, replication_factor: {copies}), so a failover could drop a \
+         record the tracker was told was written. Make it durable and either \
+         `Quorum` or one copy; see docs/work-tracker.md, \"What Felix must guarantee\"",
+        stream["consistency"].as_str().unwrap_or("unknown"),
+    )
 }
 
 /// A team's log and ready lanes, one durable stream each, and its lease
@@ -753,6 +808,13 @@ impl Broker for Felix {
         }
         .await;
         self.forget_main(done).await
+    }
+
+    async fn check_acks(&self) -> Result<()> {
+        match self.kind {
+            Kind::Team => work_events_acks(&self.session).await,
+            Kind::Org => Ok(()),
+        }
     }
 
     async fn forget(&self, member: Option<&str>) {

@@ -24,6 +24,7 @@ import {
   agent as spawnAgent,
   check,
   createRun,
+  createRunWhenReady,
   felixToken,
   giveUpAfter,
   killAll,
@@ -133,7 +134,8 @@ const id = (name) => `bk-${tag}-${name}`;
 try {
   // 1. Fill the log.
   const felix = await felixToken();
-  createRun(newRunId("backup"), "backup check");
+  // A fresh stack refuses writes until its leases are held.
+  await createRunWhenReady("backup", "backup check");
   must(["org", "init", "--tracker-subject", "agents-admin"]);
   let tracker = await startTracker(tokens, { ...timing, ...orgEnv });
   const run = newRunId("backupagents");
@@ -297,7 +299,7 @@ try {
   // 4. The restored log serves.
   tracker = await startTracker(tokens, { ...timing, ...orgEnv });
   const felix2 = await felixToken();
-  createRun(newRunId("backupagain"), "backup check, restored");
+  await createRunWhenReady("backupagain", "backup check, restored");
   const run2 = newRunId("backupagain2");
   createRun(run2, "restored agents");
   const w4 = await spawnAgent(felix2, run2, "w1", { ...timing, KBL_TRACKER_URL: TRACKER_URL, KBL_TRACKER_TOKEN: "tok-w1" });

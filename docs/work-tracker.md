@@ -151,6 +151,55 @@ state's wire form leaves out, so a restored state answers budget and wait questi
 fold would. A test folds a log once, records the state at every offset,
 and checks `fold_to` at each one, with and without snapshots, blanks included.
 
+#### What Felix must guarantee
+
+The tracker needs a record Felix acknowledged on `work.events` to stay at its
+offset. Its checks look at where the log ends: a resume or an extend compares
+the log's tip with the end of its state, and every append is conditional on
+that offset. If a failover cut an acknowledged record and another writer
+filled the offset again, the log would end where the tracker expects, and it
+could hand an agent a claim that another agent now holds.
+
+So `work.events` must be acknowledged only once a quorum holds it:
+
+- a durable stream with `consistency: Quorum`, or one on Felix's per-shard
+  Raft engine, where an ack is a Raft commit;
+- or a durable stream with `replication_factor: 1`. With one copy there is no
+  failover: Felix keeps the shard unplaced while its broker is down. This
+  relies on the broker not losing an acknowledged record when it restarts, so
+  run it with `FELIX_ACK_ON_COMMIT=true` and `FELIX_DURABLE_FSYNC_MODE=on_commit`
+  (the dev stack does), and do not abandon the shard's log.
+
+With one copy, the reliance also covers a record Felix never acknowledged:
+it must not become readable and then vanish. That holds under fsync
+`on_commit`, where a record is readable only once it is on disk.
+
+At start the tracker reads `work.events` from the control plane and refuses
+to start unless it is durable and either `Quorum` or one copy; a missing
+replication factor is refused, not read as one copy. It reads the settings
+again on every rebuild of its state, because a stream can be changed or
+recreated while the tracker runs. If they no longer hold, the rebuild fails,
+the state stays stale and every call is refused with an error that names the
+settings, until the stream is fixed. The tracker keeps running rather than
+exiting, so it serves again once the stream is fixed. The control plane does not show the shard engine or the
+broker's ack and fsync settings
+([felix#2735](https://github.com/GetFelix/felix/issues/2735)), so a stream on
+Raft with more than one copy must still be `Quorum`, and fsync on a single copy
+is up to whoever runs the broker.
+
+The tracker also assumes a read of the log's tip shows every acknowledged
+write. Felix does not promise that once reads need no leader lease: a deposed
+`Quorum` leader can still serve a read that shows less
+([felix#2735](https://github.com/GetFelix/felix/issues/2735) asks for a
+read that reflects every acknowledged write). The cost is that a resumed or
+extended claim can be reported live briefly after its hold ended. That is
+wasted agent work and never two holders, because every claim is conditional on
+the tail, so Felix refuses it and the tracker rebuilds.
+
+The tracker does not defend against Felix losing a write it acknowledged. A
+record Felix never acknowledged can still be cut, such as a publish whose
+reply was lost; the tracker treats that as a lost reply and reads the log again.
+
 #### Snapshots on disk
 
 Set `KBL_TRACKER_SNAPSHOT_DIR` (or `--snapshot-dir`) and the tracker keeps
@@ -172,13 +221,33 @@ record count. With none usable it folds from the start. The folder is derived
 data, so deleting it only costs a slower rebuild. A team folder that is a
 symlink is not used. The disk work runs off the async workers.
 
-When a rebuild has folded `KBL_TRACKER_SNAPSHOT_EVERY` records (2,000 by default)
-past the newest snapshot it writes a new one: temp file, `fsync`, rename, `fsync`
-of the folder, so a crash leaves the old file. The last three are kept, and the
-folder is mode 700. A failed write is logged and the tracker starts anyway.
-Snapshots are written by a rebuild, not by the running tracker, because the
-hash chain is built from the log the rebuild has just read. Run the tracker on a
-disk that survives restarts, or the folder is empty each time.
+`KBL_TRACKER_SNAPSHOT_EVERY` (2,000 records by default, `--snapshot-every`) sets
+how often a snapshot is written, and 0 turns saving off. Smaller means a restart
+folds less and the disk is written more; each save copies the whole state and
+writes it, so it should stay well above the records a busy minute adds. A save
+is temp file, `fsync`, rename, `fsync` of the folder, so a crash leaves the old
+file. The last three are kept (the one just written always among them), and the
+folder is mode 700. A failed write is logged and the tracker carries on.
+
+Two things write snapshots. A rebuild (boot, lease retake, stale recovery)
+writes one when it folded `every` records past the newest. The running tracker
+writes one each time `every` records have landed since the last save, so a
+tracker that never restarts keeps its snapshots current. Each landed record is
+applied under the core lock and then, if a save is due, the state and the
+per-record data are copied at that record, which is the one point where they
+equal the fold of the log to its offset. The hashing and the file write run on
+a blocking thread, so an append waits only for the copy, once per `every`
+records. The hash chain is extended from the last save: the tracker keeps the
+chain's head and the records since, not the log, so a save hashes only those
+records. One save runs at a time per state, so one copy exists beside the live one (a
+rebuild can briefly overlap the last save of the state it replaced). Records that land during a save wait for the next; if a stuck
+disk lets more than the larger of 4 x `every` and 10,000 pile up, the tracker
+logs it and stops saving until its next rebuild, which restarts from the log.
+A snapshot is never trusted on how it was made: the next rebuild checks every
+file against the log, and a file that does not match is skipped, so a
+stale or foreign file costs a full fold. The check covers the records, not the
+state inside the file, which is why the copy is taken at a record boundary. Run the tracker on a disk that survives
+restarts, or the folder is empty each time.
 
 Each record carries a format. A tracker that finds a record of a newer format
 than it reads does not serve, instead of skipping the record.
@@ -193,9 +262,23 @@ once only, and tokens are compared in constant time:
 ```json
 {
   "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" }, "ingest": { "<token>": "ingest-gh" },
+  "ingest_sources": { "ingest-gh": "github" },
   "grants": { "w1": ["github:GetFelix/felix-gateway"] }
 }
 ```
+
+`ingest_sources` is optional. It ties an ingest worker (by the name its token
+maps to) to one source, `github` or `jira`. A tied worker imports and writes
+only for that source's roots, with one exception: the `github` worker may
+record the state of a pull request on a root from any source, since agents
+open their requests on GitHub whatever tracker the issue is in. A worker with
+no entry is not tied and reaches every root, which is only appropriate when
+one worker runs, so the tracker refuses to start when some workers are tied
+and another is not. A tied worker other than `github` lists only its own
+source's roots. Tie each worker when a Jira worker and a GitHub worker run
+together. The tracker refuses a key it does not know in this file, so a
+misspelling fails at startup. A tracker from before `ingest_sources` ignores
+it, so downgrading removes the ties.
 
 `grants` is optional. It lists, per agent, the repositories it may file a
 [prerequisite](#prerequisites-in-another-repo) in or link to, beyond the
@@ -408,16 +491,20 @@ record if the fold accepts it:
 | `POST /v1/work/request-changes` `{item}` | `changes_requested`: records that a person sent the open pull request back |
 | `POST /v1/work/mark-merged` `{item}` | `merge_marked`: records that the pull request was merged upstream, and closes the item as merged. Refused while upstream shows the request open; the item keeps who recorded it, and a later open or closed-unmerged status reopens it into Needs you as `merge_disputed` |
 | `POST /v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated`: marks the summary the attempt handed off accurate or not |
+| `POST /v1/work/take` `{item}` | `taken`: assigns the item to the caller. See [Assignees](#assignees) |
+| `POST /v1/work/reassign` `{item, to}` | `reassigned`: assigns the item to `to`, `{"person": name}` of the caller's team (`not_member` otherwise), or to nobody with `null` |
+| `POST /v1/work/steer` `{item, attempt, text}` | `steered`: a note to the agent holding `attempt` |
 
 A person's token can also read the team's work. These calls write nothing:
 
 | Call | Answers with |
 |---|---|
-| `GET /v1/work/queue` | My queue: every item that waits on a person, oldest wait first, then lower tier, as `{item, title, work, stage, needs, wait, tier, since_ms, root}`, with `count` (the whole queue) and `at`. `?limit=` trims `queue` to its first entries: 200 by default, at most 1000. `wait` is `proposal`, `question`, `failure`, `review` or `other`; an item whose reason changes starts a new wait from that record. An item a person snoozed or parked is left out while that wait continues (see [Card actions on My queue](#card-actions-on-my-queue)). `since_ms` is null for a wait the tracker did not see begin (it started before a snapshot), and those come first, since they are older than any known start. The same list for every person of the team. Person tokens only |
-| `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
+| `GET /v1/work/queue` | My queue: every item that waits on the caller, oldest wait first, then lower tier, as `{item, title, work, stage, needs, wait, tier, since_ms, root, assignee}`, with `count` (the whole queue) and `at`. `?limit=` trims `queue` to its first entries: 200 by default, at most 1000. `wait` is `proposal`, `question`, `failure`, `review` or `other`; an item whose reason changes starts a new wait from that record. An item a person snoozed or parked is left out while that wait continues (see [Card actions on My queue](#card-actions-on-my-queue)). `since_ms` is null for a wait the tracker did not see begin (it started before a snapshot), and those come first, since they are older than any known start. An item assigned to a person is only in that person's queue; anything else waiting is in everyone's. Person tokens only |
+| `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, assignee, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
 | `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A `from` past the end of the log is an empty answer with `next` null. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
 | `GET /v1/work/metrics/time-to-human` | Time to first human action over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.count`, `p50_ms` and `p90_ms` of the waits a person ended in the window, the same per reason in `by_kind` (`proposal`, `question`, `failure`, `review`, `other`), `open` (items waiting now with no person action yet) and `oldest_open_since_ms`. `truncated` is true, with `complete_since_ms`, when the oldest finished waits were dropped past the 20,000 kept, or the tracker restored its state from a snapshot, and the window reaches back before what the fold has seen. Open waits are not in the percentiles. See [Time to first human action](#time-to-first-human-action) |
+| `GET /v1/work/metrics/summary-trust` | How often the summaries people marked were marked accurate over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.rated` (attempts whose standing mark was written in the window), `accurate`, `not_accurate`, `accurate_permille` (null with nothing rated), `unrated` (finished attempts with no mark now, whatever the window), `min_sample` (10) and `undated`. A person only. See [Summary trust](#summary-trust) |
 
 An unknown item answers `409` with `why: unknown_item`, like the agent calls.
 A path that is not a valid item id is a `400`.
@@ -435,6 +522,18 @@ The log is the truth for holds. Before each call the tracker checks that the log
 still shows the agent holding the item. If a person closed the item or the
 attempt, or another agent took it, the agent's next `extend`, `complete` or
 `release` answers `lost`.
+
+Memory can miss a record another writer appended, for example a release a
+broker failover wrote. So before it hands a held claim back to its agent (a
+`work_next` that answers `resumed`, or an `extend`), the tracker reads the log
+from the end of its state. If the log's end moved (a record landed, a new
+leader's blank start, or a failover that cut the end short), it rebuilds from the log
+and checks the hold again, as after a refused write: `work_next` then answers
+from the rebuilt state, and `extend` answers 503 so the agent calls again and
+hears `lost` if the hold ended. A new claim needs no read, since its `claimed`
+record is written only if nothing landed after the state's end. The read sees
+where the log ends, not what it holds, which is why the tracker needs
+acknowledged records to stay put ([What Felix must guarantee](#what-felix-must-guarantee)).
 
 When Felix answers an extend with `stale_claim` (it no longer has the
 delivery), the tracker renews its lease by version before it answers `lost`.
@@ -641,6 +740,7 @@ KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
 | `add_note` | A note, review comment or priority change, as `human_input` |
 | `retry_item`, `snooze_item`, `park_item`, `unpark_item`, `unblock_item` | The [card actions](#card-actions-on-my-queue) |
 | `request_review`, `request_changes`, `mark_merged`, `rate_summary` | The [review actions and summary marks](#review-actions-and-summary-marks) |
+| `take_item`, `reassign_item`, `steer_agent` | [Assignees](#assignees): take an item, assign it to a person (`to`) or to nobody (no `to`), or send a note to the agent holding it |
 
 Every write takes an optional `request_key`, as the REST calls do. A tool
 refuses a parameter it does not list before it calls the tracker.
@@ -659,7 +759,38 @@ the same environment can read the token.
 Add a tool by adding an entry to the table in `mcp/src/person/table.rs`, and a
 row to the threat model.
 
-Reassign, take and steer need an assignee in the fold and are not built yet.
+#### Assignees
+
+An item has at most one assignee, as in Linear or GitHub. Any person of the
+team may set or clear it, and it stays through a close and a reopen. The three
+moves are [format 12](upgrades.md#formats): until a person raises the log to 12
+they are refused with `format`. Each needs an open, accepted item (`closed`,
+`not_ready`), and a move that changes nothing is `no_change`.
+
+- **Take** assigns the item to you. **Reassign** assigns it to a person of the
+  team, or to nobody. The tracker refuses a person outside the team as
+  `not_member`.
+- A person assignee means you are doing it yourself, so no agent claims it.
+  Where the item would be Ready it waits in Needs you as `taken` instead. Other
+  reasons to wait (a question, a failed check, used tries, a flag) come first:
+  they say what to do, the assignee says who. An item in review or blocked
+  stays there.
+- If an agent holds the item, it keeps the hold. When it finishes or releases,
+  the item stops in Needs you as `taken` instead of going back to Ready. Stop
+  it (`released`) to end the agent's work now. Reassigning to nobody returns the
+  item to Ready.
+- **Steer** sends a note to the agent holding the item: it names the attempt
+  held and is refused without a holder (`not_held`) or for another attempt
+  (`wrong_attempt`). The agent reads it as a note on its attempt, through the
+  same read as any other note, and it counts as a note for redoing a red check.
+- My queue is per person: an item assigned to a person is only in that
+  person's queue. Unassigned items are in everyone's.
+- A take, a reassign and a steer each count as a person acting on the wait for
+  [time to first human action](#time-to-first-human-action). The wait a take
+  starts is counted as acted on, since the person chose it.
+- An agent cannot be an assignee yet: `reassigned` to `{"agent": ...}` is
+  refused as `bad_assignee`. Routing a claim to one agent is
+  [#324](https://github.com/GetFelix/KBL/issues/324).
 
 #### Review actions and summary marks
 
@@ -1590,7 +1721,7 @@ so a missed webhook costs latency, not an item.
 | Priority from | a label mapping | the Priority field (1 to 4) | the priority field |
 | Links from | blocked by, sub-issues | predecessor, parent | blocks, sub-tasks |
 | Closed as | `completed` / `not_planned`, duplicate | Done, Closed, Removed | the resolution |
-| Credentials | GitHub App or token | personal access token or Entra app | API token or OAuth app |
+| Credentials | GitHub App or token | personal access token or Entra service principal | API token or OAuth app |
 
 The ingest worker holds the source credentials. Agents never see them and
 write back only through the tracker, which checks the claim first.
@@ -1664,13 +1795,107 @@ GitHub one has `github`. A rule's `repo` is `<site>/<PROJECT>`, and its
   issue through the named workflow transition (`transition_on_pr`, and
   `transition_on_merge` once the item's pull request is recorded as merged).
   A transition the workflow does not offer from the issue's status is
-  skipped. Each step is done once per pull request. A Jira worker records no
-  pull request merges, so `transition_on_merge` fires only when a merged
-  `pr_status` comes from elsewhere, and the worker warns at startup when a
-  rule sets it ([#298](https://github.com/GetFelix/KBL/issues/298)).
+  skipped. Each step is done once per pull request. A Jira worker reads no
+  pull requests and holds no GitHub credential. The GitHub worker records the
+  state of an agent's request on a Jira root, so `transition_on_merge` needs
+  a GitHub worker running beside it with a rule for the repository the
+  request is in. That worker writes the request's `pr_status` on the root (the
+  tracker then opens the request's review items, as for any root) and nothing
+  else; the Jira worker alone moves the issue and the root.
 - **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
   long (30 s when none is named, at most an hour) before any further request.
   Re-polling and a lost cursor never import an issue twice.
+
+### Azure DevOps
+
+An Azure DevOps worker has an `ado` block where a GitHub one has `github`. A
+rule's `repo` is `<organization>/<project>`; the work item id is the number,
+so `ado:contoso/Platform#4410` is work item 4410 in project `Platform`. A
+project whose name has spaces is listed under `projects`, which maps the name
+the rule uses to the real one:
+
+```json
+{
+  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN" },
+  "ado": {
+    "organization": "contoso",
+    "projects": { "Platform": "Platform Team" },
+    "pat_env": "ADO_PAT",
+    "own_logins": ["KBL Bot"]
+  },
+  "rules": [{
+    "name": "agent-ok",
+    "repo": "contoso/Platform",
+    "labels_all": ["agent-ok"],
+    "mode": "admit",
+    "area_paths": {
+      "Platform Team\\Storage": "GetFelix/felix",
+      "Platform Team\\Docs": "GetFelix/felix-docs"
+    },
+    "target_repo": "GetFelix/felix",
+    "comment": true,
+    "link_pr": true,
+    "transition_on_pr": "Resolved",
+    "transition_on_merge": "Closed"
+  }]
+}
+```
+
+- **Sign-in.** Either a personal access token (`pat_env` or `pat_file`, sent
+  as HTTP basic) or a Microsoft Entra service principal (`entra`: tenant,
+  client id, and `client_secret_env` or `client_secret_file`). Ingest signs
+  in with the client credentials flow for the Azure DevOps resource
+  (`499b84ac-1321-427f-aa17-267ca6975798/.default`), keeps the token until
+  two minutes before it expires, and signs in again once on a 401. Azure
+  DevOps no longer takes new OAuth app registrations, so there is no OAuth
+  option. Secrets are read from the environment or a file each time they are
+  used, never from the config, and are not in any error or log line. The
+  worker learns its own name from `connectionData`, or from `own_logins`, and
+  refuses to start with neither.
+- **Least privilege.** A worker with no rule that writes back needs only
+  Work Items (Read) on the PAT, and the adapter refuses every write. Give
+  Work Items (Read & write) only to a worker whose rules set `comment`,
+  `link_pr` or a transition. A service principal has no scopes to pick: its
+  rights are the access level and project permissions it was added with, so
+  add it as a Basic user with read access, and write access only for
+  write-back.
+- **Selection.** Either tags or a saved query. Tags are the rule's
+  `labels_all`, `labels_any` and `labels_excluded`, matched against the work
+  item's tags; the type, assignee and iteration (`milestone`) filters work as
+  for GitHub. `ado_query` names a saved query by id or by path
+  (`Shared Queries/Agent Work`) and replaces those filters: the query
+  decides, so an item that leaves it is withdrawn. Ingest asks for the
+  project's changes since its cursor with a WIQL query it builds itself, and
+  the saved query's own result is intersected with them. Nothing from a work
+  item, and no cursor that is not a date, is ever put in a query or an
+  address. The first poll reads open items only. A query that fails (401, 403
+  or 404) stalls that project with its items and cursor as they were.
+- **Tiers.** Priority 1 to 4 maps to tiers 0 to 3. `priority_labels` can map
+  a priority (`"2": 0`) or a tag, the lowest tier wins, and anything else
+  takes `default_tier`.
+- **Links.** A predecessor link and an item's children become edges: the
+  item waits on its predecessors and on its children. An end in a project
+  that no rule reads is not an edge.
+- **Closed.** The state Done, Closed or Completed is completed; Removed or
+  Cut is dropped; any other state is open.
+- **Repository.** The longest `area_paths` entry that is the item's area
+  path or an ancestor of it names the repository (`Platform\Team` covers
+  `Platform\Team\Sub`, not `Platform\Teamster`), then `target_repo`. An
+  item with neither is imported and shown in Needs you as out of scope, and
+  returns to its stage on the first poll after a mapping covers it.
+- **Write-back.** For an agent's pull request in a mapped repository, ingest
+  adds a hyperlink to the work item (`link_pr`), a comment (`comment`) and
+  sets the named state (`transition_on_pr`, and `transition_on_merge` once
+  the item's pull request is recorded as merged). Each is done once per pull
+  request, skipped when it is already there, and a state the work item's
+  process refuses from where it is is skipped. Only work items ingest
+  imported are written to, and only in a project a rule reads. As with Jira,
+  an Azure DevOps worker reads no pull requests: the GitHub worker records
+  their state, so `transition_on_merge` needs one beside it.
+- **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
+  long (30 s when none is named, at most an hour). A bad token is answered
+  203 with a sign-in page or a redirect; both are read as a 401 and stall the
+  project.
 
 ### Intake rules
 
@@ -1687,7 +1912,7 @@ Each source has one or more intake rules. A rule is the source's own filter
   as roots close.
 - **A default tier** and the mapping from the upstream priority.
 - **The repository** agents work in. ADO and Jira items do not name one, so
-  the rule maps a project, area path or component to it. An item with no
+  the rule maps an area path or component to it. An item with no
   repository goes to Needs you.
 
 Each upstream id is imported once (`cache_put_if` absent on the id), so
@@ -1994,7 +2219,8 @@ My queue is the only place things arrive. Nothing pops up when a record lands.
 
 ### My queue
 
-The landing view. It lists everything that waits on the person looking:
+The landing view. It lists everything that waits on the person looking, which
+leaves out items assigned to someone else:
 
 - a question an agent asked, or an item triage found unclear. The card shows
   the options as numbers with the default marked, and a field for any other answer,
@@ -2022,7 +2248,7 @@ GitHub and Jira. `?` shows the map in the page.
 | `1` to `9` | The card's numbered choices (table below) | what that choice records |
 | `s` | Set status. Lists only the moves a person can make from here, such as snooze, park, close, retry or mark merged | the record of that move |
 | `p` | Set tier (on a proposal: edit it before accepting) | `tier_changed` |
-| `a` | Assign to an agent, or to yourself so no agent claims it | `reassigned`, `taken` |
+| `a` | Assign to yourself or a person of the team, so no agent claims it, or to nobody. Agents come later ([#324](https://github.com/GetFelix/KBL/issues/324)) | `taken`, `reassigned` |
 | `h` | Snooze for four hours | `snoozed` |
 | `c` | New item, filed in one of the trackers | `imported`, when ingest sees it |
 | `f` | Filter | nothing |
@@ -2178,7 +2404,9 @@ approvals are never counted as review.
 - Time waiting on a human, per merged fix.
 - Time to the first human action on My queue and on In review. The tracker
   serves it today, see [Time to first human action](#time-to-first-human-action);
-  the dashboard has no Metrics tab yet.
+  the dashboard does not draw it yet.
+- Trust in summaries: the share of marked summaries a person marked accurate.
+  The dashboard's Metrics dialog shows it, see [Summary trust](#summary-trust).
 - Throughput against arrivals, and a cumulative flow chart. A band that widens
   is the constraint.
 - Blocked time and the items that hold the most up.
@@ -2219,6 +2447,37 @@ record falls in. Waits still open are reported as `open`, with the time the
 longest began, and are left out of p50 and p90. Percentiles use the nearest
 rank. The numbers are for the team whose log is folded; nothing names who
 acted. The fold keeps the last 20,000 finished waits; past that the response sets `truncated` for a window that reaches the dropped ones. The waits are not in a state's wire form, so a state restored from that counts only from the first record after it, and `truncated` is true for any window reaching earlier.
+
+#### Summary trust
+
+How often a person who marked an agent's summary marked it accurate. The fold
+keeps each finished attempt's latest `summary_rated` mark and when it was
+written ([review actions](#review-actions-and-summary-marks)); no new record is
+written and no model reads anything.
+
+`GET /v1/work/metrics/summary-trust` counts an attempt in the window its
+standing mark was written in. Marking an attempt again moves it to the later
+mark's window and its new answer, so an attempt is never counted twice and the
+first mark does not linger. A repeat of the standing mark is refused and moves
+nothing. Each attempt counts, so a redo's summary is marked and counted apart
+from the first attempt's.
+
+- `rated`, `accurate` and `not_accurate` are the marks in the window;
+  `accurate_permille` is `accurate` over `rated` in thousandths, and null when
+  nothing was rated, so an empty window is never read as 0%.
+- `unrated` is the finished attempts nobody has marked as of now. It does not
+  follow the window: an attempt has no finish time in the fold, so it is the
+  backlog still waiting for a mark.
+- `min_sample` is 10. Below it the dashboard shows the counts first, the share
+  muted, and says there are too few marks to read a trend from.
+- `undated` counts marks a state decoded from its wire form has no time for; they are left out of the
+  window. A tracker folding the log reports 0.
+
+The numbers are for the team. There is no breakdown by agent, model or
+reviewer, and none will be added: the fold keeps no agent or model per attempt
+for a summary, and a per-reviewer figure ranks people, which the Metrics tab
+does not do. A team with one reviewer still reveals that person's marks; the
+route is for people of the team, who can read the same marks on each item.
 
 [dashboard-research.md](dashboard-research.md) says why each part is there and
 how much evidence stands behind it.

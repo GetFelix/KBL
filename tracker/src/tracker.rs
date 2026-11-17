@@ -101,8 +101,8 @@ pub(crate) struct Settings {
     pub(crate) review_limit: usize,
     /// Where fold snapshots are kept, if anywhere. One folder per team inside.
     pub(crate) snapshot_dir: Option<std::path::PathBuf>,
-    /// Records between snapshots; a boot saves one when this many have
-    /// accumulated since the newest.
+    /// Records between snapshots. A rebuild and the running tracker each save
+    /// one when this many have accumulated since the newest. Zero turns it off.
     pub(crate) snapshot_every: u64,
 }
 
@@ -178,6 +178,16 @@ pub(crate) enum Which {
     Claim(u64),
 }
 
+/// What `hold_at_tip` found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AtTip {
+    Live,
+    /// The state no longer shows the hold.
+    Gone,
+    /// The log moved past the state, which is being rebuilt.
+    Moved,
+}
+
 /// One agent's delivery of one ready record.
 struct Delivery {
     /// Names this delivery among all the deliveries of the same item.
@@ -231,6 +241,9 @@ struct Core {
     /// handed the record to before it landed (felix#2207).
     handed_back: HashMap<ItemId, u64>,
     recall: Recall,
+    /// Saves of snapshots from this running state. None when snapshots are off
+    /// or saving stopped until the next rebuild.
+    snap: Option<snapshots::Periodic>,
     /// Agents whose token was revoked. A claim checks it under this lock, so a
     /// `work_next` that passed the token check before the revoke cannot claim
     /// after the revoke has released the agent's holds.
@@ -735,12 +748,13 @@ impl<B: Broker> Tracker<B> {
         // must not hold the lease and keep a build that can from starting.
         tracker.read_state().await?;
         tracker.acquire_lease().await?;
-        let (state, recall, tail) = tracker.read_state().await?;
+        let (state, recall, tail, snap) = tracker.read_state().await?;
         {
             let mut core = tracker.0.core.lock().await;
             core.state = state;
             core.recall = recall;
             core.tail = tail;
+            core.snap = snap;
         }
         // Like a retake: the lease was granted before the read, so it is
         // confirmed by version before the first write.
@@ -815,6 +829,7 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         let lanes = self.review_lanes(reviews)?;
         let deadline = Instant::now() + wait.min(MAX_WAIT);
+        let mut moved = 0;
         loop {
             self.begin().await?;
             let slot = self.slot(agent);
@@ -823,8 +838,11 @@ impl<B: Broker> Tracker<B> {
                 self.reconcile(agent, &mut delivery).await;
                 self.resume_recover(agent, &mut delivery).await?;
                 if let Some(d) = delivery.as_ref() {
-                    let core = self.0.core.lock().await;
-                    return Ok(claimed(&core, d, true));
+                    if let Some(reply) = self.resumed(agent, d, &mut moved).await? {
+                        return Ok(reply);
+                    }
+                    // The log moved past the state: rebuild, which drops a hold that ended.
+                    continue;
                 }
                 let held = self.0.core.lock().await.state.held_by(agent.as_str());
                 if let Some((item, _)) = held {
@@ -877,6 +895,13 @@ impl<B: Broker> Tracker<B> {
         }
         match extended {
             Ok(visible) => {
+                // Checked after Felix's extend, so a log read that fails costs
+                // the agent a retry, not its delivery.
+                if self.hold_at_tip(agent, d).await? == AtTip::Moved {
+                    return Err(Error::Unavailable(format!(
+                        "{WORK_EVENTS} moved past this tracker's state; call again"
+                    )));
+                }
                 // The hold may have been released while Felix was answering.
                 let mut core = self.0.core.lock().await;
                 let ours = core.owner.get(item).is_some_and(|o| o.id == d.id);
@@ -2152,6 +2177,79 @@ impl<B: Broker> Tracker<B> {
         });
     }
 
+    /// The reply that resumes `d`, or none when the log has moved past the
+    /// state and the caller should rebuild and look again. A second move in
+    /// one call errs, so a busy log cannot hold the caller in a loop.
+    async fn resumed(
+        &self,
+        agent: &AgentName,
+        d: &Delivery,
+        moved: &mut u32,
+    ) -> Result<Option<Value>, Error> {
+        match self.hold_at_tip(agent, d).await? {
+            AtTip::Live => return Ok(Some(claimed(&*self.0.core.lock().await, d, true))),
+            // The next round's reconcile drops it.
+            AtTip::Gone => return Ok(None),
+            AtTip::Moved => {}
+        }
+        *moved += 1;
+        if *moved > 1 {
+            return Err(Error::Unavailable(format!(
+                "{WORK_EVENTS} keeps moving under this claim; call again"
+            )));
+        }
+        Ok(None)
+    }
+
+    /// Whether `d`'s hold stands at the tip of the log. The single check
+    /// before a held claim is answered to its agent (a resume, an extension):
+    /// memory misses a release another writer appended after a failover, so
+    /// the log is read from the tail. A tip that moved marks the state
+    /// refused, as a refused write would, so the next call rebuilds and
+    /// confirms the lease. A fresh claim needs no check: its write is
+    /// conditional on the tail.
+    async fn hold_at_tip(&self, agent: &AgentName, d: &Delivery) -> Result<AtTip, Error> {
+        // Assumes the tip read shows every acknowledged write; Felix does not
+        // promise that after a leader is deposed (docs/work-tracker.md).
+        let tail = self.0.core.lock().await.tail;
+        // From one before the tail, so a tip a failover lowered shows too.
+        let (_, tip) = self
+            .io(
+                None,
+                self.0
+                    .broker
+                    .read_to_tip(WORK_EVENTS, tail.saturating_sub(1)),
+            )
+            .await
+            .map_err(|e| {
+                Error::Unavailable(format!("could not check your claim against the log: {e:#}"))
+            })?;
+        let core = self.0.core.lock().await;
+        let mut lease = self.lease();
+        if lease.stale || lease.retaken {
+            return Ok(AtTip::Moved);
+        }
+        // Our own write may land during the read and raise the tail; it was
+        // conditional on the tail, so nothing foreign came before it.
+        let lowered = core.tail == tail && tip < tail;
+        if tip > core.tail || lowered {
+            lease.refused();
+            return Ok(AtTip::Moved);
+        }
+        let ours = core.owner.get(&d.item).is_some_and(|o| o.id == d.id);
+        let shown = core
+            .state
+            .items
+            .get(&d.item)
+            .and_then(|i| i.hold.as_ref())
+            .is_some_and(|h| h.by.as_str() == agent.as_str() && h.attempt == d.attempt);
+        Ok(if ours && shown {
+            AtTip::Live
+        } else {
+            AtTip::Gone
+        })
+    }
+
     /// For an agent whose recover failed: tries again, and errs while Felix still
     /// fails, so the agent calls again instead of hearing its claim is lost.
     async fn resume_recover(
@@ -2380,6 +2478,7 @@ impl<B: Broker> Tracker<B> {
                 core.tail = offset + 1;
                 core.recall
                     .remember(offset, &logged, &self.0.me, absent, false);
+                self.note_landed(core, offset, &logged);
                 if logged.req.is_some() {
                     request_keys::landed();
                 }
@@ -2399,6 +2498,52 @@ impl<B: Broker> Tracker<B> {
                 Err(Error::Felix(e))
             }
         }
+    }
+
+    /// The record at `offset` landed and is applied: the one point where the
+    /// state is exactly the fold of the log to `offset`. Takes the copy a
+    /// periodic snapshot is built from, and saves it off the async workers so
+    /// the append does not wait on hashing or disk.
+    fn note_landed(&self, core: &mut Core, offset: u64, logged: &WorkLogged) {
+        let Some(snap) = core.snap.as_mut() else {
+            return;
+        };
+        match snap.note(offset, logged, &core.state, &core.recall) {
+            Ok(None) => {}
+            Ok(Some(job)) => self.spawn_save(job),
+            Err(why) => {
+                eprintln!("kbl-tracker: {why}; snapshots stop until the next rebuild");
+                core.snap = None;
+            }
+        }
+    }
+
+    /// Runs a save off the async workers and then hands its anchor back to the
+    /// core, which may start the next one.
+    fn spawn_save(&self, job: snapshots::Job) {
+        let me = self.clone();
+        tokio::spawn(async move {
+            let id = job.id();
+            let anchor = tokio::task::spawn_blocking(move || job.run())
+                .await
+                .ok()
+                .flatten();
+            let mut core = me.0.core.lock().await;
+            let core = &mut *core;
+            let Some(snap) = core.snap.as_mut() else {
+                return;
+            };
+            match snap.finished(id, anchor, &core.state, &core.recall) {
+                Ok(None) => {}
+                Ok(Some(next)) => me.spawn_save(next),
+                Err(()) => {
+                    eprintln!(
+                        "kbl-tracker: could not build a snapshot; saving stops until the next rebuild"
+                    );
+                    core.snap = None;
+                }
+            }
+        });
     }
 
     /// Refuses to serve without the writer lease, and rebuilds the state first
@@ -2460,7 +2605,7 @@ impl<B: Broker> Tracker<B> {
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
         let rebuilt_at = Instant::now();
-        let (state, recall, tail) = self
+        let (state, recall, tail, snap) = self
             .read_state()
             .instrument(tracing::info_span!(
                 "tracker.fold.rebuild",
@@ -2468,6 +2613,13 @@ impl<B: Broker> Tracker<B> {
             ))
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
+        // After the read, so a failure leaves the state stale and every call
+        // refused: the tracker serves again once the stream is fixed.
+        self.0.broker.check_acks().await.map_err(|e| {
+            Error::Unavailable(format!(
+                "{e:#}; the tracker is refusing work until it is fixed"
+            ))
+        })?;
         let team = self.0.settings.team.clone();
         metrics::counter!("kbl_tracker_fold_rebuilds_total", "team" => team.clone()).increment(1);
         metrics::histogram!("kbl_tracker_fold_rebuild_seconds", "team" => team)
@@ -2475,6 +2627,7 @@ impl<B: Broker> Tracker<B> {
         let mut core = self.0.core.lock().await;
         core.state = state;
         core.recall = recall;
+        core.snap = snap;
         // Assigned, not raised: a shard failover can lower the tip.
         core.tail = tail;
         // A retake during the read may have let records in that it missed.
@@ -2487,7 +2640,9 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// The fold of every record in `work.events`, and the committed tip.
-    async fn read_state(&self) -> anyhow::Result<(State, Recall, u64)> {
+    async fn read_state(
+        &self,
+    ) -> anyhow::Result<(State, Recall, u64, Option<snapshots::Periodic>)> {
         let mut entries = Vec::new();
         let (records, tail) = self
             .io(None, self.0.broker.read_to_tip(WORK_EVENTS, 0))
@@ -2527,14 +2682,16 @@ impl<B: Broker> Tracker<B> {
             let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
             recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
+        let mut snap = None;
         if let Some(store) = store {
-            (state, recall) = tokio::task::spawn_blocking(move || {
-                store.save(&entries, saved.as_ref(), &state, &recall);
-                (state, recall)
+            (state, recall, snap) = tokio::task::spawn_blocking(move || {
+                let anchor = store.save(&entries, saved.as_ref(), &state, &recall);
+                let snap = snapshots::Periodic::new(store, anchor, &entries);
+                (state, recall, snap)
             })
             .await?;
         }
-        Ok((state, recall, tail))
+        Ok((state, recall, tail, snap))
     }
 
     /// The text at `offset` if memory still has it.

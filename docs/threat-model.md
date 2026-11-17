@@ -25,7 +25,7 @@ the end.
 |---|---|---|---|
 | Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/KBL/issues/120)) |
 | Agent | A model acting through `kbl-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
-| Ingest | The `kbl-ingest` worker that mirrors GitHub or Jira | An ingest token, and a GitHub or Jira credential | Trusted code that carries untrusted text |
+| Ingest | The `kbl-ingest` worker that mirrors GitHub, Azure DevOps or Jira | An ingest token, and a GitHub, Azure DevOps or Jira credential | Trusted code that carries untrusted text |
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
 | Webhook sender | Whoever posts to ingest's `/webhook` | The shared webhook secret | Not trusted without a valid signature |
 
@@ -47,7 +47,7 @@ Two more parties are outside KBL and can still steer it:
 | Merges | GitHub. KBL records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
 | Rules | `rules_set` records, shown in every claim reply | Instructions injected into every other agent |
 | Artifacts | The artifacts cache, keyed by content hash | Other bytes shown under a trusted id |
-| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), Felix tokens | Any of them |
+| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), the Azure DevOps credential (a personal access token, or an Entra service principal's client secret and the access token it yields), Felix tokens | Any of them |
 
 ## Trust boundaries
 
@@ -71,13 +71,27 @@ Two more parties are outside KBL and can still steer it:
    lease: a revoke or release written that way counts, late.
 3. **Ingest to tracker.** A separate token and a short list of record kinds,
    only on roots ingest imported (`tracker/src/tracker/ingest.rs#allowed`,
-   `tracker/src/tracker/ingest.rs#ingest_record`).
+   `tracker/src/tracker/ingest.rs#ingest_record_in`).
 4. **GitHub to ingest.** Issue text is data. The pull request an item reports
    is named by an agent, so ingest ties it to the item before it reads it
    (see [What ingest believes](#what-ingest-believes)).
 5. **Agent to Felix.** `kbl-mcp` runs beside the model with the agent's
    Felix token. Nothing in `kbl-mcp` is a security check: an agent with its
    token and a raw client skips it. Felix grants are the check.
+
+`kbl-mcp` takes its Felix token from `KBL_FELIX_TOKEN`, or renews one from an
+ID token it reads from a file or a command (`mcp/src/credential.rs`). Both come
+from the environment or a file, never a flag, so nothing shows in the process
+list. The ID token file must be mode 600 or 400 (`mcp/src/credential.rs#read_file`).
+The ID token is sent only to an `https` control plane, or `http` on this
+machine (`mcp/src/credential.rs#exchange_url`), and the request does not
+follow redirects (`mcp/src/credential.rs#http_client`). Errors name the step and the status, never a
+token, the control plane's reply or the command line, and the command's stderr
+is dropped. The ID token is the standing secret here: whoever reads the file or
+runs the command can mint Felix tokens until the ID token expires or is revoked,
+so give an agent one narrowed to its own run, not the administrator's. A
+failed renewal keeps the current Felix token until it expires. Revoking the ID token stops renewals, not the Felix token in hand, and a stream already open outlives its
+token's expiry (Felix `docs/auth.md`), so cut an agent off by revoking its Felix principal, not only the ID token.
 6. **Browser to gateway.** Read only, one run.
 
 When ingest signs in as a GitHub App, the private key is the standing secret:
@@ -103,6 +117,34 @@ what the agent named. An issue whose component maps to no repository
 is imported but stays in Needs you (`ingest/src/sync.rs#park_unmapped`), so no
 agent is handed work with no repository to run in.
 
+When ingest signs in to Azure DevOps, the personal access token or the Entra
+client secret is read from an environment variable or a file each time it is
+used (`ingest/src/ado/transport.rs#Secret`) and sent only as that request's
+`Authorization` header, or to the Entra token endpoint. The access token Entra
+returns is held in memory until two minutes before it expires. None of them is
+in the config, the saved state, any record, any error or any log line: an
+Entra refusal reports only its status and error code, not the provider's
+description (`ingest/src/ado/transport.rs#token`). New Azure DevOps OAuth app
+registrations are deprecated, so there is no OAuth path. The credential needs
+Work Items (Read), and Read & write only when a rule writes back; the adapter
+refuses every write when no rule asks for one, so a worker given a read-only
+credential cannot be steered into writing (`ingest/src/ado.rs#write_back`). A
+service principal has no scopes, so its rights are whatever the organization
+granted it, which the operator should keep to the projects the rules read.
+Writes go only to a work item ingest imported (the engine writes back only for
+its imported roots, `ingest/src/sync.rs#announce`) and only in a project a rule
+reads (`ingest/src/ado.rs#project_of`). Work item text is untrusted like
+GitHub's and is never put into a query or an address: queries are built from the
+configured project, a date that is checked, and ids; a saved query is named by the
+configuration and its path may not climb out of the queries tree
+(`ingest/src/ado.rs#wiql_date`, `ingest/src/config.rs#check_ado`). Text written to a
+work item is HTML-escaped (`ingest/src/ado.rs#html_escape`). A work item whose
+area path maps to no repository is imported but stays in Needs you
+(`ingest/src/sync.rs#park_unmapped`). A bad personal access token is answered
+203 with a sign-in page, not a 401; the adapter reads it, and a redirect, as a
+refusal so the project stalls and nothing is imported from the page
+(`ingest/src/ado.rs#call`).
+
 The token file must be mode 600 or 400 (`tracker/src/config.rs#load`), a token
 may be listed once (`tracker/src/config.rs#parse`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs#entries`).
@@ -124,7 +166,7 @@ the build's, and a hash over every record it covers still matches `work.events`
 inside the file, so the digest stops damage and not a deliberate edit. A file that
 fails is removed and the next one is tried, then a full fold. A file is written
 to a temp file, synced, renamed and the folder synced
-(`tracker/src/tracker/snapshots.rs#save`), so a crash leaves the old one.
+(`tracker/src/tracker/snapshots.rs#write`), so a crash leaves the old one.
 
 ## Tracker routes
 
@@ -151,7 +193,7 @@ All of them need an agent token (`tracker/src/http.rs#agent`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs#claim_loop`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs#step_record`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs#review_lanes`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs#try_claim`, `tracker/src/tracker.rs#try_claim`) and the fold refuses the claim too (`core/src/work_fold.rs#step_record`) |
+| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs#claim_loop`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs#step_record`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs#review_lanes`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs#try_claim`, `tracker/src/tracker.rs#try_claim`) and the fold refuses the claim too (`core/src/work_fold.rs#step_record`). A held claim is handed back, or extended, only while the log's tip still shows the hold (`tracker/src/tracker.rs#hold_at_tip`) |
 | `/v1/work/extend` | `item` | Keep another agent's claim alive, or its own after losing it | Must own the delivery and the hold (`tracker/src/tracker.rs#holding`, `tracker/src/tracker.rs#holding`) |
 | `/v1/work/complete` | `item`, `claim`, `attempt`, `usage` | Finish work it does not hold; finish over open children; report no usage, or a model with no price; claim a replay of an outcome it did not write | `claim` (or `attempt`) only replays a record this agent wrote, of the same kind, ending that claim (by attempt, its own latest claim of it); a lapse the tracker wrote stays `lost`, and a `claim` or `attempt` that is not the one held ends nothing (`tracker/src/tracker.rs#ended_by`, `tracker/src/tracker.rs#finish`). Holder only (`tracker/src/tracker.rs#finish`, `core/src/work_fold.rs#step_record`). Open children refuse it (`core/src/work_fold.rs#step_record`). A fix is not closed by `done`; a merge or a person closes it. Usage: what each model used is the agent's word; the fold prices it and charges at least the floor the tracker writes on the record, `KBL_COST_FLOOR_MICROS` (`core/src/work_fold.rs#charge`). At most 16 entries, one per model, plain model names; a `cost_micros` is refused (`core/src/work_fold.rs#check_charge`, `tracker/src/http.rs#usage_of`); the item total saturates (`core/src/work_fold.rs#charge`) |
 | `/v1/work/release` | `item`, `claim`, `attempt`, `reason`, `usage` | Release another's work; write a huge record | `claim` and `attempt` replay only as for `complete`. Holder only (`core/src/work_fold.rs#step_record`). Two claims per attempt (`core/src/work_fold.rs#step_record`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs#check_sizes`). Usage: what each model used is the agent's word; the fold prices it and charges at least the floor the tracker writes on the record, `KBL_COST_FLOOR_MICROS` (`core/src/work_fold.rs#charge`). At most 16 entries, one per model, plain model names; a `cost_micros` is refused (`core/src/work_fold.rs#check_charge`, `tracker/src/http.rs#usage_of`) |
@@ -201,10 +243,14 @@ in `check_sizes` (`tracker/src/tracker/tools.rs#check_sizes`).
 | `/v1/work/request-changes` | `changes_requested` | Person only in the fold too, same conditions as the ask, and a repeat is `no_change` (`core/src/work_fold.rs#step_record`). Starts no redo and holds nothing back. Format 11 |
 | `/v1/work/mark-merged` | `merge_marked` | Person only in the fold too, item open and reporting a request that upstream shows neither open nor closed without a merge (`core/src/work_fold.rs#step_record`). It closes the item as merged, as a person's `closed` with `merged` already does, so it adds no power; the tracker never merges. Format 11 |
 | `/v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated` | Person only in the fold too, the attempt must exist and be finished, and the same mark again is `no_change` (`core/src/work_fold.rs#step_record`). A closed item can still be marked. It changes nothing the fold acts on: no stage, claim or wait. Format 11 |
-| `GET /v1/work/queue` | None: reads the fold | Person only. Lists what waits on a person, oldest wait first, then tier, at most 1000 entries per call (`?limit=`, default 200) (`core/src/work_fold/human_wait.rs#State::queue`). The fold keeps no assignee, so every person of the team sees the same list, which is what they see in `GET /v1/work/items` already. An item a person snoozed or parked is left out while the wait they hid continues. A read, so no request key |
+| `/v1/work/take` `{item}` | `taken` | Person only in the fold too, item open and accepted, and already the caller's is `no_change` (`core/src/work_fold.rs#assign`). The assignee is the token's person, so a person can only take for themselves. It keeps the item out of Ready, so no agent claims it, and leaves any hold as it is (`core/src/work_fold.rs#needs_you`). Format 12 |
+| `/v1/work/reassign` `{item, to}` | `reassigned` | Person only in the fold too, same conditions as a take (`core/src/work_fold.rs#assign`). `to` must be a person of the token's team, by its token file or the org log, or the call is `not_member`, on this route and on `/v1/work/records` alike (`tracker/src/http.rs#as_person`); the fold does not read the org log. An agent assignee is `bad_assignee` (`core/src/work_fold.rs#step_record`), so no assignee can steer a claim to one agent. Format 12 |
+| `/v1/work/steer` `{item, attempt, text}` | `steered` | Person only in the fold too, item open and held, and `attempt` must be the one held (`core/src/work_fold.rs#step_record`). Text over the inline limit is refused, as for a note (`tracker/src/tracker/tools.rs#check_sizes`). It adds a note to that attempt, as `human_input` with an attempt does, so it gives a person no power a note does not. Format 12 |
+| `GET /v1/work/queue` | None: reads the fold | Person only. Lists what waits on a person, oldest wait first, then tier, at most 1000 entries per call (`?limit=`, default 200) (`core/src/work_fold/human_wait.rs#State::queue_for`). An item assigned to another person is left out; that hides nothing, since `GET /v1/work/items` lists every item of the team. An item a person snoozed or parked is left out while the wait they hid continues. A read, so no request key |
 | `GET /v1/work/items`, `GET /v1/work/items/{item}` | None: reads the fold | A person sees every item of the team, as the dashboard does from `work.events` (`tracker/src/http.rs#items`) |
 | `GET /v1/work/items/{item}/history` | None: reads `work.events` | Records about the item, at most 500 per answer and 20,000 read, page by page from Felix (`tracker/src/tracker/reads.rs#HISTORY_PAGE`). Payloads come back as logged, with no redaction at read time. Secrets and agent text are cut only in records written since the log started redacting, so older records return as written. The same person can already read `work.events` itself, so this shows nothing new |
 | `GET /v1/work/metrics/time-to-human` | None: reads the fold | Counts and percentiles of how long items waited on a person, for the whole team, from records a person can already read. No item ids and no names of who acted, so it adds no per-person figure. `days` is clamped to 1 to 366 and the answer is built from at most 20,000 kept waits (`core/src/work_fold/human_wait.rs#KEPT_WAITS`) |
+| `GET /v1/work/metrics/summary-trust` | None: reads the fold | Counts of the summary marks a person wrote in a window and of finished attempts with no mark, for the whole team, from records a person can already read. No item ids and no names of agents, models or who marked, so it adds no per-person figure; a team with one reviewer still shows that reviewer's marks. `days` is clamped to 1 to 366 and the answer is a fixed set of integers (`core/src/work_fold/trust.rs#summary_trust`). A mark counts once, by its latest write |
 
 ### The dashboard
 
@@ -228,9 +274,9 @@ The ingest routes need an ingest token (`tracker/src/http/ingest.rs#worker`).
 
 | Route | What ingest controls | Check |
 |---|---|---|
-| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs#allowed`). Only on roots it imported (`tracker/src/tracker/ingest.rs#ingest_record`). An `imported` naming an existing prerequisite is held to the fold's format 6 checks; ingest opens that issue, and trusts a `kbl-prerequisite:` marker, only in a repo whose own rule has `open_prerequisites`, which needs issues: write there (`ingest/src/sync.rs#opening_rule`). A marker counts only in an issue by one of `own_logins`, so those credentials must not be given to agents with issue write. Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs#ingest_record`, `core/src/work_fold.rs#step_record`). So does `shipped`, which is also refused once a release is recorded (`tracker/src/tracker/ingest.rs#ingest_record`). An `unlinked` removes only an edge that ingest's own `linked` created, which the tracker derives from the log, so an edge from a prerequisite, an answer, a person or an agent stays; it is refused as `not_linked` or `not_ingests`, and ingest's `linked` of such an edge as `already_linked` (`tracker/src/tracker/ingest.rs#ingest_record`); ingest writes one only from a complete listing of the issue's links (`ingest/src/sync.rs#link`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs#ingest_record`); a context write with the text the entry already holds, on an entry no agent wrote, is not logged, so repeated lost saves cannot grow the log; the stored text is read back with no lock held, a read that fails refuses the write, and an entry whose stored text retention trimmed has its current text written, since there is nothing to compare and skipping would lose it (`tracker/src/tracker/ingest.rs#ingest_record`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs#append_expecting`); ingest cuts titles itself (`ingest/src/sync.rs#cut_title`) |
+| `/v1/ingest/records` | A whole record | Only the kinds upstream sync needs (`tracker/src/tracker/ingest.rs#allowed`). Only on roots it imported (`tracker/src/tracker/ingest.rs#ingest_record_in`). An `imported` naming an existing prerequisite is held to the fold's format 6 checks; ingest opens that issue, and trusts a `kbl-prerequisite:` marker, only in a repo whose own rule has `open_prerequisites`, which needs issues: write there (`ingest/src/sync.rs#opening_rule`). A marker counts only in an issue by one of `own_logins`, so those credentials must not be given to agents with issue write. A worker tied to a source by `ingest_sources` in the token file acts only on that source's roots and imports only that source's issues (`tracker/src/tracker/ingest.rs#ingest_record_in`). The `github` worker is the one exception: it may write `pr_status`, and nothing else, on a root from any source, so a Jira root's merge can be recorded (a request that opens also gets the tracker's own two review items under the root); a root's own worker still decides what upstream says about it. Once any worker is tied the tracker refuses to start unless all are, and a tied worker other than `github` lists only its own source's roots (`tracker/src/tracker/ingest.rs#ingest_roots`); with none tied, a token reaches every root. Closing as merged needs a merged status for the request the item reports (`tracker/src/tracker/ingest.rs#ingest_record_in`, `core/src/work_fold.rs#step_record`). So does `shipped`, which is also refused once a release is recorded (`tracker/src/tracker/ingest.rs#ingest_record_in`). An `unlinked` removes only an edge that ingest's own `linked` created, which the tracker derives from the log, so an edge from a prerequisite, an answer, a person or an agent stays; it is refused as `not_linked` or `not_ingests`, and ingest's `linked` of such an edge as `already_linked` (`tracker/src/tracker/ingest.rs#ingest_record_in`); ingest writes one only from a complete listing of the issue's links (`ingest/src/sync.rs#link`). Context text up to 4 KiB (`tracker/src/tracker/ingest.rs#ingest_record_in`); a context write with the text the entry already holds, on an entry no agent wrote, is not logged, so repeated lost saves cannot grow the log; the stored text is read back with no lock held, a read that fails refuses the write, and an entry whose stored text retention trimmed has its current text written, since there is nothing to compare and skipping would lose it (`tracker/src/tracker/ingest.rs#ingest_record_in`). Other strings are held to 4 KiB by the append check (`tracker/src/tracker.rs#append_expecting`); ingest cuts titles itself (`ingest/src/sync.rs#cut_title`) |
 | `/v1/ingest/roots` | Nothing | Read only |
-| `GET /v1/ingest/state/{source}`, `PUT /v1/ingest/state/{source}` | The saved cursor for a source | The name is a key (`tracker/src/tracker/ingest.rs#ingest_state`). 4 MB at most (`tracker/src/tracker/ingest.rs#ingest_save`). Saved only if nobody saved since the version read (`tracker/src/tracker/ingest.rs#ingest_save`). Any ingest token reaches any source's state, which is fine with one worker |
+| `GET /v1/ingest/state/{source}`, `PUT /v1/ingest/state/{source}` | The saved cursor for a source | The name is a key (`tracker/src/tracker/ingest.rs#ingest_state`). 4 MB at most (`tracker/src/tracker/ingest.rs#ingest_save`). Saved only if nobody saved since the version read (`tracker/src/tracker/ingest.rs#ingest_save`). A token tied to a source by `ingest_sources` reads and saves only that source's state and is refused with 403 for another's (`tracker/src/http/ingest.rs#load`); an untied token reaches any source's state, which is fine with one worker |
 | `/healthz` | Nothing | No token. Answers `ok` and nothing else |
 
 ### Team routes
@@ -289,8 +335,9 @@ request only when all of these hold, so the name alone steers nothing.
 | Attack | Check |
 |---|---|
 | Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs#may_write_to`) |
-| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs#pull_requests`, `ingest/src/github.rs#pull_request`) |
-| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs#pull_requests`) |
+| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs#linked_request`, `ingest/src/github.rs#pull_request`) |
+| Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs#linked_request`) |
+| Name a request for a Jira root so the GitHub worker records its merge | The same author, age and default-branch checks, but the branch only (a closing reference names GitHub issues), in a repo one of the GitHub worker's own rules names (`ingest/src/sync.rs#foreign_pull_requests`). The worker writes `pr_status` and nothing more; the tracker refuses the rest of its records for a root of another source (`tracker/src/tracker/ingest.rs#ingest_record_in`), and a status for a request the item did not report as `wrong_pr` (`core/src/work_fold.rs#step_record`) |
 | Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs#pull_request`) |
 | Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs#review_state`) |
 | Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs#check_state`) |
@@ -365,6 +412,9 @@ the call is made (`mcp/src/person.rs#check`).
 | `request_changes` | `POST /v1/work/request-changes` | Person only (`tracker/src/http.rs#person`) |
 | `mark_merged` | `POST /v1/work/mark-merged` | Person only (`tracker/src/http.rs#person`) |
 | `rate_summary` | `POST /v1/work/rate-summary` | Person only (`tracker/src/http.rs#person`) |
+| `take_item` | `POST /v1/work/take` | Person only (`tracker/src/http.rs#person`) |
+| `reassign_item` | `POST /v1/work/reassign` | Person only, and `to` a person of the team (`tracker/src/http.rs#as_person`) |
+| `steer_agent` | `POST /v1/work/steer` | Person only (`tracker/src/http.rs#person`) |
 
 `my_queue` returns raw item text to the host model. Tool names and routes are static, so that text cannot change which calls exist, but hosts should treat it as untrusted.
 
@@ -381,7 +431,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `triaged` | Person, or the agent holding the item's triage child | `core/src/work_fold.rs#may_triage`. An agent writes it through `/v1/work/triage` |
 | `accepted` | Tracker, person | `core/src/work_fold.rs#step_record` |
 | `prerequisite` | The holding agent | `core/src/work_fold.rs#prerequisite`. Not closed, except from format 5 a `released` wait on merged or completed work with no release (`core/src/work_fold.rs#prerequisite`). With `triage`, the agent holding that triage item writes it for the item under triage, and keeps its claim (`core/src/work_fold.rs#prerequisite_holder`). Format 3, so refused until a person raises the log |
-| `shipped` | Tracker, person, ingest | Only a done item (`core/src/work_fold.rs#step_record`). Ingest only on a root it imported whose reported request has a merged status, and not once a release is recorded (`tracker/src/tracker/ingest.rs#ingest_record`). The worker, not the tracker, checks that the release is published and not a draft or prerelease, and that GitHub says its tag contains the merge commit. A person's `shipped` replaces the release recorded before, ingest's included (`core/src/work_fold.rs#step_record`), and a reopen clears it (`core/src/work_fold.rs#step_record`) |
+| `shipped` | Tracker, person, ingest | Only a done item (`core/src/work_fold.rs#step_record`). Ingest only on a root it imported whose reported request has a merged status, and not once a release is recorded (`tracker/src/tracker/ingest.rs#ingest_record_in`). The worker, not the tracker, checks that the release is published and not a draft or prerelease, and that GitHub says its tag contains the merge commit. A person's `shipped` replaces the release recorded before, ingest's included (`core/src/work_fold.rs#step_record`), and a reopen clears it (`core/src/work_fold.rs#step_record`) |
 | `linked` | All | An agent only inside one tree (`core/src/work_fold.rs#agent_may_link`) |
 | `unlinked` | Tracker, person | `core/src/work_fold.rs#step_record` |
 | `context` | All | An agent only on work it holds (`core/src/work_fold.rs#step_record`). An agent replaces only its own entries (`tracker/src/tracker/tools.rs#context_add`) |
@@ -413,6 +463,9 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `changes_requested` | Person | Open items whose request upstream shows open and unapproved, and only a change (`core/src/work_fold.rs#step_record`). Format 11 |
 | `merge_marked` | Person | Open items that report a request upstream shows neither open nor closed without a merge (`core/src/work_fold.rs#step_record`). Format 11 |
 | `summary_rated` | Person | An existing, finished attempt, and only a change (`core/src/work_fold.rs#step_record`). Format 11 |
+| `taken` | Person | Open, accepted items; the assignee is the writer, and only a change (`core/src/work_fold.rs#assign`). Format 12 |
+| `reassigned` | Person | Open, accepted items, a person assignee or none, and only a change (`core/src/work_fold.rs#assign`). An agent assignee is `bad_assignee`. Format 12 |
+| `steered` | Person | Open items an agent holds, on the attempt it holds (`core/src/work_fold.rs#step_record`). Format 12 |
 | `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs#step_record`). Ingest reopens only what it closed. It keeps release waits and clears the item's release, so a waiter waits for the next release |
 | `attempt_closed` | Tracker, person | `core/src/work_fold.rs#step_record` |
 | `tier_changed` | Person | `core/src/work_fold.rs#step_record` |
@@ -527,6 +580,13 @@ each token and never a token. A format above the build's stops the reader.
 | Secrets in what an agent reports | A token from the environment in a step's output or a diff hunk, kept on the log for as long as the item | Known secret shapes are replaced with `[redacted]` by the tracker in the free text of every record an agent writes (`tracker/src/tracker.rs#append_expecting`) and of a person's note (`tracker/src/http.rs#note`) or answer (`tracker/src/tracker/tools.rs#person_answer`), and by `kbl-mcp` before it stores an artifact (`mcp/src/tasks.rs#content`), a task result (`mcp/src/tasks.rs#complete`) or a task title (`mcp/src/tasks.rs#post`). Every record kind's fields are sorted into redacted and structured, with no default (`core/src/redact.rs#redact_record`); a progress record's `pr` and `branch` are keys the fold matches on, so only URL userinfo is cut from them. Each shape is matched on what a real one looks like, not its prefix alone, because a cut word in a record is lost for good. What still goes through: a secret with no known prefix, such as an AWS secret access key; `Bearer` followed by two spaces or a tab; quoted assignments such as `TOKEN="..."` and `"token": "..."`; `password=`; `token=` outside a URL query unless the value has a long run of mixed letters and digits; the body of a key whose lines start with anything but indentation, `>`, `+` or `-`, such as `# ` or `//` comments, or that has a `Name: value` header line over 256 bytes or one that names another key header (its header line is cut); an AWS access key id followed by anything but a second id, such as `AKIA...EXAMPLEs`; a `Bearer` token with no digits outside an `Authorization` header, or inside one when it reads as a call, a path or words joined by `-` (`Bearer correct-horse-battery-staple-token` and `Bearer AbCd.EfGh` look like prose and paths), after `AUTHORIZATION,` with no quote, or in `from_static("Bearer ...")` and `format!("Bearer ...")`, where no header name is in sight; a PEM body indented more than 128 bytes with no `END` line; a key with no `END` whose first body line is under 32 bytes, or under 64 bytes with fewer than three character classes (a 64-character hex hash after a header is cut with one more short line), whose first line is over 71 bytes with fewer than three character classes, or that has more than one blank line after its header; a one-line key with no `END` whose short last run has no `=` padding and is followed by prose; a Slack token whose secret is under 12 bytes or of one character class. The reverse also happens: `feature/xoxb-2-RotateTokensV2x` is cut as a token and `-----BEGIN PRIVATE KEY-----` named in prose is cut as a header, which loses the words and nothing else. Line breaks escaped to any depth, written as `\u000a` or `%0A` (with or without the carriage return, and with `%2B`, `%2F` and `%3D` read as base64), and a `\n\` continuation, are followed through a key body. `PRIVATE KEY` and PGP `PRIVATE KEY BLOCK` headers are keys, also URL-encoded with `+` or `%20` for the spaces (`-----BEGIN%20PRIVATE%20KEY-----`), `Proc-Type:`, `DEK-Info:` and any number of PGP armor lines before a body go with it, a `/` escaped as `\/` and `+`, `/` or `=` written as `\u002b`, `\u002f` or `\u003d` (at any depth) count as base64, a URL-encoded key pasted on one line has its runs split by `%20`, a body with its line breaks stripped goes whole, stuck to the header or after one gap, a URL-encoded byte (`%20ghp_...`, `d%3Dxoxd-...`) starts a secret like a space does, and two AWS ids joined by one byte are cut together |
 | Metrics that carry content | An item title, a token or an agent's name in a label, read by anyone who can scrape | Labels are fixed words and route templates; the tests scrape after calls that carry known secrets and fail if one appears |
 | Forged webhooks | Wake ingest in a loop | Signature and spacing. A captured body can be replayed under a new delivery id, and it only wakes the poll |
+
+## Assumptions
+
+| Assumption | What breaks without it | Check |
+|---|---|---|
+| Felix never cuts a record it acknowledged on `work.events`. A failover that did, with another writer refilling the offset, leaves the log ending where the tracker expects, so a resume or an extend could hand out a claim another agent holds | Two agents work one attempt | At start the tracker refuses a `work.events` that is not durable and either `Quorum` or one copy (`tracker/src/felix.rs#acks_are_durable`). A single copy also needs the broker to fsync before it acks, which the tracker cannot read ([felix#2735](https://github.com/GetFelix/felix/issues/2735)). With one copy this also relies on a record Felix never acknowledged not being readable, which holds under fsync `on_commit`. The tracker repeats the stream check on every rebuild and refuses work while it fails. KBL does not defend against Felix losing an acknowledged write |
+| A read of the log's tip on `work.events` shows every acknowledged write. Felix does not promise this once `lease_free_reads` is final: a deposed `Quorum` leader may serve a read that shows less ([felix#2735](https://github.com/GetFelix/felix/issues/2735)) | A resumed or extended claim is reported live briefly after its hold ended | Wasted agent work only, never two holders: every claim is conditional on the tail, so Felix refuses it and the tracker rebuilds (`tracker/src/tracker.rs#hold_at_tip`) |
 
 ## Gaps
 

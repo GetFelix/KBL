@@ -194,8 +194,12 @@ The claim rules match words, so "tests do not pass" is read the same way as
 A reviewer can mark the summary an attempt handed off accurate or not. The
 mark is a `summary_rated` record ([format 11](upgrades.md#formats)) for the item
 and the attempt; the latest one stands, and the story section of the panel shows
-it beside two buttons. It marks the agent's summary, not the flags above, and
-nothing computes a trust number from it yet. See
+it beside two buttons. It marks the agent's summary, not the flags above. The
+tracker counts the marks into a trust number for the team: how many of the
+summaries marked in a window were marked accurate, beside how many finished
+attempts have no mark. Each attempt counts once, by its latest mark, and the
+number names no agent, model or reviewer. See
+[summary trust](work-tracker.md#summary-trust) and
 [review actions and summary marks](work-tracker.md#review-actions-and-summary-marks).
 
 ## The Felix mapping

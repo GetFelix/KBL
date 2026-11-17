@@ -276,6 +276,7 @@ fn entry(item: &str, tier: Option<u8>, since_ms: Option<u64>) -> QueueEntry {
         kind: WaitKind::Other,
         tier,
         since_ms,
+        assignee: None,
     }
 }
 

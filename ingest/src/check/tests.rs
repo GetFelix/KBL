@@ -422,7 +422,7 @@ async fn a_config_the_worker_would_refuse_is_one_error() {
                  "github": { "token_env": "G" },
                  "jira": { "site": "a", "api": "x", "email": "e", "token_env": "J" },
                  "rules": [{ "name": "r", "repo": "o/n", "mode": "admit" }] }),
-            "exactly one of github and jira",
+            "exactly one of github, jira and ado",
         ),
         (
             json!({ "tracker": { "url": "u", "token_env": "T" }, "github": { "token_env": "G" },

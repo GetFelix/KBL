@@ -82,6 +82,8 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .fields dd { margin: 0; }
 
 .row-flag { margin-left: var(--space-2); flex-shrink: 0; padding: 0 var(--space-2); border: 1px solid var(--warn); border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text); }
+.assignee { margin-left: var(--space-2); flex-shrink: 0; min-width: 1.5em; padding: 0 var(--space-1); border: 1px solid var(--line); border-radius: 999px; font-size: var(--text-xs); text-align: center; color: var(--text); }
+.card .assignee { margin-left: 0; align-self: flex-start; }
 .section-title { font-size: var(--text-md); font-weight: var(--weight-bold); margin: var(--space-5) 0 var(--space-2); }
 .overlap-notes, .overlap-files { list-style: none; margin: 0; padding: 0; }
 .overlap { border-left: 3px solid var(--warn); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-3); }
@@ -203,6 +205,11 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .card-mark { font-size: var(--text-xs); color: var(--accent-ink); }
 .confirm-items { margin: var(--space-2) 0; padding-left: var(--space-4); max-height: 12rem; overflow: auto; }
 
+.dialog.metrics .dialog-body { max-height: 80vh; overflow: auto; }
+.metrics-card p { margin: var(--space-1) 0; }
+.metrics-headline { font-size: var(--text-lg); }
+.metrics-share { font-variant-numeric: tabular-nums; }
+.metrics-error { color: var(--warn, var(--muted)); }
 .dialog.spend .dialog-body { max-height: 80vh; overflow: auto; }
 .spend-total { margin: var(--space-3) 0 var(--space-1); font-size: var(--text-lg); }
 .spend-note { margin: 0; }

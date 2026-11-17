@@ -8,7 +8,7 @@ use kbl_core::work::{HumanKind, RequestKey};
 use super::*;
 use crate::felix::Broker;
 use crate::tracker::tests::{Fake, claim, item, key, seed, settings, start, start_with};
-use crate::tracker::{Actor, Tracker, WORK_EVENTS, WorkRecord, json};
+use crate::tracker::{Actor, Recall, Tracker, WORK_EVENTS, WorkRecord, edge_absent, json};
 
 static N: AtomicU32 = AtomicU32::new(0);
 
@@ -213,14 +213,13 @@ async fn a_crash_while_writing_leaves_the_old_snapshot() {
     let t = start_with(&fake, settings()).await;
     seed(&t, "c1", 1).await;
     let state = t.0.core.lock().await.state.clone();
-    let body = Body {
-        saved: Saved::capture(&entries(&fake).await, None, &state).unwrap(),
-        seed: Seed::of(&t.0.core.lock().await.recall),
-    };
-    let tmp = stage(&dir.join("default"), "snapshot-99.json", &encode(&body)).unwrap();
+    let saved = Saved::capture(&entries(&fake).await, None, &state).unwrap();
+    let seed = Seed::of(&t.0.core.lock().await.recall);
+    let body = encode(&saved, &seed);
+    let tmp = stage(&dir.join("default"), "snapshot-99.json", &body).unwrap();
     assert!(tmp.exists());
     // Half a file, as if the write was cut short.
-    fs::write(&tmp, &encode(&body)[..20]).unwrap();
+    fs::write(&tmp, &body[..20]).unwrap();
 
     assert_eq!(files(&dir), before);
     assert_eq!(
@@ -306,4 +305,158 @@ async fn no_directory_means_no_snapshots() {
     let t = start(&fake).await;
     seed(&t, "a1", 1).await;
     assert!(Store::new(&settings()).is_none());
+}
+
+/// Waits for the running tracker's saves to finish.
+async fn quiet(t: &Tracker<Fake>) {
+    for _ in 0..500 {
+        {
+            let core = t.0.core.lock().await;
+            if core.snap.as_ref().is_none_or(|s| !s.saving) {
+                return;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("a save did not finish");
+}
+
+/// A running tracker with snapshots every 3 records, after its appends.
+async fn running(fake: &Fake, dir: &Path) -> Tracker<Fake> {
+    let t = start_with(fake, with_dir(dir, 3)).await;
+    seed(&t, "a1", 1).await;
+    seed(&t, "b1", 2).await;
+    assert_eq!(claim(&t, "w1").await["claimed"], true);
+    for k in ["k1", "k2", "k3", "k4", "k5", "k6", "k7", "k8", "k9"] {
+        note(&t, k).await;
+    }
+    quiet(&t).await;
+    t
+}
+
+/// Every file in `dir` is valid against the log, holds the fold of the log up
+/// to its last record, and the recall a fold of that prefix builds.
+async fn assert_files_are_folds(t: &Tracker<Fake>, fake: &Fake, dir: &Path) -> usize {
+    let log = entries(fake).await;
+    let files = files(dir);
+    for path in &files {
+        let body = read(path).expect("a readable file");
+        let records = body.saved.records() as usize;
+        assert!(body.saved.valid(&log), "{path:?} does not match the log");
+        let want = kbl_core::work_fold::fold_to(&log, log[records - 1].0);
+        assert_eq!(body.saved.state(), want, "{path:?}");
+        // The recall that went with it is the one a fold of that prefix builds.
+        let mut state = State::default();
+        let mut recall = Recall::default();
+        for (o, rec) in &log[..records] {
+            let absent = edge_absent(&state, &rec.record);
+            state.apply(*o, rec);
+            let created = absent && !edge_absent(&state, &rec.record);
+            let rejected = state.rejections.last().is_some_and(|r| r.offset == *o);
+            recall.remember(*o, rec, &t.0.me, created, rejected);
+        }
+        assert_eq!(
+            serde_json::to_string(&body.seed).unwrap(),
+            serde_json::to_string(&Seed::of(&recall)).unwrap(),
+            "{path:?}"
+        );
+    }
+    files.len()
+}
+
+#[tokio::test]
+async fn a_periodic_save_is_the_fold_of_the_log_at_its_offset() {
+    let dir = scratch();
+    let fake = Fake::default();
+    let t = running(&fake, &dir).await;
+    let saved = assert_files_are_folds(&t, &fake, &dir).await;
+    assert!(saved >= 2, "the running tracker saved {saved} files");
+    // A boot from the newest equals a full fold.
+    drop(t);
+    let a = start_with(&fake, with_dir(&dir, 1_000_000)).await;
+    let b = start_with(&fake, settings()).await;
+    assert_eq!(a.0.core.lock().await.state, b.0.core.lock().await.state);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn saves_during_concurrent_appends_are_each_a_fold_of_the_log() {
+    let dir = scratch();
+    let fake = Fake::default();
+    let t = start_with(&fake, with_dir(&dir, 2)).await;
+    seed(&t, "a1", 1).await;
+    let writers: Vec<_> = (0..6)
+        .map(|w| {
+            let t = t.clone();
+            tokio::spawn(async move {
+                for i in 0..8 {
+                    note(&t, &format!("w{w}k{i}")).await;
+                }
+            })
+        })
+        .collect();
+    for w in writers {
+        w.await.unwrap();
+    }
+    quiet(&t).await;
+    let saved = assert_files_are_folds(&t, &fake, &dir).await;
+    assert!(saved >= 1);
+    // Saves kept up with the appends: the newest covers all but a few records.
+    let log = entries(&fake).await;
+    let newest = read(&files(&dir).pop().unwrap()).unwrap().saved.records();
+    assert!(
+        log.len() as u64 - newest < 2 + 4,
+        "{newest} of {}",
+        log.len()
+    );
+}
+
+#[tokio::test]
+async fn a_periodic_snapshot_that_does_not_match_the_log_is_not_used() {
+    let dir = scratch();
+    let fake = Fake::default();
+    let t = running(&fake, &dir).await;
+    drop(t);
+    let log = entries(&fake).await;
+    let newest = read(&files(&dir).pop().unwrap()).unwrap().saved.records() as usize;
+    assert!(store(&dir).restore(&log).is_some());
+
+    // An edit below the newest: every file covering it is refused, and the
+    // boot folds from the start to the same state as a clean one.
+    let mut edited = log.clone();
+    edited[1].1 = log[newest - 1].1.clone();
+    assert!(store(&dir).restore(&edited).is_none());
+    // A log that lost its tail is shorter than the newest file.
+    assert!(
+        store(&dir)
+            .restore(&log[..newest - 1])
+            .is_none_or(|(s, _)| (s.records() as usize) < newest)
+    );
+    // A damaged file.
+    let path = files(&dir).pop().unwrap();
+    let mut bytes = fs::read(&path).unwrap();
+    let at = bytes.len() / 2;
+    bytes[at] ^= 1;
+    fs::write(&path, bytes).unwrap();
+    assert!(read(&path).is_none());
+}
+
+#[tokio::test]
+async fn a_save_after_retention_trimmed_the_log_is_kept_though_its_count_is_low() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    // Old files carry high record counts; the log then loses its head and a
+    // new snapshot of fewer records is written.
+    let store = store(&dir);
+    let log = entries(&fake).await;
+    let high = Saved::capture(&log, None, &kbl_core::work_fold::fold_to(&log, u64::MAX)).unwrap();
+    for n in [1000, 1001, 1002] {
+        let mut name = format!("{PREFIX}{n:020}{SUFFIX}");
+        name.push_str("");
+        fs::write(dir.join("default").join(&name), b"x").unwrap();
+    }
+    let fresh = dir
+        .join("default")
+        .join(format!("{PREFIX}{:020}{SUFFIX}", high.records()));
+    store.write(&high, &Seed::of(&Recall::default()));
+    assert!(fresh.exists(), "the file just written survives the prune");
 }
