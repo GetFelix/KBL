@@ -1,0 +1,1 @@
+An SLO page with proposed targets for claim latency, ingest lag and dashboard freshness, example Prometheus alert rules and a runbook per alert ([observability.md](docs/observability.md)). Traces are not wired yet ([#127](https://github.com/GetFelix/KBL/issues/127)).
