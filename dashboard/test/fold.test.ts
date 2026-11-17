@@ -10,7 +10,7 @@ import { attemptFlags, citedText, decisionCount, flagsFor, stories } from '../sr
 const { Folder } = createRequire(import.meta.url)('../.wasm-node/kbl_wasm.js');
 const golden = new URL('../../wasm/golden/', import.meta.url);
 
-for (const name of ['every_record', 'pre_prerequisite', 'pre_questions', 'format_2', 'format_3', 'format_4', 'format_5', 'format_6', 'format_7', 'format_8', 'format_9', 'pre_review', 'agent_context']) {
+for (const name of ['every_record', 'pre_prerequisite', 'pre_questions', 'format_2', 'format_3', 'format_4', 'format_5', 'format_6', 'format_7', 'format_8', 'format_9', 'format_10', 'format_11', 'pre_review', 'agent_context']) {
   test(`the wasm fold equals the native fold on ${name}`, () => {
     const log = readFileSync(new URL(`${name}.jsonl`, golden), 'utf8').trimEnd().split('\n');
     const fold = new Folder();

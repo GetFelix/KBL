@@ -1173,6 +1173,10 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::Snoozed { .. }
         | WorkRecord::Parked { .. }
         | WorkRecord::Unblocked { .. }
+        | WorkRecord::ReviewRequested { .. }
+        | WorkRecord::ChangesRequested { .. }
+        | WorkRecord::MergeMarked { .. }
+        | WorkRecord::SummaryRated { .. }
         | WorkRecord::Reopened { .. }
         | WorkRecord::AttemptClosed { .. }
         | WorkRecord::TierChanged { .. }

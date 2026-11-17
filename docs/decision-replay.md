@@ -191,10 +191,12 @@ does not know is invisible to the rules, like any unrecorded step.
 The claim rules match words, so "tests do not pass" is read the same way as
 "tests pass". A flag is a prompt to look, never a verdict.
 
-Reviewers can mark a story accurate or not, which feeds the trust numbers on
-the metrics tab. The dashboard does not have that control yet: no record kind
-carries the mark (`human_input` has a note, an answer, a review comment and a
-priority change), and adding one is a format raise tracked on its own.
+A reviewer can mark the summary an attempt handed off accurate or not. The
+mark is a `summary_rated` record ([format 11](upgrades.md#formats)) for the item
+and the attempt; the latest one stands, and the story section of the panel shows
+it beside two buttons. It marks the agent's summary, not the flags above, and
+nothing computes a trust number from it yet. See
+[review actions and summary marks](work-tracker.md#review-actions-and-summary-marks).
 
 ## The Felix mapping
 

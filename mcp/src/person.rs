@@ -136,6 +136,10 @@ fn convert(p: &Param, v: Value) -> Result<Value, String> {
             .as_u64()
             .map(Value::from)
             .ok_or_else(|| wrong("a whole number from 0")),
+        Kind::Bool => v
+            .is_boolean()
+            .then_some(v)
+            .ok_or_else(|| wrong("true or false")),
         Kind::Words(words) => match v.as_str() {
             Some(w) if words.contains(&w) => Ok(v),
             _ => Err(wrong(&format!("one of {}", words.join(", ")))),
@@ -155,6 +159,7 @@ fn describe(tool: &Tool) -> McpTool {
         let mut s = match p.kind {
             Kind::Text | Kind::Content => json!({ "type": "string" }),
             Kind::Number => json!({ "type": "integer", "minimum": 0 }),
+            Kind::Bool => json!({ "type": "boolean" }),
             Kind::Words(w) => json!({ "type": "string", "enum": w }),
         };
         s["description"] = p.about.into();

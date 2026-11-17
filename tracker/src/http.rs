@@ -178,6 +178,10 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/park", post(park::<B>))
         .route("/v1/work/unpark", post(unpark::<B>))
         .route("/v1/work/unblock", post(unblock::<B>))
+        .route("/v1/work/request-review", post(request_review::<B>))
+        .route("/v1/work/request-changes", post(request_changes::<B>))
+        .route("/v1/work/mark-merged", post(mark_merged::<B>))
+        .route("/v1/work/rate-summary", post(rate_summary::<B>))
         .route("/v1/work/queue", get(queue::<B>))
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
@@ -426,6 +430,19 @@ struct ItemBody {
 struct SnoozeBody {
     item: ItemId,
     until_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct ReviewBody {
+    item: ItemId,
+    reviewer: String,
+}
+
+#[derive(Deserialize)]
+struct RateBody {
+    item: ItemId,
+    attempt: u32,
+    accurate: bool,
 }
 
 #[derive(Deserialize)]
@@ -1314,6 +1331,31 @@ async fn unblock<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<UnblockBody>) -> 
     let record = WorkRecord::Unblocked {
         item: b.item,
         to: b.to,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn request_review<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ReviewBody>) -> Response {
+    let record = WorkRecord::ReviewRequested {
+        item: b.item,
+        reviewer: b.reviewer,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn request_changes<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::ChangesRequested { item: b.item }).await
+}
+
+async fn mark_merged<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::MergeMarked { item: b.item }).await
+}
+
+async fn rate_summary<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<RateBody>) -> Response {
+    let record = WorkRecord::SummaryRated {
+        item: b.item,
+        attempt: b.attempt,
+        accurate: b.accurate,
     };
     as_person(&call, rk, record).await
 }

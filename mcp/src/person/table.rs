@@ -9,6 +9,8 @@ pub(super) enum Kind {
     Text,
     /// A whole number from 0.
     Number,
+    /// `true` or `false`.
+    Bool,
     /// One of these words.
     Words(&'static [&'static str]),
     /// A string the tracker keeps as content. Sent as `{"text": ...}`.
@@ -197,6 +199,52 @@ pub(super) const TOOLS: &[Tool] = &[
                 kind: Kind::Text,
                 required: true,
                 about: "The id of the item it waits on.",
+            },
+        ],
+    },
+    Tool {
+        name: "request_review",
+        about: "Record that the item's open pull request was put to a reviewer. The tracker contacts no one.",
+        route: Route::Post("/v1/work/request-review"),
+        params: &[
+            ITEM,
+            Param {
+                name: "reviewer",
+                kind: Kind::Text,
+                required: true,
+                about: "Who was asked, up to 100 characters.",
+            },
+        ],
+    },
+    Tool {
+        name: "request_changes",
+        about: "Record that a person sent the item's open pull request back.",
+        route: Route::Post("/v1/work/request-changes"),
+        params: &[ITEM],
+    },
+    Tool {
+        name: "mark_merged",
+        about: "Record a merge you saw upstream that ingest has not, and close the item as merged.",
+        route: Route::Post("/v1/work/mark-merged"),
+        params: &[ITEM],
+    },
+    Tool {
+        name: "rate_summary",
+        about: "Mark the summary an attempt handed off as accurate or not.",
+        route: Route::Post("/v1/work/rate-summary"),
+        params: &[
+            ITEM,
+            Param {
+                name: "attempt",
+                kind: Kind::Number,
+                required: true,
+                about: "The attempt whose summary this marks.",
+            },
+            Param {
+                name: "accurate",
+                kind: Kind::Bool,
+                required: true,
+                about: "Whether the summary was accurate.",
             },
         ],
     },

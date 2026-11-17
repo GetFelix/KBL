@@ -2044,6 +2044,87 @@ fn shipped(tag: &str) -> WorkRecord {
 }
 
 #[tokio::test]
+async fn a_person_works_a_pull_request_and_marks_the_summary() {
+    use kbl_core::work::{PrChecks, PrPhase, PrReview, PrSnapshot};
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let pr = "GetFelix/felix#9";
+    fixed(&t, Some(pr)).await;
+    let person = |r| t.person_record(key("gab"), r);
+    let refused = |e: Error| match e {
+        Error::Refused { why } => why,
+        e => panic!("{e}"),
+    };
+    let ask = WorkRecord::ReviewRequested {
+        item: item("a1"),
+        reviewer: "kim".into(),
+    };
+    // Before the raise, and before upstream reports the request, nothing is written.
+    assert_eq!(refused(person(ask.clone()).await.unwrap_err()), "format");
+    person(WorkRecord::FormatRaised { to: 11 }).await.unwrap();
+    assert_eq!(refused(person(ask.clone()).await.unwrap_err()), "no_change");
+    let open = |review| WorkRecord::PrStatus {
+        item: item("a1"),
+        status: PrSnapshot {
+            pr: pr.into(),
+            phase: PrPhase::Open,
+            review,
+            checks: PrChecks::Green,
+            failing: None,
+        },
+    };
+    t.ingest_record(key("ingest-gh"), open(PrReview::Unreviewed))
+        .await
+        .unwrap();
+    person(ask).await.unwrap();
+    person(WorkRecord::ChangesRequested { item: item("a1") })
+        .await
+        .unwrap();
+    person(WorkRecord::SummaryRated {
+        item: item("a1"),
+        attempt: 1,
+        accurate: false,
+    })
+    .await
+    .unwrap();
+    {
+        let core = t.0.core.lock().await;
+        let it = &core.state.items[&item("a1")];
+        assert!(it.review_ask.is_none() && it.changes_ask.is_some());
+        assert_eq!(it.paths[0].summary_accurate, Some(false));
+    }
+    // Open upstream, the merge is not recorded; once upstream shows it merged it is.
+    assert_eq!(
+        refused(
+            person(WorkRecord::MergeMarked { item: item("a1") })
+                .await
+                .unwrap_err()
+        ),
+        "no_change"
+    );
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::PrStatus {
+            item: item("a1"),
+            status: PrSnapshot {
+                pr: pr.into(),
+                phase: PrPhase::Merged,
+                review: PrReview::Approved,
+                checks: PrChecks::Green,
+                failing: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
+    person(WorkRecord::MergeMarked { item: item("a1") })
+        .await
+        .unwrap();
+    let core = t.0.core.lock().await;
+    assert!(core.state.items[&item("a1")].closed.is_some());
+}
+
+#[tokio::test]
 async fn ingest_records_the_release_of_a_merged_root_once() {
     let fake = Fake::default();
     let t = start(&fake).await;
@@ -2243,6 +2324,7 @@ mod request_keys;
 mod retry;
 mod review;
 mod review_limit;
+mod sweep;
 mod texts;
 mod traces;
 

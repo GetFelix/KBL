@@ -144,6 +144,8 @@ pub struct AttemptLine {
     pub forked_from: Option<(u32, u64)>,
     pub done: bool,
     pub closed: bool,
+    /// A person's mark of the summary this attempt handed off, if any.
+    pub summary_accurate: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -337,6 +339,7 @@ pub fn story<'a>(
                 forked_from: p.forked_from.as_ref().map(|f| (f.from_attempt, f.at)),
                 done: p.done,
                 closed: p.closed,
+                summary_accurate: p.summary_accurate,
             })
             .collect(),
         groups,

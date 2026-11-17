@@ -5,7 +5,7 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
-    FORMAT_V8, FORMAT_V9, FORMAT_V10, ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -932,7 +932,7 @@ const FORMAT_10_LOG: &str = include_str!("work_format_10.jsonl");
 #[test]
 fn the_tenth_format_is_ten_and_names_its_kinds() {
     assert_eq!(FORMAT_V10, 10);
-    assert_eq!(FORMAT, FORMAT_V10);
+    const { assert!(FORMAT >= FORMAT_V10) };
     let mut seen: Vec<&str> = entries(FORMAT_10_LOG)
         .iter()
         .filter(|(_, r)| r.v == FORMAT_V10 && r.record.kind() != "format_raised")
@@ -974,5 +974,71 @@ fn a_card_action_is_written_with_its_format() {
             parked: true
         }),
         r#"{"v":10,"at_ms":7,"by":"gabriel","actor":"person","kind":"parked","item":"r1","parked":true}"#
+    );
+}
+
+/// A log that raises to the eleventh format and takes a person's moves on a
+/// pull request and on the summary. Its folded state is pinned in
+/// `wasm/golden/format_11.state.json`; `work_replay.rs` checks each step.
+const FORMAT_11_LOG: &str = include_str!("work_format_11.jsonl");
+
+#[test]
+fn the_eleventh_format_is_eleven_and_names_its_kinds() {
+    assert_eq!(FORMAT_V11, 11);
+    assert_eq!(FORMAT, FORMAT_V11);
+    let mut seen: Vec<&str> = entries(FORMAT_11_LOG)
+        .iter()
+        .filter(|(_, r)| r.v == FORMAT_V11 && r.record.kind() != "format_raised")
+        .map(|(_, r)| {
+            assert_eq!(r.record.format(), FORMAT_V11, "{}", r.record.kind());
+            r.record.kind()
+        })
+        .collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(
+        seen,
+        [
+            "changes_requested",
+            "merge_marked",
+            "review_requested",
+            "summary_rated"
+        ]
+    );
+}
+
+#[test]
+fn a_review_action_is_written_with_its_format() {
+    let item = |s: &str| kbl_core::names::ItemId::new(s).unwrap();
+    let write = |record| {
+        String::from_utf8(
+            WorkLogged::new(
+                7,
+                kbl_core::names::Key::new("gabriel").unwrap(),
+                Actor::Person,
+                record,
+            )
+            .encode(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        write(WorkRecord::SummaryRated {
+            item: item("r1"),
+            attempt: 2,
+            accurate: true
+        }),
+        r#"{"v":11,"at_ms":7,"by":"gabriel","actor":"person","kind":"summary_rated","item":"r1","attempt":2,"accurate":true}"#
+    );
+    assert_eq!(
+        write(WorkRecord::ReviewRequested {
+            item: item("r1"),
+            reviewer: "kim".into()
+        }),
+        r#"{"v":11,"at_ms":7,"by":"gabriel","actor":"person","kind":"review_requested","item":"r1","reviewer":"kim"}"#
+    );
+    assert_eq!(
+        write(WorkRecord::MergeMarked { item: item("r1") }),
+        r#"{"v":11,"at_ms":7,"by":"gabriel","actor":"person","kind":"merge_marked","item":"r1"}"#
     );
 }

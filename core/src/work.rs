@@ -60,8 +60,16 @@ pub const FORMAT_V9: u32 = 9;
 /// card actions a person takes on My queue.
 pub const FORMAT_V10: u32 = 10;
 
+/// The format that added `review_requested`, `changes_requested`,
+/// `merge_marked` and `summary_rated`: a person's moves on a pull request and
+/// on the agent's summary.
+pub const FORMAT_V11: u32 = 11;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V10;
+pub const FORMAT: u32 = FORMAT_V11;
+
+/// Longest reviewer name a `review_requested` carries.
+pub const MAX_REVIEWER: usize = 100;
 
 /// Usage entries one report may carry: one per model.
 pub const MAX_USAGE_ENTRIES: usize = 16;
@@ -846,6 +854,22 @@ pub enum WorkRecord {
     /// A person marks what an item waits on as resolved: the link is dropped
     /// and the item no longer waits on `to`. Format 10.
     Unblocked { item: ItemId, to: ItemId },
+    /// A person asks `reviewer` to review the item's open pull request. It
+    /// records the ask; upstream's own review state stays in `pr_status`.
+    /// Format 11.
+    ReviewRequested { item: ItemId, reviewer: String },
+    /// A person sends the item's open pull request back for changes. Format 11.
+    ChangesRequested { item: ItemId },
+    /// A person records that the item's pull request was merged upstream, and
+    /// the item closes as merged. Format 11.
+    MergeMarked { item: ItemId },
+    /// A person marks the summary an attempt handed off as accurate or not.
+    /// The latest mark for an attempt stands. Format 11.
+    SummaryRated {
+        item: ItemId,
+        attempt: u32,
+        accurate: bool,
+    },
     /// The upstream issue was reopened: the same root goes back to Triage with
     /// its history and its remaining budget.
     Reopened { item: ItemId },
@@ -967,6 +991,10 @@ impl WorkRecord {
             WorkRecord::Snoozed { .. } => "snoozed",
             WorkRecord::Parked { .. } => "parked",
             WorkRecord::Unblocked { .. } => "unblocked",
+            WorkRecord::ReviewRequested { .. } => "review_requested",
+            WorkRecord::ChangesRequested { .. } => "changes_requested",
+            WorkRecord::MergeMarked { .. } => "merge_marked",
+            WorkRecord::SummaryRated { .. } => "summary_rated",
             WorkRecord::Reopened { .. } => "reopened",
             WorkRecord::AttemptClosed { .. } => "attempt_closed",
             WorkRecord::TierChanged { .. } => "tier_changed",
@@ -1020,6 +1048,10 @@ impl WorkRecord {
             | WorkRecord::Snoozed { item, .. }
             | WorkRecord::Parked { item, .. }
             | WorkRecord::Unblocked { item, .. }
+            | WorkRecord::ReviewRequested { item, .. }
+            | WorkRecord::ChangesRequested { item }
+            | WorkRecord::MergeMarked { item }
+            | WorkRecord::SummaryRated { item, .. }
             | WorkRecord::Reopened { item }
             | WorkRecord::AttemptClosed { item, .. }
             | WorkRecord::TierChanged { item, .. }
@@ -1149,6 +1181,10 @@ impl WorkRecord {
             | WorkRecord::Snoozed { .. }
             | WorkRecord::Parked { .. }
             | WorkRecord::Unblocked { .. } => FORMAT_V10,
+            WorkRecord::ReviewRequested { .. }
+            | WorkRecord::ChangesRequested { .. }
+            | WorkRecord::MergeMarked { .. }
+            | WorkRecord::SummaryRated { .. } => FORMAT_V11,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,
             WorkRecord::PriceSet { .. } => FORMAT_V8,
             r if r
