@@ -254,12 +254,11 @@ fn time_redact(text: &str) -> Duration {
     start.elapsed()
 }
 
-#[test]
-fn adversarial_input_stays_linear() {
-    // Compare one input at two sizes so the check does not depend on runner
-    // speed. Linear gives about 4x for 4x the bytes; quadratic gives 16x.
-    let small = adversarial(512 * 1024);
-    let large = adversarial(2 * 1024 * 1024);
+/// Compare each input at two sizes so the check does not depend on runner
+/// speed. Linear gives about 4x for 4x the bytes; quadratic gives 16x.
+fn assert_linear(make: fn(usize) -> Vec<String>) {
+    let small = make(512 * 1024);
+    let large = make(2 * 1024 * 1024);
     // Timer noise swamps tiny runs, so the baseline never counts below this.
     let floor = Duration::from_millis(20);
     for (s, l) in small.iter().zip(&large) {
@@ -275,6 +274,11 @@ fn adversarial_input_stays_linear() {
         // Hang guard only.
         assert!(t_large.as_secs() < 60, "{:?} took {t_large:?}", &s[..20]);
     }
+}
+
+#[test]
+fn adversarial_input_stays_linear() {
+    assert_linear(adversarial);
 }
 
 fn secret() -> String {
@@ -797,10 +801,8 @@ fn slack_d_cookies_are_cut() {
     assert!(untouched("xoxd-short"));
 }
 
-#[test]
-fn new_shapes_stay_linear() {
-    let mb = 10 * 1024 * 1024;
-    let inputs = [
+fn new_shapes_stay_linear_inputs(mb: usize) -> Vec<String> {
+    vec![
         "AKIAA1B2C3D4E5F6A1B2".repeat(mb / 20),
         "xoxd-".repeat(mb / 5),
         format!("xoxd-{}", "a1%2B".repeat(mb / 5)),
@@ -813,13 +815,12 @@ fn new_shapes_stay_linear() {
         format!("-----BEGIN PRIVATE KEY-----\n{}", "A".repeat(mb)),
         "-----BEGIN PRIVATE KEY-----\n\n".repeat(mb / 29),
         "\\\"Authorization\\\": \\\"".repeat(mb / 24),
-    ];
-    for text in inputs {
-        let start = Instant::now();
-        let _ = redact(&text);
-        let took = start.elapsed();
-        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
-    }
+    ]
+}
+
+#[test]
+fn new_shapes_stay_linear() {
+    assert_linear(new_shapes_stay_linear_inputs);
 }
 
 fn mixed(n: usize) -> String {
@@ -1016,10 +1017,8 @@ fn aws_ids_joined_by_one_byte_are_cut_whole() {
     assert!(untouched(&format!("k={akia}xEXAMPLEEXAMPLE1234 z")));
 }
 
-#[test]
-fn encoded_breaks_armor_and_stripped_keys_stay_linear() {
-    let mb = 10 * 1024 * 1024;
-    let inputs = [
+fn encoded_breaks_armor_and_stripped_keys_stay_linear_inputs(mb: usize) -> Vec<String> {
+    vec![
         format!("-----BEGIN PRIVATE KEY-----{}", "A".repeat(mb)),
         "-----BEGIN PRIVATE KEY-----AAAA".repeat(mb / 31),
         format!(
@@ -1069,13 +1068,12 @@ fn encoded_breaks_armor_and_stripped_keys_stay_linear() {
             "-----BEGIN PRIVATE KEY-----\n{}",
             "A: x-----BEGIN PRIVATE KEY-----\n".repeat(mb / 32)
         ),
-    ];
-    for text in inputs {
-        let start = Instant::now();
-        let _ = redact(&text);
-        let took = start.elapsed();
-        assert!(took.as_secs() < 20, "{:?} took {took:?}", &text[..20]);
-    }
+    ]
+}
+
+#[test]
+fn encoded_breaks_armor_and_stripped_keys_stay_linear() {
+    assert_linear(encoded_breaks_armor_and_stripped_keys_stay_linear_inputs);
 }
 
 #[test]
