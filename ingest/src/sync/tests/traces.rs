@@ -22,8 +22,18 @@ async fn a_poll_is_one_span_per_source_and_names_no_issue() {
     assert_eq!(polls[1].attributes["outcome"], "failed");
     assert_eq!(polls[1].attributes["reconcile"], "true");
     for s in &spans {
-        for v in s.attributes.values() {
-            assert!(!v.contains("812") && !v.contains("GetFelix"), "{s:#?}");
+        for (k, v) in &s.attributes {
+            // The tracing layer adds timings and call-site fields; a number
+            // like idle_ns can contain "812" by chance.
+            let layer = matches!(k.as_str(), "busy_ns" | "idle_ns" | "target")
+                || k.starts_with("thread.")
+                || k.starts_with("code.");
+            if !layer {
+                assert!(
+                    !v.contains("812") && !v.contains("GetFelix"),
+                    "{k} in {s:#?}"
+                );
+            }
         }
     }
 }
