@@ -539,7 +539,7 @@ try {
   await page.eval(`document.querySelector('.story-evidence .story-ref').click()`);
   check(await focused(`.story-step[data-at="${stepAt}"]`), 'a step citation moves the focus to the step');
   await page.eval(`document.querySelector('.panel').focus()`);
-  await page.eval(`document.querySelector('.story-flag[data-rule=cited_step_failed] .story-ref').click()`);
+  await page.eval(`[...document.querySelectorAll('.story-flag[data-rule=cited_step_failed] .story-ref')].find((b) => b.textContent.startsWith('offset')).click()`);
   check(await focused(`.story-step[data-at="${stepAt}"]`), 'the offset in a failed-step flag moves the focus to the step');
   await page.eval(`document.querySelector('.story-evidence .story-ref').focus()`);
   await rec({ kind: 'edit', file: 'core/src/cache.rs', hunk: { text: '@@ -1 +1 @@' }, decision: decisionAt });
