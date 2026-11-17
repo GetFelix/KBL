@@ -10,7 +10,7 @@ import { overlapField } from './overlap-section.ts';
 import { storyField } from './story-section.ts';
 import { waitsOnField } from './waits-on-field.ts';
 import { itemActions, type WriteHandlers } from './item-actions.ts';
-import { needsText } from '../writes.ts';
+import { assigneePerson, needsLine } from '../writes.ts';
 
 export interface PanelHandlers extends WriteHandlers {
   closeItem(): void;
@@ -32,8 +32,16 @@ const stageField: Field = {
 };
 
 const needsField: Field = {
-  key: (item) => item.needs ?? '',
-  render: (item) => (item.needs ? ['Needs you', document.createTextNode(needsText(item.needs))] : null),
+  key: (item) => `${item.needs ?? ''}|${assigneePerson(item) ?? ''}`,
+  render: (item) => (item.needs ? ['Needs you', document.createTextNode(needsLine(item))] : null),
+};
+
+const assigneeField: Field = {
+  key: (item) => assigneePerson(item) ?? '',
+  render: (item) => {
+    const who = assigneePerson(item);
+    return who === null ? null : ['Assigned to', document.createTextNode(who)];
+  },
 };
 
 // Only what the log recorded: a facet with no value is left out, not shown as "none".
@@ -46,7 +54,7 @@ const facetFields: Field[] = FACETS.map(([facet, label]) => ({
 }));
 
 // A new field is one module and one entry here.
-const FIELDS: readonly Field[] = [stageField, needsField, ...facetFields, waitsOnField, overlapField, storyField];
+const FIELDS: readonly Field[] = [stageField, needsField, assigneeField, ...facetFields, waitsOnField, overlapField, storyField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,

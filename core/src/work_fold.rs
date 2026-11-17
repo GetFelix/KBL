@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FORMAT_V6,
-    FORMAT_V8, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
+    Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
+    FORMAT_V6, FORMAT_V8, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
     MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWER,
     MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
     MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
@@ -294,6 +294,8 @@ pub enum NeedsYou {
     Flagged,
     /// A person recorded the merge and upstream shows the request not merged.
     MergeDisputed,
+    /// A person took it: it would be Ready, and waits on them instead.
+    Taken,
 }
 
 /// What the open question offers, kept so an answer can be checked and the
@@ -597,6 +599,10 @@ pub struct Item {
     /// reopen or an upstream merge.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_marked: Option<MergeMark>,
+    /// Who works it. A person assignee keeps it out of Ready. Kept across
+    /// close and reopen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<Assignee>,
     pub accepted: bool,
     /// A person wrote the last `accepted` on a log at format 6 or above.
     /// An earlier acceptance does not count, so a format 5 state is unchanged.
@@ -741,6 +747,8 @@ pub enum Reject {
     NoChange,
     /// A snooze that ends in the past or more than 30 days out.
     BadTime,
+    /// An assignee the fold does not accept: an agent, from format 12.
+    BadAssignee,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1066,14 +1074,20 @@ impl State {
                     Stage::Triage
                 }
             }
-            None if it.pending_fork.is_none() && it.open_path().is_some_and(|p| p.done) => {
-                Stage::InReview
-            }
-            None if self.links_from(id).any(|b| self.waits_on(id, b)) || self.resuming(id) => {
-                Stage::Blocked
-            }
-            None => Stage::Ready,
+            None => self.accepted_stage(id, it),
         })
+    }
+
+    /// The stage of an open, accepted item that nobody holds and that does
+    /// not need a person.
+    fn accepted_stage(&self, id: &ItemId, it: &Item) -> Stage {
+        if it.pending_fork.is_none() && it.open_path().is_some_and(|p| p.done) {
+            Stage::InReview
+        } else if self.links_from(id).any(|b| self.waits_on(id, b)) || self.resuming(id) {
+            Stage::Blocked
+        } else {
+            Stage::Ready
+        }
     }
 
     /// Why an open item waits on a person, if it does.
@@ -1148,6 +1162,15 @@ impl State {
         // Last, so an item that also waits for another reason shows that one.
         if it.flagged && it.hold.is_none() {
             return Some(NeedsYou::Flagged);
+        }
+        // A person works it, so no agent may claim it: where it would be Ready
+        // it waits on them. A holder finishes or releases first.
+        if matches!(it.assignee, Some(Assignee::Person(_)))
+            && it.hold.is_none()
+            && it.accepted
+            && self.accepted_stage(id, it) == Stage::Ready
+        {
+            return Some(NeedsYou::Taken);
         }
         None
     }
@@ -1368,6 +1391,30 @@ impl State {
         Ok(holder)
     }
 
+    /// Sets who works an open, accepted item, for `taken` and `reassigned`.
+    fn assign(
+        &mut self,
+        id: &ItemId,
+        to: Option<Assignee>,
+        rec: &WorkLogged,
+    ) -> Result<(), Reject> {
+        if rec.actor != Actor::Person {
+            return Err(Reject::ActorNotAllowed);
+        }
+        let it = self.item_mut(id)?;
+        if it.closed.is_some() {
+            return Err(Reject::Closed);
+        }
+        if !it.accepted {
+            return Err(Reject::NotReady);
+        }
+        if it.assignee == to {
+            return Err(Reject::NoChange);
+        }
+        it.assignee = to;
+        Ok(())
+    }
+
     fn agent_holder(&self, id: &ItemId, attempt: u32, rec: &WorkLogged) -> Result<(), Reject> {
         if rec.actor != Actor::Agent {
             return Err(Reject::ActorNotAllowed);
@@ -1443,6 +1490,7 @@ impl State {
             review_ask: None,
             changes_ask: None,
             merge_marked: None,
+            assignee: None,
             left_scope_by_sync: false,
             accepted: false,
             accepted_by_person: false,
@@ -2539,6 +2587,33 @@ impl State {
                     return Err(Reject::NoChange);
                 }
                 p.summary_accurate = Some(*accurate);
+            }
+            WorkRecord::Taken { item } => {
+                let to = Some(Assignee::Person(rec.by.clone()));
+                self.assign(item, to, rec)?;
+            }
+            WorkRecord::Reassigned { item, to } => {
+                // An agent assignee needs the claim path to route to it.
+                if matches!(to, Some(Assignee::Agent(_))) {
+                    return Err(Reject::BadAssignee);
+                }
+                self.assign(item, to.clone(), rec)?;
+            }
+            WorkRecord::Steered { item, attempt, .. } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // It names the attempt an agent holds, so it reaches that agent.
+                match &it.hold {
+                    None => return Err(Reject::NotHeld),
+                    Some(h) if h.attempt != *attempt => return Err(Reject::WrongAttempt),
+                    Some(_) => {}
+                }
+                self.path_mut(item, *attempt)?.human_inputs.push(offset);
             }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {

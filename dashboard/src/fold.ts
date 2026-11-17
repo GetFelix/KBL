@@ -45,6 +45,10 @@ export interface ItemRow {
   accepted?: boolean;
   /** A person flagged it for a person, whatever else it waits on. */
   flagged?: boolean;
+  /** Who the item is assigned to, or absent. An agent assignee is not accepted yet. */
+  assignee?: { person: string } | { agent: string } | null;
+  /** The attempt an agent holds, when the item is held. */
+  held_attempt?: number | null;
   /** The log's format when the page read it, the same for every row. A log below 7 refuses flags. */
   format?: number;
 }

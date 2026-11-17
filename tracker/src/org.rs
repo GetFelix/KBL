@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use kbl_core::codec::Codec;
 use kbl_core::names::Key;
-use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, read};
+use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, TeamName, read};
 use kbl_core::org_fold::{Applied, OrgState, Principal};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -175,6 +175,12 @@ impl<B: Broker> Org<B> {
             return Err(OrgUnavailable);
         }
         Ok(view.state.who(token))
+    }
+
+    /// Whether `person` is in `team` by the last fold. An org admin is in every team.
+    pub(crate) fn is_member(&self, team: &TeamName, person: &Key) -> bool {
+        let view = self.view.read().expect("org view lock");
+        view.state.role_in(team, person).is_some()
     }
 
     /// Whether the lease is held with room for a write to land, and the log was

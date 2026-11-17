@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use kbl_core::names::ItemId;
+use kbl_core::names::{ItemId, Key};
 use kbl_core::work::{WORK_EVENTS, WorkRecord, read};
 use kbl_core::work_fold::Stage;
 use serde_json::{Value, json};
@@ -44,6 +44,7 @@ impl<B: Broker> Tracker<B> {
                     "root": i.root,
                     "held_by": i.hold.as_ref().map(|h| &h.by),
                     "flagged": i.flagged,
+                    "assignee": i.assignee,
                     "closed": i.closed,
                 })
             })
@@ -53,14 +54,14 @@ impl<B: Broker> Tracker<B> {
 
     /// What waits on a person, in the order My queue shows it: unknown start
     /// first (it began before this tracker's snapshot), then longest wait,
-    /// then lower tier. A team view: the fold keeps no assignee, so every
-    /// person of the team sees the same list. `count` is the whole queue;
-    /// `queue` holds its first `limit` entries.
-    pub(crate) async fn queue(&self, limit: usize) -> Result<Value, Error> {
+    /// then lower tier. `viewer`'s list: an item assigned to another person
+    /// is left out. `count` is the whole queue; `queue` holds its first
+    /// `limit` entries.
+    pub(crate) async fn queue(&self, viewer: &Key, limit: usize) -> Result<Value, Error> {
         self.begin().await?;
         let core = self.0.core.lock().await;
         let s = &core.state;
-        let all = s.queue(super::now_ms());
+        let all = s.queue_for(super::now_ms(), Some(viewer));
         let count = all.len();
         let entries: Vec<Value> = all
             .into_iter()
@@ -77,6 +78,7 @@ impl<B: Broker> Tracker<B> {
                     "tier": e.tier,
                     "since_ms": e.since_ms,
                     "root": it.root,
+                    "assignee": e.assignee,
                 })
             })
             .collect();

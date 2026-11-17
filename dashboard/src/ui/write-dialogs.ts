@@ -1,7 +1,7 @@
 // The sign-in dialog and the confirm step before a write that cannot be undone
 // (WCAG 3.3.4: the person reviews what will be written, and can cancel).
 import type { ItemRow } from '../fold.ts';
-import { acceptTier, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
+import { acceptTier, assigneePerson, assignPick, checkPerson, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
 import { modal } from './dialog.ts';
 import { h } from './dom.ts';
 import { tierSelect } from './item-actions.ts';
@@ -122,6 +122,59 @@ export function signInDialog(check: (token: string) => Promise<string | null>) {
       input.removeAttribute('aria-invalid');
       m.open();
       input.focus();
+    },
+  };
+}
+
+/** The assign picker: me, someone by name, or nobody. `names` are people the log already shows as assignees. */
+export function assignDialog(send: (ids: string[], args: WriteArgs) => void) {
+  const m = modal('Assign', 'assign-dialog');
+  m.el.setAttribute('aria-labelledby', 'assign-title');
+  m.el.removeAttribute('aria-label');
+  return {
+    el: m.el,
+    isOpen: m.isOpen,
+    open(item: ItemRow, me: string, names: readonly string[]) {
+      const now = assigneePerson(item);
+      const pick = (args: WriteArgs | null) => {
+        if (!args) return;
+        m.close();
+        send([item.id], args);
+      };
+      const meButton = h('button', { type: 'button', class: 'button primary', 'data-focus': 'assign-me', onclick: () => pick(assignPick(now, me, 'me')) }, `Me (${me})`);
+      const nobody = h('button', { type: 'button', class: 'button', 'data-focus': 'assign-nobody', onclick: () => pick(assignPick(now, me, 'nobody')) }, 'Nobody');
+      if (now === me) meButton.setAttribute('aria-disabled', 'true');
+      if (now === null) nobody.setAttribute('aria-disabled', 'true');
+      const others = names.filter((n) => n !== me);
+      const input = h('input', { id: 'assign-name', type: 'text', class: 'field', list: 'assign-names', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': 'assign-error' });
+      const error = h('p', { id: 'assign-error', class: 'field-error' });
+      const form = h('form', { method: 'dialog' },
+        h('h2', { id: 'assign-title' }, `Assign ${item.id}`),
+        h('p', { class: 'muted' }, now ? `${item.title} (now ${now})` : `${item.title} (nobody yet)`),
+        h('div', { class: 'action-row' }, meButton, nobody),
+        h('label', { for: 'assign-name', class: 'field-label' }, 'Someone else, by name'),
+        input,
+        h('datalist', { id: 'assign-names' }, ...others.map((n) => h('option', { value: n }))),
+        h('p', { class: 'muted small' }, 'An assigned item shows only in that person’s queue, and no agent claims it.'),
+        error,
+        h('div', { class: 'dialog-actions' },
+          h('span', { class: 'spacer' }),
+          h('button', { type: 'button', class: 'button ghost', onclick: () => m.close() }, 'Cancel'),
+          h('button', { type: 'submit', class: 'button' }, 'Assign')),
+      );
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const problem = checkPerson(input.value);
+        error.textContent = problem ?? '';
+        if (problem) {
+          input.setAttribute('aria-invalid', 'true');
+          return input.focus();
+        }
+        pick({ kind: 'reassign', to: input.value.trim() });
+      });
+      m.body.replaceChildren(form);
+      m.open();
+      meButton.focus();
     },
   };
 }

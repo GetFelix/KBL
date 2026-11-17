@@ -95,6 +95,10 @@ fn logs() -> Vec<(&'static str, String)> {
             std::fs::read_to_string(format!("{core}/work_format_11.jsonl")).unwrap(),
         ),
         (
+            "format_12",
+            std::fs::read_to_string(format!("{core}/work_format_12.jsonl")).unwrap(),
+        ),
+        (
             "pre_review",
             std::fs::read_to_string(format!("{core}/work_pre_review.jsonl")).unwrap(),
         ),
@@ -388,4 +392,50 @@ fn review_load_is_the_count_the_tracker_pause_uses() {
     );
     let load: serde_json::Value = serde_json::from_str(&f.review_load_json()).unwrap();
     assert_eq!(load, serde_json::json!({ "load": 3, "in_review": 2 }));
+}
+
+#[test]
+fn items_carry_their_assignee_and_held_attempt() {
+    let mut f = Folder::new();
+    for (i, l) in include_str!("../../core/tests/work_format_12.jsonl")
+        .lines()
+        .enumerate()
+    {
+        f.apply(i as f64, l.as_bytes());
+    }
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let row = |id: &str| {
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        row("r1")["assignee"],
+        serde_json::json!({"person": "gabriel"})
+    );
+    assert_eq!(row("r1")["needs"], "taken");
+    assert!(row("r1")["held_attempt"].is_null());
+    assert!(row("r2")["assignee"].is_null());
+
+    // While an agent holds it, the row names the attempt.
+    let mut f = Folder::new();
+    for (i, l) in include_str!("../../core/tests/work_format_12.jsonl")
+        .lines()
+        .take(13)
+        .enumerate()
+    {
+        f.apply(i as f64, l.as_bytes());
+    }
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let r1 = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "r1")
+        .unwrap();
+    assert_eq!(r1["held_attempt"], 1);
 }

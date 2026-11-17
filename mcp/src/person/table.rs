@@ -15,6 +15,8 @@ pub(super) enum Kind {
     Words(&'static [&'static str]),
     /// A string the tracker keeps as content. Sent as `{"text": ...}`.
     Content,
+    /// A person's name. Sent as `{"person": ...}`.
+    Person,
 }
 
 pub(super) struct Param {
@@ -49,7 +51,7 @@ const ITEM: Param = Param {
 pub(super) const TOOLS: &[Tool] = &[
     Tool {
         name: "my_queue",
-        about: "What waits on a person in this team, oldest wait first, then lower tier. An item you snoozed or parked is left out while the wait you hid continues.",
+        about: "What waits on you in this team, oldest wait first, then lower tier. An item assigned to someone else is left out, and so is one you snoozed or parked while the wait you hid continues.",
         route: Route::Get("/v1/work/queue"),
         params: &[Param {
             name: "limit",
@@ -245,6 +247,46 @@ pub(super) const TOOLS: &[Tool] = &[
                 kind: Kind::Bool,
                 required: true,
                 about: "Whether the summary was accurate.",
+            },
+        ],
+    },
+    Tool {
+        name: "take_item",
+        about: "Assign the item to yourself. No agent claims it while it is yours; an agent already holding it finishes or is stopped first.",
+        route: Route::Post("/v1/work/take"),
+        params: &[ITEM],
+    },
+    Tool {
+        name: "reassign_item",
+        about: "Assign the item to a person of this team, or to nobody so agents may claim it again.",
+        route: Route::Post("/v1/work/reassign"),
+        params: &[
+            ITEM,
+            Param {
+                name: "to",
+                kind: Kind::Person,
+                required: false,
+                about: "The person's name. Leave it out for nobody.",
+            },
+        ],
+    },
+    Tool {
+        name: "steer_agent",
+        about: "Send a note to the agent holding the item. It reads it as a note on the attempt it holds.",
+        route: Route::Post("/v1/work/steer"),
+        params: &[
+            ITEM,
+            Param {
+                name: "attempt",
+                kind: Kind::Number,
+                required: true,
+                about: "The attempt the agent holds.",
+            },
+            Param {
+                name: "text",
+                kind: Kind::Content,
+                required: true,
+                about: "The note.",
             },
         ],
     },
