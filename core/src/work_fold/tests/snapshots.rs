@@ -335,6 +335,41 @@ fn restored_review_asks_and_summary_marks_fold_like_fresh_ones() {
     check_every_offset(&with_blanks(&l.0), 4);
 }
 
+/// An assignee and a steer come back from a stored snapshot as a fresh fold
+/// has them, and later records act on them the same.
+#[test]
+fn restored_assignees_and_steers_fold_like_fresh_ones() {
+    use crate::work::Assignee;
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 12 });
+    for item in ["r1", "r2", "r3"] {
+        accepted_root(&mut l, item);
+    }
+    l.person(WorkRecord::Taken { item: id("r1") });
+    l.person(WorkRecord::Reassigned {
+        item: id("r2"),
+        to: Some(Assignee::Person(key("ana"))),
+    });
+    l.agent("w1", claimed("r3", 1));
+    l.person(WorkRecord::Taken { item: id("r3") });
+    l.person(WorkRecord::Steered {
+        item: id("r3"),
+        attempt: 1,
+        text: text("use the writer lock"),
+    });
+    l.person(WorkRecord::Reassigned {
+        item: id("r2"),
+        to: None,
+    });
+    let fresh = fold(&l.0);
+    assert_eq!(fresh.needs_you(&id("r1")), Some(NeedsYou::Taken));
+    assert_eq!(fresh.stage(&id("r2")), Some(Stage::Ready));
+    assert_eq!(fresh.items[&id("r3")].paths[0].human_inputs.len(), 1);
+    assert!(fresh.rejections.is_empty(), "{:?}", fresh.rejections);
+    check_every_offset(&l.0, 3);
+    check_every_offset(&with_blanks(&l.0), 4);
+}
+
 /// One snapshot kept on its own, read back from JSON, is the fold of its
 /// records, derived data included, and an edit anywhere below it fails it.
 #[test]

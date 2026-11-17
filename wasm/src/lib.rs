@@ -112,6 +112,8 @@ impl Folder {
     /// and `default`, and `unclear` (`scope`, `repo` or `acceptance`) when it is
     /// triage's. `root` is true for an item with no parent. `accepted` and `flagged` say
     /// whether a person accepted it and whether one flagged it for a person.
+    /// `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
+    /// the attempt an agent holds, or null.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
         let items: Vec<_> = self
@@ -140,6 +142,8 @@ impl Folder {
                     "root": i.parent.is_none(),
                     "accepted": i.accepted,
                     "flagged": i.flagged,
+                    "assignee": i.assignee,
+                    "held_attempt": i.hold.as_ref().map(|h| h.attempt),
                 })
             })
             .collect();
