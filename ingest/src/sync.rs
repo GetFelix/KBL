@@ -1199,11 +1199,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             ) else {
                 continue;
             };
+            // A GitLab request lives in the rule's own project, or the target.
             let allowed = rule
                 .target_repo
                 .iter()
                 .chain(rule.components.values())
-                .chain(rule.area_paths.values());
+                .chain(rule.area_paths.values())
+                .chain(rule.gitlab.then_some(&rule.repo));
             if t.moved_to.is_some()
                 || !t.in_scope
                 || !allowed
@@ -1212,13 +1214,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             {
                 continue;
             }
-            due.push((
-                key.clone(),
-                issue.clone(),
-                pr.clone(),
-                "linked",
-                rule.clone(),
-            ));
+            // A GitLab request is announced once it was read and tied to the
+            // item, so a number an agent made up names nothing on the issue.
+            if !(rule.gitlab && root.pr_status.is_none()) {
+                due.push((
+                    key.clone(),
+                    issue.clone(),
+                    pr.clone(),
+                    "linked",
+                    rule.clone(),
+                ));
+            }
             if root
                 .pr_status
                 .as_ref()
@@ -1526,7 +1532,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 }
 
 /// The line that ties an issue ingest opened to its prerequisite item.
-const MARKER: &str = "kbl-prerequisite:";
+pub(crate) const MARKER: &str = "kbl-prerequisite:";
 
 /// The issue body. An agent wrote `why`, so a marker line in it is dropped:
 /// only ingest's own, written last, may name the item.
@@ -1671,7 +1677,7 @@ fn prune(p: &mut Poll) {
 /// The tracker knows a transferred issue's root only under the id it was
 /// imported with, so each new id is given the root of the id it moved from.
 /// A chain of moves is followed to its end.
-fn alias_moved(state: &State, roots: &mut HashMap<String, Root>) {
+pub(crate) fn alias_moved(state: &State, roots: &mut HashMap<String, Root>) {
     for (old, t) in &state.items {
         let Some(root) = roots.get(old).cloned() else {
             continue;

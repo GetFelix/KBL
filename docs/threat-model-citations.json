@@ -164,7 +164,7 @@
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
  ],
  "ingest/src/sync.rs#announce": [
-  ".chain(rule.area_paths.values());"
+  ".chain(rule.gitlab.then_some(&rule.repo));"
  ],
  "ingest/src/sync.rs#cut": [
   "fn cut(s: &str) -> String {"
@@ -281,6 +281,10 @@
  ],
  "tracker/src/http.rs#items": [
   "match call.person() {"
+ ],
+ "tracker/src/http.rs#team_agents": [
+  "if let Err(d) = call.person() {",
+  ".filter(|(_, a)| !a.revoked)"
  ],
  "tracker/src/http.rs#me": [
   "async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {"
@@ -463,7 +467,17 @@
   "if !it.accepted {"
  ],
  "tracker/src/http.rs#as_person": [
-  "&& !call.teams.is_member(&call.team, to)"
+  "} => (!call.teams.is_member(&call.team, to)).then_some(\"that person is not in this team\"),",
+  "(!call.teams.is_team_agent(&call.team, to)).then_some(\"that agent is not in this team\")"
+ ],
+ "tracker/src/tracker.rs#try_assigned": [
+  ".filter(|(_, it)| it.assignee == Some(Assignee::Agent(key.clone())))"
+ ],
+ "tracker/src/tracker.rs#claim_from": [
+  "if assigned_agent(&core.state, &item).is_some() {"
+ ],
+ "tracker/src/tracker.rs#drop_away_assignees": [
+  "revoked || last.elapsed() >= away"
  ],
  "ingest/src/ado/transport.rs#Secret": [
   "pub(crate) enum Secret {"
@@ -488,5 +502,31 @@
  ],
  "ingest/src/ado.rs#call": [
   "if res.status == 203 || (300..400).contains(&res.status) {"
+ ],
+ "ingest/src/gitlab.rs#base_url": [
+  "\"http\" if loopback => {}",
+  "url.username().is_empty() && url.password().is_none(),"
+ ],
+ "ingest/src/gitlab.rs#call": [
+  "if (300..400).contains(&res.status) {"
+ ],
+ "ingest/src/gitlab.rs#write_back": [
+  "return Err(anyhow!(\"no rule asks for a write to GitLab\").into());"
+ ],
+ "ingest/src/gitlab.rs#project_of": [
+  ".ok_or_else(|| anyhow!(\"{repo} is not a project this worker is configured for\").into())"
+ ],
+ "ingest/src/gitlab.rs#pull_request": [
+  "if !self.is_own(&author) {",
+  "into_default && merger.is_some_and(|m| !self.is_own(m))"
+ ],
+ "ingest/src/gitlab.rs#parse_note": [
+  "if raw[\"system\"] == true || raw[\"internal\"] == true {"
+ ],
+ "ingest/src/gitlab/transport.rs#send": [
+  "value.set_sensitive(true);"
+ ],
+ "ingest/src/config.rs#check_gitlab": [
+  "fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {"
  ]
 }

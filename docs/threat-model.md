@@ -25,7 +25,7 @@ the end.
 |---|---|---|---|
 | Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/KBL/issues/120)) |
 | Agent | A model acting through `kbl-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
-| Ingest | The `kbl-ingest` worker that mirrors GitHub, Azure DevOps or Jira | An ingest token, and a GitHub, Azure DevOps or Jira credential | Trusted code that carries untrusted text |
+| Ingest | The `kbl-ingest` worker that mirrors GitHub, GitLab, Azure DevOps or Jira | An ingest token, and a GitHub, GitLab, Azure DevOps or Jira credential | Trusted code that carries untrusted text |
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
 | Webhook sender | Whoever posts to ingest's `/webhook` | The shared webhook secret | Not trusted without a valid signature |
 
@@ -47,7 +47,7 @@ Two more parties are outside KBL and can still steer it:
 | Merges | GitHub. KBL records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
 | Rules | `rules_set` records, shown in every claim reply | Instructions injected into every other agent |
 | Artifacts | The artifacts cache, keyed by content hash | Other bytes shown under a trusted id |
-| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), the Azure DevOps credential (a personal access token, or an Entra service principal's client secret and the access token it yields), Felix tokens | Any of them |
+| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), the Azure DevOps credential (a personal access token, or an Entra service principal's client secret and the access token it yields), the GitLab credential (a group or project access token), Felix tokens | Any of them |
 
 ## Trust boundaries
 
@@ -145,6 +145,34 @@ area path maps to no repository is imported but stays in Needs you
 refusal so the project stalls and nothing is imported from the page
 (`ingest/src/ado.rs#call`).
 
+When ingest signs in to GitLab, the group or project access token (a bot user)
+is read from an environment variable or a file for each request
+(`ingest/src/ado/transport.rs#Secret`) and sent only as that request's
+`PRIVATE-TOKEN` header, marked sensitive
+(`ingest/src/gitlab/transport.rs#send`). It is not in the config, the saved
+state, any record, any error or any log line: an error carries a status and
+never GitLab's answer (`ingest/src/gitlab.rs#call`). Redirects are never
+followed, so a token cannot be carried to another host, and one is read as a
+refusal. The instance address comes from the config alone and must be https,
+or http on loopback; an address with a user name, password, query or fragment
+is refused at startup (`ingest/src/gitlab.rs#base_url`,
+`ingest/src/config.rs#check_gitlab`). A page of a listing is
+asked for by number, never by following a link the server sends, and no
+address or query is built from issue text, so an issue cannot steer a request
+(SSRF through the configured address is the operator's choice, and through
+item text is not possible). The token needs `read_api`, and `api` only when a
+rule writes back; the adapter refuses every write, including drafting a merge
+request, when no rule asks for one
+(`ingest/src/gitlab.rs#write_back`). Writes go only to a project a rule reads
+(`ingest/src/gitlab.rs#project_of`), only for an issue ingest imported
+(`ingest/src/sync.rs#announce`), and only as a comment, a `close` or `reopen`,
+or a draft title on a merge request our own login opened. GitLab sends no
+word of who merged beyond the merge request: a merge counts only into the
+project's default branch, and only when GitLab names a merger who is not one
+of our logins, so a merge whose merger or default branch cannot be read counts
+nothing (`ingest/src/gitlab.rs#pull_request`). A system note and an internal
+note are not imported as comments (`ingest/src/gitlab.rs#parse_note`).
+
 The token file must be mode 600 or 400 (`tracker/src/config.rs#load`), a token
 may be listed once (`tracker/src/config.rs#parse`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs#entries`).
@@ -193,7 +221,7 @@ All of them need an agent token (`tracker/src/http.rs#agent`).
 
 | Route | Fields the agent controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs#claim_loop`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs#step_record`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs#review_lanes`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs#try_claim`, `tracker/src/tracker.rs#try_claim`) and the fold refuses the claim too (`core/src/work_fold.rs#step_record`). A held claim is handed back, or extended, only while the log's tip still shows the hold (`tracker/src/tracker.rs#hold_at_tip`) |
+| `/v1/work/next` | `wait_seconds`, `review_tiers` | Hold a connection open; claim work it should not | Wait capped at 30 s (`tracker/src/tracker.rs#claim_loop`). A claim needs a Ready item, tries left and cost left (`core/src/work_fold.rs#step_record`). Any agent may claim any Ready item ([#120](https://github.com/GetFelix/KBL/issues/120)) except one assigned to another agent: the fold refuses that claim as `not_assignee` (`core/src/work_fold.rs#step_record`), and the tracker never publishes such an item to a lane, hands it only to its assignee (`tracker/src/tracker.rs#try_assigned`), and acks a ready record of it that another agent polls, without a nack or a new publish (`tracker/src/tracker.rs#claim_from`), so no agent loops on it or spends Felix's handouts. An agent assignee that is revoked or calls nothing for `KBL_ASSIGNEE_AWAY_SECS` is dropped by the sweep (`tracker/src/tracker.rs#drop_away_assignees`). `review_tiers`: a review is given only to an agent that names its tier; at most 4 names, an unconfigured one is refused (`tracker/src/tracker.rs#review_lanes`). An agent that worked a tree is skipped for its reviews (`tracker/src/tracker.rs#try_claim`, `tracker/src/tracker.rs#try_claim`) and the fold refuses the claim too (`core/src/work_fold.rs#step_record`). A held claim is handed back, or extended, only while the log's tip still shows the hold (`tracker/src/tracker.rs#hold_at_tip`) |
 | `/v1/work/extend` | `item` | Keep another agent's claim alive, or its own after losing it | Must own the delivery and the hold (`tracker/src/tracker.rs#holding`, `tracker/src/tracker.rs#holding`) |
 | `/v1/work/complete` | `item`, `claim`, `attempt`, `usage` | Finish work it does not hold; finish over open children; report no usage, or a model with no price; claim a replay of an outcome it did not write | `claim` (or `attempt`) only replays a record this agent wrote, of the same kind, ending that claim (by attempt, its own latest claim of it); a lapse the tracker wrote stays `lost`, and a `claim` or `attempt` that is not the one held ends nothing (`tracker/src/tracker.rs#ended_by`, `tracker/src/tracker.rs#finish`). Holder only (`tracker/src/tracker.rs#finish`, `core/src/work_fold.rs#step_record`). Open children refuse it (`core/src/work_fold.rs#step_record`). A fix is not closed by `done`; a merge or a person closes it. Usage: what each model used is the agent's word; the fold prices it and charges at least the floor the tracker writes on the record, `KBL_COST_FLOOR_MICROS` (`core/src/work_fold.rs#charge`). At most 16 entries, one per model, plain model names; a `cost_micros` is refused (`core/src/work_fold.rs#check_charge`, `tracker/src/http.rs#usage_of`); the item total saturates (`core/src/work_fold.rs#charge`) |
 | `/v1/work/release` | `item`, `claim`, `attempt`, `reason`, `usage` | Release another's work; write a huge record | `claim` and `attempt` replay only as for `complete`. Holder only (`core/src/work_fold.rs#step_record`). Two claims per attempt (`core/src/work_fold.rs#step_record`). `reason` is held to 4 KiB (`tracker/src/tracker/tools.rs#check_sizes`). Usage: what each model used is the agent's word; the fold prices it and charges at least the floor the tracker writes on the record, `KBL_COST_FLOOR_MICROS` (`core/src/work_fold.rs#charge`). At most 16 entries, one per model, plain model names; a `cost_micros` is refused (`core/src/work_fold.rs#check_charge`, `tracker/src/http.rs#usage_of`) |
@@ -244,10 +272,11 @@ in `check_sizes` (`tracker/src/tracker/tools.rs#check_sizes`).
 | `/v1/work/mark-merged` | `merge_marked` | Person only in the fold too, item open and reporting a request that upstream shows neither open nor closed without a merge (`core/src/work_fold.rs#step_record`). It closes the item as merged, as a person's `closed` with `merged` already does, so it adds no power; the tracker never merges. Format 11 |
 | `/v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated` | Person only in the fold too, the attempt must exist and be finished, and the same mark again is `no_change` (`core/src/work_fold.rs#step_record`). A closed item can still be marked. It changes nothing the fold acts on: no stage, claim or wait. Format 11 |
 | `/v1/work/take` `{item}` | `taken` | Person only in the fold too, item open and accepted, and already the caller's is `no_change` (`core/src/work_fold.rs#assign`). The assignee is the token's person, so a person can only take for themselves. It keeps the item out of Ready, so no agent claims it, and leaves any hold as it is (`core/src/work_fold.rs#needs_you`). Format 12 |
-| `/v1/work/reassign` `{item, to}` | `reassigned` | Person only in the fold too, same conditions as a take (`core/src/work_fold.rs#assign`). `to` must be a person of the token's team, by its token file or the org log, or the call is `not_member`, on this route and on `/v1/work/records` alike (`tracker/src/http.rs#as_person`); the fold does not read the org log. An agent assignee is `bad_assignee` (`core/src/work_fold.rs#step_record`), so no assignee can steer a claim to one agent. Format 12 |
+| `/v1/work/reassign` `{item, to}` | `reassigned` | Person only in the fold too, same conditions as a take (`core/src/work_fold.rs#assign`). `to` must be a person of the token's team, by its token file or the org log, or the call is `not_member`, on this route and on `/v1/work/records` alike (`tracker/src/http.rs#as_person`); the fold does not read the org log. `to` may be an agent of the team that is not revoked, also checked there; it is `bad_assignee` on a log below format 13 (`core/src/work_fold.rs#step_record`). Only a person assigns an agent, so an agent cannot route work to itself or away from another. Format 12, an agent from 13 |
 | `/v1/work/steer` `{item, attempt, text}` | `steered` | Person only in the fold too, item open and held, and `attempt` must be the one held (`core/src/work_fold.rs#step_record`). Text over the inline limit is refused, as for a note (`tracker/src/tracker/tools.rs#check_sizes`). It adds a note to that attempt, as `human_input` with an attempt does, so it gives a person no power a note does not. Format 12 |
 | `GET /v1/work/queue` | None: reads the fold | Person only. Lists what waits on a person, oldest wait first, then tier, at most 1000 entries per call (`?limit=`, default 200) (`core/src/work_fold/human_wait.rs#State::queue_for`). An item assigned to another person is left out; that hides nothing, since `GET /v1/work/items` lists every item of the team. An item a person snoozed or parked is left out while the wait they hid continues. A read, so no request key |
 | `GET /v1/work/items`, `GET /v1/work/items/{item}` | None: reads the fold | A person sees every item of the team, as the dashboard does from `work.events` (`tracker/src/http.rs#items`) |
+| `GET /v1/work/agents` | None: reads the org log and token file | Person only. The names of the team's agents that are not revoked, so a person can pick one to assign; no token hash, holds or who added it, which stay on the org admin's `GET /v1/teams/{team}/agents` (`tracker/src/http.rs#team_agents`) |
 | `GET /v1/work/items/{item}/history` | None: reads `work.events` | Records about the item, at most 500 per answer and 20,000 read, page by page from Felix (`tracker/src/tracker/reads.rs#HISTORY_PAGE`). Payloads come back as logged, with no redaction at read time. Secrets and agent text are cut only in records written since the log started redacting, so older records return as written. The same person can already read `work.events` itself, so this shows nothing new |
 | `GET /v1/work/metrics/time-to-human` | None: reads the fold | Counts and percentiles of how long items waited on a person, for the whole team, from records a person can already read. No item ids and no names of who acted, so it adds no per-person figure. `days` is clamped to 1 to 366 and the answer is built from at most 20,000 kept waits (`core/src/work_fold/human_wait.rs#KEPT_WAITS`) |
 | `GET /v1/work/metrics/summary-trust` | None: reads the fold | Counts of the summary marks a person wrote in a window and of finished attempts with no mark, for the whole team, from records a person can already read. No item ids and no names of agents, models or who marked, so it adds no per-person figure; a team with one reviewer still shows that reviewer's marks. `days` is clamped to 1 to 366 and the answer is a fixed set of integers (`core/src/work_fold/trust.rs#summary_trust`). A mark counts once, by its latest write |
@@ -335,10 +364,10 @@ request only when all of these hold, so the name alone steers nothing.
 | Attack | Check |
 |---|---|
 | Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs#may_write_to`) |
-| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs#linked_request`, `ingest/src/github.rs#pull_request`) |
+| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs#linked_request`, `ingest/src/github.rs#pull_request`, `ingest/src/gitlab.rs#pull_request`) |
 | Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs#linked_request`) |
 | Name a request for a Jira root so the GitHub worker records its merge | The same author, age and default-branch checks, but the branch only (a closing reference names GitHub issues), in a repo one of the GitHub worker's own rules names (`ingest/src/sync.rs#foreign_pull_requests`). The worker writes `pr_status` and nothing more; the tracker refuses the rest of its records for a root of another source (`tracker/src/tracker/ingest.rs#ingest_record_in`), and a status for a request the item did not report as `wrong_pr` (`core/src/work_fold.rs#step_record`) |
-| Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs#pull_request`) |
+| Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs#pull_request`); on GitLab also a named merger (`ingest/src/gitlab.rs#pull_request`) |
 | Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs#review_state`) |
 | Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs#check_state`) |
 | Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs#check_state`) |
@@ -413,7 +442,7 @@ the call is made (`mcp/src/person.rs#check`).
 | `mark_merged` | `POST /v1/work/mark-merged` | Person only (`tracker/src/http.rs#person`) |
 | `rate_summary` | `POST /v1/work/rate-summary` | Person only (`tracker/src/http.rs#person`) |
 | `take_item` | `POST /v1/work/take` | Person only (`tracker/src/http.rs#person`) |
-| `reassign_item` | `POST /v1/work/reassign` | Person only, and `to` a person of the team (`tracker/src/http.rs#as_person`) |
+| `reassign_item` | `POST /v1/work/reassign` | Person only, and `to` a person or a live agent of the team (`tracker/src/http.rs#as_person`) |
 | `steer_agent` | `POST /v1/work/steer` | Person only (`tracker/src/http.rs#person`) |
 
 `my_queue` returns raw item text to the host model. Tool names and routes are static, so that text cannot change which calls exist, but hosts should treat it as untrusted.
@@ -464,7 +493,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `merge_marked` | Person | Open items that report a request upstream shows neither open nor closed without a merge (`core/src/work_fold.rs#step_record`). Format 11 |
 | `summary_rated` | Person | An existing, finished attempt, and only a change (`core/src/work_fold.rs#step_record`). Format 11 |
 | `taken` | Person | Open, accepted items; the assignee is the writer, and only a change (`core/src/work_fold.rs#assign`). Format 12 |
-| `reassigned` | Person | Open, accepted items, a person assignee or none, and only a change (`core/src/work_fold.rs#assign`). An agent assignee is `bad_assignee`. Format 12 |
+| `reassigned` | Person; the tracker only to clear an agent assignee | Open, accepted items, and only a change (`core/src/work_fold.rs#assign`). An agent assignee is `bad_assignee` below format 13. Format 12 |
 | `steered` | Person | Open items an agent holds, on the attempt it holds (`core/src/work_fold.rs#step_record`). Format 12 |
 | `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs#step_record`). Ingest reopens only what it closed. It keeps release waits and clears the item's release, so a waiter waits for the next release |
 | `attempt_closed` | Tracker, person | `core/src/work_fold.rs#step_record` |

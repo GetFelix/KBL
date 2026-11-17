@@ -16,7 +16,7 @@ priority change) becomes regular work or a record the tracker already keeps.
 
 ## The problem
 
-Bugs arrive in GitHub Issues, Azure DevOps or Jira. Agents fix them, but three
+Bugs arrive in GitHub Issues, GitLab, Azure DevOps or Jira. Agents fix them, but three
 things are missing:
 
 - **Asking for the next piece of work.** An agent has no way to say "give me
@@ -63,7 +63,7 @@ The agent named on each record is the one the tracker authenticated. Felix
 records the tracker as the publisher of every `work.events` record, so the
 agent's identity is the tracker's attestation, written into the record.
 
-An ingest worker pulls new and changed items from GitHub, ADO or Jira. For each
+An ingest worker pulls new and changed items from GitHub, GitLab, ADO or Jira. For each
 root it posts one triage item and one augment item, once. Triaging again is a
 person's action. People edit any record through REST or the viewer.
 
@@ -71,6 +71,7 @@ person's action. People edit any record through REST or the viewer.
 flowchart LR
     subgraph Sources
         GH[GitHub]
+        GL[GitLab]
         ADO[Azure DevOps]
         JIRA[Jira]
         P[People, in the dashboard]
@@ -89,6 +90,7 @@ flowchart LR
     end
     D[Dashboard]
     GH --> T
+    GL --> T
     ADO --> T
     JIRA --> T
     P --> T
@@ -216,8 +218,13 @@ rebuild after the writer lease is retaken or goes stale. It uses the first that
 passes the digest, the fold revision and the hash chain over the log, and logs
 and skips each one that does not: damaged, cut short, from another revision, or
 ahead of a log that lost its tail. A skipped file stays, so a log that was only
-briefly short uses it again once it is back; saving keeps the last three by
-record count. With none usable it folds from the start. The folder is derived
+briefly short uses it again once it is back. A file the log contradicts
+is removed once a rebuild has the log: each file carries the chain at every
+earlier save, and one whose chain differs from the log at a point the log
+covers was made from a log that was trimmed or started over, whatever its
+record count. A file ahead of the log is kept, since the log may only be
+short. Saving then keeps the last three of
+what is left, and never removes the file it just wrote. With none usable it folds from the start. The folder is derived
 data, so deleting it only costs a slower rebuild. A team folder that is a
 symlink is not used. The disk work runs off the async workers.
 
@@ -240,7 +247,9 @@ a blocking thread, so an append waits only for the copy, once per `every`
 records. The hash chain is extended from the last save: the tracker keeps the
 chain's head and the records since, not the log, so a save hashes only those
 records. One save runs at a time per state, so one copy exists beside the live one (a
-rebuild can briefly overlap the last save of the state it replaced). Records that land during a save wait for the next; if a stuck
+rebuild can briefly overlap the last save of the state it replaced). Each
+rebuild starts a new generation for the folder, and a save taken before it
+writes and prunes nothing, so it cannot remove a file the rebuild restored from. Records that land during a save wait for the next; if a stuck
 disk lets more than the larger of 4 x `every` and 10,000 pile up, the tracker
 logs it and stops saving until its next rebuild, which restarts from the log.
 A snapshot is never trusted on how it was made: the next rebuild checks every
@@ -492,7 +501,7 @@ record if the fold accepts it:
 | `POST /v1/work/mark-merged` `{item}` | `merge_marked`: records that the pull request was merged upstream, and closes the item as merged. Refused while upstream shows the request open; the item keeps who recorded it, and a later open or closed-unmerged status reopens it into Needs you as `merge_disputed` |
 | `POST /v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated`: marks the summary the attempt handed off accurate or not |
 | `POST /v1/work/take` `{item}` | `taken`: assigns the item to the caller. See [Assignees](#assignees) |
-| `POST /v1/work/reassign` `{item, to}` | `reassigned`: assigns the item to `to`, `{"person": name}` of the caller's team (`not_member` otherwise), or to nobody with `null` |
+| `POST /v1/work/reassign` `{item, to}` | `reassigned`: assigns the item to `to`, `{"person": name}` of the caller's team (`not_member` otherwise), `{"agent": name}` of a team agent not revoked (format 13), or to nobody with `null` |
 | `POST /v1/work/steer` `{item, attempt, text}` | `steered`: a note to the agent holding `attempt` |
 
 A person's token can also read the team's work. These calls write nothing:
@@ -502,6 +511,7 @@ A person's token can also read the team's work. These calls write nothing:
 | `GET /v1/work/queue` | My queue: every item that waits on the caller, oldest wait first, then lower tier, as `{item, title, work, stage, needs, wait, tier, since_ms, root, assignee}`, with `count` (the whole queue) and `at`. `?limit=` trims `queue` to its first entries: 200 by default, at most 1000. `wait` is `proposal`, `question`, `failure`, `review` or `other`; an item whose reason changes starts a new wait from that record. An item a person snoozed or parked is left out while that wait continues (see [Card actions on My queue](#card-actions-on-my-queue)). `since_ms` is null for a wait the tracker did not see begin (it started before a snapshot), and those come first, since they are older than any known start. An item assigned to a person is only in that person's queue; anything else waiting is in everyone's. Person tokens only |
 | `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, assignee, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
+| `GET /v1/work/agents` | The names of the team's agents an item can be assigned to, as `{agents}`: the token file's, and those added with `kbl-tool agent add` and not revoked. The dashboard's assign picker lists them |
 | `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A `from` past the end of the log is an empty answer with `next` null. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
 | `GET /v1/work/metrics/time-to-human` | Time to first human action over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.count`, `p50_ms` and `p90_ms` of the waits a person ended in the window, the same per reason in `by_kind` (`proposal`, `question`, `failure`, `review`, `other`), `open` (items waiting now with no person action yet) and `oldest_open_since_ms`. `truncated` is true, with `complete_since_ms`, when the oldest finished waits were dropped past the 20,000 kept, or the tracker restored its state from a snapshot, and the window reaches back before what the fold has seen. Open waits are not in the percentiles. See [Time to first human action](#time-to-first-human-action) |
 | `GET /v1/work/metrics/summary-trust` | How often the summaries people marked were marked accurate over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.rated` (attempts whose standing mark was written in the window), `accurate`, `not_accurate`, `accurate_permille` (null with nothing rated), `unrated` (finished attempts with no mark now, whatever the window), `min_sample` (10) and `undated`. A person only. See [Summary trust](#summary-trust) |
@@ -788,9 +798,53 @@ they are refused with `format`. Each needs an open, accepted item (`closed`,
 - A take, a reassign and a steer each count as a person acting on the wait for
   [time to first human action](#time-to-first-human-action). The wait a take
   starts is counted as acted on, since the person chose it.
-- An agent cannot be an assignee yet: `reassigned` to `{"agent": ...}` is
-  refused as `bad_assignee`. Routing a claim to one agent is
-  [#324](https://github.com/GetFelix/KBL/issues/324).
+- **An agent assignee** (`{"agent": "w1"}`, from [format 13](upgrades.md#formats))
+  means only that agent works the item. It must be an agent of the team that
+  is not revoked (`not_member`), and only a person sets it. The item stays
+  Ready and shows in everyone's My queue when it waits on a person. Below
+  format 13 it is refused as `bad_assignee`.
+
+##### How the claim reaches the assigned agent
+
+The fold refuses `claimed` by any other agent as `not_assignee`. A hold is
+still one slot that a claim fills only from Ready, so assigning or reassigning
+while an agent holds the item never makes a second holder: the holder keeps
+it until it finishes, releases or lapses, and only then can the assignee claim.
+
+The tracker does not publish an agent's item to a ready lane. When the
+assignee calls `work_next`, the tracker claims its assigned Ready item in the highest-priority lane
+straight from the state, ahead of the lanes, and nobody else is ever handed
+it. A ready record published before the assignment is acked by whichever
+agent polls it and is not published again, so:
+
+- no agent gets the item back, and none passes it between them;
+- the item spends none of Felix's handouts, which dead-letter a record at
+  their limit: the record is acked, never nacked;
+- the assignee is never starved, since nothing else can claim the item.
+
+A direct claim has no Felix delivery. The agent extends it as usual and the
+tracker's sweep lapses it when it is not extended.
+
+A restarted tracker takes a direct claim back from the log without polling
+Felix, whoever the item is assigned to by then. The tracker records whether
+each claim was direct: the item was assigned to the claiming agent when its
+`claimed` record landed, since a lane claim is never written for an item
+assigned to an agent. The hold then runs one visibility period from the
+restart, past any deadline the old tracker gave, and lapses unless the agent
+extends it. So a restart neither ends a direct claim early, which would let a
+new assignee start a second attempt while the holder still works, nor spends a
+handout on another item's ready record looking for it.
+
+If the assigned agent goes away (it is revoked, or makes no call to the
+tracker to claim, extend or finish work for `KBL_ASSIGNEE_AWAY_SECS`, 600 by
+default, counted from the tracker's start), the sweep writes
+`reassigned` to nobody as the tracker, and the item goes to the whole team.
+The story shows why. A busy agent working another item still extends it, so
+it keeps its assigned items. A revoke drops the assignee at once only on the
+tracker that served it; a restarted tracker waits out the away time.
+
+Reassigning or clearing an agent while it holds the item leaves its hold in
+place until it finishes, releases or lapses, across a tracker restart too.
 
 #### Review actions and summary marks
 
@@ -868,6 +922,8 @@ Start each `kbl-mcp` session with one of those tokens as its
 - Without teams on, the agent routes answer `404` with `teams_off`.
 
 ### Running the ingest worker
+
+To set ingest up for the first time, start with [Setting up ingest](ingest-setup.md): `kbl-tool source init` writes a config and `kbl-ingest check` tests it, writing nothing.
 
 `kbl-ingest` is a separate binary. It never writes to Felix: it reads
 GitHub, then writes through the three `ingest` calls above under its own token,
@@ -1705,21 +1761,22 @@ it did. The tracker links each item to its runs.
 
 ## Sources
 
-GitHub, Azure DevOps and Jira are each an adapter behind one interface, so the
+GitHub, GitLab, Azure DevOps and Jira are each an adapter behind one interface, so the
 tracker, the tools and the dashboard never see which system an item came
 from. An adapter lists what changed since a cursor it keeps, fetches one item,
 maps its fields and links, and writes back. Polling is the record; webhooks
-(GitHub webhooks, ADO service hooks, Jira webhooks) only wake the poll early,
+(GitHub and GitLab webhooks, ADO service hooks, Jira webhooks) only wake the poll early,
 so a missed webhook costs latency, not an item.
 
-| | GitHub | Azure DevOps | Jira |
-|---|---|---|---|
-| Upstream id | `github:GetFelix/felix#812` | `ado:org/project#4410` | `jira:acme/FEL#123` (site `acme`, key `FEL-123`) |
-| Scope by | repo, labels (all or any), excluded labels, milestone, assignee, type | project, area path, iteration, tags, or a saved query | a JQL filter |
-| Priority from | a label mapping | the Priority field (1 to 4) | the priority field |
-| Links from | blocked by, sub-issues | predecessor, parent | blocks, sub-tasks |
-| Closed as | `completed` / `not_planned`, duplicate | Done, Closed, Removed | the resolution |
-| Credentials | GitHub App or token | personal access token or Entra service principal | API token or OAuth app |
+| | GitHub | GitLab | Azure DevOps | Jira |
+|---|---|---|---|---|
+| Upstream id | `github:GetFelix/felix#812` | `gitlab:group/project#812` (the issue's `iid`) | `ado:org/project#4410` | `jira:acme/FEL#123` (site `acme`, key `FEL-123`) |
+| Scope by | repo, labels (all or any), excluded labels, milestone, assignee, type | project, labels (all or any), excluded labels, milestone, assignee, type | project, area path, iteration, tags, or a saved query | a JQL filter |
+| Priority from | a label mapping | a label mapping (`priority::1`) | the Priority field (1 to 4) | the priority field |
+| Links from | blocked by, sub-issues | is blocked by | predecessor, parent | blocks, sub-tasks |
+| Closed as | `completed` / `not_planned`, duplicate | completed, or dropped by a `wontfix`, `duplicate` or `not planned` label, or a move | Done, Closed, Removed | the resolution |
+| Pull requests | pull requests | merge requests | none (the GitHub worker records them) | none (the GitHub worker records them) |
+| Credentials | GitHub App or token | group or project access token | personal access token or Entra service principal | API token or OAuth app |
 
 The ingest worker holds the source credentials. Agents never see them and
 write back only through the tracker, which checks the claim first.
@@ -1894,6 +1951,106 @@ the rule uses to the real one:
   long (30 s when none is named, at most an hour). A bad token is answered
   203 with a sign-in page or a redirect; both are read as a 401 and stall the
   project.
+
+### GitLab
+
+A GitLab worker has a `gitlab` block where a GitHub one has `github`. A rule's
+`repo` is `group/project`, and the issue id is the project's issue number
+(`iid`), so `gitlab:team/app#812` is issue 812 of that project. A project in a
+subgroup, whose path has more than one slash, is listed under `projects`,
+which maps the name the rule uses to the project's full path. GitLab.com is
+the default; a self-managed instance sets `api`:
+
+```json
+{
+  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN" },
+  "gitlab": {
+    "api": "https://gitlab.example.com",
+    "projects": { "team/app": "group/sub/app" },
+    "token_file": "/run/secrets/gitlab-token",
+    "own_logins": ["project_42_bot_8f3a"]
+  },
+  "rules": [{
+    "name": "agent-ok",
+    "repo": "team/app",
+    "labels_all": ["agent-ok"],
+    "mode": "admit",
+    "cap": 10,
+    "default_tier": 2,
+    "priority_labels": { "priority::1": 0, "priority::2": 1 },
+    "comment": true,
+    "transition_on_merge": "close"
+  }]
+}
+```
+
+- **Sign-in.** A group or project access token, which GitLab creates with a
+  bot user, in `token_env` or `token_file`. The file is read again for every
+  request, so a rotated token is picked up, and the secret is never in the
+  config, the saved state, a record, an error or a log line. The worker
+  learns its own username from `GET /user`, or from `own_logins`, and refuses
+  to start with neither.
+- **Address.** `api` is the instance's address and may carry a path prefix
+  (`https://example.com/gitlab`). It must be https; plain http is accepted
+  only on loopback (`localhost`, `127.0.0.1`, `::1`), and an address with a
+  user name, password, query or fragment is refused. Redirects are not
+  followed, so the token is never sent anywhere the config did not name. The
+  address comes from this file alone: no request is built from an issue's
+  text, and a page of a listing is asked for by number.
+- **Least privilege.** A worker with no rule that writes back needs only
+  the `read_api` scope, with the Reporter role, and the adapter refuses
+  every write. Give the token `api` only to a worker whose rules set
+  `comment` or a transition, or `open_prerequisites`. Without `api`, a
+  dropped issue's merge request is not made a draft either. Give the bot
+  access to the projects the rules read and no others: what the bot can see
+  is what ingest can import, confidential issues included.
+- **Selection.** The rule's own filters, run by ingest over each project's
+  issues: labels (`labels_all`, `labels_any`, `labels_excluded`), `milestone`,
+  `assignee` and `type` (`issue`, `incident` or `task`), as for GitHub. The
+  first poll reads open issues only, and later ones ask for what changed
+  since the cursor, which includes a close. Results are paged; a cut-short
+  listing resumes from the newest update it read. A project that answers 401,
+  403 or 404 stalls with its issues and cursor as they were. A note is read
+  only for an issue a rule takes and that has notes; a system note and an
+  internal note are not imported.
+- **Tiers.** `priority_labels` maps a label (a scoped label such as
+  `priority::1` works) to a tier, the lowest tier wins, and anything else takes
+  `default_tier`.
+- **Links.** An issue link of type "is blocked by" becomes an edge: the
+  issue waits on the issue that blocks it. "Blocks" is the other issue's
+  wait and shows in its own listing, and "relates to" waits on nothing, so
+  neither is an edge. A blocker in a project that no rule reads is not an
+  edge, and its issue's links are then not whole.
+- **Closed.** A closed issue is completed, unless GitLab moved it or it carries a
+  `wontfix`, `duplicate`, `invalid` or `not planned` label (or the same under
+  `resolution::`), which is dropped. GitLab keeps no reason on a closed
+  issue, so a label is the only signal.
+- **Merge requests.** Merge requests stand in for pull requests, and the
+  worker reads the one an agent reports on a root, in the issue's own
+  project: `team/app#7` is merge request 7 there. The rules are GitHub's.
+  Only a request our own login opened is read further. It is tied to the item
+  by the branch `kbl/<item>` or a `Closes #812` in its description, and must
+  have been created after the first claim. A merge counts only when it went
+  into the project's default branch and GitLab names a merger who is not one
+  of our logins, so a merge into a side branch, a merge by our own token, a
+  merge GitLab names no merger for and a request of someone else's all leave
+  the root open. The merge request's reviews (approvals and requested
+  changes, never the author's own) and pipeline (the first failed job that is
+  not allowed to fail) are recorded as its review and checks.
+- **Write-back.** For an agent's merge request in the rule's project (or its
+  `target_repo`), ingest posts a comment (`comment`) and sets the issue's
+  state (`transition_on_pr` and `transition_on_merge`, each `close` or
+  `reopen`). The comment names the request as `group/project!7`, which GitLab
+  links. Each is done once per merge request, a comment already there is not
+  posted again, and a state the issue is already in is skipped. When an issue is
+  dropped while our own request is open, the request becomes a draft with a
+  note. Only issues ingest imported are written to, and only in a project a
+  rule reads. `link_pr` is for Jira and Azure DevOps: GitLab links a request
+  from the comment and from `Closes`.
+- **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
+  long (30 s when none is named, at most an hour) before any further request.
+  A redirect is read as a refusal (a sign-in page or a moved instance) and
+  stalls the project.
 
 ### Intake rules
 

@@ -122,6 +122,20 @@ test('the client sends the viewer’s token to the page’s own routes, and read
   assert.equal((await down.write(request('a', { kind: 'reject' }))).status, 'failed');
 });
 
+test('the assign picker reads the team’s agents from the tracker', async () => {
+  const seen: string[] = [];
+  const fake: Fetch = async (url) => {
+    seen.push(url);
+    return { status: 200, json: async () => ({ agents: ['w1', 'w2', 7] }) };
+  };
+  assert.deepEqual(await new Tracker(fake, 'tok', 'default').agents(), ['w1', 'w2']);
+  assert.deepEqual(seen, ['/v1/teams/default/work/agents']);
+  const garbled = new Tracker(async () => ({ status: 200, json: async () => ({}) }), 'tok', null);
+  assert.equal(((await garbled.agents()) as { status: string }).status, 'failed');
+  const refused = new Tracker(async () => ({ status: 403, json: async () => ({ error: 'persons only' }) }), 'tok', null);
+  assert.equal(((await refused.agents()) as { status: string }).status, 'refused');
+});
+
 test('a write that gets no answer is abandoned as failed, with its outcome unknown', async () => {
   const hung: Fetch = (_url, init) => new Promise((_res, rej) => init.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError'))));
   const t = new Tracker(hung, 'tok', null, 20);
@@ -282,6 +296,7 @@ test('assign, take and steer are the tracker person routes', () => {
   assert.deepEqual(request('a', { kind: 'take' }), { path: '/v1/work/take', body: { item: 'a' } });
   assert.deepEqual(request('a', { kind: 'reassign', to: 'ana' }), { path: '/v1/work/reassign', body: { item: 'a', to: { person: 'ana' } } });
   assert.deepEqual(request('a', { kind: 'reassign', to: null }), { path: '/v1/work/reassign', body: { item: 'a', to: null } });
+  assert.deepEqual(request('a', { kind: 'reassign', to: 'w1', agent: true }), { path: '/v1/work/reassign', body: { item: 'a', to: { agent: 'w1' } } });
   assert.deepEqual(request('a', { kind: 'steer', attempt: 2, text: ' slow down ' }), { path: '/v1/work/steer', body: { item: 'a', attempt: 2, text: { text: 'slow down' } } });
   assert.equal(route('/v1/work/take', 'ops'), '/v1/teams/ops/work/take');
 });

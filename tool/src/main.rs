@@ -9,6 +9,7 @@ mod backup;
 mod felix;
 mod prices;
 mod run;
+mod source;
 mod teams;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -86,6 +87,9 @@ enum Command {
     /// Add, list and revoke a team's agents on the tracker.
     #[command(subcommand)]
     Agent(agents::AgentCommand),
+    /// Set up an upstream source for the ingest worker.
+    #[command(subcommand)]
+    Source(source::SourceCommand),
 }
 
 #[derive(Subcommand)]
@@ -199,6 +203,7 @@ async fn serve() -> Result<()> {
         Command::Team(TeamCommand::Create(args)) => teams::team_create(target, args).await,
         Command::Prices(PricesCommand::Import(args)) => prices::import(target, args).await,
         Command::Agent(command) => agents::run(&target.namespace, command).await,
+        Command::Source(command) => source::run(command),
     }
 }
 

@@ -24,7 +24,7 @@ pub(crate) enum Secret {
 }
 
 impl Secret {
-    fn read(&self, what: &str) -> Result<String> {
+    pub(crate) fn read(&self, what: &str) -> Result<String> {
         let text = match self {
             Secret::Env(name) => {
                 std::env::var(name).with_context(|| format!("{name} is not set"))?

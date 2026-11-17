@@ -183,7 +183,9 @@ const assignItem = (id: string) => {
   if (item === 'sign-in') return signInBox.open();
   if (!item || s.tracker.kind !== 'signed-in') return;
   const names = [...new Set(s.items.flatMap((i) => assigneePerson(i) ?? []))].sort();
-  assignBox.open(item, s.tracker.person, names);
+  // The picker opens at once; the agents fill in when the tracker answers.
+  const agents = tracker ? tracker.agents().then((a) => (Array.isArray(a) ? a : [])) : Promise.resolve([]);
+  assignBox.open(item, s.tracker.person, names, agents);
 };
 
 const openItem = (id: string) => {

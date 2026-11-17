@@ -5,7 +5,7 @@
 //! `KBL_SWEEP_SEEDS=n` runs seeds 0..n (default 40), `KBL_SWEEP_SEED=s` replays
 //! one seed. A failure names the seed. See docs/fault-sweep.md.
 
-use kbl_core::work::CloseWhy;
+use kbl_core::work::{Assignee, CloseWhy};
 use kbl_core::work_fold::{Closure, Stage, State};
 
 use super::*;
@@ -79,6 +79,14 @@ fn replay(fake: &Fake) -> Replayed {
             WorkRecord::Claimed { item, .. } => {
                 let held = state.items.get(item).and_then(|i| i.hold.as_ref());
                 assert!(held.is_none(), "{item} claimed at {offset} while held");
+                if let Some(Assignee::Agent(a)) =
+                    state.items.get(item).and_then(|i| i.assignee.as_ref())
+                {
+                    assert_eq!(
+                        a, &logged.by,
+                        "{item} claimed at {offset} by a non-assignee"
+                    );
+                }
             }
             WorkRecord::Done { item, attempt, .. } => {
                 assert!(
@@ -286,6 +294,27 @@ async fn extend_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, who: &'stati
     }
 }
 
+/// A person assigns an item to an agent, or to nobody, held or not.
+async fn assign_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
+    let mut ids: Vec<_> = m.accepted.iter().cloned().collect();
+    ids.sort();
+    if ids.is_empty() {
+        return;
+    }
+    let id = ids[rng.below(ids.len())].clone();
+    let n = rng.below(AGENTS.len() + 1);
+    let to = AGENTS.get(n).map(|a| Assignee::Agent(key(a)));
+    let _ = t
+        .person_record(
+            key("gab"),
+            WorkRecord::Reassigned {
+                item: item(&id),
+                to,
+            },
+        )
+        .await;
+}
+
 async fn dismiss_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
     let mut ids: Vec<_> = m.imported.iter().cloned().collect();
     ids.sort();
@@ -310,7 +339,7 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
     let Replayed { state, ended } = replay(fake);
     let at = fake.net.lock().unwrap().next_offset(WORK_EVENTS);
     let ids: Vec<ItemId> = state.items.keys().cloned().collect();
-    let kind = rng.below(4);
+    let kind = rng.below(5);
     let first = rng.below(ids.len().max(1));
     let mut theirs = None;
     for k in 0..ids.len() {
@@ -319,17 +348,28 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
         if it.closed.is_some() {
             continue;
         }
-        let (by, record) = match (kind, &it.hold) {
+        let (by, actor, record) = match (kind, &it.hold) {
             (0, None) => (
                 key("ghost"),
+                Actor::Agent,
                 WorkRecord::Claimed {
                     item: id.clone(),
                     attempt: it.next_attempt(),
                     deadline_ms: now_ms() + 60_000,
                 },
             ),
+            // Another tracker's person assigns an agent this one has not folded.
+            (2, _) => (
+                key("gab"),
+                Actor::Person,
+                WorkRecord::Reassigned {
+                    item: id.clone(),
+                    to: Some(Assignee::Agent(key(AGENTS[rng.below(AGENTS.len())]))),
+                },
+            ),
             (1, Some(h)) => (
                 h.by.clone(),
+                Actor::Agent,
                 WorkRecord::Released {
                     item: id.clone(),
                     attempt: h.attempt,
@@ -341,7 +381,7 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
             ),
             _ => continue,
         };
-        let logged = WorkLogged::new(0, by, Actor::Agent, record);
+        let logged = WorkLogged::new(0, by, actor, record);
         if state.clone().try_apply(at, &logged).is_ok() {
             theirs = Some(logged);
             break;
@@ -359,6 +399,99 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
     if let WorkRecord::Claimed { item, attempt, .. } = &theirs.record {
         m.start(&ended, item.as_str(), *attempt, "ghost", offset);
     }
+}
+
+/// The holds that came from a direct claim: the item was assigned to its
+/// claimer when the claim landed. By agent: item and attempt.
+fn direct_holds(fake: &Fake) -> HashMap<String, (String, u32)> {
+    let mut state = State::default();
+    let mut direct = HashMap::new();
+    for (offset, logged) in fake.log().into_iter().enumerate() {
+        let before = state
+            .items
+            .get(logged.record.item().unwrap_or(&item("none")))
+            .and_then(|i| i.assignee.clone());
+        if state.try_apply(offset as u64, &logged).is_err() {
+            continue;
+        }
+        if let WorkRecord::Claimed { item, attempt, .. } = &logged.record {
+            let mine = before == Some(Assignee::Agent(logged.by.clone()));
+            direct.retain(|_, (i, _)| i != item.as_str());
+            if mine {
+                direct.insert(logged.by.to_string(), (item.to_string(), *attempt));
+            }
+        }
+    }
+    direct.retain(|who, (id, attempt)| {
+        state.items[&item(id)]
+            .hold
+            .as_ref()
+            .map(|h| (h.by.as_str(), h.attempt))
+            == Some((who.as_str(), *attempt))
+    });
+    direct
+}
+
+/// A person reassigns an item an agent holds from a direct claim, then the
+/// tracker restarts. The new tracker keeps the hold, polls no lane for it,
+/// and the holder extends it.
+async fn reassign_and_restart(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
+    let mut held: Vec<_> = direct_holds(fake)
+        .into_iter()
+        .filter_map(|(who, claim)| {
+            let who = *AGENTS.iter().find(|a| **a == who)?;
+            (m.beliefs.get(who) == Some(&claim.0) && m.attempts.get(who) == Some(&claim.1))
+                .then_some((who, claim))
+        })
+        .collect();
+    held.sort();
+    if held.is_empty() {
+        return;
+    }
+    let (who, (id, attempt)) = held[rng.below(held.len())].clone();
+    let to = AGENTS
+        .iter()
+        .filter(|a| **a != who)
+        .map(|a| Assignee::Agent(key(a)))
+        .nth(rng.below(AGENTS.len()));
+    let reassigned = WorkRecord::Reassigned {
+        item: item(&id),
+        to,
+    };
+    if t.cur.person_record(key("gab"), reassigned).await.is_err() {
+        return;
+    }
+    let polls = |fake: &Fake| {
+        let mine = format!(" {who}");
+        fake.calls()
+            .iter()
+            .filter(|c| c.starts_with("poll ") && c.ends_with(&mine))
+            .count()
+    };
+    let before = polls(fake);
+    let new = restart(fake).await;
+    t.old = Some(std::mem::replace(&mut t.cur, new));
+    let hold = |fake: &Fake| {
+        replay(fake).state.items[&item(&id)]
+            .hold
+            .as_ref()
+            .map(|h| (h.by.to_string(), h.attempt))
+    };
+    assert_eq!(
+        hold(fake),
+        Some((who.to_owned(), attempt)),
+        "a restart ended {who}'s direct claim on {id} after a reassign"
+    );
+    assert_eq!(
+        polls(fake),
+        before,
+        "a restart polled a lane for {who}'s direct claim"
+    );
+    let extended = t.cur.extend(&agent(who), &item(&id)).await;
+    assert!(
+        extended.is_ok(),
+        "{who} could not extend its direct claim on {id} after a restart: {extended:?}"
+    );
 }
 
 /// One step: maybe a fault, then an operation, then the checks.
@@ -379,6 +512,7 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
         // A write that never reached a quorum: a failover cuts it before
         // anyone is told. A record Felix acknowledged is never cut.
         41..=45 => fake.cut_next_lost_write(WORK_EVENTS),
+        46..=50 => reassign_and_restart(fake, t, m, rng).await,
         18..=22 => foreign_write(fake, m, rng).await,
         23..=30 => {
             // Felix hands a record out again: a lapsed lease, or a repeat of an acked one.
@@ -398,11 +532,12 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     let who = AGENTS[rng.below(AGENTS.len())];
     let serving = t.serving(rng.below(100) < 40);
-    match rng.below(11) {
+    match rng.below(12) {
         0..=1 => seed_item(serving, m).await,
         2..=5 => claim_step(serving, fake, m, who).await,
         6..=8 => finish_step(serving, m, rng, who).await,
         9 => extend_step(serving, fake, m, who).await,
+        10 => assign_step(serving, m, rng).await,
         _ => dismiss_step(serving, m, rng).await,
     }
     fake.fail_polls(None);
@@ -502,6 +637,11 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             cur: start(&fake).await,
             old: None,
         };
+        // Format 13, so items can be assigned to agents.
+        t.cur
+            .person_record(key("gab"), WorkRecord::FormatRaised { to: 13 })
+            .await
+            .unwrap();
         let mut m = Model::default();
         for _ in 0..STEPS {
             step(&fake, &mut t, &mut m, &mut rng).await;

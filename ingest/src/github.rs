@@ -70,6 +70,11 @@ impl<T: Transport> Github<T> {
         res.body["login"].as_str().map(str::to_owned)
     }
 
+    /// A GET of one API path, for `kbl-ingest check`'s credential and permission probes.
+    pub(crate) async fn probe(&self, path: &str) -> Result<Res, SourceError> {
+        self.call(Req::get(format!("{}{path}", self.api))).await
+    }
+
     async fn call(&self, req: Req) -> Result<Res, SourceError> {
         if let Some(until) = *self.limited_until.lock().expect("lock") {
             let now = epoch();
@@ -698,7 +703,7 @@ impl<T: Transport> Source for Github<T> {
 }
 
 /// A tag or commit that can go into a URL path as it is.
-fn plain_ref(s: &str) -> bool {
+pub(crate) fn plain_ref(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 200
         && !s.contains("..")
@@ -851,7 +856,7 @@ fn check_state(
 }
 
 /// Milliseconds since the epoch from `YYYY-MM-DDTHH:MM:SSZ`, as GitHub writes times.
-fn parse_utc_ms(t: &str) -> Option<u64> {
+pub(crate) fn parse_utc_ms(t: &str) -> Option<u64> {
     let b = t.as_bytes();
     if b.len() != 20 || b[19] != b'Z' || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' {
         return None;
@@ -874,7 +879,7 @@ fn parse_utc_ms(t: &str) -> Option<u64> {
         .map(|x| x * 1000)
 }
 
-fn cut_bytes(s: &str, max: usize) -> String {
+pub(crate) fn cut_bytes(s: &str, max: usize) -> String {
     let mut end = max.min(s.len());
     while !s.is_char_boundary(end) {
         end -= 1;
