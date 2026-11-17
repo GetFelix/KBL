@@ -322,3 +322,27 @@ fn a_merged_blocker_awaiting_its_release_says_so() {
     assert_eq!(rows[0]["id"], "r1");
     assert_eq!(rows[0]["waits_on"][0]["awaiting_release"], true);
 }
+
+#[test]
+fn review_load_is_the_count_the_tracker_pause_uses() {
+    let mut f = Folder::new();
+    let mut at = 0.0;
+    let mut recs = Vec::new();
+    for id in ["a", "b", "c"] {
+        recs.push(format!(r#"{{"at_ms":1,"by":"ingest","actor":"tracker","kind":"imported","item":"{id}","source":"github","upstream_id":"x/y#{id}","title":"{id}"}}"#));
+        recs.push(format!(
+            r#"{{"at_ms":2,"by":"gabriel","actor":"person","kind":"accepted","item":"{id}"}}"#
+        ));
+        recs.push(format!(r#"{{"at_ms":3,"by":"w1","actor":"agent","kind":"claimed","item":"{id}","attempt":1,"deadline_ms":1800000090000}}"#));
+    }
+    for id in ["a", "b"] {
+        recs.push(format!(r#"{{"at_ms":4,"by":"w1","actor":"agent","kind":"done","item":"{id}","attempt":1,"cost_micros":0}}"#));
+    }
+    feed(
+        &mut f,
+        &mut at,
+        &recs.iter().map(String::as_str).collect::<Vec<_>>(),
+    );
+    let load: serde_json::Value = serde_json::from_str(&f.review_load_json()).unwrap();
+    assert_eq!(load, serde_json::json!({ "load": 3, "in_review": 2 }));
+}

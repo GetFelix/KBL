@@ -6,7 +6,7 @@
 import './ui/tokens.css';
 import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
-import { blocked, items, questionText, type Fold } from './fold.ts';
+import { blocked, items, questionText, reviewLoad, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { priceAgeDays, priceRequest, spend, type PriceEntry, type PriceUnit } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
@@ -60,6 +60,7 @@ const initial: ViewState = {
   items: [],
   blocked: [],
   overlaps: new Map(),
+  reviewLoad: { load: 0, inReview: 0 },
   ...address,
   selected: address.open,
   density: stored(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable',
@@ -468,6 +469,7 @@ async function main() {
     itemsJson: () => fold.items_json(),
     blockedJson: () => fold.blocked_json(),
     overlapsJson: () => fold.overlaps_json(),
+    reviewLoadJson: () => fold.review_load_json(),
     spendJson: () => fold.spend_json(),
   };
   readSpend = () => spend(sink);
@@ -478,7 +480,7 @@ async function main() {
     queued = true;
     requestAnimationFrame(() => {
       queued = false;
-      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
+      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
       if (spendBox.isOpen()) showSpend();
       if (readSpend) pricesBox.refresh(readSpend());
     });
@@ -503,7 +505,7 @@ async function main() {
         },
         onLive: () => {
           delay = 1000;
-          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), questions: new Map(questions) });
+          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();
           if (readSpend) pricesBox.refresh(readSpend());

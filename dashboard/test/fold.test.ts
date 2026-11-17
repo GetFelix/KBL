@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { test } from 'node:test';
-import { blocked, waitsOn, type Fold, type ItemRow } from '../src/fold.ts';
+import { blocked, reviewLoad, waitsOn, type Fold, type ItemRow } from '../src/fold.ts';
 import { MAX_FILES, MAX_NOTES, overlapNotes } from '../src/overlap.ts';
 
 // Built by `npm run wasm`.
@@ -160,4 +160,17 @@ test('items say whether a person accepted and flagged them', () => {
   assert.deepEqual([r1.accepted, r1.flagged, r1.needs, r1.stage], [true, true, 'flagged', 'needs_you']);
   fold.apply(4, rec({ v: 7, kind: 'flagged', item: 'r1', flagged: false }));
   assert.deepEqual([JSON.parse(fold.items_json())[0].flagged, JSON.parse(fold.items_json())[0].needs], [false, null]);
+});
+
+test('the review load the page reads is the one the tracker pause counts', () => {
+  const fold = new Folder();
+  const rec = (at: number, r: object) => assert.ok(fold.apply(at, new TextEncoder().encode(JSON.stringify({ at_ms: at, by: 'gabriel', actor: 'person', ...r }))));
+  let at = 0;
+  for (const id of ['a', 'b', 'c']) {
+    rec(at++, { kind: 'imported', item: id, source: 'github', upstream_id: `x/y#${id}`, title: id, by: 'ingest', actor: 'tracker' });
+    rec(at++, { kind: 'accepted', item: id });
+    rec(at++, { kind: 'claimed', item: id, attempt: 1, deadline_ms: 1800000090000, by: 'w1', actor: 'agent' });
+  }
+  for (const id of ['a', 'b']) rec(at++, { kind: 'done', item: id, attempt: 1, cost_micros: 0, by: 'w1', actor: 'agent' });
+  assert.deepEqual(reviewLoad({ reviewLoadJson: () => fold.review_load_json() }), { load: 3, inReview: 2 });
 });

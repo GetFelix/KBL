@@ -244,7 +244,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       writes.render(s);
       if (search.value !== s.query) search.value = s.query;
       status.render(s);
-      const line = s.tracker.kind === 'signed-in' ? reviewFull(s.items, s.tracker.reviewLimit) : null;
+      const line = s.tracker.kind === 'signed-in' ? reviewFull(s.reviewLoad, s.tracker.reviewLimit) : null;
       full.hidden = !line;
       if (line && full.textContent !== `▲${line}`) full.replaceChildren(h('span', { class: 'status-icon', 'aria-hidden': 'true' }, '▲'), line);
       list.render(s);

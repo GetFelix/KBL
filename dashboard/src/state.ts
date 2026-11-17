@@ -1,7 +1,7 @@
 // The page's view state and a small store. Views read a snapshot and send actions;
 // only main.ts talks to the gateway. The view, item and search are kept in the address so
 // a link opens the same view for someone else.
-import type { BlockedRow, ItemRow } from './fold.ts';
+import type { BlockedRow, ItemRow, ReviewLoad } from './fold.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
 import { putWrite, type Write, type Writes } from './writes.ts';
@@ -41,6 +41,8 @@ export interface ViewState {
   blocked: BlockedRow[];
   /** File overlaps per item, from the same fold as `items`. */
   overlaps: Overlaps;
+  /** The tracker's review load, from the same fold as `items`. */
+  reviewLoad: ReviewLoad;
   view: View;
   query: string;
   selected: string | null;
@@ -64,7 +66,7 @@ export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; questions?: ReadonlyMap<number, string> }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string> }
   /** Marks or unmarks one item for a bulk action. */
   | { type: 'mark'; id: string }
   | { type: 'marks'; ids: string[] }
@@ -95,6 +97,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
         items: a.items,
         blocked: a.blocked,
         overlaps: a.overlaps,
+        reviewLoad: a.reviewLoad ?? s.reviewLoad,
         questions: a.questions ?? s.questions,
         marked: s.marked.filter((id) => a.items.some((i) => i.id === id)),
       };
@@ -166,11 +169,12 @@ export function toAddress(search: string, s: AddressState): string {
   return out ? `?${out}` : '';
 }
 
-/** The header line when In review is at the tracker's limit, from the items the page folded and the limit the tracker reported. */
-export function reviewFull(items: readonly { stage: string }[], limit: number): string | null {
-  if (limit <= 0) return null;
-  const n = items.filter((i) => i.stage === 'in_review').length;
-  return n >= limit ? `review full: agents paused, ${n}/${limit} in review` : null;
+/** The header line when the review load is at the tracker's limit: the same count the pause uses, split into its parts. */
+export function reviewFull(load: ReviewLoad, limit: number): string | null {
+  if (limit <= 0 || load.load < limit) return null;
+  const held = load.load - load.inReview;
+  const parts = [load.inReview > 0 ? `${load.inReview} in review` : '', held > 0 ? `${held} in progress` : ''].filter(Boolean);
+  return `review full: agents paused, ${load.load}/${limit}: ${parts.join(', ')}`;
 }
 
 /** One line for the status bar, and how loudly to say it. */
