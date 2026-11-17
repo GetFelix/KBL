@@ -921,6 +921,15 @@ impl State {
         sources
     }
 
+    /// How many items sit in In review: attempts agents finished that nobody
+    /// has closed.
+    pub fn in_review_count(&self) -> usize {
+        self.items
+            .keys()
+            .filter(|id| self.stage(id) == Some(Stage::InReview))
+            .count()
+    }
+
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
         Some(match it.closed {

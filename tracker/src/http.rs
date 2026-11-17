@@ -262,7 +262,11 @@ async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Re
     };
     let teams: Vec<Value> = found
         .iter()
-        .map(|(t, _)| json!({ "team": t.name(), "role": "admin" }))
+        .map(|(t, _)| {
+            // Null while the team is not serving, like its other calls answer 503.
+            let limit = t.tracker().map(|tr| tr.review_limit());
+            json!({ "team": t.name(), "role": "admin", "review_limit": limit })
+        })
         .collect();
     Json(json!({ "person": person, "org_admin": true, "teams": teams })).into_response()
 }

@@ -23,7 +23,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
     Actor, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS,
-    Usage, WORK_EVENTS, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
+    Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
 use serde_json::{Value, json};
@@ -89,6 +89,9 @@ pub(crate) struct Settings {
     /// The least a claim is charged, whatever usage the agent reports. Usage
     /// is the agent's word, so this is what bounds a tree's cost.
     pub(crate) cost_floor_micros: u64,
+    /// Agent pull requests in In review at which new fix claims pause. Zero
+    /// turns the limit off.
+    pub(crate) review_limit: usize,
 }
 
 #[cfg(test)]
@@ -690,6 +693,11 @@ impl<B: Broker> Tracker<B> {
         tracker.sweep().await;
         tracker.sync_ready().await;
         Ok(tracker)
+    }
+
+    /// Agent pull requests in In review at which new fix claims pause; zero is no limit.
+    pub(crate) fn review_limit(&self) -> usize {
+        self.0.settings.review_limit
     }
 
     /// Claims the highest-priority ready item for `agent`, waiting up to `wait`.
@@ -1549,7 +1557,16 @@ impl<B: Broker> Tracker<B> {
             return Ok(None);
         }
         match core.state.stage(&item) {
-            Some(Stage::Ready) => {}
+            Some(Stage::Ready) => {
+                if self.review_full(&core.state, &item) {
+                    // Like a refusal: published again only after the log moves, which
+                    // is the only way the count can change.
+                    core.live.remove(&item);
+                    core.refused.insert(item.clone(), core.state.at);
+                    ack(ops, record.offset);
+                    return Ok(None);
+                }
+            }
             Some(Stage::Held) => {
                 let Some(hold) = core.state.items.get(&item).and_then(|i| i.hold.clone()) else {
                     return Ok(None);
@@ -1627,6 +1644,18 @@ impl<B: Broker> Tracker<B> {
                 Err(e)
             }
         }
+    }
+
+    /// Whether `item` is a new fix claim while In review is at the limit. Triage,
+    /// answers, reviews and the other kinds never wait on it.
+    fn review_full(&self, state: &State, item: &ItemId) -> bool {
+        let limit = self.0.settings.review_limit;
+        limit > 0
+            && state
+                .items
+                .get(item)
+                .is_some_and(|i| i.work == WorkKind::Fix)
+            && state.in_review_count() >= limit
     }
 
     /// Writes the tracker's refusal so the root sits in Needs you and its ready

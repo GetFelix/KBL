@@ -187,7 +187,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
-| `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
+| `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin", "review_limit": 3}]}` |
 
 A call that ends a claim (`complete`, `release`, `give_up`, and a
 `prerequisite` post that ends it) can be retried safely when its answer was
@@ -1782,9 +1782,22 @@ agent PRs in In review. At the limit agents stop claiming, and the header says
 so: "review full: agents paused, 6/6". Triage, answers and reviews carry on, and
 the Ready column explains why nothing is moving.
 
-The limit is a setting. There is no evidence behind any default: the
-research found nothing that says how many open PRs a reviewer can handle. Pick
-a number, watch the review column, and change it.
+The limit is `KBL_REVIEW_LIMIT` (or `--review-limit`), 3 by default, and 0
+turns it off. It counts items in In review, which are fixes an agent finished
+that nobody has closed. At the limit `work_next` skips Ready fixes, so a new
+fix is not claimed. Triage, questions, resumed work and reviews are claimed as
+before. The paused fixes come back on their own once a merge or a close
+brings the count under the limit. Work an agent already holds is not taken
+back.
+
+There is no evidence behind the default of 3: the research found nothing that
+says how many open PRs a reviewer can handle, and "two or three per active
+reviewer" was a guess. Pick a number, watch the review column, and change it.
+
+`GET /v1/me` carries each team's limit as `review_limit` (null while the team
+is not serving). The dashboard reads it once you sign in and counts the In
+review column itself, so a viewer who has not signed in sees no limit in the
+header.
 
 ### The footer names the constraint
 

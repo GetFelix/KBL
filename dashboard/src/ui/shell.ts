@@ -3,7 +3,7 @@
 import { chordFor, displayChord } from '../keys.ts';
 import { decodeView, encodeView, sameView, summary, type SavedView, type ViewSpec } from '../views.ts';
 import { inScope } from '../list.ts';
-import { toAddress, type View, type ViewState } from '../state.ts';
+import { reviewFull, toAddress, type View, type ViewState } from '../state.ts';
 import { boardView } from './board-view.ts';
 import { h, kbd } from './dom.ts';
 import { filterBar, type FilterHandlers } from './filter-bar.ts';
@@ -62,6 +62,8 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   const panel = itemPanel(on);
   const writes = bulkBar(on);
   const status = statusBar();
+  const full = h('p', { class: 'status review-full', role: 'status', 'aria-live': 'polite' });
+  full.hidden = true;
   const search = h('input', {
     id: 'search',
     type: 'search',
@@ -144,6 +146,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       menu,
       heading,
       h('label', { class: 'search' }, search, kbd(displayChord(chordFor('search'), mac))),
+      full,
       status.el,
     ),
     h('div', { class: 'content' },
@@ -241,6 +244,9 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       writes.render(s);
       if (search.value !== s.query) search.value = s.query;
       status.render(s);
+      const line = s.tracker.kind === 'signed-in' ? reviewFull(s.items, s.tracker.reviewLimit) : null;
+      full.hidden = !line;
+      if (line && full.textContent !== `▲${line}`) full.replaceChildren(h('span', { class: 'status-icon', 'aria-hidden': 'true' }, '▲'), line);
       list.render(s);
       panel.render(s);
     },

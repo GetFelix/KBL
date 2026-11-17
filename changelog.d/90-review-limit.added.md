@@ -1,0 +1,1 @@
+A review limit. `KBL_REVIEW_LIMIT` (default 3, 0 is off; the default is a guess) pauses new fix claims while that many agent fixes sit in In review. Triage, questions, resumed work and reviews carry on, and the dashboard header says "review full: agents paused, N/N". `GET /v1/me` carries `review_limit` per team.
