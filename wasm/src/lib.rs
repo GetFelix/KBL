@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use kbl_core::content::Content;
 use kbl_core::names::ItemId;
 use kbl_core::overlap::{FILES_ENTRY, files_offset, overlaps};
+use kbl_core::story::{Kept, accepted, has_story, story};
 use kbl_core::work::{ReadError, WorkLogged, WorkRecord, read};
 use kbl_core::work_fold::{Stage, State};
 use serde_json::json;
@@ -28,6 +29,9 @@ pub struct Folder {
     /// `overlaps_json` as of the last applied record. The comparison is
     /// pairwise, so a redraw with no new record reuses it.
     overlaps: RefCell<Option<String>>,
+    /// What the story reads of each decision, step, edit and note the fold
+    /// took, by offset. The state keeps only the offsets.
+    kept: BTreeMap<u64, Kept>,
 }
 
 #[wasm_bindgen]
@@ -51,6 +55,11 @@ impl Folder {
                 let before = self.files_offset(&rec);
                 self.state.apply(offset, &rec);
                 self.keep_files(offset, &rec, before);
+                if accepted(&self.state, offset, &rec)
+                    && let Some(k) = Kept::of(&rec)
+                {
+                    self.kept.insert(offset, k);
+                }
                 self.overlaps.take();
                 true
             }
@@ -193,6 +202,20 @@ impl Folder {
                 serde_json::to_string(&found).expect("plain data serializes")
             })
             .clone()
+    }
+
+    /// The story of every item with a recorded decision, as `{item: story}`:
+    /// `groups` (decisions by phase, each with its `edits` and `evidence`),
+    /// `people`, `attempts` and `flags`. See `kbl_core::story`.
+    pub fn stories_json(&self) -> String {
+        let stories: BTreeMap<_, _> = self
+            .state
+            .items
+            .values()
+            .filter(|i| has_story(i))
+            .filter_map(|i| Some((&i.id, story(&self.state, &i.id, |o| self.kept.get(&o))?)))
+            .collect();
+        serde_json::to_string(&stories).expect("plain data serializes")
     }
 
     /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.

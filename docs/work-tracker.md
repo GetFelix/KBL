@@ -1721,6 +1721,14 @@ people who use Linear or Jira every day.
 - **Side panel.** Selecting an item opens it on the right: status, tier,
   assignee and source at the top, then what the item needs and its choices.
   `Esc` closes it.
+- **Story.** An item with a recorded decision shows its story in the side
+  panel: the decisions in order across attempts and people, grouped under
+  Understand, Reproduce, Cause, Fix and Verify. Each decision shows what the
+  agent recorded (the choice, why, so far, the revert check) with the offsets
+  of the steps it cites and the edits that carry it out, each one a link to
+  the record it names. Flags above it are rules over those records, listed in
+  [decision-replay.md](decision-replay.md#claims-checked-against-steps). The
+  view reads only recorded fields and generates nothing.
 - **Command palette.** `Ctrl+K` (`Cmd+K` on a Mac) lists every action for the
   open item and every place to go, and finds items by number or title. Anything
   that has no key of its own is here.

@@ -4,6 +4,7 @@
 import type { BlockedRow, ItemRow, ReviewLoad } from './fold.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
+import type { Stories } from './story.ts';
 import { putWrite, type Write, type Writes } from './writes.ts';
 
 /** The viewer's sign-in to the tracker, which every write needs. The token itself is held in main.ts only. */
@@ -41,6 +42,8 @@ export interface ViewState {
   blocked: BlockedRow[];
   /** File overlaps per item, from the same fold as `items`. */
   overlaps: Overlaps;
+  /** The story of each item with a recorded decision, from the same fold as `items`. */
+  stories: Stories;
   /** The tracker's review load, from the same fold as `items`. */
   reviewLoad: ReviewLoad;
   view: View;
@@ -66,7 +69,7 @@ export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string> }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; stories?: Stories; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string> }
   /** Marks or unmarks one item for a bulk action. */
   | { type: 'mark'; id: string }
   | { type: 'marks'; ids: string[] }
@@ -97,6 +100,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
         items: a.items,
         blocked: a.blocked,
         overlaps: a.overlaps,
+        stories: a.stories ?? s.stories,
         reviewLoad: a.reviewLoad ?? s.reviewLoad,
         questions: a.questions ?? s.questions,
         marked: s.marked.filter((id) => a.items.some((i) => i.id === id)),

@@ -7,6 +7,7 @@ import { FACETS, valueOf } from '../views.ts';
 import { h } from './dom.ts';
 import { itemHref } from './item-list.ts';
 import { overlapField } from './overlap-section.ts';
+import { storyField } from './story-section.ts';
 import { waitsOnField } from './waits-on-field.ts';
 import { itemActions, type WriteHandlers } from './item-actions.ts';
 import { needsText } from '../writes.ts';
@@ -45,7 +46,7 @@ const facetFields: Field[] = FACETS.map(([facet, label]) => ({
 }));
 
 // A new field is one module and one entry here.
-const FIELDS: readonly Field[] = [stageField, needsField, ...facetFields, waitsOnField, overlapField];
+const FIELDS: readonly Field[] = [stageField, needsField, ...facetFields, waitsOnField, overlapField, storyField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,

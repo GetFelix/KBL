@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { blocked, reviewLoad, waitsOn, type Fold, type ItemRow } from '../src/fold.ts';
 import { MAX_FILES, MAX_NOTES, overlapNotes } from '../src/overlap.ts';
+import { attemptFlags, citedText, decisionCount, flagsFor, stories } from '../src/story.ts';
 
 // Built by `npm run wasm`.
 const { Folder } = createRequire(import.meta.url)('../.wasm-node/kbl_wasm.js');
@@ -173,4 +174,19 @@ test('the review load the page reads is the one the tracker pause counts', () =>
   }
   for (const id of ['a', 'b']) rec(at++, { kind: 'done', item: id, attempt: 1, cost_micros: 0, by: 'w1', actor: 'agent' });
   assert.deepEqual(reviewLoad({ reviewLoadJson: () => fold.review_load_json() }), { load: 3, inReview: 2 });
+});
+
+test('the story groups recorded decisions by phase and flags a claim with no run', () => {
+  const fold = new Folder();
+  const log = readFileSync(new URL('story.jsonl', golden), 'utf8').trimEnd().split('\n');
+  log.forEach((line, i) => assert.ok(fold.apply(i, new TextEncoder().encode(line))));
+  const story = stories({ storiesJson: () => fold.stories_json() }).get('r1')!;
+  assert.deepEqual(story.groups.map((g) => g.phase), ['reproduce', 'cause', 'fix', 'verify']);
+  assert.equal(decisionCount(story), 4);
+  const fix = story.groups[2].decisions[0];
+  assert.equal(fix.edits[0].file, 'core/src/cache.rs');
+  assert.equal(citedText(fix.evidence[0]), 'step 3: cargo test cache (exit 101)');
+  assert.deepEqual(flagsFor(story, 9).map((f) => f.rule), ['claims_pass_without_run']);
+  assert.deepEqual(attemptFlags(story).map((f) => f.rule), ['edits_never_run']);
+  assert.equal(story.people[0].by, 'gabriel');
 });

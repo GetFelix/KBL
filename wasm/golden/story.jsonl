@@ -1,0 +1,10 @@
+{"at_ms": 1000, "by": "ingest", "actor": "tracker", "kind": "imported", "item": "r1", "source": "github", "upstream_id": "o/r#1", "title": "cache reads stale data"}
+{"at_ms": 1001, "by": "gabriel", "actor": "person", "kind": "accepted", "item": "r1", "tier": 1}
+{"at_ms": 1002, "by": "w1", "actor": "agent", "kind": "claimed", "item": "r1", "attempt": 1, "deadline_ms": 90000}
+{"at_ms": 1003, "by": "w1", "actor": "agent", "kind": "step", "item": "r1", "attempt": 1, "command": "cargo test cache", "exit_code": 101, "output": {"text": "1 failed"}}
+{"at_ms": 1004, "by": "w1", "actor": "agent", "kind": "decision", "item": "r1", "attempt": 1, "phase": "reproduce", "so_far": "a test fails", "question": "does it fail", "chosen": "yes", "why": "cargo test cache fails", "commit": "c1", "evidence": [{"stream": "work.events", "offset": 3}]}
+{"at_ms": 1005, "by": "w1", "actor": "agent", "kind": "decision", "item": "r1", "attempt": 1, "phase": "cause", "so_far": "the cache is read before it is filled", "question": "where", "chosen": "reader", "why": "the writer holds the lock", "commit": "c2", "evidence": [{"stream": "work.events", "offset": 3}]}
+{"at_ms": 1006, "by": "gabriel", "actor": "person", "kind": "human_input", "item": "r1", "attempt": 1, "input": "note", "text": {"text": "keep the lock as is"}}
+{"at_ms": 1007, "by": "w1", "actor": "agent", "kind": "decision", "item": "r1", "attempt": 1, "phase": "fix", "so_far": "guarding the read", "question": "how", "chosen": "fill before read", "why": "keeps the lock", "commit": "c3", "evidence": [{"stream": "work.events", "offset": 3}]}
+{"at_ms": 1008, "by": "w1", "actor": "agent", "kind": "edit", "item": "r1", "attempt": 1, "file": "core/src/cache.rs", "hunk": {"text": "@@ -10 +10 @@"}, "decision": 7}
+{"at_ms": 1009, "by": "w1", "actor": "agent", "kind": "decision", "item": "r1", "attempt": 1, "phase": "verify", "so_far": "fixed", "question": "is it fixed", "chosen": "yes", "why": "the cache tests pass now", "commit": "c4"}
