@@ -90,8 +90,8 @@ token, the control plane's reply or the command line, and the command's stderr
 is dropped. The ID token is the standing secret here: whoever reads the file or
 runs the command can mint Felix tokens until the ID token expires or is revoked,
 so give an agent one narrowed to its own run, not the administrator's. A
-failed renewal keeps the current Felix token until it expires, so a revoked ID
-token ends an agent's access after at most one Felix token life, 15 minutes by default.
+failed renewal keeps the current Felix token until it expires. Revoking the ID token stops renewals, not the Felix token in hand, and a stream already open outlives its
+token's expiry (Felix `docs/auth.md`), so cut an agent off by revoking its Felix principal, not only the ID token.
 6. **Browser to gateway.** Read only, one run.
 
 When ingest signs in as a GitHub App, the private key is the standing secret:

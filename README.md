@@ -394,12 +394,16 @@ runs. To keep an agent working for longer, give it an ID token instead and let i
 | `KBL_FELIX_ID_TOKEN_FILE` | A file holding the ID token. It must be mode 600 or 400. It is read again on every renewal, so whatever keeps the token fresh only has to rewrite the file |
 | `KBL_FELIX_ID_TOKEN_COMMAND` | A command whose output is the ID token, run through `sh -c` on every renewal (`cmd /C` on Windows). Use it instead of the file when the host can mint one on demand |
 
+The command is passed to `sh -c`, so its text shows in the process list while it runs: put no secret in it, and let it read one from a file or the environment. The mode check applies on Linux and macOS.
+
 Set exactly one of the file and the command, and not `KBL_FELIX_TOKEN` as well. `kbl-mcp` trades the ID token at
 `/v1/tenants/<tenant>/token/exchange` for a token for the broker when it starts, and again once two thirds of that
 token's life has passed. The broker checks a token when a stream opens, so a renewal reaches the next request without
 a reconnect, and a claim the agent holds keeps standing across it. If a renewal fails (the control plane is down, the
 ID token expired or was revoked), `kbl-mcp` keeps using the Felix token it has and tries again every few seconds. Once
-that token expires too, the agent's calls fail and the error says the control plane refused the ID token. Nothing prints a token, the control plane's answer or the command line, and the command's error output is
+that token expires too, calls that open a new stream fail and the error says the control plane refused the ID token.
+The Felix client opens its publish and cache streams once, when it connects, and the broker does not end an open stream
+when its token expires, so those keep the first token; a restart of `kbl-mcp` is what replaces them. Nothing prints a token, the control plane's answer or the command line, and the command's error output is
 discarded.
 
 The ID token itself must outlast the agent's work or be replaced in the file or by the command before then, since

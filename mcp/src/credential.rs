@@ -26,8 +26,9 @@ use tokio::io::AsyncReadExt;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-/// How long the control plane or the ID-token command may take.
-const STEP_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long the control plane or the ID-token command may take. The two add up
+/// to less than the 30 s the Felix client gives a token fetch.
+const STEP_TIMEOUT: Duration = Duration::from_secs(12);
 /// The most an ID token or a Felix token may be.
 const MAX_TOKEN_BYTES: usize = 16 * 1024;
 /// The audience of the Felix token the broker accepts.
@@ -92,6 +93,7 @@ impl Auth {
                     exchange: Exchange::new(&base, tenant, source)?,
                     max_age,
                     held: Mutex::new(None),
+                    rejected: std::sync::Mutex::new(None),
                 })))
             }
             (None, None) => bail!(
@@ -108,6 +110,8 @@ struct Renewer {
     max_age: Option<Duration>,
     /// Held across a renewal, so callers that arrive meanwhile wait for its answer.
     held: Mutex<Option<Held>>,
+    /// A token the broker refused, until the next `token()` sees it.
+    rejected: std::sync::Mutex<Option<String>>,
 }
 
 struct Held {
@@ -140,6 +144,12 @@ impl TokenProvider for Renewer {
     fn token(&self) -> TokenFuture<'_> {
         Box::pin(async move {
             let mut held = self.held.lock().await;
+            let refused = self.rejected.lock().expect("rejected lock").take();
+            if let (Some(h), Some(refused)) = (held.as_mut(), refused)
+                && h.token == refused
+            {
+                h.renew_at = Instant::now();
+            }
             if let Some(h) = held.as_ref()
                 && Instant::now() < h.renew_at
             {
@@ -167,14 +177,9 @@ impl TokenProvider for Renewer {
     }
 
     fn invalidate(&self, rejected: &str) {
-        // The broker refused it, so ask again on the next stream. A lock that
-        // is busy means a renewal is under way, which replaces it anyway.
-        if let Ok(mut held) = self.held.try_lock()
-            && let Some(h) = held.as_mut()
-            && h.token == rejected
-        {
-            h.renew_at = Instant::now();
-        }
+        // Noted outside the token lock, which a stream open may hold; the next
+        // `token()` acts on it.
+        *self.rejected.lock().expect("rejected lock") = Some(rejected.to_string());
     }
 }
 
@@ -292,19 +297,21 @@ async fn read_id_token(source: &IdSource) -> Result<String> {
 
 async fn read_file(path: &Path) -> Result<String> {
     let shown = path.display();
+    let mut file = tokio::fs::File::open(path)
+        .await
+        .with_context(|| format!("read the ID token file {shown}"))?;
+    // The opened file's mode, so a swap after the check cannot change what is read.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let meta = tokio::fs::metadata(path)
+        let meta = file
+            .metadata()
             .await
             .with_context(|| format!("read the ID token file {shown}"))?;
         if meta.permissions().mode() & 0o077 != 0 {
             bail!("the ID token file {shown} must not be readable by others; run chmod 600 on it");
         }
     }
-    let mut file = tokio::fs::File::open(path)
-        .await
-        .with_context(|| format!("read the ID token file {shown}"))?;
     let mut bytes = Vec::new();
     // One byte over the limit is enough to tell it is too big.
     (&mut file)
