@@ -316,6 +316,37 @@ with the agent's Felix token, so Felix grants are the check.
 | `task_release` | The `workers` group and run log | `kbl-mcp` only releases the task it holds (`mcp/src/tasks.rs#holding`). In Felix: **None** (#29). Known secret patterns are cut from the reason (`mcp/src/tasks.rs#release`) |
 | `task_give_up` | The `workers` group and run log | Same, and the reason too (`mcp/src/tasks.rs#give_up`) |
 
+## Person MCP tools
+
+`kbl-mcp person` is a second server, for a person's own MCP host. It is started
+with a person's tracker token in `KBL_PERSON_TOKEN`, a variable the agent server
+never reads, and serves only the tools below. The agent server has none of them
+and is never given that token, so an agent cannot reach a person route through
+either server. `kbl-mcp person` refuses to start unless the tracker names the
+token's owner as a person (`mcp/src/person.rs#connect`), so an agent's
+token yields no tools. Its calls go to the same routes the dashboard uses with
+that token: the tracker refuses an agent's token on every one of them
+(`tracker/src/http.rs#person`), writes the record under the person's name,
+and keeps the call inside the token's team (`--team` puts it in the path). A
+tool refuses a parameter it does not list and a value of the wrong kind before
+the call is made (`mcp/src/person.rs#check`).
+
+| Tool | Goes to | Check |
+|---|---|---|
+| `my_queue` | `GET /v1/work/queue` | Person only (`tracker/src/http.rs#person`) |
+| `accept_proposal` | `POST /v1/work/proposals/accept` | Person only (`tracker/src/http.rs#person`) |
+| `reject_proposal` | `POST /v1/work/proposals/reject` | Person only (`tracker/src/http.rs#person`) |
+| `answer_question` | `POST /v1/work/questions/answer` | Person only (`tracker/src/http.rs#person`) |
+| `set_tier` | `POST /v1/work/tier` | Person only (`tracker/src/http.rs#person`) |
+| `flag_item` | `POST /v1/work/flag` | Person only (`tracker/src/http.rs#person`) |
+| `unflag_item` | `POST /v1/work/unflag` | Person only (`tracker/src/http.rs#person`) |
+| `add_note` | `POST /v1/work/note` | Person only. Known secret patterns are cut by the tracker before the note is stored (`tracker/src/http.rs#note`). Text over the inline limit is refused by the tool, since this process has no Felix to store an artifact in |
+| `retry_item` | `POST /v1/work/retry` | Person only (`tracker/src/http.rs#person`) |
+| `snooze_item` | `POST /v1/work/snooze` | Person only (`tracker/src/http.rs#person`) |
+| `park_item` | `POST /v1/work/park` | Person only (`tracker/src/http.rs#person`) |
+| `unpark_item` | `POST /v1/work/unpark` | Person only (`tracker/src/http.rs#person`) |
+| `unblock_item` | `POST /v1/work/unblock` | Person only (`tracker/src/http.rs#person`) |
+
 ## Records on work.events
 
 Only the tracker appends. "Agent" below means a record written for an agent's

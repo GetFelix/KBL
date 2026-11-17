@@ -212,7 +212,12 @@ for (const [crate, headings] of Object.entries(ROUTE_SECTIONS)) {
   count += [...found.values()].reduce((n, m) => n + m.size, 0);
 }
 
+// The person server's tools are table entries, not `#[tool]` functions.
+const PERSON_TABLE = 'mcp/src/person/table.rs';
+const personTools = all(read(PERSON_TABLE).split('pub(super) const TOOLS')[1] ?? '', /^ {8}name: "(\w+)",\n {8}about:/gm);
+
 const named = {
+  'Person MCP tools': personTools,
   ...Object.fromEntries(Object.entries(TOOL_SECTIONS).map(([crate, h]) => [h, toolsFound[crate]])),
   'Records on work.events': kinds('core/src/work.rs'),
   'Records on org.events': kinds('core/src/org.rs'),

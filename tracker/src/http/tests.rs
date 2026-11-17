@@ -1565,6 +1565,62 @@ async fn waiting_item(app: &Router, prefix: &str, token: &str, item: &str) {
     assert_eq!(status, StatusCode::OK, "{r}");
 }
 
+/// What `kbl-mcp person` sends: the card actions with a person's token. Each
+/// record names that person, and an agent's token writes none of them.
+#[tokio::test]
+async fn a_person_tool_call_is_recorded_as_the_person() {
+    let felix = Quiet::default();
+    felix.keeps.store(true, Ordering::SeqCst);
+    let tokens = r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"},"ingest":{}}"#;
+    let one = team("default", felix.clone(), tokens, 64).await;
+    let app = router(Arc::new(Teams::new(vec![one]).unwrap()));
+    raise_to(&app, 10).await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    let keyed = |k: &str| json!({ "item": "a1", "request_key": k });
+    let calls = [
+        (
+            "/v1/work/proposals/accept",
+            json!({ "item": "a1", "tier": 1 }),
+        ),
+        ("/v1/work/tier", json!({ "item": "a1", "tier": 2 })),
+        (
+            "/v1/work/note",
+            json!({ "item": "a1", "text": { "text": "x" } }),
+        ),
+        ("/v1/work/flag", keyed("k-1")),
+        ("/v1/work/unflag", keyed("k-2")),
+    ];
+    let before = felix.log.lock().unwrap().len();
+    for (path, body) in &calls {
+        let denied = call(&app, path, Some("tok-w1"), body.clone()).await;
+        assert_eq!(denied.0, StatusCode::FORBIDDEN, "{path}");
+    }
+    assert_eq!(felix.log.lock().unwrap().len(), before, "an agent wrote");
+    for (path, body) in calls {
+        let (status, r) = call(&app, path, Some("tok-gab"), body).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {r}");
+    }
+    let log = felix.log.lock().unwrap().clone();
+    let written: Vec<Value> = log[before..]
+        .iter()
+        .map(|(_, p)| serde_json::from_slice(p).unwrap())
+        .collect();
+    let kinds: Vec<&str> = written
+        .iter()
+        .map(|w| w["kind"].as_str().unwrap_or("?"))
+        .collect();
+    for want in ["accepted", "tier_changed", "human_input", "flagged"] {
+        assert!(kinds.contains(&want), "{want} in {kinds:?}");
+    }
+    for w in written.iter().filter(|w| w["actor"].is_string()) {
+        assert_eq!(
+            (w["by"].as_str(), w["actor"].as_str()),
+            (Some("gab"), Some("person")),
+            "{w}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_card_actions_wait_for_format_10() {
     let app = kept().await;
