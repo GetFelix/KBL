@@ -1,0 +1,1 @@
+Dashboard: stronger control edges (3:1 in both themes), a contrast test over the colour tokens, landmark, live-region and Tab-order checks, and a performance budget for a 10,000-item log, all checked in CI (#131).
