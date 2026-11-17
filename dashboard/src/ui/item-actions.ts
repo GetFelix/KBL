@@ -148,7 +148,7 @@ export function itemActions(on: WriteHandlers) {
       const kinds = (Object.keys(CAN) as (keyof typeof CAN)[]).filter((k) => CAN[k](item));
       const assignable = canAssign(item);
       const limit = canTakeAfterLimit(item);
-      const steerAt = canSteer(item) ? heldAttempt(item, s.stories[item.id]) : null;
+      const steerAt = canSteer(item) ? heldAttempt(item, s.stories.get(item.id)) : null;
       // `checking` keeps the last sign-in state, so checking a token does not rebuild the form.
       if (s.tracker.kind !== 'checking') auth = s.tracker.kind === 'refused' ? `refused:${s.tracker.reason}` : s.tracker.kind;
       const key = `${item.id}|${kinds.join(',')}|${assignable}|${limit}|${steerAt}|${auth}|${item.question}|${item.unclear}|${(item.options ?? []).join('\u0000')}|${item.question == null ? '' : s.questions.get(item.question)}`;
