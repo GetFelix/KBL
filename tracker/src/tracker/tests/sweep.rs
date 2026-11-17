@@ -352,6 +352,25 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
     }
 }
 
+/// A failover cuts the last record, a claim the tracker wrote, and another
+/// writer refills its offset with the same attempt claimed by someone else.
+/// The tracker is not told, and its next write lands on top.
+fn refill_step(fake: &Fake, m: &mut Model) {
+    let mut net = fake.net.lock().unwrap();
+    let Some((at, payload)) = net.streams.get_mut(WORK_EVENTS).and_then(|s| s.last_mut()) else {
+        return;
+    };
+    let mut theirs = WorkLogged::decode(payload).unwrap();
+    let WorkRecord::Claimed { item, attempt, .. } = &theirs.record else {
+        return;
+    };
+    let attempt = (item.to_string(), *attempt);
+    theirs.by = key("ghost");
+    *payload = theirs.encode();
+    m.handed.insert(*at, "ghost");
+    m.started.insert(attempt, ("ghost".into(), *at));
+}
+
 /// One step: maybe a fault, then an operation, then the checks.
 async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     let mut crash_after = false;
@@ -382,6 +401,7 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
             pass(&t.cur, Duration::from_secs(10 + rng.below(90) as u64)).await;
             t.cur.sweep().await;
         }
+        41..=44 => refill_step(fake, m),
         _ => {}
     }
     let who = AGENTS[rng.below(AGENTS.len())];

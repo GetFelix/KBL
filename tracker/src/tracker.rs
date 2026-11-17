@@ -2447,8 +2447,7 @@ impl<B: Broker> Tracker<B> {
         let req = (actor != Actor::Tracker)
             .then(request_keys::current)
             .flatten();
-        let logged = WorkLogged::new(now_ms(), by, actor, record)
-            .with_request(req);
+        let logged = WorkLogged::new(now_ms(), by, actor, record).with_request(req);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied, or the read tip when a generation start moved it.
         let guess = core.state.at.map_or(0, |a| a + 1).max(core.tail);
