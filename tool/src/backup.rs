@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::io::Write;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
@@ -12,8 +13,9 @@ use kbl_core::work::WORK_EVENTS;
 use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tokio::time::Instant;
 
-use crate::felix::{Broker, ConditionalWrite, Session, Target};
+use crate::felix::{Broker, ConditionalWrite, Session, Target, is_leaderless};
 
 /// The file's first line names it, so a file of something else is refused.
 const MAGIC: &str = "kbl-backup";
@@ -70,7 +72,6 @@ impl Log {
 pub(crate) trait LogStore {
     /// Every record with its offset, and the offset after the committed log's end.
     async fn read_to_tip(&self, stream: &str) -> Result<(Vec<(u64, Vec<u8>)>, u64)>;
-    async fn publish(&self, stream: &str, payload: Vec<u8>) -> Result<u64>;
     async fn publish_if(
         &self,
         stream: &str,
@@ -82,9 +83,6 @@ pub(crate) trait LogStore {
 impl LogStore for Broker {
     async fn read_to_tip(&self, stream: &str) -> Result<(Vec<(u64, Vec<u8>)>, u64)> {
         Broker::read_to_tip(self, stream).await
-    }
-    async fn publish(&self, stream: &str, payload: Vec<u8>) -> Result<u64> {
-        Broker::publish(self, stream, payload).await
     }
     async fn publish_if(
         &self,
@@ -207,11 +205,7 @@ async fn restore(broker: &impl LogStore, stream: &str, backup: &Backup<'_>) -> R
     for offset in tip..backup.next {
         match backup.line(offset) {
             Some(line) => {
-                let landed = broker.publish(stream, line.as_bytes().to_vec()).await?;
-                ensure!(
-                    landed == offset,
-                    "the record for offset {offset} landed at offset {landed}; the log is now out of step with the backup. Restore into a fresh log."
-                );
+                write_at(broker, stream, offset, line).await?;
             }
             None => blank(broker, stream, offset).await?,
         }
@@ -232,6 +226,65 @@ async fn restore(broker: &impl LogStore, stream: &str, backup: &Backup<'_>) -> R
         wanted.len(),
         backup.next - tip
     ))
+}
+
+/// How long a restore keeps trying while the broker has no lease on the shard.
+const LEASE_WAIT: Duration = Duration::from_secs(60);
+
+/// Writes `line` at exactly `offset`. A refusal that says the shard has no
+/// leader right now (a lost lease, a move, a shard still opening) is waited out.
+/// Before each retry the log is read back: if the first attempt landed, the
+/// record is there and the retry never happens, so nothing is written twice. A
+/// conditional publish also cannot land anywhere but `offset`.
+async fn write_at(broker: &impl LogStore, stream: &str, offset: u64, line: &str) -> Result<()> {
+    let deadline = Instant::now() + LEASE_WAIT;
+    let mut wait = Duration::from_millis(250);
+    let mut check = false;
+    loop {
+        if check {
+            match broker.read_to_tip(stream).await {
+                Ok((records, tip)) => {
+                    if records
+                        .iter()
+                        .any(|(o, p)| *o == offset && p == line.as_bytes())
+                    {
+                        return Ok(());
+                    }
+                    ensure!(
+                        tip <= offset,
+                        "{stream} holds something else at offset {offset} where the backup has a record; stop other writers and restore into a fresh log"
+                    );
+                }
+                Err(e) if Instant::now() < deadline && is_leaderless(&e) => {
+                    tokio::time::sleep(wait).await;
+                    wait = (wait * 2).min(Duration::from_secs(4));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        match broker
+            .publish_if(stream, line.as_bytes().to_vec(), offset)
+            .await
+        {
+            Ok(ConditionalWrite::Written { offset: at }) => {
+                ensure!(
+                    at == offset,
+                    "the record for offset {offset} landed at offset {at}; the log is now out of step with the backup. Restore into a fresh log."
+                );
+                return Ok(());
+            }
+            Ok(ConditionalWrite::Refused { tail }) => bail!(
+                "{stream} no longer ends at offset {offset} (it names {tail}); another writer is on it. Stop other writers and restore into a fresh log."
+            ),
+            Err(e) if Instant::now() < deadline && is_leaderless(&e) => {
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(4));
+                check = true;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 /// Leaves offset `at` with no record. On a Raft shard a refused conditional

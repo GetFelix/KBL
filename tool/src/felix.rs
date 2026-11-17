@@ -324,6 +324,15 @@ where
     }
 }
 
+/// What a broker says while its shard has no leader to serve the request.
+const LEADERLESS: [&str; 5] = [
+    "no longer holds a lease",
+    "not owner",
+    "not the owner",
+    "not assigned",
+    "still opening",
+];
+
 /// What a broker says while a new stream's shard has no owner yet or is still opening.
 const NOT_READY: [&str; 2] = ["not assigned", "still opening"];
 
@@ -349,6 +358,14 @@ where
 fn past_the_tail(err: &anyhow::Error) -> bool {
     err.downcast_ref::<SubscribeCursorError>()
         .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
+}
+
+/// Whether the broker says the shard has no leader to take the request right
+/// now: a lost lease, a shard that moved, or one not yet open. Nothing else is
+/// transient.
+pub(crate) fn is_leaderless(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}");
+    LEADERLESS.iter().any(|marker| text.contains(marker))
 }
 
 fn is_not_ready(err: &anyhow::Error) -> bool {

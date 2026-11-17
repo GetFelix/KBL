@@ -9,6 +9,10 @@ struct Fake {
     /// Stop publishing after this many writes, as a dropped connection would.
     cut_after: Mutex<Option<usize>>,
     slots: Mutex<Vec<Option<Vec<u8>>>>,
+    /// Conditional publishes to refuse with a lost lease before any lands.
+    lease_lost: Mutex<usize>,
+    /// Conditional publishes that land and then fail with a lost lease.
+    unanswered: Mutex<usize>,
 }
 
 impl Fake {
@@ -17,6 +21,8 @@ impl Fake {
             raft,
             cut_after: Mutex::new(None),
             slots: Mutex::new(vec![None; lead]),
+            lease_lost: Mutex::new(0),
+            unanswered: Mutex::new(0),
         }
     }
 
@@ -60,16 +66,32 @@ impl LogStore for Fake {
         Ok((self.records(), self.tip()))
     }
 
-    async fn publish(&self, _: &str, payload: Vec<u8>) -> Result<u64> {
+    async fn publish_if(
+        &self,
+        _: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> Result<ConditionalWrite> {
         self.spend()?;
-        self.slots.lock().unwrap().push(Some(payload));
-        Ok(self.tip() - 1)
-    }
-
-    async fn publish_if(&self, _: &str, _: Vec<u8>, expected: u64) -> Result<ConditionalWrite> {
-        self.spend()?;
+        let lease_err =
+            || anyhow::anyhow!("this broker no longer holds a lease on the shards it led");
+        {
+            let mut n = self.lease_lost.lock().unwrap();
+            if *n > 0 {
+                *n -= 1;
+                return Err(lease_err());
+            }
+        }
         let tail = self.tip();
-        assert_ne!(expected, tail, "the test's refusal must be a refusal");
+        if expected == tail {
+            self.slots.lock().unwrap().push(Some(payload));
+            let mut n = self.unanswered.lock().unwrap();
+            if *n > 0 {
+                *n -= 1;
+                return Err(lease_err());
+            }
+            return Ok(ConditionalWrite::Written { offset: tail });
+        }
         if self.raft {
             self.slots.lock().unwrap().push(None);
             return Ok(ConditionalWrite::Refused { tail: tail + 1 });
@@ -294,4 +316,38 @@ fn a_digest_of_the_exported_prefix_ignores_later_writes() {
     let prefix: Vec<_> = later.iter().filter(|(o, _)| *o < 2).cloned().collect();
     assert_eq!(digest_json(Log::Org, &prefix).unwrap().1, whole);
     assert_ne!(digest_json(Log::Org, &later).unwrap().1, whole);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lost_lease_is_waited_out_with_one_record_per_offset() {
+    let text = backup(&[r#"{"a":1}"#, r#"{"b":2}"#, r#"{"c":3}"#]);
+    let fake = Fake::new(true, 1);
+    *fake.lease_lost.lock().unwrap() = 4;
+    restore(&fake, WORK_EVENTS, &parsed(&text)).await.unwrap();
+    let want: Vec<(u64, Vec<u8>)> = [(1, r#"{"a":1}"#), (2, r#"{"b":2}"#), (3, r#"{"c":3}"#)]
+        .iter()
+        .map(|(o, l)| (*o, l.as_bytes().to_vec()))
+        .collect();
+    assert_eq!((fake.records(), fake.tip()), (want, 4));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_publish_that_landed_unanswered_is_not_written_twice() {
+    let text = backup(&[r#"{"a":1}"#, r#"{"b":2}"#]);
+    let fake = Fake::new(true, 1);
+    *fake.unanswered.lock().unwrap() = 1;
+    restore(&fake, WORK_EVENTS, &parsed(&text)).await.unwrap();
+    assert_eq!((fake.records().len(), fake.tip()), (2, 3));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lease_that_never_comes_back_fails_after_the_wait() {
+    let text = backup(&[r#"{"a":1}"#]);
+    let fake = Fake::new(true, 1);
+    *fake.lease_lost.lock().unwrap() = usize::MAX;
+    let err = restore(&fake, WORK_EVENTS, &parsed(&text))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("lease"), "{err}");
+    assert_eq!(fake.tip(), 1);
 }
