@@ -83,6 +83,7 @@ struct Body {
 }
 
 /// The snapshot folder of one team.
+#[derive(Clone)]
 pub(super) struct Store {
     dir: PathBuf,
     every: u64,
@@ -103,9 +104,18 @@ impl Store {
     }
 
     /// The newest snapshot that still describes `log`, with the recall that
-    /// went with it. Files that do not are logged and removed, so one ahead of
-    /// the log cannot outlive the files that replace it.
+    /// went with it. Files that do not are logged and left: a short read or a
+    /// failover can make the newest ones invalid for a while, and they are
+    /// good again once the log is back. [`Store::prune`] retires them by number.
     pub(super) fn restore(&self, log: &[(u64, WorkLogged)]) -> Option<(Saved, Recall)> {
+        if fs::symlink_metadata(&self.dir).is_ok_and(|m| m.file_type().is_symlink()) {
+            eprintln!(
+                "kbl-tracker: {} is a symlink; snapshots are not used",
+                self.dir.display()
+            );
+            return None;
+        }
+        self.clear_temps();
         for path in self.files().into_iter().rev() {
             match read(&path).filter(|b| b.saved.valid(log)) {
                 Some(Body { saved, seed }) => return Some((saved, seed.into_recall())),
@@ -114,7 +124,6 @@ impl Store {
                         "kbl-tracker: snapshot {} does not match work.events; ignored",
                         path.display()
                     );
-                    let _ = fs::remove_file(&path);
                 }
             }
         }
@@ -150,8 +159,7 @@ impl Store {
             saved,
             seed: Seed::of(recall),
         };
-        let result = fs::create_dir_all(&self.dir)
-            .and_then(|()| restrict(&self.dir))
+        let result = prepare(&self.dir)
             .and_then(|()| stage(&self.dir, &name, &encode(&body)))
             .and_then(|tmp| commit(&tmp, &self.dir.join(&name), &self.dir));
         match result {
@@ -186,7 +194,11 @@ impl Store {
         for old in &files[..files.len().saturating_sub(KEEP)] {
             let _ = fs::remove_file(old);
         }
-        // A crash between staging and the rename leaves a temp file behind.
+        self.clear_temps();
+    }
+
+    /// A crash between staging and the rename leaves a temp file behind.
+    fn clear_temps(&self) {
         if let Ok(rd) = fs::read_dir(&self.dir) {
             for e in rd.flatten() {
                 if e.file_name().to_string_lossy().ends_with(".tmp") {
@@ -234,14 +246,26 @@ fn commit(tmp: &Path, to: &Path, dir: &Path) -> std::io::Result<()> {
     fs::File::open(dir)?.sync_all()
 }
 
-/// The folder holds the team's whole state, so it is for the tracker's user.
-fn restrict(dir: &Path) -> std::io::Result<()> {
+/// Creates the team folder if needed and makes it private to the tracker's
+/// user, since it holds the team's whole state. A symlink is refused: chmod
+/// would follow it onto whatever it points at.
+fn prepare(dir: &Path) -> std::io::Result<()> {
+    if !dir.exists() {
+        fs::create_dir_all(dir)?;
+        // The new name has to survive a power cut too.
+        if let Some(parent) = dir.parent() {
+            fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    let meta = fs::symlink_metadata(dir)?;
+    if !meta.is_dir() {
+        return Err(std::io::Error::other("not a plain folder (symlink?)"));
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
     }
-    let _ = dir;
     Ok(())
 }
 

@@ -151,13 +151,12 @@ async fn a_damaged_snapshot_falls_back_to_an_older_one_then_to_a_full_fold() {
     bytes[at] ^= 1;
     fs::write(&new, bytes).unwrap();
     assert_eq!(store(&dir).restore(&log).unwrap().0.records() as usize, n);
-    assert!(!new.exists(), "a rejected file is removed");
+    assert!(new.exists(), "a rejected file is kept");
 
     // Truncated.
     let bytes = fs::read(&old).unwrap();
     fs::write(&old, &bytes[..bytes.len() / 2]).unwrap();
     assert!(store(&dir).restore(&log).is_none());
-    assert!(files(&dir).is_empty());
 }
 
 #[tokio::test]
@@ -195,7 +194,6 @@ async fn a_log_edited_below_the_snapshot_rejects_it() {
     // Same count, same offsets, same last record: only an earlier record differs.
     log[1].1 = log[3].1.clone();
     assert!(store(&dir).restore(&log).is_none());
-    assert!(files(&dir).is_empty());
 
     // A log shorter than the snapshot, as after a trim or a lost shard tail.
     let (fake, _) = logged(&dir).await;
@@ -230,9 +228,63 @@ async fn a_crash_while_writing_leaves_the_old_snapshot() {
         n
     );
 
-    // The next save clears the leftover.
+    // A restore clears the leftover.
+    assert!(!tmp.exists());
+}
+
+#[tokio::test]
+async fn a_leftover_temp_file_is_cleared_by_the_next_save() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let tmp = dir.join("default").join(".snapshot-99.json.tmp");
+    fs::write(&tmp, b"half").unwrap();
+    let t = start_with(&fake, settings()).await;
+    seed(&t, "c1", 1).await;
+    drop(t);
     drop(start_with(&fake, with_dir(&dir, 2)).await);
     assert!(!tmp.exists());
+}
+
+#[tokio::test]
+async fn a_shorter_log_skips_the_newest_snapshot_and_a_regrown_log_uses_it_again() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let full = entries(&fake).await;
+    let before = files(&dir);
+
+    // A failover or a short read: the snapshot covers records the log lacks.
+    assert!(store(&dir).restore(&full[..full.len() - 1]).is_none());
+    assert_eq!(files(&dir), before, "the file is kept");
+
+    assert_eq!(
+        store(&dir).restore(&full).unwrap().0.records() as usize,
+        full.len()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_symlinked_team_folder_is_neither_used_nor_chmodded() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scratch();
+    let target = scratch();
+    fs::create_dir_all(&target).unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(&target, dir.join("default")).unwrap();
+
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 1).await;
+    seed(&t, "b1", 2).await;
+    drop(start_with(&fake, with_dir(&dir, 1)).await);
+
+    assert!(files(&dir).is_empty());
+    assert_eq!(
+        fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+    assert!(fs::read_dir(&target).unwrap().next().is_none());
 }
 
 #[tokio::test]

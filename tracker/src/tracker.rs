@@ -2482,10 +2482,18 @@ impl<B: Broker> Tracker<B> {
             }
         }
         let store = snapshots::Store::new(&self.0.settings);
-        let (mut state, mut recall, from, saved) = match store
-            .as_ref()
-            .and_then(|s| s.restore(&entries))
-        {
+        // The disk work (reads, hashing the log, fsyncs) runs off the async workers.
+        let (entries, restored) = match store.clone() {
+            Some(store) => {
+                tokio::task::spawn_blocking(move || {
+                    let restored = store.restore(&entries);
+                    (entries, restored)
+                })
+                .await?
+            }
+            None => (entries, None),
+        };
+        let (mut state, mut recall, from, saved) = match restored {
             Some((saved, recall)) => (saved.state(), recall, saved.records() as usize, Some(saved)),
             None => (State::default(), Recall::default(), 0, None),
         };
@@ -2497,8 +2505,12 @@ impl<B: Broker> Tracker<B> {
             let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
             recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
-        if let Some(store) = &store {
-            store.save(&entries, saved.as_ref(), &state, &recall);
+        if let Some(store) = store {
+            (state, recall) = tokio::task::spawn_blocking(move || {
+                store.save(&entries, saved.as_ref(), &state, &recall);
+                (state, recall)
+            })
+            .await?;
         }
         Ok((state, recall, tail))
     }

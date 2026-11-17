@@ -162,19 +162,23 @@ ingest made) and the chain links before it, with a digest of the body on its
 first line. Message texts are not in it; a read of one that is not in memory
 fetches it from the log, as after an eviction.
 
-A boot tries the files newest first. It uses the first that passes the digest,
-the fold revision and the hash chain over the log, and logs and deletes each one
-that does not: damaged, cut short, from another revision, or ahead of a log that
-lost its tail. With none left it folds from the start. The folder is derived
-data, so deleting it only costs a slower boot.
+Every rebuild of the state tries the files newest first: the boot, and each
+rebuild after the writer lease is retaken or goes stale. It uses the first that
+passes the digest, the fold revision and the hash chain over the log, and logs
+and skips each one that does not: damaged, cut short, from another revision, or
+ahead of a log that lost its tail. A skipped file stays, so a log that was only
+briefly short uses it again once it is back; saving keeps the last three by
+record count. With none usable it folds from the start. The folder is derived
+data, so deleting it only costs a slower rebuild. A team folder that is a
+symlink is not used. The disk work runs off the async workers.
 
-When a boot has folded `KBL_TRACKER_SNAPSHOT_EVERY` records (2,000 by default)
+When a rebuild has folded `KBL_TRACKER_SNAPSHOT_EVERY` records (2,000 by default)
 past the newest snapshot it writes a new one: temp file, `fsync`, rename, `fsync`
 of the folder, so a crash leaves the old file. The last three are kept, and the
 folder is mode 700. A failed write is logged and the tracker starts anyway.
-Snapshots are written at boot, not while running, because the hash chain is
-built from the log the boot has just read. Run the tracker on a disk that
-survives restarts, or the folder is empty each time.
+Snapshots are written by a rebuild, not by the running tracker, because the
+hash chain is built from the log the rebuild has just read. Run the tracker on a
+disk that survives restarts, or the folder is empty each time.
 
 Each record carries a format. A tracker that finds a record of a newer format
 than it reads does not serve, instead of skipping the record.
