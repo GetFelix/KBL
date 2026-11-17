@@ -127,6 +127,8 @@ export async function startTracker(tokens, extraEnv = {}, bin = TRACKER) {
       KBL_TRACKER_LISTEN: TRACKER_ADDR,
       KBL_CLAIM_VISIBILITY_MS: "4000",
       KBL_TRACKER_LEASE_TTL_MS: "3000",
+      // The tracker's default review limit (3) would pause fix claims partway through a check that finishes many fixes.
+      KBL_REVIEW_LIMIT: "0",
       ...extraEnv,
     }),
     stdio: ["ignore", "inherit", "inherit"],

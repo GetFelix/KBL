@@ -927,6 +927,31 @@ impl State {
         sources
     }
 
+    /// How many items sit in In review: attempts agents finished that nobody
+    /// has closed.
+    pub fn in_review_count(&self) -> usize {
+        self.items
+            .keys()
+            .filter(|id| self.stage(id) == Some(Stage::InReview))
+            .count()
+    }
+
+    /// What the review limit counts: items in In review, plus fixes agents hold
+    /// that are headed there. A fix a review asked for (`finding`) is left out:
+    /// it closes without a PR of its own and is never paused.
+    pub fn review_load(&self) -> usize {
+        let held = self
+            .items
+            .iter()
+            .filter(|(id, it)| {
+                it.work == WorkKind::Fix
+                    && it.finding.is_none()
+                    && self.stage(id) == Some(Stage::Held)
+            })
+            .count();
+        self.in_review_count() + held
+    }
+
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
         Some(match it.closed {
