@@ -325,8 +325,10 @@ where
 }
 
 /// What a broker says while its shard has no leader to serve the request.
-const LEADERLESS: [&str; 5] = [
+const LEADERLESS: [&str; 7] = [
     "no longer holds a lease",
+    "lease lapsed",
+    "publish not served",
     "not owner",
     "not the owner",
     "not assigned",

@@ -42,6 +42,19 @@ fn only_a_shard_that_is_not_ready_is_retried() {
     assert!(!is_not_ready(&anyhow::anyhow!("permission denied")));
 }
 
+#[test]
+fn a_lapsed_lease_is_leaderless() {
+    let err = anyhow::anyhow!("publish_if refused: publish not served: lease lapsed: shard 3");
+    assert!(is_leaderless(&err));
+    assert!(is_leaderless(&anyhow::anyhow!("lease lapsed")));
+}
+
+#[test]
+fn an_unserved_publish_is_leaderless() {
+    assert!(is_leaderless(&anyhow::anyhow!("publish not served: moved")));
+    assert!(!is_leaderless(&anyhow::anyhow!("permission denied")));
+}
+
 #[tokio::test]
 async fn a_shard_that_is_not_ready_is_tried_again_until_it_is() {
     let mut calls = 0;
