@@ -212,7 +212,7 @@ the id cannot be used again, so use a new one.
 
 `kbl-mcp` is the server an agent reaches Felix through. It speaks [MCP](https://modelcontextprotocol.io) over stdio, so
 any MCP host can start it: Claude Code, the Claude Agent SDK, or a host from another vendor. One `kbl-mcp` process
-serves one agent and holds that agent's Felix token, so the agent can do on Felix only what its token allows.
+serves one agent and holds that agent's Felix token (or the ID token it renews one from), so the agent can do on Felix only what its token allows.
 
 `run_info` reports the run, the agent's name and the tenant, and the [task tools](#the-task-tools) post and work tasks.
 On start it connects to the broker, and it exits with the broker's error if the token or address is wrong, so a host
@@ -376,20 +376,42 @@ To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mc
 }
 ```
 
-Three variables are required:
+Two variables are required, and one way to authenticate:
 
 | Variable | What |
 |---|---|
 | `KBL_RUN` | The run the agent works in |
 | `KBL_AGENT` | The agent's name in that run, such as `w1` |
-| `KBL_FELIX_TOKEN` | The agent's Felix token for the broker. It is read from the environment only, never from a flag, so it stays out of the process list |
+| `KBL_FELIX_TOKEN` | The agent's Felix token for the broker, used as it is until it expires. It is read from the environment only, never from a flag, so it stays out of the process list |
+
+A Felix token from a production control plane lasts 15 minutes, and a fixed one cannot be replaced while `kbl-mcp`
+runs. To keep an agent working for longer, give it an ID token instead and let it renew its own Felix token. Leave
+`KBL_FELIX_TOKEN` unset and set a control plane and one source for the ID token:
+
+| Variable | What |
+|---|---|
+| `KBL_FELIX_CONTROL_PLANE` | The control plane's address, such as `https://felix.example.com`. Plain `http` is accepted only for this machine, because the ID token goes there as a bearer credential |
+| `KBL_FELIX_ID_TOKEN_FILE` | A file holding the ID token. It must be mode 600 or 400. It is read again on every renewal, so whatever keeps the token fresh only has to rewrite the file |
+| `KBL_FELIX_ID_TOKEN_COMMAND` | A command whose output is the ID token, run through `sh -c` on every renewal (`cmd /C` on Windows). Use it instead of the file when the host can mint one on demand |
+
+Set exactly one of the file and the command, and not `KBL_FELIX_TOKEN` as well. `kbl-mcp` trades the ID token at
+`/v1/tenants/<tenant>/token/exchange` for a token for the broker when it starts, and again once two thirds of that
+token's life has passed. The broker checks a token when a stream opens, so a renewal reaches the next request without
+a reconnect, and a claim the agent holds keeps standing across it. If a renewal fails (the control plane is down, the
+ID token expired or was revoked), `kbl-mcp` keeps using the Felix token it has and tries again every few seconds. Once
+that token expires too, the agent's calls fail and the error says the control plane refused the ID token. Nothing prints a token, the control plane's answer or the command line, and the command's error output is
+discarded.
+
+The ID token itself must outlast the agent's work or be replaced in the file or by the command before then, since
+`kbl-mcp` does not renew that.
 
 The rest are the variables [`kbl-tool`](#creating-a-run) uses, with the same defaults: `KBL_TENANT`,
 `KBL_NAMESPACE`, `KBL_FELIX_BROKER`, `KBL_FELIX_BROKER_NAME` and `KBL_FELIX_CA_FILE`. The default for the
 certificate file is relative to the host's working directory, so give an absolute path when a host starts the server.
 
 Issuing a token per agent is not built yet, so for now `dev/check-mcp.mjs` asks the stand-in identity provider for the
-administrator's.
+administrator's. `node dev/check-renewal.mjs` starts a worker from an ID token file, renews its Felix token every second,
+and checks a claim it holds survives.
 
 ## Developing
 

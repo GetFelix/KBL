@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::credential::Auth;
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_client::{
@@ -22,7 +23,7 @@ pub(crate) struct Target {
     pub(crate) broker: String,
     pub(crate) broker_ca: PathBuf,
     pub(crate) broker_name: String,
-    pub(crate) token: String,
+    pub(crate) auth: Auth,
 }
 
 /// A signed-in connection to one tenant and namespace.
@@ -45,7 +46,12 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
     let mut config =
         ClientConfig::optimized_defaults(quic_client_config(Some(Arc::new(roots)), false)?);
     config.auth_tenant_id = Some(target.tenant.clone());
-    config.auth_token = Some(target.token);
+    // The client asks for a token each time it opens a stream, so a renewed
+    // token reaches new streams without a reconnect.
+    match target.auth {
+        Auth::Fixed(token) => config.auth_token = Some(token),
+        Auth::Renewing(provider) => config.token_provider = Some(provider),
+    }
     // The ack carries the record's offset only once it is committed.
     config.ack_on_commit = true;
     let seeds: Vec<_> = target

@@ -122,6 +122,10 @@ jobs:
           node dev/check-mcp.mjs
       - name: Run the task tools against Felix
         run: node dev/check-tasks.mjs
+      - name: Keep a claim across Felix token renewals
+        run: |
+          cargo build -p kbl-tool -p kbl-mcp
+          node dev/check-renewal.mjs
       - name: Run the tracker's claim path against Felix
         run: |
           cargo build -p kbl-tool -p kbl-mcp -p kbl-tracker
