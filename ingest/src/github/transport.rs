@@ -9,6 +9,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+use super::app::AppAuth;
+
 #[derive(Debug, Clone)]
 pub(crate) struct Req {
     pub(crate) method: &'static str,
@@ -54,12 +56,15 @@ pub(crate) trait Transport: Send + Sync {
 pub(crate) enum Token {
     File(PathBuf),
     Env(String),
+    /// Installation tokens ingest mints and refreshes itself.
+    App(Box<AppAuth>),
 }
 
 impl Token {
     /// Read for every request, so a refreshed App installation token is picked up.
-    fn read(&self) -> Result<String> {
+    async fn read(&self) -> Result<String> {
         let token = match self {
+            Token::App(app) => return app.token().await,
             Token::File(p) => std::fs::read_to_string(p)
                 .with_context(|| format!("read the GitHub token file {}", p.display()))?,
             Token::Env(name) => {
@@ -95,11 +100,37 @@ impl Reqwest {
 
 impl Transport for Reqwest {
     async fn send(&self, req: Req) -> Result<Res> {
+        let token = self.token.read().await?;
+        let res = self.send_with(&req, &token).await?;
+        let Token::App(app) = &self.token else {
+            return Ok(res);
+        };
+        if res.status != 401 {
+            return Ok(res);
+        }
+        // The cached token may have been revoked or may have outlived its
+        // clock: mint once more. A second 401 is the credential, not the cache.
+        app.forget(&token).await;
+        let token = app.token().await?;
+        let res = self.send_with(&req, &token).await?;
+        if res.status == 401 {
+            bail!(
+                "GitHub answered 401 to a freshly minted installation token for App {}; \
+                 check the App id, the private key and that the installation still exists",
+                app.id()
+            );
+        }
+        Ok(res)
+    }
+}
+
+impl Reqwest {
+    async fn send_with(&self, req: &Req, token: &str) -> Result<Res> {
         let method = reqwest::Method::from_bytes(req.method.as_bytes())?;
         let mut b = self
             .client
             .request(method, &req.url)
-            .bearer_auth(self.token.read()?)
+            .bearer_auth(token)
             .header("accept", "application/vnd.github+json")
             .header("x-github-api-version", "2022-11-28");
         if let Some(tag) = &req.if_none_match {

@@ -26,6 +26,7 @@ use clap::Parser;
 
 use config::Config;
 use github::Github;
+use github::app::{self, AppAuth};
 use github::transport::{Reqwest, Token};
 use source::{Source, SourceError};
 use sync::{Ingest, Settings};
@@ -107,10 +108,34 @@ async fn serve() -> Result<()> {
     let token = std::env::var(&cfg.tracker.token_env)
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
     let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
-    let gh_token = match (&cfg.github.token_file, &cfg.github.token_env) {
-        (Some(f), _) => Token::File(f.clone()),
-        (None, Some(e)) => Token::Env(e.clone()),
-        (None, None) => unreachable!("the config checks for a token"),
+    // A token_file wins over an app, and an app over a token_env.
+    let sources = [
+        ("token_file", cfg.github.token_file.is_some()),
+        ("app", cfg.github.app.is_some()),
+        ("token_env", cfg.github.token_env.is_some()),
+    ];
+    let set: Vec<&str> = sources.iter().filter(|s| s.1).map(|s| s.0).collect();
+    if set.len() > 1 {
+        eprintln!(
+            "kbl-ingest: warning: several GitHub credentials are configured ({}); {} is used and the rest are ignored",
+            set.join(", "),
+            set[0]
+        );
+    }
+    let gh_token = match (
+        &cfg.github.token_file,
+        &cfg.github.app,
+        &cfg.github.token_env,
+    ) {
+        (Some(f), _, _) => Token::File(f.clone()),
+        (None, Some(app), _) => Token::App(Box::new(AppAuth::new(
+            app,
+            &cfg.github.api,
+            app::system_clock(),
+            app::stderr_log(),
+        )?)),
+        (None, None, Some(e)) => Token::Env(e.clone()),
+        (None, None, None) => unreachable!("the config checks for a token"),
     };
     let mut github = Github::new(
         &cfg.github.api,

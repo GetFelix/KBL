@@ -829,6 +829,7 @@ async fn asking_is_charged_at_least_the_floor() {
     let fake = Fake::default();
     let floor = crate::tracker::Settings {
         cost_floor_micros: 500,
+        review_limit: 0,
         ..settings()
     };
     let t = start_with(&fake, floor).await;
@@ -858,6 +859,7 @@ async fn a_prerequisite_is_charged_at_least_the_floor() {
     let floor = crate::tracker::Settings {
         grants,
         cost_floor_micros: 500,
+        review_limit: 0,
         ..settings()
     };
     let t = start_with(&fake, floor).await;
@@ -1129,7 +1131,10 @@ async fn the_question_text_is_read_back_with_the_context() {
         .unwrap();
     let q = asked["offset"].as_u64().unwrap();
     let core = t.0.core.lock().await;
-    assert_eq!(core.recall.texts[&q], text("which cache?"));
+    assert_eq!(
+        core.recall.texts.peek(q).unwrap().clone(),
+        text("which cache?")
+    );
 }
 
 #[tokio::test]
@@ -1340,7 +1345,7 @@ async fn a_prerequisite_blocks_the_item_without_using_an_attempt() {
         assert_eq!(it.target.as_ref().unwrap().repo, "GetFelix/felix-gateway");
         let at = it.context.values().next().unwrap();
         assert_eq!(
-            core.recall.texts[at],
+            core.recall.texts.peek(*at).unwrap().clone(),
             text("the client cannot swap atomically")
         );
         // No try was spent and nothing was released or given up.
@@ -1717,7 +1722,10 @@ async fn one_key_answers_with_a_choice_and_appends_one_resume_item() {
     // The asker is parked until the resume work is done.
     assert_eq!(core.state.stage(&item("a1")), Some(Stage::Blocked));
     let answer = core.state.items[&ids[0]].context[&key("answer")];
-    assert_eq!(core.recall.texts[&answer], text("write"));
+    assert_eq!(
+        core.recall.texts.peek(answer).unwrap().clone(),
+        text("write")
+    );
     assert!(q < answer);
 }
 
@@ -1737,7 +1745,10 @@ async fn answering_without_choosing_takes_the_default() {
     let ids = resume_ids(&t).await;
     let core = t.0.core.lock().await;
     let answer = core.state.items[&ids[0]].context[&key("answer")];
-    assert_eq!(core.recall.texts[&answer], text("read"));
+    assert_eq!(
+        core.recall.texts.peek(answer).unwrap().clone(),
+        text("read")
+    );
 }
 
 #[tokio::test]
@@ -3138,4 +3149,100 @@ async fn a_prerequisite_retried_after_it_ended_the_claim_is_replayed() {
         Err(Error::NotHeld(_))
     ));
     assert!(matches!(ask(None).await, Err(Error::NotHeld(_))));
+}
+
+#[tokio::test]
+async fn a_key_that_hits_a_closed_or_rejected_item_says_so() {
+    let (_fake, t) = held().await;
+    let first = post(&t, "w1", "a1", "p", "proposal").await.unwrap();
+    assert_eq!(first["created"], true);
+    let open = post(&t, "w1", "a1", "p", "proposal").await.unwrap();
+    assert_eq!(
+        (open["created"].clone(), open["stage"].clone()),
+        (false.into(), "proposed".into())
+    );
+    assert_eq!(open["closure"], Value::Null);
+    t.person_record(
+        key("gab"),
+        WorkRecord::Rejected {
+            item: item(first["item"].as_str().unwrap()),
+        },
+    )
+    .await
+    .unwrap();
+    let dead = post(&t, "w1", "a1", "p", "proposal").await.unwrap();
+    assert_eq!(dead["created"], false);
+    assert_eq!(dead["stage"], "closed");
+    assert_eq!(dead["closure"], "rejected");
+}
+
+#[tokio::test]
+async fn proposals_waiting_use_up_the_root_budget_until_a_person_decides() {
+    let (fake, t) = held().await;
+    t.person_record(
+        key("gab"),
+        WorkRecord::BudgetSet {
+            root: item("a1"),
+            items_left: 2,
+            max_depth: 3,
+            cost_left_micros: 1_000_000,
+            redos_per_item: 3,
+        },
+    )
+    .await
+    .unwrap();
+    let a = post(&t, "w1", "a1", "p0", "proposal").await.unwrap();
+    post(&t, "w1", "a1", "p1", "proposal").await.unwrap();
+    let before = count(&fake, "proposed");
+    assert_eq!(
+        why(post(&t, "w1", "a1", "p2", "proposal").await),
+        "over_budget"
+    );
+    assert_eq!(count(&fake, "proposed"), before);
+    // The proposals took nothing from the budget itself.
+    assert_eq!(
+        t.0.core.lock().await.state.budgets[&item("a1")].items_left,
+        2
+    );
+    // A rejection frees the room.
+    t.person_record(
+        key("gab"),
+        WorkRecord::Rejected {
+            item: item(a["item"].as_str().unwrap()),
+        },
+    )
+    .await
+    .unwrap();
+    post(&t, "w1", "a1", "p2", "proposal").await.unwrap();
+}
+
+#[tokio::test]
+async fn texts_past_the_cap_are_read_back_from_the_log() {
+    let (_fake, t) = held().await;
+    for n in 0..4 {
+        t.context_add(
+            &agent("w1"),
+            &item("a1"),
+            key(&format!("e{n}")),
+            text(&format!("{n}{}", "x".repeat(100))),
+        )
+        .await
+        .unwrap();
+    }
+    t.0.core.lock().await.recall.texts.set_cap(150);
+    // The cap bites on the next insert.
+    t.context_add(&agent("w1"), &item("a1"), key("e4"), text(&"y".repeat(100)))
+        .await
+        .unwrap();
+    {
+        let core = t.0.core.lock().await;
+        assert!(core.recall.texts.bytes() <= 150);
+        assert!(core.recall.texts.peek(1).is_none() || core.recall.texts.peek(2).is_none());
+    }
+    let read = t.context_read(&agent("w1"), &item("a1")).await.unwrap();
+    let entries = read["context"].as_array().unwrap();
+    assert_eq!(entries.len(), 5);
+    for (n, e) in entries.iter().enumerate().take(4) {
+        assert_eq!(e["text"], json!(text(&format!("{n}{}", "x".repeat(100)))));
+    }
 }

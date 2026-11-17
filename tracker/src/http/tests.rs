@@ -207,6 +207,7 @@ fn quiet_settings() -> crate::tracker::Settings {
         review_tiers: crate::tracker::default_review_tiers(),
         cost_floor_micros: 0,
         team: String::new(),
+        review_limit: 0,
     }
 }
 
@@ -223,6 +224,7 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             review_tiers: crate::tracker::default_review_tiers(),
             cost_floor_micros: 0,
             team: name.to_owned(),
+            review_limit: 3,
         },
     )
     .await
@@ -980,7 +982,10 @@ async fn me_lists_the_persons_own_teams() {
     let (status, reply) = get_json(&two.app, "/v1/me", Some("tok-b-ana")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(reply["person"], "ana");
-    assert_eq!(reply["teams"], json!([{ "team": "b", "role": "admin" }]));
+    assert_eq!(
+        reply["teams"],
+        json!([{ "team": "b", "role": "admin", "review_limit": 3 }])
+    );
     let (_, reply) = get_json(&two.app, "/v1/me", Some("tok-both")).await;
     let names: Vec<&str> = reply["teams"]
         .as_array()
@@ -1381,4 +1386,33 @@ async fn an_expected_price_that_is_not_a_price_or_none_true_is_a_bad_request() {
             "{expected}: {status} {reply}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_person_reads_time_to_human_action_and_an_agent_cannot() {
+    let app = kept().await;
+    let path = "/v1/work/metrics/time-to-human";
+    let (status, m) = get_json(&app, path, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert_eq!(m["days"], 30);
+    assert_eq!(m["stats"]["count"], 0);
+    assert_eq!(m["stats"]["open"], 0);
+    assert!(m["stats"]["p50_ms"].is_null());
+    assert_eq!(m["stats"]["by_kind"]["question"]["count"], 0);
+
+    let (_, wide) = get_json(&app, &format!("{path}?days=99999"), Some("tok-gab")).await;
+    assert_eq!(wide["days"], 366);
+    let (_, one) = get_json(&app, &format!("{path}?days=0"), Some("tok-gab")).await;
+    assert_eq!(one["days"], 1);
+
+    let team = "/v1/teams/default/work/metrics/time-to-human";
+    let (status, in_team) = get_json(&app, team, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{in_team}");
+    assert_eq!(in_team["stats"]["by_kind"], m["stats"]["by_kind"]);
+
+    assert_eq!(
+        get_json(&app, path, Some("tok-w1")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(get_json(&app, path, None).await.0, StatusCode::UNAUTHORIZED);
 }

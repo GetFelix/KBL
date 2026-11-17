@@ -116,6 +116,11 @@ struct Cli {
     /// millionths of a dollar, whatever the agent reports.
     #[arg(long, env = "KBL_COST_FLOOR_MICROS", default_value_t = 100_000)]
     cost_floor_micros: u64,
+    /// Agent pull requests in In review at which agents stop taking new fixes.
+    /// Triage, answers and reviews carry on. Zero turns the limit off. The default
+    /// is a guess with no measurement behind it (docs/dashboard-research.md).
+    #[arg(long, env = "KBL_REVIEW_LIMIT", default_value_t = 3)]
+    review_limit: usize,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -213,6 +218,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
     let review_tiers = cli.review_tiers.clone();
     // One floor for every team; each team's tracker charges it against its own fold.
     let cost_floor_micros = cli.cost_floor_micros;
+    let review_limit = cli.review_limit;
     let base = target(cli, "");
     Arc::new(move |team: TeamName| {
         let mut target = base.clone();
@@ -232,6 +238,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             review_tiers: review_tiers.clone(),
             cost_floor_micros,
             team: team.as_str().to_owned(),
+            review_limit,
         };
         Box::pin(async move {
             let felix = felix::connect(target, Kind::Team).await?;
