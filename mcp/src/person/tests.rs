@@ -126,7 +126,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 20] = [
+    let cases: [(&str, Value, &str, Value); 21] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -234,6 +234,12 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             json!({ "item": "a1", "to": "ana" }),
             "/v1/work/reassign",
             json!({ "item": "a1", "to": { "person": "ana" } }),
+        ),
+        (
+            "reassign_item",
+            json!({ "item": "a1", "to": "agent:w1" }),
+            "/v1/work/reassign",
+            json!({ "item": "a1", "to": { "agent": "w1" } }),
         ),
         (
             "reassign_item",
