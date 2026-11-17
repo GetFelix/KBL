@@ -1,0 +1,1 @@
+`kbl-tool work export <file>` writes `work.events` to a checksummed backup, `work import <file>` loads one into an empty log, and `work digest` prints a digest of the log's fold (`--state` also writes its canonical JSON). CI backs up a filled stack, restores into a fresh one and compares the two folds. See docs/backup-restore.md.

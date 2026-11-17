@@ -162,6 +162,11 @@ jobs:
         run: node dev/check-death.mjs
       - name: Dead-letter a poison task
         run: node dev/check-poison.mjs
+      # Last, because it recreates the stack.
+      - name: Back up, restore into a fresh stack, and compare the folds
+        run: |
+          cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker
+          node dev/check-backup.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml logs
       - if: always()

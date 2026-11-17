@@ -5,6 +5,7 @@
 //! ```
 
 mod agents;
+mod backup;
 mod felix;
 mod prices;
 mod run;
@@ -112,6 +113,12 @@ enum WorkCommand {
     /// Fold `work.events` and print what claims cost, in micro-dollars, per
     /// root, reviewer tier and repo.
     Spend,
+    /// Write `work.events` to a backup file. See docs/backup-restore.md.
+    Export(backup::ExportArgs),
+    /// Load a backup file into an empty `work.events`.
+    Import(backup::ImportArgs),
+    /// Fold `work.events` and print the fold's digest, to compare two logs.
+    Digest(backup::DigestArgs),
 }
 
 #[derive(Subcommand)]
@@ -164,6 +171,9 @@ async fn serve() -> Result<()> {
         Command::Run(RunCommand::Log { run }) => log(target, &run).await,
         Command::Work(WorkCommand::Log) => print_stream(target, WORK_EVENTS).await,
         Command::Work(WorkCommand::Spend) => print_spend(target).await,
+        Command::Work(WorkCommand::Export(args)) => backup::export(target, args).await,
+        Command::Work(WorkCommand::Import(args)) => backup::import(target, args).await,
+        Command::Work(WorkCommand::Digest(args)) => backup::digest(target, args).await,
         Command::Org(OrgCommand::Init(args)) => teams::org_init(target, args).await,
         Command::Team(TeamCommand::Create(args)) => teams::team_create(target, args).await,
         Command::Prices(PricesCommand::Import(args)) => prices::import(target, args).await,
@@ -244,7 +254,7 @@ fn spend(records: &[(u64, Vec<u8>)]) -> Result<Spend> {
 
 /// Folds `records`. A record of a newer format than this build reads stops it,
 /// since every total after it would be short.
-fn fold_log(records: &[(u64, Vec<u8>)]) -> Result<State> {
+pub(crate) fn fold_log(records: &[(u64, Vec<u8>)]) -> Result<State> {
     let mut state = State::default();
     for (offset, payload) in records {
         match read(payload) {
