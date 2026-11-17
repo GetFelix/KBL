@@ -165,8 +165,36 @@ not show what the decision says it shows. The flags are deterministic rules
 over the recorded steps, not a model's opinion, and they say "recorded" because
 an unrecorded step is invisible to them.
 These flags matter more than the story itself, because they tell a
-reviewer where to look hardest. Reviewers can mark a story accurate or not,
-which feeds the trust numbers on the metrics tab.
+reviewer where to look hardest. They are computed in `kbl-core`
+(`core/src/story.rs`) from the decisions, steps, edits and notes the fold took,
+so the page and any other reader get the same flags. Each rule reads recorded
+fields only:
+
+| Rule | Flags when |
+|---|---|
+| `claims_pass_without_run` | A decision's `so_far`, `chosen` or `why` says tests pass (the words "test" and "pass" both appear), and no step of that attempt, between its last edit before the decision and the decision, ran tests and exited 0. With no edit before it, any earlier passing test step counts |
+| `cited_step_failed` | A decision that says tests pass cites a step that exited non-zero |
+| `evidence_not_recorded` | A decision cites an offset on `work.events` that is not a recorded step, edit, decision or person's note |
+| `revert_check_not_proven` | A decision carries a revert check that did not both fail without the fix and pass with it |
+| `fix_without_edit` | A `fix` decision has no recorded `edit` carrying it out |
+| `edits_never_run` | An attempt recorded edits and no passing test step after its last one |
+
+A step counts as a test run when its command has a test runner as a whole
+word (`pytest`, `jest`, `vitest`, `mocha`, `rspec`, `phpunit`, `nextest`,
+`ctest`, `python -m unittest`), a `test` subcommand of a build tool (`cargo`,
+`npm`, `yarn`, `pnpm`, `bun`, `deno`, `go`, `make`, `task`, `just`, `mvn`,
+`gradle`, `dotnet`, `swift`, `mix`, `rake`, `flutter`, including `npm run
+test`), or `node --test`. A command that only contains the letters, like
+`git checkout latest` or `grep attest`, does not count. A runner this list
+does not know is invisible to the rules, like any unrecorded step.
+
+The claim rules match words, so "tests do not pass" is read the same way as
+"tests pass". A flag is a prompt to look, never a verdict.
+
+Reviewers can mark a story accurate or not, which feeds the trust numbers on
+the metrics tab. The dashboard does not have that control yet: no record kind
+carries the mark (`human_input` has a note, an answer, a review comment and a
+priority change), and adding one is a format raise tracked on its own.
 
 ## The Felix mapping
 

@@ -224,3 +224,16 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .price-model-section { margin: 1rem 0; }
 .price-edit { border: 1px solid var(--border, currentColor); border-radius: 6px; padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
 .price-model-section details { margin-top: 0.5rem; }
+
+.story { display: grid; gap: var(--space-3); }
+.story h3 { margin: var(--space-3) 0 var(--space-1); font-size: var(--text-sm); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.story p { margin: var(--space-1) 0; }
+.story ul, .story ol { list-style: none; margin: 0; padding: 0; }
+.story-decision { border-left: 3px solid var(--line-strong); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-3); }
+.story-label { color: var(--muted); }
+.story-flag { border-left: 3px solid var(--warn); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-2); }
+.story-ref { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); text-decoration: underline; background: none; border: 0; padding: 0; cursor: pointer; }
+.story-hunk { overflow-x: auto; font-family: var(--font-mono); font-size: var(--text-sm); }
+.story-edit code { overflow-wrap: anywhere; }
+.story-step { padding: var(--space-1) 0; }
+.story-step code { overflow-wrap: anywhere; }

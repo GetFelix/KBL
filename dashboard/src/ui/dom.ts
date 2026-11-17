@@ -19,3 +19,8 @@ export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Attrs = 
 export function kbd(parts: string[]): HTMLElement {
   return h('span', { class: 'chord' }, ...parts.map((p) => h('kbd', {}, p)));
 }
+
+/** The element in `root` whose `data-focus` is `key`. The key can hold recorded text, so it is escaped. */
+export function byFocus(root: ParentNode, key: string): HTMLElement | null {
+  return root.querySelector<HTMLElement>(`[data-focus="${CSS.escape(key)}"]`);
+}

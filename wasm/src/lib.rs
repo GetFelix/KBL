@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use kbl_core::content::Content;
 use kbl_core::names::ItemId;
 use kbl_core::overlap::{FILES_ENTRY, files_offset, overlaps};
+use kbl_core::story::{Kept, accepted, has_story, story};
 use kbl_core::work::{ReadError, WorkLogged, WorkRecord, read};
 use kbl_core::work_fold::{Stage, State};
 use serde_json::json;
@@ -28,6 +29,15 @@ pub struct Folder {
     /// `overlaps_json` as of the last applied record. The comparison is
     /// pairwise, so a redraw with no new record reuses it.
     overlaps: RefCell<Option<String>>,
+    /// What the story reads of each decision, step, edit and note the fold
+    /// took, by offset. The state keeps only the offsets.
+    kept: BTreeMap<u64, Kept>,
+    /// How many records of each item the fold has taken. A story is rebuilt
+    /// only when its item's count moved.
+    revs: BTreeMap<ItemId, u64>,
+    /// Each item's story as serialised JSON (with its `rev`), by the count it
+    /// was built at. None is an item with no story yet.
+    stories: RefCell<BTreeMap<ItemId, (u64, Option<String>)>>,
 }
 
 #[wasm_bindgen]
@@ -51,7 +61,15 @@ impl Folder {
                 let before = self.files_offset(&rec);
                 self.state.apply(offset, &rec);
                 self.keep_files(offset, &rec, before);
+                if accepted(&self.state, offset, &rec)
+                    && let Some(k) = Kept::of(&rec)
+                {
+                    self.kept.insert(offset, k);
+                }
                 self.overlaps.take();
+                if let Some(item) = rec.record.item() {
+                    *self.revs.entry(item.clone()).or_default() += 1;
+                }
                 true
             }
             Err(ReadError::Newer { v }) => {
@@ -193,6 +211,38 @@ impl Folder {
                 serde_json::to_string(&found).expect("plain data serializes")
             })
             .clone()
+    }
+
+    /// The story of every item with a recorded decision, as `{item: story}`:
+    /// `rev` (changes whenever the item takes a record), `groups` (decisions by
+    /// phase, each with its `edits` and `evidence`), `people`, `attempts` and
+    /// `flags`. See `kbl_core::story`. A story is rebuilt only after its item
+    /// takes a record.
+    pub fn stories_json(&self) -> String {
+        let mut cache = self.stories.borrow_mut();
+        let mut out = String::from("{");
+        for i in self.state.items.values().filter(|i| has_story(i)) {
+            let rev = self.revs.get(&i.id).copied().unwrap_or(0);
+            let stale = cache.get(&i.id).is_none_or(|(at, _)| *at != rev);
+            if stale {
+                let built = story(&self.state, &i.id, |o| self.kept.get(&o)).map(|st| {
+                    let mut v = serde_json::to_value(&st).expect("plain data serializes");
+                    v["rev"] = json!(rev);
+                    v.to_string()
+                });
+                cache.insert(i.id.clone(), (rev, built));
+            }
+            if let Some((_, Some(text))) = cache.get(&i.id) {
+                if out.len() > 1 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::to_string(&i.id).expect("an id is a string"));
+                out.push(':');
+                out.push_str(text);
+            }
+        }
+        out.push('}');
+        out
     }
 
     /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.

@@ -11,6 +11,8 @@ export interface Fold {
   itemsJson(): string;
   blockedJson(): string;
   overlapsJson(): string;
+  /** The story of every item with a recorded decision, keyed by item id. */
+  storiesJson(): string;
   /** `{load, in_review}`: the review load the tracker's pause counts, and the In review part of it. */
   reviewLoadJson(): string;
   /** The fold's spend: what claims cost per root, reviewer tier and repo. */
