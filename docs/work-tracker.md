@@ -302,7 +302,7 @@ record if the fold accepts it:
 | `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
-| `POST /v1/work/prices` `{model, unit, price_micros, effective_from_ms?}` | `price_set`: the price of one unit of a model from now, or from a later time. See [Cost and spend](#cost-and-spend) |
+| `POST /v1/work/prices` `{model, unit, price_micros, effective_from_ms?, expected_price?}` | `price_set`: the price of one unit of a model from now, or from a later time. See [Cost and spend](#cost-and-spend) |
 | `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` (`text` is a string) | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |
 | `POST /v1/work/flag` `{item}` | `flagged` with `flagged: true`: the item moves to Needs you and is not handed out. See [Flagging an item for a person](#flagging-an-item-for-a-person) |
 | `POST /v1/work/unflag` `{item}` | `flagged` with `flagged: false`: the item leaves Needs you, unless it waits there for another reason |
@@ -1485,6 +1485,17 @@ an `effective_from_ms` before the tracker's clock is refused with `bad_price`,
 so leave it out for "now". Prices are never edited: a new `price_set` for the
 same model and unit takes over from its time on. The tracker fetches no prices
 from vendors.
+
+To change a price without overwriting one someone else just set, send the price
+you read as `expected_price`: `{"price_micros": 15000000, "since_ms": 1760000000000}`
+(its value and when it took effect). If the price in effect when the new one starts
+is not that one, the tracker answers `409` with `why: "price_changed"` and writes
+nothing; read the price again and retry. For a first price, send
+`"expected_price": {"none": true}`: it is refused the same way if a price is in
+effect by then. `none` is its own field and only `true` is accepted, so a price
+left out or read wrongly cannot turn into "expect none" by accident. The check and
+the write happen together, so of two posts that expected the same price (or both
+expected none) only one lands. Leave `expected_price` out and nothing is checked.
 
 **Importing prices.** `kbl-tool prices import` writes `price_set` records from
 a price table, so a fresh install is not empty:

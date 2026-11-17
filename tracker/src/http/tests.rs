@@ -41,6 +41,9 @@ struct Quiet {
     fail_lease_get: Arc<AtomicBool>,
     /// A conditional publish is refused unless it names the next offset.
     fences: Arc<AtomicBool>,
+    /// With `fences`, a refusal takes the offset it asked for, as on a Raft
+    /// stream shard: the record is never stored, and the tip passes it.
+    raft_blanks: Arc<AtomicBool>,
     /// Offsets another writer was given whose records are not committed yet:
     /// Felix's tail counts them, reads do not show them.
     in_flight: Arc<std::sync::atomic::AtomicU64>,
@@ -84,6 +87,10 @@ impl Broker for Quiet {
         let tail =
             self.published.lock().unwrap().len() as u64 + self.in_flight.load(Ordering::SeqCst);
         if self.fences.load(Ordering::SeqCst) && expected != tail {
+            if self.raft_blanks.load(Ordering::SeqCst) {
+                self.published.lock().unwrap().push(stream.to_owned());
+                return Ok(ConditionalWrite::Refused { tail: tail + 1 });
+            }
             return Ok(ConditionalWrite::Refused { tail });
         }
         let offset = self.publish(stream, payload).await?;
@@ -102,6 +109,15 @@ impl Broker for Quiet {
             }
         }
         Ok(self.log.lock().unwrap().clone())
+    }
+    async fn read_to_tip(&self, stream: &str, from: u64) -> anyhow::Result<crate::felix::ToTip> {
+        let records = self.read_from(stream, from).await?;
+        let mut tip = records.last().map_or(from, |(o, _)| o + 1);
+        // Felix's empty page points past a trailing blank.
+        if self.raft_blanks.load(Ordering::SeqCst) {
+            tip = tip.max(self.published.lock().unwrap().len() as u64);
+        }
+        Ok((records, tip))
     }
     async fn poll(
         &self,
@@ -1101,4 +1117,208 @@ async fn only_a_person_sets_a_price_once_the_log_is_at_format_8() {
         (StatusCode::OK, Some("price_set")),
         "{reply}"
     );
+}
+
+fn now_plus(ms: u64) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + ms
+}
+
+/// A price that starts a minute from now, so the replacement's start names it.
+async fn priced_for_later(app: &Router) -> u64 {
+    raise_to(app, 8).await;
+    let since = now_plus(60_000);
+    let first = json!({ "model": "m", "unit": "input", "price_micros": 3_000_000, "effective_from_ms": since });
+    let (status, reply) = call(app, "/v1/work/prices", Some("tok-gab"), first).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    since
+}
+
+fn replacing(price_micros: u64, expected: Value) -> Value {
+    json!({
+        "model": "m", "unit": "input", "price_micros": price_micros,
+        "effective_from_ms": now_plus(120_000), "expected_price": expected,
+    })
+}
+
+#[tokio::test]
+async fn a_price_replaces_the_one_it_expected() {
+    let app = kept().await;
+    let since = priced_for_later(&app).await;
+    let expected = json!({ "price_micros": 3_000_000, "since_ms": since });
+    let (status, reply) = call(
+        &app,
+        "/v1/work/prices",
+        Some("tok-gab"),
+        replacing(4_000_000, expected),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("price_set")),
+        "{reply}"
+    );
+}
+
+#[tokio::test]
+async fn a_price_that_expected_another_is_refused_and_not_written() {
+    let app = kept().await;
+    let since = priced_for_later(&app).await;
+    let tail = |reply: &Value| reply["offset"].as_u64();
+    let stale = [
+        json!({ "price_micros": 2_000_000, "since_ms": since }),
+        json!({ "price_micros": 3_000_000, "since_ms": since + 1 }),
+    ];
+    for expected in stale {
+        let (status, reply) = call(
+            &app,
+            "/v1/work/prices",
+            Some("tok-gab"),
+            replacing(4_000_000, expected),
+        )
+        .await;
+        assert_eq!(
+            (status, reply["why"].as_str()),
+            (StatusCode::CONFLICT, Some("price_changed")),
+            "{reply}"
+        );
+    }
+    // Nothing was written: the next write lands at the offset right after the first price.
+    let ok = replacing(
+        5_000_000,
+        json!({ "price_micros": 3_000_000, "since_ms": since }),
+    );
+    let (_, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), ok).await;
+    let (_, first) = call(
+        &app,
+        "/v1/work/prices",
+        Some("tok-gab"),
+        json!({ "model": "other", "unit": "input", "price_micros": 1 }),
+    )
+    .await;
+    assert_eq!(tail(&first), tail(&reply).map(|o| o + 1), "{reply} {first}");
+}
+
+#[tokio::test]
+async fn a_price_without_an_expected_price_is_not_checked() {
+    let app = kept().await;
+    priced_for_later(&app).await;
+    let mut body = replacing(4_000_000, Value::Null);
+    body.as_object_mut().unwrap().remove("expected_price");
+    let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), body).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+}
+
+#[tokio::test]
+async fn of_two_prices_that_expect_the_same_one_only_one_lands() {
+    let app = kept().await;
+    let since = priced_for_later(&app).await;
+    let expected = json!({ "price_micros": 3_000_000, "since_ms": since });
+    let from = now_plus(120_000);
+    let body = |p: u64| json!({ "model": "m", "unit": "input", "price_micros": p, "effective_from_ms": from, "expected_price": expected });
+    let (a, b) = tokio::join!(
+        call(&app, "/v1/work/prices", Some("tok-gab"), body(4_000_000)),
+        call(&app, "/v1/work/prices", Some("tok-gab"), body(5_000_000)),
+    );
+    let mut statuses = [a.0, b.0];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::CONFLICT],
+        "{a:?} {b:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_first_price_that_expected_none_lands_when_there_is_none() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    let body = json!({ "model": "m", "unit": "input", "price_micros": 1, "expected_price": { "none": true } });
+    let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), body).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+}
+
+#[tokio::test]
+async fn a_price_that_expected_none_is_refused_when_one_is_in_effect() {
+    let app = kept().await;
+    let since = priced_for_later(&app).await;
+    let (status, reply) = call(
+        &app,
+        "/v1/work/prices",
+        Some("tok-gab"),
+        replacing(4_000_000, json!({ "none": true })),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("price_changed")),
+        "{reply}"
+    );
+    // Nothing was written: replacing the first price still works.
+    let ok = replacing(
+        5_000_000,
+        json!({ "price_micros": 3_000_000, "since_ms": since }),
+    );
+    let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), ok).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+}
+
+#[tokio::test]
+async fn a_price_that_expected_a_price_is_refused_when_none_is_in_effect() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    let expected = json!({ "price_micros": 3_000_000, "since_ms": 1 });
+    let (status, reply) = call(
+        &app,
+        "/v1/work/prices",
+        Some("tok-gab"),
+        replacing(4_000_000, expected),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("price_changed")),
+        "{reply}"
+    );
+}
+
+#[tokio::test]
+async fn of_two_first_prices_that_expect_none_only_one_lands() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    let body = |p: u64| json!({ "model": "m", "unit": "input", "price_micros": p, "expected_price": { "none": true } });
+    let (a, b) = tokio::join!(
+        call(&app, "/v1/work/prices", Some("tok-gab"), body(1)),
+        call(&app, "/v1/work/prices", Some("tok-gab"), body(2)),
+    );
+    let mut statuses = [a.0, b.0];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::CONFLICT],
+        "{a:?} {b:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_expected_price_that_is_not_a_price_or_none_true_is_a_bad_request() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    for expected in [
+        json!({ "none": false }),
+        json!({}),
+        json!({ "none": true, "price_micros": 1 }),
+        json!({ "price_micros": 1 }),
+    ] {
+        let body =
+            json!({ "model": "m", "unit": "input", "price_micros": 1, "expected_price": expected });
+        let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), body).await;
+        assert!(
+            status.is_client_error() && status != StatusCode::CONFLICT,
+            "{expected}: {status} {reply}"
+        );
+    }
 }

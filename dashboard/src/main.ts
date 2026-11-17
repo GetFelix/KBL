@@ -8,7 +8,7 @@ import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { blocked, items, questionText, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
-import { priceAgeDays, priceRequest, spend, type PriceUnit } from './spend.ts';
+import { priceAgeDays, priceRequest, spend, type PriceEntry, type PriceUnit } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { commandFor, type CommandId } from './keys.ts';
@@ -345,10 +345,11 @@ const palette = paletteView(
 const help = helpView(mac);
 // Set once the fold exists; Spend does nothing before then.
 let readSpend: (() => ReturnType<typeof spend>) | null = null;
-const setPrice = async (model: string, unit: PriceUnit, dollarsText: string, from = ''): Promise<string | null> => {
-  const req = priceRequest(model, unit, dollarsText, from);
+const setPrice = async (model: string, unit: PriceUnit, dollarsText: string, from = '', replaced: PriceEntry | null = null): Promise<string | null> => {
+  const req = priceRequest(model, unit, dollarsText, from, Date.now(), replaced);
   if (typeof req === 'string') return req;
   const o = tracker ? await tracker.write(req) : ({ status: 'failed', reason: 'Not signed in to the tracker.' } as const);
+  if (o.status === 'refused' && o.why === 'price_changed') return 'Price changed, review and retry.';
   return o.status === 'ok' ? null : o.reason;
 };
 const spendBox = spendView({

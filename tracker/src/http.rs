@@ -32,6 +32,7 @@ use crate::config::Caller;
 use crate::felix::Broker;
 use crate::org::OrgUnavailable;
 use crate::teams::Teams;
+use crate::tracker::ExpectedPrice;
 use crate::tracker::{
     Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
 };
@@ -357,6 +358,43 @@ struct PriceBody {
     price_micros: u64,
     effective_from_ms: Option<u64>,
     as_of: Option<String>,
+    /// What the caller saw: the price this one replaces, or `{"none": true}`
+    /// for no price in effect. Refused as `price_changed` when it is not what
+    /// is in effect. Absent means no check.
+    expected_price: Option<ExpectedPriceBody>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum ExpectedPriceBody {
+    Seen(SeenPrice),
+    None(#[allow(dead_code)] NoPrice),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeenPrice {
+    price_micros: u64,
+    /// When that price took effect, in milliseconds.
+    since_ms: u64,
+}
+
+/// `{"none": true}`. A named field, and only `true` is accepted, so no price
+/// read wrongly or left out turns into "expect none".
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoPrice {
+    #[serde(deserialize_with = "only_true")]
+    #[allow(dead_code)]
+    none: bool,
+}
+
+fn only_true<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    if bool::deserialize(d)? {
+        Ok(true)
+    } else {
+        Err(serde::de::Error::custom("none must be true"))
+    }
 }
 
 #[derive(Deserialize)]
@@ -996,7 +1034,20 @@ async fn price<B: Broker>(call: Call<B>, Json(b): Json<PriceBody>) -> Response {
         effective_from_ms: b.effective_from_ms,
         as_of: b.as_of,
     };
-    as_person(&call, record).await
+    let Some(e) = b.expected_price else {
+        return as_person(&call, record).await;
+    };
+    let expected = match e {
+        ExpectedPriceBody::Seen(s) => ExpectedPrice::Seen {
+            price_micros: s.price_micros,
+            since_ms: s.since_ms,
+        },
+        ExpectedPriceBody::None(_) => ExpectedPrice::None,
+    };
+    match call.person() {
+        Ok(p) => reply(call.tracker().person_price(p, record, expected).await),
+        Err(d) => denied(d),
+    }
 }
 
 async fn rules<B: Broker>(call: Call<B>, Json(b): Json<RulesBody>) -> Response {

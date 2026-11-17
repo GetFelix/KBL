@@ -20,7 +20,7 @@ export class FakeGateway implements Transport {
   filterEvent: (offset: number) => boolean = () => true;
   /** Runs when a subscribe arrives, before `subscribed` is sent: in-flight events of the replaced subscription. */
   beforeSubscribed: () => void = () => {};
-  /** Offsets that hold no event (a generation-start record): never delivered, counted by `skipped_before`. */
+  /** Offsets that hold no event (a generation-start record, or a Raft blank): never read or delivered, counted by `skipped_before`. */
   nonEvents = new Set<number>();
   /** Makes an empty read page report a `next_offset` this far ahead of `from`. */
   emptyPageAhead = 0;
@@ -57,9 +57,17 @@ export class FakeGateway implements Transport {
       return;
     }
     const start = from >= this.log.length ? from : Math.max(0, from - this.overlap);
-    const records = this.log.slice(start, from + this.pageSize).map((payload, i) => ({ offset: start + i, payload }));
+    const records = this.log
+      .slice(start, from + this.pageSize)
+      .map((payload, i) => ({ offset: start + i, payload }))
+      .filter((r) => !this.nonEvents.has(r.offset));
+    // Read before the hook, which can publish: the page was answered before it.
+    const end = Math.max(from, this.log.length);
     if (records.length === 0) this.afterEmptyRead();
-    this.onMessage({ type: 'records', id, records, next_offset: Math.max(from, start + records.length) + (records.length === 0 ? this.emptyPageAhead : 0) });
+    // Like Felix: a page ends after its last record, and an empty one names where the log ends,
+    // past any offsets that hold no event.
+    const last = records.length ? records[records.length - 1].offset + 1 : end;
+    this.onMessage({ type: 'records', id, records, next_offset: last + (records.length === 0 ? this.emptyPageAhead : 0) });
   }
 
   private subscribe(from: number): void {
