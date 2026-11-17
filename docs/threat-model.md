@@ -152,7 +152,7 @@ the build's, and a hash over every record it covers still matches `work.events`
 inside the file, so the digest stops damage and not a deliberate edit. A file that
 fails is removed and the next one is tried, then a full fold. A file is written
 to a temp file, synced, renamed and the folder synced
-(`tracker/src/tracker/snapshots.rs#save`), so a crash leaves the old one.
+(`tracker/src/tracker/snapshots.rs#write`), so a crash leaves the old one.
 
 ## Tracker routes
 

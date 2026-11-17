@@ -11,11 +11,12 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use kbl_core::artifact::ArtifactId;
 use kbl_core::names::ItemId;
 use kbl_core::work::WorkLogged;
-use kbl_core::work_fold::{Saved, State};
+use kbl_core::work_fold::{Anchor, Saved, State};
 use serde::{Deserialize, Serialize};
 
 use super::request_keys::{Requests, Seen};
@@ -32,7 +33,7 @@ const SUFFIX: &str = ".json";
 /// snapshot covers. Texts are left out: they are a cache, and a miss reads the
 /// record back from the log.
 #[derive(Serialize, Deserialize)]
-struct Seed {
+pub(super) struct Seed {
     subjects: Vec<(u64, ItemId)>,
     ingest_edges: Vec<(ItemId, ItemId)>,
     attempts: Vec<((ItemId, u32), Vec<ClaimLog>)>,
@@ -42,26 +43,34 @@ struct Seed {
 
 impl Seed {
     fn of(recall: &Recall) -> Self {
-        // Sorted, so the same state writes the same bytes.
-        let mut subjects: Vec<_> = (recall.subjects.iter())
-            .map(|(o, i)| (*o, i.clone()))
-            .collect();
-        subjects.sort();
-        let mut ingest_edges: Vec<_> = recall.ingest_edges.iter().cloned().collect();
-        ingest_edges.sort();
-        let mut attempts: Vec<_> = (recall.attempts.iter())
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        attempts.sort_by(|a, b| a.0.cmp(&b.0));
-        let mut claims: Vec<_> = recall.claims.iter().map(|(o, k)| (*o, k.clone())).collect();
-        claims.sort();
+        Self::copy(recall).sorted()
+    }
+
+    /// A copy of what the snapshot keeps, in no order. Cheap enough to take
+    /// under the core lock; [`Seed::sorted`] runs off it.
+    pub(super) fn copy(recall: &Recall) -> Self {
         Self {
-            subjects,
-            ingest_edges,
-            attempts,
-            claims,
+            subjects: recall
+                .subjects
+                .iter()
+                .map(|(o, i)| (*o, i.clone()))
+                .collect(),
+            ingest_edges: recall.ingest_edges.iter().cloned().collect(),
+            attempts: (recall.attempts.iter())
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            claims: recall.claims.iter().map(|(o, k)| (*o, k.clone())).collect(),
             requests: recall.requests.parts(),
         }
+    }
+
+    /// Sorted, so the same state writes the same bytes.
+    pub(super) fn sorted(mut self) -> Self {
+        self.subjects.sort();
+        self.ingest_edges.sort();
+        self.attempts.sort_by(|a, b| a.0.cmp(&b.0));
+        self.claims.sort();
+        self
     }
 
     fn into_recall(self) -> Recall {
@@ -80,6 +89,139 @@ impl Seed {
 struct Body {
     saved: Saved,
     seed: Seed,
+}
+
+/// Saves from the running tracker. It keeps the chain over the log up to its
+/// anchor and the records applied since, so a save hashes only those and never
+/// reads the log back. Lives in the core and is touched under its lock.
+pub(super) struct Periodic {
+    id: u64,
+    store: Store,
+    anchor: Anchor,
+    /// Records landed since `anchor`, oldest first. While a save runs this
+    /// is capped (see [`TAIL_CAP`]); past that, saving stops until the next rebuild.
+    tail: Vec<(u64, WorkLogged)>,
+    saving: bool,
+}
+
+/// A save in progress: the copy taken at a record boundary.
+pub(super) struct Job {
+    id: u64,
+    store: Store,
+    anchor: Anchor,
+    tail: Vec<(u64, WorkLogged)>,
+    state: State,
+    seed: Seed,
+}
+
+/// How many saves' worth of records may pile up behind a slow disk, and the
+/// fewest records that may, so a small `every` is not given up on by a burst.
+const TAIL_CAP: u64 = 4;
+const TAIL_CAP_MIN: u64 = 10_000;
+
+static PERIODIC_IDS: AtomicU64 = AtomicU64::new(1);
+
+impl Periodic {
+    /// `anchor` is where the chain over `log` stands, as [`Store::save`] left
+    /// it. None when saving is off.
+    pub(super) fn new(store: Store, anchor: Anchor, log: &[(u64, WorkLogged)]) -> Option<Self> {
+        if store.every == 0 {
+            return None;
+        }
+        let from = usize::try_from(anchor.records()).ok()?;
+        Some(Self {
+            id: PERIODIC_IDS.fetch_add(1, Ordering::Relaxed),
+            store,
+            tail: log.get(from..)?.to_vec(),
+            anchor,
+            saving: false,
+        })
+    }
+
+    /// The record at `offset` has landed and `state` and `recall` include it,
+    /// and nothing after it. Returns the copy to save once `every` records
+    /// came since the last save. `Err` means this cannot keep up (the state is
+    /// not at the record, or a save is far behind) and saving is off until the
+    /// next rebuild.
+    pub(super) fn note(
+        &mut self,
+        offset: u64,
+        logged: &WorkLogged,
+        state: &State,
+        recall: &Recall,
+    ) -> Result<Option<Job>, &'static str> {
+        if state.at != Some(offset) {
+            return Err("the state is not at the record that landed");
+        }
+        self.tail.push((offset, logged.clone()));
+        let every = self.store.every;
+        if self.saving {
+            let cap = every.saturating_mul(TAIL_CAP).max(TAIL_CAP_MIN);
+            return if self.tail.len() as u64 > cap {
+                Err("a save is far behind")
+            } else {
+                Ok(None)
+            };
+        }
+        if (self.tail.len() as u64) < every {
+            return Ok(None);
+        }
+        Ok(self.due(state, recall))
+    }
+
+    /// The copy for the next save, if `every` records are waiting.
+    fn due(&mut self, state: &State, recall: &Recall) -> Option<Job> {
+        if (self.tail.len() as u64) < self.store.every {
+            return None;
+        }
+        self.saving = true;
+        Some(Job {
+            id: self.id,
+            store: self.store.clone(),
+            anchor: self.anchor.clone(),
+            tail: std::mem::take(&mut self.tail),
+            state: state.clone(),
+            seed: Seed::copy(recall),
+        })
+    }
+
+    /// The save of `job_id` ended; `anchor` is where its chain reached. A save
+    /// that could not build a snapshot stops saving (`Err`). Records that piled
+    /// up behind it start the next save at once, if `state` is at the last of
+    /// them: it is not while a write that failed sits applied.
+    pub(super) fn finished(
+        &mut self,
+        job_id: u64,
+        anchor: Option<Anchor>,
+        state: &State,
+        recall: &Recall,
+    ) -> Result<Option<Job>, ()> {
+        if self.id != job_id {
+            return Ok(None);
+        }
+        self.anchor = anchor.ok_or(())?;
+        self.saving = false;
+        let at_boundary = self.tail.last().is_some_and(|(o, _)| state.at == Some(*o));
+        Ok(if at_boundary {
+            self.due(state, recall)
+        } else {
+            None
+        })
+    }
+}
+
+impl Job {
+    pub(super) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Hashes the records since the anchor, writes the file, and returns the
+    /// extended anchor. Blocking: run it off the async workers.
+    pub(super) fn run(self) -> Option<Anchor> {
+        let saved = self.anchor.extend(&self.tail, &self.state)?;
+        self.store.write(&saved, &self.seed.sorted());
+        Some(saved.anchor())
+    }
 }
 
 /// The snapshot folder of one team.
@@ -138,32 +280,37 @@ impl Store {
 
     /// Saves the fold of all of `log` if `every` records came since `from`, the
     /// snapshot it was started from, then drops all but the newest [`KEEP`].
-    /// A failure is logged: a snapshot is only a shortcut.
+    /// A failure is logged: a snapshot is only a shortcut. Returns where the
+    /// chain over `log` stands, saved or not, so a running tracker can extend
+    /// it from the records after it.
     pub(super) fn save(
         &self,
         log: &[(u64, WorkLogged)],
         from: Option<&Saved>,
         state: &State,
         recall: &Recall,
-    ) {
+    ) -> Anchor {
         let have = from.map_or(0, Saved::records);
         let new = (log.len() as u64).saturating_sub(have);
+        let behind = || from.map_or_else(Anchor::default, Saved::anchor);
         if self.every == 0 || new < self.every {
-            return;
+            return behind();
         }
         let Some(saved) = Saved::capture(log, from, state) else {
-            return;
+            return behind();
         };
+        self.write(&saved, &Seed::of(recall));
+        saved.anchor()
+    }
+
+    /// Writes `saved` and drops the files past [`KEEP`].
+    pub(super) fn write(&self, saved: &Saved, seed: &Seed) {
         let name = format!("{PREFIX}{:020}{SUFFIX}", saved.records());
-        let body = Body {
-            saved,
-            seed: Seed::of(recall),
-        };
         let result = prepare(&self.dir)
-            .and_then(|()| stage(&self.dir, &name, &encode(&body)))
+            .and_then(|()| stage(&self.dir, &name, &encode(saved, seed)))
             .and_then(|tmp| commit(&tmp, &self.dir.join(&name), &self.dir));
         match result {
-            Ok(()) => self.prune(),
+            Ok(()) => self.prune(&self.dir.join(&name)),
             Err(e) => eprintln!(
                 "kbl-tracker: could not save a snapshot in {}: {e}",
                 self.dir.display()
@@ -189,9 +336,13 @@ impl Store {
         files
     }
 
-    fn prune(&self) {
+    /// Keeps the newest [`KEEP`] files by record count, and always `fresh`: after
+    /// retention trims the log the records restart low, and the file just
+    /// written must not lose to stale ones with bigger numbers.
+    fn prune(&self, fresh: &Path) {
         let files = self.files();
-        for old in &files[..files.len().saturating_sub(KEEP)] {
+        let excess = files.len().saturating_sub(KEEP);
+        for old in files.iter().filter(|f| f.as_path() != fresh).take(excess) {
             let _ = fs::remove_file(old);
         }
         self.clear_temps();
@@ -211,8 +362,13 @@ impl Store {
 
 /// The file: the digest of the body on the first line, then the body. The
 /// digest catches a damaged file; the log check decides whether it is current.
-fn encode(body: &Body) -> Vec<u8> {
-    let json = serde_json::to_vec(body).expect("a snapshot serializes");
+fn encode(saved: &Saved, seed: &Seed) -> Vec<u8> {
+    #[derive(Serialize)]
+    struct BodyRef<'a> {
+        saved: &'a Saved,
+        seed: &'a Seed,
+    }
+    let json = serde_json::to_vec(&BodyRef { saved, seed }).expect("a snapshot serializes");
     let mut out = ArtifactId::of(&json).as_str().as_bytes().to_vec();
     out.push(b'\n');
     out.extend(json);
