@@ -30,5 +30,11 @@ failure: `PINNED_ADMISSION` lists (seed, issue) pairs that must end unadmitted,
 and `KNOWN_FAILING` lists seeds that must end with a root closed while its
 issue is open. Every other check still runs on them. A pin that no longer
 shows its failure fails the sweep, so the fix removes the pin in the same
-change. Replaying one seed with `KBL_SWEEP_SEED` ignores the pins and fails on
+change. The claim sweep pins its case the same way in `PINNED_RESUMED`: (seed,
+item) pairs that must be handed a resumed claim whose hold already ended. Replaying one seed with `KBL_SWEEP_SEED` ignores the pins and fails on
 what it finds.
+
+| Issue | Where | Bug |
+| --- | --- | --- |
+| #301 | `PINNED_ADMISSION` | A poll that fails partway through the existing-root branch still saves the root as tracked, so it is never fully admitted. |
+| #311 | `PINNED_RESUMED` | A tracker that missed a failover's release resumes a claim whose hold already ended. The fold refuses the agent's completion. |
