@@ -6,6 +6,8 @@ import { waitsOn } from '../fold.ts';
 import { visible, type Group } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { flagText } from '../overlap.ts';
+import { assigneePerson } from '../writes.ts';
+import { paintAssignee } from './assignee-chip.ts';
 import { h } from './dom.ts';
 import { drawn, itemHref, restoreFocus, type Announce, type Drawn, type ListHandlers } from './item-list.ts';
 
@@ -37,7 +39,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }), h('span', { class: 'card-mark', hidden: true }, 'Selected'));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }), h('span', { class: 'card-mark', hidden: true }, 'Selected'), h('span', { class: 'assignee', hidden: true }));
       cards.set(id, a);
     }
     const t = a.querySelector('.card-title')!;
@@ -81,6 +83,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
         for (const i of g.items) cards.get(i.id)?.setAttribute('tabindex', i.id === stop ? '0' : '-1');
       }
       const waits = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
+      const byId = new Map(s.items.map((i) => [i.id, i]));
       for (const [id, a] of cards) {
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
@@ -94,6 +97,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
         const text = flagText(s.overlaps.get(id));
         if (flag.textContent !== text) flag.textContent = text;
         flag.hidden = text === '';
+        paintAssignee(a, assigneePerson(byId.get(id) ?? {}));
         // Same "waits on" line as a Blocked row in the list.
         const w = a.querySelector<HTMLElement>('.card-waits')!;
         const what = waits.get(id);

@@ -4,6 +4,7 @@ import type { ItemRow } from './fold.ts';
 import { score } from './palette.ts';
 import type { ViewState } from './state.ts';
 import { applyFilters } from './views.ts';
+import { assigneePerson } from './writes.ts';
 
 /** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
 export const STAGES = [
@@ -59,26 +60,38 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
   return rows[Math.max(0, Math.min(rows.length - 1, at + step))].id;
 }
 
+/**
+ * What needs `viewer`: an item assigned to another person is in that person's queue, not here.
+ * Unassigned items show for everyone. Signed out there is no one to filter for, so all show.
+ */
+export function myQueue(items: readonly ItemRow[], viewer: string | null): ItemRow[] {
+  return items.filter((i) => {
+    if (i.stage !== 'needs_you') return false;
+    const who = assigneePerson(i);
+    return who === null || viewer === null || who === viewer;
+  });
+}
+
 /** The items the view covers, before filters and search: every item, or only the Blocked ones. */
-export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'>): ItemRow[] {
+export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
   if (s.view === 'all') return s.items;
-  if (s.view === 'inbox') return s.items.filter((i) => i.stage === 'needs_you');
+  if (s.view === 'inbox') return myQueue(s.items, s.tracker?.kind === 'signed-in' ? s.tracker.person : null);
   const blocked = new Set(s.blocked.map((b) => b.id));
   return s.items.filter((i) => blocked.has(i.id));
 }
 
 /** What the page shows: the items in the view, filtered, matching the search, grouped by stage. */
-export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>): Group[] {
+export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker'] }): Group[] {
   return group(applyFilters(inScope(s), s.filters), s.query);
 }
 
 /** The rows the list shows, in the order j and k walk. */
-export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>): ItemRow[] {
+export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
   return flatten(visible(s));
 }
 
 /** The marked items the view shows now. A bulk action never reaches an item a search or filter hides. */
-export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'>): ItemRow[] {
+export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
   const marked = new Set(s.marked);
   return shownRows(s).filter((i) => marked.has(i.id));
 }
