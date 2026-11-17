@@ -150,8 +150,14 @@
  "ingest/src/github.rs#review_state": [
   "fn review_state(reviews: &Value, author: &str, asked: bool) -> PrReview {"
  ],
+ "ingest/src/jira/transport.rs#Secret": [
+  "pub(crate) enum Secret {"
+ ],
  "ingest/src/main.rs#check_listen": [
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
+ ],
+ "ingest/src/sync.rs#announce": [
+  "let allowed = rule.target_repo.iter().chain(rule.components.values());"
  ],
  "ingest/src/sync.rs#cut": [
   "fn cut(s: &str) -> String {"
@@ -170,6 +176,9 @@
  ],
  "ingest/src/sync.rs#opening_rule": [
   "fn opening_rule(&self, repo: &str) -> Option<&Rule> {"
+ ],
+ "ingest/src/sync.rs#park_unmapped": [
+  "if rule.target_for(issue).is_some() {"
  ],
  "ingest/src/sync.rs#pull_requests": [
   "let ours = self.own.contains(&pull.author.to_ascii_lowercase());",

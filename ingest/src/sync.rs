@@ -165,7 +165,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             }
         }
         self.retry_waiting(p).await?;
-        self.pull_requests(p).await?;
+        if self.source.reads_pull_requests() {
+            self.pull_requests(p).await?;
+        }
         p.state.polls += 1;
         let reconciled = reconcile || p.state.polls >= self.settings.reconcile_every;
         if reconciled {
@@ -179,6 +181,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         self.link(p).await?;
         self.write_back(p).await?;
+        self.announce(p).await?;
         // Last, so a crash after the issue is opened leaves it to the next
         // listing, which finds it by its marker.
         self.open_prerequisites(p, reconciled).await?;
@@ -301,6 +304,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 )
                 .await?;
             }
+            self.park_unmapped(p, &rule, issue).await?;
             if was_waiting {
                 self.import_comments(p, issue).await?;
             }
@@ -363,11 +367,35 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         p.state
             .items
             .insert(key.clone(), tracked(&item, &rule, issue));
+        self.park_unmapped(p, &rule, issue).await?;
         if was_waiting {
             self.import_comments(p, issue).await?;
         }
         p.state.waiting.remove(&key);
         p.touched.push(key);
+        Ok(())
+    }
+
+    /// An issue whose rule names no repository for it goes to Needs you as
+    /// out of scope, and returns to its stage once a mapping covers it.
+    async fn park_unmapped(
+        &self,
+        p: &mut Poll,
+        rule: &Rule,
+        issue: &Issue,
+    ) -> Result<(), SourceError> {
+        if rule.target_for(issue).is_some() {
+            return Ok(());
+        }
+        let key = issue.id.to_string();
+        let Some(t) = p.state.items.get_mut(&key) else {
+            return Ok(());
+        };
+        if t.in_scope {
+            let item = t.item.clone();
+            t.in_scope = false;
+            self.write(&WorkRecord::LeftScope { item }).await?;
+        }
         Ok(())
     }
 
@@ -465,7 +493,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             let rules = &self.settings.rules;
             let in_rule = match rules.iter().find(|r| r.name == t.rule) {
                 _ if t.prerequisite => true,
-                Some(r) => r.filter(issue),
+                Some(r) => r.filter(issue) && r.target_for(issue).is_some(),
                 // Rebuilt after a prune while no rule took it: the rule that
                 // takes it now is its rule, if that rule has room.
                 None if t.rule.is_empty() => match first_match(rules, issue) {
@@ -1056,6 +1084,117 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         Ok(())
     }
 
+    /// Tells the upstream issue about an agent's pull request, as each rule
+    /// asks: a comment, a link and a workflow transition. Each is done once
+    /// per pull request, kept in `announced`, so a retry or a re-poll never
+    /// repeats it. The request is an agent's word, so it must be in a
+    /// repository the rule maps issues to.
+    async fn announce(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let mut due: Vec<(String, IssueRef, IssueRef, &'static str, Rule)> = Vec::new();
+        for (key, root) in &p.roots {
+            let Some(t) = p.state.items.get(key) else {
+                continue;
+            };
+            let (Some(rule), Some(pr), Some(issue)) = (
+                self.settings.rules.iter().find(|r| r.name == t.rule),
+                root.pr.as_deref().and_then(IssueRef::parse),
+                IssueRef::parse(key),
+            ) else {
+                continue;
+            };
+            let allowed = rule.target_repo.iter().chain(rule.components.values());
+            if t.moved_to.is_some()
+                || !t.in_scope
+                || !allowed
+                    .into_iter()
+                    .any(|r| r.eq_ignore_ascii_case(&pr.repo))
+            {
+                continue;
+            }
+            due.push((
+                key.clone(),
+                issue.clone(),
+                pr.clone(),
+                "linked",
+                rule.clone(),
+            ));
+            if root
+                .pr_status
+                .as_ref()
+                .is_some_and(|s| s.phase == PrPhase::Merged)
+            {
+                due.push((key.clone(), issue, pr, "merged", rule.clone()));
+            }
+        }
+        due.sort_by(|a, b| (&a.0, a.3).cmp(&(&b.0, b.3)));
+        for (key, issue, pr, stage, rule) in due {
+            let mark = format!("{stage}:{pr}");
+            if p.state
+                .items
+                .get(&key)
+                .is_some_and(|t| t.announced.contains(&mark))
+            {
+                continue;
+            }
+            let mut calls = Vec::new();
+            if stage == "linked" {
+                if rule.link_pr {
+                    calls.push(WriteBack::LinkPullRequest {
+                        issue: issue.clone(),
+                        pr: pr.clone(),
+                    });
+                }
+                if rule.comment {
+                    calls.push(WriteBack::Comment {
+                        issue: issue.clone(),
+                        body: format!("An agent opened {pr} for this issue."),
+                    });
+                }
+                if let Some(name) = &rule.transition_on_pr {
+                    calls.push(WriteBack::Transition {
+                        issue: issue.clone(),
+                        name: name.clone(),
+                    });
+                }
+            } else {
+                if rule.comment {
+                    calls.push(WriteBack::Comment {
+                        issue: issue.clone(),
+                        body: format!("{pr} was merged."),
+                    });
+                }
+                if let Some(name) = &rule.transition_on_merge {
+                    calls.push(WriteBack::Transition {
+                        issue: issue.clone(),
+                        name: name.clone(),
+                    });
+                }
+            }
+            let mut failed = false;
+            for call in calls {
+                match self.source.write_back(&call).await {
+                    Ok(()) => {}
+                    Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                    Err(e) => {
+                        eprintln!("kbl-ingest: write-back for {key} failed: {e}");
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            if let Some(t) = p.state.items.get_mut(&key) {
+                t.announce_tries += u8::from(failed);
+                // Every call is idempotent upstream, so a retry after a
+                // failure is safe; after a few it is given up on.
+                if !failed || t.announce_tries >= MAX_WRITE_BACK_TRIES {
+                    t.announced.insert(mark);
+                    t.announce_tries = 0;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The pull request comes from an agent, so it is trusted only in the
     /// repo of the issue it works on, and only if a rule takes that repo. The
     /// adapter also checks its author against our own logins.
@@ -1328,6 +1467,8 @@ fn tracked_as(item: &ItemId, rule: &str, issue: &Issue) -> Tracked {
         not_ours: Default::default(),
         written_back: false,
         write_back_tries: 0,
+        announced: Default::default(),
+        announce_tries: 0,
         moved_to: None,
         prerequisite: false,
     }
@@ -1489,7 +1630,9 @@ fn issue_text(issue: &Issue) -> String {
 }
 
 fn intake_text(rule: &Rule, issue: &Issue) -> String {
-    let repo = rule.target_repo.as_deref().unwrap_or(&issue.id.repo);
+    let repo = rule
+        .target_for(issue)
+        .unwrap_or_else(|| "no repository is mapped for it, so it waits in Needs you".to_owned());
     let how = match rule.mode {
         Mode::Admit => "admitted",
         Mode::Propose => "proposed, waiting for a person to accept it",

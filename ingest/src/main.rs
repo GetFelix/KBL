@@ -4,6 +4,7 @@
 
 mod config;
 mod github;
+mod jira;
 mod metrics;
 mod rules;
 mod source;
@@ -108,11 +109,25 @@ async fn serve() -> Result<()> {
     let token = std::env::var(&cfg.tracker.token_env)
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
     let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
+    match (&cfg.github, &cfg.jira) {
+        (Some(g), None) => {
+            let github = github_source(g).await?;
+            drive(github, tracker, cfg, cli).await
+        }
+        (None, Some(j)) => {
+            let jira = jira_source(j, &cfg).await?;
+            drive(jira, tracker, cfg, cli).await
+        }
+        _ => unreachable!("the config checks for exactly one source"),
+    }
+}
+
+async fn github_source(gh: &config::GithubConfig) -> Result<Github<Reqwest>> {
     // A token_file wins over an app, and an app over a token_env.
     let sources = [
-        ("token_file", cfg.github.token_file.is_some()),
-        ("app", cfg.github.app.is_some()),
-        ("token_env", cfg.github.token_env.is_some()),
+        ("token_file", gh.token_file.is_some()),
+        ("app", gh.app.is_some()),
+        ("token_env", gh.token_env.is_some()),
     ];
     let set: Vec<&str> = sources.iter().filter(|s| s.1).map(|s| s.0).collect();
     if set.len() > 1 {
@@ -122,35 +137,76 @@ async fn serve() -> Result<()> {
             set[0]
         );
     }
-    let gh_token = match (
-        &cfg.github.token_file,
-        &cfg.github.app,
-        &cfg.github.token_env,
-    ) {
+    let gh_token = match (&gh.token_file, &gh.app, &gh.token_env) {
         (Some(f), _, _) => Token::File(f.clone()),
         (None, Some(app), _) => Token::App(Box::new(AppAuth::new(
             app,
-            &cfg.github.api,
+            &gh.api,
             app::system_clock(),
             app::stderr_log(),
         )?)),
         (None, None, Some(e)) => Token::Env(e.clone()),
         (None, None, None) => unreachable!("the config checks for a token"),
     };
-    let mut github = Github::new(
-        &cfg.github.api,
-        Reqwest::new(gh_token)?,
-        cfg.github.own_logins.clone(),
-    );
+    let mut github = Github::new(&gh.api, Reqwest::new(gh_token)?, gh.own_logins.clone());
     // A user token names itself; an App installation token cannot, so the config lists its bot login.
     if let Some(login) = github.login().await {
         github.add_own(login);
     }
+    Ok(github)
+}
 
+async fn jira_source(
+    j: &config::JiraConfig,
+    cfg: &Config,
+) -> Result<jira::Jira<jira::transport::Reqwest>> {
+    use jira::transport::{Auth, Secret};
+    let secret = match (&j.token_file, &j.token_env) {
+        (Some(f), _) => Some(Secret::File(f.clone())),
+        (None, Some(e)) => Some(Secret::Env(e.clone())),
+        (None, None) => None,
+    };
+    let auth = match (&j.email, secret, &j.oauth_token_file) {
+        (Some(email), Some(secret), None) => Auth::Token {
+            email: email.clone(),
+            secret,
+        },
+        (None, None, Some(f)) => Auth::Bearer(Secret::File(f.clone())),
+        _ => unreachable!("the config checks the sign-in"),
+    };
+    let scopes = cfg
+        .rules
+        .iter()
+        .filter_map(|r| {
+            Some(jira::Scope {
+                name: r.name.clone(),
+                repo: r.repo.clone(),
+                jql: r.jql.clone()?,
+            })
+        })
+        .collect();
+    let mut jira = jira::Jira::new(
+        &j.site,
+        &j.api,
+        jira::transport::Reqwest::new(auth)?,
+        j.own_logins.clone(),
+        scopes,
+        &j.pr_url_base,
+    );
+    jira.add_own(jira.login().await);
+    Ok(jira)
+}
+
+async fn drive<S: Source>(
+    source: S,
+    tracker: tracker_api::Http,
+    cfg: Config,
+    cli: Cli,
+) -> Result<()> {
     let repos = cfg.repos();
     let poll_every = Duration::from_secs(cfg.poll_seconds);
     let ingest = Ingest::new(
-        github,
+        source,
         tracker,
         Settings {
             rules: cfg.rules,

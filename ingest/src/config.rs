@@ -11,7 +11,9 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     pub(crate) tracker: TrackerConfig,
-    pub(crate) github: GithubConfig,
+    /// Exactly one of `github` and `jira`: a worker serves one source.
+    pub(crate) github: Option<GithubConfig>,
+    pub(crate) jira: Option<JiraConfig>,
     /// Seconds between polls when no webhook wakes it.
     #[serde(default = "default_poll")]
     pub(crate) poll_seconds: u64,
@@ -44,6 +46,35 @@ pub(crate) struct TrackerConfig {
     pub(crate) url: String,
     /// The environment variable holding ingest's tracker token.
     pub(crate) token_env: String,
+}
+
+/// How ingest signs in to Jira. The secret is read from the environment or a
+/// file, never from this config, and only ingest holds it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct JiraConfig {
+    /// The name rule repos and upstream ids use for the site: `site/PROJ`.
+    pub(crate) site: String,
+    /// The site, such as `https://acme.atlassian.net`. With `oauth` it is
+    /// `https://api.atlassian.com/ex/jira/<cloud id>`.
+    pub(crate) api: String,
+    /// API token sign-in: the account email and the token.
+    pub(crate) email: Option<String>,
+    pub(crate) token_env: Option<String>,
+    pub(crate) token_file: Option<std::path::PathBuf>,
+    /// OAuth app sign-in: a bearer token in a file that something beside the
+    /// worker refreshes. Read again for every request.
+    pub(crate) oauth_token_file: Option<std::path::PathBuf>,
+    /// Display names or account ids the credential writes as.
+    #[serde(default)]
+    pub(crate) own_logins: Vec<String>,
+    /// Where the agents' pull requests live, for the link written back.
+    #[serde(default = "default_pr_base")]
+    pub(crate) pr_url_base: String,
+}
+
+fn default_pr_base() -> String {
+    "https://github.com".into()
 }
 
 #[derive(Debug, Deserialize)]
@@ -152,6 +183,24 @@ pub(crate) struct Rule {
     #[serde(rename = "type")]
     pub(crate) issue_type: Option<String>,
     pub(crate) mode: Mode,
+    /// Jira: the JQL filter, combined with the project in `repo`
+    /// (`site/PROJ`).
+    pub(crate) jql: Option<String>,
+    /// Jira: component name to the repository agents work in. The first
+    /// listed component with a mapping wins; `target_repo` is the fallback.
+    #[serde(default)]
+    pub(crate) components: BTreeMap<String, String>,
+    /// Jira: comment on the issue when an agent's pull request is linked.
+    #[serde(default)]
+    pub(crate) comment: bool,
+    /// Jira: add the pull request as a remote link on the issue.
+    #[serde(default)]
+    pub(crate) link_pr: bool,
+    /// Jira: the workflow transition to apply when a pull request is linked
+    /// (for example "In Review") and when it merges (for example "Done").
+    /// Skipped when the workflow does not offer it.
+    pub(crate) transition_on_pr: Option<String>,
+    pub(crate) transition_on_merge: Option<String>,
     /// Open roots this rule may have at once.
     pub(crate) cap: Option<u32>,
     #[serde(default = "default_tier")]
@@ -185,15 +234,42 @@ impl Config {
     pub(crate) fn parse(text: &str) -> Result<Self> {
         let cfg: Config = serde_json::from_str(text)?;
         ensure!(!cfg.rules.is_empty(), "there are no intake rules");
-        ensure!(
-            cfg.github.token_file.is_some()
-                || cfg.github.app.is_some()
-                || cfg.github.token_env.is_some(),
-            "github needs a token_file, an app or a token_env"
-        );
+        match (&cfg.github, &cfg.jira) {
+            (Some(g), None) => ensure!(
+                g.token_file.is_some() || g.app.is_some() || g.token_env.is_some(),
+                "github needs a token_file, an app or a token_env"
+            ),
+            (None, Some(j)) => cfg.check_jira(j)?,
+            _ => anyhow::bail!("set exactly one of github and jira"),
+        }
         let mut seen = std::collections::HashSet::new();
         for r in &cfg.rules {
             ensure!(seen.insert(&r.name), "rule {:?} is listed twice", r.name);
+            let jira_only = r.jql.is_some()
+                || !r.components.is_empty()
+                || r.comment
+                || r.link_pr
+                || r.transition_on_pr.is_some()
+                || r.transition_on_merge.is_some();
+            ensure!(
+                cfg.jira.is_some() || !jira_only,
+                "rule {:?}: jql, components, comment, link_pr and transitions are for jira",
+                r.name
+            );
+            if let Some(j) = &cfg.jira {
+                ensure!(
+                    r.jql.is_some(),
+                    "rule {:?}: a jira rule needs a jql filter",
+                    r.name
+                );
+                let project = r.repo.strip_prefix(&format!("{}/", j.site));
+                ensure!(
+                    project.is_some_and(|p| !p.is_empty() && !p.contains('/')),
+                    "rule {:?}: repo is {}/PROJECT for this site",
+                    r.name,
+                    j.site
+                );
+            }
             ensure!(
                 r.repo.contains('/'),
                 "rule {:?}: repo is owner/name",
@@ -209,6 +285,20 @@ impl Config {
             );
         }
         Ok(cfg)
+    }
+
+    fn check_jira(&self, j: &JiraConfig) -> Result<()> {
+        ensure!(
+            !j.site.is_empty() && !j.site.contains(['/', '#']),
+            "jira.site is a plain name"
+        );
+        let token = j.token_env.is_some() || j.token_file.is_some();
+        ensure!(
+            (token && j.email.is_some() && j.oauth_token_file.is_none())
+                || (!token && j.email.is_none() && j.oauth_token_file.is_some()),
+            "jira signs in with email plus token_env or token_file, or with oauth_token_file"
+        );
+        Ok(())
     }
 
     /// The repositories the rules read.

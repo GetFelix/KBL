@@ -75,6 +75,13 @@ pub(crate) struct Issue {
     pub(crate) author: String,
     pub(crate) url: String,
     pub(crate) updated_at: String,
+    /// The upstream priority name, where the system has one (Jira).
+    pub(crate) priority: Option<String>,
+    /// Jira components; empty elsewhere.
+    pub(crate) components: Vec<String>,
+    /// Names of the rules whose upstream query (a JQL filter) selects this
+    /// issue. Empty for sources that filter locally.
+    pub(crate) scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +192,13 @@ pub(crate) enum WriteBack {
     /// The issue was dropped upstream while an agent's pull request is open:
     /// make the pull request a draft and say why on it.
     DraftPullRequest { pr: IssueRef, note: String },
+    /// Say something on the upstream issue itself (Jira).
+    Comment { issue: IssueRef, body: String },
+    /// Link the agent's pull request (`owner/repo#n`) from the issue.
+    LinkPullRequest { issue: IssueRef, pr: IssueRef },
+    /// Move the issue through the workflow transition of this name, if the
+    /// workflow offers it now.
+    Transition { issue: IssueRef, name: String },
 }
 
 #[derive(Debug)]
@@ -218,6 +232,12 @@ impl From<anyhow::Error> for SourceError {
 pub(crate) trait Source: Send + Sync {
     /// The `source` field of the records, such as `github`.
     fn name(&self) -> &'static str;
+
+    /// Whether pull requests can be read through this source. Jira holds no
+    /// pull requests, so its worker skips that step.
+    fn reads_pull_requests(&self) -> bool {
+        true
+    }
 
     /// Logins the worker's own credential writes as. Their comments are not
     /// imported back.

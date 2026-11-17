@@ -30,6 +30,9 @@ fn issue(labels: &[&str]) -> Issue {
         author: "alice".into(),
         url: String::new(),
         updated_at: String::new(),
+        priority: None,
+        components: Vec::new(),
+        scopes: Vec::new(),
     }
 }
 

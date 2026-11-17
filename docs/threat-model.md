@@ -25,7 +25,7 @@ the end.
 |---|---|---|---|
 | Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/KBL/issues/120)) |
 | Agent | A model acting through `kbl-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
-| Ingest | The `kbl-ingest` worker that mirrors GitHub | An ingest token, and a GitHub credential | Trusted code that carries untrusted text |
+| Ingest | The `kbl-ingest` worker that mirrors GitHub or Jira | An ingest token, and a GitHub or Jira credential | Trusted code that carries untrusted text |
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
 | Webhook sender | Whoever posts to ingest's `/webhook` | The shared webhook secret | Not trusted without a valid signature |
 
@@ -47,7 +47,7 @@ Two more parties are outside KBL and can still steer it:
 | Merges | GitHub. KBL records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
 | Rules | `rules_set` records, shown in every claim reply | Instructions injected into every other agent |
 | Artifacts | The artifacts cache, keyed by content hash | Other bytes shown under a trusted id |
-| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), Felix tokens | Any of them |
+| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), Felix tokens | Any of them |
 
 ## Trust boundaries
 
@@ -87,6 +87,18 @@ signed JWT and the installation token are held in memory, never logged, and
 left out of errors (GitHub's error text goes through the redactor first). An
 installation token lives an hour and is replaced five minutes early, so a
 leaked one is short-lived; the key is not.
+
+When ingest signs in to Jira, the API token or OAuth access token is read from
+an environment variable or a file for each request (`ingest/src/jira/transport.rs#Secret`) and
+sent only as that request's `Authorization` header. It is not in the config,
+the saved state, any record or any log line. Jira text is untrusted like
+GitHub's: a filter that matches an issue says only that the issue is in scope,
+never that its text is safe. Ingest writes to Jira only what its rule asks for
+(a comment, a remote link, a workflow transition), only on an issue it
+imported, and only for a pull request in a repository the rule maps issues to
+(`ingest/src/sync.rs#announce`). An issue whose component maps to no repository
+is imported but stays in Needs you (`ingest/src/sync.rs#park_unmapped`), so no
+agent is handed work with no repository to run in.
 
 The token file must be mode 600 or 400 (`tracker/src/config.rs#load`), a token
 may be listed once (`tracker/src/config.rs#parse`), and the lookup takes the
