@@ -22,6 +22,7 @@ use crate::source::{
     Releases, Source, SourceError, WriteBack,
 };
 
+pub(crate) mod app;
 pub(crate) mod transport;
 
 pub(crate) use transport::{Req, Res, Transport};

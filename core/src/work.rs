@@ -8,6 +8,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::codec::{Codec, DecodeError};
 use crate::content::Content;
@@ -1188,8 +1189,71 @@ pub struct WorkLogged {
     pub at_ms: u64,
     pub by: Key,
     pub actor: Actor,
+    /// The client's request key, when the call that wrote this record sent one.
+    /// Not part of the fold: only the tracker reads it, to answer a retry with
+    /// the first result. A reader that predates it ignores the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub req: Option<RequestKey>,
     #[serde(flatten)]
     pub record: WorkRecord,
+}
+
+/// A client's request key as logged, with a digest of the request it was sent
+/// with, so a reuse of the key for another request can be told from a retry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestKey {
+    pub key: Key,
+    /// Sixteen hex digits of SHA-256 over the route and the request body
+    /// without its `request_key`, keys sorted.
+    pub sig: String,
+}
+
+impl RequestKey {
+    pub fn new(key: Key, route: &str, body: &serde_json::Value) -> Self {
+        let mut text = String::new();
+        canonical(body, &mut text);
+        let mut hash = Sha256::new();
+        hash.update(route.as_bytes());
+        hash.update([0]);
+        hash.update(text.as_bytes());
+        let sig = hash.finalize()[..8]
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Self { key, sig }
+    }
+}
+
+/// JSON with object keys sorted, so a client's key order does not change the digest.
+fn canonical(v: &serde_json::Value, out: &mut String) {
+    use serde_json::Value;
+    match v {
+        Value::Object(m) => {
+            let mut keys: Vec<_> = m.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, k) in keys.into_iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String(k.clone()).to_string());
+                out.push(':');
+                canonical(&m[k], out);
+            }
+            out.push('}');
+        }
+        Value::Array(a) => {
+            out.push('[');
+            for (i, x) in a.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                canonical(x, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
 }
 
 impl WorkLogged {
@@ -1200,8 +1264,15 @@ impl WorkLogged {
             at_ms,
             by,
             actor,
+            req: None,
             record,
         }
+    }
+
+    /// The same record, written for a call that sent `req`.
+    pub fn with_request(mut self, req: Option<RequestKey>) -> Self {
+        self.req = req;
+        self
     }
 }
 

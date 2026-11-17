@@ -207,6 +207,53 @@ attempt. An attempt number is shared by every claim of a retried attempt, so
 it cannot tell an old claim from a new one of the same attempt. Without
 either, as from an older `kbl-mcp`, a retry is never replayed.
 
+#### Request keys
+
+Every other write an agent or a person makes can carry an optional
+`request_key` (1 to 64 characters of letters, digits, `-` and `_`). If a call
+may have landed and its answer was lost, send it again with the same key and
+the same body: the tracker writes nothing and answers with the first write,
+`{"item", "kind", "offset", "replayed": true}`. The reply names the first
+record; it is not a copy of the first answer, which may have carried more.
+Agent routes: `post` (not a `prerequisite`, which is retried by its claim and
+refuses a `request_key`), `link`, `context/add`, `progress`, `decide`,
+`finding`, `verdict`, `triage`, `step`, `edit`, `ask`, `answer`. Person routes:
+`records`, `proposals/accept`, `proposals/edit`, `proposals/reject`,
+`questions/answer`, `note`, `tier`, `close`, `unlink`, `budget`, `prices`,
+`rules`, `flag`, `unflag`. The `kbl-mcp` tools for these take `request_key` too.
+
+- **Where it is kept.** On the record the call wrote, as `req` beside `at_ms`
+  and `by`, with a digest of the route and the body. A restarted tracker, or
+  one that takes over, folds the log and finds the keys again. A reader that
+  predates the field ignores it and folds as before, so replay of old logs does
+  not change.
+- **Upgrades.** `req` is a new optional field on the record. A reader that
+  predates it ignores the field. During a rolling upgrade or downgrade, a
+  tracker that predates request keys can hold the writer lease: it neither
+  reads nor honors keys, so a keyed call it serves is written again on retry.
+  Keep retrying under a key only once every tracker runs this version.
+- **A caller that hangs up.** A write whose caller goes away while it is in
+  flight may have landed. The tracker marks its state stale, so the next call
+  rebuilds from the log, finds the key, and replays it.
+- **Whose.** Each caller (an agent, or a person) has its own keys. Another
+  caller's key is not a hit, and a person's key is not an agent's.
+- **How long.** The last 256 keyed writes of each caller. A key older than that
+  is forgotten and a call that reuses it writes again, so use a fresh key per
+  call and keep retrying only while the answer is still in doubt.
+- **A different body.** The same key with another body, or on another route, is
+  `409` with `why: request_key_reused` and writes nothing.
+- **Two at once.** A call whose key is still being written answers `503`; send
+  it again and it gets the first write.
+- **Refusals are not remembered.** Only a write that lands remembers its key, so
+  a call the fold refused can be corrected and sent again under the same key.
+- **The writer fence.** A replay writes nothing, so it takes no part in the
+  `publish_if` fence. A write that does happen is as fenced as any other: if
+  another tracker took over, the conditional write is refused, and the retry
+  rebuilds from the log, finds the key if the other tracker wrote it, and
+  answers with that record.
+- **Not covered.** `work_next`, `extend` and the calls that end a claim (see
+  above). The ingest routes need no key: they are idempotent by upstream id.
+
 Every work and ingest route is also served under `/v1/teams/{team}/`, for
 example `/v1/teams/default/work/next`. See [Which team a call is for](#teams).
 A team takes at most `KBL_TEAM_INFLIGHT` calls at once (64 by default). A call
@@ -582,10 +629,41 @@ ingest closed it.
 A rule's `repo`, `labels_all`, `labels_any`, `labels_excluded`, `milestone`,
 `assignee` and `type` are ANDed; `mode` is `admit` or `propose`; `cap` limits
 open roots; `target_repo` names where agents work (default: the issue's repo).
-The first rule that matches takes the issue. The GitHub credential is a token
-read from `token_file` or `token_env`; the file is read again for every
-request, so a GitHub App installation token can be refreshed beside the worker
-(the worker does not mint installation tokens itself).
+The first rule that matches takes the issue.
+
+The GitHub credential is one of three, and the first one set is used:
+
+1. `token_file`: a file holding a token, read again for every request, so a
+   token refreshed beside the worker is picked up.
+2. `app`: ingest mints installation tokens itself.
+3. `token_env`: the environment variable holding a token.
+
+```json
+"github": {
+  "app": { "id": 123456, "installation_id": 7890123, "private_key_file": "/run/secrets/kbl-app.pem" },
+  "own_logins": ["kbl[bot]"]
+}
+```
+
+`app.id` is the App's id (or client id). Name the installation with exactly one
+of `installation_id`, `installation_repo` (`owner/name`) or `installation_org`;
+the last two ask GitHub which installation serves that repo or organization,
+and remember the answer. If GitHub then refuses that installation (404 or 401)
+because the App was uninstalled and installed again, ingest asks once more and
+fails with an error if the new answer is refused too; a fixed `installation_id`
+is never looked up again. `private_key_file` must be mode 600 or 400, like the tracker's token file;
+ingest refuses to start otherwise. A GitHub `api` that is not https logs a
+warning, and so does setting more than one credential (the first in the list
+above wins). `private_key_file` is the PEM GitHub gives out when the key is generated
+(`RSA PRIVATE KEY` or `PRIVATE KEY`). Ingest signs a JWT with it (RS256, issued
+60 seconds in the past, valid under ten minutes), trades it at
+`POST /app/installations/{id}/access_tokens` and keeps the token until five
+minutes of its hour are left, and reuses a token minted in the last minute
+whatever the local clock says, so a fast clock does not mint on every request. A request GitHub answers with 401 mints a new
+token and is sent once more; a second 401 stops the request with an error that
+names the App id, never the credential. The key, the JWT and the token are never
+logged, and an error from GitHub is passed through the secret redactor first.
+The token stays in memory.
 
 `open_prerequisites: true` on a rule lets ingest open issues in that rule's
 `repo` for prerequisites, as in
