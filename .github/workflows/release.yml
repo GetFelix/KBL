@@ -8,6 +8,11 @@ on:
   push:
     tags:
       - "v*"
+  # A change to this file rehearses the whole build, so a broken target shows
+  # up in the pull request instead of at the next tag.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
   workflow_dispatch:
     inputs:
       dry_run:
@@ -96,7 +101,7 @@ jobs:
     # off (to retry a release whose publish step failed).
     if: >-
       github.ref_type == 'tag' &&
-      (github.event_name == 'push' || !inputs.dry_run)
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
