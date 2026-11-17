@@ -75,6 +75,13 @@ pub(crate) enum Caller {
     Ingest(Worker),
 }
 
+impl Worker {
+    /// Whether the worker may read and save the cursor kept for `source`.
+    pub(crate) fn may_keep(&self, source: &str) -> bool {
+        self.source.as_deref().is_none_or(|own| own == source)
+    }
+}
+
 /// An ingest worker, and the source it is tied to if the token file ties it.
 #[derive(Clone)]
 pub(crate) struct Worker {

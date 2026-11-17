@@ -288,6 +288,9 @@
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
  ],
+ "tracker/src/http/ingest.rs#load": [
+  "Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),"
+ ],
  "tracker/src/http/ingest.rs#worker": [
   "fn worker(&self) -> Result<Worker, super::Denied> {"
  ],

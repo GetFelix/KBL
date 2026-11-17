@@ -1737,8 +1737,9 @@ GitHub one has `github`. A rule's `repo` is `<site>/<PROJECT>`, and its
   pull requests and holds no GitHub credential. The GitHub worker records the
   state of an agent's request on a Jira root, so `transition_on_merge` needs
   a GitHub worker running beside it with a rule for the repository the
-  request is in. That worker writes the request's `pr_status` on the root and
-  nothing else; the Jira worker alone moves the issue and the root.
+  request is in. That worker writes the request's `pr_status` on the root (the
+  tracker then opens the request's review items, as for any root) and nothing
+  else; the Jira worker alone moves the issue and the root.
 - **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
   long (30 s when none is named, at most an hour) before any further request.
   Re-polling and a lost cursor never import an issue twice.

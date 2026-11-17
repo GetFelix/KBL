@@ -705,6 +705,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .foreign
             .iter()
             .filter(|r| !r.closed)
+            // A merge is final, and the root's own worker closes it soon.
+            .filter(|r| {
+                r.pr_status
+                    .as_ref()
+                    .is_none_or(|s| s.phase != PrPhase::Merged)
+            })
             .filter_map(|r| {
                 let pr = IssueRef::parse(r.pr.as_deref()?)?;
                 let named = self

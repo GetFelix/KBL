@@ -34,6 +34,11 @@ struct SaveBody {
     version: Option<u64>,
 }
 
+const STATE_OF_OTHER: super::Denied = (
+    StatusCode::FORBIDDEN,
+    "this ingest token keeps another source's state",
+);
+
 impl<B> Call<B> {
     fn worker(&self) -> Result<Worker, super::Denied> {
         match &self.caller {
@@ -63,6 +68,7 @@ async fn roots<B: Broker>(call: Call<B>) -> Response {
 
 async fn load<B: Broker>(call: Call<B>, Path(source): Path<String>) -> Response {
     match call.worker() {
+        Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),
         Ok(_) => reply(call.tracker().ingest_state(&source).await),
         Err(d) => denied(d),
     }
@@ -74,6 +80,7 @@ async fn save<B: Broker>(
     Json(body): Json<SaveBody>,
 ) -> Response {
     match call.worker() {
+        Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),
         Ok(_) => reply(
             call.tracker()
                 .ingest_save(&source, &body.state, body.version)

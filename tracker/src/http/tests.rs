@@ -727,6 +727,16 @@ async fn an_ingest_token_tied_to_a_source_reaches_only_that_sources_roots() {
         why(post("tok-gh", state("j1")).await),
         (StatusCode::CONFLICT, Some("wrong_pr".into()))
     );
+    // A tied token keeps only its own source's cursor.
+    for (token, own, other) in [("tok-gh", "github", "jira"), ("tok-jira", "jira", "github")] {
+        let get = |source: &str| {
+            let app = &app;
+            let path = format!("/v1/ingest/state/{source}");
+            async move { get_json(app, &path, Some(token)).await.0 }
+        };
+        assert_ne!(get(own).await, StatusCode::FORBIDDEN);
+        assert_eq!(get(other).await, StatusCode::FORBIDDEN);
+    }
     // The Jira token reaches its own root and not another source's request state.
     assert_eq!(post("tok-jira", context).await.0, StatusCode::OK);
     assert_eq!(
