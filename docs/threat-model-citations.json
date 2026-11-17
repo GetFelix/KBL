@@ -306,6 +306,9 @@
   "let held = match holding(&core, delivery.as_ref(), agent, item) {",
   ".append(&mut core, Actor::Agent, agent_key(agent), record(held))"
  ],
+ "tracker/src/tracker.rs#hold_at_tip": [
+  "if tip > core.tail {"
+ ],
  "tracker/src/tracker.rs#holding": [
   "return if &d.item == item {",
   "Some(i) if holds(i, agent) => Ok(i.hold.as_ref().map_or(1, |h| h.attempt)),"

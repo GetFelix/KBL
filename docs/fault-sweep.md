@@ -24,14 +24,8 @@ it. The pull request job runs 400 seeds of each sweep. The nightly workflow
 
 ## Known failing seeds
 
-A bug the sweep finds on main is filed as an issue and pinned here until it is
-fixed, never silently. The claim sweep runs a pinned case and expects its
-failure: `PINNED_RESUMED` lists (seed, item) pairs that must be handed a
-resumed claim whose hold already ended. Every other check still runs on them.
-A pin that no longer shows its failure fails the sweep, so the fix removes the
-pin in the same change. Replaying one seed with `KBL_SWEEP_SEED` ignores the
-pins and fails on what it finds. The ingest sweep has no pins.
-
-| Issue | Where | Bug |
-| --- | --- | --- |
-| #311 | `PINNED_RESUMED` | A tracker that missed a failover's release resumes a claim whose hold already ended. The fold refuses the agent's completion. |
+A bug the sweep finds on main is filed as an issue and pinned in the sweep
+until it is fixed, never silently. A pin lists the (seed, item) pairs that
+show the failure and expects exactly those, so the fix removes the pin in the
+same change. Replaying one seed with `KBL_SWEEP_SEED` ignores pins and fails
+on what it finds. Neither sweep has a pin today.

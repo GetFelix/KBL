@@ -815,6 +815,7 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         let lanes = self.review_lanes(reviews)?;
         let deadline = Instant::now() + wait.min(MAX_WAIT);
+        let mut moved = 0;
         loop {
             self.begin().await?;
             let slot = self.slot(agent);
@@ -823,8 +824,11 @@ impl<B: Broker> Tracker<B> {
                 self.reconcile(agent, &mut delivery).await;
                 self.resume_recover(agent, &mut delivery).await?;
                 if let Some(d) = delivery.as_ref() {
-                    let core = self.0.core.lock().await;
-                    return Ok(claimed(&core, d, true));
+                    if let Some(reply) = self.resumed(agent, d, &mut moved).await? {
+                        return Ok(reply);
+                    }
+                    // The log moved past the state: rebuild, which drops a hold that ended.
+                    continue;
                 }
                 let held = self.0.core.lock().await.state.held_by(agent.as_str());
                 if let Some((item, _)) = held {
@@ -868,6 +872,11 @@ impl<B: Broker> Tracker<B> {
                 _ => lapsed(item),
             });
         };
+        if !self.hold_at_tip(agent, d).await? {
+            return Err(Error::Unavailable(format!(
+                "{WORK_EVENTS} moved past this tracker's state; call again"
+            )));
+        }
         let stream = ready_stream(d.tier);
         let mut extended = self.try_extend(&stream, agent, d).await;
         if matches!(extended, Err(ExtendError::Failed(_))) {
@@ -2150,6 +2159,63 @@ impl<B: Broker> Tracker<B> {
             while tries.join_next().await.is_some() {}
             me.0.retrying.store(false, Ordering::SeqCst);
         });
+    }
+
+    /// The reply that resumes `d`, or none when the log has moved past the
+    /// state and the caller should rebuild and look again. A second move in
+    /// one call errs, so a busy log cannot hold the caller in a loop.
+    async fn resumed(
+        &self,
+        agent: &AgentName,
+        d: &Delivery,
+        moved: &mut u32,
+    ) -> Result<Option<Value>, Error> {
+        if self.hold_at_tip(agent, d).await? {
+            return Ok(Some(claimed(&*self.0.core.lock().await, d, true)));
+        }
+        *moved += 1;
+        if *moved > 1 {
+            return Err(Error::Unavailable(format!(
+                "{WORK_EVENTS} keeps moving under this claim; call again"
+            )));
+        }
+        Ok(None)
+    }
+
+    /// Whether `d`'s hold stands at the tip of the log. The single check
+    /// before a held claim is answered to its agent (a resume, an extension):
+    /// memory misses a release another writer appended after a failover, so
+    /// the log is read from the tail. A record past the tail marks the state
+    /// refused, as a refused write would, so the next call rebuilds and
+    /// confirms the lease. A fresh claim needs no check: its write is
+    /// conditional on the tail.
+    async fn hold_at_tip(&self, agent: &AgentName, d: &Delivery) -> Result<bool, Error> {
+        let tail = self.0.core.lock().await.tail;
+        let (_, tip) = self
+            .io(None, self.0.broker.read_to_tip(WORK_EVENTS, tail))
+            .await
+            .map_err(|e| {
+                Error::Unavailable(format!("could not check your claim against the log: {e:#}"))
+            })?;
+        let core = self.0.core.lock().await;
+        let mut lease = self.lease();
+        if lease.stale || lease.retaken {
+            return Ok(false);
+        }
+        // Our own write may have landed during the read and raised the tail;
+        // a foreign one before it would have been refused.
+        if tip > core.tail {
+            lease.refused();
+            return Ok(false);
+        }
+        let ours = core.owner.get(&d.item).is_some_and(|o| o.id == d.id);
+        let shown = core
+            .state
+            .items
+            .get(&d.item)
+            .and_then(|i| i.hold.as_ref())
+            .is_some_and(|h| h.by.as_str() == agent.as_str() && h.attempt == d.attempt);
+        Ok(ours && shown)
     }
 
     /// For an agent whose recover failed: tries again, and errs while Felix still

@@ -436,6 +436,15 @@ still shows the agent holding the item. If a person closed the item or the
 attempt, or another agent took it, the agent's next `extend`, `complete` or
 `release` answers `lost`.
 
+Memory can miss a record another writer appended, for example a release a
+broker failover wrote. So before it hands a held claim back to its agent (a
+`work_next` that answers `resumed`, or an `extend`), the tracker reads the log
+from the end of its state. If anything landed there, it rebuilds from the log
+and checks the hold again, as after a refused write: `work_next` then answers
+from the rebuilt state, and `extend` answers 503 so the agent calls again and
+hears `lost` if the hold ended. A new claim needs no read, since its `claimed`
+record is written only if nothing landed after the state's end.
+
 When Felix answers an extend with `stale_claim` (it no longer has the
 delivery), the tracker renews its lease by version before it answers `lost`.
 Felix runs the lease out by its own clock, so a broker whose clock runs fast
