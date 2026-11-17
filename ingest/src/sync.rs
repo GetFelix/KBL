@@ -355,7 +355,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 closed_by_sync: false,
-                closed_by_merge: false,
+                closed_by_merge: Some(false),
                 left_scope_by_sync: false,
                 reopened_by: None,
                 has_children: rule.mode == Mode::Admit,
@@ -490,7 +490,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             // The close was written but the save that would have recorded it
             // was lost, and the issue reopened before the next poll.
             (None, None) => {
-                if root.closed && root.closed_by_sync && !root.closed_by_merge {
+                if root.closed && root.closed_by_sync && root.closed_by_merge == Some(false) {
                     self.write(&WorkRecord::Reopened {
                         item: t.item.clone(),
                     })
@@ -1395,7 +1395,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 stage: "ready".to_owned(),
                 closed: false,
                 closed_by_sync: false,
-                closed_by_merge: false,
+                closed_by_merge: Some(false),
                 left_scope_by_sync: false,
                 reopened_by: None,
                 has_children: false,

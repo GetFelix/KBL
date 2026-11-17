@@ -22,9 +22,11 @@ pub(crate) struct Root {
     #[serde(default)]
     pub(crate) closed_by_sync: bool,
     /// The close was the merge of the item's pull request, which an open issue
-    /// does not undo.
+    /// does not undo. `None` from a tracker that predates the field: it is not
+    /// known, so ingest leaves the root closed rather than reopen a merge on
+    /// every poll.
     #[serde(default)]
-    pub(crate) closed_by_merge: bool,
+    pub(crate) closed_by_merge: Option<bool>,
     /// Upstream sync took it out of scope, so sync brings it back when the
     /// issue matches its rule again.
     #[serde(default)]

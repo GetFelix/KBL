@@ -132,6 +132,10 @@ struct Inner {
     save_fails: bool,
     /// Every append fails, as when the tracker cannot be reached.
     append_fails: bool,
+    /// Appends of this record kind fail; every other kind lands.
+    fail_kind: Option<&'static str>,
+    /// The roots omit `closed_by_merge`, as a tracker that predates it.
+    old_tracker: bool,
     roots_calls: usize,
     race_next_save: bool,
     saves_left: Option<usize>,
@@ -158,6 +162,8 @@ impl Default for Fake {
             saved: None,
             save_fails: false,
             append_fails: false,
+            fail_kind: None,
+            old_tracker: false,
             roots_calls: 0,
             race_next_save: false,
             saves_left: None,
@@ -254,6 +260,14 @@ impl Fake {
         serde_json::from_value(i.saved.clone().expect("saved").0).unwrap()
     }
 
+    /// The ingest state as last saved, if it was saved at all.
+    pub(crate) fn try_saved(&self) -> Option<crate::state::State> {
+        let i = self.0.lock().unwrap();
+        i.saved
+            .as_ref()
+            .map(|(v, _)| serde_json::from_value(v.clone()).unwrap())
+    }
+
     /// Saved state written by an older version, in its own form.
     pub(crate) fn seed_saved(&self, state: Value) {
         self.0.lock().unwrap().saved = Some((state, 1));
@@ -315,6 +329,17 @@ impl Fake {
         self.0.lock().unwrap().append_fails = fail;
     }
 
+    /// Appends of one record kind fail, as if the tracker went away between
+    /// two writes. `None` lifts it.
+    pub(crate) fn fail_kind(&self, kind: Option<&'static str>) {
+        self.0.lock().unwrap().fail_kind = kind;
+    }
+
+    /// The roots lack `closed_by_merge`, as from a tracker that predates it.
+    pub(crate) fn act_as_old_tracker(&self) {
+        self.0.lock().unwrap().old_tracker = true;
+    }
+
     /// Ingest's saved state is lost, as if the cache entry expired.
     pub(crate) fn forget_saved(&self) {
         self.0.lock().unwrap().saved = None;
@@ -357,7 +382,8 @@ impl Fake {
                         .to_owned(),
                     closed: it.closed.is_some(),
                     closed_by_sync: it.closed_by_sync,
-                    closed_by_merge: it.closed == Some(kbl_core::work_fold::Closure::Merged),
+                    closed_by_merge: (!i.old_tracker)
+                        .then_some(it.closed == Some(kbl_core::work_fold::Closure::Merged)),
                     left_scope_by_sync: it.left_scope_by_sync,
                     reopened_by: it.reopened_by,
                     has_children: !it.children.is_empty(),
@@ -413,6 +439,10 @@ impl Tracker for Fake {
     async fn append(&self, record: &WorkRecord) -> Result<Appended> {
         anyhow::ensure!(
             !self.0.lock().unwrap().append_fails,
+            "the tracker is unreachable"
+        );
+        anyhow::ensure!(
+            self.0.lock().unwrap().fail_kind != Some(record.kind()),
             "the tracker is unreachable"
         );
         self.spend_write()?;

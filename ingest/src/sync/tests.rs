@@ -659,6 +659,129 @@ async fn a_close_whose_save_was_lost_is_undone_when_the_issue_reopens_before_the
     assert_eq!(rig.tracker.state().items[&item].closed, None);
 }
 
+/// A poll in which the issue is open and the item is already closed by
+/// someone else: tracked state has no close, so `follow` takes its (open,
+/// not recorded closed) arm.
+async fn polls_open_after(rig: &Rig, ingest: &Ingest<Github<Script>, Fake>) {
+    rig.list(vec![at(issue(812, |_| {}), "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_root_closed_by_its_merge_stays_closed_when_the_issue_is_open() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Merged)
+    );
+    polls_open_after(&rig, &ingest).await;
+    polls_open_after(&rig, &ingest).await;
+    assert_eq!(rig.tracker.count("reopened"), 0);
+    assert_eq!(
+        rig.tracker.state().items[&item].closed,
+        Some(Closure::Merged)
+    );
+}
+
+#[tokio::test]
+async fn a_root_a_person_dismissed_stays_closed_when_the_issue_is_open() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+    rig.tracker.person(WorkRecord::Closed {
+        item: item.clone(),
+        why: CloseWhy::Dismissed,
+    });
+    polls_open_after(&rig, &ingest).await;
+    assert_eq!(rig.tracker.count("reopened"), 0);
+    assert!(rig.tracker.state().items[&item].closed.is_some());
+}
+
+#[tokio::test]
+async fn a_tracker_that_does_not_say_how_a_root_closed_is_not_asked_to_reopen_it() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    ingest.poll(false).await.unwrap();
+    rig.tracker.act_as_old_tracker();
+    polls_open_after(&rig, &ingest).await;
+    polls_open_after(&rig, &ingest).await;
+    assert_eq!(rig.tracker.count("reopened"), 0);
+    assert!(rig.tracker.state().items[&item].closed.is_some());
+}
+
+#[test]
+fn a_root_without_closed_by_merge_reads_as_unknown() {
+    let root: crate::tracker_api::Root = serde_json::from_value(json!({
+        "item": "r1", "source": "github", "upstream_id": UP, "stage": "triage",
+        "closed": true, "closed_by_sync": true, "pr": null
+    }))
+    .unwrap();
+    assert_eq!(root.closed_by_merge, None);
+}
+
+#[tokio::test]
+async fn a_failed_admit_write_leaves_the_root_untracked_and_the_next_poll_finishes_it() {
+    let rig = rig();
+    rig.tracker.append(&imported_record()).await.unwrap();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    // The context writes land; the admit write does not.
+    rig.tracker.fail_kind(Some("accepted"));
+    ingest.poll(false).await.unwrap_err();
+    assert_eq!(rig.tracker.count("context"), 2);
+    assert!(
+        !rig.tracker
+            .try_saved()
+            .is_some_and(|s| s.items.contains_key(UP)),
+        "the root was saved as tracked before it was admitted"
+    );
+    rig.tracker.fail_kind(None);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    let root = &s.items[&item_id(UP)];
+    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.children.len(), 2);
+    assert_eq!(s.stage(&root.id), Some(Stage::Ready));
+}
+
+#[tokio::test]
+async fn a_crash_after_the_admission_writes_and_before_the_save_adds_no_duplicates() {
+    let rig = rig();
+    rig.tracker.append(&imported_record()).await.unwrap();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("proposed"), 2);
+    rig.tracker.allow_saves();
+    ingest.poll(false).await.unwrap();
+    // The fold refuses the repeated records as duplicates, so none lands.
+    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("proposed"), 2);
+    assert_eq!(rig.tracker.state().items[&item_id(UP)].children.len(), 2);
+}
+
 #[tokio::test]
 async fn closed_issues_are_pruned_from_the_saved_state_and_still_reopen() {
     let rig = rig();
