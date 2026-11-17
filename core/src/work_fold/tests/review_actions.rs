@@ -147,6 +147,20 @@ fn an_ask_lasts_until_upstream_answers_or_the_request_ends() {
 }
 
 #[test]
+fn a_repeated_changes_requested_status_keeps_an_ask_made_on_it() {
+    let mut l = open();
+    status(&mut l, PrChecks::Green, PrReview::ChangesRequested);
+    l.person(ask("kim"));
+    assert!(item(&l).review_ask.is_some());
+    // The same review state again is not an answer.
+    status(&mut l, PrChecks::Pending, PrReview::ChangesRequested);
+    assert!(item(&l).review_ask.is_some());
+    // A change to approved is.
+    status(&mut l, PrChecks::Green, PrReview::Approved);
+    assert!(item(&l).review_ask.is_none());
+}
+
+#[test]
 fn a_changes_request_is_recorded_once_and_answers_the_ask() {
     let mut l = open();
     l.person(ask("kim"));
@@ -210,25 +224,94 @@ fn a_new_request_drops_the_asks() {
 }
 
 #[test]
+fn a_new_attempt_on_the_same_request_drops_the_asks() {
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 11 });
+    accepted_root(&mut l, "r1");
+    l.agent("w1", claimed("r1", 1));
+    let d = l.agent("w1", decision("r1", 1, vec![]));
+    l.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: id("r1"),
+            attempt: 1,
+            note: text("opened"),
+            branch: None,
+            pr: Some(PR.into()),
+        },
+    );
+    l.agent("w1", done("r1", 1, 0));
+    status(&mut l, PrChecks::Green, PrReview::Unreviewed);
+    l.person(ask("kim"));
+    l.person(changes());
+    l.person(ask("ana"));
+    l.person(WorkRecord::ForkedFrom {
+        item: id("r1"),
+        from_attempt: 1,
+        at: d,
+        note: None,
+    });
+    l.agent("w2", claimed("r1", 2));
+    assert_eq!(fold(&l.0).rejections, vec![]);
+    let it = item(&l);
+    assert_eq!(it.pr.as_deref(), Some(PR));
+    assert!(it.review_ask.is_none() && it.changes_ask.is_none());
+}
+
+#[test]
 fn a_recorded_merge_closes_the_item_as_merged() {
-    // Upstream has not said yet, or says open: the person saw it merge.
-    for status_first in [false, true] {
-        let mut l = raised();
-        if status_first {
-            status(&mut l, PrChecks::Green, PrReview::Approved);
-        }
-        l.agent("w1", merged());
-        assert_eq!(last_reject(&l), Some(Reject::ActorNotAllowed));
-        l.person(merged());
-        assert_eq!(item(&l).closed, Some(Closure::Merged), "{status_first}");
-        l.person(merged());
-        assert_eq!(last_reject(&l), Some(Reject::Closed));
-    }
+    // Upstream has not said yet: the person saw it merge.
+    let mut l = raised();
+    l.agent("w1", merged());
+    assert_eq!(last_reject(&l), Some(Reject::ActorNotAllowed));
+    l.person(merged());
+    let it = item(&l);
+    assert_eq!(it.closed, Some(Closure::Merged));
+    let mark = it.merge_marked.unwrap();
+    assert_eq!(mark.by, key("gabriel"));
+    assert_eq!(mark.offset, (l.0.len() - 1) as u64);
+    l.person(merged());
+    assert_eq!(last_reject(&l), Some(Reject::Closed));
     // Upstream already says merged, and nobody closed the item yet.
     let mut l = raised();
     phase(&mut l, PrPhase::Merged);
     assert_eq!(item(&l).closed, None);
     l.person(merged());
+    assert_eq!(item(&l).closed, Some(Closure::Merged));
+}
+
+#[test]
+fn a_recorded_merge_is_refused_while_upstream_shows_the_request_open() {
+    let mut l = open();
+    l.person(merged());
+    assert_eq!(last_reject(&l), Some(Reject::NoChange));
+    let it = item(&l);
+    assert!(it.closed.is_none() && it.merge_marked.is_none());
+}
+
+#[test]
+fn a_later_open_status_sends_a_recorded_merge_back_to_needs_you() {
+    for p in [PrPhase::Open, PrPhase::Closed] {
+        let mut l = raised();
+        l.person(merged());
+        assert!(item(&l).merge_marked.is_some());
+        phase(&mut l, p);
+        let st = fold(&l.0);
+        assert_eq!(st.rejections, vec![], "{p:?}");
+        let it = &st.items[&id("r1")];
+        assert!(it.closed.is_none() && it.merge_marked.is_some());
+        assert_eq!(st.needs_you(&id("r1")), Some(NeedsYou::MergeDisputed));
+        // Upstream merging after all settles it.
+        let mut l2 = l;
+        phase(&mut l2, PrPhase::Merged);
+        let st = fold(&l2.0);
+        assert!(st.items[&id("r1")].merge_marked.is_none());
+        assert_ne!(st.needs_you(&id("r1")), Some(NeedsYou::MergeDisputed));
+    }
+    // A status that agrees leaves the closed item alone.
+    let mut l = raised();
+    l.person(merged());
+    phase(&mut l, PrPhase::Merged);
     assert_eq!(item(&l).closed, Some(Closure::Merged));
 }
 

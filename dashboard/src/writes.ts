@@ -22,6 +22,7 @@ export const NEEDS: Readonly<Record<string, string>> = {
   left_scope: 'The issue left its intake rule',
   check_failed: 'A check failed',
   flagged: 'A person moved it here',
+  merge_disputed: 'Marked merged, but upstream shows it open',
 };
 
 export function needsText(needs: string | null | undefined): string {

@@ -283,7 +283,7 @@ fn a_restored_park_or_snooze_folds_and_queues_like_a_fresh_one() {
 fn restored_review_asks_and_summary_marks_fold_like_fresh_ones() {
     let mut l = Log::default();
     l.person(WorkRecord::FormatRaised { to: 11 });
-    for (n, item) in ["r1", "r2", "r3"].into_iter().enumerate() {
+    for (n, item) in ["r1", "r2", "r3", "r4", "r5"].into_iter().enumerate() {
         let pr = format!("GetFelix/felix#{n}");
         accepted_root(&mut l, item);
         l.agent("w1", claimed(item, 1));
@@ -298,9 +298,16 @@ fn restored_review_asks_and_summary_marks_fold_like_fresh_ones() {
             },
         );
         l.agent("w1", done(item, 1, 0));
-        let snap = snapshot(&pr, PrChecks::Green, PrReview::Unreviewed);
-        l.tracker(pr_status(item, snap));
+        if n < 3 {
+            let snap = snapshot(&pr, PrChecks::Green, PrReview::Unreviewed);
+            l.tracker(pr_status(item, snap));
+        }
     }
+    l.person(WorkRecord::MergeMarked { item: id("r4") });
+    l.person(WorkRecord::MergeMarked { item: id("r5") });
+    // Upstream then shows r5's request open: it comes back disputed.
+    let snap = snapshot("GetFelix/felix#4", PrChecks::Green, PrReview::Unreviewed);
+    l.tracker(pr_status("r5", snap));
     l.person(WorkRecord::ReviewRequested {
         item: id("r1"),
         reviewer: "kim".into(),
@@ -314,8 +321,9 @@ fn restored_review_asks_and_summary_marks_fold_like_fresh_ones() {
     // Upstream answers r1's ask after the stores above were taken.
     let snap = snapshot("GetFelix/felix#0", PrChecks::Green, PrReview::Approved);
     l.tracker(pr_status("r1", snap));
-    l.person(WorkRecord::MergeMarked { item: id("r2") });
     let fresh = fold(&l.0);
+    assert!(fresh.items[&id("r4")].merge_marked.is_some());
+    assert_eq!(fresh.needs_you(&id("r5")), Some(NeedsYou::MergeDisputed));
     assert!(fresh.items[&id("r1")].review_ask.is_none());
     assert!(fresh.items[&id("r2")].changes_ask.is_some());
     assert_eq!(

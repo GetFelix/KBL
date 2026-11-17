@@ -292,6 +292,8 @@ pub enum NeedsYou {
     Unclear,
     /// A person moved it here with `flagged`.
     Flagged,
+    /// A person recorded the merge and upstream shows the request not merged.
+    MergeDisputed,
 }
 
 /// What the open question offers, kept so an answer can be checked and the
@@ -368,7 +370,19 @@ pub struct ReviewAsk {
     pub reviewer: String,
     /// The request the ask was made on. A status for another request drops it.
     pub pr: String,
+    /// What upstream showed when the ask was made. The ask is answered by a
+    /// review that differs from it, not by one that repeats it.
+    pub review: PrReview,
     pub at_ms: u64,
+}
+
+/// A person's record that the item's pull request merged, kept so the panel
+/// and the API can tell it from a merge upstream reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeMark {
+    pub by: Key,
+    /// Offset of the `merge_marked` record.
+    pub offset: u64,
 }
 
 /// A person's request that the pull request an item reports change before it merges.
@@ -577,6 +591,12 @@ pub struct Item {
     /// A person sent the open pull request back for changes. Cleared like `review_ask`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes_ask: Option<ChangesAsk>,
+    /// A person recorded the merge. While the item is closed as merged this is
+    /// who said so; if upstream then shows the request open or closed unmerged,
+    /// the item reopens into Needs you with this still set. Cleared by a
+    /// reopen or an upstream merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_marked: Option<MergeMark>,
     pub accepted: bool,
     /// A person wrote the last `accepted` on a log at format 6 or above.
     /// An earlier acceptance does not count, so a format 5 state is unchanged.
@@ -1071,6 +1091,9 @@ impl State {
         if it.over_budget {
             return Some(NeedsYou::OverBudget);
         }
+        if it.merge_marked.is_some() {
+            return Some(NeedsYou::MergeDisputed);
+        }
         // A holder may finish or release first; only then does the item stop.
         if it.left_scope && it.hold.is_none() {
             return Some(NeedsYou::LeftScope);
@@ -1419,6 +1442,7 @@ impl State {
             parked_kind: None,
             review_ask: None,
             changes_ask: None,
+            merge_marked: None,
             left_scope_by_sync: false,
             accepted: false,
             accepted_by_person: false,
@@ -1925,6 +1949,9 @@ impl State {
                         proven: Vec::new(),
                         summary_accurate: None,
                     });
+                    // A new attempt answers the asks made on the last one's request.
+                    it.review_ask = None;
+                    it.changes_ask = None;
                 }
                 if it.work != WorkKind::Review
                     && !it.workers.contains(&rec.by)
@@ -2429,9 +2456,11 @@ impl State {
                 if same {
                     return Err(Reject::NoChange);
                 }
+                let review = it.pr_status.as_ref().map_or(PrReview::Unreviewed, |s| s.review);
                 it.review_ask = Some(ReviewAsk {
                     reviewer: reviewer.clone(),
                     pr,
+                    review,
                     at_ms: rec.at_ms,
                 });
                 // A new round of review: the earlier send-back has been taken up.
@@ -2474,16 +2503,20 @@ impl State {
                     return Err(Reject::Closed);
                 }
                 // Upstream may not have said yet, or may already say merged. A
-                // request it shows closed unmerged was not merged.
+                // request it shows open or closed unmerged was not merged.
                 let seen = it
                     .pr_status
                     .as_ref()
                     .filter(|s| it.pr.as_deref() == Some(s.pr.as_str()))
                     .map(|s| s.phase);
-                if it.pr.is_none() || seen == Some(PrPhase::Closed) {
+                if it.pr.is_none() || matches!(seen, Some(PrPhase::Open | PrPhase::Closed)) {
                     return Err(Reject::NoChange);
                 }
                 self.close(item, Closure::Merged);
+                self.item_mut(item)?.merge_marked = Some(MergeMark {
+                    by: rec.by.clone(),
+                    offset,
+                });
             }
             WorkRecord::SummaryRated {
                 item,
@@ -2533,6 +2566,7 @@ impl State {
                 it.parked_kind = None;
                 it.review_ask = None;
                 it.changes_ask = None;
+                it.merge_marked = None;
                 it.changed_upstream = true;
                 it.proposal = None;
             }
@@ -2733,6 +2767,22 @@ impl State {
                 }
             }
             WorkRecord::PrStatus { item, status } => {
+                // A person recorded the merge and upstream says otherwise: the
+                // item comes back for a person to look at.
+                if rec.actor != Actor::Agent
+                    && status.phase != PrPhase::Merged
+                    && status.fits()
+                    && status.consistent()
+                    && let Some(it) = self.items.get_mut(item)
+                    && it.parent.is_none()
+                    && matches!(it.closed, Some(Closure::Merged))
+                    && it.merge_marked.is_some()
+                    && it.pr.as_deref() == Some(status.pr.as_str())
+                {
+                    it.closed = None;
+                    it.release = None;
+                    self.track(item);
+                }
                 let it = self.upstream_sync(item, rec)?;
                 if it.pr.as_deref() != Some(status.pr.as_str()) {
                     return Err(Reject::WrongPr);
@@ -2755,12 +2805,14 @@ impl State {
                 if it.review_ask.as_ref().is_some_and(|a| {
                     !open
                         || a.pr != status.pr
-                        || matches!(
-                            status.review,
-                            PrReview::Approved | PrReview::ChangesRequested
-                        )
+                        || status.review == PrReview::Approved
+                        || (status.review == PrReview::ChangesRequested
+                            && a.review != PrReview::ChangesRequested)
                 }) {
                     it.review_ask = None;
+                }
+                if status.phase == PrPhase::Merged {
+                    it.merge_marked = None;
                 }
                 if it.changes_ask.as_ref().is_some_and(|a| {
                     !open || a.pr != status.pr || status.review == PrReview::Approved
