@@ -227,6 +227,14 @@ refuses a `request_key`), `link`, `context/add`, `progress`, `decide`,
   one that takes over, folds the log and finds the keys again. A reader that
   predates the field ignores it and folds as before, so replay of old logs does
   not change.
+- **Upgrades.** `req` is a new optional field on the record. A reader that
+  predates it ignores the field. During a rolling upgrade or downgrade, a
+  tracker that predates request keys can hold the writer lease: it neither
+  reads nor honors keys, so a keyed call it serves is written again on retry.
+  Keep retrying under a key only once every tracker runs this version.
+- **A caller that hangs up.** A write whose caller goes away while it is in
+  flight may have landed. The tracker marks its state stale, so the next call
+  rebuilds from the log, finds the key, and replays it.
 - **Whose.** Each caller (an agent, or a person) has its own keys. Another
   caller's key is not a hit, and a person's key is not an agent's.
 - **How long.** The last 256 keyed writes of each caller. A key older than that

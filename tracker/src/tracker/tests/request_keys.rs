@@ -188,3 +188,25 @@ async fn an_agents_write_is_keyed_too() {
     assert_eq!(again["offset"], first["offset"]);
     assert_eq!(fake.kinds().iter().filter(|k| *k == "progress").count(), 1);
 }
+
+#[tokio::test]
+async fn a_dropped_call_does_not_let_its_retry_write_twice() {
+    let fake = Fake::default();
+    let t = ready(&fake).await;
+    // The record lands, and the caller goes away before the reply is handled.
+    fake.hold_next_publish();
+    let first = tokio::spawn({
+        let t = t.clone();
+        async move { send(&t, "r1", "x").await }
+    });
+    let landed = fake.log().len();
+    while fake.log().len() == landed {
+        tokio::task::yield_now().await;
+    }
+    first.abort();
+    let _ = first.await;
+    fake.open_gate();
+    let again = send(&t, "r1", "x").await.unwrap();
+    assert_eq!(again["replayed"], true);
+    assert_eq!(notes(&fake), 1);
+}

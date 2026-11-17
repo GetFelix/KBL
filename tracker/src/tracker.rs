@@ -277,6 +277,20 @@ impl LeaseState {
     }
 }
 
+/// Marks the state stale if dropped while armed: see `append`.
+struct Unanswered<'a> {
+    lease: &'a StdMutex<LeaseState>,
+    armed: bool,
+}
+
+impl Drop for Unanswered<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.lease.lock().expect("lease lock").refused();
+        }
+    }
+}
+
 /// What a review lane looked like when an agent last left it with nothing to take.
 struct Emptied {
     at: Option<u64>,
@@ -2153,15 +2167,25 @@ impl<B: Broker> Tracker<B> {
         }
         // Conditional on the tail: if another tracker took the lease and wrote,
         // Felix refuses this, whatever this tracker's clock says.
-        match self
+        // A caller that drops this future mid-write (a client that hung up)
+        // leaves a record that may have landed and was applied above, with
+        // nothing learned from the reply. Armed until the reply is handled, the
+        // guard marks the state stale so the next call rebuilds from the log,
+        // which also re-learns a request key the record carried.
+        let mut unanswered = Unanswered {
+            lease: &self.0.lease,
+            armed: true,
+        };
+        let written = self
             .io(
                 None,
                 self.0
                     .broker
                     .publish_if(WORK_EVENTS, logged.encode(), guess),
             )
-            .await
-        {
+            .await;
+        unanswered.armed = false;
+        match written {
             Ok(ConditionalWrite::Written { offset }) => {
                 core.tail = offset + 1;
                 core.recall
