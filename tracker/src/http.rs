@@ -13,7 +13,7 @@ use std::time::Duration;
 use axum::extract::{FromRequest, FromRequestParts, MatchedPath, Path, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
-use axum::middleware::{Next, from_fn};
+use axum::middleware::{Next, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
@@ -61,7 +61,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
     // `/v1/work/items/{item}`, never an item id. The team-scoped catch-all is added
     // after the layer: the inner router's routes are counted once, not twice.
     let work = work_routes::<B>()
-        .route_layer(from_fn(observe))
+        .route_layer(from_fn_with_state(app.clone(), observe::<B>))
         .with_state(app.clone());
     let scoped = work.clone();
     let for_agents = app.clone();
@@ -72,7 +72,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
             "/v1/org/teams",
             get(org::list_teams::<B>).post(org::create_team::<B>),
         )
-        .route_layer(from_fn(observe))
+        .route_layer(from_fn_with_state(app.clone(), observe::<B>))
         .route(
             "/v1/teams/{team}/{*rest}",
             any(move |req: Request| in_team(scoped.clone(), for_agents.clone(), req)),
@@ -82,7 +82,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
 }
 
 /// Counts the call and times it, by route template, method and status.
-async fn observe(req: Request, next: Next) -> Response {
+async fn observe<B: Broker>(State(app): State<Arc<App<B>>>, req: Request, next: Next) -> Response {
     // The layer only runs on matched routes, so there is always a template.
     let Some(route) = req
         .extensions()
@@ -100,12 +100,26 @@ async fn observe(req: Request, next: Next) -> Response {
         http.request.method = method_label(method.as_str()),
         http.response.status_code = tracing::field::Empty,
     );
-    kbl_trace::adopt_parent(&span, req.headers());
+    // The span starts when it is first entered, so the parent has to be set
+    // before that, not once the handler has checked the token. A caller with
+    // no matching token cannot pick the trace or its sampling flag: its span
+    // stays a root under the tracker's own sampler.
+    if knows_token(&app, req.headers()) {
+        kbl_trace::adopt_parent(&span, req.headers());
+    }
     let started = std::time::Instant::now();
     let res = next.run(req).instrument(span.clone()).await;
     span.record("http.response.status_code", res.status().as_u16());
     record_request(&route, method.as_str(), res.status(), started.elapsed());
     res
+}
+
+/// Whether the request's bearer token is one the tracker accepts, for any call.
+fn knows_token<B: Broker>(app: &App<B>, headers: &HeaderMap) -> bool {
+    let Some(token) = bearer(headers) else {
+        return false;
+    };
+    app.teams.org_admin(token).is_some() || matches!(app.teams.who(token), Ok(f) if !f.is_empty())
 }
 
 /// The method label is one of a fixed set, so a client cannot mint labels.
