@@ -201,3 +201,20 @@ async fn a_restart_keeps_the_assignees_direct_claim_without_polling_felix() {
         Some("b1")
     );
 }
+
+#[tokio::test]
+async fn a_lane_claim_assigned_while_held_is_acked_not_handed_back() {
+    let fake = Fake::default();
+    let t = at_13(&fake).await;
+    seed(&t, "a1", 2).await;
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+    assign(&t, "a1", Some("w2")).await;
+    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+        .await
+        .unwrap();
+    // A nack would count a handout toward Felix's dead-letter bound for a
+    // record no agent may claim from the lane.
+    assert_eq!(count(&fake, "nack"), 0);
+    assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
