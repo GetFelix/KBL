@@ -1582,6 +1582,7 @@ a price table, so a fresh install is not empty:
 export KBL_TRACKER_TOKEN=...          # a person's token; only a person may set a price
 kbl-tool prices import --default      # the table shipped with this build
 kbl-tool prices import my-prices.json --dry-run
+KBL_TEAM=alpha kbl-tool prices import --default   # a token in more than one team names its team
 ```
 
 `--default` is `tool/prices/default.json`: Anthropic's list prices, dated

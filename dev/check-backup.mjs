@@ -27,8 +27,7 @@ import {
   giveUpAfter,
   killAll,
   newRunId,
-  personCall,
-  personRecord,
+  personCall as personCallAny,
   sleep,
   startTracker,
   TRACKER_URL,
@@ -62,6 +61,12 @@ const digest = (stateFile, backup) =>
   JSON.parse(must(["work", "digest", "--state", stateFile, ...(backup ? ["--backup", backup] : [])]));
 const orgDigest = (stateFile, backup) =>
   JSON.parse(must(["org", "digest", "--state", stateFile, ...(backup ? ["--backup", backup] : [])]));
+// Teams are on, so a person's token is in more than one team and every call names its team.
+const DEFAULT = "default";
+const personRecord = (token, record) =>
+  personCallAny(token, `/v1/teams/${DEFAULT}/work/records`, { record });
+const personCall = (token, path, body) =>
+  personCallAny(token, path.replace(/^\/v1\//, `/v1/teams/${DEFAULT}/`), body);
 const admin = { KBL_TRACKER_URL: TRACKER_URL, KBL_TRACKER_TOKEN: "tok-gab" };
 const orgEnv = { KBL_ORG_NAMESPACE: "kbl" };
 const ALPHA = { KBL_NAMESPACE: "alpha" };
@@ -125,7 +130,7 @@ try {
 
   // Prices need the newest format; a log that is already there is left as it is.
   await personRecord("tok-gab", { kind: "format_raised", to: 9 }).catch((e) => console.log(`format not raised: ${e.message}`));
-  must(["prices", "import", "--default"], { KBL_TRACKER_URL: TRACKER_URL, KBL_TRACKER_TOKEN: "tok-gab" });
+  must(["prices", "import", "--default"], { ...admin, KBL_TEAM: DEFAULT });
 
   // A claim with notes, children, a decision, a step, a progress note and usage.
   await seed(id("root"), "stale read after restart");
