@@ -128,6 +128,18 @@ impl Folder {
         serde_json::to_string(&items).expect("plain data serializes")
     }
 
+    /// What the review limit counts, as `{load, in_review}`: `load` is
+    /// [`State::review_load`], the number the tracker's pause compares to the
+    /// limit, and `in_review` the part of it that sits in In review. The rest of
+    /// `load` is fixes agents hold.
+    pub fn review_load_json(&self) -> String {
+        json!({
+            "load": self.state.review_load(),
+            "in_review": self.state.in_review_count(),
+        })
+        .to_string()
+    }
+
     /// Every item in the Blocked stage, as `{id, title, repo, source, waits_on}`, in
     /// id order. `waits_on` lists the items holding it, each with its own
     /// `repo`, stage, `source` and `awaiting_release` (merged, but the link

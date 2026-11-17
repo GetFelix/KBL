@@ -1883,18 +1883,17 @@ pausing it would stop that PR from ever leaving In review. The paused fixes
 come back on their own once a merge, a close or a finished hold brings the sum
 under the limit. Work an agent already holds is not taken back.
 
-The header says "review full: agents paused, 6/6 in review" when In review
-alone is at the limit. It counts only the In review column, so while held fixes
-are what fill the limit the header stays quiet even though new fixes wait.
+The header says "review full: agents paused, 3/3: 2 in review, 1 in progress"
+when the review load is at the limit. The page reads that load from the same
+fold function the pause uses, so the two cannot disagree: In review plus the
+fixes agents hold, split into its two parts.
 
 There is no evidence behind the default of 3: the research found nothing that
 says how many open PRs a reviewer can handle, and "two or three per active
 reviewer" was a guess. Pick a number, watch the review column, and change it.
 
 `GET /v1/me` carries each team's limit as `review_limit` (null while the team
-is not serving). The dashboard reads it once you sign in and counts the In
-review column itself, so a viewer who has not signed in sees no limit in the
-header.
+is not serving). The dashboard reads it once you sign in, so a viewer who has not signed in sees no limit in the header.
 
 ### The footer names the constraint
 

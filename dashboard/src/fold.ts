@@ -11,6 +11,8 @@ export interface Fold {
   itemsJson(): string;
   blockedJson(): string;
   overlapsJson(): string;
+  /** `{load, in_review}`: the review load the tracker's pause counts, and the In review part of it. */
+  reviewLoadJson(): string;
   /** The fold's spend: what claims cost per root, reviewer tier and repo. */
   spendJson(): string;
 }
@@ -132,4 +134,15 @@ export function blockerText(b: BlockerLine): string {
 /** What a row waits on, as the list shows it after "waits on". */
 export function waitsOn(row: BlockedRow): string {
   return blockerLines(row).map(blockerText).join(', ');
+}
+
+/** What the review limit counts: In review plus the fixes agents hold, from the same fold as `items`. */
+export interface ReviewLoad {
+  load: number;
+  inReview: number;
+}
+
+export function reviewLoad(fold: Pick<Fold, 'reviewLoadJson'>): ReviewLoad {
+  const r = JSON.parse(fold.reviewLoadJson()) as { load: number; in_review: number };
+  return { load: r.load, inReview: r.in_review };
 }
