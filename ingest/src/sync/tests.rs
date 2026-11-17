@@ -10,6 +10,7 @@ use crate::testing::{Fake, Script, fixture, issue, labels, ok, status};
 const LIST: &str = "/repos/GetFelix/felix/issues?";
 
 mod metrics;
+mod sweep;
 mod traces;
 
 struct Rig {

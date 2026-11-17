@@ -1,0 +1,1 @@
+A seeded fault sweep runs the tracker's claim path and ingest under crashes between writes, repeated deliveries, broker failover and save conflicts, and checks that an item is worked once, no upstream issue is lost and no dismissed root reopens. CI runs 400 seeds per pull request and 5000 nightly; see `docs/fault-sweep.md`.

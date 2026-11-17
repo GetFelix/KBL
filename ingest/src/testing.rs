@@ -135,6 +135,11 @@ struct Inner {
     roots_calls: usize,
     race_next_save: bool,
     saves_left: Option<usize>,
+    /// Writes (appends and saves) that still land before the process dies;
+    /// every later one fails, as if it had stopped between two writes.
+    writes_left: Option<usize>,
+    /// The next append lands and its reply is lost.
+    lose_next_append_reply: bool,
     /// The edges ingest's own `linked` made, as the tracker tracks them.
     ingest_edges: HashSet<(ItemId, ItemId)>,
     /// `linked` records ingest sent, written or refused.
@@ -156,6 +161,8 @@ impl Default for Fake {
             roots_calls: 0,
             race_next_save: false,
             saves_left: None,
+            writes_left: None,
+            lose_next_append_reply: false,
             ingest_edges: HashSet::new(),
             links_sent: 0,
         })))
@@ -280,6 +287,29 @@ impl Fake {
         i.saves_left = None;
     }
 
+    /// The process dies after `n` more writes. `restart` brings it back.
+    pub(crate) fn crash_after_writes(&self, n: usize) {
+        self.0.lock().unwrap().writes_left = Some(n);
+    }
+
+    /// Every pending fault is gone.
+    pub(crate) fn restart(&self) {
+        let mut i = self.0.lock().unwrap();
+        i.writes_left = None;
+        i.lose_next_append_reply = false;
+        i.race_next_save = false;
+    }
+
+    /// The next append lands, and ingest is told it failed.
+    pub(crate) fn lose_next_append_reply(&self) {
+        self.0.lock().unwrap().lose_next_append_reply = true;
+    }
+
+    /// A person's record, if the fold accepts it.
+    pub(crate) fn try_person(&self, record: WorkRecord) -> bool {
+        self.push("gabriel", Actor::Person, record).is_ok()
+    }
+
     /// Whether every later append fails, as if the tracker went away.
     pub(crate) fn fail_appends(&self, fail: bool) {
         self.0.lock().unwrap().append_fails = fail;
@@ -292,6 +322,15 @@ impl Fake {
 }
 
 impl Fake {
+    fn spend_write(&self) -> Result<()> {
+        let mut i = self.0.lock().unwrap();
+        if let Some(left) = i.writes_left.as_mut() {
+            anyhow::ensure!(*left > 0, "the process died");
+            *left -= 1;
+        }
+        Ok(())
+    }
+
     /// How many times ingest listed the roots.
     pub(crate) fn links_sent(&self) -> usize {
         self.0.lock().unwrap().links_sent
@@ -375,6 +414,7 @@ impl Tracker for Fake {
             !self.0.lock().unwrap().append_fails,
             "the tracker is unreachable"
         );
+        self.spend_write()?;
         // The tracker's ingest gate: ingest links and unlinks only edges its
         // own link made.
         if let WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } = record {
@@ -397,12 +437,14 @@ impl Tracker for Fake {
                 _ => {}
             }
         }
-        Ok(
-            match self.push("ingest-gh", Actor::Tracker, record.clone()) {
-                Ok(()) => Appended::Written,
-                Err(why) => Appended::Refused(why),
-            },
-        )
+        let pushed = self.push("ingest-gh", Actor::Tracker, record.clone());
+        if pushed.is_ok() && std::mem::take(&mut self.0.lock().unwrap().lose_next_append_reply) {
+            anyhow::bail!("the reply was lost");
+        }
+        Ok(match pushed {
+            Ok(()) => Appended::Written,
+            Err(why) => Appended::Refused(why),
+        })
     }
 
     async fn load(&self, _: &str) -> Result<Saved> {
@@ -414,6 +456,7 @@ impl Tracker for Fake {
     }
 
     async fn save(&self, _: &str, state: &Value, version: Option<u64>) -> Result<u64> {
+        self.spend_write()?;
         let mut i = self.0.lock().unwrap();
         anyhow::ensure!(!i.save_fails, "the tracker refused the save");
         if let Some(left) = i.saves_left.as_mut() {
@@ -422,7 +465,10 @@ impl Tracker for Fake {
         }
         if std::mem::take(&mut i.race_next_save) {
             let now = i.saved.as_ref().map_or(0, |(_, v)| *v);
-            let other = i.saved.as_ref().map_or(json!({}), |(s, _)| s.clone());
+            let other = i.saved.as_ref().map_or_else(
+                || serde_json::to_value(crate::state::State::default()).unwrap(),
+                |(s, _)| s.clone(),
+            );
             i.saved = Some((other, now + 1));
         }
         let now = i.saved.as_ref().map(|(_, v)| *v);
