@@ -73,11 +73,20 @@ export interface Flag {
   message: string;
 }
 
+export interface AttemptLine {
+  attempt: number;
+  forked_from: [number, number] | null;
+  done: boolean;
+  closed: boolean;
+  /** A person's latest mark of the summary this attempt handed off, or null if nobody marked it. */
+  summary_accurate: boolean | null;
+}
+
 export interface Story {
   item: string;
   /** Changes whenever the item takes a record, so a view can tell a changed story from the same one. */
   rev: number;
-  attempts: { attempt: number; forked_from: [number, number] | null; done: boolean; closed: boolean }[];
+  attempts: AttemptLine[];
   groups: Group[];
   people: PersonLine[];
   flags: Flag[];
@@ -146,4 +155,27 @@ export function citedText(c: Cited): string {
     case 'decision': return `decision ${c.offset}: ${f.chosen}`;
     case 'input': return `note ${c.offset} from ${f.by}`;
   }
+}
+
+/** One of the two marks a reviewer can give a summary. */
+export interface RatingChoice {
+  accurate: boolean;
+  label: string;
+  /** Whether this is the recorded mark, for `aria-pressed`. */
+  pressed: boolean;
+}
+
+/** The marks offered for an attempt's summary. Only an attempt that finished handed one off. */
+export function ratingChoices(a: AttemptLine): RatingChoice[] {
+  if (!a.done) return [];
+  return [
+    { accurate: true, label: 'Accurate', pressed: a.summary_accurate === true },
+    { accurate: false, label: 'Not accurate', pressed: a.summary_accurate === false },
+  ];
+}
+
+/** What the recorded mark says, in words, or null when nobody marked the summary. */
+export function ratingText(a: AttemptLine): string | null {
+  if (a.summary_accurate === null) return null;
+  return a.summary_accurate ? 'Marked accurate' : 'Marked not accurate';
 }

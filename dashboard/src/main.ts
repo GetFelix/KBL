@@ -327,6 +327,7 @@ const ui = shell(
     confirm: confirmKind,
     setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
+    rate: (item, attempt, accurate) => write([item], { kind: 'rate', attempt, accurate }),
     answer: (item, question, text, chosen) => write([item], { kind: 'answer', question, text, chosen }),
     undo: undoLast,
     dismiss: () => {

@@ -400,3 +400,71 @@ fn an_old_log_has_no_snoozed_or_parked_items() {
         assert!(!json.contains("snoozed") && !json.contains("parked_at_ms"));
     }
 }
+
+/// A log at format 11: a person's moves on a pull request and on the summary.
+/// Its folded state is pinned in `wasm/golden/format_11.state.json`.
+#[test]
+fn the_review_actions_fold_step_by_step() {
+    use kbl_core::work_fold::{Closure, Rejection};
+    let log: Vec<_> = include_str!("work_format_11.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let fold = |n: usize| kbl_core::work_fold::fold(&log[..n]);
+    let r1 = ItemId::new("r1").unwrap();
+    let r2 = ItemId::new("r2").unwrap();
+    let it = |n: usize, id: &ItemId| fold(n).items[id].clone();
+
+    // Asked before the raise: nothing recorded. After it, the ask stands.
+    assert!(it(9, &r1).review_ask.is_none());
+    assert_eq!(it(11, &r1).review_ask.unwrap().reviewer, "kim");
+    // A send-back answers the ask.
+    let sent = it(13, &r1);
+    assert!(sent.review_ask.is_none() && sent.changes_ask.is_some());
+    assert_eq!(it(16, &r1).paths[0].summary_accurate, Some(true));
+    // Upstream approving ends the send-back.
+    assert!(it(19, &r1).changes_ask.is_none());
+    // The merge closes r2, and its summary can still be marked.
+    assert_eq!(it(24, &r2).closed, Some(Closure::Merged));
+    let end = fold(log.len());
+    assert_eq!(end.items[&r2].paths[0].summary_accurate, Some(false));
+    let why = |offset, why| Rejection { offset, why };
+    assert_eq!(
+        end.rejections,
+        vec![
+            why(8, Reject::Format),
+            why(11, Reject::NoChange),
+            why(13, Reject::NoChange),
+            why(14, Reject::ActorNotAllowed),
+            why(16, Reject::NoChange),
+            why(17, Reject::WrongAttempt),
+            why(19, Reject::NoChange),
+            why(24, Reject::Closed),
+        ]
+    );
+}
+
+/// Logs from before format 11 fold with no ask and no mark, and their states
+/// serialize without those fields.
+#[test]
+fn an_old_log_has_no_review_asks_or_summary_marks() {
+    for log in [
+        include_str!("work_pre_prerequisite.jsonl"),
+        include_str!("work_format_6.jsonl"),
+        include_str!("work_format_7.jsonl"),
+        include_str!("work_format_8.jsonl"),
+        include_str!("work_format_10.jsonl"),
+    ] {
+        let entries: Vec<_> = log
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+            .collect();
+        let s = kbl_core::work_fold::fold(&entries);
+        let json = serde_json::to_string(&s).unwrap();
+        for field in ["review_ask", "changes_ask", "summary_accurate"] {
+            assert!(!json.contains(field), "{field}");
+        }
+    }
+}

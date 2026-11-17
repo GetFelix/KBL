@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, stories, type Story } from '../src/story.ts';
+import { attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, ratingChoices, ratingText, stories, type Story } from '../src/story.ts';
 
 const story: Story = {
   item: 'r1',
   rev: 3,
-  attempts: [{ attempt: 1, forked_from: null, done: false, closed: false }],
+  attempts: [{ attempt: 1, forked_from: null, done: false, closed: false, summary_accurate: null }],
   groups: [{ phase: 'fix', decisions: [{ offset: 7, attempt: 1, by: 'w1', so_far: 's', question: 'q', options: [], chosen: 'c', why: 'w', commit: 'abc', evidence: [], revert_check: null, proven: false, edits: [] }] }],
   people: [],
   flags: [
@@ -44,4 +44,14 @@ test('a step cited by two decisions is listed once, in offset order', () => {
     groups: [{ phase: 'fix', decisions: [{ ...d, evidence: [step(5, 0), step(3, 1)] }, { ...d, offset: 8, evidence: [step(3, 1), { stream: 'work.events', offset: 9, found: null }] }] }],
   };
   assert.deepEqual(citedSteps(two), [{ offset: 3, command: 'run 3', exit_code: 1 }, { offset: 5, command: 'run 5', exit_code: 0 }]);
+});
+
+test('only a finished attempt offers a mark, and the recorded one is pressed', () => {
+  const at = (done: boolean, summary_accurate: boolean | null) => ({ attempt: 2, forked_from: null, done, closed: false, summary_accurate });
+  assert.deepEqual(ratingChoices(at(false, null)), []);
+  assert.deepEqual(ratingChoices(at(true, null)).map((c) => [c.label, c.pressed]), [['Accurate', false], ['Not accurate', false]]);
+  assert.deepEqual(ratingChoices(at(true, false)).map((c) => [c.accurate, c.pressed]), [[true, false], [false, true]]);
+  assert.equal(ratingText(at(true, null)), null);
+  assert.equal(ratingText(at(true, true)), 'Marked accurate');
+  assert.equal(ratingText(at(true, false)), 'Marked not accurate');
 });

@@ -274,7 +274,8 @@ impl State {
 
     /// Runs after each accepted record. A person's record on a waiting item
     /// ends the wait; then the item's wait state is read again. A snooze or a
-    /// park only hides the item from My queue, so it is not an action.
+    /// park only hides the item from My queue, and a rating judges a summary,
+    /// so neither is an action.
     pub(super) fn track_human_wait(&mut self, rec: &WorkLogged) {
         // `at` is still the previous offset here, so a first record on a state
         // that already has one means the state came from a snapshot.
@@ -289,7 +290,9 @@ impl State {
         };
         let hides = matches!(
             rec.record,
-            WorkRecord::Snoozed { .. } | WorkRecord::Parked { .. }
+            WorkRecord::Snoozed { .. }
+                | WorkRecord::Parked { .. }
+                | WorkRecord::SummaryRated { .. }
         );
         if rec.actor == Actor::Person
             && !hides

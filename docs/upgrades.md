@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 10.
+is 11.
 
 ### Formats
 
@@ -83,6 +83,7 @@ is 10.
 | 8 | Spend as usage: `done`, `released`, `gave_up`, `question` and `prerequisite` carry `usage` per model and `floor_micros` instead of a reported `cost_micros`, and `price_set` prices a model's unit ([work tracker](work-tracker.md#cost-and-spend)). The fold prices usage when it folds. From the raise, a report with `cost_micros` above 0 is refused with `bad_usage`; the tracker's routes refuse one above 0 on any format | Until the raise, the tracker writes each report as before, with the floor as its `cost_micros`, and drops the usage it was sent. `POST /v1/work/prices` is refused with `format` |
 | 9 | `price_set` with `as_of`: the day the price table was copied. The fold refuses a day that is not a real `YYYY-MM-DD` as `bad_price` | Until the raise, `POST /v1/work/prices` refuses a price with `as_of` as `format`; a price without it is format 8 and unchanged |
 | 10 | `retried`, `snoozed`, `parked` and `unblocked`: the card actions a person takes on My queue ([work tracker](work-tracker.md#card-actions-on-my-queue)). The fold hides a snoozed or parked item from My queue while the wait they hid continues | Until the raise, `POST /v1/work/retry`, `/snooze`, `/park`, `/unpark` and `/unblock` are refused with `format`. A reader below 10 stops at the raise itself, so it never folds a card action as an unknown kind |
+| 11 | `review_requested`, `changes_requested`, `merge_marked` and `summary_rated`: a person's moves on a pull request and on the agent's summary ([work tracker](work-tracker.md#review-actions-and-summary-marks)). The fold keeps the ask and the send-back on the item, closes a merged request's item as merged, and keeps the latest mark per attempt | Until the raise, `POST /v1/work/request-review`, `/request-changes`, `/mark-merged` and `/rate-summary` are refused with `format`. A reader below 11 stops at the raise itself, so it never folds one as an unknown kind |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -182,6 +183,8 @@ tracker does not have yet.
   flagged item. `core/tests/work_format_10.jsonl` takes each card action, with
   one before the raise and one of each refusal; `work_replay.rs` checks each
   step and that every older log folds with nothing snoozed or parked.
+  `core/tests/work_format_11.jsonl` does the same for the review actions and the
+  summary mark, with a `review_requested` before the raise and each refusal.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

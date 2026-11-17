@@ -2,9 +2,12 @@
 // phase, with the edits and evidence behind each and the flags where a claim and the
 // recorded steps disagree. Every line is a recorded field; offsets let a reader find
 // the record. See docs/decision-replay.md.
-import { PHASE_LABEL, attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, type CitedStep, type DecisionLine, type EditLine, type Flag, type Story } from '../story.ts';
+import { PHASE_LABEL, attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, ratingChoices, ratingText, type AttemptLine, type CitedStep, type DecisionLine, type EditLine, type Flag, type Story } from '../story.ts';
+import type { ItemRow } from '../fold.ts';
+import type { ViewState } from '../state.ts';
 import { h } from './dom.ts';
-import type { Field } from './item-panel.ts';
+import type { Field, PanelHandlers } from './item-panel.ts';
+import { canRate } from '../writes.ts';
 
 /** Moves to the record with this offset in the story, opening what holds it. */
 function jump(root: () => HTMLElement | null, offset: number) {
@@ -67,7 +70,38 @@ function decisionLine(d: DecisionLine, story: Story, t: Targets): Node {
     flagList(flagsFor(story, d.offset), `d${d.offset}`, t));
 }
 
-function storySection(story: Story): Node {
+/** What a reviewer says to a finished attempt's summary. */
+export interface Rater {
+  /** Whether the viewer can write: signed in, on a log that takes the mark. */
+  enabled: boolean;
+  rate(attempt: number, accurate: boolean): void;
+}
+
+/**
+ * The mark on one attempt's summary: the recorded mark in words, and two toggle buttons when the
+ * viewer can write. A button is plain text, so a keyboard reaches it with Tab and Enter or Space
+ * sends it; the pressed one says what is recorded.
+ */
+function ratingLine(a: AttemptLine, rater: Rater): Node | null {
+  const choices = ratingChoices(a);
+  if (choices.length === 0) return null;
+  const said = ratingText(a);
+  return h('li', { class: 'story-rating', 'data-attempt': String(a.attempt) },
+    h('span', { class: 'story-label', id: `rating-${a.attempt}` }, `Attempt ${a.attempt} summary `),
+    h('span', { class: 'muted' }, said ?? 'Not marked yet. '),
+    ...(rater.enabled
+      ? choices.map((c) => h('button', {
+          type: 'button',
+          class: 'button',
+          'data-focus': `rate:${a.attempt}:${c.accurate ? 'yes' : 'no'}`,
+          'aria-pressed': String(c.pressed),
+          'aria-describedby': `rating-${a.attempt}`,
+          onclick: () => rater.rate(a.attempt, c.accurate),
+        }, c.label))
+      : []));
+}
+
+function storySection(story: Story, rater: Rater): Node {
   let root: HTMLElement | null = null;
   const steps = citedSteps(story);
   const known = new Set<number>([
@@ -83,6 +117,11 @@ function storySection(story: Story): Node {
     ...story.groups.map((g) => h('section', { class: 'story-phase', 'data-phase': g.phase },
       h('h3', {}, PHASE_LABEL[g.phase]),
       h('ol', { class: 'story-decisions' }, ...g.decisions.map((d) => decisionLine(d, story, t))))),
+    story.attempts.some((a) => a.done)
+      ? h('section', { class: 'story-ratings' },
+          h('h3', {}, 'Is the summary accurate?'),
+          h('ul', {}, ...story.attempts.map((a) => ratingLine(a, rater))))
+      : null,
     steps.length > 0
       ? h('section', { class: 'story-steps' },
           h('h3', {}, 'Cited steps'),
@@ -98,14 +137,17 @@ function storySection(story: Story): Node {
   return root;
 }
 
+const raterEnabled = (item: ItemRow, s: ViewState): boolean => s.tracker.kind === 'signed-in' && canRate(item);
+
 /** The panel field for the story. It is left out for an item with no recorded decision. */
 export const storyField: Field = {
   key: (item, s) => {
     const story = s.stories.get(item.id);
-    return story ? String(story.rev) : '';
+    return story ? `${story.rev}|${raterEnabled(item, s)}` : '';
   },
-  render: (item, s) => {
+  render: (item, s, on: PanelHandlers) => {
     const story = s.stories.get(item.id);
-    return story ? ['Story', storySection(story)] : null;
+    const rater: Rater = { enabled: raterEnabled(item, s), rate: (attempt, accurate) => on.rate(item.id, attempt, accurate) };
+    return story ? ['Story', storySection(story, rater)] : null;
   },
 };
