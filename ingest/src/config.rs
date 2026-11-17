@@ -49,6 +49,11 @@ pub(crate) struct TrackerConfig {
     pub(crate) url: String,
     /// The environment variable holding ingest's tracker token.
     pub(crate) token_env: String,
+    /// The worker group this worker serves. Set, the worker takes its sources
+    /// by lease once a connection names the group; unset, it polls every
+    /// configured repo as before.
+    #[serde(default)]
+    pub(crate) group: Option<String>,
 }
 
 /// How ingest signs in to Jira. The secret is read from the environment or a
@@ -342,6 +347,17 @@ fn default_tier() -> u8 {
 }
 
 impl Config {
+    /// The source's vendor word, as its sources' ids start: `github` in
+    /// `github:o/r`. The same as the adapter's `Source::name`.
+    pub(crate) fn vendor(&self) -> &'static str {
+        match (&self.github, &self.jira, &self.ado, &self.gitlab) {
+            (_, Some(_), _, _) => "jira",
+            (_, _, Some(_), _) => "ado",
+            (_, _, _, Some(_)) => "gitlab",
+            _ => "github",
+        }
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("read the config {}", path.display()))?;

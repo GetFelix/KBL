@@ -507,9 +507,9 @@
   "if logged.v > self.format {",
   "return Err(OrgRefusal::SourceServed);"
  ],
- "tracker/src/http/ingest.rs#config_answer": [
+ "tracker/src/http/ingest.rs#connection_for": [
   ".connection_of_group(team, group)",
-  ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor));"
+  ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor))"
  ],
  "tracker/src/http/ingest.rs#config": [
   "None => return busy(),"
@@ -542,6 +542,47 @@
  ],
  "ingest/src/config.rs#check_gitlab": [
   "fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {"
+ ],
+ "tracker/src/http/ingest/leases.rs#heartbeat": [
+  "super::connection_for(state, &team, &group, worker.source.as_deref())",
+  "release_all(tracker, groups, &sources, &me).await;"
+ ],
+ "core/src/lease.rs#step": [
+  "Some(l) if l.free(now_ms) => Step::Take,"
+ ],
+ "core/src/lease.rs#next": [
+  "Step::Take => epoch + 1,"
+ ],
+ "tracker/src/http/ingest/leases.rs#MAX_MEMBERS": [
+  "pub(crate) const MAX_MEMBERS: usize = 256;"
+ ],
+ "tracker/src/http/ingest/leases.rs#join": [
+  "match tracker.put_group_members(group, &m, version).await {"
+ ],
+ "core/src/lease.rs#Lease::free": [
+  "self.expires_ms.saturating_add(TAKE_MARGIN_MS) <= now_ms"
+ ],
+ "ingest/src/lease.rs#Gate::send": [
+  "if let Err(why) = self.lessee.open_for(repos, elsewhere) {",
+  "why = self.lessee.closes(repos, elsewhere) => {"
+ ],
+ "ingest/src/lease.rs#read_elsewhere": [
+  "lessee.check_in(Some(repo), true)?;"
+ ],
+ "ingest/src/source.rs#mark": [
+  "format!(\"<!-- kbl:{item}:{kind}:{key} -->\")"
+ ],
+ "tracker/src/http/ingest/leases.rs#Membership": [
+  "struct Membership {"
+ ],
+ "ingest/src/lease.rs#Lessee::open_for": [
+  ".ok_or(\"another worker holds this source's lease\")?;"
+ ],
+ "ingest/src/lease.rs#Lessee::left": [
+  "limit.checked_sub(mono.max(wall)).filter(|d| !d.is_zero())"
+ ],
+ "ingest/src/lease.rs#leave": [
+  "beating.abort();"
  ],
  "ingest/src/check.rs#safe": [
   "kbl_core::redact::redact(&text.to_string()).into_owned()"

@@ -8,6 +8,7 @@ mod config;
 mod github;
 mod gitlab;
 mod jira;
+mod lease;
 mod metrics;
 mod rules;
 mod source;
@@ -134,23 +135,30 @@ async fn serve() -> Result<()> {
     }
     let token = std::env::var(&cfg.tracker.token_env)
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
-    let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
+    let tracker = tracker_api::Http::new(&cfg.tracker.url, token.clone())?;
+    let lease_api = Arc::new(tracker_api::Http::new(&cfg.tracker.url, token)?);
+    let vendor = cfg.vendor();
+    let lessee = match &cfg.tracker.group {
+        None => lease::Lessee::file_managed(vendor),
+        Some(_) => lease::Lessee::waiting(vendor, cfg.repos()),
+    };
+    let lanes = (tracker, lease_api, lessee.clone());
     match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {
         (Some(g), None, None, None) => {
-            let github = github_source(g).await?;
-            drive(github, tracker, cfg, cli).await
+            let github = github_source(g, &lessee).await?;
+            drive(github, lanes, cfg, cli).await
         }
         (None, Some(j), None, None) => {
-            let jira = jira_source(j, &cfg).await?;
-            drive(jira, tracker, cfg, cli).await
+            let jira = jira_source(j, &cfg, &lessee).await?;
+            drive(jira, lanes, cfg, cli).await
         }
         (None, None, Some(a), None) => {
-            let ado = ado_source(a, &cfg).await?;
-            drive(ado, tracker, cfg, cli).await
+            let ado = ado_source(a, &cfg, &lessee).await?;
+            drive(ado, lanes, cfg, cli).await
         }
         (None, None, None, Some(g)) => {
-            let gitlab = gitlab_source(g, &cfg).await?;
-            drive(gitlab, tracker, cfg, cli).await
+            let gitlab = gitlab_source(g, &cfg, &lessee).await?;
+            drive(gitlab, lanes, cfg, cli).await
         }
         _ => unreachable!("the config checks for exactly one source"),
     }
@@ -171,7 +179,13 @@ pub(crate) fn github_token(gh: &config::GithubConfig) -> Result<Token> {
     })
 }
 
-async fn github_source(gh: &config::GithubConfig) -> Result<Github<Reqwest>> {
+/// A source's HTTP behind the lease fence.
+type Gated<T> = lease::Gate<T>;
+
+async fn github_source(
+    gh: &config::GithubConfig,
+    lessee: &Arc<lease::Lessee>,
+) -> Result<Github<Gated<Reqwest>>> {
     let sources = [
         ("token_file", gh.token_file.is_some()),
         ("app", gh.app.is_some()),
@@ -187,11 +201,11 @@ async fn github_source(gh: &config::GithubConfig) -> Result<Github<Reqwest>> {
     }
     let mut github = Github::new(
         &gh.api,
-        Reqwest::new(github_token(gh)?)?,
+        lease::gated(Reqwest::new(github_token(gh)?)?, lessee.clone()),
         gh.own_logins.clone(),
     );
     // A user token names itself; an App installation token cannot, so the config lists its bot login.
-    if let Some(login) = github.login().await {
+    if let Some(login) = lease::identity(github.login()).await {
         github.add_own(login);
     }
     Ok(github)
@@ -230,16 +244,17 @@ pub(crate) fn jira_scopes(cfg: &Config) -> Vec<jira::Scope> {
 async fn jira_source(
     j: &config::JiraConfig,
     cfg: &Config,
-) -> Result<jira::Jira<jira::transport::Reqwest>> {
+    lessee: &Arc<lease::Lessee>,
+) -> Result<jira::Jira<Gated<jira::transport::Reqwest>>> {
     let mut jira = jira::Jira::new(
         &j.site,
         &j.api,
-        jira::transport::Reqwest::new(jira_auth(j))?,
+        lease::gated(jira::transport::Reqwest::new(jira_auth(j))?, lessee.clone()),
         j.own_logins.clone(),
         jira_scopes(cfg),
         &j.pr_url_base,
     );
-    jira.add_own(jira.login().await);
+    jira.add_own(lease::identity(jira.login()).await);
     jira.require_own()?;
     if let Some(b) = &j.browse_url {
         jira.browse_at(b);
@@ -274,7 +289,8 @@ pub(crate) fn ado_scopes(cfg: &Config) -> Vec<ado::Scope> {
 async fn ado_source(
     a: &config::AdoConfig,
     cfg: &Config,
-) -> Result<ado::Ado<ado::transport::Reqwest>> {
+    lessee: &Arc<lease::Lessee>,
+) -> Result<ado::Ado<Gated<ado::transport::Reqwest>>> {
     let plain = std::iter::once(a.api.as_str())
         .chain(a.entra.iter().map(|e| e.authority.as_str()))
         .any(|u| !u.starts_with("https://"));
@@ -286,13 +302,13 @@ async fn ado_source(
     let mut ado = ado::Ado::new(
         &a.organization,
         &a.api,
-        ado::transport::Reqwest::new(ado_auth(a))?,
+        lease::gated(ado::transport::Reqwest::new(ado_auth(a))?, lessee.clone()),
         a.own_logins.clone(),
         ado_scopes(cfg),
         &a.projects,
         &a.pr_url_base,
     );
-    ado.add_own(ado.login().await);
+    ado.add_own(lease::identity(ado.login()).await);
     ado.require_own()?;
     Ok(ado)
 }
@@ -309,29 +325,56 @@ pub(crate) fn gitlab_secret(g: &config::GitlabConfig) -> ado::transport::Secret 
 async fn gitlab_source(
     g: &config::GitlabConfig,
     cfg: &Config,
-) -> Result<gitlab::Gitlab<gitlab::transport::Reqwest>> {
+    lessee: &Arc<lease::Lessee>,
+) -> Result<gitlab::Gitlab<Gated<gitlab::transport::Reqwest>>> {
     let mut gitlab = gitlab::Gitlab::new(
         &g.api,
-        gitlab::transport::Reqwest::new(gitlab_secret(g))?,
+        lease::gated(
+            gitlab::transport::Reqwest::new(gitlab_secret(g))?,
+            lessee.clone(),
+        ),
         g.own_logins.clone(),
         cfg.rules.clone(),
         &g.projects,
     )?;
-    gitlab.add_own(gitlab.login().await);
+    gitlab.add_own(lease::identity(gitlab.login()).await);
     gitlab.require_own()?;
     Ok(gitlab)
 }
 
 async fn drive<S: Source>(
     source: S,
-    tracker: tracker_api::Http,
+    (tracker, lease_api, lessee): (
+        tracker_api::Http,
+        Arc<tracker_api::Http>,
+        Arc<lease::Lessee>,
+    ),
     cfg: Config,
     cli: Cli,
 ) -> Result<()> {
     let repos = cfg.repos();
     let poll_every = Duration::from_secs(cfg.poll_seconds);
+    let leasing = match cfg.tracker.group.clone() {
+        Some(group) => {
+            let instance = lease::instance()?;
+            tokio::spawn(lease::config_task(
+                lease_api.clone(),
+                lessee.clone(),
+                group.clone(),
+                instance.clone(),
+            ));
+            let beating = tokio::spawn(lease::heartbeat_task(
+                lease_api.clone(),
+                lessee.clone(),
+                group.clone(),
+                instance.clone(),
+            ));
+            Some((group, instance, beating))
+        }
+        None => None,
+    };
     let ingest = Ingest::new(
-        source,
+        lease::Fenced::new(source, lessee.clone()),
         tracker,
         Settings {
             rules: cfg.rules,
@@ -365,16 +408,34 @@ async fn drive<S: Source>(
         });
     }
 
-    run(&ingest, &wake, poll_every, cli.once).await
+    let done = run(&ingest, &lessee, &wake, poll_every, cli.once).await;
+    // Released only once the poll loop has stopped, so the next holder never
+    // overlaps this one.
+    if let Some((group, instance, beating)) = leasing {
+        lease::leave(&*lease_api, beating, &group, &instance).await;
+    }
+    done
 }
 
 async fn run<S: Source, T: tracker_api::Tracker>(
     ingest: &Ingest<S, T>,
+    lessee: &lease::Lessee,
     wake: &webhook::Wake,
     every: Duration,
     once: bool,
 ) -> Result<()> {
     loop {
+        // Without a fresh lease the poll would make no vendor call anyway;
+        // skipping it also spares the tracker.
+        if !lessee.may_poll() {
+            let changed = lessee.changed.notified();
+            tokio::select! {
+                () = changed => {}
+                () = tokio::time::sleep(every) => {}
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+            }
+            continue;
+        }
         let reconcile = wake.reconcile.swap(false, Ordering::SeqCst);
         let polled = ingest.poll(reconcile).await;
         // A failed poll did not reconcile, so the next one still must.

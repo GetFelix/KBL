@@ -191,14 +191,30 @@ pub(crate) struct Links {
 pub(crate) enum WriteBack {
     /// The issue was dropped upstream while an agent's pull request is open:
     /// make the pull request a draft and say why on it.
-    DraftPullRequest { pr: IssueRef, note: String },
+    DraftPullRequest {
+        pr: IssueRef,
+        note: String,
+        /// See [`mark`].
+        mark: String,
+    },
     /// Say something on the upstream issue itself (Jira).
-    Comment { issue: IssueRef, body: String },
+    Comment {
+        issue: IssueRef,
+        body: String,
+        /// See [`mark`].
+        mark: String,
+    },
     /// Link the agent's pull request (`owner/repo#n`) from the issue.
     LinkPullRequest { issue: IssueRef, pr: IssueRef },
     /// Move the issue through the workflow transition of this name, if the
     /// workflow offers it now.
     Transition { issue: IssueRef, name: String },
+}
+
+/// The hidden tag on a comment KBL writes about `item`. A post cut short has
+/// an unknown outcome, so the retry looks for this before posting again.
+pub(crate) fn mark(item: &str, kind: &str, key: &str) -> String {
+    format!("<!-- kbl:{item}:{kind}:{key} -->")
 }
 
 #[derive(Debug)]

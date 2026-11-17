@@ -424,6 +424,7 @@ async fn write_back_comments_links_and_changes_state() {
     .await
     .unwrap();
     a.write_back(&WriteBack::Comment {
+        mark: "<!-- kbl:t -->".into(),
         issue: issue.clone(),
         body: "An agent opened GetFelix/felix#40 <b>for</b> this & that.".into(),
     })
@@ -452,7 +453,7 @@ async fn write_back_comments_links_and_changes_state() {
             ),
             (
                 "POST /contoso/Platform%20Team/_apis/wit/workItems/12/comments".to_owned(),
-                json!({ "text": "An agent opened GetFelix/felix#40 &lt;b&gt;for&lt;/b&gt; this &amp; that." })
+                json!({ "text": "An agent opened GetFelix/felix#40 &lt;b&gt;for&lt;/b&gt; this &amp; that.<!-- kbl:t -->" })
             ),
             (
                 "PATCH /contoso/Platform%20Team/_apis/wit/workitems/12".to_owned(),
@@ -486,6 +487,7 @@ async fn a_write_already_made_or_refused_by_the_process_is_not_an_error() {
     let a = ado(&org);
     let issue = IssueRef::new("contoso/Platform", 12);
     a.write_back(&WriteBack::Comment {
+        mark: "<!-- kbl:t -->".into(),
         issue: issue.clone(),
         body: "hi".into(),
     })
@@ -508,6 +510,7 @@ async fn a_write_already_made_or_refused_by_the_process_is_not_an_error() {
     // A refused comment is an error, so the engine retries it.
     assert!(
         a.write_back(&WriteBack::Comment {
+            mark: "<!-- kbl:t -->".into(),
             issue: IssueRef::new("contoso/Platform", 12),
             body: "new".into(),
         })
@@ -524,6 +527,7 @@ async fn nothing_is_written_unless_a_rule_asks_and_only_to_a_configured_project(
     }));
     let err = ado_with(&org, &read_only)
         .write_back(&WriteBack::Comment {
+            mark: "<!-- kbl:t -->".into(),
             issue: IssueRef::new("contoso/Platform", 12),
             body: "x".into(),
         })
@@ -538,6 +542,7 @@ async fn nothing_is_written_unless_a_rule_asks_and_only_to_a_configured_project(
         let a = ado(&org);
         assert!(
             a.write_back(&WriteBack::Comment {
+                mark: "<!-- kbl:t -->".into(),
                 issue: issue.clone(),
                 body: "x".into()
             })

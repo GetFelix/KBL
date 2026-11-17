@@ -30,7 +30,12 @@ async fn a_failed_poll_keeps_the_reconcile_flag() {
     );
     let wake = webhook::Wake::default();
     wake.reconcile.store(true, Ordering::SeqCst);
-    assert!(run(&ingest, &wake, Duration::ZERO, true).await.is_err());
+    let lessee = lease::Lessee::file_managed("github");
+    assert!(
+        run(&ingest, &lessee, &wake, Duration::ZERO, true)
+            .await
+            .is_err()
+    );
     assert!(wake.reconcile.load(Ordering::SeqCst));
 }
 

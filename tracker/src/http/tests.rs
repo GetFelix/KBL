@@ -54,9 +54,20 @@ struct Quiet {
     /// The next read takes this long. With a record, another tracker meanwhile
     /// takes the lease and appends it.
     slow_read: Arc<StdMutex<Option<SlowRead>>>,
+    /// Ingest source leases by source: value and version.
+    source_leases: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
+    /// Ingest worker groups' members by group: value and version.
+    group_members: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
+    /// Membership writes fail.
+    fail_members_put: Arc<AtomicBool>,
+    /// Another tracker writes this to a source's lease just before the next
+    /// lease put, so that put's version check fails.
+    race_lease_put: Arc<StdMutex<Option<Vec<u8>>>>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
+/// A cache value and its version.
+type Versioned = (Vec<u8>, u64);
 
 /// How long a read takes, and the record another tracker appends meanwhile.
 type SlowRead = (Duration, Option<Vec<u8>>);
@@ -192,6 +203,51 @@ impl Broker for Quiet {
             .unwrap()
             .is_some_and(|t| t > tokio::time::Instant::now());
         Ok(live.then(|| (self.lease_holder.lock().unwrap().clone(), version)))
+    }
+    async fn source_lease_get(&self, source: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        Ok(self.source_leases.lock().unwrap().get(source).cloned())
+    }
+    async fn source_lease_put(
+        &self,
+        source: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut leases = self.source_leases.lock().unwrap();
+        if let Some(other) = self.race_lease_put.lock().unwrap().take() {
+            let next = leases.get(source).map_or(1, |(_, v)| v + 1);
+            leases.insert(source.to_owned(), (other, next));
+        }
+        let now = leases.get(source).map(|(_, v)| *v);
+        if now != expect {
+            return Ok(None);
+        }
+        let next = now.unwrap_or(0) + 1;
+        leases.insert(source.to_owned(), (value, next));
+        Ok(Some(next))
+    }
+    async fn group_members_get(&self, group: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        // A real read is a round trip, so concurrent heartbeats interleave.
+        tokio::task::yield_now().await;
+        Ok(self.group_members.lock().unwrap().get(group).cloned())
+    }
+    async fn group_members_put(
+        &self,
+        group: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        if self.fail_members_put.load(Ordering::SeqCst) {
+            anyhow::bail!("the cache is unreachable");
+        }
+        let mut all = self.group_members.lock().unwrap();
+        let now = all.get(group).map(|(_, v)| *v);
+        if now != expect {
+            return Ok(None);
+        }
+        let next = now.unwrap_or(0) + 1;
+        all.insert(group.to_owned(), (value, next));
+        Ok(Some(next))
     }
     async fn forget(&self, _: Option<&str>) {}
     async fn close_idle(&self, _: Duration) {}

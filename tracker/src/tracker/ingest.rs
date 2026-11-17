@@ -415,6 +415,67 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
+    /// A source's ingest lease and the version to write it back at.
+    pub(crate) async fn source_lease(
+        &self,
+        source: &str,
+    ) -> Result<Option<(kbl_core::lease::Lease, u64)>, Error> {
+        match self.0.broker.source_lease_get(source).await {
+            Ok(Some((bytes, version))) => serde_json::from_slice(&bytes)
+                .map(|l| Some((l, version)))
+                .map_err(|e| Error::Felix(anyhow::anyhow!("a source lease is not JSON: {e}"))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
+    /// Writes a source's lease if nobody wrote it since `version`.
+    pub(crate) async fn put_source_lease(
+        &self,
+        source: &str,
+        lease: &kbl_core::lease::Lease,
+        version: Option<u64>,
+    ) -> Result<bool, Error> {
+        let bytes = serde_json::to_vec(lease).map_err(|_| refused("invalid"))?;
+        match self.0.broker.source_lease_put(source, bytes, version).await {
+            Ok(put) => Ok(put.is_some()),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
+    /// A worker group's membership entry and the version to write it back at.
+    pub(crate) async fn group_members<T: serde::de::DeserializeOwned>(
+        &self,
+        group: &Key,
+    ) -> Result<Option<(T, u64)>, Error> {
+        match self.0.broker.group_members_get(group.as_str()).await {
+            Ok(Some((bytes, version))) => serde_json::from_slice(&bytes)
+                .map(|m| Some((m, version)))
+                .map_err(|e| Error::Felix(anyhow::anyhow!("a group's members are not JSON: {e}"))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
+    /// Writes a group's members if nobody wrote them since `version`.
+    pub(crate) async fn put_group_members<T: serde::Serialize>(
+        &self,
+        group: &Key,
+        members: &T,
+        version: Option<u64>,
+    ) -> Result<bool, Error> {
+        let bytes = serde_json::to_vec(members).map_err(|_| refused("invalid"))?;
+        match self
+            .0
+            .broker
+            .group_members_put(group.as_str(), bytes, version)
+            .await
+        {
+            Ok(put) => Ok(put.is_some()),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
     pub(crate) async fn ingest_state(&self, source: &str) -> Result<Value, Error> {
         let name = state_name(source)?;
         match self.0.broker.cursor_get(&name).await {

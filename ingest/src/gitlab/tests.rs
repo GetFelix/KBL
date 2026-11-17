@@ -811,10 +811,10 @@ async fn a_reported_merge_request_on_the_item_branch_closes_the_root_when_merged
     // The comment says the request is `path!7`, which GitLab reads as a merge request.
     let writes: Vec<(String, Value)> = lab.writes();
     assert!(
-        writes
-            .iter()
-            .any(|(w, b)| w.ends_with("/issues/12/notes")
-                && b["body"] == "group/sub/app!7 was merged."),
+        writes.iter().any(|(w, b)| w.ends_with("/issues/12/notes")
+            && b["body"]
+                .as_str()
+                .is_some_and(|b| b.starts_with("group/sub/app!7 was merged.\n\n<!-- kbl:"))),
         "{writes:?}"
     );
     assert!(
@@ -924,7 +924,8 @@ async fn re_polling_announces_a_request_once() {
     assert_eq!(writes[0].0, format!("POST {PROJECT}/issues/12/notes"));
     assert_eq!(
         writes[0].1["body"],
-        "An agent opened group/sub/app!7 for this issue."
+        "An agent opened group/sub/app!7 for this issue.\n\n\
+         <!-- kbl:team/app#12:linked:team/app#7 -->"
     );
 }
 
@@ -949,12 +950,14 @@ async fn a_comment_is_posted_once_and_a_state_change_only_when_needed() {
     let g = gitlab(&lab);
     let issue = IssueRef::new("team/app", 12);
     g.write_back(&WriteBack::Comment {
+        mark: "<!-- kbl:t -->".into(),
         issue: issue.clone(),
         body: "already said".into(),
     })
     .await
     .unwrap();
     g.write_back(&WriteBack::Comment {
+        mark: "<!-- kbl:t -->".into(),
         issue: issue.clone(),
         body: "something new".into(),
     })
@@ -970,7 +973,10 @@ async fn a_comment_is_posted_once_and_a_state_change_only_when_needed() {
     let writes = lab.writes();
     assert_eq!(writes.len(), 1, "{writes:?}");
     assert_eq!(writes[0].0, format!("POST {PROJECT}/issues/12/notes"));
-    assert_eq!(writes[0].1, json!({ "body": "something new" }));
+    assert_eq!(
+        writes[0].1,
+        json!({ "body": "something new\n\n<!-- kbl:t -->" })
+    );
 }
 
 #[tokio::test]
@@ -1010,6 +1016,7 @@ async fn nothing_is_written_unless_a_rule_asks_and_only_to_a_configured_project(
     let issue = IssueRef::new("team/app", 12);
     for what in [
         WriteBack::Comment {
+            mark: "<!-- kbl:t -->".into(),
             issue: issue.clone(),
             body: "x".into(),
         },
@@ -1018,6 +1025,7 @@ async fn nothing_is_written_unless_a_rule_asks_and_only_to_a_configured_project(
             name: "close".into(),
         },
         WriteBack::DraftPullRequest {
+            mark: "<!-- kbl:t -->".into(),
             pr: IssueRef::new("team/app", 7),
             note: "x".into(),
         },
@@ -1033,6 +1041,7 @@ async fn nothing_is_written_unless_a_rule_asks_and_only_to_a_configured_project(
     let elsewhere = IssueRef::new("evil/repo", 1);
     for what in [
         WriteBack::Comment {
+            mark: "<!-- kbl:t -->".into(),
             issue: elsewhere.clone(),
             body: "x".into(),
         },
@@ -1041,6 +1050,7 @@ async fn nothing_is_written_unless_a_rule_asks_and_only_to_a_configured_project(
             name: "close".into(),
         },
         WriteBack::DraftPullRequest {
+            mark: "<!-- kbl:t -->".into(),
             pr: elsewhere.clone(),
             note: "x".into(),
         },
@@ -1064,6 +1074,7 @@ async fn a_dropped_issue_makes_our_open_request_a_draft_and_leaves_others_alone(
     });
     let g = gitlab(&lab);
     let draft = || WriteBack::DraftPullRequest {
+        mark: "<!-- kbl:t -->".into(),
         pr: IssueRef::new("team/app", 7),
         note: "dropped".into(),
     };
@@ -1096,6 +1107,7 @@ async fn a_failed_write_is_an_error_without_the_answer() {
     });
     let err = gitlab(&lab)
         .write_back(&WriteBack::Comment {
+            mark: "<!-- kbl:t -->".into(),
             issue: IssueRef::new("team/app", 12),
             body: "x".into(),
         })
@@ -1478,4 +1490,32 @@ async fn an_invented_request_number_is_not_announced() {
     let _ = item;
     ingest.poll(false).await.unwrap();
     assert!(lab.writes().is_empty(), "{:?}", lab.writes());
+}
+
+#[tokio::test]
+async fn a_draft_note_whose_post_may_have_landed_is_not_posted_again() {
+    let mark = "<!-- kbl:team/app#12:draft:team/app#7 -->";
+    let notes = Arc::new(Mutex::new(json!([])));
+    let n = notes.clone();
+    let lab = Lab::new(move |req| match req.method {
+        "GET" if req.url.contains("/notes") => res(200, n.lock().unwrap().clone()),
+        "GET" => res(200, mr(|v| v["draft"] = json!(true))),
+        _ => res(201, Value::Null),
+    });
+    let g = gitlab(&lab);
+    let draft = WriteBack::DraftPullRequest {
+        mark: mark.into(),
+        pr: IssueRef::new("team/app", 7),
+        note: "dropped".into(),
+    };
+    g.write_back(&draft).await.unwrap();
+    assert_eq!(lab.writes()[0].1["body"], format!("dropped\n\n{mark}"));
+    // The post was cut short but landed: the retry finds its mark.
+    *notes.lock().unwrap() = json!([{
+        "id": 1,
+        "author": { "username": OURS },
+        "body": format!("dropped\n\n{mark}"),
+    }]);
+    g.write_back(&draft).await.unwrap();
+    assert_eq!(lab.writes().len(), 1);
 }

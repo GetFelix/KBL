@@ -324,6 +324,7 @@ async fn write_back_posts_a_comment_a_remote_link_and_a_transition() {
     .await
     .unwrap();
     j.write_back(&WriteBack::Comment {
+        mark: "<!-- kbl:t -->".into(),
         issue: issue.clone(),
         body: "An agent opened GetFelix/felix#40 for this issue.".into(),
     })
@@ -380,6 +381,7 @@ async fn a_comment_already_there_is_not_posted_again() {
     });
     jira(&site)
         .write_back(&WriteBack::Comment {
+            mark: "<!-- kbl:t -->".into(),
             issue: IssueRef::new("acme/FEL", 12),
             body: "hi".into(),
         })

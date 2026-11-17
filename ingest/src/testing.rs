@@ -53,6 +53,12 @@ pub(crate) fn status(code: u16, headers: &[(&str, &str)]) -> Res {
     }
 }
 
+/// An answer that never comes: the lease fence cut the request after it
+/// was sent, so it may have landed.
+pub(crate) fn cut() -> Res {
+    status(0, &[])
+}
+
 struct Route {
     method: &'static str,
     contains: String,
@@ -117,11 +123,15 @@ impl Transport for Script {
             .iter_mut()
             .filter(|r| r.method == req.method && req.url.contains(&r.contains))
             .max_by_key(|r| r.contains.len());
-        Ok(match best {
+        let res = match best {
             Some(r) if r.answers.len() > 1 => r.answers.pop_front().unwrap(),
             Some(r) => r.answers[0].clone(),
             None => status(404, &[]),
-        })
+        };
+        if res.status == 0 {
+            return Err(crate::lease::FenceClosed("request cancelled".into()).into());
+        }
+        Ok(res)
     }
 }
 

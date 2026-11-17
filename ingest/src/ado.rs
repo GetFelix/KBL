@@ -818,8 +818,10 @@ impl<T: Transport> Source for Ado<T> {
         let project = self.project_of(issue)?.to_owned();
         match what {
             WriteBack::DraftPullRequest { .. } => unreachable!("returned above"),
-            WriteBack::Comment { issue, body } => {
-                // A retry after a later step failed must not say it twice.
+            WriteBack::Comment { issue, body, mark } => {
+                // A retry, after a later step failed or a post was cut short,
+                // must not say it twice. The text read back has the hidden
+                // mark stripped, so the body is what matches.
                 if self
                     .issue_comments(issue)
                     .await?
@@ -834,7 +836,8 @@ impl<T: Transport> Source for Ado<T> {
                     &[],
                     COMMENTS_API,
                 )?;
-                self.post_write(Req::post(url, json!({ "text": html_escape(body) })))
+                let text = format!("{}{mark}", html_escape(body));
+                self.post_write(Req::post(url, json!({ "text": text })))
                     .await
             }
             WriteBack::LinkPullRequest { issue, pr } => {

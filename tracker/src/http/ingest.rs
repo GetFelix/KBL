@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use kbl_core::names::Key;
 use kbl_core::org::{TeamName, TokenHash};
@@ -29,7 +29,10 @@ pub(super) fn routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/ingest/roots", get(roots::<B>))
         .route("/v1/ingest/state/{source}", get(load::<B>).put(save::<B>))
         .route("/v1/ingest/config", get(config::<B>))
+        .route("/v1/ingest/leases", put(leases::heartbeat::<B>))
 }
+
+pub(super) mod leases;
 
 /// Config long polls held at once across the tracker. One per worker; well
 /// past the 200 workers the design is sized for.
@@ -46,6 +49,10 @@ struct ConfigQuery {
     group: String,
     #[serde(default)]
     wait: u64,
+    /// The worker's instance, as its lease heartbeat names it. With it the
+    /// answer adds what the worker is assigned and the leases it holds.
+    #[serde(default)]
+    instance: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -133,6 +140,10 @@ async fn config<B: Broker>(
     let Ok(group) = Key::new(q.group) else {
         return refused(StatusCode::BAD_REQUEST, "group is a key", "invalid");
     };
+    let me = match q.instance.map(Key::new).transpose() {
+        Ok(i) => i.map(|i| leases::member(&worker.key, &i)),
+        Err(_) => return refused(StatusCode::BAD_REQUEST, "instance is a key", "invalid"),
+    };
     let Some(org) = call.teams.org().map(|o| o.org.clone()) else {
         return refused(
             StatusCode::NOT_FOUND,
@@ -161,13 +172,24 @@ async fn config<B: Broker>(
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         changes.borrow_and_update();
-        let Some((body, etag)) = org.with_view(|state, _| {
+        let Some((mut body, sources)) = org.with_view(|state, _| {
             let body = config_answer(state, &team, &group, worker.source.as_deref());
-            let etag = etag_of(&body);
-            (body, etag)
+            let sources = connection_for(state, &team, &group, worker.source.as_deref())
+                .map(|(_, c)| c.sources.clone());
+            (body, sources)
         }) else {
             return super::org_unavailable();
         };
+        // Leases change without an org record, so a held poll also wakes on
+        // the group's heartbeats.
+        let mut moved = None;
+        if let (Some(me), Some(sources)) = (&me, &sources) {
+            let (view, rx) = app.leases.view(&team, &group, me, sources);
+            body["assigned"] = view["assigned"].clone();
+            body["leases"] = view["leases"].clone();
+            moved = Some(rx);
+        }
+        let etag = etag_of(&body);
         if seen.as_deref() != Some(etag.as_str()) {
             let mut res = Json(body).into_response();
             if let Ok(v) = HeaderValue::from_str(&etag) {
@@ -175,11 +197,18 @@ async fn config<B: Broker>(
             }
             return res;
         }
-        if held.is_none()
-            || tokio::time::timeout_at(deadline, changes.changed())
-                .await
-                .is_err()
-        {
+        let woke = async {
+            match moved.as_mut() {
+                Some(rx) => {
+                    tokio::select! {
+                        r = changes.changed() => r.is_ok(),
+                        r = rx.changed() => r.is_ok(),
+                    }
+                }
+                None => changes.changed().await.is_ok(),
+            }
+        };
+        if held.is_none() || tokio::time::timeout_at(deadline, woke).await.is_err() {
             let mut res = StatusCode::NOT_MODIFIED.into_response();
             if let Ok(v) = HeaderValue::from_str(&etag) {
                 res.headers_mut().insert(header::ETAG, v);
@@ -221,10 +250,7 @@ fn busy() -> Response {
 /// `connection: null`, and its worker stays file-managed. A token tied to a
 /// vendor sees only a connection to that vendor.
 fn config_answer(state: &OrgState, team: &TeamName, group: &Key, tied: Option<&str>) -> Value {
-    let conn = state
-        .connection_of_group(team, group)
-        .filter(|(_, c)| tied.is_none_or(|v| v == c.vendor));
-    let Some((name, c)) = conn else {
+    let Some((name, c)) = connection_for(state, team, group, tied) else {
         return json!({ "org_format": state.format(), "connection": null, "budget": null });
     };
     // The pool's budget, not a share: the split per worker follows the
@@ -248,6 +274,19 @@ fn config_answer(state: &OrgState, team: &TeamName, group: &Key, tied: Option<&s
         },
         "budget": budget,
     })
+}
+
+/// The connection naming `group` in `team`. A token tied to a vendor sees
+/// only a connection to that vendor.
+fn connection_for<'a>(
+    state: &'a OrgState,
+    team: &TeamName,
+    group: &Key,
+    tied: Option<&str>,
+) -> Option<(&'a Key, &'a kbl_core::org_fold::Connection)> {
+    state
+        .connection_of_group(team, group)
+        .filter(|(_, c)| tied.is_none_or(|v| v == c.vendor))
 }
 
 /// A digest of the answer, so a record for another team or group leaves a

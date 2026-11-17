@@ -11,6 +11,8 @@ use super::*;
 use crate::org::{Org, OrgError};
 use crate::teams::{OrgSide, Starter};
 
+mod leases;
+
 /// A tracker with teams on: `default` adopted, `tok-ops` its org admin and
 /// `tok-w1` an agent of `default`. Each team gets its own Felix, made on its
 /// first start and kept, so a test can break one team's.

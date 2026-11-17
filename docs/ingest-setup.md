@@ -157,6 +157,29 @@ kbl-ingest --config ingest.json          # keep polling
 Ready columns. If the result is not what `check` showed, run `check` again with
 `--json` and compare.
 
+### Running more than one worker
+
+Set `"group"` under `"tracker"` to the worker group an org admin named in a
+`connection_set`. The worker then holds the config route open on its own task
+and takes the connection's sources by lease: it polls and writes back only to
+the sources it holds. Each lease runs for 90 s and the worker renews all of
+them every 30 s. If no renew has succeeded for 60 s, it makes no upstream call
+until one does, and cancels any request still running, so a worker cut off from
+the tracker stops before another can take its sources. Time the machine spends
+asleep counts. A lease is free to take 30 s after it expires, so the trackers'
+clocks must agree within 30 s. When the worker stops, it releases its leases.
+
+A repo in the worker's rules that the connection does not name is not polled:
+the worker prints a warning naming it when the config arrives. Names match the
+way the vendor compares them, so `Owner/Repo` and `owner/repo` are one GitHub,
+GitLab or Azure DevOps repo; Jira project keys must match exactly.
+
+Leave `"group"` unset, or name a group no connection uses, and the worker polls
+every configured repo as before.
+
+Each worker still keeps one state per adapter in this release, so run one
+worker per connection until per-source state ships.
+
 ## Quick start
 
 The development stack's [quick start](../README.md#quick-start) has the tracker
