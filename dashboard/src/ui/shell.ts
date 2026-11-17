@@ -62,7 +62,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   const panel = itemPanel(on);
   const writes = bulkBar(on);
   const status = statusBar();
-  const full = h('p', { class: 'status review-full', role: 'status', 'aria-live': 'polite' });
+  const full = h('p', { class: 'review-full', role: 'status', 'aria-live': 'polite' });
   full.hidden = true;
   const search = h('input', {
     id: 'search',
