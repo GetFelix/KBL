@@ -11,7 +11,9 @@ mod serve;
 
 use std::sync::OnceLock;
 
-use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use metrics_exporter_prometheus::{
+    Matcher, PrometheusBuilder, PrometheusHandle, PrometheusRecorder,
+};
 
 pub use serve::{check_listen, router, serve};
 
@@ -24,6 +26,22 @@ const LAG_BUCKETS: &[f64] = &[
     1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 3600.0, 21_600.0, 86_400.0,
 ];
 
+/// Builds a recorder with the service's buckets that is not installed, so a
+/// test can scope one to its own thread with `metrics::set_default_local_recorder`
+/// and read counts no other test touches.
+pub fn local_recorder() -> (PrometheusRecorder, PrometheusHandle) {
+    let recorder = builder().build_recorder();
+    let handle = recorder.handle();
+    (recorder, handle)
+}
+
+fn builder() -> PrometheusBuilder {
+    PrometheusBuilder::new()
+        .set_buckets_for_metric(Matcher::Suffix("lag_seconds".into()), LAG_BUCKETS)
+        .and_then(|b| b.set_buckets(LATENCY_BUCKETS))
+        .expect("the bucket lists are not empty")
+}
+
 static HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 
 /// Renders what the process has recorded.
@@ -34,11 +52,7 @@ pub struct Exporter(PrometheusHandle);
 /// exporter, so tests in one process share it.
 pub fn install(service: &'static str) -> Exporter {
     let handle = HANDLE.get_or_init(|| {
-        let recorder = PrometheusBuilder::new()
-            .set_buckets_for_metric(Matcher::Suffix("lag_seconds".into()), LAG_BUCKETS)
-            .and_then(|b| b.set_buckets(LATENCY_BUCKETS))
-            .expect("the bucket lists are not empty")
-            .build_recorder();
+        let recorder = builder().build_recorder();
         let handle = recorder.handle();
         if metrics::set_global_recorder(recorder).is_err() {
             eprintln!("{service}: another metrics recorder was installed first; /metrics is empty");
