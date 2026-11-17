@@ -1,0 +1,8 @@
+{"at_ms":1000,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#9","title":"stale read"}
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1020,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":91020}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"decision","item":"r1","attempt":1,"phase":"verify","so_far":"fix in","question":"","chosen":"","why":"test added","commit":"9f3c2ab"}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"progress","item":"r1","attempt":1,"note":{"text":"fixed"},"pr":"GetFelix/felix#9"}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"done","item":"r1","attempt":1,"cost_micros":0}
+{"at_ms":1060,"by":"ingest","actor":"tracker","kind":"pr_status","item":"r1","status":{"pr":"GetFelix/felix#9","phase":"open","review":"unreviewed","checks":"green"}}
+{"at_ms":1070,"by":"ingest","actor":"tracker","kind":"pr_status","item":"r1","status":{"pr":"GetFelix/felix#9","phase":"open","review":"approved","checks":"green"}}

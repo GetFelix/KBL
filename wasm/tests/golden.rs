@@ -83,6 +83,14 @@ fn logs() -> Vec<(&'static str, String)> {
             std::fs::read_to_string(format!("{core}/work_format_8.jsonl")).unwrap(),
         ),
         (
+            "format_9",
+            std::fs::read_to_string(format!("{core}/work_format_9.jsonl")).unwrap(),
+        ),
+        (
+            "pre_review",
+            std::fs::read_to_string(format!("{core}/work_pre_review.jsonl")).unwrap(),
+        ),
+        (
             "agent_context",
             std::fs::read_to_string(format!("{core}/work_agent_context.jsonl")).unwrap(),
         ),
@@ -118,6 +126,33 @@ fn the_page_fold_matches_the_core_fold_on_the_golden_logs() {
             std::fs::read_to_string(&state_path).unwrap(),
             native,
             "{name} state"
+        );
+    }
+}
+
+/// A new format or old-log file cannot skip the corpus: every `work_*.jsonl` in core's tests is
+/// folded above, and every format from 2 to the current one has a log.
+#[test]
+fn the_corpus_holds_every_format_and_every_old_log() {
+    let core = concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests");
+    let names: Vec<_> = logs().into_iter().map(|(n, _)| n).collect();
+    for entry in std::fs::read_dir(core).unwrap() {
+        let file = entry.unwrap().file_name().into_string().unwrap();
+        let Some(stem) = file
+            .strip_suffix(".jsonl")
+            .and_then(|f| f.strip_prefix("work_"))
+        else {
+            continue;
+        };
+        // `work_wire` is the every-record log, wrapped above.
+        let name = if stem == "wire" { "every_record" } else { stem };
+        assert!(names.contains(&name), "{file} is not in the golden corpus");
+    }
+    for v in 2..=kbl_core::work::FORMAT {
+        let name = format!("format_{v}");
+        assert!(
+            names.contains(&name.as_str()),
+            "no golden log for format {v}"
         );
     }
 }
