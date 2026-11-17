@@ -44,3 +44,12 @@ fn the_webhook_listens_only_on_loopback_without_a_tls_proxy() {
     assert!(check_listen(addr("[::]:8791"), false).is_err());
     check_listen(addr("0.0.0.0:8791"), true).unwrap();
 }
+
+#[test]
+fn check_is_a_subcommand_and_a_plain_run_still_needs_a_config() {
+    let cli = Cli::try_parse_from(["kbl-ingest", "check", "--config", "c.json", "--json"]).unwrap();
+    assert!(matches!(cli.command, Some(Command::Check(_))));
+    let run = Cli::try_parse_from(["kbl-ingest", "--config", "c.json", "--once"]).unwrap();
+    assert!(run.command.is_none() && run.config.is_some() && run.once);
+    assert!(Cli::try_parse_from(["kbl-ingest", "--once"]).is_err());
+}

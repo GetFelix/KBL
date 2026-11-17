@@ -255,7 +255,7 @@ impl AppAuth {
     }
 }
 
-fn check_key_mode(path: &std::path::Path) -> Result<()> {
+pub(crate) fn check_key_mode(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

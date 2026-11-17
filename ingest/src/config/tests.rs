@@ -124,3 +124,37 @@ fn a_jira_filter_may_not_order_itself() {
     assert!(parse(r#"summary ~ "order by" AND labels = x"#).is_ok());
     assert!(parse("labels = x").is_ok());
 }
+
+/// The starter configs `kbl-tool source init` writes, filled in the way it
+/// fills them, must be configs the worker accepts.
+#[test]
+fn the_starter_configs_of_kbl_tool_parse() {
+    let fill = |name: &str| {
+        let path = format!(
+            "{}/../tool/src/source/{name}.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let mut text = std::fs::read_to_string(&path).expect(&path);
+        text = text.replace("{{cap}}", "5");
+        let values = [
+            ("repo", "acme/FEL"),
+            ("site", "acme"),
+            ("api", "https://acme.atlassian.net"),
+            ("email", "kbl@acme.example"),
+            ("token_env", "SOURCE_TOKEN"),
+            ("tracker_url", "http://127.0.0.1:8790"),
+            ("label", "agent-ok"),
+            ("jql", "labels = \"agent-ok\""),
+            ("mode", "admit"),
+            ("target_repo", "GetFelix/felix"),
+        ];
+        for (k, v) in values {
+            text = text.replace(&format!("{{{{{k}}}}}"), &serde_json::to_string(v).unwrap());
+        }
+        text
+    };
+    let github = fill("github").replace("acme/FEL", "GetFelix/felix");
+    Config::parse(&github).unwrap();
+    let jira = Config::parse(&fill("jira")).unwrap();
+    assert!(jira.jira.is_some());
+}
