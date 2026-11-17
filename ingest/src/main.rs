@@ -247,20 +247,9 @@ async fn jira_source(
     Ok(jira)
 }
 
-async fn ado_source(
-    a: &config::AdoConfig,
-    cfg: &Config,
-) -> Result<ado::Ado<ado::transport::Reqwest>> {
+pub(crate) fn ado_auth(a: &config::AdoConfig) -> ado::transport::Auth {
     use ado::transport::{Auth, Entra, Secret};
-    let plain = std::iter::once(a.api.as_str())
-        .chain(a.entra.iter().map(|e| e.authority.as_str()))
-        .any(|u| !u.starts_with("https://"));
-    if plain {
-        eprintln!(
-            "kbl-ingest: warning: an Azure DevOps address is not https; the credential is sent in the clear"
-        );
-    }
-    let auth = match (&a.pat_file, &a.pat_env, &a.entra) {
+    match (&a.pat_file, &a.pat_env, &a.entra) {
         (Some(f), _, None) => Auth::Pat(Secret::File(f.clone())),
         (None, Some(e), None) => Auth::Pat(Secret::Env(e.clone())),
         (None, None, Some(e)) => {
@@ -272,18 +261,34 @@ async fn ado_source(
             Auth::Entra(Entra::new(&e.tenant_id, &e.client_id, secret, &e.authority))
         }
         _ => unreachable!("the config checks the sign-in"),
-    };
-    let scopes = cfg
-        .rules
+    }
+}
+
+pub(crate) fn ado_scopes(cfg: &Config) -> Vec<ado::Scope> {
+    cfg.rules
         .iter()
         .map(|r| ado::Scope { rule: r.clone() })
-        .collect();
+        .collect()
+}
+
+async fn ado_source(
+    a: &config::AdoConfig,
+    cfg: &Config,
+) -> Result<ado::Ado<ado::transport::Reqwest>> {
+    let plain = std::iter::once(a.api.as_str())
+        .chain(a.entra.iter().map(|e| e.authority.as_str()))
+        .any(|u| !u.starts_with("https://"));
+    if plain {
+        eprintln!(
+            "kbl-ingest: warning: an Azure DevOps address is not https; the credential is sent in the clear"
+        );
+    }
     let mut ado = ado::Ado::new(
         &a.organization,
         &a.api,
-        ado::transport::Reqwest::new(auth)?,
+        ado::transport::Reqwest::new(ado_auth(a))?,
         a.own_logins.clone(),
-        scopes,
+        ado_scopes(cfg),
         &a.projects,
         &a.pr_url_base,
     );
@@ -292,19 +297,22 @@ async fn ado_source(
     Ok(ado)
 }
 
+pub(crate) fn gitlab_secret(g: &config::GitlabConfig) -> ado::transport::Secret {
+    use ado::transport::Secret;
+    match (&g.token_file, &g.token_env) {
+        (Some(f), _) => Secret::File(f.clone()),
+        (None, Some(e)) => Secret::Env(e.clone()),
+        (None, None) => unreachable!("the config checks for a token"),
+    }
+}
+
 async fn gitlab_source(
     g: &config::GitlabConfig,
     cfg: &Config,
 ) -> Result<gitlab::Gitlab<gitlab::transport::Reqwest>> {
-    use ado::transport::Secret;
-    let secret = match (&g.token_file, &g.token_env) {
-        (Some(f), _) => Secret::File(f.clone()),
-        (None, Some(e)) => Secret::Env(e.clone()),
-        (None, None) => unreachable!("the config checks for a token"),
-    };
     let mut gitlab = gitlab::Gitlab::new(
         &g.api,
-        gitlab::transport::Reqwest::new(secret)?,
+        gitlab::transport::Reqwest::new(gitlab_secret(g))?,
         g.own_logins.clone(),
         cfg.rules.clone(),
         &g.projects,

@@ -1,6 +1,6 @@
 # Setting up ingest
 
-Ingest is the worker that turns upstream issues (GitHub or Jira) into work for
+Ingest is the worker that turns upstream issues (GitHub, Jira, Azure DevOps or GitLab) into work for
 agents. This page takes you from nothing to a config that has been checked
 against your real repository or project, before the worker ever imports
 anything. The full config reference is in
@@ -57,6 +57,8 @@ What the source credential needs:
 |---|---|---|
 | GitHub | Read access to issues and pull requests on each rule's `repo` | `open_prerequisites`: issues write on that repo. Drafting an agent's pull request after its issue is dropped: pull requests write |
 | Jira | Browse projects on each rule's project | `comment`: add comments. `link_pr`: link issues. `transition_on_pr` or `transition_on_merge`: transition issues |
+| Azure DevOps | Work Items (Read) on each rule's project | `comment`, `link_pr`, `transition_on_pr` or `transition_on_merge`: Work Items (Read & write) |
+| GitLab | A token with `read_api` and a role in each rule's project | `comment`, `transition_on_pr`, `transition_on_merge`: the `api` scope and the Reporter role or higher. `open_prerequisites`: `api` and Guest or higher |
 
 A fine-grained GitHub token or a GitHub App installation must be granted each
 repository the rules name. For an App, see
@@ -73,9 +75,11 @@ kbl-ingest check --config ingest.json
 `check` reads only. It never creates, changes or comments on anything, in the
 tracker or upstream: the connection to the source refuses any request that is
 not a GET, and the tracker is called only to list its roots and read ingest's
-saved state. (An App credential still mints its installation token, which is
-how it is tested.) Run it as often as you like, and again after every config
-change.
+saved state. (An App or Entra credential still mints its token, which is how
+it is tested.) The one exception is Azure DevOps, which takes a work item query
+as a POST: `check` lets through exactly that query endpoint, with a `SELECT`
+query as its only body, and refuses every other request. Run it as often as you
+like, and again after every config change.
 
 It does four things:
 
@@ -85,13 +89,21 @@ It does four things:
    message.
 2. **Tests the credentials.** It names each environment variable and file, says
    whether it is set and readable, and then asks the source who the credential
-   is. Secret values are never printed.
+   is. Secret values are never printed. For GitLab it also reports the token's
+   scopes and expiry (GitLab 15.5 or later), and an expired or soon-to-expire
+   token is flagged.
 3. **Reports permissions per rule.** For each repository or project it says
    whether the credential can read it and whether it holds the write access the
    rule's options need. A missing read, or a missing write that an option
    needs, is an error. Pull request write on GitHub is only a warning, since it
    is used only to draft a pull request after its issue is dropped, and a
    credential whose rights GitHub does not report is a warning too.
+   For Azure DevOps, a project read and, where a rule writes back, the work item
+   edit right from the permission service; a personal access token's own scopes
+   are not visible to the API, so when the service will not say, `check` warns.
+   For GitLab, the project read, the token's `api` scope where a rule writes
+   back, and the token's role in the project (Reporter for comments and
+   transitions).
 4. **Dry-runs the first poll.** It lists the open issues in the rules'
    repositories and gives each to the first rule that matches, as the worker
    does, then applies each rule's `cap` to the roots the tracker already has. For each rule it shows what would be
@@ -170,4 +182,7 @@ machine until you press Ctrl-C. Without `--token-file` it reads `GITHUB_TOKEN`.
 | `issues: write ... which the credential lacks` | A rule sets `open_prerequisites` and the token has read access only. |
 | `own_logins` is empty | An App installation token has no user. List the App's bot login, such as `kbl[bot]`, so ingest skips its own comments. |
 | `Jira refused the credential` | Wrong email or token, or an OAuth token without `read:me`. |
+| `GitLab rejected the token (401)` | The token is wrong, expired or revoked. |
+| `the token lacks the api scope` | A GitLab rule comments, transitions or opens prerequisites. Give the token `api`, not only `read_api`. |
+| `the credential may not edit work items` | An Azure DevOps rule writes back. Grant the credential Work Items (Read & write) on the project. |
 | `the source answered 400 listing its issues` | For Jira, the project's JQL is one Jira rejects. Run it in Jira's issue search. |
