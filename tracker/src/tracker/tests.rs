@@ -1167,6 +1167,29 @@ async fn a_claim_released_behind_the_trackers_back_is_not_extended() {
 }
 
 #[tokio::test]
+async fn a_claim_a_failover_cut_from_the_log_is_not_extended() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await;
+    let at = first["offset"].as_u64().unwrap();
+    // The new leader never had the claim: the log ends before it.
+    (fake
+        .net
+        .lock()
+        .unwrap()
+        .streams
+        .get_mut(WORK_EVENTS)
+        .unwrap())
+    .retain(|(o, _)| *o < at);
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_err());
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
+}
+
+#[tokio::test]
 async fn extend_reports_a_lapsed_claim_and_drops_it() {
     let fake = Fake::default();
     let t = start(&fake).await;

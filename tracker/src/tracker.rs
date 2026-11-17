@@ -179,6 +179,16 @@ pub(crate) enum Which {
 }
 
 /// One agent's delivery of one ready record.
+/// What `hold_at_tip` found.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AtTip {
+    Live,
+    /// The state no longer shows the hold.
+    Gone,
+    /// The log moved past the state, which is being rebuilt.
+    Moved,
+}
+
 struct Delivery {
     /// Names this delivery among all the deliveries of the same item.
     id: u64,
@@ -872,11 +882,6 @@ impl<B: Broker> Tracker<B> {
                 _ => lapsed(item),
             });
         };
-        if !self.hold_at_tip(agent, d).await? {
-            return Err(Error::Unavailable(format!(
-                "{WORK_EVENTS} moved past this tracker's state; call again"
-            )));
-        }
         let stream = ready_stream(d.tier);
         let mut extended = self.try_extend(&stream, agent, d).await;
         if matches!(extended, Err(ExtendError::Failed(_))) {
@@ -886,6 +891,13 @@ impl<B: Broker> Tracker<B> {
         }
         match extended {
             Ok(visible) => {
+                // Checked after Felix's extend, so a log read that fails costs
+                // the agent a retry, not its delivery.
+                if self.hold_at_tip(agent, d).await? == AtTip::Moved {
+                    return Err(Error::Unavailable(format!(
+                        "{WORK_EVENTS} moved past this tracker's state; call again"
+                    )));
+                }
                 // The hold may have been released while Felix was answering.
                 let mut core = self.0.core.lock().await;
                 let ours = core.owner.get(item).is_some_and(|o| o.id == d.id);
@@ -2170,8 +2182,11 @@ impl<B: Broker> Tracker<B> {
         d: &Delivery,
         moved: &mut u32,
     ) -> Result<Option<Value>, Error> {
-        if self.hold_at_tip(agent, d).await? {
-            return Ok(Some(claimed(&*self.0.core.lock().await, d, true)));
+        match self.hold_at_tip(agent, d).await? {
+            AtTip::Live => return Ok(Some(claimed(&*self.0.core.lock().await, d, true))),
+            // The next round's reconcile drops it.
+            AtTip::Gone => return Ok(None),
+            AtTip::Moved => {}
         }
         *moved += 1;
         if *moved > 1 {
@@ -2185,14 +2200,20 @@ impl<B: Broker> Tracker<B> {
     /// Whether `d`'s hold stands at the tip of the log. The single check
     /// before a held claim is answered to its agent (a resume, an extension):
     /// memory misses a release another writer appended after a failover, so
-    /// the log is read from the tail. A record past the tail marks the state
+    /// the log is read from the tail. A tip that moved marks the state
     /// refused, as a refused write would, so the next call rebuilds and
     /// confirms the lease. A fresh claim needs no check: its write is
     /// conditional on the tail.
-    async fn hold_at_tip(&self, agent: &AgentName, d: &Delivery) -> Result<bool, Error> {
+    async fn hold_at_tip(&self, agent: &AgentName, d: &Delivery) -> Result<AtTip, Error> {
         let tail = self.0.core.lock().await.tail;
+        // From one before the tail, so a tip a failover lowered shows too.
         let (_, tip) = self
-            .io(None, self.0.broker.read_to_tip(WORK_EVENTS, tail))
+            .io(
+                None,
+                self.0
+                    .broker
+                    .read_to_tip(WORK_EVENTS, tail.saturating_sub(1)),
+            )
             .await
             .map_err(|e| {
                 Error::Unavailable(format!("could not check your claim against the log: {e:#}"))
@@ -2200,13 +2221,14 @@ impl<B: Broker> Tracker<B> {
         let core = self.0.core.lock().await;
         let mut lease = self.lease();
         if lease.stale || lease.retaken {
-            return Ok(false);
+            return Ok(AtTip::Moved);
         }
-        // Our own write may have landed during the read and raised the tail;
-        // a foreign one before it would have been refused.
-        if tip > core.tail {
+        // Our own write may land during the read and raise the tail; it was
+        // conditional on the tail, so nothing foreign came before it.
+        let lowered = core.tail == tail && tip < tail;
+        if tip > core.tail || lowered {
             lease.refused();
-            return Ok(false);
+            return Ok(AtTip::Moved);
         }
         let ours = core.owner.get(&d.item).is_some_and(|o| o.id == d.id);
         let shown = core
@@ -2215,7 +2237,11 @@ impl<B: Broker> Tracker<B> {
             .get(&d.item)
             .and_then(|i| i.hold.as_ref())
             .is_some_and(|h| h.by.as_str() == agent.as_str() && h.attempt == d.attempt);
-        Ok(ours && shown)
+        Ok(if ours && shown {
+            AtTip::Live
+        } else {
+            AtTip::Gone
+        })
     }
 
     /// For an agent whose recover failed: tries again, and errs while Felix still

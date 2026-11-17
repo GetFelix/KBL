@@ -307,7 +307,7 @@
   ".append(&mut core, Actor::Agent, agent_key(agent), record(held))"
  ],
  "tracker/src/tracker.rs#hold_at_tip": [
-  "if tip > core.tail {"
+  "if tip > core.tail || lowered {"
  ],
  "tracker/src/tracker.rs#holding": [
   "return if &d.item == item {",

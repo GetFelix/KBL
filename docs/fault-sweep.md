@@ -24,8 +24,8 @@ it. The pull request job runs 400 seeds of each sweep. The nightly workflow
 
 ## Known failing seeds
 
-A bug the sweep finds on main is filed as an issue and pinned in the sweep
-until it is fixed, never silently. A pin lists the (seed, item) pairs that
-show the failure and expects exactly those, so the fix removes the pin in the
-same change. Replaying one seed with `KBL_SWEEP_SEED` ignores pins and fails
-on what it finds. Neither sweep has a pin today.
+Neither sweep has a known failing seed today. A bug the sweep finds on main is
+filed as an issue and pinned, never skipped silently: the change that pins it
+adds a list of the (seed, item) pairs that show the failure, and the sweep
+expects exactly those, so the fix has to remove the pin. Replaying one seed
+with `KBL_SWEEP_SEED` should ignore pins and fail on what it finds.

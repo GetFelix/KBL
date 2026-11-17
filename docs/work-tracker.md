@@ -439,7 +439,8 @@ attempt, or another agent took it, the agent's next `extend`, `complete` or
 Memory can miss a record another writer appended, for example a release a
 broker failover wrote. So before it hands a held claim back to its agent (a
 `work_next` that answers `resumed`, or an `extend`), the tracker reads the log
-from the end of its state. If anything landed there, it rebuilds from the log
+from the end of its state. If the log's end moved (a record landed, a new
+leader's blank start, or a failover that cut the end short), it rebuilds from the log
 and checks the hold again, as after a refused write: `work_next` then answers
 from the rebuilt state, and `extend` answers 503 so the agent calls again and
 hears `lost` if the hold ended. A new claim needs no read, since its `claimed`
