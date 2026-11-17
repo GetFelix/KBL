@@ -1163,17 +1163,22 @@ async fn as_person<B: Broker>(
         Ok(p) => p,
         Err(d) => return denied(d),
     };
-    if let WorkRecord::Reassigned {
-        to: Some(Assignee::Person(to)),
-        ..
-    } = &record
-        && !call.teams.is_member(&call.team, to)
-    {
-        return refused(
-            StatusCode::CONFLICT,
-            "that person is not in this team",
-            "not_member",
-        );
+    let outsider = match &record {
+        WorkRecord::Reassigned {
+            to: Some(Assignee::Person(to)),
+            ..
+        } => (!call.teams.is_member(&call.team, to)).then_some("that person is not in this team"),
+        // A revoked agent counts as outside: it can never claim the item.
+        WorkRecord::Reassigned {
+            to: Some(Assignee::Agent(to)),
+            ..
+        } => {
+            (!call.teams.is_team_agent(&call.team, to)).then_some("that agent is not in this team")
+        }
+        _ => None,
+    };
+    if let Some(why) = outsider {
+        return refused(StatusCode::CONFLICT, why, "not_member");
     }
     reply(
         call.keyed(rk, call.tracker().person_record(p, record))

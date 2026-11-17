@@ -69,8 +69,12 @@ pub const FORMAT_V11: u32 = 11;
 /// item, and a note sent to the agent holding it.
 pub const FORMAT_V12: u32 = 12;
 
+/// No record or field: a log at 13 accepts an agent assignee, and refuses
+/// `claimed` from any other agent. Readers below 13 stop at the raise.
+pub const FORMAT_V13: u32 = 13;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V12;
+pub const FORMAT: u32 = FORMAT_V13;
 
 /// Longest reviewer name a `review_requested` carries.
 pub const MAX_REVIEWER: usize = 100;
@@ -575,7 +579,7 @@ impl PrSnapshot {
 #[serde(rename_all = "snake_case")]
 pub enum Assignee {
     Person(Key),
-    /// Not accepted yet: the fold refuses it as `bad_assignee`.
+    /// Only this agent may claim the item. Format 13.
     Agent(Key),
 }
 
@@ -886,7 +890,9 @@ pub enum WorkRecord {
     /// The person writing it takes the item: no agent claims it while it is
     /// theirs. Format 12.
     Taken { item: ItemId },
-    /// A person assigns the item to someone, or to nobody. Format 12.
+    /// A person assigns the item to someone, or to nobody. Format 12; a log
+    /// below 13 refuses an agent. The tracker writes one to nobody when an agent assignee
+    /// stays away.
     Reassigned { item: ItemId, to: Option<Assignee> },
     /// A person sends a note to the agent holding `attempt`. It steers that
     /// attempt like a `human_input` on it. Format 12.
