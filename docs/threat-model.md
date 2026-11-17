@@ -82,7 +82,7 @@ Two more parties are outside KBL and can still steer it:
 
 When ingest signs in as a GitHub App, the private key is the standing secret:
 anyone who reads the key file can mint installation tokens until the key is
-revoked in GitHub. Keep it mode 600 and readable only by ingest. The key, the
+revoked in GitHub. Keep it mode 600 or 400; ingest refuses to start with a looser key file. The key, the
 signed JWT and the installation token are held in memory, never logged, and
 left out of errors (GitHub's error text goes through the redactor first). An
 installation token lives an hour and is replaced five minutes early, so a
