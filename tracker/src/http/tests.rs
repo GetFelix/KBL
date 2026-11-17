@@ -399,6 +399,68 @@ async fn a_token_pasted_in_a_note_is_cut_before_the_write() {
     assert!(!log.iter().any(|p| p.contains(&secret)));
 }
 
+fn notes_logged(felix: &Quiet) -> usize {
+    felix
+        .log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, p)| String::from_utf8_lossy(p).contains("\"kind\":\"human_input\""))
+        .count()
+}
+
+#[tokio::test]
+async fn a_request_key_makes_a_retried_write_one_record() {
+    let felix = Quiet::default();
+    felix.keeps.store(true, Ordering::SeqCst);
+    let tokens = r#"{"agents":{"tok-w1":"w1"},"people":{"tok-gab":"gab"},"ingest":{}}"#;
+    let one = team("default", felix.clone(), tokens, 64).await;
+    let app = router(Arc::new(Teams::new(vec![one]).unwrap()));
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    let note = |text: &str| json!({ "item": "a1", "text": { "text": text }, "request_key": "n-1" });
+
+    let (status, first) = call(&app, "/v1/work/note", Some("tok-gab"), note("hi")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let (status, again) = call(&app, "/v1/work/note", Some("tok-gab"), note("hi")).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        (again["replayed"].as_bool(), &again["offset"]),
+        (Some(true), &first["offset"])
+    );
+    assert_eq!(notes_logged(&felix), 1);
+
+    let (status, other) = call(&app, "/v1/work/note", Some("tok-gab"), note("changed")).await;
+    assert_eq!(
+        (status, other["why"].as_str()),
+        (StatusCode::CONFLICT, Some("request_key_reused"))
+    );
+    // The same key on another route is another request.
+    let tier = json!({ "item": "a1", "tier": 1, "request_key": "n-1" });
+    let (status, reply) = call(&app, "/v1/work/tier", Some("tok-gab"), tier).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("request_key_reused"))
+    );
+    assert_eq!(notes_logged(&felix), 1);
+
+    // A key that is not a key, and a prerequisite, which a claim replays.
+    for bad in [json!("has space"), json!(7), json!("")] {
+        let body = json!({ "item": "a1", "text": { "text": "x" }, "request_key": bad });
+        let (status, _) = call(&app, "/v1/work/note", Some("tok-gab"), body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let prereq = json!({ "item": "a1", "key": "k", "work": "prerequisite", "request_key": "p-1" });
+    let (status, _) = call(&app, "/v1/work/post", Some("tok-w1"), prereq).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // An agent's keyed write is refused as it always was when it holds nothing.
+    let progress = json!({ "item": "a1", "note": { "text": "x" }, "request_key": "g-1" });
+    let (status, reply) = call(&app, "/v1/work/progress", Some("tok-w1"), progress).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_held"))
+    );
+}
+
 /// A team whose Felix keeps what is published, so a reread finds it.
 async fn kept() -> Router {
     let felix = Quiet::default();
