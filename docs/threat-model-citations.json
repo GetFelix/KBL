@@ -282,6 +282,10 @@
  "tracker/src/http.rs#items": [
   "match call.person() {"
  ],
+ "tracker/src/http.rs#team_agents": [
+  "if let Err(d) = call.person() {",
+  ".filter(|(_, a)| !a.revoked)"
+ ],
  "tracker/src/http.rs#me": [
   "async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {"
  ],

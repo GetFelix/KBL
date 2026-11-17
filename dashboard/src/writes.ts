@@ -33,6 +33,9 @@ export function needsText(needs: string | null | undefined): string {
 /** The person an item is assigned to, or null. An agent assignee has no person name. */
 export const assigneePerson = (i: Pick<ItemRow, 'assignee'>): string | null => (i.assignee && 'person' in i.assignee ? i.assignee.person : null);
 
+/** The agent an item is assigned to, or null. */
+export const assigneeAgent = (i: Pick<ItemRow, 'assignee'>): string | null => (i.assignee && 'agent' in i.assignee ? i.assignee.agent : null);
+
 /** Why the item waits on a person, naming who took it when that is the reason. */
 export function needsLine(i: Pick<ItemRow, 'needs' | 'assignee'>): string {
   const who = assigneePerson(i);
@@ -162,8 +165,8 @@ export type WriteArgs =
   | { kind: 'rate'; attempt: number; accurate: boolean }
   /** Assigns the item to the signed-in person. */
   | { kind: 'take' }
-  /** Assigns the item to the named person, or to nobody with null. */
-  | { kind: 'reassign'; to: string | null }
+  /** Assigns the item to the named person, or the named agent with `agent`, or to nobody with null. */
+  | { kind: 'reassign'; to: string | null; agent?: true }
   /** Sends a note to the agent holding `attempt`. */
   | { kind: 'steer'; attempt: number; text: string };
 
@@ -191,7 +194,7 @@ export function request(item: string, a: WriteArgs): Request {
     case 'take':
       return { path: '/v1/work/take', body: { item } };
     case 'reassign':
-      return { path: '/v1/work/reassign', body: { item, to: a.to === null ? null : { person: a.to } } };
+      return { path: '/v1/work/reassign', body: { item, to: a.to === null ? null : a.agent ? { agent: a.to } : { person: a.to } } };
     case 'steer':
       return { path: '/v1/work/steer', body: { item, attempt: a.attempt, text: { text: a.text.trim() } } };
     case 'answer': {

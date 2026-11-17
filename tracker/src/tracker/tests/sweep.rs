@@ -401,6 +401,99 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
     }
 }
 
+/// The holds that came from a direct claim: the item was assigned to its
+/// claimer when the claim landed. By agent: item and attempt.
+fn direct_holds(fake: &Fake) -> HashMap<String, (String, u32)> {
+    let mut state = State::default();
+    let mut direct = HashMap::new();
+    for (offset, logged) in fake.log().into_iter().enumerate() {
+        let before = state
+            .items
+            .get(logged.record.item().unwrap_or(&item("none")))
+            .and_then(|i| i.assignee.clone());
+        if state.try_apply(offset as u64, &logged).is_err() {
+            continue;
+        }
+        if let WorkRecord::Claimed { item, attempt, .. } = &logged.record {
+            let mine = before == Some(Assignee::Agent(logged.by.clone()));
+            direct.retain(|_, (i, _)| i != item.as_str());
+            if mine {
+                direct.insert(logged.by.to_string(), (item.to_string(), *attempt));
+            }
+        }
+    }
+    direct.retain(|who, (id, attempt)| {
+        state.items[&item(id)]
+            .hold
+            .as_ref()
+            .map(|h| (h.by.as_str(), h.attempt))
+            == Some((who.as_str(), *attempt))
+    });
+    direct
+}
+
+/// A person reassigns an item an agent holds from a direct claim, then the
+/// tracker restarts. The new tracker keeps the hold, polls no lane for it,
+/// and the holder extends it.
+async fn reassign_and_restart(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
+    let mut held: Vec<_> = direct_holds(fake)
+        .into_iter()
+        .filter_map(|(who, claim)| {
+            let who = *AGENTS.iter().find(|a| **a == who)?;
+            (m.beliefs.get(who) == Some(&claim.0) && m.attempts.get(who) == Some(&claim.1))
+                .then_some((who, claim))
+        })
+        .collect();
+    held.sort();
+    if held.is_empty() {
+        return;
+    }
+    let (who, (id, attempt)) = held[rng.below(held.len())].clone();
+    let to = AGENTS
+        .iter()
+        .filter(|a| **a != who)
+        .map(|a| Assignee::Agent(key(a)))
+        .nth(rng.below(AGENTS.len()));
+    let reassigned = WorkRecord::Reassigned {
+        item: item(&id),
+        to,
+    };
+    if t.cur.person_record(key("gab"), reassigned).await.is_err() {
+        return;
+    }
+    let polls = |fake: &Fake| {
+        let mine = format!(" {who}");
+        fake.calls()
+            .iter()
+            .filter(|c| c.starts_with("poll ") && c.ends_with(&mine))
+            .count()
+    };
+    let before = polls(fake);
+    let new = restart(fake).await;
+    t.old = Some(std::mem::replace(&mut t.cur, new));
+    let hold = |fake: &Fake| {
+        replay(fake).state.items[&item(&id)]
+            .hold
+            .as_ref()
+            .map(|h| (h.by.to_string(), h.attempt))
+    };
+    assert_eq!(
+        hold(fake),
+        Some((who.to_owned(), attempt)),
+        "a restart ended {who}'s direct claim on {id} after a reassign"
+    );
+    assert_eq!(
+        polls(fake),
+        before,
+        "a restart polled a lane for {who}'s direct claim"
+    );
+    let extended = t.cur.extend(&agent(who), &item(&id)).await;
+    assert!(
+        extended.is_ok(),
+        "{who} could not extend its direct claim on {id} after a restart: {extended:?}"
+    );
+}
+
 /// One step: maybe a fault, then an operation, then the checks.
 async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     let mut crash_after = false;
@@ -419,6 +512,7 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
         // A write that never reached a quorum: a failover cuts it before
         // anyone is told. A record Felix acknowledged is never cut.
         41..=45 => fake.cut_next_lost_write(WORK_EVENTS),
+        46..=50 => reassign_and_restart(fake, t, m, rng).await,
         18..=22 => foreign_write(fake, m, rng).await,
         23..=30 => {
             // Felix hands a record out again: a lapsed lease, or a repeat of an acked one.

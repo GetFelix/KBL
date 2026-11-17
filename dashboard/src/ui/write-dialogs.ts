@@ -1,7 +1,7 @@
 // The sign-in dialog and the confirm step before a write that cannot be undone
 // (WCAG 3.3.4: the person reviews what will be written, and can cancel).
 import type { ItemRow } from '../fold.ts';
-import { acceptTier, assigneePerson, assignPick, checkPerson, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
+import { acceptTier, assigneeAgent, assigneePerson, assignPick, checkPerson, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
 import { modal } from './dialog.ts';
 import { h } from './dom.ts';
 import { tierSelect } from './item-actions.ts';
@@ -134,28 +134,43 @@ export function assignDialog(send: (ids: string[], args: WriteArgs) => void) {
   return {
     el: m.el,
     isOpen: m.isOpen,
-    open(item: ItemRow, me: string, names: readonly string[]) {
+    open(item: ItemRow, me: string, names: readonly string[], agents: Promise<readonly string[]>) {
       const now = assigneePerson(item);
+      const nowAgent = assigneeAgent(item);
       const pick = (args: WriteArgs | null) => {
         if (!args) return;
         m.close();
         send([item.id], args);
       };
       const meButton = h('button', { type: 'button', class: 'button primary', 'data-focus': 'assign-me', onclick: () => pick(assignPick(now, me, 'me')) }, `Me (${me})`);
-      const nobody = h('button', { type: 'button', class: 'button', 'data-focus': 'assign-nobody', onclick: () => pick(assignPick(now, me, 'nobody')) }, 'Nobody');
+      const nobody = h('button', { type: 'button', class: 'button', 'data-focus': 'assign-nobody', onclick: () => pick(nowAgent === null ? assignPick(now, me, 'nobody') : { kind: 'reassign', to: null }) }, 'Nobody');
       if (now === me) meButton.setAttribute('aria-disabled', 'true');
-      if (now === null) nobody.setAttribute('aria-disabled', 'true');
+      if (now === null && nowAgent === null) nobody.setAttribute('aria-disabled', 'true');
+      const agentRow = h('div', { class: 'action-row', role: 'group', 'aria-labelledby': 'assign-agents' }, h('span', { class: 'muted small' }, 'Loading agents…'));
+      const agentPart = h('div', {}, h('p', { id: 'assign-agents', class: 'field-label' }, 'An agent'), agentRow);
+      void agents.then((list) => {
+        if (!agentPart.isConnected) return;
+        if (list.length === 0) return agentPart.remove();
+        agentRow.replaceChildren(
+          ...list.map((a) => {
+            const b = h('button', { type: 'button', class: 'button', onclick: () => (a === nowAgent ? undefined : pick({ kind: 'reassign', to: a, agent: true })) }, a);
+            if (a === nowAgent) b.setAttribute('aria-disabled', 'true');
+            return b;
+          }),
+        );
+      });
       const others = names.filter((n) => n !== me);
       const input = h('input', { id: 'assign-name', type: 'text', class: 'field', list: 'assign-names', autocomplete: 'off', spellcheck: 'false', 'aria-describedby': 'assign-error' });
       const error = h('p', { id: 'assign-error', class: 'field-error' });
       const form = h('form', { method: 'dialog' },
         h('h2', { id: 'assign-title' }, `Assign ${item.id}`),
-        h('p', { class: 'muted' }, now ? `${item.title} (now ${now})` : `${item.title} (nobody yet)`),
+        h('p', { class: 'muted' }, now ? `${item.title} (now ${now})` : nowAgent ? `${item.title} (now agent ${nowAgent})` : `${item.title} (nobody yet)`),
         h('div', { class: 'action-row' }, meButton, nobody),
+        agentPart,
         h('label', { for: 'assign-name', class: 'field-label' }, 'Someone else, by name'),
         input,
         h('datalist', { id: 'assign-names' }, ...others.map((n) => h('option', { value: n }))),
-        h('p', { class: 'muted small' }, 'An assigned item shows only in that person’s queue, and no agent claims it.'),
+        h('p', { class: 'muted small' }, 'An item assigned to a person shows only in their queue, and no agent claims it. One assigned to an agent goes to that agent only.'),
         error,
         h('div', { class: 'dialog-actions' },
           h('span', { class: 'spacer' }),

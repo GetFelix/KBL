@@ -7,6 +7,7 @@
 //! Every handler gets its team and caller from [`Call`], so no handler can
 //! reach a tracker the token was not given.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -213,6 +214,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/steer", post(steer::<B>))
         .route("/v1/work/queue", get(queue::<B>))
         .route("/v1/work/items", get(items::<B>))
+        .route("/v1/work/agents", get(team_agents::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
         .route("/v1/work/items/{item}/history", get(history::<B>))
         .route("/v1/work/metrics/time-to-human", get(time_to_human::<B>))
@@ -1505,6 +1507,27 @@ async fn items<B: Broker>(call: Call<B>, Query(q): Query<ItemsQuery>) -> Respons
         Ok(_) => reply(call.tracker().items(q.stage).await),
         Err(d) => denied(d),
     }
+}
+
+/// The team's agents a person may assign an item to: the token file's and
+/// the minted ones not revoked. Names only, so any member may read it.
+async fn team_agents<B: Broker>(call: Call<B>) -> Response {
+    if let Err(d) = call.person() {
+        return denied(d);
+    }
+    let mut names: BTreeSet<String> = (call.team.file_agents().into_iter())
+        .map(|a| a.as_str().to_owned())
+        .collect();
+    if let Some(org) = call.teams.org() {
+        let state = org.org.state().await;
+        names.extend(
+            state
+                .agents_in(call.team.name())
+                .filter(|(_, a)| !a.revoked)
+                .map(|(n, _)| n.as_str().to_owned()),
+        );
+    }
+    Json(json!({ "agents": names })).into_response()
 }
 
 async fn item<B: Broker>(call: Call<B>, Path(id): Path<ItemId>) -> Response {
