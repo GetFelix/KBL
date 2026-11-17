@@ -1199,11 +1199,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             ) else {
                 continue;
             };
+            // A GitLab request lives in the rule's own project, or the target.
             let allowed = rule
                 .target_repo
                 .iter()
                 .chain(rule.components.values())
-                .chain(rule.area_paths.values());
+                .chain(rule.area_paths.values())
+                .chain(rule.gitlab.then_some(&rule.repo));
             if t.moved_to.is_some()
                 || !t.in_scope
                 || !allowed
@@ -1212,13 +1214,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             {
                 continue;
             }
-            due.push((
-                key.clone(),
-                issue.clone(),
-                pr.clone(),
-                "linked",
-                rule.clone(),
-            ));
+            // A GitLab request is announced once it was read and tied to the
+            // item, so a number an agent made up names nothing on the issue.
+            if !(rule.gitlab && root.pr_status.is_none()) {
+                due.push((
+                    key.clone(),
+                    issue.clone(),
+                    pr.clone(),
+                    "linked",
+                    rule.clone(),
+                ));
+            }
             if root
                 .pr_status
                 .as_ref()

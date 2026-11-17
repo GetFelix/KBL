@@ -23,7 +23,7 @@ fn a_token_listed_twice_or_for_both_kinds_is_refused() {
 #[test]
 fn an_ingest_worker_can_be_tied_to_a_source() {
     let tokens = Tokens::parse(
-        r#"{"ingest":{"t-gh":"ingest-gh","t-jira":"ingest-jira","t-ado":"ingest-ado"},"ingest_sources":{"ingest-gh":"github","ingest-jira":"jira","ingest-ado":"ado"}}"#,
+        r#"{"ingest":{"t-gh":"ingest-gh","t-jira":"ingest-jira","t-ado":"ingest-ado","t-gl":"ingest-gl"},"ingest_sources":{"ingest-gh":"github","ingest-jira":"jira","ingest-ado":"ado","ingest-gl":"gitlab"}}"#,
     )
     .unwrap();
     let source = |t| match tokens.who(t) {
@@ -33,11 +33,12 @@ fn an_ingest_worker_can_be_tied_to_a_source() {
     assert_eq!(source("t-gh").as_deref(), Some("github"));
     assert_eq!(source("t-jira").as_deref(), Some("jira"));
     assert_eq!(source("t-ado").as_deref(), Some("ado"));
+    assert_eq!(source("t-gl").as_deref(), Some("gitlab"));
     // A tie for a name that is no ingest worker, or to a bad source, is a mistake.
     assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"b":"github"}}"#).is_err());
     assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"a":"Not A Key"}}"#).is_err());
     // A source Felix has no worker for is refused at startup.
-    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"a":"gitlab"}}"#).is_err());
+    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"a":"bitbucket"}}"#).is_err());
 }
 
 #[test]
