@@ -1,0 +1,138 @@
+name: Release
+
+# A `v*` tag builds kbl-mcp and kbl-tool for every platform and publishes them
+# as a GitHub release with checksums. A manual run with dry_run builds and
+# uploads the archives as workflow artifacts and creates no release. Run on a
+# branch, it can never release: only a tag ref reaches the publish job.
+on:
+  push:
+    tags:
+      - "v*"
+  # A change to this file rehearses the whole build, so a broken target shows
+  # up in the pull request instead of at the next tag.
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build every target and keep the archives as artifacts; create no release
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-24.04, ext: tar.gz }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm, ext: tar.gz }
+          - { target: aarch64-apple-darwin, os: macos-latest, ext: tar.gz }
+          # Built on the arm runner: Intel macOS runners are being retired.
+          - { target: x86_64-apple-darwin, os: macos-latest, ext: tar.gz }
+          - { target: x86_64-pc-windows-msvc, os: windows-2022, ext: zip }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Name the archives
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          if [ "$IS_TAG" = true ]; then
+            echo "version=$REF_NAME" >> "$GITHUB_ENV"
+          else
+            echo "version=dev-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
+          fi
+      - run: rustup update stable && rustup default stable && rustup target add ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }} -p kbl-mcp -p kbl-tool
+      - name: Check the binary starts
+        # The Intel macOS binary is cross-built and the runner is arm.
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          ext=""; [ "${{ runner.os }}" = Windows ] && ext=.exe
+          bin=target/${{ matrix.target }}/release
+          "$bin/kbl-mcp$ext" --help > /dev/null
+          "$bin/kbl-tool$ext" --help > /dev/null
+      - name: Package
+        shell: bash
+        run: |
+          name="kbl-${version}-${{ matrix.target }}"
+          ext=""; [ "${{ runner.os }}" = Windows ] && ext=.exe
+          mkdir -p "dist/$name"
+          for b in kbl-mcp kbl-tool; do
+            cp "target/${{ matrix.target }}/release/$b$ext" "dist/$name/"
+          done
+          cp LICENSE README.md "dist/$name/"
+          cd dist
+          if [ "${{ matrix.ext }}" = zip ]; then
+            7z a "$name.zip" "$name" > /dev/null
+          else
+            tar -czf "$name.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+          ls -l
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: kbl-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: publish release
+    needs: build
+    # Only a tag publishes: a push of it, or a manual run on it with dry_run
+    # off (to retry a release whose publish step failed).
+    if: >-
+      github.ref_type == 'tag' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a plain tag on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in */*) echo "tag name must not contain a slash"; exit 1;; esac
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "$TAG is not on main"; exit 1; }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum kbl-*.tar.gz kbl-*.zip > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "$REPO" --verify-tag --title "$TAG" --generate-notes

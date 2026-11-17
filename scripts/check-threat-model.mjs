@@ -212,7 +212,12 @@ for (const [crate, headings] of Object.entries(ROUTE_SECTIONS)) {
   count += [...found.values()].reduce((n, m) => n + m.size, 0);
 }
 
+// The person server's tools are table entries, not `#[tool]` functions.
+const PERSON_TABLE = 'mcp/src/person/table.rs';
+const personTools = all(read(PERSON_TABLE).split('pub(super) const TOOLS')[1] ?? '', /^ {8}name: "(\w+)",\n {8}about:/gm);
+
 const named = {
+  'Person MCP tools': personTools,
   ...Object.fromEntries(Object.entries(TOOL_SECTIONS).map(([crate, h]) => [h, toolsFound[crate]])),
   'Records on work.events': kinds('core/src/work.rs'),
   'Records on org.events': kinds('core/src/org.rs'),
@@ -228,7 +233,14 @@ for (const [heading, names] of Object.entries(named)) {
 // Each citation names a symbol; the lines pinned to it must still be in its body, so a rename,
 // a deletion or a check that moved out of the function fails here.
 const PINS = 'docs/threat-model-citations.json';
-const pins = existsSync(join(root, PINS)) ? JSON.parse(read(PINS)) : {};
+// JSON.parse keeps the last of two equal keys, which would silently drop the first pin.
+const pinText = existsSync(join(root, PINS)) ? read(PINS) : '{}';
+const pinKeys = [...pinText.matchAll(/^ "([^"]+)": \[/gm)].map((m) => m[1]);
+for (const k of new Set(pinKeys.filter((k, i) => pinKeys.indexOf(k) !== i))) {
+  console.error(`${PINS}: duplicate key ${k}; merge its pinned lines into one array`);
+  process.exit(1);
+}
+const pins = JSON.parse(pinText);
 const cites = [...new Set([...doc.matchAll(/`([\w./-]+\.(?:rs|toml|mjs))#(\w+(?:::\w+)?)`/g)].map((m) => m[0]))];
 for (const stale of doc.matchAll(/`[\w./-]+\.(?:rs|toml|mjs):\d+`/g)) failures.push(`${stale[0]} cites a line; cite \`file#symbol\` instead`);
 for (const cite of cites) {
