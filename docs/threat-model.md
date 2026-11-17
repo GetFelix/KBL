@@ -115,6 +115,17 @@ token to whatever tracker URL they are given, `http://` included. Tokens are lon
 There is no request rate limit; a refused call writes nothing, and the first
 cap an attempt hits is logged once (`tracker/src/tracker/tools.rs#note_refusal`).
 
+The snapshot folder (`KBL_TRACKER_SNAPSHOT_DIR`, off by default) holds a copy of
+each team's folded state, so whoever can write to it can change what the tracker
+believes at the next start. It is created mode 700 and is trusted like the token
+file. A file is used only if a digest over its body matches, its fold revision is
+the build's, and a hash over every record it covers still matches `work.events`
+(`tracker/src/tracker/snapshots.rs#restore`); the hash does not cover the state
+inside the file, so the digest stops damage and not a deliberate edit. A file that
+fails is removed and the next one is tried, then a full fold. A file is written
+to a temp file, synced, renamed and the folder synced
+(`tracker/src/tracker/snapshots.rs#save`), so a crash leaves the old one.
+
 ## Tracker routes
 
 Every route but `/healthz` needs a bearer token. A wrong kind of token gets

@@ -112,6 +112,8 @@ async fn serve() -> Result<()> {
         return serve_person(args).await;
     }
     let exporter = kbl_metrics::install("kbl-mcp");
+    // Held to the end of `serve`, which flushes the last spans.
+    let _traces = kbl_trace::init("kbl-mcp");
     if let Some(addr) = cli.metrics_listen {
         kbl_metrics::check_listen(addr, cli.metrics_allow_remote, "--metrics-allow-remote")?;
         let bound = kbl_metrics::serve(addr, exporter).await?;

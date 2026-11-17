@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tracing::Instrument as _;
 
 use kbl_core::record::ClaimLostCause;
 
@@ -67,13 +68,25 @@ impl Http {
 
 impl TrackerApi for Http {
     async fn call(&self, path: &str, body: Value) -> Result<Value, CallError> {
+        // The path is one of the tracker's fixed routes, never an item id.
+        let span = tracing::info_span!(
+            "tracker.request",
+            otel.kind = "client",
+            http.route = path,
+            http.response.status_code = tracing::field::Empty,
+        );
         let sent = self
             .client
             .post(format!("{}{path}", self.base))
             .bearer_auth(&self.token)
+            .headers(span.in_scope(kbl_trace::headers))
             .json(&body)
             .send()
+            .instrument(span.clone())
             .await;
+        if let Ok(response) = &sent {
+            span.record("http.response.status_code", response.status().as_u16());
+        }
         answer(sent).await
     }
 

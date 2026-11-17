@@ -144,15 +144,40 @@ page does and checks a message gets through, and CI runs the page itself in Chro
 no-match, setup, stopped and phone views, in both themes, and on the board in both themes and both densities,
 the filtered list, the save dialog and the phone menu, and on every write state: the Needs you view, signed
 out, the sign-in error, the answer form, a write pending, a refusal, a tier set, the bulk bar and the confirm
-dialog. It reports no violations of any impact, and fails CI
-on serious or critical.
+dialog, and on the story panel. It fails CI on a serious or critical violation.
+
+Four more checks run in CI beside axe:
+
+- **Contrast tokens** (`dashboard/test/contrast.test.ts`, part of `npm test`) computes the contrast of every text
+  colour on every surface and of the focus ring and control edges, from `tokens.css`, in both themes. Text must reach
+  4.5:1 and edges and the ring 3:1. It is exact where axe samples rendered pixels, and a translucent edge is
+  composited over its surface first.
+- **Landmarks and live regions** (browser check): one `main`, one `h1`, every `nav` named, and the connection status
+  and announcer present as polite live regions.
+- **Keyboard** (browser check): Tab walks the page, and every stop must be on screen and draw a focus indicator.
+- **Performance budget**, below.
+
+### Performance budget
+
+A fixture log of 10,000 items (about 38,500 records, `bigLog` in `dashboard/check/fixture.mjs`) is folded two ways. The
+numbers live in `dashboard/check/budget.mjs`, and CI fails when one is over.
+
+| Measure | Where | Budget |
+| --- | --- | --- |
+| Fold of 10,000 items plus reading them back, wasm in node | `npm test` (`test/budget.test.ts`) | 2000 ms (140 ms on a laptop, 800 to 1100 ms on a CI runner running tests in parallel) |
+| Time spent in `fold.apply` while the page loads the log | `npm run check` | 1000 ms (220 to 290 ms on a CI runner) |
+| First useful paint: the first list row on screen | `npm run check` | 3000 ms (about 900 ms on a CI runner) |
+| Live with the whole log | `npm run check` | 6000 ms (about 1600 ms on a CI runner) |
+
+Budgets are a measured baseline plus margin for a shared CI runner. The browser check prints its numbers on a
+`perf:` line, so a budget can be tightened from a run. Raising one needs a reason in the change that does it.
 
 | Criterion | Status |
 | --- | --- |
 | 1.1.1 Non-text content | Met: the mark is decorative (`aria-hidden`), every control has a name. |
 | 1.3.1 Info and relationships | Met: nav/main/aside landmarks, headed stage groups, listbox roles in the palette. |
 | 1.4.1 Use of colour | Met: stage is a heading, never colour alone. |
-| 1.4.3 / 1.4.11 Contrast | Met: axe passes both themes; focus ring and borders are at least 3:1. |
+| 1.4.3 / 1.4.11 Contrast | Met: axe passes both themes, and the token test holds text to 4.5:1 and the focus ring and control edges to 3:1. |
 | 1.4.10 Reflow | Met: one column at 390 px with no horizontal scroll; board columns stack. On wide screens the board scrolls sideways inside its own area, as two-dimensional content may. |
 | 1.4.12 Text spacing | Met: no fixed-height text boxes. |
 | 2.1.1 Keyboard, 2.1.2 No trap | Met: everything by keyboard; dialogs close on `Esc` and give focus back. |

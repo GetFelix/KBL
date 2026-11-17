@@ -8,9 +8,69 @@ The targets below are proposals. Nothing in KBL enforces them, and they have
 not been measured against a production load. Change them to fit your
 deployment, then keep the alert thresholds in step.
 
-Traces are not wired. The services do not use a tracing crate yet, so there
-are no spans to export. That is tracked in
-[#292](https://github.com/GetFelix/KBL/issues/292).
+The [traces](#traces) section covers spans, which show where one slow call
+spent its time.
+
+## Traces
+
+The tracker, `kbl-ingest` and `kbl-mcp` can export OpenTelemetry traces over
+OTLP/HTTP. They are off until an endpoint is set. With none set, no exporter
+or subscriber is installed, spans are skipped where they are created, and no
+trace headers are read or sent.
+
+| Variable | Effect |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | Turns export on. The first is a base URL (`http://collector:4318`); spans go to its `/v1/traces`. |
+| `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_EXPORTER_OTLP_TIMEOUT` | Passed to the exporter, as the OpenTelemetry specification defines them. |
+| `OTEL_SERVICE_NAME` | Overrides the service name (default `kbl-tracker`, `kbl-ingest` or `kbl-mcp`). |
+| `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG` | The sampler; the default keeps every trace unless the caller's sampled flag says otherwise. |
+| `OTEL_SDK_DISABLED=true`, `OTEL_TRACES_EXPORTER=none` | Off, even with an endpoint set. |
+
+Only the `http/protobuf` protocol is built in. A collector that is down costs
+the services nothing but dropped spans; the last batch is flushed when the
+process exits normally.
+
+### Spans
+
+| Span | Where | Attributes |
+|---|---|---|
+| `GET /v1/work/items/{item}` (`http.request`) | Every tracker route | `http.route`, `http.request.method`, `http.response.status_code` |
+| `tracker.claim` | Inside the request that claims work | `team`, `outcome` (`claimed`, `resumed`, `empty`, `error`) |
+| `tracker.fold.apply` | A record the tracker applies before writing it | `team`, `record.kind` |
+| `tracker.fold.rebuild` | Rebuilding the fold from `work.events` | `team` |
+| `ingest.poll` | One poll of a source | `source`, `reconcile`, `outcome` (`ok`, `failed`) |
+| `ingest.write_back` | The write-back step of a poll | `source` |
+| `mcp.tool` | One tool call on `kbl-mcp` | `tool` (`unknown` for a name outside the tool list), `outcome` |
+| `tracker.request` | A call from `kbl-mcp` or `kbl-ingest` to the tracker | `http.route`, `http.response.status_code` |
+
+A request span is named by method and route template, so the span for an
+item is `GET /v1/work/items/{item}` whatever the item.
+
+`kbl-mcp` and `kbl-ingest` send a W3C `traceparent` header on each call to the
+tracker, and the tracker makes its request span a child of it. One tool call
+or poll is then a single trace from the agent's tool to the fold. The
+`kbl-mcp` keep-alive that extends a held claim runs in the background and
+starts its own traces. The tracker does not call Felix with trace headers, so a
+trace ends at the tracker.
+
+### Attribute policy
+
+Span attributes follow the same rule as metric labels: a trace must be safe to
+hand to anyone who can read the collector.
+
+- Allowed: route templates, tool names, source kinds, result words, record
+  kinds, status codes, and the team name (the metrics already carry it).
+- Never: item ids, item or comment text, titles, repo or project names, agent
+  or person names, tokens or other credentials, request or response bodies,
+  query strings, or the raw path of a request.
+- A value that comes from a caller (a method, a tool name) is mapped to a
+  fixed set before it becomes an attribute, as for metrics.
+- Incoming `traceparent` is accepted from any caller, before authentication,
+  because it only names the trace the span joins. The tracker never copies
+  `tracestate` or any other request header into a span.
+
+A new span or attribute follows this list, and its test checks that no
+secret reaches it.
 
 ## SLOs
 

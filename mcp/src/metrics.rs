@@ -7,6 +7,15 @@ use std::time::Duration;
 use rmcp::ErrorData;
 use rmcp::model::CallToolResponse;
 
+/// The result word shared by the metrics and the trace.
+pub(crate) fn outcome(result: &Result<CallToolResponse, ErrorData>) -> &'static str {
+    match result {
+        Ok(CallToolResponse::Complete(r)) if r.is_error == Some(true) => "error",
+        Ok(_) => "ok",
+        Err(_) => "protocol_error",
+    }
+}
+
 /// Counts a finished call and times it. `known` is whether the router has the tool.
 pub(crate) fn tool_finished(
     tool: &str,
@@ -19,11 +28,7 @@ pub(crate) fn tool_finished(
     } else {
         "unknown".to_owned()
     };
-    let outcome = match result {
-        Ok(CallToolResponse::Complete(r)) if r.is_error == Some(true) => "error",
-        Ok(_) => "ok",
-        Err(_) => "protocol_error",
-    };
+    let outcome = outcome(result);
     metrics::counter!("kbl_mcp_tool_calls_total", "tool" => tool.clone(), "outcome" => outcome)
         .increment(1);
     metrics::histogram!("kbl_mcp_tool_seconds", "tool" => tool.clone()).record(took.as_secs_f64());
