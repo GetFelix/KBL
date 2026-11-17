@@ -3,7 +3,7 @@
 //! replay gives the same numbers. It is a team figure: nothing here names
 //! who acted.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -46,20 +46,31 @@ struct Finished {
     waited_ms: u64,
 }
 
-#[derive(Debug, Clone, Default)]
+/// Not in the wire form, so a state read back from JSON has none of it and
+/// differs from the one that was written; tests that round-trip clear it first.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Waits {
     open: BTreeMap<ItemId, Open>,
     finished: VecDeque<Finished>,
+    /// Most waits kept; a field so a test can lower it.
+    cap: usize,
+    /// When the newest dropped wait ended. Windows reaching back to it are partial.
+    dropped_through_ms: Option<u64>,
+    /// Items seen closed, so a close frees its dependents once, not on every later record.
+    closed: BTreeSet<ItemId>,
 }
 
-/// Never part of a state's identity: it is not in the wire form, so a state
-/// read back from JSON must still equal the one that was written.
-impl PartialEq for Waits {
-    fn eq(&self, _: &Self) -> bool {
-        true
+impl Default for Waits {
+    fn default() -> Self {
+        Self {
+            open: BTreeMap::new(),
+            finished: VecDeque::new(),
+            cap: KEPT_WAITS,
+            dropped_through_ms: None,
+            closed: BTreeSet::new(),
+        }
     }
 }
-impl Eq for Waits {}
 
 /// Count and percentiles of the waits that ended in a window.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,6 +93,13 @@ pub struct HumanWaitStats {
     pub open: u64,
     /// When the longest open wait began.
     pub oldest_open_since_ms: Option<u64>,
+    /// True when the oldest finished waits were dropped past the cap and the
+    /// window reaches back to them, so the figures cover only part of it.
+    #[serde(default)]
+    pub truncated: bool,
+    /// With `truncated`, the first time the figures are complete from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complete_since_ms: Option<u64>,
 }
 
 pub(super) fn stats(mut ms: Vec<u64>) -> KindStats {
@@ -124,7 +142,15 @@ impl State {
             by_kind,
             open: open.clone().count() as u64,
             oldest_open_since_ms: open.map(|o| o.since_ms).min(),
+            truncated: w.dropped_through_ms.is_some_and(|d| from_ms <= d),
+            complete_since_ms: w.dropped_through_ms.map(|d| d.saturating_add(1)),
         }
+    }
+
+    /// Lowers the cap on finished waits kept.
+    #[cfg(test)]
+    pub(super) fn keep_waits(&mut self, cap: usize) {
+        self.human_waits.cap = cap;
     }
 
     /// Why `id` waits on a person now, if it does.
@@ -168,14 +194,24 @@ impl State {
                 waited_ms: rec.at_ms.saturating_sub(o.since_ms),
             };
             let fin = &mut self.human_waits.finished;
-            if fin.len() == KEPT_WAITS {
-                fin.pop_front();
+            if fin.len() >= self.human_waits.cap
+                && let Some(old) = fin.pop_front()
+            {
+                let d = &mut self.human_waits.dropped_through_ms;
+                *d = (*d).max(Some(old.acted_ms));
             }
             fin.push_back(done);
         }
         self.refresh_wait(&id, rec.at_ms);
         // Closing an item can free or drop what waits on it.
-        if self.items.get(&id).is_some_and(|i| i.closed.is_some()) {
+        let closed = self.items.get(&id).is_some_and(|i| i.closed.is_some());
+        let newly = if closed {
+            self.human_waits.closed.insert(id.clone())
+        } else {
+            self.human_waits.closed.remove(&id);
+            false
+        };
+        if newly {
             let dependents: Vec<ItemId> = self
                 .edges
                 .iter()

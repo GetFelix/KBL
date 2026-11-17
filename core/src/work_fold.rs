@@ -944,12 +944,7 @@ impl State {
             None if it.pending_fork.is_none() && it.open_path().is_some_and(|p| p.done) => {
                 Stage::InReview
             }
-            None if self
-                .edges
-                .iter()
-                .any(|(a, b)| a == id && self.waits_on(a, b))
-                || self.resuming(id) =>
-            {
+            None if self.links_from(id).any(|b| self.waits_on(id, b)) || self.resuming(id) => {
                 Stage::Blocked
             }
             None => Stage::Ready,
@@ -996,19 +991,18 @@ impl State {
         {
             return Some(NeedsYou::CheckFailed);
         }
-        let dropped = self.edges.iter().any(|(a, b)| {
-            a == id
-                && self.items.get(b).is_some_and(|d| {
-                    matches!(
-                        d.closed,
-                        Some(
-                            Closure::Dismissed
-                                | Closure::Upstream
-                                | Closure::Cancelled
-                                | Closure::Rejected
-                        )
+        let dropped = self.links_from(id).any(|b| {
+            self.items.get(b).is_some_and(|d| {
+                matches!(
+                    d.closed,
+                    Some(
+                        Closure::Dismissed
+                            | Closure::Upstream
+                            | Closure::Cancelled
+                            | Closure::Rejected
                     )
-                })
+                )
+            })
         });
         if dropped {
             return Some(NeedsYou::DependencyDropped);
@@ -1118,6 +1112,17 @@ impl State {
         }
     }
 
+    /// What `id` waits on, open or not. A range scan, not a walk of every edge.
+    fn links_from<'a>(&'a self, id: &ItemId) -> impl Iterator<Item = &'a ItemId> + use<'a> {
+        let owner = id.clone();
+        // "-" sorts before every other valid name, so it bounds the range from below.
+        let lowest = ItemId::new("-").expect("a valid name");
+        self.edges
+            .range((owner.clone(), lowest)..)
+            .take_while(move |(a, _)| *a == owner)
+            .map(|(_, b)| b)
+    }
+
     /// Whether a link says `from` waits on `to`, open or not.
     pub fn is_linked(&self, from: &ItemId, to: &ItemId) -> bool {
         self.edges.contains(&(from.clone(), to.clone()))
@@ -1126,10 +1131,8 @@ impl State {
     /// The items that hold `id` back now, in id order. A link holds whatever
     /// tree, repo or source the other end is in.
     pub fn blockers(&self, id: &ItemId) -> Vec<&ItemId> {
-        self.edges
-            .iter()
-            .filter(|(a, b)| a == id && self.waits_on(a, b))
-            .map(|(_, b)| b)
+        self.links_from(id)
+            .filter(|b| self.waits_on(id, b))
             .collect()
     }
 
@@ -3214,7 +3217,7 @@ impl State {
                 return true;
             }
             if seen.insert(n) {
-                stack.extend(self.edges.iter().filter(|(a, _)| a == n).map(|(_, b)| b));
+                stack.extend(self.links_from(n));
             }
         }
         false

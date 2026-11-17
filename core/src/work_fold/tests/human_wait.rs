@@ -168,3 +168,68 @@ fn each_team_folds_its_own_log() {
     assert_eq!(stats(&a).all.count, 1);
     assert_eq!(stats(&b).all.count, 0);
 }
+
+#[test]
+fn waits_dropped_past_the_cap_are_reported_as_a_partial_window() {
+    let mut l = held_root();
+    for _ in 0..4 {
+        let q = l.agent("w1", question_rec("r1"));
+        l.person(answer_rec(q));
+    }
+    let mut s = State::default();
+    s.keep_waits(2);
+    for (o, r) in &l.0 {
+        s.apply(*o, r);
+    }
+    // Two waits are kept; the newest dropped one ended at 70.
+    let all = s.time_to_human_action(0, u64::MAX);
+    assert_eq!((all.all.count, all.truncated), (2, true));
+    assert_eq!(all.complete_since_ms, Some(71));
+    assert!(!s.time_to_human_action(71, u64::MAX).truncated);
+    assert!(!fold(&l.0).time_to_human_action(0, u64::MAX).truncated);
+}
+
+#[test]
+fn states_with_different_waits_are_not_equal() {
+    let mut l = held_root();
+    l.agent("w1", question_rec("r1"));
+    let a = fold(&l.0);
+    assert_eq!(a, fold(&l.0));
+    let mut b = a.clone();
+    b.human_waits = Default::default();
+    assert_ne!(a, b);
+}
+
+#[test]
+fn tracking_a_record_does_not_scan_every_edge() {
+    use std::time::{Duration, Instant};
+    let run = |n: usize| {
+        let mut s = fold(&held_root().0);
+        for i in 0..n {
+            s.edges
+                .insert((id(&format!("e{i}")), id(&format!("e{}", i + 1))));
+        }
+        let rec = WorkLogged::new(
+            5,
+            key("tracker"),
+            Actor::Tracker,
+            WorkRecord::TierChanged {
+                item: id("r1"),
+                tier: 1,
+            },
+        );
+        let t = Instant::now();
+        for _ in 0..n {
+            s.track_human_wait(&rec);
+        }
+        t.elapsed()
+    };
+    let _ = run(1000);
+    let small = run(4000).max(Duration::from_millis(20));
+    let large = run(16_000);
+    let ratio = large.as_secs_f64() / small.as_secs_f64();
+    assert!(
+        ratio < 10.0,
+        "{small:?} then {large:?} for 4x the records and edges"
+    );
+}

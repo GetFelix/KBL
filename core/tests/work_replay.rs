@@ -265,6 +265,8 @@ fn usage_is_priced_from_format_8_and_reported_costs_still_fold() {
     assert_eq!(spend.by_model["credits"].aic_milli, 1_500);
     assert!(spend.by_model["credits"].unpriced);
     // The stored state reads back with the prices and waiting usage in it.
-    let back: State = serde_json::from_value(serde_json::to_value(&end).unwrap()).unwrap();
-    assert_eq!(back, end);
+    // Compared by wire form: the derived wait figures are not in it.
+    let wire = serde_json::to_value(&end).unwrap();
+    let back: State = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&back).unwrap(), wire);
 }
