@@ -253,8 +253,12 @@ only for that source's roots, with one exception: the `github` worker may
 record the state of a pull request on a root from any source, since agents
 open their requests on GitHub whatever tracker the issue is in. A worker with
 no entry is not tied and reaches every root, which is only appropriate when
-one worker runs. Tie each worker when a Jira worker and a GitHub worker run
-together.
+one worker runs, so the tracker refuses to start when some workers are tied
+and another is not. A tied worker other than `github` lists only its own
+source's roots. Tie each worker when a Jira worker and a GitHub worker run
+together. The tracker refuses a key it does not know in this file, so a
+misspelling fails at startup. A tracker from before `ingest_sources` ignores
+it, so downgrading removes the ties.
 
 `grants` is optional. It lists, per agent, the repositories it may file a
 [prerequisite](#prerequisites-in-another-repo) in or link to, beyond the

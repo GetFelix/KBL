@@ -1837,7 +1837,7 @@ async fn ingest_writes_upstream_records_as_the_tracker_under_its_own_name() {
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].by, key("ingest-gh"));
     assert_eq!(log[0].actor, Actor::Tracker);
-    let roots = t.ingest_roots().await.unwrap();
+    let roots = t.ingest_roots(None).await.unwrap();
     assert_eq!(roots["roots"][0]["upstream_id"], "GetFelix/felix#1");
     assert_eq!(roots["roots"][0]["closed"], false);
 }
@@ -1970,6 +1970,35 @@ async fn a_source_tied_worker_acts_only_on_its_own_roots_but_the_github_worker_r
         )
         .await;
     free.unwrap();
+}
+
+#[tokio::test]
+async fn a_tied_worker_lists_only_its_sources_roots_but_the_github_worker_lists_all() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    jira_and_github_roots(&t, "GetFelix/felix#9").await;
+    let sources = |v: Value| {
+        let mut s: Vec<String> = v["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["source"].as_str().unwrap().to_owned())
+            .collect();
+        s.sort();
+        s
+    };
+    assert_eq!(
+        sources(t.ingest_roots(Some("jira")).await.unwrap()),
+        ["jira"]
+    );
+    assert_eq!(
+        sources(t.ingest_roots(Some("github")).await.unwrap()),
+        ["github", "jira"]
+    );
+    assert_eq!(
+        sources(t.ingest_roots(None).await.unwrap()),
+        ["github", "jira"]
+    );
 }
 
 #[tokio::test]

@@ -36,7 +36,11 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Pairs<T> {
     }
 }
 
+/// The sources an ingest worker can be tied to.
+const KNOWN_SOURCES: [&str; 2] = ["github", "jira"];
+
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct File {
     /// Token to agent name.
     #[serde(default = "Pairs::empty")]
@@ -161,6 +165,20 @@ impl Tokens {
             Key::new(source.as_str()).map_err(|_| {
                 anyhow::anyhow!("the source {source:?} for {worker:?} is not a key")
             })?;
+            anyhow::ensure!(
+                KNOWN_SOURCES.contains(&source.as_str()),
+                "the source {source:?} for {worker:?} is not one of {KNOWN_SOURCES:?}"
+            );
+        }
+        // One untied worker would reach the other sources' roots and cursors.
+        if !file.ingest_sources.is_empty() {
+            for (_, worker) in &file.ingest.0 {
+                anyhow::ensure!(
+                    file.ingest_sources.contains_key(worker.as_str()),
+                    "ingest_sources ties some workers, so {:?} must be tied too",
+                    worker.as_str()
+                );
+            }
         }
         let ingest = file
             .ingest

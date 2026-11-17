@@ -345,6 +345,9 @@
  "tracker/src/tracker/ingest.rs#allowed": [
   "fn allowed(record: &WorkRecord) -> bool {"
  ],
+ "tracker/src/tracker/ingest.rs#ingest_roots": [
+  ".filter(|(source, _, _)| only.is_none_or(|o| o == *source))"
+ ],
  "tracker/src/tracker/ingest.rs#ingest_record_in": [
   "&& text.len() > INLINE_LIMIT",
   "if !targets(&record).into_iter().all(reaches) {",

@@ -316,8 +316,11 @@ impl<B: Broker> Tracker<B> {
 
     /// Every imported root: what ingest needs to count a rule's open roots and
     /// to write back to the right pull request. Also the prerequisites ingest
-    /// may open an upstream issue for.
-    pub(crate) async fn ingest_roots(&self) -> Result<Value, Error> {
+    /// may open an upstream issue for. A worker tied to a source other than the
+    /// pull request source sees only that source's; the pull request worker
+    /// sees every root, to record a request's state on it.
+    pub(crate) async fn ingest_roots(&self, tied: Option<&str>) -> Result<Value, Error> {
+        let only = tied.filter(|s| *s != PULL_REQUEST_SOURCE);
         self.begin().await?;
         let mut fetched: HashMap<u64, TextRead> = HashMap::new();
         loop {
@@ -325,6 +328,7 @@ impl<B: Broker> Tracker<B> {
             let roots: Vec<Value> = core
                 .state
                 .imported()
+                .filter(|(source, _, _)| only.is_none_or(|o| o == *source))
                 .filter_map(|(source, upstream_id, item)| {
                     let it = core.state.items.get(item)?;
                     Some(json!({
@@ -354,6 +358,9 @@ impl<B: Broker> Tracker<B> {
                 .into_iter()
                 .filter_map(|(it, waiter)| {
                     let target = it.target.as_ref()?;
+                    if only.is_some_and(|o| o != target.source.as_str()) {
+                        return None;
+                    }
                     let at = it.context.get(&prerequisite).copied();
                     Some((
                         it.id.clone(),

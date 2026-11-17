@@ -61,7 +61,7 @@ async fn record<B: Broker>(call: Call<B>, Json(body): Json<RecordBody>) -> Respo
 
 async fn roots<B: Broker>(call: Call<B>) -> Response {
     match call.worker() {
-        Ok(_) => reply(call.tracker().ingest_roots().await),
+        Ok(w) => reply(call.tracker().ingest_roots(w.source.as_deref()).await),
         Err(d) => denied(d),
     }
 }
