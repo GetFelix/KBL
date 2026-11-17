@@ -221,7 +221,8 @@ impl<B: Broker> Org<B> {
         view.held_until = Self::held_until(core);
         drop(view);
         let next = core.at.map_or(0, |a| a + 1);
-        self.changed.send_if_modified(|at| std::mem::replace(at, next) != next);
+        self.changed
+            .send_if_modified(|at| std::mem::replace(at, next) != next);
     }
 
     /// Answers from the org as last folded, with the offset after its last

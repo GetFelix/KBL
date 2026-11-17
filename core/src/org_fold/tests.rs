@@ -475,10 +475,7 @@ fn a_team_repeated_with_other_fields_is_not_the_same_team() {
 }
 
 fn at(v: u32, r: OrgRecord) -> OrgLogged {
-    OrgLogged {
-        v,
-        ..log(r)
-    }
+    OrgLogged { v, ..log(r) }
 }
 fn source(t: &str, s: &str) -> OrgRecord {
     OrgRecord::SourceAdded {
@@ -548,10 +545,16 @@ fn a_connection_serves_only_its_own_teams_sources_once() {
         "another team's source"
     );
     assert_eq!(
-        s.check(&log(connection("a", "gh", "g1", &["github:o/one", "github:o/one"]))),
+        s.check(&log(connection(
+            "a",
+            "gh",
+            "g1",
+            &["github:o/one", "github:o/one"]
+        ))),
         Err(OrgRefusal::UnknownSource)
     );
-    s.apply(&log(connection("a", "gh", "g1", &["github:o/one"]))).unwrap();
+    s.apply(&log(connection("a", "gh", "g1", &["github:o/one"])))
+        .unwrap();
     assert_eq!(
         s.check(&log(connection("a", "gh2", "g2", &["github:o/one"]))),
         Err(OrgRefusal::SourceServed)
@@ -565,7 +568,8 @@ fn a_connection_serves_only_its_own_teams_sources_once() {
         s.apply(&log(connection("a", "gh", "g1", &["github:o/one"]))),
         Ok(Applied::Unchanged)
     );
-    s.apply(&log(connection("b", "gh", "g1", &["github:o/two"]))).unwrap();
+    s.apply(&log(connection("b", "gh", "g1", &["github:o/two"])))
+        .unwrap();
     let (name, c) = s.connection_of_group(&team("a"), &key("g1")).unwrap();
     assert_eq!((name.as_str(), c.sources.len()), ("gh", 1));
     assert_eq!(s.pool_sources(&key("gh-app")), 2);

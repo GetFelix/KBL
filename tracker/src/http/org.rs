@@ -141,11 +141,17 @@ pub(super) async fn org_record<B: Broker>(
         Err(_) => None,
     };
     let Some(RecordBody { record }) = body else {
-        return refused(StatusCode::BAD_REQUEST, "the body is not an org record", "invalid");
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "the body is not an org record",
+            "invalid",
+        );
     };
     if !matches!(
         record,
-        OrgRecord::FormatRaised { .. } | OrgRecord::ConnectionSet { .. } | OrgRecord::BudgetSet { .. }
+        OrgRecord::FormatRaised { .. }
+            | OrgRecord::ConnectionSet { .. }
+            | OrgRecord::BudgetSet { .. }
     ) {
         return refused(
             StatusCode::BAD_REQUEST,
@@ -165,7 +171,9 @@ pub(super) async fn org_record<B: Broker>(
 
 fn org_error(e: OrgError) -> Response {
     match e {
-        OrgError::Refused(why) => refused(StatusCode::CONFLICT, "the org log refused the record", why),
+        OrgError::Refused(why) => {
+            refused(StatusCode::CONFLICT, "the org log refused the record", why)
+        }
         OrgError::Unavailable(e) => refused(StatusCode::SERVICE_UNAVAILABLE, &e, "org_unavailable"),
         OrgError::Felix(e) => (
             StatusCode::BAD_GATEWAY,

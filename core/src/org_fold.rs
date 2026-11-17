@@ -14,8 +14,8 @@ use std::fmt;
 use crate::names::Key;
 use crate::org::{
     MAX_AGENTS_PER_TEAM, MAX_CONNECTION_SOURCES, MAX_CONNECTIONS_PER_TEAM, MAX_GRANT_AGENTS,
-    MAX_GRANTS_PER_TEAM, MAX_INGEST_PER_TEAM, ORG_FORMAT_V1,
-    MAX_LABEL_BYTES, MAX_ROLE_REPOS, OrgLogged, OrgRecord, Role, TeamName, TokenHash,
+    MAX_GRANTS_PER_TEAM, MAX_INGEST_PER_TEAM, MAX_LABEL_BYTES, MAX_ROLE_REPOS, ORG_FORMAT_V1,
+    OrgLogged, OrgRecord, Role, TeamName, TokenHash,
 };
 
 #[cfg(test)]
