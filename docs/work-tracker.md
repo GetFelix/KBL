@@ -631,6 +631,44 @@ is refused with `no_change`; a closed item with `closed`.
   in that the log says the person resolved it, and a link that holds nothing
   is `no_change`.
 
+#### Person tools over MCP
+
+`kbl-mcp person` serves the actions above and My queue as MCP tools, so a
+person can work the queue from their own MCP host. It is a separate process
+from the agent server, started with a person's token:
+
+```bash
+KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
+  kbl-mcp person --team default
+```
+
+| Tool | Does |
+|---|---|
+| `my_queue` | `GET /v1/work/queue`, with an optional `limit` |
+| `accept_proposal`, `reject_proposal` | Accept a proposal, with an optional `tier`, or reject it |
+| `answer_question` | Answer the open question on an item with `chosen` or `text` |
+| `set_tier`, `flag_item`, `unflag_item` | Change an item's priority, or flag it |
+| `add_note` | A note, review comment or priority change, as `human_input` |
+| `retry_item`, `snooze_item`, `park_item`, `unpark_item`, `unblock_item` | The [card actions](#card-actions-on-my-queue) |
+| `request_review`, `request_changes`, `mark_merged`, `rate_summary` | The [review actions and summary marks](#review-actions-and-summary-marks) |
+
+Every write takes an optional `request_key`, as the REST calls do. A tool
+refuses a parameter it does not list before it calls the tracker.
+
+The token is held by this process alone. It is read from `KBL_PERSON_TOKEN`,
+which the agent server never reads, and at start the server asks the tracker
+whom the token belongs to. An agent's token is not a person's, so the server
+exits and lists no tools. The tracker also refuses an agent's token on every
+person route, and writes each record under the person's name with the actor
+`person`, so a record made through MCP looks like one made in the dashboard.
+`--team` (or `KBL_TEAM`) fixes the team; a token in more than one team needs
+it, and a token not in that team does not start. Run the person server in the
+person's own MCP host, not in an agent's: an agent that can run a command in
+the same environment can read the token.
+
+Add a tool by adding an entry to the table in `mcp/src/person/table.rs`, and a
+row to the threat model.
+
 Reassign, take and steer need an assignee in the fold and are not built yet.
 
 #### Review actions and summary marks

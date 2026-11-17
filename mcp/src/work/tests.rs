@@ -57,6 +57,10 @@ impl TrackerApi for Fake {
             },
         }
     }
+
+    async fn get(&self, _path: &str) -> Result<Value, CallError> {
+        Err(CallError::Refused("the agent tools do not read".into()))
+    }
 }
 
 fn work(fake: &Fake) -> Work<Fake> {

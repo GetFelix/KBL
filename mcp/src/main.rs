@@ -2,11 +2,15 @@
 //! MCP over stdio. The agent's token comes from the environment, so the agent
 //! can do on Felix what its token allows and nothing else.
 //!
+//! `kbl-mcp person` is the person-side server: a person's card actions, with
+//! a person's token, in a process of its own. See `person.rs`.
+//!
 //! Stdout belongs to the protocol. Anything meant for a person goes to stderr.
 
 mod felix;
 mod keepalive;
 mod metrics;
+mod person;
 mod server;
 mod tasks;
 mod work;
@@ -24,14 +28,20 @@ use felix::Target;
 use server::Server;
 
 #[derive(Parser)]
-#[command(version, about = "Felix tools for one agent, served as MCP over stdio")]
+#[command(
+    version,
+    about = "Felix tools for one agent, served as MCP over stdio",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// The run this agent works in.
-    #[arg(long, env = "KBL_RUN")]
-    run: String,
+    #[arg(long, env = "KBL_RUN", required = true)]
+    run: Option<String>,
     /// This agent's name in the run, such as `planner` or `w1`.
-    #[arg(long, env = "KBL_AGENT")]
-    agent: String,
+    #[arg(long, env = "KBL_AGENT", required = true)]
+    agent: Option<String>,
     #[arg(long, env = "KBL_TENANT", default_value = "agents")]
     tenant: String,
     #[arg(long, env = "KBL_NAMESPACE", default_value = "default")]
@@ -72,6 +82,22 @@ struct Cli {
     extend_every_ms: Option<u64>,
 }
 
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Serve a person's card actions and My queue, with a person's token.
+    Person(PersonArgs),
+}
+
+#[derive(clap::Args)]
+struct PersonArgs {
+    /// Where the tracker's REST API is.
+    #[arg(long, env = "KBL_TRACKER_URL")]
+    tracker: String,
+    /// The team to act in. Needed when the token is in more than one.
+    #[arg(long, env = "KBL_TEAM")]
+    team: Option<String>,
+}
+
 fn main() -> Result<()> {
     kbl_core::legacy_env::adopt();
     tokio::runtime::Builder::new_multi_thread()
@@ -82,6 +108,9 @@ fn main() -> Result<()> {
 
 async fn serve() -> Result<()> {
     let cli = Cli::parse();
+    if let Some(Command::Person(args)) = cli.command {
+        return serve_person(args).await;
+    }
     let exporter = kbl_metrics::install("kbl-mcp");
     // Held to the end of `serve`, which flushes the last spans.
     let _traces = kbl_trace::init("kbl-mcp");
@@ -93,8 +122,11 @@ async fn serve() -> Result<()> {
     // Environment only: a flag would show the token in `ps`.
     let token = std::env::var("KBL_FELIX_TOKEN")
         .context("set KBL_FELIX_TOKEN to the agent's Felix token for the broker")?;
-    let run = RunId::new(cli.run).context("--run")?;
-    let agent = AgentName::new(cli.agent).context("--agent")?;
+    let (Some(run), Some(agent)) = (cli.run, cli.agent) else {
+        anyhow::bail!("--run and --agent are needed");
+    };
+    let run = RunId::new(run).context("--run")?;
+    let agent = AgentName::new(agent).context("--agent")?;
     let felix = felix::connect(Target {
         tenant: cli.tenant,
         namespace: cli.namespace,
@@ -124,6 +156,29 @@ async fn serve() -> Result<()> {
         extend_every: cli.extend_every_ms.map(Duration::from_millis),
     };
     let service = Server::new(run, agent, felix, tracker, timing)
+        .serve(stdio())
+        .await
+        .context("start the MCP server")?;
+    service.waiting().await?;
+    Ok(())
+}
+
+/// The person server. Its token is `KBL_PERSON_TOKEN`, a name the agent server
+/// never reads, so an agent's environment cannot be mistaken for it.
+async fn serve_person(args: PersonArgs) -> Result<()> {
+    let token = std::env::var("KBL_PERSON_TOKEN")
+        .context("set KBL_PERSON_TOKEN to a person's tracker token")?;
+    let team = args
+        .team
+        .map(kbl_core::org::TeamName::new)
+        .transpose()
+        .context("--team")?;
+    let api = work::Http::new(&args.tracker, token).context("set up the tracker client")?;
+    let person = person::Person::connect(api, team)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    eprintln!("kbl-mcp: person tools, {} tools", person.tools().len());
+    let service = person
         .serve(stdio())
         .await
         .context("start the MCP server")?;

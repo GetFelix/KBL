@@ -44,6 +44,9 @@ pub(crate) trait TrackerApi: Clone + Send + Sync + 'static {
         path: &str,
         body: Value,
     ) -> impl Future<Output = Result<Value, CallError>> + Send;
+
+    /// A read: `path` carries any query.
+    fn get(&self, path: &str) -> impl Future<Output = Result<Value, CallError>> + Send;
 }
 
 #[derive(Clone)]
@@ -72,7 +75,7 @@ impl TrackerApi for Http {
             http.route = path,
             http.response.status_code = tracing::field::Empty,
         );
-        let response = self
+        let sent = self
             .client
             .post(format!("{}{path}", self.base))
             .bearer_auth(&self.token)
@@ -80,23 +83,40 @@ impl TrackerApi for Http {
             .json(&body)
             .send()
             .instrument(span.clone())
-            .await
-            .map_err(|e| CallError::Down(format!("could not reach the tracker: {e}")))?;
-        let status = response.status();
-        span.record("http.response.status_code", status.as_u16());
-        let reply: Value = response.json().await.unwrap_or(Value::Null);
-        if status.is_success() {
-            return Ok(reply);
+            .await;
+        if let Ok(response) = &sent {
+            span.record("http.response.status_code", response.status().as_u16());
         }
-        let message = reply["error"]
-            .as_str()
-            .map_or_else(|| format!("the tracker answered {status}"), str::to_owned);
-        Err(match (status.as_u16(), reply["why"].as_str()) {
-            (409, Some("lost")) => CallError::Lost(message),
-            (400..=499, _) => CallError::Refused(message),
-            _ => CallError::Down(message),
-        })
+        answer(sent).await
     }
+
+    async fn get(&self, path: &str) -> Result<Value, CallError> {
+        let sent = self
+            .client
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(&self.token)
+            .send()
+            .await;
+        answer(sent).await
+    }
+}
+
+async fn answer(sent: Result<reqwest::Response, reqwest::Error>) -> Result<Value, CallError> {
+    let response =
+        sent.map_err(|e| CallError::Down(format!("could not reach the tracker: {e}")))?;
+    let status = response.status();
+    let reply: Value = response.json().await.unwrap_or(Value::Null);
+    if status.is_success() {
+        return Ok(reply);
+    }
+    let message = reply["error"]
+        .as_str()
+        .map_or_else(|| format!("the tracker answered {status}"), str::to_owned);
+    Err(match (status.as_u16(), reply["why"].as_str()) {
+        (409, Some("lost")) => CallError::Lost(message),
+        (400..=499, _) => CallError::Refused(message),
+        _ => CallError::Down(message),
+    })
 }
 
 /// The one item this agent holds, and the loop that keeps its claim alive.
@@ -330,7 +350,7 @@ fn lost(held: &mut Option<Held>) -> Option<String> {
     ))
 }
 
-fn message(e: CallError) -> String {
+pub(crate) fn message(e: CallError) -> String {
     match e {
         CallError::Lost(m) | CallError::Refused(m) | CallError::Down(m) => m,
     }
