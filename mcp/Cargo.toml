@@ -1,6 +1,6 @@
 [package]
 name = "kbl-mcp"
-version = "0.0.0"
+version.workspace = true
 description = "An MCP server that gives an agent its Felix Agents tools"
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ kbl-core = { path = "../core" }
 kbl-metrics = { path = "../metrics" }
 kbl-trace = { path = "../trace" }
 anyhow = "=1.0.100"
+base64 = "=0.22.1"
 bytes = "=1.12.1"
 clap = { version = "=4.5.51", features = ["derive", "env"] }
 felix-client = "=0.6.2"
@@ -19,9 +20,10 @@ metrics = "=0.24.6"
 reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rmcp = { version = "=3.5.1", features = ["server", "macros", "transport-io"] }
 schemars = "1.0"
+url = "=2.5.8"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.145"
-tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "=1.48.0", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tracing = "=0.1.44"
 
 [dev-dependencies]

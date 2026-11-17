@@ -1,6 +1,6 @@
 [package]
 name = "kbl-wasm"
-version = "0.0.0"
+version.workspace = true
 description = "The work fold from kbl-core as WebAssembly, for the dashboard"
 edition.workspace = true
 rust-version.workspace = true

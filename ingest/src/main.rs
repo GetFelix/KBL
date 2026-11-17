@@ -2,6 +2,7 @@
 //! and keeps them in step. It writes only through the tracker's REST API, under
 //! its own token, and makes no model calls. See docs/work-tracker.md "Sources".
 
+mod ado;
 mod config;
 mod github;
 mod jira;
@@ -111,14 +112,18 @@ async fn serve() -> Result<()> {
     let token = std::env::var(&cfg.tracker.token_env)
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
     let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
-    match (&cfg.github, &cfg.jira) {
-        (Some(g), None) => {
+    match (&cfg.github, &cfg.jira, &cfg.ado) {
+        (Some(g), None, None) => {
             let github = github_source(g).await?;
             drive(github, tracker, cfg, cli).await
         }
-        (None, Some(j)) => {
+        (None, Some(j), None) => {
             let jira = jira_source(j, &cfg).await?;
             drive(jira, tracker, cfg, cli).await
+        }
+        (None, None, Some(a)) => {
+            let ado = ado_source(a, &cfg).await?;
+            drive(ado, tracker, cfg, cli).await
         }
         _ => unreachable!("the config checks for exactly one source"),
     }
@@ -201,6 +206,51 @@ async fn jira_source(
         jira.browse_at(b);
     }
     Ok(jira)
+}
+
+async fn ado_source(
+    a: &config::AdoConfig,
+    cfg: &Config,
+) -> Result<ado::Ado<ado::transport::Reqwest>> {
+    use ado::transport::{Auth, Entra, Secret};
+    let plain = std::iter::once(a.api.as_str())
+        .chain(a.entra.iter().map(|e| e.authority.as_str()))
+        .any(|u| !u.starts_with("https://"));
+    if plain {
+        eprintln!(
+            "kbl-ingest: warning: an Azure DevOps address is not https; the credential is sent in the clear"
+        );
+    }
+    let auth = match (&a.pat_file, &a.pat_env, &a.entra) {
+        (Some(f), _, None) => Auth::Pat(Secret::File(f.clone())),
+        (None, Some(e), None) => Auth::Pat(Secret::Env(e.clone())),
+        (None, None, Some(e)) => {
+            let secret = match (&e.client_secret_file, &e.client_secret_env) {
+                (Some(f), _) => Secret::File(f.clone()),
+                (None, Some(v)) => Secret::Env(v.clone()),
+                (None, None) => unreachable!("the config checks the client secret"),
+            };
+            Auth::Entra(Entra::new(&e.tenant_id, &e.client_id, secret, &e.authority))
+        }
+        _ => unreachable!("the config checks the sign-in"),
+    };
+    let scopes = cfg
+        .rules
+        .iter()
+        .map(|r| ado::Scope { rule: r.clone() })
+        .collect();
+    let mut ado = ado::Ado::new(
+        &a.organization,
+        &a.api,
+        ado::transport::Reqwest::new(auth)?,
+        a.own_logins.clone(),
+        scopes,
+        &a.projects,
+        &a.pr_url_base,
+    );
+    ado.add_own(ado.login().await);
+    ado.require_own()?;
+    Ok(ado)
 }
 
 async fn drive<S: Source>(
