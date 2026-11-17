@@ -247,10 +247,12 @@ try {
   // The tracker opens the teams the log lists and creates their streams; alpha's
   // namespace and grants are new in this Felix.
   check(/already exists/.test(await teamCreate("alpha")), "alpha is in the restored org log");
-  tracker.kill();
-  await tracker.exited;
+  // alpha's streams are made by the tracker's background retry after the create,
+  // so the tracker stays up until alpha's log can be read.
   await waitReadable("the default team's work log", ["work", "digest", "--state", join(dir, "ready.json")]);
   await waitReadable("alpha's work log", ["work", "digest", "--state", join(dir, "alpha-ready.json")], ALPHA);
+  tracker.kill();
+  await tracker.exited;
   check(digest(join(dir, "empty.json")).records === 0, "the fresh cluster's log is empty");
 
   const bad = join(dir, "damaged.backup");
