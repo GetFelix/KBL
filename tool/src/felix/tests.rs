@@ -118,3 +118,52 @@ async fn a_read_refused_for_another_reason_is_not_retried() {
     assert!(got.is_err());
     assert_eq!(calls, 1);
 }
+
+#[test]
+fn a_refused_read_on_an_unplaced_shard_is_leaderless() {
+    let err = anyhow::anyhow!("read refused: shard is not assigned to any broker")
+        .context("read work.events from offset 0");
+    assert!(is_leaderless(&err));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_read_refused_for_a_leaderless_shard_succeeds_once_it_has_a_leader() {
+    let mut calls = 0;
+    let (records, tip) = pages_to_tip("work.events", |from| {
+        calls += 1;
+        let n = calls;
+        async move {
+            match (n, from) {
+                (1..=5, _) => Err(anyhow::anyhow!(
+                    "read refused: shard is not assigned to any broker"
+                )),
+                (_, 0) => Ok((vec![(0, b"a".to_vec())], 1)),
+                _ => Ok((Vec::new(), from)),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!((records.len(), tip, calls), (1, 1, 7));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_read_that_never_recovers_fails_within_the_bound() {
+    let start = Instant::now();
+    let err = pages_to_tip("work.events", |_| async {
+        Err(anyhow::anyhow!(
+            "read refused: shard is not assigned to any broker"
+        ))
+    })
+    .await
+    .unwrap_err();
+    let waited = start.elapsed();
+    assert!(
+        format!("{err:#}").contains("read work.events from offset 0"),
+        "{err:#}"
+    );
+    assert!(
+        waited >= LEADERLESS_WAIT && waited < LEADERLESS_WAIT + Duration::from_secs(5),
+        "{waited:?}"
+    );
+}

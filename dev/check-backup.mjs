@@ -57,6 +57,19 @@ function must(args, env) {
   if (!r.ok) throw new Error(`kbl-tool ${args.join(" ")}: ${r.err}`);
   return r.out;
 }
+// A cheap read of each log the import is about to use. A broker that has just
+// started, or a team whose streams are still being placed, answers "shard is not
+// assigned" until it holds a lease; the import waits on that itself, but a clear
+// failure here names which log never became readable.
+async function waitReadable(what, args, env = {}, seconds = 240) {
+  const until = Date.now() + seconds * 1000;
+  for (;;) {
+    const r = tool(args, env);
+    if (r.ok) return;
+    if (Date.now() >= until) throw new Error(`${what} was not readable after ${seconds}s: ${r.err}`);
+    await sleep(3000);
+  }
+}
 const digest = (stateFile, backup) =>
   JSON.parse(must(["work", "digest", "--state", stateFile, ...(backup ? ["--backup", backup] : [])]));
 const orgDigest = (stateFile, backup) =>
@@ -217,6 +230,7 @@ try {
   must(["org", "init", "--tracker-subject", "agents-admin"]);
   // The org log goes in before any tracker starts: a tracker on an empty org log
   // adopts its first team there, and the import would then refuse the backup.
+  await waitReadable("the org log", ["org", "digest", "--state", join(dir, "org-ready.json")], orgEnv);
   must(["org", "import", orgFile]);
   const orgAfter = orgDigest(join(dir, "org-after.json"));
   check(orgAfter.sha256 === orgBefore.sha256, "the restored org log's digest equals the original's");
@@ -235,6 +249,8 @@ try {
   check(/already exists/.test(await teamCreate("alpha")), "alpha is in the restored org log");
   tracker.kill();
   await tracker.exited;
+  await waitReadable("the default team's work log", ["work", "digest", "--state", join(dir, "ready.json")]);
+  await waitReadable("alpha's work log", ["work", "digest", "--state", join(dir, "alpha-ready.json")], ALPHA);
   check(digest(join(dir, "empty.json")).records === 0, "the fresh cluster's log is empty");
 
   const bad = join(dir, "damaged.backup");

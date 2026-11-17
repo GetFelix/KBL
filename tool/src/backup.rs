@@ -4,7 +4,6 @@
 
 use std::fs;
 use std::io::Write;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::Args;
@@ -13,9 +12,8 @@ use kbl_core::work::WORK_EVENTS;
 use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::time::Instant;
 
-use crate::felix::{Broker, ConditionalWrite, Session, Target, is_leaderless};
+use crate::felix::{Broker, ConditionalWrite, Patience, Session, Target};
 
 /// The file's first line names it, so a file of something else is refused.
 const MAGIC: &str = "kbl-backup";
@@ -228,17 +226,13 @@ async fn restore(broker: &impl LogStore, stream: &str, backup: &Backup<'_>) -> R
     ))
 }
 
-/// How long a restore keeps trying while the broker has no lease on the shard.
-const LEASE_WAIT: Duration = Duration::from_secs(60);
-
 /// Writes `line` at exactly `offset`. A refusal that says the shard has no
 /// leader right now (a lost lease, a move, a shard still opening) is waited out.
 /// Before each retry the log is read back: if the first attempt landed, the
 /// record is there and the retry never happens, so nothing is written twice. A
 /// conditional publish also cannot land anywhere but `offset`.
 async fn write_at(broker: &impl LogStore, stream: &str, offset: u64, line: &str) -> Result<()> {
-    let deadline = Instant::now() + LEASE_WAIT;
-    let mut wait = Duration::from_millis(250);
+    let mut patience = Patience::new();
     let mut check = false;
     loop {
         if check {
@@ -255,11 +249,7 @@ async fn write_at(broker: &impl LogStore, stream: &str, offset: u64, line: &str)
                         "{stream} holds something else at offset {offset} where the backup has a record; stop other writers and restore into a fresh log"
                     );
                 }
-                Err(e) if Instant::now() < deadline && is_leaderless(&e) => {
-                    tokio::time::sleep(wait).await;
-                    wait = (wait * 2).min(Duration::from_secs(4));
-                    continue;
-                }
+                Err(e) if patience.again(&e).await => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -277,11 +267,7 @@ async fn write_at(broker: &impl LogStore, stream: &str, offset: u64, line: &str)
             Ok(ConditionalWrite::Refused { tail }) => bail!(
                 "{stream} no longer ends at offset {offset} (it names {tail}); another writer is on it. Stop other writers and restore into a fresh log."
             ),
-            Err(e) if Instant::now() < deadline && is_leaderless(&e) => {
-                tokio::time::sleep(wait).await;
-                wait = (wait * 2).min(Duration::from_secs(4));
-                check = true;
-            }
+            Err(e) if patience.again(&e).await => check = true,
             Err(e) => return Err(e),
         }
     }

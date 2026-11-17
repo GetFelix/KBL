@@ -4,7 +4,7 @@
 use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 pub(crate) use felix_client::ConditionalWrite;
@@ -13,6 +13,7 @@ use felix_client::{
     quic_client_config, root_store_from_pem_file,
 };
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
 /// Where Felix is and who `kbl-tool` is.
 #[derive(Debug, Clone)]
@@ -35,6 +36,9 @@ const ID_TOKEN_AUDIENCE: &str = "kbl";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
 const PLACEMENT_WAIT: Duration = Duration::from_secs(60);
+/// How long a read or restore waits for a shard to have a leader. A broker
+/// that has just started can take a while to hold its leases.
+const LEADERLESS_WAIT: Duration = Duration::from_secs(120);
 /// The development stack's administrator, who may create runs.
 const ADMIN_SUBJECT: &str = "agents-admin";
 
@@ -296,8 +300,8 @@ impl Broker {
 }
 
 /// Reads pages from offset 0 until an empty one. `read` returns a page's
-/// records and the offset after it. A shard that is not ready yet is retried,
-/// since a read has no effect to repeat.
+/// records and the offset after it. A shard with no leader is waited out, since
+/// a read has no effect to repeat.
 async fn pages_to_tip<F, Fut>(stream: &str, mut read: F) -> Result<(Vec<(u64, Vec<u8>)>, u64)>
 where
     F: FnMut(u64) -> Fut,
@@ -306,7 +310,7 @@ where
     let mut out = Vec::new();
     let mut from = 0;
     loop {
-        let (records, next) = match placed(|| read(from)).await {
+        let (records, next) = match leaderless(|| read(from)).await {
             Ok(page) => page,
             // Felix refuses an offset past its tail: `from` is the tip.
             Err(e) if past_the_tail(&e) => return Ok((out, from)),
@@ -352,6 +356,49 @@ where
             Err(err) if Instant::now() < deadline && is_not_ready(&err) => {
                 tokio::time::sleep(Duration::from_millis(250)).await;
             }
+            done => return done,
+        }
+    }
+}
+
+/// The bounded wait every read and restore step shares: how long is left and
+/// how long to sleep before the next try.
+pub(crate) struct Patience {
+    deadline: Instant,
+    wait: Duration,
+}
+
+impl Patience {
+    pub(crate) fn new() -> Self {
+        Self {
+            deadline: Instant::now() + LEADERLESS_WAIT,
+            wait: Duration::from_millis(250),
+        }
+    }
+
+    /// Sleeps and returns true if `err` is a shard with no leader and the wait
+    /// is not used up; false means the caller should give the error up.
+    pub(crate) async fn again(&mut self, err: &anyhow::Error) -> bool {
+        if Instant::now() >= self.deadline || !is_leaderless(err) {
+            return false;
+        }
+        tokio::time::sleep(self.wait).await;
+        self.wait = (self.wait * 2).min(Duration::from_secs(4));
+        true
+    }
+}
+
+/// Runs `op` again while the broker says the shard has no leader, up to the
+/// bound. Only for calls that are safe to repeat, such as reads.
+pub(crate) async fn leaderless<T, F, Fut>(mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let mut patience = Patience::new();
+    loop {
+        match op().await {
+            Err(err) if patience.again(&err).await => {}
             done => return done,
         }
     }
