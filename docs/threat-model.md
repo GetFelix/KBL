@@ -47,7 +47,7 @@ Two more parties are outside KBL and can still steer it:
 | Merges | GitHub. KBL records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
 | Rules | `rules_set` records, shown in every claim reply | Instructions injected into every other agent |
 | Artifacts | The artifacts cache, keyed by content hash | Other bytes shown under a trusted id |
-| Credentials | The token file, the webhook secret, the GitHub credential, Felix tokens | Any of them |
+| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), Felix tokens | Any of them |
 
 ## Trust boundaries
 
@@ -80,12 +80,20 @@ Two more parties are outside KBL and can still steer it:
    token and a raw client skips it. Felix grants are the check.
 6. **Browser to gateway.** Read only, one run.
 
+When ingest signs in as a GitHub App, the private key is the standing secret:
+anyone who reads the key file can mint installation tokens until the key is
+revoked in GitHub. Keep it mode 600 or 400; ingest refuses to start with a looser key file. The key, the
+signed JWT and the installation token are held in memory, never logged, and
+left out of errors (GitHub's error text goes through the redactor first). An
+installation token lives an hour and is replaced five minutes early, so a
+leaked one is short-lived; the key is not.
+
 The token file must be mode 600 or 400 (`tracker/src/config.rs:93`), a token
 may be listed once (`tracker/src/config.rs:114`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs:149`).
 The tracker and the webhook serve plain HTTP, so each refuses to listen on
 an address other than loopback unless a flag says a TLS proxy is in front
-(`tracker/src/main.rs:132`, `ingest/src/main.rs:69`). The flag is a promise
+(`tracker/src/main.rs:132`, `ingest/src/main.rs:70`). The flag is a promise
 the process cannot check: set it without a proxy and tokens cross the network
 in the clear. Callers are not checked either: `kbl-mcp` and ingest send their
 token to whatever tracker URL they are given, `http://` included. Tokens are long-lived ([#121](https://github.com/GetFelix/KBL/issues/121)).
@@ -199,8 +207,8 @@ and the token file's callers belong to it.
 
 | Route | Fields the caller controls | What they could steer | Check |
 |---|---|---|---|
-| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:134`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:183`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
-| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:311`), with each team's review limit, a count that is no secret |
+| `/v1/teams/{team}/{*rest}` | `team`, and the inner route's own fields | Act in a team the token is not in; reach a route that has no team form | Only `work/` and `ingest/` routes are served under it (`tracker/src/http.rs:134`). The named team must be one the token belongs to; any other, existing or not, answers `404` with `unknown_team`, and the token is checked first (`tracker/src/http.rs:222`). The route's own token and field checks then apply as above. Tested with two teams in `tracker/src/http/tests.rs` |
+| `/v1/me` | None | Learn other teams | Person token only. Answers only the teams the token is in (`tracker/src/http.rs:311`) |
 | `GET /v1/org/teams`, `POST /v1/org/teams` | `team`, `display_name` on `POST` | Create a team, or adopt a namespace that already holds another team's data; list the org's teams | Org admin only: a person of the token file. An agent or ingest token gets `403` with `org_admin_required` before the body is read, and the body is capped at 4 KiB (`tracker/src/http/org.rs`). The name follows the key rule and is not `kbl`. A name already on `org.events` writes nothing and answers `created: false`. The tracker only serves the namespace: Felix grants on it come from `kbl-tool team create`, run with the org admin's own Felix sign-in. Without `KBL_ORG_NAMESPACE` it answers `404` with `teams_off` |
 
 A person token in more than one team gets `400` with `team_required` on a path
@@ -235,12 +243,12 @@ request only when all of these hold, so the name alone steers nothing.
 | Attack | Check |
 |---|---|
 | Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs:1054`) |
-| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:577`, `ingest/src/github.rs:362`) |
+| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs:577`, `ingest/src/github.rs:363`) |
 | Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs:591`) |
-| Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs:374`) |
-| Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:708`) |
-| Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:795`) |
-| Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs:771`) |
+| Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs:375`) |
+| Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs:709`) |
+| Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs:796`) |
+| Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs:772`) |
 | Name another item's request in other letter case | The tracker records the casing an open item already uses, so the fold refuses it as `pr_in_use` (`tracker/src/tracker.rs:327`) |
 | Get a stranger's request turned into a draft | Write-back uses the same repo and author checks (`ingest/src/sync.rs:1009`) |
 | Hide instructions in an issue or comment | Not stopped: the text is the work. Intake rules choose whose issues get in, text is cut to fit a record (`ingest/src/sync.rs:1491`), our own comments are skipped (`ingest/src/sync.rs:507`), and an edit after triage shows as "changed upstream" |
