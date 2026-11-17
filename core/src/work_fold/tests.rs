@@ -3046,6 +3046,7 @@ fn chained_answers_stop_at_the_depth_cap() {
     assert!(fold(&l.0).items[&id(&at)].open_question.is_some());
 }
 
+mod human_wait;
 mod review;
 mod spend;
 

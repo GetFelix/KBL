@@ -314,6 +314,7 @@ A person's token can also read the team's work. These calls write nothing:
 | `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
 | `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A `from` past the end of the log is an empty answer with `next` null. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
+| `GET /v1/work/metrics/time-to-human` | Time to first human action over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.count`, `p50_ms` and `p90_ms` of the waits a person ended in the window, the same per reason in `by_kind` (`proposal`, `question`, `failure`, `review`, `other`), `open` (items waiting now with no person action yet) and `oldest_open_since_ms`. Open waits are not in the percentiles. See [Time to first human action](#time-to-first-human-action) |
 
 An unknown item answers `409` with `why: unknown_item`, like the agent calls.
 A path that is not a valid item id is a `400`.
@@ -1813,7 +1814,9 @@ approvals are never counted as review.
 
 - Time in each stage, p50 and p85.
 - Time waiting on a human, per merged fix.
-- Time to the first human action on My queue and on In review.
+- Time to the first human action on My queue and on In review. The tracker
+  serves it today, see [Time to first human action](#time-to-first-human-action);
+  the dashboard has no Metrics tab yet.
 - Throughput against arrivals, and a cumulative flow chart. A band that widens
   is the constraint.
 - Blocked time and the items that hold the most up.
@@ -1825,6 +1828,35 @@ approvals are never counted as review.
 
 These come from `work.events` alone. Cost and minutes arrive as `cost` and
 `human` records. The numbers are published as they are, not picked.
+
+#### Time to first human action
+
+How long an item waits on a person before a person writes anything about it.
+The fold derives it from records that already exist; no new record is written
+and no model reads anything.
+
+An item starts waiting when it enters one of these:
+
+- an agent's proposal or triage answer waits to be accepted (`proposal`)
+- an agent's question, or triage that found the issue unclear (`question`)
+- a failed check, or an attempt that used its tries (`failure`)
+- the work is done and its pull request is in review (`review`)
+- any other Needs you reason, such as over budget or flagged (`other`)
+
+The wait ends at the first record whose actor is a person on that item: an
+answer, an accept, a note, a close. Agent and tracker records do not end it.
+A snooze does not either: it names no item the fold knows, so it is not an
+action. A wait is one unbroken stretch. If the item stops waiting and later
+waits again, that is a second wait and counts twice; a second person record
+during the same stretch does not count again. An item that stops waiting
+without a person acting (a green check, a close by upstream sync) leaves no
+wait at all.
+
+`GET /v1/work/metrics/time-to-human` counts a wait in the window its ending
+record falls in. Waits still open are reported as `open`, with the time the
+longest began, and are left out of p50 and p90. Percentiles use the nearest
+rank. The numbers are for the team whose log is folded; nothing names who
+acted. The fold keeps the last 20,000 finished waits.
 
 [dashboard-research.md](dashboard-research.md) says why each part is there and
 how much evidence stands behind it.

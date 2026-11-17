@@ -22,8 +22,11 @@ use crate::work::{
     Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
+mod human_wait;
 #[cfg(test)]
 mod tests;
+
+pub use human_wait::{HumanWaitStats, KindStats, WaitKind};
 
 const DEFAULT_MAX_ITEMS: u32 = 12;
 const DEFAULT_MAX_DEPTH: u8 = 3;
@@ -705,6 +708,9 @@ pub struct State {
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
     #[serde(skip)]
     probing: Option<Vec<ItemId>>,
+    /// Waits on a person, open and finished. Derived by replay, so not in the wire form.
+    #[serde(skip)]
+    human_waits: human_wait::Waits,
 }
 
 /// Whether a build that reads formats up to `reads` takes `rec` on a log at
@@ -1484,6 +1490,12 @@ impl State {
     }
 
     fn step(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
+        self.step_record(offset, rec)?;
+        self.track_human_wait(rec);
+        Ok(())
+    }
+
+    fn step_record(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
         if let Some(raised) = format_gate(FORMAT, self.format(), rec)? {
             self.format = Some(raised);
             return Ok(());

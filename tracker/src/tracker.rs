@@ -33,7 +33,7 @@ use tokio::time::Instant;
 use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
-mod reads;
+pub(crate) mod reads;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
 const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
