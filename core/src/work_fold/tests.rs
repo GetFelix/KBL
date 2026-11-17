@@ -3215,6 +3215,62 @@ fn pending_proposals_are_counted_per_root_and_a_decision_frees_a_slot() {
     assert!(fold(&l.0).rejections.is_empty());
 }
 
+/// Every root's waiting proposals counted by walking all items.
+fn waiting_by_scan(s: &State) -> BTreeMap<ItemId, u32> {
+    let mut by_root = BTreeMap::new();
+    for from in s
+        .items
+        .values()
+        .filter(|i| !i.accepted && i.closed.is_none())
+        .filter_map(|i| i.proposed_from.as_ref())
+    {
+        *by_root.entry(from.1.clone()).or_insert(0) += 1;
+    }
+    by_root
+}
+
+#[test]
+fn the_waiting_proposal_count_stays_right_across_accept_reject_close_reopen_and_replay() {
+    let mut l = held_root();
+    let check = |l: &Log, expect: u32| {
+        let replayed = fold(&l.0);
+        assert_eq!(replayed.waiting.per_root, waiting_by_scan(&replayed));
+        assert_eq!(
+            replayed
+                .waiting
+                .per_root
+                .get(&id("r1"))
+                .copied()
+                .unwrap_or(0),
+            expect
+        );
+        // Applied one record at a time, as the tracker does.
+        let mut live = State::default();
+        for (at, rec) in &l.0 {
+            live.apply(*at, rec);
+        }
+        assert_eq!(live.waiting.per_root, replayed.waiting.per_root);
+        assert_eq!(live.waiting.from, replayed.waiting.from);
+    };
+    check(&l, 0);
+    propose_n(&mut l, "w1", "a", 4);
+    check(&l, 4);
+    l.person(accept("a0"));
+    check(&l, 3);
+    l.person(WorkRecord::Rejected { item: id("a1") });
+    check(&l, 2);
+    l.agent("w1", needs("g1", true, DoneWhen::Merged));
+    check(&l, 3);
+    // A proposal a person closes leaves the count, and comes back with a reopen.
+    l.person(WorkRecord::Closed {
+        item: id("a2"),
+        why: CloseWhy::Dismissed,
+    });
+    check(&l, 2);
+    l.person(WorkRecord::Reopened { item: id("a2") });
+    check(&l, 3);
+}
+
 #[test]
 fn pending_proposals_are_counted_per_agent_across_roots_and_attempts() {
     let mut l = held_root();

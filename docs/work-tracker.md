@@ -271,7 +271,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 
 | Call | Does |
 |---|---|
-| `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing |
+| `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing. That answer carries `stage` and `closure` (null while open), so a key that hit a closed or rejected item (`stage: closed`, `closure: rejected`) is not mistaken for live work; the call does not reopen it, so use a new key |
 | `POST /v1/work/post` `{item, key, work: "prerequisite", ...}` | Work another repo must do first. From a held triage item it is for the item under triage. See [Prerequisites in another repo](#prerequisites-in-another-repo) |
 | `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree. The edge is refused with `cycle` if `to` already waits on `item`, directly or through other items |
 | `POST /v1/work/rules/read` `{item}` | Reads the rules in effect for the held item |
@@ -1503,6 +1503,12 @@ slipping by.
   A prerequisite that files work in another repo and a deferred review
   finding count the same way. The tracker checks this before it appends, so
   the fold of an existing log does not change.
+- **Waiting proposals use up the root's budget.** A proposal takes nothing
+  from the root's budget, but a root whose waiting proposals number as many as
+  its remaining items, or whose cost budget is spent, refuses the next one as
+  `over_budget`, so repeated claims cannot flood it. A person's accept or
+  reject takes the proposal out of the count, which frees the room; an
+  accepted proposal is a root with a budget of its own.
 - **Attempts.** A claim that ends in a release, a lapse or a give-up may be
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most
@@ -1520,6 +1526,11 @@ slipping by.
 
 Budgets are enforced by a compare-and-set on the budget key (`cache_put_if`),
 not by counters, because Felix has no bounded add (gap 42).
+
+The tracker keeps the text of context, note, question, answer, decision and
+triage records in memory, at most 8 MiB, least recently used first. A text it
+let go is read back from `work.events` when a call needs it, so the cap costs a
+read and never loses text.
 
 ### Cost and spend
 

@@ -12,7 +12,7 @@
 //! extends, so one slow Felix call stalls that agent and nobody else.
 //! Every Felix call has a timeout.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -35,6 +35,7 @@ use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 mod ingest;
 pub(crate) mod reads;
 mod request_keys;
+mod texts;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
 const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
@@ -452,7 +453,7 @@ fn retry_has_note(core: &Core, record: &WorkRecord) -> Result<(), Error> {
 #[derive(Default)]
 struct Recall {
     /// The text of context, note, question, answer, decision and triage records.
-    texts: HashMap<u64, Content>,
+    texts: texts::Texts,
     /// The item each record names, so evidence can be held to its tree.
     subjects: HashMap<u64, ItemId>,
     /// Edges ingest made: its `linked` found no edge and the fold created it
@@ -468,6 +469,16 @@ struct Recall {
     claims: HashMap<u64, (ItemId, u32)>,
     /// The request keys callers sent lately, so a retry is answered with the first write.
     requests: request_keys::Requests,
+}
+
+/// What reading a record's text back from the log found.
+#[derive(Clone)]
+enum TextRead {
+    Text(Content),
+    /// The record is there and has no text.
+    NoText,
+    /// No record at the offset: retention trimmed it.
+    Gone,
 }
 
 /// One `claimed` record and the record that ended it.
@@ -532,7 +543,9 @@ impl Recall {
             }
             _ => {}
         }
-        remember(&mut self.texts, offset, record);
+        if let Some(text) = texts::text_of(record) {
+            self.texts.insert(offset, text);
+        }
     }
 
     fn attempt(&mut self, offset: u64, logged: &WorkLogged) {
@@ -624,36 +637,6 @@ impl Recall {
 /// Whether `record` is a `linked` whose edge `state` does not have.
 fn edge_absent(state: &State, record: &WorkRecord) -> bool {
     matches!(record, WorkRecord::Linked { item, to } if !state.edges.contains(&(item.clone(), to.clone())))
-}
-
-/// Keeps the text of the records a read shows.
-fn remember(texts: &mut HashMap<u64, Content>, offset: u64, record: &WorkRecord) {
-    match record {
-        WorkRecord::Context { text, .. }
-        | WorkRecord::HumanInput { text, .. }
-        | WorkRecord::Question { text, .. } => {
-            texts.insert(offset, text.clone());
-        }
-        // An answer picks an option or says something, never both, so one entry reads back either.
-        WorkRecord::Answer { text, chosen, .. } => {
-            let text = match chosen {
-                Some(c) => Content::Text(c.clone()),
-                None => text.clone(),
-            };
-            texts.insert(offset, text);
-        }
-        // What the asker knew, which resume work reads as `so_far`.
-        WorkRecord::Decision { so_far, .. } => {
-            texts.insert(offset, Content::Text(so_far.clone()));
-        }
-        WorkRecord::Triaged { why, .. } => {
-            texts.insert(offset, Content::Text(why.clone()));
-        }
-        WorkRecord::Prerequisite { new: Some(n), .. } => {
-            texts.insert(offset, n.why.clone());
-        }
-        _ => {}
-    }
 }
 
 /// What to do to Felix once the core lock is released.
@@ -2434,6 +2417,59 @@ impl<B: Broker> Tracker<B> {
             recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
         Ok((state, recall, tail))
+    }
+
+    /// The text at `offset` if memory still has it.
+    fn cached_text(core: &mut Core, offset: u64) -> Option<Content> {
+        core.recall.texts.get(offset).cloned()
+    }
+
+    /// Reads the texts of the records at `offsets` back from the log, for the
+    /// ones the cache let go. It takes no lock: callers drop the core lock
+    /// first, so a slow read stalls no writer. One pass over the log serves
+    /// every offset, and a page that starts elsewhere or skips a blank offset
+    /// is scanned to the exact record. The caller puts what it gets in the cache.
+    async fn read_texts(&self, offsets: &[u64]) -> Result<HashMap<u64, TextRead>, Error> {
+        let mut pending: BTreeSet<u64> = offsets.iter().copied().collect();
+        let mut found = HashMap::new();
+        let mut from = 0;
+        while let Some(&want) = pending.first() {
+            from = from.max(want);
+            let (records, next) = self
+                .io(None, self.0.broker.read_page(WORK_EVENTS, from))
+                .await
+                .map_err(|e| {
+                    Error::Unavailable(format!("reading a text from the log failed: {e:#}"))
+                })?;
+            for (o, payload) in records {
+                // A wanted offset the page passed holds no record.
+                while let Some(&w) = pending.first()
+                    && w < o
+                {
+                    pending.pop_first();
+                    found.insert(w, TextRead::Gone);
+                }
+                if pending.first() == Some(&o) {
+                    pending.pop_first();
+                    let rec = read(&payload).map_err(|e| {
+                        Error::Unavailable(format!("{WORK_EVENTS} offset {o} does not decode: {e}"))
+                    })?;
+                    found.insert(
+                        o,
+                        texts::text_of(&rec.record).map_or(TextRead::NoText, TextRead::Text),
+                    );
+                }
+            }
+            match next {
+                Some(n) => from = n,
+                None => break,
+            }
+        }
+        // Past the end of the log, or trimmed away.
+        for w in pending {
+            found.insert(w, TextRead::Gone);
+        }
+        Ok(found)
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {
