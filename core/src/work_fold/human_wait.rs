@@ -131,7 +131,55 @@ pub(super) fn stats(mut ms: Vec<u64>) -> KindStats {
     }
 }
 
+/// An item waiting on a person, as My queue lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct QueueEntry {
+    pub item: ItemId,
+    pub kind: WaitKind,
+    pub tier: Option<u8>,
+    /// When the wait began, if this state saw it begin. A state restored from
+    /// a snapshot does not know the start of a wait already open: it began
+    /// before the snapshot, so it is older than every known start.
+    pub since_ms: Option<u64>,
+}
+
+/// Unknown start first, then oldest, then lower tier (untiered last), then id.
+pub(super) fn sort_queue(out: &mut [QueueEntry]) {
+    out.sort_by(|a, b| {
+        a.since_ms
+            .cmp(&b.since_ms)
+            .then((a.tier.is_none(), a.tier).cmp(&(b.tier.is_none(), b.tier)))
+            .then(a.item.cmp(&b.item))
+    });
+}
+
 impl State {
+    /// Every open item that waits on a person: unknown start first (it began
+    /// before this state's first record), then oldest wait, then the lower
+    /// tier number (untiered last), then id.
+    pub fn queue(&self) -> Vec<QueueEntry> {
+        let entry = |id: &ItemId| {
+            let kind = self.waiting_kind(id)?;
+            Some(QueueEntry {
+                item: id.clone(),
+                kind,
+                tier: self.items[id].tier,
+                since_ms: self.human_waits.open.get(id).map(|o| o.since_ms),
+            })
+        };
+        // Open waits cover every wait this state saw begin. A restored state
+        // also holds waits that began before its snapshot, so it scans.
+        let restored = self.human_waits.restored_from_ms.is_some()
+            || (!self.human_waits.started && self.at.is_some());
+        let mut out: Vec<QueueEntry> = if restored {
+            self.items.keys().filter_map(entry).collect()
+        } else {
+            self.human_waits.open.keys().filter_map(entry).collect()
+        };
+        sort_queue(&mut out);
+        out
+    }
+
     /// Waits a person ended with a record stamped in `from_ms..to_ms`, as
     /// count, p50 and p90 of how long they waited, overall and by reason.
     pub fn time_to_human_action(&self, from_ms: u64, to_ms: u64) -> HumanWaitStats {
@@ -270,6 +318,17 @@ impl State {
             }
             (true, None) => {
                 open.remove(id);
+            }
+            // A different reason is a new wait, so it ages from this record.
+            (true, Some(kind)) if open.get(id).is_some_and(|o| o.kind != kind) => {
+                open.insert(
+                    id.clone(),
+                    Open {
+                        kind,
+                        since_ms: at_ms,
+                        acted: false,
+                    },
+                );
             }
             _ => {}
         }

@@ -1416,3 +1416,119 @@ async fn a_person_reads_time_to_human_action_and_an_agent_cannot() {
     );
     assert_eq!(get_json(&app, path, None).await.0, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn my_queue_lists_what_waits_on_a_person_by_wait_then_tier() {
+    let app = kept().await;
+    raise_to(&app, 7).await;
+    for item in ["a1", "a2", "a3"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+        call(
+            &app,
+            "/v1/work/proposals/accept",
+            Some("tok-gab"),
+            json!({ "item": item, "tier": if item == "a2" { 1 } else { 2 } }),
+        )
+        .await;
+    }
+    // Accepted and unheld: nothing waits on a person yet.
+    let (status, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{q}");
+    assert_eq!(q["count"], 0);
+
+    // The tier 2 item is flagged first, so it is older: age beats tier. The
+    // pause keeps the two records in different milliseconds.
+    for item in ["a1", "a2"] {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let (status, r) = call(
+            &app,
+            "/v1/work/flag",
+            Some("tok-gab"),
+            json!({ "item": item }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{r}");
+    }
+    let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    let ids: Vec<&str> = q["queue"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["item"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["a1", "a2"], "{q}");
+    assert_eq!(q["queue"][0]["wait"], "other");
+    assert_eq!(q["queue"][0]["needs"], "flagged");
+
+    // The team form answers the same; an acted-on item leaves the queue.
+    let team = get_json(&app, "/v1/teams/default/work/queue", Some("tok-gab")).await;
+    assert_eq!(team.0, StatusCode::OK);
+    assert_eq!(team.1["queue"], q["queue"]);
+    call(
+        &app,
+        "/v1/work/unflag",
+        Some("tok-gab"),
+        json!({ "item": "a2" }),
+    )
+    .await;
+    let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    assert_eq!(q["count"], 1);
+}
+
+#[tokio::test]
+async fn my_queue_limit_trims_the_list_but_not_the_count() {
+    let app = kept().await;
+    raise_to(&app, 7).await;
+    for item in ["a1", "a2", "a3"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+        call(
+            &app,
+            "/v1/work/proposals/accept",
+            Some("tok-gab"),
+            json!({ "item": item, "tier": 1 }),
+        )
+        .await;
+        call(
+            &app,
+            "/v1/work/flag",
+            Some("tok-gab"),
+            json!({ "item": item }),
+        )
+        .await;
+    }
+    let (_, q) = get_json(&app, "/v1/work/queue?limit=2", Some("tok-gab")).await;
+    assert_eq!(
+        (q["queue"].as_array().unwrap().len(), &q["count"]),
+        (2, &json!(3))
+    );
+    let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    assert_eq!(q["queue"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn my_queue_is_for_a_person_and_stays_in_the_token_s_team() {
+    let app = app().await;
+    assert_eq!(
+        get_json(&app, "/v1/work/queue", Some("tok-w1")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        get_json(&app, "/v1/work/queue", Some("tok-ing")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        get_json(&app, "/v1/work/queue", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let two = two(64).await;
+    let (status, reply) = get_json(&two.app, "/v1/teams/b/work/queue", Some("tok-a-gab")).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::NOT_FOUND, Some("unknown_team"))
+    );
+    let (status, reply) = get_json(&two.app, "/v1/work/queue", Some("tok-both")).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("team_required"))
+    );
+}
