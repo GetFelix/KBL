@@ -43,6 +43,12 @@ pub(crate) struct Tracked {
     /// Failed write-back attempts; it is given up on after a few.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) write_back_tries: u8,
+    /// Upstream notices already made, as `linked:<pr>` or `merged:<pr>`.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub(crate) announced: BTreeSet<String>,
+    /// Failed notice attempts for the one in progress.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) announce_tries: u8,
     /// Set on the old id of a transferred issue, which is not fetched again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) moved_to: Option<String>,

@@ -1474,7 +1474,7 @@ so a missed webhook costs latency, not an item.
 
 | | GitHub | Azure DevOps | Jira |
 |---|---|---|---|
-| Upstream id | `github:GetFelix/felix#812` | `ado:org/project#4410` | `jira:site/FEL-123` |
+| Upstream id | `github:GetFelix/felix#812` | `ado:org/project#4410` | `jira:acme/FEL#123` (site `acme`, key `FEL-123`) |
 | Scope by | repo, labels (all or any), excluded labels, milestone, assignee, type | project, area path, iteration, tags, or a saved query | a JQL filter |
 | Priority from | a label mapping | the Priority field (1 to 4) | the priority field |
 | Links from | blocked by, sub-issues | predecessor, parent | blocks, sub-tasks |
@@ -1483,6 +1483,83 @@ so a missed webhook costs latency, not an item.
 
 The ingest worker holds the source credentials. Agents never see them and
 write back only through the tracker, which checks the claim first.
+
+### Jira
+
+A worker serves one source, so a Jira worker has a `jira` block where a
+GitHub one has `github`. A rule's `repo` is `<site>/<PROJECT>`, and its
+`jql` is the filter, combined with the project:
+
+```json
+{
+  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN" },
+  "jira": {
+    "site": "acme",
+    "api": "https://acme.atlassian.net",
+    "email": "kbl@acme.example",
+    "token_env": "JIRA_API_TOKEN",
+    "own_logins": ["KBL"],
+    "pr_url_base": "https://github.com"
+  },
+  "rules": [{
+    "name": "agent-ok",
+    "repo": "acme/FEL",
+    "jql": "labels = agent-ok AND issuetype in (Bug, Task)",
+    "mode": "admit",
+    "cap": 10,
+    "default_tier": 2,
+    "priority_labels": { "Blocker": 0 },
+    "components": { "storage": "GetFelix/felix", "docs": "GetFelix/felix-docs" },
+    "target_repo": "GetFelix/felix",
+    "comment": true,
+    "link_pr": true,
+    "transition_on_pr": "In Review",
+    "transition_on_merge": "Done"
+  }]
+}
+```
+
+- **Sign-in.** Either an API token (`email` plus `token_env` or
+  `token_file`, sent as HTTP basic) or an OAuth app's access token
+  (`oauth_token_file`, sent as a bearer, with `api` set to
+  `https://api.atlassian.com/ex/jira/<cloud id>`). The file is read again
+  for every request, so something beside the worker can refresh it. The
+  secret is never in the config. The worker needs to know its own name to
+  tell its comments from others: it reads it from Jira (an OAuth token needs
+  the `read:me` scope) or from `own_logins`, and refuses to start with
+  neither. Set `browse_url` to the site's address when `api` is the OAuth
+  one, since issue links are built from it.
+- **Selection.** Jira runs the JQL. Ingest asks for the project's changes
+  since its cursor and, per rule, which of them the filter picks, so an
+  issue that stops matching is withdrawn like a GitHub issue that loses its
+  label. The first poll reads open issues only. Results are paged and a
+  cut-short listing resumes from the newest update it read. A `jql` may not
+  contain `ORDER BY`, since ingest orders the search itself. A search that
+  fails (a 401, 403 or 400) stalls that project with its issues and cursor
+  as they were; it never takes issues out of scope.
+- **Tiers.** The priority name maps through `priority_labels` first, then
+  the defaults (Highest, Blocker and Critical 0; High and Major 1; Medium 2;
+  Low, Lowest, Minor and Trivial 3); anything else takes `default_tier`. Labels map too, and the lowest tier wins.
+- **Links.** A `Blocks` link whose inward issue is the blocker, and
+  sub-tasks, become edges. Closed means the status category is Done:
+  resolutions Done, Fixed, Complete, Completed and Resolved count as
+  completed, any other (Won't Do, Duplicate) as dropped.
+- **Repository.** The first of the issue's components found in `components`
+  names the repository, then `target_repo`. An issue with neither is
+  imported and shown in Needs you as out of scope; it returns to its stage
+  on the first poll after a mapping covers it.
+- **Write-back.** For an agent's pull request in a mapped repository,
+  ingest adds a remote link (`link_pr`), a comment (`comment`) and moves the
+  issue through the named workflow transition (`transition_on_pr`, and
+  `transition_on_merge` once the item's pull request is recorded as merged).
+  A transition the workflow does not offer from the issue's status is
+  skipped. Each step is done once per pull request. A Jira worker records no
+  pull request merges, so `transition_on_merge` fires only when a merged
+  `pr_status` comes from elsewhere, and the worker warns at startup when a
+  rule sets it ([#298](https://github.com/GetFelix/KBL/issues/298)).
+- **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
+  long (30 s when none is named, at most an hour) before any further request.
+  Re-polling and a lost cursor never import an issue twice.
 
 ### Intake rules
 

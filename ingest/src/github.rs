@@ -574,7 +574,9 @@ impl<T: Transport> Source for Github<T> {
     }
 
     async fn write_back(&self, what: &WriteBack) -> Result<(), SourceError> {
-        let WriteBack::DraftPullRequest { pr, note } = what;
+        let WriteBack::DraftPullRequest { pr, note } = what else {
+            return Err(anyhow!("GitHub takes only the draft write-back").into());
+        };
         let pull = format!("{}/repos/{}/pulls/{}", self.api, pr.repo, pr.number);
         let res = self.call(Req::get(pull)).await?;
         match res.status {
@@ -954,6 +956,9 @@ fn parse_issue(repo: &str, raw: &Value) -> anyhow::Result<Issue> {
         author: text(&raw["user"]["login"]),
         url: text(&raw["html_url"]),
         updated_at: text(&raw["updated_at"]),
+        priority: None,
+        components: Vec::new(),
+        scopes: Vec::new(),
     })
 }
 
