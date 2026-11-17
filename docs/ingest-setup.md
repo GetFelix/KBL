@@ -128,10 +128,11 @@ with `level`, `scope` and `message`, `rules` with every issue listed, and
 - It lists as a first poll does: open issues only, and a GitHub repository is
   read in full up to the worker's page limit. A large repository costs the same
   requests as the worker's first poll.
-- It does not show the issues ingest itself opened for prerequisites, or
-  comments, links and pull requests.
-- If ingest has run before, issues it already imported are counted as
-  already imported, not listed again.
+- It leaves out the issues ingest itself opened for prerequisites, as the
+  worker does, and shows no comments, links or pull requests.
+- If ingest has run before, issues it already imported (from this source only)
+  are counted as already imported, not listed again. If the tracker's roots
+  cannot be read, `check` warns and treats every issue as new.
 
 ## 4. Run ingest
 

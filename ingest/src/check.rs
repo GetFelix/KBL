@@ -170,7 +170,11 @@ async fn report_for(path: &Path) -> Report {
     match (&cfg.github, &cfg.jira) {
         (Some(g), None) => match crate::github_token(g).and_then(GithubHttp::new) {
             Ok(http) => {
-                let github = Github::new(&g.api, ReadOnly(http), g.own_logins.clone());
+                let mut github = Github::new(&g.api, ReadOnly(http), g.own_logins.clone());
+                // As the worker does, so its own issues are recognised.
+                if let Some(login) = github.login().await {
+                    github.add_own(login);
+                }
                 github_findings(&cfg, g, &github, &mut report.findings).await;
                 dry_run(&cfg, &github, tracker.as_ref(), &mut report).await;
             }
@@ -215,14 +219,10 @@ async fn report_for(path: &Path) -> Report {
 
 async fn tracker_finding<T: Tracker>(cfg: &Config, tracker: &T) -> Finding {
     match tracker.roots().await {
-        Ok(listed) => Finding::new(
+        Ok(_) => Finding::new(
             Level::Ok,
             "tracker",
-            format!(
-                "{} answers the ingest token ({} imported root(s))",
-                cfg.tracker.url,
-                listed.roots.len()
-            ),
+            format!("{} answers the ingest token", safe(&cfg.tracker.url)),
         ),
         Err(e) => Finding::new(
             Level::Error,
@@ -264,7 +264,7 @@ pub(crate) fn static_findings(cfg: &Config, env: &dyn Fn(&str) -> Option<String>
             out.push(Finding::new(
                 Level::Warn,
                 "github",
-                format!("api {} is not https", g.api),
+                safe(format!("api {} is not https", g.api)),
             ));
         }
         let set: Vec<&str> = [
@@ -294,7 +294,7 @@ pub(crate) fn static_findings(cfg: &Config, env: &dyn Fn(&str) -> Option<String>
             out.push(
                 match crate::github::app::check_key_mode(&app.private_key_file) {
                     Ok(()) => secret_file("github", "app.private_key_file", &app.private_key_file),
-                    Err(e) => Finding::new(Level::Error, "github", format!("{e:#}")),
+                    Err(e) => Finding::new(Level::Error, "github", safe(format!("{e:#}"))),
                 },
             );
         }
@@ -543,7 +543,7 @@ pub(crate) async fn jira_findings<T: Transport>(
         }
     }
     if let Err(e) = jira.require_own() {
-        out.push(Finding::new(Level::Error, "jira", format!("{e:#}")));
+        out.push(Finding::new(Level::Error, "jira", safe(format!("{e:#}"))));
     }
     let mut projects = BTreeSet::new();
     for r in &cfg.rules {
@@ -639,31 +639,46 @@ pub(crate) async fn dry_run<S: Source, T: Tracker>(
 
     let mut imported: BTreeSet<String> = BTreeSet::new();
     let mut open: BTreeMap<String, usize> = BTreeMap::new();
+    let mut known = false;
     if let Some(t) = tracker
         && let Ok(listed) = t.roots().await
     {
-        {
-            let roots: BTreeMap<_, _> = listed
-                .roots
-                .iter()
-                .map(|r| (r.upstream_id.clone(), r.closed))
-                .collect();
-            imported = roots.keys().cloned().collect();
-            let state = t
-                .load(source.name())
-                .await
-                .ok()
-                .and_then(|(v, _)| v)
-                .and_then(|v| serde_json::from_value::<State>(v).ok())
-                .unwrap_or_default();
-            // The worker's own count: items a rule admitted whose root is still open.
-            for (key, tracked) in &state.items {
-                if tracked.moved_to.is_none() && roots.get(key) == Some(&false) {
-                    *open.entry(tracked.rule.clone()).or_default() += 1;
-                }
+        known = true;
+        let state = t
+            .load(source.name())
+            .await
+            .ok()
+            .and_then(|(v, _)| v)
+            .and_then(|v| serde_json::from_value::<State>(v).ok())
+            .unwrap_or_default();
+        // As the worker reads them: this source's roots, with a moved issue's new id aliased.
+        let mut roots: std::collections::HashMap<String, _> = listed
+            .roots
+            .into_iter()
+            .filter(|r| r.source == source.name())
+            .map(|r| (r.upstream_id.clone(), r))
+            .collect();
+        crate::sync::alias_moved(&state, &mut roots);
+        imported = roots.keys().cloned().collect();
+        // The worker's own count: items a rule admitted whose root is still open.
+        for (key, tracked) in &state.items {
+            if tracked.moved_to.is_none() && roots.get(key).is_some_and(|r| !r.closed) {
+                *open.entry(tracked.rule.clone()).or_default() += 1;
             }
         }
     }
+    if !known {
+        report.findings.push(Finding::new(
+            Level::Warn,
+            "dry run",
+            "the tracker's roots could not be read, so the dry run ignores what is already imported and each rule's open roots",
+        ));
+    }
+    let own: Vec<String> = source
+        .own_logins()
+        .iter()
+        .map(|l| l.to_ascii_lowercase())
+        .collect();
 
     let mut rules: Vec<RuleReport> = cfg
         .rules
@@ -683,6 +698,10 @@ pub(crate) async fn dry_run<S: Source, T: Tracker>(
         })
         .collect();
     for issue in changes.issues.iter().filter(|i| i.closed.is_none()) {
+        // The worker never imports an issue it opened for a prerequisite.
+        if is_prerequisite(cfg, &own, issue) {
+            continue;
+        }
         let Some(rule) = first_match(&cfg.rules, issue) else {
             report.unmatched += 1;
             continue;
@@ -713,6 +732,20 @@ pub(crate) async fn dry_run<S: Source, T: Tracker>(
         }
     }
     report.rules = rules;
+}
+
+/// An issue ingest opened for a prerequisite: its own author, in a repo a rule
+/// opens prerequisites in, with the marker line.
+fn is_prerequisite(cfg: &Config, own: &[String], issue: &crate::source::Issue) -> bool {
+    own.contains(&issue.author.to_ascii_lowercase())
+        && cfg
+            .rules
+            .iter()
+            .any(|r| r.open_prerequisites && r.repo.eq_ignore_ascii_case(&issue.id.repo))
+        && issue
+            .body
+            .lines()
+            .any(|l| l.trim().starts_with(crate::sync::MARKER))
 }
 
 fn render(r: &Report) -> String {

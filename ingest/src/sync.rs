@@ -1447,7 +1447,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
 }
 
 /// The line that ties an issue ingest opened to its prerequisite item.
-const MARKER: &str = "kbl-prerequisite:";
+pub(crate) const MARKER: &str = "kbl-prerequisite:";
 
 /// The issue body. An agent wrote `why`, so a marker line in it is dropped:
 /// only ingest's own, written last, may name the item.
@@ -1592,7 +1592,7 @@ fn prune(p: &mut Poll) {
 /// The tracker knows a transferred issue's root only under the id it was
 /// imported with, so each new id is given the root of the id it moved from.
 /// A chain of moves is followed to its end.
-fn alias_moved(state: &State, roots: &mut HashMap<String, Root>) {
+pub(crate) fn alias_moved(state: &State, roots: &mut HashMap<String, Root>) {
     for (old, t) in &state.items {
         let Some(root) = roots.get(old).cloned() else {
             continue;

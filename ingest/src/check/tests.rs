@@ -513,3 +513,47 @@ fn the_text_report_lists_picks_and_the_json_report_is_machine_readable() {
     assert_eq!(v["ok"], false);
     assert_eq!(v["rules"][0]["would_import"][0]["issue"], "o/n#1");
 }
+
+#[tokio::test]
+async fn the_dry_run_skips_ingests_own_prerequisite_issues_and_other_sources_roots() {
+    let gh = Script::default();
+    let own = issue(5, |v| {
+        labels(v, &["agent-ok"]);
+        v["user"] = json!({ "login": "kbl[bot]", "type": "Bot" });
+        v["body"] = json!("Needed.\n\nkbl-prerequisite: gabc");
+    });
+    gh.on(
+        "GET",
+        "/issues?",
+        ok(json!([issue(1, |v| labels(v, &["agent-ok"])), own])),
+    );
+    let cfg = config(vec![
+        json!({ "name": "pre", "repo": "GetFelix/felix", "labels_all": ["zzz"],
+                                  "mode": "admit", "open_prerequisites": true }),
+    ]);
+    let tracker = Fake::default();
+    // A root of another source under the same upstream id text.
+    tracker
+        .append(&WorkRecord::Imported {
+            item: crate::sync::item_id("GetFelix/felix#1"),
+            source: "jira".into(),
+            upstream_id: "GetFelix/felix#1".into(),
+            title: "t".into(),
+        })
+        .await
+        .unwrap();
+    let g = Github::new(API, ReadOnly(gh.clone()), vec!["kbl[bot]".into()]);
+    let mut report = Report::default();
+    dry_run(&cfg, &g, Some(&tracker), &mut report).await;
+    let first = pick(&report.rules, "first");
+    assert_eq!(first.already_imported, 0);
+    assert_eq!(
+        first
+            .would_import
+            .iter()
+            .map(|p| p.issue.as_str())
+            .collect::<Vec<_>>(),
+        ["GetFelix/felix#1"]
+    );
+    assert!(first.over_cap.is_empty());
+}
