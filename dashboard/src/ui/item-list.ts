@@ -6,7 +6,8 @@ import { inScope, neighbour, visible, type Group } from '../list.ts';
 import { flagText } from '../overlap.ts';
 import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
-import { needsText } from '../writes.ts';
+import { assigneePerson, needsLine } from '../writes.ts';
+import { paintAssignee } from './assignee-chip.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
@@ -143,7 +144,7 @@ export function itemList(
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }), h('span', { class: 'assignee', hidden: true }));
       rows.set(id, a);
     }
     const t = a.querySelector('.row-title')!;
@@ -212,7 +213,7 @@ export function itemList(
       }
       const groups = visible(s);
       const waits = new Map(s.blocked.map((b) => [b.id, `waits on ${waitsOn(b)}`]));
-      for (const i of s.items) if (i.needs) waits.set(i.id, needsText(i.needs));
+      for (const i of s.items) if (i.needs) waits.set(i.id, needsLine(i));
       if (groups.length === 0) {
         const filtered = activeCount(s.filters) > 0;
         const what = s.query ? `“${s.query}”` : 'these filters';
@@ -255,6 +256,7 @@ export function itemList(
       }
       const marked = new Set(s.marked);
       for (const [id, box] of marks) if (box.checked !== marked.has(id)) box.checked = marked.has(id);
+      const byId = new Map(s.items.map((i) => [i.id, i]));
       for (const [id, a] of rows) {
         const href = itemHref(id, s);
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
@@ -265,6 +267,7 @@ export function itemList(
         const text = flagText(s.overlaps.get(id));
         if (flag.textContent !== text) flag.textContent = text;
         flag.hidden = text === '';
+        paintAssignee(a, assigneePerson(byId.get(id) ?? {}));
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

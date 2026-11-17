@@ -468,3 +468,65 @@ fn an_old_log_has_no_review_asks_or_summary_marks() {
         }
     }
 }
+
+/// A log at format 12: a take, a reassign and a steer. Its folded state is
+/// pinned in `wasm/golden/format_12.state.json`.
+#[test]
+fn the_assignee_records_fold_step_by_step() {
+    use kbl_core::work::Assignee;
+    use kbl_core::work_fold::{NeedsYou, Rejection};
+    let log: Vec<_> = include_str!("work_format_12.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let fold = |n: usize| kbl_core::work_fold::fold(&log[..n]);
+    let r1 = ItemId::new("r1").unwrap();
+    let person = |k: &str| Some(Assignee::Person(Key::new(k).unwrap()));
+
+    // Taken before the raise: nothing recorded. After it, r1 waits on gabriel.
+    assert_eq!(fold(5).items[&r1].assignee, None);
+    assert_eq!(fold(7).items[&r1].assignee, person("gabriel"));
+    assert_eq!(fold(7).needs_you(&r1), Some(NeedsYou::Taken));
+    assert_eq!(fold(10).items[&r1].assignee, person("ana"));
+    // Back to nobody: Ready, and the next claim holds it.
+    assert_eq!(fold(12).stage(&r1), Some(Stage::Ready));
+    assert_eq!(fold(13).stage(&r1), Some(Stage::Held));
+    assert_eq!(fold(14).items[&r1].paths[0].human_inputs, vec![13]);
+    // Taken while held: the holder keeps it, then it stops for gabriel.
+    assert_eq!(fold(17).stage(&r1), Some(Stage::Held));
+    let end = fold(log.len());
+    assert_eq!(end.needs_you(&r1), Some(NeedsYou::Taken));
+    let why = |offset, why| Rejection { offset, why };
+    assert_eq!(
+        end.rejections,
+        vec![
+            why(4, Reject::Format),
+            why(7, Reject::NoChange),
+            why(8, Reject::NotReady),
+            why(10, Reject::BadAssignee),
+            why(14, Reject::WrongAttempt),
+            why(15, Reject::ActorNotAllowed),
+            why(18, Reject::NotHeld),
+        ]
+    );
+}
+
+/// Logs from before format 12 fold with no assignee, and their states
+/// serialize without the field.
+#[test]
+fn an_old_log_has_no_assignee() {
+    for log in [
+        include_str!("work_pre_prerequisite.jsonl"),
+        include_str!("work_format_10.jsonl"),
+        include_str!("work_format_11.jsonl"),
+    ] {
+        let entries: Vec<_> = log
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+            .collect();
+        let s = kbl_core::work_fold::fold(&entries);
+        assert!(!serde_json::to_string(&s).unwrap().contains("assignee"));
+    }
+}

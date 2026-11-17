@@ -20,8 +20,8 @@ use axum::{Json, Router};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, PriceUnit,
-    RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
+    Actor, Assignee, CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase,
+    PriceUnit, RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
 };
 use kbl_core::work_fold::Stage;
 use serde::Deserialize;
@@ -34,7 +34,7 @@ use tracing::Instrument as _;
 use crate::config::Caller;
 use crate::felix::Broker;
 use crate::org::OrgUnavailable;
-use crate::teams::Teams;
+use crate::teams::{Team, Teams};
 use crate::tracker::ExpectedPrice;
 use crate::tracker::{
     Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
@@ -196,11 +196,15 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/request-changes", post(request_changes::<B>))
         .route("/v1/work/mark-merged", post(mark_merged::<B>))
         .route("/v1/work/rate-summary", post(rate_summary::<B>))
+        .route("/v1/work/take", post(take::<B>))
+        .route("/v1/work/reassign", post(reassign::<B>))
+        .route("/v1/work/steer", post(steer::<B>))
         .route("/v1/work/queue", get(queue::<B>))
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
         .route("/v1/work/items/{item}/history", get(history::<B>))
         .route("/v1/work/metrics/time-to-human", get(time_to_human::<B>))
+        .route("/v1/work/metrics/summary-trust", get(summary_trust::<B>))
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
@@ -296,6 +300,8 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Keyed<T> {
 /// before the body is read, so an unknown token is refused first.
 struct Call<B> {
     tracker: Tracker<B>,
+    team: Arc<Team<B>>,
+    teams: Arc<Teams<B>>,
     caller: Caller,
     _slot: OwnedSemaphorePermit,
 }
@@ -352,6 +358,8 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
         };
         Ok(Self {
             tracker,
+            team,
+            teams: app.teams.clone(),
             caller,
             _slot: slot,
         })
@@ -450,6 +458,19 @@ struct SnoozeBody {
 struct ReviewBody {
     item: ItemId,
     reviewer: String,
+}
+
+#[derive(Deserialize)]
+struct ReassignBody {
+    item: ItemId,
+    to: Option<Assignee>,
+}
+
+#[derive(Deserialize)]
+struct SteerBody {
+    item: ItemId,
+    attempt: u32,
+    text: Content,
 }
 
 #[derive(Deserialize)]
@@ -859,13 +880,7 @@ async fn give_up<B: Broker>(call: Call<B>, Json(body): Json<GiveUpBody>) -> Resp
 }
 
 async fn records<B: Broker>(call: Call<B>, Keyed(body, rk): Keyed<RecordBody>) -> Response {
-    match call.person() {
-        Ok(p) => reply(
-            call.keyed(rk, call.tracker().person_record(p, body.record))
-                .await,
-        ),
-        Err(d) => denied(d),
-    }
+    as_person(&call, rk, body.record).await
 }
 
 async fn work_post<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<PostBody>) -> Response {
@@ -1136,19 +1151,34 @@ async fn answer<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AnswerBody>) -> Re
     )
 }
 
-/// A person's action that is one record.
+/// A person's action that is one record. Every record a person writes
+/// passes here, so the assignee check holds for `/v1/work/records` too: the
+/// fold does not read the org log, so it cannot tell who is in the team.
 async fn as_person<B: Broker>(
     call: &Call<B>,
     rk: Option<RequestKey>,
     record: WorkRecord,
 ) -> Response {
-    match call.person() {
-        Ok(p) => reply(
-            call.keyed(rk, call.tracker().person_record(p, record))
-                .await,
-        ),
-        Err(d) => denied(d),
+    let p = match call.person() {
+        Ok(p) => p,
+        Err(d) => return denied(d),
+    };
+    if let WorkRecord::Reassigned {
+        to: Some(Assignee::Person(to)),
+        ..
+    } = &record
+        && !call.teams.is_member(&call.team, to)
+    {
+        return refused(
+            StatusCode::CONFLICT,
+            "that person is not in this team",
+            "not_member",
+        );
     }
+    reply(
+        call.keyed(rk, call.tracker().person_record(p, record))
+            .await,
+    )
 }
 
 async fn accept<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AcceptBody>) -> Response {
@@ -1374,6 +1404,28 @@ async fn rate_summary<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<RateBody>) -
     as_person(&call, rk, record).await
 }
 
+async fn take<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::Taken { item: b.item }).await
+}
+
+/// The fold does not read the org log, so membership is checked here.
+async fn reassign<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ReassignBody>) -> Response {
+    let record = WorkRecord::Reassigned {
+        item: b.item,
+        to: b.to,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn steer<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<SteerBody>) -> Response {
+    let record = WorkRecord::Steered {
+        item: b.item,
+        attempt: b.attempt,
+        text: b.text,
+    };
+    as_person(&call, rk, record).await
+}
+
 #[derive(Deserialize)]
 struct ItemsQuery {
     stage: Option<Stage>,
@@ -1401,6 +1453,17 @@ async fn time_to_human<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -
     }
 }
 
+async fn summary_trust<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -> Response {
+    let days = q
+        .days
+        .unwrap_or(30)
+        .clamp(1, crate::tracker::reads::MAX_WINDOW_DAYS);
+    match call.person() {
+        Ok(_) => reply(call.tracker().summary_trust(days).await),
+        Err(d) => denied(d),
+    }
+}
+
 /// Entries My queue returns when `limit` is not given, and the most it returns.
 const QUEUE_DEFAULT_LIMIT: usize = 200;
 const QUEUE_MAX_LIMIT: usize = 1000;
@@ -1412,9 +1475,9 @@ struct QueueQuery {
 
 async fn queue<B: Broker>(call: Call<B>, Query(q): Query<QueueQuery>) -> Response {
     match call.person() {
-        Ok(_) => {
+        Ok(p) => {
             let limit = q.limit.unwrap_or(QUEUE_DEFAULT_LIMIT).min(QUEUE_MAX_LIMIT);
-            reply(call.tracker().queue(limit).await)
+            reply(call.tracker().queue(&p, limit).await)
         }
         Err(d) => denied(d),
     }

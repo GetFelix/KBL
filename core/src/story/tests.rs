@@ -350,3 +350,24 @@ fn a_refused_record_is_not_kept() {
     assert!(l.kept.is_empty());
     assert!(l.story().is_none());
 }
+
+#[test]
+fn a_steer_sits_in_the_story_as_a_note_on_its_attempt() {
+    let mut l = Log::new();
+    l.put(
+        "gabriel",
+        "person",
+        json!({ "v": 12, "kind": "format_raised", "to": 12 }),
+    );
+    l.decide("cause", "first guess", &[]);
+    let steer = l.put("gabriel", "person", json!({ "v": 12, "kind": "steered", "item": "r1", "attempt": 1, "text": { "text": "use the writer lock" } }));
+    assert_eq!(l.state.rejections, vec![]);
+    let s = l.story().unwrap();
+    assert_eq!(s.people.len(), 1);
+    let p = &s.people[0];
+    assert_eq!(
+        (p.offset, p.attempt, p.by.as_str()),
+        (steer, Some(1), "gabriel")
+    );
+    assert_eq!(p.text, Content::Text("use the writer lock".into()));
+}

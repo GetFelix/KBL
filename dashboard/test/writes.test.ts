@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { acceptTier, CAN, canRate, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import { acceptTier, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkSteer, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
@@ -274,4 +274,111 @@ test('a summary mark is the tracker person route, and is offered only on a log a
   assert.match(old.req as string, /below format 11/);
   const [ok] = jobsFor(['a'], { kind: 'rate', attempt: 1, accurate: true }, [item({ id: 'a', stage: 'done', format: 11 })], NO_WRITES);
   assert.deepEqual(ok.req, { path: '/v1/work/rate-summary', body: { item: 'a', attempt: 1, accurate: true } });
+});
+
+const twelve = { format: 12, accepted: true };
+
+test('assign, take and steer are the tracker person routes', () => {
+  assert.deepEqual(request('a', { kind: 'take' }), { path: '/v1/work/take', body: { item: 'a' } });
+  assert.deepEqual(request('a', { kind: 'reassign', to: 'ana' }), { path: '/v1/work/reassign', body: { item: 'a', to: { person: 'ana' } } });
+  assert.deepEqual(request('a', { kind: 'reassign', to: null }), { path: '/v1/work/reassign', body: { item: 'a', to: null } });
+  assert.deepEqual(request('a', { kind: 'steer', attempt: 2, text: ' slow down ' }), { path: '/v1/work/steer', body: { item: 'a', attempt: 2, text: { text: 'slow down' } } });
+  assert.equal(route('/v1/work/take', 'ops'), '/v1/teams/ops/work/take');
+});
+
+test('assigning is offered only on a log at format 12, on an accepted open item', () => {
+  assert.equal(canAssign(item({ id: 'a', ...twelve })), true);
+  assert.equal(canAssign(item({ id: 'a', ...twelve, format: 11 })), false);
+  assert.equal(canAssign(item({ id: 'a', ...twelve, accepted: false })), false);
+  assert.equal(canAssign(item({ id: 'a', ...twelve, stage: 'closed' })), false);
+  assert.equal(canSteer(item({ id: 'a', ...twelve, stage: 'held' })), true);
+  assert.equal(canSteer(item({ id: 'a', ...twelve, stage: 'held', format: 11 })), false);
+  assert.equal(canSteer(item({ id: 'a', ...twelve, stage: 'ready' })), false);
+  assert.equal(canTakeAfterLimit(item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'tries_used' }), 'ana'), true);
+  assert.equal(canTakeAfterLimit(item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'question' }), 'ana'), false);
+  // Already the viewer's: taking it again would change nothing.
+  const hers = item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'tries_used', assignee: { person: 'ana' } });
+  assert.equal(canTakeAfterLimit(hers, 'ana'), false);
+  assert.equal(canTakeAfterLimit(hers, 'bo'), true);
+  // The write itself is refused before sending on a log that is too old.
+  const old = item({ id: 'a', ...twelve, format: 11 });
+  const [job] = jobsFor(['a'], { kind: 'take' }, [old], NO_WRITES);
+  assert.equal(typeof job.req, 'string');
+  const [ok] = jobsFor(['a'], { kind: 'take' }, [item({ id: 'a', ...twelve })], NO_WRITES);
+  assert.deepEqual(ok.req, { path: '/v1/work/take', body: { item: 'a' } });
+  const [lost] = jobsFor(['a'], { kind: 'steer', attempt: 1, text: 'x' }, [item({ id: 'a', ...twelve })], NO_WRITES);
+  assert.match(lost.req as string, /not held/);
+});
+
+test('the held attempt comes from the fold, else the newest open attempt of the story', () => {
+  const held = item({ id: 'a', ...twelve, stage: 'held' });
+  const story = { attempts: [{ attempt: 1, done: true, closed: false }, { attempt: 2, done: false, closed: false }] };
+  assert.equal(heldAttempt(held, story), 2);
+  assert.equal(heldAttempt({ ...held, held_attempt: 5 }, story), 5);
+  assert.equal(heldAttempt(held), null);
+  assert.equal(heldAttempt(item({ id: 'a', ...twelve, stage: 'ready' }), story), null);
+});
+
+test('a steer note must say something and fit', () => {
+  assert.equal(checkSteer('  '), 'Write the note for the agent.');
+  assert.equal(checkSteer('x'.repeat(5000)), 'Keep the note under 4 KiB, or link to the longer text.');
+  assert.equal(checkSteer('use the fixture'), null);
+});
+
+test('a taken item says who took it, and an assignee has initials', () => {
+  const taken = item({ id: 'a', stage: 'needs_you', needs: 'taken', assignee: { person: 'ana' } });
+  assert.equal(needsLine(taken), 'Taken by ana');
+  assert.equal(needsLine(item({ id: 'a', stage: 'needs_you', needs: 'question' })), 'An agent asked a question');
+  assert.equal(assigneePerson(taken), 'ana');
+  assert.equal(assigneePerson(item({ id: 'a', assignee: { agent: 'a1' } })), null);
+  assert.equal(initials('ana lopez'), 'AL');
+  assert.equal(initials('ana'), 'AN');
+});
+
+test('my queue holds what is unassigned or assigned to the signed-in person', async () => {
+  const { inScope, myQueue } = await import('../src/list.ts');
+  const items = [
+    item({ id: 'free', stage: 'needs_you', needs: 'question' }),
+    item({ id: 'mine', stage: 'needs_you', needs: 'taken', assignee: { person: 'ana' } }),
+    item({ id: 'theirs', stage: 'needs_you', needs: 'taken', assignee: { person: 'bo' } }),
+    item({ id: 'agent', stage: 'needs_you', needs: 'question', assignee: { agent: 'a1' } }),
+    item({ id: 'ready' }),
+  ];
+  assert.deepEqual(myQueue(items, 'ana').map((i) => i.id), ['free', 'mine', 'agent']);
+  assert.deepEqual(myQueue(items, 'bo').map((i) => i.id), ['free', 'theirs', 'agent']);
+  // Signed out, an assigned item is no one's, as in the tracker's queue.
+  assert.deepEqual(myQueue(items, null).map((i) => i.id), ['free', 'agent']);
+  const signed = { kind: 'signed-in' as const, person: 'ana', reviewLimit: 0 };
+  assert.deepEqual(inScope({ items, blocked: [], view: 'inbox', tracker: signed }).map((i) => i.id), ['free', 'mine', 'agent']);
+  // The other views are not narrowed by who is signed in.
+  assert.equal(inScope({ items, blocked: [], view: 'all', tracker: signed }).length, 5);
+});
+
+test('a format refusal on an assign says to raise the log to 12', () => {
+  const w: Write = { item: 'a', kind: 'take', batch: 1, status: 'refused', reason: 'raw', why: 'format', id: 1 };
+  assert.match(summary([w]).text, /raise the log to format 12 to assign and steer/);
+  assert.equal(summary([{ ...w, status: 'ok', why: undefined }]).text, 'Took a.');
+});
+
+test('the assign key and command exist', async () => {
+  const { commandFor, COMMANDS } = await import('../src/keys.ts');
+  assert.equal(commandFor({ key: 'a', metaKey: false, ctrlKey: false, altKey: false, inText: false }, false), 'assign');
+  assert.equal(commandFor({ key: 'a', metaKey: false, ctrlKey: false, altKey: false, inText: true }, false), undefined);
+  assert.ok(COMMANDS.some((c) => c.id === 'assign'));
+});
+
+test('the assign picker writes nothing for the choice the item already has', () => {
+  assert.deepEqual(assignPick(null, 'ana', 'me'), { kind: 'take' });
+  assert.equal(assignPick('ana', 'ana', 'me'), null);
+  assert.equal(assignPick(null, 'ana', 'nobody'), null);
+  assert.deepEqual(assignPick('bo', 'ana', 'nobody'), { kind: 'reassign', to: null });
+});
+
+test('assigning asks to sign in only for an item that takes an assignee', () => {
+  const open = item({ id: 'a', ...twelve });
+  const old = item({ id: 'b', ...twelve, format: 11 });
+  assert.equal(assignTarget([open, old], 'a', true), open);
+  assert.equal(assignTarget([open, old], 'a', false), 'sign-in');
+  assert.equal(assignTarget([open, old], 'b', false), null);
+  assert.equal(assignTarget([open, old], 'nope', false), null);
 });

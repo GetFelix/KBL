@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::human_wait::Waits;
+use super::trust::MarkTimes;
 use super::{State, Waiting, fold};
 use crate::artifact::ArtifactId;
 use crate::codec::Codec;
@@ -22,7 +23,7 @@ pub const SNAPSHOT_EVERY: u64 = 2_000;
 
 /// Bump when a change to the fold would make an old snapshot differ from a
 /// fold of the same prefix. Snapshots from another revision are dropped.
-pub const FOLD_REV: u32 = 3;
+pub const FOLD_REV: u32 = 4;
 
 /// Every record at an offset up to and including `upto`.
 ///
@@ -53,6 +54,7 @@ pub struct Snapshot {
     pub(in crate::work_fold) state: State,
     waiting: Waiting,
     human_waits: Waits,
+    mark_times: MarkTimes,
     /// What the state's wire form leaves out of each item.
     #[serde(default)]
     left_out: BTreeMap<ItemId, LeftOut>,
@@ -88,6 +90,7 @@ impl Snapshot {
             chain,
             waiting: std::mem::take(&mut state.waiting),
             human_waits: std::mem::take(&mut state.human_waits),
+            mark_times: std::mem::take(&mut state.mark_times),
             state,
         }
     }
@@ -97,6 +100,7 @@ impl Snapshot {
         let mut state = self.state.clone();
         state.waiting = self.waiting.clone();
         state.human_waits = self.human_waits.clone();
+        state.mark_times = self.mark_times.clone();
         for (id, left) in &self.left_out {
             if let Some(item) = state.items.get_mut(id) {
                 item.proposed_from.clone_from(&left.proposed_from);

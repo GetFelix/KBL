@@ -65,8 +65,12 @@ pub const FORMAT_V10: u32 = 10;
 /// on the agent's summary.
 pub const FORMAT_V11: u32 = 11;
 
+/// The format that added `taken`, `reassigned` and `steered`: who works an
+/// item, and a note sent to the agent holding it.
+pub const FORMAT_V12: u32 = 12;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V11;
+pub const FORMAT: u32 = FORMAT_V12;
 
 /// Longest reviewer name a `review_requested` carries.
 pub const MAX_REVIEWER: usize = 100;
@@ -566,6 +570,15 @@ impl PrSnapshot {
     }
 }
 
+/// Who an item is assigned to. Written `{"person": "ana"}` or `{"agent": "a1"}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Assignee {
+    Person(Key),
+    /// Not accepted yet: the fold refuses it as `bad_assignee`.
+    Agent(Key),
+}
+
 /// What a record says happened. `kind` is the variant name in snake case.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -870,6 +883,18 @@ pub enum WorkRecord {
         attempt: u32,
         accurate: bool,
     },
+    /// The person writing it takes the item: no agent claims it while it is
+    /// theirs. Format 12.
+    Taken { item: ItemId },
+    /// A person assigns the item to someone, or to nobody. Format 12.
+    Reassigned { item: ItemId, to: Option<Assignee> },
+    /// A person sends a note to the agent holding `attempt`. It steers that
+    /// attempt like a `human_input` on it. Format 12.
+    Steered {
+        item: ItemId,
+        attempt: u32,
+        text: Content,
+    },
     /// The upstream issue was reopened: the same root goes back to Triage with
     /// its history and its remaining budget.
     Reopened { item: ItemId },
@@ -995,6 +1020,9 @@ impl WorkRecord {
             WorkRecord::ChangesRequested { .. } => "changes_requested",
             WorkRecord::MergeMarked { .. } => "merge_marked",
             WorkRecord::SummaryRated { .. } => "summary_rated",
+            WorkRecord::Taken { .. } => "taken",
+            WorkRecord::Reassigned { .. } => "reassigned",
+            WorkRecord::Steered { .. } => "steered",
             WorkRecord::Reopened { .. } => "reopened",
             WorkRecord::AttemptClosed { .. } => "attempt_closed",
             WorkRecord::TierChanged { .. } => "tier_changed",
@@ -1052,6 +1080,9 @@ impl WorkRecord {
             | WorkRecord::ChangesRequested { item }
             | WorkRecord::MergeMarked { item }
             | WorkRecord::SummaryRated { item, .. }
+            | WorkRecord::Taken { item }
+            | WorkRecord::Reassigned { item, .. }
+            | WorkRecord::Steered { item, .. }
             | WorkRecord::Reopened { item }
             | WorkRecord::AttemptClosed { item, .. }
             | WorkRecord::TierChanged { item, .. }
@@ -1185,6 +1216,9 @@ impl WorkRecord {
             | WorkRecord::ChangesRequested { .. }
             | WorkRecord::MergeMarked { .. }
             | WorkRecord::SummaryRated { .. } => FORMAT_V11,
+            WorkRecord::Taken { .. }
+            | WorkRecord::Reassigned { .. }
+            | WorkRecord::Steered { .. } => FORMAT_V12,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,
             WorkRecord::PriceSet { .. } => FORMAT_V8,
             r if r

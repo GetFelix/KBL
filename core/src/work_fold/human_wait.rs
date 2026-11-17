@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use super::{NeedsYou, Stage, State};
-use crate::names::ItemId;
-use crate::work::{Actor, WorkLogged, WorkRecord};
+use crate::names::{ItemId, Key};
+use crate::work::{Actor, Assignee, WorkLogged, WorkRecord};
 
 /// Finished waits kept, oldest dropped first, so a long log costs bounded memory.
 const KEPT_WAITS: usize = 20_000;
@@ -26,7 +26,7 @@ pub enum WaitKind {
     Failure,
     /// The work is done and its pull request is in review.
     Review,
-    /// Any other reason an item needs you: over budget, left scope, flagged.
+    /// Any other reason an item needs you: over budget, left scope, flagged, taken.
     Other,
 }
 
@@ -141,6 +141,8 @@ pub struct QueueEntry {
     /// a snapshot does not know the start of a wait already open: it began
     /// before the snapshot, so it is older than every known start.
     pub since_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assignee: Option<Assignee>,
 }
 
 /// Unknown start first, then oldest, then lower tier (untiered last), then id.
@@ -158,10 +160,27 @@ impl State {
     /// before this state's first record), then oldest wait, then the lower
     /// tier number (untiered last), then id. An item a person snoozed (until
     /// `now_ms`) or parked is left out while the wait they hid continues.
+    /// The whole team's list; [`State::queue_for`] is one person's.
     pub fn queue(&self, now_ms: u64) -> Vec<QueueEntry> {
+        self.queue_matching(now_ms, |_| true)
+    }
+
+    /// My queue for `viewer`: an item assigned to a person is only in that
+    /// person's queue; any other waiting item is in everyone's.
+    pub fn queue_for(&self, now_ms: u64, viewer: Option<&Key>) -> Vec<QueueEntry> {
+        self.queue_matching(now_ms, |it| match &it.assignee {
+            Some(Assignee::Person(p)) => Some(p) == viewer,
+            _ => true,
+        })
+    }
+
+    fn queue_matching(&self, now_ms: u64, shown: impl Fn(&super::Item) -> bool) -> Vec<QueueEntry> {
         let entry = |id: &ItemId| {
             let kind = self.waiting_kind(id)?;
             let it = &self.items[id];
+            if !shown(it) {
+                return None;
+            }
             let since_ms = self.human_waits.open.get(id).map(|o| o.since_ms);
             let snoozed = it
                 .snoozed
@@ -177,6 +196,7 @@ impl State {
                 kind,
                 tier: it.tier,
                 since_ms,
+                assignee: it.assignee.clone(),
             })
         };
         // Open waits cover every wait this state saw begin. A restored state
@@ -275,7 +295,8 @@ impl State {
     /// Runs after each accepted record. A person's record on a waiting item
     /// ends the wait; then the item's wait state is read again. A snooze or a
     /// park only hides the item from My queue, and a rating judges a summary,
-    /// so neither is an action.
+    /// so neither is an action. A take, a reassign and a steer are. A wait
+    /// for `taken` starts as acted on: the person chose it.
     pub(super) fn track_human_wait(&mut self, rec: &WorkLogged) {
         // `at` is still the previous offset here, so a first record on a state
         // that already has one means the state came from a snapshot.
@@ -338,6 +359,7 @@ impl State {
 
     fn refresh_wait(&mut self, id: &ItemId, at_ms: u64) {
         let now = self.waiting_kind(id);
+        let acted = self.needs_you(id) == Some(NeedsYou::Taken);
         let open = &mut self.human_waits.open;
         match (open.contains_key(id), now) {
             (false, Some(kind)) => {
@@ -346,7 +368,7 @@ impl State {
                     Open {
                         kind,
                         since_ms: at_ms,
-                        acted: false,
+                        acted,
                     },
                 );
             }
@@ -360,7 +382,7 @@ impl State {
                     Open {
                         kind,
                         since_ms: at_ms,
-                        acted: false,
+                        acted,
                     },
                 );
             }

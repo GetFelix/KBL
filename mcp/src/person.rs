@@ -149,6 +149,10 @@ fn convert(p: &Param, v: Value) -> Result<Value, String> {
             Some(_) => Err(format!("{} is longer than {INLINE_LIMIT} bytes", p.name)),
             None => Err(wrong("a string")),
         },
+        Kind::Person => match v.as_str() {
+            Some(name) if !name.is_empty() => Ok(json!({ "person": name })),
+            _ => Err(wrong("a person's name")),
+        },
     }
 }
 
@@ -157,7 +161,7 @@ fn describe(tool: &Tool) -> McpTool {
     let mut required = Vec::new();
     for p in tool.params {
         let mut s = match p.kind {
-            Kind::Text | Kind::Content => json!({ "type": "string" }),
+            Kind::Text | Kind::Content | Kind::Person => json!({ "type": "string" }),
             Kind::Number => json!({ "type": "integer", "minimum": 0 }),
             Kind::Bool => json!({ "type": "boolean" }),
             Kind::Words(w) => json!({ "type": "string", "enum": w }),

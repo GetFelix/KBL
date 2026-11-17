@@ -1,6 +1,7 @@
 // The tracker's REST routes, called with the viewer's own person token. The page only
 // talks to the tracker at its own origin (`/v1/...`): it never sends the token to an
 // address taken from the link, and needs no CORS on the tracker.
+import { parseTrust, type Trust } from './trust.ts';
 import { outcome, route, type Outcome, type Request } from './writes.ts';
 
 export type Fetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ status: number; json(): Promise<unknown> }>;
@@ -70,6 +71,15 @@ export class Tracker {
       if (typeof t.team === 'string' && typeof t.review_limit === 'number' && t.review_limit > 0) limits[t.team] = t.review_limit;
     }
     return { person: b.person, teams, limits };
+  }
+
+  /** Summary marks over the last `days` days, or why the tracker would not say. */
+  async summaryTrust(days: number): Promise<Trust | Outcome> {
+    const r = await this.send('GET', route(`/v1/work/metrics/summary-trust?days=${days}`, this.team));
+    if (r.network === TIMED_OUT) return { status: 'failed', reason: 'No answer from the tracker.' };
+    const o = outcome(r.status, r.body, r.network);
+    if (o.status !== 'ok') return o;
+    return parseTrust(r.body) ?? { status: 'failed', reason: 'The tracker answered with numbers this page does not read. Reload the page.' };
   }
 
   async write(req: Request): Promise<Outcome> {

@@ -6,6 +6,7 @@ export type CommandId =
   | 'palette'
   | 'help'
   | 'spend'
+  | 'metrics'
   | 'prices'
   | 'search'
   | 'next'
@@ -32,6 +33,7 @@ export type CommandId =
   | 'closeItems'
   | 'flag'
   | 'unflag'
+  | 'assign'
   | 'undo'
   | 'signIn';
 
@@ -57,6 +59,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'open', label: 'Open the selected item', group: 'Navigation', keys: ['Enter'] },
   { id: 'close', label: 'Close, or clear the search', group: 'Navigation', keys: ['Escape'] },
   { id: 'spend', label: 'Show spend', group: 'View', keys: [] },
+  { id: 'metrics', label: 'Show metrics', group: 'View', keys: [] },
   { id: 'prices', label: 'Models and prices', group: 'View', keys: [] },
   { id: 'view-all', label: 'Show all work', group: 'View', keys: [] },
   { id: 'view-inbox', label: 'Show what needs you', group: 'View', keys: [] },
@@ -74,6 +77,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'closeItems', label: 'Close the selected items', group: 'Actions', keys: [] },
   { id: 'flag', label: 'Flag the selected items for a person', group: 'Actions', keys: [] },
   { id: 'unflag', label: 'Unflag the selected items', group: 'Actions', keys: [] },
+  { id: 'assign', label: 'Assign the selected item', group: 'Actions', keys: ['A'] },
   { id: 'undo', label: 'Undo the last tier change', group: 'Actions', keys: ['Mod+Z'] },
   { id: 'signIn', label: 'Sign in to the tracker', group: 'Actions', keys: [] },
 ];

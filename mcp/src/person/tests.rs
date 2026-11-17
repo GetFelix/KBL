@@ -101,6 +101,9 @@ async fn a_person_token_lists_every_tool() {
             "request_changes",
             "mark_merged",
             "rate_summary",
+            "take_item",
+            "reassign_item",
+            "steer_agent",
         ]
     );
     assert!(p.tools().iter().all(|t| t.description.is_some()));
@@ -123,7 +126,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 16] = [
+    let cases: [(&str, Value, &str, Value); 20] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -220,6 +223,30 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             "/v1/work/rate-summary",
             json!({ "item": "a1", "attempt": 1, "accurate": true }),
         ),
+        (
+            "take_item",
+            json!({ "item": "a1" }),
+            "/v1/work/take",
+            json!({ "item": "a1" }),
+        ),
+        (
+            "reassign_item",
+            json!({ "item": "a1", "to": "ana" }),
+            "/v1/work/reassign",
+            json!({ "item": "a1", "to": { "person": "ana" } }),
+        ),
+        (
+            "reassign_item",
+            json!({ "item": "a1" }),
+            "/v1/work/reassign",
+            json!({ "item": "a1" }),
+        ),
+        (
+            "steer_agent",
+            json!({ "item": "a1", "attempt": 2, "text": "use the writer lock" }),
+            "/v1/work/steer",
+            json!({ "item": "a1", "attempt": 2, "text": { "text": "use the writer lock" } }),
+        ),
     ];
     for (tool, args, path, body) in cases {
         let fake = Fake::person();
@@ -232,8 +259,8 @@ async fn each_tool_posts_to_its_route_with_its_body() {
 
 #[tokio::test]
 async fn every_table_entry_is_covered_by_a_case() {
-    // 16 writes above and the queue below: a new entry needs its case.
-    assert_eq!(TOOLS.len(), 17);
+    // 19 writes above and the queue below: a new entry needs its case.
+    assert_eq!(TOOLS.len(), 20);
 }
 
 #[tokio::test]
@@ -296,6 +323,16 @@ async fn a_bad_call_never_reaches_the_tracker() {
             "team is not a parameter",
         ),
         ("flag_item", json!({ "item": 4 }), "item must be a string"),
+        (
+            "reassign_item",
+            json!({ "item": "a1", "to": "" }),
+            "to must be a person's name",
+        ),
+        (
+            "steer_agent",
+            json!({ "item": "a1", "text": "x" }),
+            "attempt is needed",
+        ),
         (
             "add_note",
             json!({ "item": "a1", "text": "x".repeat(INLINE_LIMIT + 1) }),
