@@ -23,6 +23,10 @@ use crate::work::{
 };
 
 mod human_wait;
+mod snapshots;
+
+pub use snapshots::{FOLD_REV, SNAPSHOT_EVERY, Snapshot, Snapshots, fold_to};
+
 #[cfg(test)]
 mod tests;
 

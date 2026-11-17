@@ -3048,6 +3048,7 @@ fn chained_answers_stop_at_the_depth_cap() {
 
 mod human_wait;
 mod review;
+mod snapshots;
 mod spend;
 
 /// The tracker refuses such a replacement before it is logged, but a log that holds

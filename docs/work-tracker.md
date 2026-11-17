@@ -134,6 +134,19 @@ they are not there, and folds `work.events` from the start before it
 serves. It appends a record only when the fold accepts it, so a refused call
 leaves no trace in the log.
 
+**The fold to an offset.** `kbl_core::work_fold::fold_to(log, n)` is the state
+after every record at an offset up to `n`: items, claims, decisions and refusals,
+as the tracker held them when it had applied that record. Offsets that hold no
+record are not in the list it is given. A Raft shard burns one when a
+conditional publish is refused, so `n` at a blank is the state at the last
+record before it. `Snapshots` keeps a copy of the state every 2,000 records
+(records, not offsets) so a fold to a late offset starts near it. A snapshot is
+only a cache: it is used after its tail record and count are checked against
+the log and its fold revision against the build, and one that fails is skipped
+and rebuilt by `refresh`, so a missing or stale one costs time and never
+changes the answer. A test folds a log once, records the state at every offset,
+and checks `fold_to` at each one, with and without snapshots, blanks included.
+
 Each record carries a format. A tracker that finds a record of a newer format
 than it reads does not serve, instead of skipping the record.
 [upgrades.md](upgrades.md) has the upgrade order, how to go back, and the
