@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
-    Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FORMAT_V6,
-    FORMAT_V8, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
+    Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
+    FORMAT_V6, FORMAT_V8, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
     MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWER,
     MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
     MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
@@ -1392,7 +1392,12 @@ impl State {
     }
 
     /// Sets who works an open, accepted item, for `taken` and `reassigned`.
-    fn assign(&mut self, id: &ItemId, to: Option<Assignee>, rec: &WorkLogged) -> Result<(), Reject> {
+    fn assign(
+        &mut self,
+        id: &ItemId,
+        to: Option<Assignee>,
+        rec: &WorkLogged,
+    ) -> Result<(), Reject> {
         if rec.actor != Actor::Person {
             return Err(Reject::ActorNotAllowed);
         }
@@ -2594,11 +2599,7 @@ impl State {
                 }
                 self.assign(item, to.clone(), rec)?;
             }
-            WorkRecord::Steered {
-                item,
-                attempt,
-                ..
-            } => {
+            WorkRecord::Steered { item, attempt, .. } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);
                 }

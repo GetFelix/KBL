@@ -1070,9 +1070,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         WorkRecord::Shipped { release, .. } => redact_in(release),
         WorkRecord::Context { text, .. }
         | WorkRecord::HumanInput { text, .. }
-        | WorkRecord::Steered { text, .. } => {
-            redact_content(text)
-        }
+        | WorkRecord::Steered { text, .. } => redact_content(text),
         WorkRecord::Progress {
             note, branch, pr, ..
         } => {

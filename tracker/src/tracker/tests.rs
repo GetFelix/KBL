@@ -2051,7 +2051,9 @@ async fn a_taken_item_is_not_handed_out_until_it_is_nobodys() {
     let person = |r| t.person_record(key("gab"), r);
     person(WorkRecord::FormatRaised { to: 12 }).await.unwrap();
     seed_in_felix(&t, "a1").await;
-    person(WorkRecord::Taken { item: item("a1") }).await.unwrap();
+    person(WorkRecord::Taken { item: item("a1") })
+        .await
+        .unwrap();
     // The ready record is still on the stream; the claim path acks it.
     assert_eq!(claimed_id(&claim(&t, "w1").await), None);
     person(WorkRecord::Reassigned {
@@ -2062,7 +2064,9 @@ async fn a_taken_item_is_not_handed_out_until_it_is_nobodys() {
     .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
     // Held: a take leaves the hold, and a steer reaches the attempt.
-    person(WorkRecord::Taken { item: item("a1") }).await.unwrap();
+    person(WorkRecord::Taken { item: item("a1") })
+        .await
+        .unwrap();
     person(WorkRecord::Steered {
         item: item("a1"),
         attempt: 1,

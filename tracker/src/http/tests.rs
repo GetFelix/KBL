@@ -1876,7 +1876,10 @@ async fn the_review_actions_act_only_in_the_tokens_team() {
 fn assignee_routes() -> [(&'static str, Value); 3] {
     [
         ("take", json!({ "item": "a1" })),
-        ("reassign", json!({ "item": "a1", "to": { "person": "gab" } })),
+        (
+            "reassign",
+            json!({ "item": "a1", "to": { "person": "gab" } }),
+        ),
         (
             "steer",
             json!({ "item": "a1", "attempt": 1, "text": { "text": "x" } }),
@@ -2008,7 +2011,13 @@ async fn a_reassign_names_a_person_of_the_team() {
     assert_eq!(item["item"]["assignee"], json!({ "person": "kim" }));
     // Nobody: it is Ready again and in no one's queue.
     let none = json!({ "item": "a1", "to": null });
-    let (status, _) = call(&two.app, "/v1/teams/a/work/reassign", Some("tok-a-gab"), none).await;
+    let (status, _) = call(
+        &two.app,
+        "/v1/teams/a/work/reassign",
+        Some("tok-a-gab"),
+        none,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(queue("tok-both").await["count"], 0);
 }

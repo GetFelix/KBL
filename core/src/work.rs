@@ -887,10 +887,7 @@ pub enum WorkRecord {
     /// theirs. Format 12.
     Taken { item: ItemId },
     /// A person assigns the item to someone, or to nobody. Format 12.
-    Reassigned {
-        item: ItemId,
-        to: Option<Assignee>,
-    },
+    Reassigned { item: ItemId, to: Option<Assignee> },
     /// A person sends a note to the agent holding `attempt`. It steers that
     /// attempt like a `human_input` on it. Format 12.
     Steered {

@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 11.
+is 12.
 
 ### Formats
 
@@ -84,6 +84,7 @@ is 11.
 | 9 | `price_set` with `as_of`: the day the price table was copied. The fold refuses a day that is not a real `YYYY-MM-DD` as `bad_price` | Until the raise, `POST /v1/work/prices` refuses a price with `as_of` as `format`; a price without it is format 8 and unchanged |
 | 10 | `retried`, `snoozed`, `parked` and `unblocked`: the card actions a person takes on My queue ([work tracker](work-tracker.md#card-actions-on-my-queue)). The fold hides a snoozed or parked item from My queue while the wait they hid continues | Until the raise, `POST /v1/work/retry`, `/snooze`, `/park`, `/unpark` and `/unblock` are refused with `format`. A reader below 10 stops at the raise itself, so it never folds a card action as an unknown kind |
 | 11 | `review_requested`, `changes_requested`, `merge_marked` and `summary_rated`: a person's moves on a pull request and on the agent's summary ([work tracker](work-tracker.md#review-actions-and-summary-marks)). The fold keeps the ask and the send-back on the item, closes a merged request's item as merged, and keeps the latest mark per attempt | Until the raise, `POST /v1/work/request-review`, `/request-changes`, `/mark-merged` and `/rate-summary` are refused with `format`. A reader below 11 stops at the raise itself, so it never folds one as an unknown kind |
+| 12 | `taken`, `reassigned` and `steered`: an item's assignee and a note to the agent holding it ([work tracker](work-tracker.md#assignees)). The fold keeps `assignee` on the item and holds an unheld item with a person assignee out of Ready, in Needs you as `taken`. An agent assignee is refused as `bad_assignee` | Until the raise, `POST /v1/work/take`, `/reassign` and `/steer` are refused with `format`. A reader below 12 stops at the raise itself, so it never lets an agent claim an item a person took |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
 
@@ -185,6 +186,8 @@ tracker does not have yet.
   step and that every older log folds with nothing snoozed or parked.
   `core/tests/work_format_11.jsonl` does the same for the review actions and the
   summary mark, with a `review_requested` before the raise and each refusal.
+  `core/tests/work_format_12.jsonl` does the same for the assignee records, with
+  a `taken` before the raise and each refusal.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

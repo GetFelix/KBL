@@ -413,7 +413,10 @@ fn items_carry_their_assignee_and_held_attempt() {
             .unwrap()
             .clone()
     };
-    assert_eq!(row("r1")["assignee"], serde_json::json!({"person": "gabriel"}));
+    assert_eq!(
+        row("r1")["assignee"],
+        serde_json::json!({"person": "gabriel"})
+    );
     assert_eq!(row("r1")["needs"], "taken");
     assert!(row("r1")["held_attempt"].is_null());
     assert!(row("r2")["assignee"].is_null());
@@ -428,6 +431,11 @@ fn items_carry_their_assignee_and_held_attempt() {
         f.apply(i as f64, l.as_bytes());
     }
     let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
-    let r1 = items.as_array().unwrap().iter().find(|i| i["id"] == "r1").unwrap();
+    let r1 = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["id"] == "r1")
+        .unwrap();
     assert_eq!(r1["held_attempt"], 1);
 }
