@@ -26,6 +26,7 @@ use kbl_core::work::{
     Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
@@ -35,6 +36,7 @@ use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 mod ingest;
 pub(crate) mod reads;
 mod request_keys;
+mod snapshots;
 mod texts;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
@@ -96,6 +98,11 @@ pub(crate) struct Settings {
     /// Agent pull requests in In review at which new fix claims pause. Zero
     /// turns the limit off.
     pub(crate) review_limit: usize,
+    /// Where fold snapshots are kept, if anywhere. One folder per team inside.
+    pub(crate) snapshot_dir: Option<std::path::PathBuf>,
+    /// Records between snapshots; a boot saves one when this many have
+    /// accumulated since the newest.
+    pub(crate) snapshot_every: u64,
 }
 
 #[cfg(test)]
@@ -484,6 +491,7 @@ enum TextRead {
 }
 
 /// One `claimed` record and the record that ended it.
+#[derive(Clone, Serialize, Deserialize)]
 struct ClaimLog {
     offset: u64,
     by: Key,
@@ -491,9 +499,10 @@ struct ClaimLog {
 }
 
 /// The record that ended a claim.
+#[derive(Clone, Serialize, Deserialize)]
 struct Ended {
     offset: u64,
-    kind: &'static str,
+    kind: String,
     /// What a `prerequisite` named, so a retry naming another is not replayed.
     prerequisite: Option<ItemId>,
     actor: Actor,
@@ -576,7 +585,7 @@ impl Recall {
         } else if let Some(c) = claims.last_mut().filter(|c| c.ended.is_none()) {
             c.ended = Some(Ended {
                 offset,
-                kind: logged.record.kind(),
+                kind: logged.record.kind().to_owned(),
                 prerequisite: match &logged.record {
                     WorkRecord::Prerequisite { prerequisite, .. } => Some(prerequisite.clone()),
                     _ => None,
@@ -2472,15 +2481,24 @@ impl<B: Broker> Tracker<B> {
                 Err(e) => eprintln!("kbl-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
-        let mut recall = Recall::default();
-        let mut state = State::default();
-        for (offset, rec) in &entries {
+        let store = snapshots::Store::new(&self.0.settings);
+        let (mut state, mut recall, from, saved) = match store
+            .as_ref()
+            .and_then(|s| s.restore(&entries))
+        {
+            Some((saved, recall)) => (saved.state(), recall, saved.records() as usize, Some(saved)),
+            None => (State::default(), Recall::default(), 0, None),
+        };
+        for (offset, rec) in &entries[from..] {
             let absent = edge_absent(&state, &rec.record);
             state.apply(*offset, rec);
             let created = absent && !edge_absent(&state, &rec.record);
             // The append path remembers only what the fold took; so does a rebuild.
             let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
             recall.remember(*offset, rec, &self.0.me, created, rejected);
+        }
+        if let Some(store) = &store {
+            store.save(&entries, saved.as_ref(), &state, &recall);
         }
         Ok((state, recall, tail))
     }

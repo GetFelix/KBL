@@ -781,6 +781,8 @@ pub(super) fn settings() -> Settings {
         cost_floor_micros: 0,
         team: String::new(),
         review_limit: 0,
+        snapshot_dir: None,
+        snapshot_every: 0,
     }
 }
 
