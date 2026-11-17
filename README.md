@@ -33,11 +33,60 @@ person completes.
 ![Decision replay: scrub through an agent's decisions and see the state at each step](docs/screenshots/replay-scrub.png)
 
 <sub>Style frames from [prototype/intake-frame.html](prototype/intake-frame.html), drawn from hand-written
-fixtures. The tracker does not talk to Felix yet: only the task tools and the [dev stack](#running-felix-locally)
-do.</sub>
+fixtures. The [quick start](#quick-start) runs the real thing.</sub>
 
-> **Status:** M0 and M1 are done: the task tools, scripted planner and workers, the death and poison checks, and
-> the dashboard and replay style frames. M2, the tracker itself, is in progress. See [Status](#status).
+> **Status:** M0, M1 and M2 are done: the task tools, the tracker with ingest, ready tiers and the work tools, and the
+> dashboard and replay. Work continues on real work (M3), the live dashboard (M4) and self-hosting (M10). See [Status](#status).
+
+## Quick start
+
+This runs KBL on one machine: Felix, felix-gateway, the work tracker and the dashboard, each in a container built from
+this checkout. It is a local, single-user stack, **not a deployment**: the stand-in identity provider signs in anyone
+who asks, the tracker speaks plain HTTP, and nothing keeps its data between starts. Every port is bound to `127.0.0.1`.
+Self-hosting with a real identity provider is tracked in [issue 316](https://github.com/GetFelix/KBL/issues/316).
+
+You need Git, curl, Node 22 or later, Rust 1.97 or later (to build `kbl-mcp`), and Docker (Compose v2) or Podman (with podman-compose 1.4 or later). The first start
+builds the tracker and the dashboard from source and takes about 10 minutes (CI allows 15); later starts reuse the build cache.
+
+```bash
+git clone https://github.com/GetFelix/KBL.git
+cd KBL
+dev/quickstart.sh
+```
+
+When it finishes it prints a dashboard link (the sign-in token is in it, so keep it to yourself), the tracker address and
+the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be free. Choose the engine with `CONTAINER_ENGINE=docker` or `podman`.
+
+1. **Open the dashboard.** Open the printed link. Its queue is empty.
+2. **Add work.** Post an item to the tracker with the person token (the dashboard's Sign in takes the same token for its accept, reject, tier and close actions):
+   ```bash
+   me=$(node -e 'const t=require("./dev/state/tracker-tokens.json").people;console.log(Object.keys(t)[0])')
+   for rec in '{"kind":"imported","item":"demo-1","source":"quickstart","upstream_id":"1","title":"Fix the typo in the README"}' \
+              '{"kind":"accepted","item":"demo-1","tier":1}'; do
+     curl -fsS -X POST http://127.0.0.1:8790/v1/work/records -H "authorization: Bearer $me" \
+       -H 'content-type: application/json' -d "{\"record\": $rec}"; echo
+   done
+   ```
+   The item shows in the dashboard as ready. To bring in real issues from GitHub, Azure DevOps or Jira, see
+   [Running the ingest worker](docs/work-tracker.md#running-the-ingest-worker).
+3. **Connect Claude Code.** Build `kbl-mcp` on the host (it is the program Claude Code starts, so it runs outside the
+   containers) and write a config for one agent. Once a release is tagged you can instead
+   [download `kbl-mcp`](#getting-the-binaries) and pass its path with `--mcp`, in place of the `cargo build` line:
+   ```bash
+   cargo build --release -p kbl-mcp
+   node dev/connect.mjs agent1 --out .mcp.json
+   claude --mcp-config .mcp.json --strict-mcp-config
+   ```
+   Ask Claude Code to call `work_next`. It claims `demo-1`, and the dashboard shows the item held by `agent1`.
+   `connect.mjs` writes the file with mode 600 (it holds the agent's tokens) and with absolute paths, so any directory
+   works. The stack has agents `agent1` to `agent8`, one tracker token each. A Felix token lasts 24 hours and
+   `kbl-mcp` does not renew it: after that, run `node dev/connect.mjs` again and restart the host
+   ([issue 317](https://github.com/GetFelix/KBL/issues/317)).
+The dashboard link works once: the page removes the token from the address, so a reload needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
+4. **Stop it** with `dev/down.sh`, which also deletes its data.
+
+The tracker and the dashboard run as unprivileged users inside their containers, under both Docker and Podman. The
+tracker starts as root only long enough to read the token file the host owns, then drops to its own user.
 
 ## What it shows about Felix
 
