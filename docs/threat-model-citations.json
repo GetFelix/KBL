@@ -528,5 +528,17 @@
  ],
  "ingest/src/config.rs#check_gitlab": [
   "fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {"
+ ],
+ "ingest/src/check.rs#safe": [
+  "kbl_core::redact::redact(&text.to_string()).into_owned()"
+ ],
+ "ingest/src/check.rs#ReadOnly::send": [
+  "if req.method != \"GET\" {"
+ ],
+ "ingest/src/check.rs#ReadOnlyWiql::send": [
+  "if req.method != \"GET\" && !is_wiql_query(&req) {"
+ ],
+ "ingest/src/check.rs#is_wiql_query": [
+  "tail == [\"_apis\", \"wit\", \"wiql\"]"
  ]
 }

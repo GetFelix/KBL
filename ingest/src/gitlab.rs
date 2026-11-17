@@ -255,9 +255,18 @@ impl<T: Transport> Gitlab<T> {
         Ok(res)
     }
 
+    /// A GET of one API path, for `kbl-ingest check`'s credential and permission probes.
+    pub(crate) async fn probe(
+        &self,
+        parts: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<Res, SourceError> {
+        self.call(Req::get(self.url(parts, query)?)).await
+    }
+
     /// The full path of a rule repo, or an error for one outside the
     /// configured projects: nothing is read or written there.
-    fn project_of(&self, repo: &str) -> Result<&str, SourceError> {
+    pub(crate) fn project_of(&self, repo: &str) -> Result<&str, SourceError> {
         self.projects
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(repo))
