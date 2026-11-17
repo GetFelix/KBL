@@ -15,8 +15,8 @@ pub(super) enum Kind {
     Words(&'static [&'static str]),
     /// A string the tracker keeps as content. Sent as `{"text": ...}`.
     Content,
-    /// A person's name. Sent as `{"person": ...}`.
-    Person,
+    /// A person's name, sent as `{"person": ...}`, or `agent:<name>`, sent as `{"agent": ...}`.
+    Assignee,
 }
 
 pub(super) struct Param {
@@ -258,15 +258,15 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "reassign_item",
-        about: "Assign the item to a person of this team, or to nobody so agents may claim it again.",
+        about: "Assign the item to a person of this team, to one of its agents (only that agent may claim it), or to nobody so any agent may claim it.",
         route: Route::Post("/v1/work/reassign"),
         params: &[
             ITEM,
             Param {
                 name: "to",
-                kind: Kind::Person,
+                kind: Kind::Assignee,
                 required: false,
-                about: "The person's name. Leave it out for nobody.",
+                about: "A person's name, or agent:<name> for an agent. Leave it out for nobody.",
             },
         ],
     },

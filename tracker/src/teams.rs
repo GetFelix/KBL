@@ -232,6 +232,16 @@ impl<B: Broker> Teams<B> {
         serving
     }
 
+    /// Whether `agent` is an agent of `team` that is not revoked: by its
+    /// token file, or by the org log.
+    pub(crate) fn is_team_agent(&self, team: &Team<B>, agent: &Key) -> bool {
+        team.has_file_agent(agent.as_str())
+            || self
+                .org
+                .as_ref()
+                .is_some_and(|o| o.org.has_agent(&team.name, agent))
+    }
+
     /// Whether `person` is in `team`: by its token file, or by the org log.
     pub(crate) fn is_member(&self, team: &Team<B>, person: &Key) -> bool {
         team.has_file_person(person)

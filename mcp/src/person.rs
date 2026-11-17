@@ -149,9 +149,10 @@ fn convert(p: &Param, v: Value) -> Result<Value, String> {
             Some(_) => Err(format!("{} is longer than {INLINE_LIMIT} bytes", p.name)),
             None => Err(wrong("a string")),
         },
-        Kind::Person => match v.as_str() {
-            Some(name) if !name.is_empty() => Ok(json!({ "person": name })),
-            _ => Err(wrong("a person's name")),
+        Kind::Assignee => match v.as_str().map(|s| s.strip_prefix("agent:")) {
+            Some(Some(agent)) if !agent.is_empty() => Ok(json!({ "agent": agent })),
+            Some(None) if v.as_str().is_some_and(|n| !n.is_empty()) => Ok(json!({ "person": v })),
+            _ => Err(wrong("a person's name, or agent:<name>")),
         },
     }
 }
@@ -161,7 +162,7 @@ fn describe(tool: &Tool) -> McpTool {
     let mut required = Vec::new();
     for p in tool.params {
         let mut s = match p.kind {
-            Kind::Text | Kind::Content | Kind::Person => json!({ "type": "string" }),
+            Kind::Text | Kind::Content | Kind::Assignee => json!({ "type": "string" }),
             Kind::Number => json!({ "type": "integer", "minimum": 0 }),
             Kind::Bool => json!({ "type": "boolean" }),
             Kind::Words(w) => json!({ "type": "string", "enum": w }),
