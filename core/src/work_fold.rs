@@ -2603,8 +2603,15 @@ impl State {
             }
             WorkRecord::Reassigned { item, to } => {
                 // Below 13 a reader may not route claims to an agent.
-                if matches!(to, Some(Assignee::Agent(_))) && self.format() < FORMAT_V13 {
-                    return Err(Reject::BadAssignee);
+                if let Some(Assignee::Agent(a)) = to {
+                    if self.format() < FORMAT_V13 {
+                        return Err(Reject::BadAssignee);
+                    }
+                    // It could never claim its own tree's review, and nobody else may.
+                    let it = self.item(item)?;
+                    if it.work == WorkKind::Review && self.worked_on(&it.root, a) {
+                        return Err(Reject::SelfReview);
+                    }
                 }
                 // The tracker only lets go of an agent that stayed away.
                 let away = rec.actor == Actor::Tracker

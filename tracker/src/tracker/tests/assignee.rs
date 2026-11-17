@@ -216,3 +216,19 @@ async fn a_lane_claim_assigned_while_held_is_acked_not_handed_back() {
     assert_eq!(fake.slot("work.ready.p2", 0), Slot::Acked);
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
 }
+
+#[tokio::test]
+async fn a_record_from_before_a_direct_claim_never_lapses_it() {
+    let fake = Fake::default();
+    let t = at_13(&fake).await;
+    seed(&t, "a1", 2).await;
+    assign(&t, "a1", Some("w1")).await;
+    claim(&t, "w1").await;
+    // Cleared while w1 holds it: the record published before the assignment
+    // must not read as Felix handing the item out again.
+    assign(&t, "a1", None).await;
+    assert!(claimed_id(&claim(&t, "w2").await).is_none());
+    assert_eq!(holder(&t).await.as_deref(), Some("w1"));
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_ok());
+    assert_eq!(count(&fake, "nack"), 0);
+}

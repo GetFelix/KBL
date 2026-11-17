@@ -210,6 +210,8 @@ struct Owner {
     agent: AgentName,
     id: u64,
     last_extended: Instant,
+    /// Handed straight to its assignee, with no ready record behind it.
+    direct: bool,
 }
 
 struct LeaseHeld {
@@ -1632,6 +1634,7 @@ impl<B: Broker> Tracker<B> {
                         agent: agent.clone(),
                         id,
                         last_extended: Instant::now(),
+                        direct: true,
                     },
                 );
                 Ok(Some(Delivery {
@@ -1684,6 +1687,7 @@ impl<B: Broker> Tracker<B> {
                 agent: agent.clone(),
                 id,
                 last_extended: Instant::now(),
+                direct: true,
             },
         );
         *delivery = Some(Delivery {
@@ -1922,6 +1926,13 @@ impl<B: Broker> Tracker<B> {
                 let Some(hold) = core.state.items.get(&item).and_then(|i| i.hold.clone()) else {
                     return Ok(None);
                 };
+                // A direct claim has no record, so this one is from before it and
+                // says nothing about the holder; the sweep lapses direct claims.
+                if core.owner.get(&item).is_some_and(|o| o.direct) {
+                    core.live.remove(&item);
+                    ack(ops, record.offset);
+                    return Ok(None);
+                }
                 // Felix handed the item out again, so the old claim lapsed.
                 let lapse = WorkRecord::Released {
                     item: item.clone(),
@@ -1970,6 +1981,7 @@ impl<B: Broker> Tracker<B> {
                         agent: agent.clone(),
                         id,
                         last_extended: Instant::now(),
+                        direct: false,
                     },
                 );
                 Ok(Some(Delivery {
@@ -2272,6 +2284,7 @@ impl<B: Broker> Tracker<B> {
                             agent: agent.clone(),
                             id,
                             last_extended: Instant::now(),
+                            direct: false,
                         },
                     );
                     *delivery = Some(Delivery {
@@ -3023,6 +3036,8 @@ fn settle_op(
         ops.push(Op::Nack(stream, agent.clone(), record));
         true
     } else {
+        // Acked, so a later sync must publish afresh if the item goes to a lane.
+        core.live.remove(&d.item);
         ops.push(Op::Ack(stream, agent.clone(), record.offset));
         false
     }
