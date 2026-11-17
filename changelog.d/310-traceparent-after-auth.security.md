@@ -1,0 +1,1 @@
+The tracker joins an incoming `traceparent` only when the request carries a token it accepts. A request with no token or a wrong one starts its own trace under the tracker's sampler, so it cannot force its spans to be exported. The `mcp.tool` span setup is tested.
