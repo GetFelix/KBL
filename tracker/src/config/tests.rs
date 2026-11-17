@@ -20,6 +20,23 @@ fn a_token_listed_twice_or_for_both_kinds_is_refused() {
     assert!(Tokens::parse(r#"{"agents":{"":"w1"}}"#).is_err());
 }
 
+#[test]
+fn an_ingest_worker_can_be_tied_to_a_source() {
+    let tokens = Tokens::parse(
+        r#"{"ingest":{"t-gh":"ingest-gh","t-any":"ingest-any"},"ingest_sources":{"ingest-gh":"github"}}"#,
+    )
+    .unwrap();
+    let source = |t| match tokens.who(t) {
+        Some(Caller::Ingest(w)) => w.source,
+        _ => panic!("not an ingest token"),
+    };
+    assert_eq!(source("t-gh").as_deref(), Some("github"));
+    assert_eq!(source("t-any"), None);
+    // A tie for a name that is no ingest worker, or to a bad source, is a mistake.
+    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"b":"github"}}"#).is_err());
+    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"a":"Not A Key"}}"#).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn the_token_file_must_be_private() {

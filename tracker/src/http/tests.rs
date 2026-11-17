@@ -688,6 +688,54 @@ async fn the_ingest_token_writes_sync_records_and_nothing_else() {
 }
 
 #[tokio::test]
+async fn an_ingest_token_tied_to_a_source_reaches_only_that_sources_roots() {
+    let tokens = r#"{"agents":{},"people":{},"ingest":{"tok-gh":"ingest-gh","tok-jira":"ingest-jira"},"ingest_sources":{"ingest-gh":"github","ingest-jira":"jira"}}"#;
+    let one = team("default", Quiet::default(), tokens, 64).await;
+    let app = router(Arc::new(Teams::new(vec![one]).unwrap()));
+    let import = |item: &str, source: &str| json!({ "record": { "kind": "imported", "item": item, "source": source, "upstream_id": item, "title": "t" } });
+    let why = |(status, reply): (StatusCode, serde_json::Value)| {
+        (status, reply["why"].as_str().map(str::to_owned))
+    };
+    let post = |token: &'static str, body: serde_json::Value| {
+        let app = &app;
+        async move { call(app, "/v1/ingest/records", Some(token), body).await }
+    };
+    assert_eq!(
+        post("tok-jira", import("j1", "jira")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        post("tok-gh", import("g1", "github")).await.0,
+        StatusCode::OK
+    );
+    // A worker imports only its own source's issues.
+    assert_eq!(
+        why(post("tok-gh", import("j2", "jira")).await),
+        (StatusCode::CONFLICT, Some("wrong_source".into()))
+    );
+    // The GitHub token cannot write to a Jira root, except the state of a request.
+    let context = json!({ "record": { "kind": "context", "item": "j1", "entry": "issue", "text": { "text": "x" } } });
+    assert_eq!(
+        why(post("tok-gh", context.clone()).await),
+        (StatusCode::CONFLICT, Some("not_imported".into()))
+    );
+    let state = |item: &str| {
+        json!({ "record": { "kind": "pr_status", "item": item, "status": {
+            "pr": "GetFelix/felix#1", "phase": "open", "review": "unreviewed", "checks": "green" } } })
+    };
+    assert_eq!(
+        why(post("tok-gh", state("j1")).await),
+        (StatusCode::CONFLICT, Some("wrong_pr".into()))
+    );
+    // The Jira token reaches its own root and not another source's request state.
+    assert_eq!(post("tok-jira", context).await.0, StatusCode::OK);
+    assert_eq!(
+        why(post("tok-jira", state("g1")).await),
+        (StatusCode::CONFLICT, Some("not_imported".into()))
+    );
+}
+
+#[tokio::test]
 async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
     let app = app().await;
     let agent_routes = [

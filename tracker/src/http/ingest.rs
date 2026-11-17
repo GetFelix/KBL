@@ -8,11 +8,11 @@ use axum::extract::Path;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use kbl_core::names::Key;
 use kbl_core::work::WorkRecord;
 use serde::Deserialize;
 
 use super::{App, Call, Caller, StatusCode, denied, reply};
+use crate::config::Worker;
 use crate::felix::Broker;
 
 pub(super) fn routes<B: Broker>() -> Router<Arc<App<B>>> {
@@ -35,9 +35,9 @@ struct SaveBody {
 }
 
 impl<B> Call<B> {
-    fn worker(&self) -> Result<Key, super::Denied> {
+    fn worker(&self) -> Result<Worker, super::Denied> {
         match &self.caller {
-            Caller::Ingest(k) => Ok(k.clone()),
+            Caller::Ingest(w) => Ok(w.clone()),
             _ => Err((StatusCode::FORBIDDEN, "this call is for an ingest token")),
         }
     }
@@ -45,7 +45,11 @@ impl<B> Call<B> {
 
 async fn record<B: Broker>(call: Call<B>, Json(body): Json<RecordBody>) -> Response {
     match call.worker() {
-        Ok(by) => reply(call.tracker().ingest_record(by, body.record).await),
+        Ok(w) => reply(
+            call.tracker()
+                .ingest_record_in(w.key, w.source.as_deref(), body.record)
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }

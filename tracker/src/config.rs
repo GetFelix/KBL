@@ -47,6 +47,12 @@ struct File {
     /// Token to an ingest worker's key. It may append the upstream sync records and keep its cursor.
     #[serde(default = "Pairs::empty")]
     ingest: Pairs<Key>,
+    /// Ingest worker key to the one source it works for, such as `github` or
+    /// `jira`. A listed worker acts only on that source's roots, besides the
+    /// pull request state the `github` worker records on any root. A worker
+    /// not listed is not tied to a source.
+    #[serde(default)]
+    ingest_sources: BTreeMap<String, String>,
     /// Agent name to the `source:owner/repo` targets it may reach outside its own tree.
     #[serde(default)]
     grants: BTreeMap<String, Vec<String>>,
@@ -66,14 +72,21 @@ impl<T> Pairs<T> {
 pub(crate) enum Caller {
     Agent(AgentName),
     Person(Key),
-    Ingest(Key),
+    Ingest(Worker),
+}
+
+/// An ingest worker, and the source it is tied to if the token file ties it.
+#[derive(Clone)]
+pub(crate) struct Worker {
+    pub(crate) key: Key,
+    pub(crate) source: Option<String>,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct Tokens {
     agents: Vec<(String, AgentName)>,
     people: Vec<(String, Key)>,
-    ingest: Vec<(String, Key)>,
+    ingest: Vec<(String, Worker)>,
     grants: Grants,
 }
 
@@ -133,10 +146,28 @@ impl Tokens {
             }
             grants.insert(agent, targets);
         }
+        for (worker, source) in &file.ingest_sources {
+            anyhow::ensure!(
+                file.ingest.0.iter().any(|(_, w)| w.as_str() == worker),
+                "ingest_sources names {worker:?}, which is not an ingest worker"
+            );
+            Key::new(source.as_str()).map_err(|_| {
+                anyhow::anyhow!("the source {source:?} for {worker:?} is not a key")
+            })?;
+        }
+        let ingest = file
+            .ingest
+            .0
+            .into_iter()
+            .map(|(token, key)| {
+                let source = file.ingest_sources.get(key.as_str()).cloned();
+                (token, Worker { key, source })
+            })
+            .collect();
         Ok(Self {
             agents: file.agents.0,
             people: file.people.0,
-            ingest: file.ingest.0,
+            ingest,
             grants,
         })
     }

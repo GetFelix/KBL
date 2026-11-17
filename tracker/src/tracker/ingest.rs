@@ -16,6 +16,11 @@ use std::collections::HashMap;
 /// Longest saved state: a cache value, not a log.
 const MAX_STATE_BYTES: usize = 4 << 20;
 
+/// The source whose worker reads pull requests. Its token may record a
+/// request's state on a root from any source, since an agent's request lives
+/// here whatever tracker the issue is in.
+const PULL_REQUEST_SOURCE: &str = "github";
+
 /// Whether ingest may write this record. Budgets, claims, answers and the
 /// records a person writes are not among them.
 fn allowed(record: &WorkRecord) -> bool {
@@ -115,8 +120,21 @@ impl<B: Broker> Tracker<B> {
         Ok(Some((at, read)))
     }
 
-    /// Appends an upstream sync record if the fold accepts it.
+    /// [`Self::ingest_record_in`] for a worker that is not tied to a source.
+    #[cfg(test)]
     pub(crate) async fn ingest_record(&self, by: Key, record: WorkRecord) -> Result<Value, Error> {
+        self.ingest_record_in(by, None, record).await
+    }
+
+    /// Appends an upstream sync record if the fold accepts it. A worker tied
+    /// to a `source` acts only on that source's roots, except that the pull
+    /// request worker may also record the state of a request for any root.
+    pub(crate) async fn ingest_record_in(
+        &self,
+        by: Key,
+        source: Option<&str>,
+        record: WorkRecord,
+    ) -> Result<Value, Error> {
         if !allowed(&record) {
             return Err(refused("not_allowed"));
         }
@@ -133,17 +151,33 @@ impl<B: Broker> Tracker<B> {
         if matches!(record, WorkRecord::Proposed { parent: None, .. }) {
             return Err(refused("not_allowed"));
         }
+        // A worker tied to a source imports only that source's issues.
+        let imports = match &record {
+            WorkRecord::Imported { source, .. } => Some(source.as_str()),
+            _ => None,
+        };
+        if source.is_some() && imports.is_some() && imports != source {
+            return Err(refused("wrong_source"));
+        }
         self.begin().await?;
         let kind = record.kind();
         let stored = self.stored_context(&record).await?;
         let offset = {
             let mut core = self.0.core.lock().await;
-            if !targets(&record)
-                .into_iter()
-                .all(|t| is_imported(&core.state, t))
-            {
+            let sources = core.state.imported_sources();
+            let reaches = |item: &ItemId| match (sources.get(item), source) {
+                (None, _) => false,
+                (Some(_), None) => true,
+                (Some(root), Some(own)) => {
+                    *root == own
+                        || (own == PULL_REQUEST_SOURCE
+                            && matches!(record, WorkRecord::PrStatus { .. }))
+                }
+            };
+            if !targets(&record).into_iter().all(reaches) {
                 return Err(refused("not_imported"));
             }
+            drop(sources);
             if let WorkRecord::Closed {
                 item,
                 why: CloseWhy::Merged,
@@ -415,10 +449,6 @@ fn merged_request_reported(state: &State, item: &ItemId) -> bool {
             .as_ref()
             .is_some_and(|s| s.phase == PrPhase::Merged && it.pr.as_deref() == Some(s.pr.as_str()))
     })
-}
-
-fn is_imported(state: &State, item: &ItemId) -> bool {
-    state.imported().any(|(_, _, i)| i == item)
 }
 
 fn state_name(source: &str) -> Result<String, Error> {
