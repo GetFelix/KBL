@@ -117,6 +117,64 @@ pub(super) async fn create_team<B: Broker>(
     .into_response()
 }
 
+/// A `connection_set` names up to [`kbl_core::org::MAX_CONNECTION_SOURCES`] sources.
+const MAX_RECORD_BODY: usize = 512 * 1024;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RecordBody {
+    record: OrgRecord,
+}
+
+/// `POST /v1/org/records`: the org records that have no route of their own
+/// yet, `format_raised`, `connection_set` and `budget_set`. Org admins only.
+pub(super) async fn org_record<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    req: Request,
+) -> Response {
+    let (org, by) = match org_admin(&app, req.headers()) {
+        Ok(found) => found,
+        Err(res) => return *res,
+    };
+    let body = match to_bytes(req.into_body(), MAX_RECORD_BODY).await {
+        Ok(bytes) => serde_json::from_slice::<RecordBody>(&bytes).ok(),
+        Err(_) => None,
+    };
+    let Some(RecordBody { record }) = body else {
+        return refused(StatusCode::BAD_REQUEST, "the body is not an org record", "invalid");
+    };
+    if !matches!(
+        record,
+        OrgRecord::FormatRaised { .. } | OrgRecord::ConnectionSet { .. } | OrgRecord::BudgetSet { .. }
+    ) {
+        return refused(
+            StatusCode::BAD_REQUEST,
+            "this kind has its own route",
+            "kind_not_allowed",
+        );
+    }
+    match org.org.append(by, record).await {
+        Ok((applied, offset)) => Json(json!({
+            "changed": applied == Applied::Changed,
+            "offset": offset,
+        }))
+        .into_response(),
+        Err(e) => org_error(e),
+    }
+}
+
+fn org_error(e: OrgError) -> Response {
+    match e {
+        OrgError::Refused(why) => refused(StatusCode::CONFLICT, "the org log refused the record", why),
+        OrgError::Unavailable(e) => refused(StatusCode::SERVICE_UNAVAILABLE, &e, "org_unavailable"),
+        OrgError::Felix(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("{e:#}") })),
+        )
+            .into_response(),
+    }
+}
+
 /// The org side and the org admin calling, or the answer that refuses the call.
 pub(super) fn org_admin<'a, B: Broker>(
     app: &'a Arc<App<B>>,

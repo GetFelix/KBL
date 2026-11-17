@@ -62,7 +62,9 @@ async fn org_app() -> OrgApp {
     org.append(Key::new("tracker").unwrap(), adopt)
         .await
         .unwrap();
-    let tokens = Tokens::parse(r#"{"agents":{"tok-w1":"w1"},"people":{"tok-ops":"ops"}}"#).unwrap();
+    let tokens = Tokens::parse(
+        r#"{"agents":{"tok-w1":"w1"},"people":{"tok-ops":"ops"},"ingest":{"tok-i1":"i1"}}"#,
+    ).unwrap();
     let first = Team::new(
         name("default"),
         start(name("default")).await.unwrap(),
@@ -1088,4 +1090,127 @@ async fn an_org_retake_adopted_a_round_late_reads_what_another_wrote() {
             .await,
         Ok((Applied::Unchanged, None))
     ));
+}
+
+async fn org_record(o: &OrgApp, token: &str, record: Value) -> (StatusCode, Value) {
+    call(&o.app, "/v1/org/records", Some(token), json!({ "record": record })).await
+}
+
+/// A config poll: status, body and `ETag`.
+async fn config(o: &OrgApp, query: &str, etag: Option<&str>) -> (StatusCode, Value, String) {
+    let mut req = Request::get(format!("/v1/ingest/config?{query}"))
+        .header("authorization", "Bearer tok-i1");
+    if let Some(e) = etag {
+        req = req.header("if-none-match", e);
+    }
+    let res = o
+        .app
+        .clone()
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let etag = res
+        .headers()
+        .get("etag")
+        .map(|v| v.to_str().unwrap().to_owned())
+        .unwrap_or_default();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null), etag)
+}
+
+async fn connected() -> OrgApp {
+    let o = org_app().await;
+    create(&o.app, Some("tok-ops"), "other").await;
+    let ops = Key::new("ops").unwrap();
+    for (team, source) in [("default", "github:o/one"), ("other", "github:o/two")] {
+        let rec = OrgRecord::SourceAdded {
+            team: name(team),
+            source: source.into(),
+        };
+        o.teams.org().unwrap().org.append(ops.clone(), rec).await.unwrap();
+    }
+    let (status, _) = org_record(&o, "tok-ops", json!({ "kind": "format_raised", "to": 2 })).await;
+    assert_eq!(status, StatusCode::OK);
+    o
+}
+
+fn connection(team: &str, group: &str, sources: &[&str]) -> Value {
+    json!({
+        "kind": "connection_set", "team": team, "name": "gh", "vendor": "github",
+        "group": group, "pool": "gh-app", "sources": sources,
+    })
+}
+
+#[tokio::test]
+async fn only_an_org_admin_raises_the_org_format_and_sets_connections() {
+    let o = org_app().await;
+    let conn = connection("default", "g1", &[]);
+    let (status, body) = org_record(&o, "tok-w1", conn.clone()).await;
+    assert_eq!((status, why(&body)), (StatusCode::FORBIDDEN, Some("org_admin_required")));
+    let (status, _) = org_record(&o, "tok-i1", conn.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body) = org_record(&o, "tok-ops", conn.clone()).await;
+    assert_eq!((status, why(&body)), (StatusCode::CONFLICT, Some("format")));
+    let kept = json!({ "kind": "team_created", "team": "x" });
+    let (status, body) = org_record(&o, "tok-ops", kept).await;
+    assert_eq!((status, why(&body)), (StatusCode::BAD_REQUEST, Some("kind_not_allowed")));
+    let raise = json!({ "kind": "format_raised", "to": 2 });
+    assert_eq!(org_record(&o, "tok-ops", raise).await.0, StatusCode::OK);
+    let (status, body) = org_record(&o, "tok-ops", conn).await;
+    assert_eq!((status, body["changed"].as_bool()), (StatusCode::OK, Some(true)));
+}
+
+#[tokio::test]
+async fn a_worker_whose_group_has_no_connection_stays_file_managed() {
+    let o = connected().await;
+    let (status, body, etag) = config(&o, "group=g1", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["connection"].is_null());
+    assert!(!etag.is_empty());
+    let (status, _) = get_json(&o.app, "/v1/ingest/config?group=g1", Some("tok-w1")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "an agent token");
+}
+
+#[tokio::test]
+async fn the_config_answers_the_groups_connection_and_budget_share() {
+    let o = connected().await;
+    org_record(&o, "tok-ops", connection("default", "g1", &["github:o/one"])).await;
+    org_record(&o, "tok-ops", connection("other", "g1", &["github:o/two"])).await;
+    let budget = json!({ "kind": "budget_set", "pool": "gh-app", "per_hour": 4500, "kept_back": 900, "wake_cap": 300 });
+    assert_eq!(org_record(&o, "tok-ops", budget).await.0, StatusCode::OK);
+    let (_, body, _) = config(&o, "group=g1", None).await;
+    assert_eq!(body["connection"]["sources"], json!(["github:o/one"]), "only its own team's");
+    assert_eq!(body["budget"]["share_per_hour"], json!(1800), "half the pool's sources");
+    assert_eq!(body["org_format"], json!(2));
+}
+
+#[tokio::test]
+async fn a_held_config_poll_answers_on_change_or_at_the_wait() {
+    let o = connected().await;
+    let (_, _, etag) = config(&o, "group=g1", None).await;
+    let started = std::time::Instant::now();
+    let (status, _, same) = config(&o, "group=g1&wait=1", Some(&etag)).await;
+    assert!(started.elapsed() >= Duration::from_secs(1), "held for the wait");
+    assert_eq!((status, same.as_str()), (StatusCode::NOT_MODIFIED, etag.as_str()));
+    // Another team's record does not answer the poll.
+    let held = {
+        let o2 = OrgApp {
+            app: o.app.clone(),
+            teams: o.teams.clone(),
+            org: o.org.clone(),
+            brokers: o.brokers.clone(),
+        };
+        let etag = etag.clone();
+        tokio::spawn(async move { config(&o2, "group=g1&wait=30", Some(&etag)).await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    org_record(&o, "tok-ops", connection("other", "g1", &["github:o/two"])).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!held.is_finished());
+    org_record(&o, "tok-ops", connection("default", "g1", &["github:o/one"])).await;
+    let (status, body, next) = held.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(next, etag);
+    assert_eq!(body["connection"]["sources"], json!(["github:o/one"]));
 }

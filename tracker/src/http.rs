@@ -49,6 +49,9 @@ type Denied = (StatusCode, &'static str);
 
 struct App<B> {
     teams: Arc<Teams<B>>,
+    /// Config long polls held at once, across teams. Past it a poll answers
+    /// at once instead of waiting, so held calls cannot pile up unbounded.
+    polls: Arc<tokio::sync::Semaphore>,
 }
 
 /// The team named by a `/v1/teams/{team}/` path, set by [`in_team`] only.
@@ -56,7 +59,10 @@ struct App<B> {
 struct TeamPath(String);
 
 pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
-    let app = Arc::new(App { teams });
+    let app = Arc::new(App {
+        teams,
+        polls: Arc::new(tokio::sync::Semaphore::new(ingest::MAX_HELD_POLLS)),
+    });
     // `route_layer` sees the matched route template, so the metrics label is
     // `/v1/work/items/{item}`, never an item id. The team-scoped catch-all is added
     // after the layer: the inner router's routes are counted once, not twice.
@@ -72,6 +78,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
             "/v1/org/teams",
             get(org::list_teams::<B>).post(org::create_team::<B>),
         )
+        .route("/v1/org/records", post(org::org_record::<B>))
         .route_layer(from_fn_with_state(app.clone(), observe::<B>))
         .route(
             "/v1/teams/{team}/{*rest}",
