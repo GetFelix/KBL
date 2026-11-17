@@ -300,6 +300,7 @@ impl<B: Broker> Tracker<B> {
                         "stage": core.state.stage(item),
                         "closed": it.closed.is_some(),
                         "closed_by_sync": it.closed_by_sync,
+                        "closed_by_merge": it.closed == Some(kbl_core::work_fold::Closure::Merged),
                         "left_scope_by_sync": it.left_scope_by_sync,
                         "reopened_by": it.reopened_by,
                         "has_children": !it.children.is_empty(),

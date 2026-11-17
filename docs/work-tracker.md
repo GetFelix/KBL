@@ -231,7 +231,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | `POST /v1/work/give_up` `{item, claim?, attempt?, reason, usage}` | agent | Writes `gave_up`, then hands the delivery back, or acks it when the item is out of tries. Answers with the record's `offset` |
 | `POST /v1/work/records` `{record}` | person | Appends a record a person may write, if the fold accepts it |
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
-| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
+| `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it (and whether that close was a merge) or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin", "review_limit": 3}]}` |
 
@@ -764,6 +764,10 @@ a poll that stopped between the close and its save does not lose it. The same
 goes for a reopen: an open root whose issue is closed stays open only when a
 person reopened it. When ingest imported or reopened it and the issue closed
 before a save landed, the next poll closes the root.
+A close whose save was lost, with the issue open again by the next poll, is
+undone the same way, unless the close was the merge of the item's pull request
+(`closed_by_merge`). An imported root is saved as tracked only after its context
+and admission are written, so a poll that fails partway resumes them.
 
 Ingest's saved state keeps an entry for each open issue, each transferred
 issue, and each closed issue still waiting on its pull request. An issue that is closed
