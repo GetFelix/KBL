@@ -14,12 +14,13 @@ use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
-    FORMAT_V6, FORMAT_V8, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
-    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWER,
-    MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
-    MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
-    PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target,
-    Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
+    FORMAT_V6, FORMAT_V8, FORMAT_V13, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
+    MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF,
+    MAX_REVERT_TEST, MAX_REVIEWER, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES,
+    MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict,
+    NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReviewPass,
+    ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
+    valid_review_tier,
 };
 
 mod human_wait;
@@ -747,8 +748,10 @@ pub enum Reject {
     NoChange,
     /// A snooze that ends in the past or more than 30 days out.
     BadTime,
-    /// An assignee the fold does not accept: an agent, from format 12.
+    /// An assignee the fold does not accept: an agent on a log below format 13.
     BadAssignee,
+    /// A claim by an agent other than the item's agent assignee.
+    NotAssignee,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1958,6 +1961,12 @@ impl State {
                 if stage != Stage::Ready {
                     return Err(Reject::NotReady);
                 }
+                // Only Ready fills the hold, so this keeps one holder per attempt.
+                if let Some(Assignee::Agent(a)) = &self.items[item].assignee
+                    && *a != rec.by
+                {
+                    return Err(Reject::NotAssignee);
+                }
                 if self.items[item].work == WorkKind::Review {
                     let root = self.items[item].root.clone();
                     if self.worked_on(&root, &rec.by) {
@@ -2593,11 +2602,22 @@ impl State {
                 self.assign(item, to, rec)?;
             }
             WorkRecord::Reassigned { item, to } => {
-                // An agent assignee needs the claim path to route to it.
-                if matches!(to, Some(Assignee::Agent(_))) {
+                // Below 13 a reader may not route claims to an agent.
+                if matches!(to, Some(Assignee::Agent(_))) && self.format() < FORMAT_V13 {
                     return Err(Reject::BadAssignee);
                 }
-                self.assign(item, to.clone(), rec)?;
+                // The tracker only lets go of an agent that stayed away.
+                let away = rec.actor == Actor::Tracker
+                    && to.is_none()
+                    && matches!(
+                        self.items.get(item).and_then(|i| i.assignee.as_ref()),
+                        Some(Assignee::Agent(_))
+                    );
+                if away {
+                    self.item_mut(item)?.assignee = None;
+                } else {
+                    self.assign(item, to.clone(), rec)?;
+                }
             }
             WorkRecord::Steered { item, attempt, .. } => {
                 if rec.actor != Actor::Person {

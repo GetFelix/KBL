@@ -99,6 +99,10 @@ fn logs() -> Vec<(&'static str, String)> {
             std::fs::read_to_string(format!("{core}/work_format_12.jsonl")).unwrap(),
         ),
         (
+            "format_13",
+            std::fs::read_to_string(format!("{core}/work_format_13.jsonl")).unwrap(),
+        ),
+        (
             "pre_review",
             std::fs::read_to_string(format!("{core}/work_pre_review.jsonl")).unwrap(),
         ),
