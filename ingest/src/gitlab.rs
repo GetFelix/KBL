@@ -647,15 +647,19 @@ impl<T: Transport> Source for Gitlab<T> {
         // someone other than us: agents never merge their own work. A merge
         // whose merger or default branch cannot be read does not count.
         let counted = state == Some("merged") && {
-            let into_default = match self
+            // Unreadable is not "not default": a transient failure must not
+            // read a real merge as closed.
+            let project = self
                 .call(Req::get(self.in_project(&project, &[], &[])?))
-                .await?
-            {
-                p if p.status == 200 => p.body["default_branch"]
-                    .as_str()
-                    .is_some_and(|d| mr["target_branch"].as_str() == Some(d)),
-                _ => false,
-            };
+                .await?;
+            if project.status != 200 {
+                return Err(
+                    anyhow!("GitLab answered {} for the project of {id}", project.status).into(),
+                );
+            }
+            let into_default = project.body["default_branch"]
+                .as_str()
+                .is_some_and(|d| mr["target_branch"].as_str() == Some(d));
             let merger = mr["merge_user"]["username"]
                 .as_str()
                 .or_else(|| mr["merged_by"]["username"].as_str());
@@ -824,9 +828,10 @@ impl<T: Transport> Source for Gitlab<T> {
                 let project = self.project_of(&issue.repo)?.to_owned();
                 // The engine's text names a merge request as `repo#n`, which
                 // GitLab would read as an issue. A merge request is `path!n`.
-                let body = self.projects.iter().fold(body.clone(), |b, (alias, real)| {
-                    b.replace(&format!("{alias}#"), &format!("{real}!"))
-                });
+                let body = self
+                    .projects
+                    .iter()
+                    .fold(body.clone(), |b, (alias, real)| mr_refs(&b, alias, real));
                 // A retry after a later step failed must not say it twice.
                 if self
                     .issue_comments(issue)
@@ -998,6 +1003,34 @@ impl<T: Transport> Source for Gitlab<T> {
             (s, _) => Err(anyhow!("could not open an issue in {repo}: {s}").into()),
         }
     }
+}
+
+/// `alias#n` as `real!n`, ignoring case, where the alias starts a word: a
+/// longer path that merely ends in it is left alone.
+fn mr_refs(text: &str, alias: &str, real: &str) -> String {
+    let (lower, key) = (
+        text.to_ascii_lowercase(),
+        format!("{}#", alias.to_ascii_lowercase()),
+    );
+    let mut out = String::new();
+    let mut at = 0;
+    while let Some(i) = lower[at..].find(&key) {
+        let i = at + i;
+        let word = text[..i]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')));
+        out.push_str(&text[at..i]);
+        if word {
+            out.push_str(real);
+            out.push('!');
+        } else {
+            out.push_str(&text[i..i + key.len()]);
+        }
+        at = i + key.len();
+    }
+    out.push_str(&text[at..]);
+    out
 }
 
 fn put_req(url: String, body: Value) -> Req {

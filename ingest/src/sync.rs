@@ -1214,13 +1214,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             {
                 continue;
             }
-            due.push((
-                key.clone(),
-                issue.clone(),
-                pr.clone(),
-                "linked",
-                rule.clone(),
-            ));
+            // A GitLab request is announced once it was read and tied to the
+            // item, so a number an agent made up names nothing on the issue.
+            if !(rule.gitlab && root.pr_status.is_none()) {
+                due.push((
+                    key.clone(),
+                    issue.clone(),
+                    pr.clone(),
+                    "linked",
+                    rule.clone(),
+                ));
+            }
             if root
                 .pr_status
                 .as_ref()

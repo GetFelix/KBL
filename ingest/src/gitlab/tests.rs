@@ -572,14 +572,12 @@ async fn a_merge_that_does_not_count_is_closed_not_merged() {
             .phase,
         PrPhase::Closed
     );
-    // A project whose default branch cannot be read counts nothing.
-    assert_eq!(
-        read(&with_mr(merged(|_| {}), None))
+    // A project whose default branch cannot be read is an error, never a closed request.
+    assert!(
+        gitlab(&with_mr(merged(|_| {}), None))
+            .pull_request(&IssueRef::new("team/app", 7))
             .await
-            .status
-            .unwrap()
-            .phase,
-        PrPhase::Closed
+            .is_err()
     );
 }
 
@@ -1455,4 +1453,29 @@ async fn a_full_page_with_no_next_page_header_is_followed() {
     });
     let changes = gitlab(&lab).changed(&repos(), &none()).await.unwrap();
     assert_eq!(changes.issues.len(), 101);
+}
+
+#[test]
+fn a_merge_request_reference_is_rewritten_ignoring_case_and_only_at_a_word() {
+    assert_eq!(
+        mr_refs(
+            "opened Team/App#7 and other/team/app#8 (team/app#9)",
+            "team/app",
+            "g/s/app"
+        ),
+        "opened g/s/app!7 and other/team/app#8 (g/s/app!9)"
+    );
+}
+
+#[tokio::test]
+async fn an_invented_request_number_is_not_announced() {
+    let mr = Arc::new(Mutex::new(mr(|_| {})));
+    let lab = project(&mr);
+    let tracker = Fake::default();
+    let (ingest, item) = reported(&lab, &tracker, &mr, None).await;
+    // The request is a stranger's: nothing is read as ours, so nothing is said.
+    *mr.lock().unwrap() = self::mr(|v| v["author"] = json!({ "username": "mallory" }));
+    let _ = item;
+    ingest.poll(false).await.unwrap();
+    assert!(lab.writes().is_empty(), "{:?}", lab.writes());
 }
