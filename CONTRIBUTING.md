@@ -25,3 +25,19 @@
 - List design calls under "Review notes", and Felix gaps you hit under "Felix gaps found", with the issue each one is filed as.
 - A new route, MCP tool or record kind gets a row in [docs/threat-model.md](docs/threat-model.md): who can call or write it, which fields an agent controls, and the check that stops misuse. CI fails without the row, and a row with no check needs an issue. Cite code as `file#symbol` (a function, constant or `Type::method`), never a line, and pin the line it relies on in `docs/threat-model-citations.json`.
 - Add a changelog fragment, `changelog.d/<name>.<section>.md`, and do not edit `CHANGELOG.md`: two pull requests that edit it conflict. [changelog.d/README.md](changelog.d/README.md) has the naming and sections.
+
+## Cutting a release
+
+A maintainer tags `main` and pushes the tag; nothing else publishes.
+
+```bash
+git tag v0.1.0 origin/main && git push origin v0.1.0
+```
+
+The `Release` workflow builds `kbl-mcp` and `kbl-tool` for five targets (Linux x86_64 and aarch64, macOS aarch64 and
+x86_64, Windows x86_64) and creates a GitHub release with one archive per target plus `SHA256SUMS`. Move the
+`changelog.d` fragments into `CHANGELOG.md` before tagging.
+
+To rehearse, run the workflow from the Actions tab (or `gh workflow run release.yml --ref <branch>`) with `dry_run` on.
+It builds every target and keeps the archives as run artifacts for 14 days. It creates no release, and a run on a
+branch cannot create one.

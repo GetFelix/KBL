@@ -218,6 +218,25 @@ serves one agent and holds that agent's Felix token, so the agent can do on Feli
 On start it connects to the broker, and it exits with the broker's error if the token or address is wrong, so a host
 sees a failed server instead of a list of tools that cannot work.
 
+### Getting the binaries
+
+Each [release](https://github.com/GetFelix/KBL/releases) carries `kbl-mcp` and `kbl-tool` for Linux (x86_64,
+aarch64), macOS (aarch64, x86_64) and Windows (x86_64). Download the archive for your platform, check it against
+`SHA256SUMS` from the same release, and put the two binaries on your `PATH`:
+
+```bash
+tag=v0.1.0   # the release you want
+target=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
+base=https://github.com/GetFelix/KBL/releases/download/$tag
+curl -fLO "$base/kbl-$tag-$target.tar.gz" -O "$base/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS   # on macOS: shasum -a 256 -c --ignore-missing SHA256SUMS
+tar -xzf "kbl-$tag-$target.tar.gz"
+kbl-$tag-$target/kbl-mcp --help
+```
+
+On Windows, download `kbl-<tag>-x86_64-pc-windows-msvc.zip`, compare `Get-FileHash` with its line in `SHA256SUMS`, and
+unzip it. To build from source instead, use `cargo build --release -p kbl-mcp -p kbl-tool`.
+
 With the [dev stack](#running-felix-locally) running, build it and run the check that starts it the way a host would,
 lists its tools and calls one:
 
