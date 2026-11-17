@@ -13,6 +13,8 @@ const TIMED_OUT = 'timed out';
 export interface Me {
   person: string;
   teams: string[];
+  /** The review limit each team reported; a team that sent none, or none that applies, is left out. */
+  limits: Record<string, number>;
 }
 
 export class Tracker {
@@ -60,10 +62,14 @@ export class Tracker {
     const r = await this.send('GET', '/v1/me');
     const o = outcome(r.status, r.body, r.network);
     if (o.status !== 'ok') return o;
-    const b = r.body as { person?: unknown; teams?: { team?: unknown }[] } | null;
+    const b = r.body as { person?: unknown; teams?: { team?: unknown; review_limit?: unknown }[] } | null;
     if (typeof b?.person !== 'string') return { status: 'failed', reason: 'The tracker answered /v1/me without a person.' };
     const teams = Array.isArray(b.teams) ? b.teams.map((t) => t.team).filter((t): t is string => typeof t === 'string') : [];
-    return { person: b.person, teams };
+    const limits: Record<string, number> = {};
+    for (const t of Array.isArray(b.teams) ? b.teams : []) {
+      if (typeof t.team === 'string' && typeof t.review_limit === 'number' && t.review_limit > 0) limits[t.team] = t.review_limit;
+    }
+    return { person: b.person, teams, limits };
   }
 
   async write(req: Request): Promise<Outcome> {

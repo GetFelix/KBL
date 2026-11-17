@@ -14,6 +14,11 @@ use crate::felix::Broker;
 /// Most records one history answer carries. `next` names where to go on.
 pub(crate) const HISTORY_PAGE: usize = 500;
 
+/// The widest window the metrics reads take, in days.
+pub(crate) const MAX_WINDOW_DAYS: u64 = 366;
+
+const DAY_MS: u64 = 86_400_000;
+
 /// Most records one history answer reads, matching or not.
 pub(crate) const HISTORY_SCAN: usize = 20_000;
 
@@ -44,6 +49,17 @@ impl<B: Broker> Tracker<B> {
             })
             .collect();
         Ok(json!({ "items": items, "at": s.at }))
+    }
+
+    /// Time to first human action over the last `days` days, team level:
+    /// count, p50 and p90 of the waits a person ended, and the waits still open.
+    pub(crate) async fn time_to_human_action(&self, days: u64) -> Result<Value, Error> {
+        self.begin().await?;
+        let core = self.0.core.lock().await;
+        let to = super::now_ms();
+        let from = to.saturating_sub(days.saturating_mul(DAY_MS));
+        let stats = core.state.time_to_human_action(from, to);
+        Ok(json!({ "days": days, "stats": stats, "at": core.state.at }))
     }
 
     /// One item as the fold holds it, with its stage and why it needs a person.

@@ -114,6 +114,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
         .route("/v1/work/items/{item}/history", get(history::<B>))
+        .route("/v1/work/metrics/time-to-human", get(time_to_human::<B>))
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
@@ -322,7 +323,11 @@ async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Re
     };
     let teams: Vec<Value> = found
         .iter()
-        .map(|(t, _)| json!({ "team": t.name(), "role": "admin" }))
+        .map(|(t, _)| {
+            // Null while the team is not serving, like its other calls answer 503.
+            let limit = t.tracker().map(|tr| tr.review_limit());
+            json!({ "team": t.name(), "role": "admin", "review_limit": limit })
+        })
         .collect();
     Json(json!({ "person": person, "org_admin": true, "teams": teams })).into_response()
 }
@@ -1197,6 +1202,22 @@ struct ItemsQuery {
 struct HistoryQuery {
     #[serde(default)]
     from: u64,
+}
+
+#[derive(Deserialize)]
+struct WindowQuery {
+    days: Option<u64>,
+}
+
+async fn time_to_human<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -> Response {
+    let days = q
+        .days
+        .unwrap_or(30)
+        .clamp(1, crate::tracker::reads::MAX_WINDOW_DAYS);
+    match call.person() {
+        Ok(_) => reply(call.tracker().time_to_human_action(days).await),
+        Err(d) => denied(d),
+    }
 }
 
 async fn items<B: Broker>(call: Call<B>, Query(q): Query<ItemsQuery>) -> Response {

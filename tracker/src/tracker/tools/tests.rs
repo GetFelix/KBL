@@ -829,6 +829,7 @@ async fn asking_is_charged_at_least_the_floor() {
     let fake = Fake::default();
     let floor = crate::tracker::Settings {
         cost_floor_micros: 500,
+        review_limit: 0,
         ..settings()
     };
     let t = start_with(&fake, floor).await;
@@ -858,6 +859,7 @@ async fn a_prerequisite_is_charged_at_least_the_floor() {
     let floor = crate::tracker::Settings {
         grants,
         cost_floor_micros: 500,
+        review_limit: 0,
         ..settings()
     };
     let t = start_with(&fake, floor).await;

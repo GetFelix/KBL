@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { adviceFor, createStore, describe, fromAddress, reduce, toAddress, type ViewState } from '../src/state.ts';
+import { adviceFor, createStore, describe, fromAddress, reduce, reviewFull, toAddress, type ViewState } from '../src/state.ts';
 import { NO_WRITES } from '../src/writes.ts';
 
 const base: ViewState = { connection: { kind: 'setup' }, synced: false, items: [], blocked: [], overlaps: new Map(), view: 'all', query: '', selected: null, open: null, theme: 'dark', layout: 'list', filters: {}, density: 'comfortable', saved: [], marked: [], writes: NO_WRITES, tracker: { kind: 'signed-out' }, questions: new Map() };
@@ -86,4 +86,12 @@ test('an items update replaces the overlaps with the ones from the same fold', (
   const s = reduce(base, { type: 'items', items: [], blocked: [], overlaps: new Map([['r1', card]]) });
   assert.equal(s.overlaps.get('r1'), card);
   assert.equal(reduce(s, { type: 'items', items: [], blocked: [], overlaps: new Map() }).overlaps.size, 0);
+});
+
+test('the header says when In review is at the limit, from the folded stages', () => {
+  const rows = (n: number, other = 0) => [...Array(n).fill({ stage: 'in_review' }), ...Array(other).fill({ stage: 'ready' })];
+  assert.equal(reviewFull(rows(6, 4), 6), 'review full: agents paused, 6/6 in review');
+  assert.equal(reviewFull(rows(7), 6), 'review full: agents paused, 7/6 in review');
+  assert.equal(reviewFull(rows(5, 9), 6), null);
+  assert.equal(reviewFull(rows(9), 0), null);
 });

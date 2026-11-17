@@ -779,6 +779,7 @@ pub(super) fn settings() -> Settings {
         crash_after_done: false,
         review_tiers: default_review_tiers(),
         cost_floor_micros: 0,
+        review_limit: 0,
     }
 }
 
@@ -923,6 +924,7 @@ fn costs(fake: &Fake, kind: &str) -> Vec<u64> {
 fn floor(micros: u64) -> Settings {
     Settings {
         cost_floor_micros: micros,
+        review_limit: 0,
         ..settings()
     }
 }
@@ -2235,6 +2237,7 @@ mod replay;
 mod request_keys;
 mod retry;
 mod review;
+mod review_limit;
 mod texts;
 
 #[tokio::test(start_paused = true)]

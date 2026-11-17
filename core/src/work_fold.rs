@@ -22,8 +22,11 @@ use crate::work::{
     Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
+mod human_wait;
 #[cfg(test)]
 mod tests;
+
+pub use human_wait::{HumanWaitStats, KindStats, WaitKind};
 
 const DEFAULT_MAX_ITEMS: u32 = 12;
 const DEFAULT_MAX_DEPTH: u8 = 3;
@@ -709,6 +712,9 @@ pub struct State {
     /// decoded state does not carry it, so only a folded one can answer.
     #[serde(skip)]
     waiting: Waiting,
+    /// Waits on a person, open and finished. Derived by replay, so not in the wire form.
+    #[serde(skip)]
+    human_waits: human_wait::Waits,
 }
 
 /// The root each proposal waiting for a person came from, by item, and how many
@@ -944,6 +950,31 @@ impl State {
         sources
     }
 
+    /// How many items sit in In review: attempts agents finished that nobody
+    /// has closed.
+    pub fn in_review_count(&self) -> usize {
+        self.items
+            .keys()
+            .filter(|id| self.stage(id) == Some(Stage::InReview))
+            .count()
+    }
+
+    /// What the review limit counts: items in In review, plus fixes agents hold
+    /// that are headed there. A fix a review asked for (`finding`) is left out:
+    /// it closes without a PR of its own and is never paused.
+    pub fn review_load(&self) -> usize {
+        let held = self
+            .items
+            .iter()
+            .filter(|(id, it)| {
+                it.work == WorkKind::Fix
+                    && it.finding.is_none()
+                    && self.stage(id) == Some(Stage::Held)
+            })
+            .count();
+        self.in_review_count() + held
+    }
+
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
         Some(match it.closed {
@@ -961,12 +992,7 @@ impl State {
             None if it.pending_fork.is_none() && it.open_path().is_some_and(|p| p.done) => {
                 Stage::InReview
             }
-            None if self
-                .edges
-                .iter()
-                .any(|(a, b)| a == id && self.waits_on(a, b))
-                || self.resuming(id) =>
-            {
+            None if self.links_from(id).any(|b| self.waits_on(id, b)) || self.resuming(id) => {
                 Stage::Blocked
             }
             None => Stage::Ready,
@@ -1013,19 +1039,18 @@ impl State {
         {
             return Some(NeedsYou::CheckFailed);
         }
-        let dropped = self.edges.iter().any(|(a, b)| {
-            a == id
-                && self.items.get(b).is_some_and(|d| {
-                    matches!(
-                        d.closed,
-                        Some(
-                            Closure::Dismissed
-                                | Closure::Upstream
-                                | Closure::Cancelled
-                                | Closure::Rejected
-                        )
+        let dropped = self.links_from(id).any(|b| {
+            self.items.get(b).is_some_and(|d| {
+                matches!(
+                    d.closed,
+                    Some(
+                        Closure::Dismissed
+                            | Closure::Upstream
+                            | Closure::Cancelled
+                            | Closure::Rejected
                     )
-                })
+                )
+            })
         });
         if dropped {
             return Some(NeedsYou::DependencyDropped);
@@ -1135,6 +1160,17 @@ impl State {
         }
     }
 
+    /// What `id` waits on, open or not. A range scan, not a walk of every edge.
+    fn links_from<'a>(&'a self, id: &ItemId) -> impl Iterator<Item = &'a ItemId> + use<'a> {
+        let owner = id.clone();
+        // "-" sorts before every other valid name, so it bounds the range from below.
+        let lowest = ItemId::new("-").expect("a valid name");
+        self.edges
+            .range((owner.clone(), lowest)..)
+            .take_while(move |(a, _)| *a == owner)
+            .map(|(_, b)| b)
+    }
+
     /// Whether a link says `from` waits on `to`, open or not.
     pub fn is_linked(&self, from: &ItemId, to: &ItemId) -> bool {
         self.edges.contains(&(from.clone(), to.clone()))
@@ -1143,10 +1179,8 @@ impl State {
     /// The items that hold `id` back now, in id order. A link holds whatever
     /// tree, repo or source the other end is in.
     pub fn blockers(&self, id: &ItemId) -> Vec<&ItemId> {
-        self.edges
-            .iter()
-            .filter(|(a, b)| a == id && self.waits_on(a, b))
-            .map(|(_, b)| b)
+        self.links_from(id)
+            .filter(|b| self.waits_on(id, b))
             .collect()
     }
 
@@ -1535,6 +1569,12 @@ impl State {
     }
 
     fn step(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
+        self.step_record(offset, rec)?;
+        self.track_human_wait(rec);
+        Ok(())
+    }
+
+    fn step_record(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
         if let Some(raised) = format_gate(FORMAT, self.format(), rec)? {
             self.format = Some(raised);
             return Ok(());
@@ -3272,7 +3312,7 @@ impl State {
                 return true;
             }
             if seen.insert(n) {
-                stack.extend(self.edges.iter().filter(|(a, _)| a == n).map(|(_, b)| b));
+                stack.extend(self.links_from(n));
             }
         }
         false

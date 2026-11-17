@@ -45,3 +45,34 @@ fn a_bad_config_is_refused_with_the_reason() {
         assert!(err.contains(why), "{err} should mention {why}");
     }
 }
+
+#[test]
+fn an_app_names_one_installation_and_a_key_file() {
+    let app = |extra: &str| {
+        parse(
+            &format!("[{RULE}]"),
+            &format!(r#"{{"app":{{"id":123,"private_key_file":"/k.pem"{extra}}}}}"#),
+        )
+    };
+    let c = app(r#","installation_id":9"#).unwrap();
+    let a = c.github.app.unwrap();
+    assert_eq!(a.id, "123");
+    assert!(matches!(a.installation, Installation::Id(9)));
+    assert!(matches!(
+        app(r#","installation_repo":"o/r""#)
+            .unwrap()
+            .github
+            .app
+            .unwrap()
+            .installation,
+        Installation::Repo(_)
+    ));
+    for bad in [
+        "",
+        r#","installation_id":9,"installation_org":"o""#,
+        r#","installation_repo":"nope""#,
+    ] {
+        let err = format!("{:#}", app(bad).unwrap_err());
+        assert!(err.contains("exactly one of installation_id"), "{err}");
+    }
+}
