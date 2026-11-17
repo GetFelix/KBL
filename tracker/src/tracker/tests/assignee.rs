@@ -45,14 +45,12 @@ fn claims_by(fake: &Fake, who: &str) -> usize {
         .count()
 }
 
-fn holder(t: &Tracker<Fake>) -> impl Future<Output = Option<String>> + '_ {
-    async move {
-        let core = t.0.core.lock().await;
-        core.state.items[&item("a1")]
-            .hold
-            .as_ref()
-            .map(|h| h.by.as_str().to_owned())
-    }
+async fn holder(t: &Tracker<Fake>) -> Option<String> {
+    let core = t.0.core.lock().await;
+    core.state.items[&item("a1")]
+        .hold
+        .as_ref()
+        .map(|h| h.by.as_str().to_owned())
 }
 
 #[tokio::test]
