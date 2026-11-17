@@ -25,7 +25,7 @@ the end.
 |---|---|---|---|
 | Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/KBL/issues/120)) |
 | Agent | A model acting through `kbl-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
-| Ingest | The `kbl-ingest` worker that mirrors GitHub or Jira | An ingest token, and a GitHub or Jira credential | Trusted code that carries untrusted text |
+| Ingest | The `kbl-ingest` worker that mirrors GitHub, Azure DevOps or Jira | An ingest token, and a GitHub, Azure DevOps or Jira credential | Trusted code that carries untrusted text |
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
 | Webhook sender | Whoever posts to ingest's `/webhook` | The shared webhook secret | Not trusted without a valid signature |
 
@@ -47,7 +47,7 @@ Two more parties are outside KBL and can still steer it:
 | Merges | GitHub. KBL records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
 | Rules | `rules_set` records, shown in every claim reply | Instructions injected into every other agent |
 | Artifacts | The artifacts cache, keyed by content hash | Other bytes shown under a trusted id |
-| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), Felix tokens | Any of them |
+| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), the Azure DevOps credential (a personal access token, or an Entra service principal's client secret and the access token it yields), Felix tokens | Any of them |
 
 ## Trust boundaries
 
@@ -78,6 +78,20 @@ Two more parties are outside KBL and can still steer it:
 5. **Agent to Felix.** `kbl-mcp` runs beside the model with the agent's
    Felix token. Nothing in `kbl-mcp` is a security check: an agent with its
    token and a raw client skips it. Felix grants are the check.
+
+`kbl-mcp` takes its Felix token from `KBL_FELIX_TOKEN`, or renews one from an
+ID token it reads from a file or a command (`mcp/src/credential.rs`). Both come
+from the environment or a file, never a flag, so nothing shows in the process
+list. The ID token file must be mode 600 or 400 (`mcp/src/credential.rs#read_file`).
+The ID token is sent only to an `https` control plane, or `http` on this
+machine (`mcp/src/credential.rs#exchange_url`), and the request does not
+follow redirects (`mcp/src/credential.rs#http_client`). Errors name the step and the status, never a
+token, the control plane's reply or the command line, and the command's stderr
+is dropped. The ID token is the standing secret here: whoever reads the file or
+runs the command can mint Felix tokens until the ID token expires or is revoked,
+so give an agent one narrowed to its own run, not the administrator's. A
+failed renewal keeps the current Felix token until it expires. Revoking the ID token stops renewals, not the Felix token in hand, and a stream already open outlives its
+token's expiry (Felix `docs/auth.md`), so cut an agent off by revoking its Felix principal, not only the ID token.
 6. **Browser to gateway.** Read only, one run.
 
 When ingest signs in as a GitHub App, the private key is the standing secret:
@@ -102,6 +116,34 @@ the pull request exists or is ours, and the link and comment on the issue say
 what the agent named. An issue whose component maps to no repository
 is imported but stays in Needs you (`ingest/src/sync.rs#park_unmapped`), so no
 agent is handed work with no repository to run in.
+
+When ingest signs in to Azure DevOps, the personal access token or the Entra
+client secret is read from an environment variable or a file each time it is
+used (`ingest/src/ado/transport.rs#Secret`) and sent only as that request's
+`Authorization` header, or to the Entra token endpoint. The access token Entra
+returns is held in memory until two minutes before it expires. None of them is
+in the config, the saved state, any record, any error or any log line: an
+Entra refusal reports only its status and error code, not the provider's
+description (`ingest/src/ado/transport.rs#token`). New Azure DevOps OAuth app
+registrations are deprecated, so there is no OAuth path. The credential needs
+Work Items (Read), and Read & write only when a rule writes back; the adapter
+refuses every write when no rule asks for one, so a worker given a read-only
+credential cannot be steered into writing (`ingest/src/ado.rs#write_back`). A
+service principal has no scopes, so its rights are whatever the organization
+granted it, which the operator should keep to the projects the rules read.
+Writes go only to a work item ingest imported (the engine writes back only for
+its imported roots, `ingest/src/sync.rs#announce`) and only in a project a rule
+reads (`ingest/src/ado.rs#project_of`). Work item text is untrusted like
+GitHub's and is never put into a query or an address: queries are built from the
+configured project, a date that is checked, and ids; a saved query is named by the
+configuration and its path may not climb out of the queries tree
+(`ingest/src/ado.rs#wiql_date`, `ingest/src/config.rs#check_ado`). Text written to a
+work item is HTML-escaped (`ingest/src/ado.rs#html_escape`). A work item whose
+area path maps to no repository is imported but stays in Needs you
+(`ingest/src/sync.rs#park_unmapped`). A bad personal access token is answered
+203 with a sign-in page, not a 401; the adapter reads it, and a redirect, as a
+refusal so the project stalls and nothing is imported from the page
+(`ingest/src/ado.rs#call`).
 
 The token file must be mode 600 or 400 (`tracker/src/config.rs#load`), a token
 may be listed once (`tracker/src/config.rs#parse`), and the lookup takes the
