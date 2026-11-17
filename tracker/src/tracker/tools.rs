@@ -135,7 +135,12 @@ impl<B: Broker> Tracker<B> {
                         why: "key_reused".into(),
                     });
                 }
-                return Ok(json!({ "item": id, "created": false, "work": work }));
+                // The stage and closure say whether the key hit a dead item.
+                return Ok(json!({
+                    "item": id, "created": false, "work": work,
+                    "stage": core.state.stage(&id),
+                    "closure": existing.closed,
+                }));
             }
             if work == WorkKind::Fix && parent_of.is_none() {
                 self.proposal_room(&mut core, agent, parent, "post").await?;
@@ -454,7 +459,7 @@ impl<B: Broker> Tracker<B> {
         item: &ItemId,
     ) -> Result<Value, Error> {
         self.begin().await?;
-        let core = self.0.core.lock().await;
+        let mut core = self.0.core.lock().await;
         let it = core.state.items.get(item).ok_or_else(|| Error::Refused {
             why: "unknown_item".into(),
         })?;
@@ -468,28 +473,23 @@ impl<B: Broker> Tracker<B> {
                 "you hold neither {item} nor its parent"
             )));
         }
-        let text = |offset: &u64| {
-            core.recall
-                .texts
-                .get(offset)
-                .map_or(Value::Null, |c| json!(c))
-        };
-        let entries: Vec<Value> = it
-            .context
-            .iter()
-            .map(
-                |(entry, offset)| json!({ "entry": entry, "offset": offset, "text": text(offset) }),
-            )
-            .collect();
         let attempt = it.hold.as_ref().map(|h| h.attempt);
         let offsets = match attempt {
             Some(a) => core.state.human_inputs_on_path(item, a),
             None => it.human_inputs.clone(),
         };
-        let notes: Vec<Value> = offsets
-            .iter()
-            .map(|o| json!({ "offset": o, "text": text(o) }))
-            .collect();
+        let context: Vec<_> = it.context.iter().map(|(e, o)| (e.clone(), *o)).collect();
+        let mut entries: Vec<Value> = Vec::new();
+        for (entry, offset) in context {
+            let text = self.text_at(&mut core, offset).await?;
+            entries.push(json!({ "entry": entry, "offset": offset, "text": text }));
+        }
+        let mut notes: Vec<Value> = Vec::new();
+        for o in &offsets {
+            let text = self.text_at(&mut core, *o).await?;
+            notes.push(json!({ "offset": o, "text": text }));
+        }
+        let it = &core.state.items[item];
         // What the item waited on, so a resumed claim knows what landed and where.
         let waited: Vec<Value> = core
             .state
@@ -951,7 +951,8 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Refuses a proposal when the agent has as many waiting for a person as
-    /// it may, from `held`'s root or in all.
+    /// it may, from `held`'s root or in all, or when the proposals waiting
+    /// from the root already fill what is left of its work budget.
     async fn proposal_room(
         &self,
         core: &mut Core,
@@ -962,10 +963,14 @@ impl<B: Broker> Tracker<B> {
         let Some(root) = core.state.items.get(held).map(|i| i.root.clone()) else {
             return Ok(());
         };
-        if !core.state.proposals_full(&agent_key(agent), &root) {
+        let why = if core.state.proposals_full(&agent_key(agent), &root) {
+            "limit_reached"
+        } else if core.state.proposals_exceed_budget(&root) {
+            "over_budget"
+        } else {
             return Ok(());
         }
-        let why = "limit_reached".to_owned();
+        .to_owned();
         self.note_refusal(core, agent, held, op, &why).await;
         Err(Error::Refused { why })
     }

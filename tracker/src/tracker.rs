@@ -34,6 +34,7 @@ use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
 mod reads;
+mod texts;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
 const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
@@ -434,7 +435,7 @@ fn retry_has_note(core: &Core, record: &WorkRecord) -> Result<(), Error> {
 #[derive(Default)]
 struct Recall {
     /// The text of context, note, question, answer, decision and triage records.
-    texts: HashMap<u64, Content>,
+    texts: texts::Texts,
     /// The item each record names, so evidence can be held to its tree.
     subjects: HashMap<u64, ItemId>,
     /// Edges ingest made: its `linked` found no edge and the fold created it
@@ -509,7 +510,9 @@ impl Recall {
             }
             _ => {}
         }
-        remember(&mut self.texts, offset, record);
+        if let Some(text) = texts::text_of(record) {
+            self.texts.insert(offset, text);
+        }
     }
 
     fn attempt(&mut self, offset: u64, logged: &WorkLogged) {
@@ -601,36 +604,6 @@ impl Recall {
 /// Whether `record` is a `linked` whose edge `state` does not have.
 fn edge_absent(state: &State, record: &WorkRecord) -> bool {
     matches!(record, WorkRecord::Linked { item, to } if !state.edges.contains(&(item.clone(), to.clone())))
-}
-
-/// Keeps the text of the records a read shows.
-fn remember(texts: &mut HashMap<u64, Content>, offset: u64, record: &WorkRecord) {
-    match record {
-        WorkRecord::Context { text, .. }
-        | WorkRecord::HumanInput { text, .. }
-        | WorkRecord::Question { text, .. } => {
-            texts.insert(offset, text.clone());
-        }
-        // An answer picks an option or says something, never both, so one entry reads back either.
-        WorkRecord::Answer { text, chosen, .. } => {
-            let text = match chosen {
-                Some(c) => Content::Text(c.clone()),
-                None => text.clone(),
-            };
-            texts.insert(offset, text);
-        }
-        // What the asker knew, which resume work reads as `so_far`.
-        WorkRecord::Decision { so_far, .. } => {
-            texts.insert(offset, Content::Text(so_far.clone()));
-        }
-        WorkRecord::Triaged { why, .. } => {
-            texts.insert(offset, Content::Text(why.clone()));
-        }
-        WorkRecord::Prerequisite { new: Some(n), .. } => {
-            texts.insert(offset, n.why.clone());
-        }
-        _ => {}
-    }
 }
 
 /// What to do to Felix once the core lock is released.
@@ -2364,6 +2337,29 @@ impl<B: Broker> Tracker<B> {
             recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
         Ok((state, recall, tail))
+    }
+
+    /// The text of the record at `offset`: from memory, or read back from the
+    /// log when the cache let it go.
+    async fn text_at(&self, core: &mut Core, offset: u64) -> Result<Option<Content>, Error> {
+        if let Some(text) = core.recall.texts.get(offset) {
+            return Ok(Some(text.clone()));
+        }
+        let (records, _) = self
+            .io(None, self.0.broker.read_page(WORK_EVENTS, offset))
+            .await
+            .map_err(|e| {
+                Error::Unavailable(format!("reading a text from the log failed: {e:#}"))
+            })?;
+        let text = records
+            .into_iter()
+            .find(|(o, _)| *o == offset)
+            .and_then(|(_, payload)| read(&payload).ok())
+            .and_then(|rec| texts::text_of(&rec.record));
+        if let Some(text) = &text {
+            core.recall.texts.insert(offset, text.clone());
+        }
+        Ok(text)
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {

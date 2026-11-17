@@ -2830,6 +2830,24 @@ impl State {
         mine >= MAX_PENDING_PER_AGENT || under_root >= MAX_PENDING_PER_ROOT
     }
 
+    /// Whether the proposals waiting from `root` already use up what is left
+    /// of its budget, so one more would have nowhere to go if every one were
+    /// accepted into the tree's work. A proposal takes nothing from the budget
+    /// itself; a person's accept or reject leaves the count, so it frees the
+    /// room. Checked by the tracker before it appends, so an old log folds the
+    /// same.
+    pub fn proposals_exceed_budget(&self, root: &ItemId) -> bool {
+        let pending = self
+            .items
+            .values()
+            .filter(|i| !i.accepted && i.closed.is_none())
+            .filter(|i| i.proposed_from.as_ref().is_some_and(|f| f.1 == *root))
+            .count();
+        self.budgets.get(root).is_none_or(|b| {
+            b.cost_left_micros == 0 || u32::try_from(pending).unwrap_or(u32::MAX) >= b.items_left
+        })
+    }
+
     /// Whether the attempt on a triage item has logged as many different
     /// answers as it may.
     pub fn triage_full(&self, triage: &ItemId, attempt: u32) -> bool {

@@ -154,7 +154,7 @@ impl<B: Broker> Tracker<B> {
                 && let Some(it) = core.state.items.get(item)
                 && let Some(&at) = it.context.get(entry)
                 && !it.context_agents.contains_key(entry)
-                && core.recall.texts.get(&at) == Some(text)
+                && self.text_at(&mut core, at).await? == Some(text.clone())
             {
                 return Ok(json!({ "kind": kind, "offset": at, "unchanged": true }));
             }
@@ -234,7 +234,7 @@ impl<B: Broker> Tracker<B> {
     /// may open an upstream issue for.
     pub(crate) async fn ingest_roots(&self) -> Result<Value, Error> {
         self.begin().await?;
-        let core = self.0.core.lock().await;
+        let mut core = self.0.core.lock().await;
         let roots: Vec<Value> = core
             .state
             .imported()
@@ -260,31 +260,41 @@ impl<B: Broker> Tracker<B> {
             })
             .collect();
         let prerequisite = Key::new("prerequisite").expect("a valid key");
-        let prerequisites: Vec<Value> = core
+        let unopened: Vec<_> = core
             .state
             .unopened_prerequisites()
             .into_iter()
             .filter_map(|(it, waiter)| {
                 let target = it.target.as_ref()?;
-                // The `why` of the record that created it, when it is inline text.
-                let why = it
-                    .context
-                    .get(&prerequisite)
-                    .and_then(|at| core.recall.texts.get(at))
-                    .and_then(|c| match c {
-                        Content::Text(t) => Some(t.clone()),
-                        _ => None,
-                    });
-                Some(json!({
-                    "item": it.id,
-                    "title": it.title,
-                    "source": target.source,
-                    "repo": target.repo,
-                    "why": why,
-                    "needed_by": waiter,
-                }))
+                let at = it.context.get(&prerequisite).copied();
+                Some((
+                    it.id.clone(),
+                    it.title.clone(),
+                    target.clone(),
+                    waiter.map(str::to_owned),
+                    at,
+                ))
             })
             .collect();
+        let mut prerequisites: Vec<Value> = Vec::new();
+        for (id, title, target, waiter, at) in unopened {
+            // The `why` of the record that created it, when it is inline text.
+            let why = match at {
+                Some(at) => match self.text_at(&mut core, at).await? {
+                    Some(Content::Text(t)) => Some(t),
+                    _ => None,
+                },
+                None => None,
+            };
+            prerequisites.push(json!({
+                "item": id,
+                "title": title,
+                "source": target.source,
+                "repo": target.repo,
+                "why": why,
+                "needed_by": waiter,
+            }));
+        }
         Ok(json!({ "roots": roots, "prerequisites": prerequisites }))
     }
 
