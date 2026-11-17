@@ -544,7 +544,8 @@
   "fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {"
  ],
  "tracker/src/http/ingest/leases.rs#heartbeat": [
-  "super::connection_for(state, &team, &group, worker.source.as_deref())"
+  "super::connection_for(state, &team, &group, worker.source.as_deref())",
+  "release_all(tracker, groups, &sources, &me).await;"
  ],
  "core/src/lease.rs#step": [
   "Some(l) if l.free(now_ms) => Step::Take,"
@@ -555,7 +556,23 @@
  "tracker/src/http/ingest/leases.rs#MAX_MEMBERS": [
   "pub(crate) const MAX_MEMBERS: usize = 256;"
  ],
- "ingest/src/lease.rs#Lessee::check": [
-  "Mode::Leased { renewed, .. } if !fresh(*renewed) => Err(fenced("
+ "tracker/src/http/ingest/leases.rs#join": [
+  "match tracker.put_group_members(group, &members, version).await {"
+ ],
+ "core/src/lease.rs#Lease::free": [
+  "self.expires_ms.saturating_add(TAKE_MARGIN_MS) <= now_ms"
+ ],
+ "ingest/src/lease.rs#Gate::send": [
+  "if let Err(why) = self.lessee.open_for(repos) {",
+  "why = self.lessee.closes(repos) => bail!(\"lease fence: {why}; request cancelled\"),"
+ ],
+ "ingest/src/lease.rs#Lessee::open_for": [
+  ".ok_or(\"another worker holds this source's lease\")?;"
+ ],
+ "ingest/src/lease.rs#Lessee::left": [
+  ".checked_sub(mono.max(wall))"
+ ],
+ "ingest/src/lease.rs#leave": [
+  "beating.abort();"
  ]
 }

@@ -447,21 +447,32 @@ connection has exactly one worker.
   written with `cache_put_if`. A worker renews all its leases in one `PUT /v1/ingest/leases` every 30 s, apart
   from polling, so a 30 minute interval does not let leases lapse.
 - **Sources are spread by lease.** The tracker assigns each source to a live worker of its group by rendezvous
-  hashing, so a worker joining or leaving moves only its share of sources. The config answer lists what each
-  worker is assigned and the leases it holds. A lease moves only after its holder releases it or it expires, so a
-  source never has two pollers: a holder whose share moved stops renewing it and lets it expire, and a stopping
-  worker releases all of its leases. Who is live is the tracker's memory of heartbeats, while the lease itself
-  only moves by a version-checked write, so trackers that disagree on who is live delay a handover but never
-  make two holders.
+  hashing, so a worker joining or leaving moves only its share of sources. Who is live is one cache entry per
+  group, `ingest/members/{group}`, which every heartbeat rewrites with a version check, so every tracker
+  computes the same assignment and a worker's share does not flap with the tracker it reaches. A lease moves
+  only after its holder releases it or it expires, so a source never has two pollers: a holder whose share
+  moved stops renewing it, and its heartbeat answer says how long the lease has left, so it keeps polling
+  until then and not after. A stopping worker stops its heartbeat, then releases every lease the cache names
+  it as holder of, through whichever tracker it reaches. The config answer lists what the worker is assigned
+  and the leases it holds, as the answering tracker last saw them.
 - **Fenced by epoch.** A state write and every ingest record for a source carry the lease epoch, and the
   tracker refuses them from a worker that does not hold the current one. A worker that loses a lease stops
   at its next call, and the next holder starts from the last saved state. Across a handoff, `cache_put_if` on
   the upstream id still stops a double import.
 - **Fenced upstream by a local deadline.** The tracker cannot refuse a vendor call, so the holder fences
-  itself: once its own last successful renew is older than 60 s by its monotonic clock, it makes no upstream
-  call for any of those sources until a renew succeeds. That is 30 s inside the tracker's 90 s expiry, which
-  covers request time and clock rate drift, so the old holder has stopped before a new one can take the
-  lease. A write-back checks this deadline first, right before its upstream call.
+  itself, in the HTTP layer every vendor request passes through. Once its own last successful renew is
+  older than 60 s, timed from when the renew was sent, it makes no upstream call for any of those sources
+  until a renew succeeds. Every request carries that deadline and is cancelled when it passes, so a paged
+  listing stops between pages and a slow request does not run out its 30 s timeout. The age is the larger
+  of the monotonic and the wall-clock time since the renew, because the monotonic clock stops while the
+  machine sleeps. A write-back checks the deadline right before its request.
+- **The margins.** A lease expires 90 s after its last renew, by the tracker's clock, and is free to take
+  only 30 s after that. So the old holder's last request starts no later than 60 s after its renew was
+  sent, and a new holder starts no sooner than 120 s after it was stamped. The 30 s from fence to expiry
+  covers the renew's own travel time and clock rate drift. The 30 s take margin is headroom for what the
+  fence cannot see: trackers whose clocks disagree (the stated assumption is that they agree within 30 s),
+  a stepped wall clock, and a request the old holder sent before its fence that the vendor is still
+  serving.
 - **Only its own team's sources.** The tracker grants a lease only to a worker of the source's owning team
   whose group the source's connection names, so a lease cannot widen what a worker token may touch.
 

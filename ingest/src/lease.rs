@@ -61,12 +61,6 @@ pub(crate) struct Held {
     pub(crate) until: Option<Duration>,
 }
 
-impl Held {
-    pub(crate) fn renewed(epoch: u64) -> Self {
-        Self { epoch, until: None }
-    }
-}
-
 /// When a renew was sent, by both clocks. The monotonic clock is immune to
 /// a stepped wall clock but stops while the machine sleeps; the wall clock
 /// keeps running, so the fence closes on whichever has passed further.
@@ -231,9 +225,7 @@ impl Lessee {
         let mono = r.mono.elapsed();
         let wall = Duration::from_millis((self.wall)().saturating_sub(r.wall_ms));
         let limit = until.map_or(FENCE, |u| u.min(FENCE));
-        limit
-            .checked_sub(mono.max(wall))
-            .filter(|d| !d.is_zero())
+        limit.checked_sub(mono.max(wall)).filter(|d| !d.is_zero())
     }
 
     /// How long a vendor call for `repos` may run, none for no limit, or why
@@ -341,10 +333,9 @@ pub(crate) struct Gate<T> {
     lessee: Arc<Lessee>,
 }
 
-impl<T> Gate<T> {
-    pub(crate) fn new(inner: T, lessee: Arc<Lessee>) -> Self {
-        Self { inner, lessee }
-    }
+/// `inner` behind `lessee`'s fence.
+pub(crate) fn gated<T>(inner: T, lessee: Arc<Lessee>) -> Gate<T> {
+    Gate { inner, lessee }
 }
 
 impl<T: Transport> Transport for Gate<T> {
@@ -596,7 +587,11 @@ impl<S: Source> Source for Fenced<S> {
         // Checked here and again by the gate right before the request, as a
         // write-back is the one upstream call a second worker could repeat.
         self.lessee.check(Some(written_repo(what)))?;
-        scoped(vec![written_repo(what).to_owned()], self.inner.write_back(what)).await
+        scoped(
+            vec![written_repo(what).to_owned()],
+            self.inner.write_back(what),
+        )
+        .await
     }
 
     async fn releases(&self, repo: &str, since_ms: u64) -> Result<Releases, SourceError> {
@@ -616,7 +611,11 @@ impl<S: Source> Source for Fenced<S> {
         body: &str,
     ) -> Result<IssueRef, SourceError> {
         self.lessee.check(Some(repo))?;
-        scoped(vec![repo.to_owned()], self.inner.open_issue(repo, title, body)).await
+        scoped(
+            vec![repo.to_owned()],
+            self.inner.open_issue(repo, title, body),
+        )
+        .await
     }
 }
 

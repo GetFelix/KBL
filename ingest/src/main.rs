@@ -201,7 +201,7 @@ async fn github_source(
     }
     let mut github = Github::new(
         &gh.api,
-        lease::Gate::new(Reqwest::new(github_token(gh)?)?, lessee.clone()),
+        lease::gated(Reqwest::new(github_token(gh)?)?, lessee.clone()),
         gh.own_logins.clone(),
     );
     // A user token names itself; an App installation token cannot, so the config lists its bot login.
@@ -249,7 +249,7 @@ async fn jira_source(
     let mut jira = jira::Jira::new(
         &j.site,
         &j.api,
-        lease::Gate::new(jira::transport::Reqwest::new(jira_auth(j))?, lessee.clone()),
+        lease::gated(jira::transport::Reqwest::new(jira_auth(j))?, lessee.clone()),
         j.own_logins.clone(),
         jira_scopes(cfg),
         &j.pr_url_base,
@@ -297,7 +297,7 @@ async fn ado_source(
     let mut ado = ado::Ado::new(
         &a.organization,
         &a.api,
-        lease::Gate::new(ado::transport::Reqwest::new(auth)?, lessee.clone()),
+        lease::gated(ado::transport::Reqwest::new(auth)?, lessee.clone()),
         a.own_logins.clone(),
         scopes,
         &a.projects,
@@ -321,7 +321,7 @@ async fn gitlab_source(
     };
     let mut gitlab = gitlab::Gitlab::new(
         &g.api,
-        lease::Gate::new(gitlab::transport::Reqwest::new(secret)?, lessee.clone()),
+        lease::gated(gitlab::transport::Reqwest::new(secret)?, lessee.clone()),
         g.own_logins.clone(),
         cfg.rules.clone(),
         &g.projects,
@@ -333,7 +333,11 @@ async fn gitlab_source(
 
 async fn drive<S: Source>(
     source: S,
-    (tracker, lease_api, lessee): (tracker_api::Http, Arc<tracker_api::Http>, Arc<lease::Lessee>),
+    (tracker, lease_api, lessee): (
+        tracker_api::Http,
+        Arc<tracker_api::Http>,
+        Arc<lease::Lessee>,
+    ),
     cfg: Config,
     cli: Cli,
 ) -> Result<()> {

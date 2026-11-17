@@ -152,8 +152,10 @@ Set `"group"` under `"tracker"` to the worker group an org admin named in a
 and takes the connection's sources by lease: it polls and writes back only to
 the sources it holds. Each lease runs for 90 s and the worker renews all of
 them every 30 s. If no renew has succeeded for 60 s, it makes no upstream call
-until one does, so a worker cut off from the tracker stops before another can
-take its sources. When it stops, it releases its leases.
+until one does, and cancels any request still running, so a worker cut off from
+the tracker stops before another can take its sources. Time the machine spends
+asleep counts. A lease is free to take 30 s after it expires, so the trackers'
+clocks must agree within 30 s. When the worker stops, it releases its leases.
 
 Leave `"group"` unset, or name a group no connection uses, and the worker polls
 every configured repo as before.

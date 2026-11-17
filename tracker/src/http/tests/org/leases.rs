@@ -78,7 +78,10 @@ async fn beat_raw(
 /// A second tracker over the same Felix, with its own memory and clock.
 fn other_tracker(o: &OrgApp) -> (Router, Arc<Groups>) {
     let groups = Arc::new(Groups::default());
-    (crate::http::router_with(o.teams.clone(), groups.clone()), groups)
+    (
+        crate::http::router_with(o.teams.clone(), groups.clone()),
+        groups,
+    )
 }
 
 fn advance(groups: &Groups, ms: u64) {
@@ -215,7 +218,11 @@ async fn a_moved_source_stays_in_the_answer_while_its_lease_is_live() {
         // Taken at 0 with a 90 s expiry, 30 s ago, and not renewed since.
         assert_eq!(l["until_ms"], json!(LEASE_MS - 30_000));
         let s = l["source"].as_str().unwrap();
-        assert_eq!(stored(&o, s).holder.as_deref(), Some("i1/a"), "not renewed or moved");
+        assert_eq!(
+            stored(&o, s).holder.as_deref(),
+            Some("i1/a"),
+            "not renewed or moved"
+        );
     }
     // Past its expiry it is no longer answered.
     advance(&groups, LEASE_MS - 30_000);

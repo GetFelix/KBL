@@ -90,7 +90,15 @@ fn leased_with_suspend(sources: &[&str]) -> (Arc<Lessee>, Arc<AtomicU64>) {
 fn held(pairs: &[(&str, u64)]) -> BTreeMap<String, Held> {
     pairs
         .iter()
-        .map(|(s, e)| ((*s).to_owned(), Held::renewed(*e)))
+        .map(|(s, e)| {
+            (
+                (*s).to_owned(),
+                Held {
+                    epoch: *e,
+                    until: None,
+                },
+            )
+        })
         .collect()
 }
 
@@ -217,7 +225,8 @@ impl LeaseApi for Trackers {
             bail!("partitioned");
         }
         self.beats.lock().unwrap().push((me.to_owned(), leave));
-        let now = self.start.elapsed().as_millis() as u64 + self.skew_ms.get(me).copied().unwrap_or(0);
+        let now =
+            self.start.elapsed().as_millis() as u64 + self.skew_ms.get(me).copied().unwrap_or(0);
         let mut leases = self.leases.lock().unwrap();
         let current = leases.get("github:o/a").cloned();
         let mut got = BTreeMap::new();
@@ -234,7 +243,13 @@ impl LeaseApi for Trackers {
         }
         let step = rules::step(current.as_ref(), me, true, now);
         if let Some(next) = rules::next(current.as_ref(), me, step, now) {
-            got.insert("github:o/a".to_owned(), Held::renewed(next.epoch));
+            got.insert(
+                "github:o/a".to_owned(),
+                Held {
+                    epoch: next.epoch,
+                    until: None,
+                },
+            );
             leases.insert("github:o/a".to_owned(), next);
         }
         Ok(got)
@@ -364,7 +379,7 @@ fn fenced_vendor(
     lessee: &Arc<Lessee>,
     pages: u32,
 ) -> Fenced<Paging<Gate<Line>>> {
-    let http = Gate::new(Line(vendor.clone(), who), lessee.clone());
+    let http = gated(Line(vendor.clone(), who), lessee.clone());
     Fenced::new(Paging { http, pages }, lessee.clone())
 }
 
@@ -392,9 +407,19 @@ async fn after_a_partition_no_two_workers_are_busy_upstream_for_one_source_at_on
     heartbeat_once(&*api, &a, "g", "A").await;
     api.cut.lock().unwrap().push("A".into());
     let tasks = [
-        tokio::spawn(heartbeat_task(api.clone(), a.clone(), "g".into(), "A".into())),
+        tokio::spawn(heartbeat_task(
+            api.clone(),
+            a.clone(),
+            "g".into(),
+            "A".into(),
+        )),
         tokio::spawn(poll_loop(src_a, a.clone())),
-        tokio::spawn(heartbeat_task(api.clone(), b.clone(), "g".into(), "B".into())),
+        tokio::spawn(heartbeat_task(
+            api.clone(),
+            b.clone(),
+            "g".into(),
+            "B".into(),
+        )),
         tokio::spawn(poll_loop(src_b, b.clone())),
     ];
     tokio::time::sleep(Duration::from_secs(240)).await;
@@ -402,7 +427,10 @@ async fn after_a_partition_no_two_workers_are_busy_upstream_for_one_source_at_on
         t.abort();
     }
     let (on_a, on_b) = (vendor.of("A"), vendor.of("B"));
-    assert!(!on_a.is_empty() && !on_b.is_empty(), "A {on_a:?}, B {on_b:?}");
+    assert!(
+        !on_a.is_empty() && !on_b.is_empty(),
+        "A {on_a:?}, B {on_b:?}"
+    );
     for (a0, a1) in &on_a {
         assert!(*a0 < 60.0, "A sent a request at {a0} s, past its fence");
         for (b0, b1) in &on_b {
@@ -412,7 +440,11 @@ async fn after_a_partition_no_two_workers_are_busy_upstream_for_one_source_at_on
             );
         }
     }
-    assert_eq!(b.epoch("github:o/a"), Some(2), "the takeover bumps the epoch");
+    assert_eq!(
+        b.epoch("github:o/a"),
+        Some(2),
+        "the takeover bumps the epoch"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -425,7 +457,11 @@ async fn a_request_in_flight_is_cancelled_when_the_fence_closes() {
     let started = Instant::now();
     let err = src.fetch(&issue("o/a")).await.unwrap_err();
     assert!(err.to_string().contains("lease fence"), "{err}");
-    assert_eq!(started.elapsed(), Duration::from_secs(30), "cut at the 60 s fence");
+    assert_eq!(
+        started.elapsed(),
+        Duration::from_secs(30),
+        "cut at the 60 s fence"
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -476,7 +512,7 @@ async fn a_moved_source_is_polled_only_until_its_lease_runs_out() {
 async fn a_request_outside_any_operation_still_passes_the_fence() {
     let lessee = leased(&["github:o/a"]);
     let vendor = Vendor::new(Duration::from_secs(1));
-    let gate = Gate::new(Line(vendor.clone(), "A"), lessee.clone());
+    let gate = gated(Line(vendor.clone(), "A"), lessee.clone());
     let req = || Req::get("https://vendor.test/user".into());
     assert!(gate.send(req()).await.is_err(), "no renew yet");
     // The start-up identity read is the one call tied to no source.
@@ -499,12 +535,21 @@ async fn a_leaving_worker_stops_its_heartbeat_before_it_releases() {
     api.slow = Duration::from_secs(5);
     let api = Arc::new(api);
     let lessee = leased(&["github:o/a"]);
-    let beating = tokio::spawn(heartbeat_task(api.clone(), lessee.clone(), "g".into(), "A".into()));
+    let beating = tokio::spawn(heartbeat_task(
+        api.clone(),
+        lessee.clone(),
+        "g".into(),
+        "A".into(),
+    ));
     tokio::time::sleep(Duration::from_secs(32)).await;
     leave(&*api, beating, "g", "A").await;
     tokio::time::sleep(Duration::from_secs(120)).await;
     let beats = api.beats.lock().unwrap().clone();
-    assert_eq!(beats.last(), Some(&("A".into(), true)), "a renew after the leave: {beats:?}");
+    assert_eq!(
+        beats.last(),
+        Some(&("A".into(), true)),
+        "a renew after the leave: {beats:?}"
+    );
     let l = api.leases.lock().unwrap()["github:o/a"].clone();
     assert_eq!(l.holder, None, "released, not taken back");
 }
