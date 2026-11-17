@@ -2224,6 +2224,7 @@ mod races;
 mod recover;
 mod renewal;
 mod replay;
+mod request_keys;
 mod retry;
 mod review;
 

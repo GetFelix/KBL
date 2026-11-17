@@ -99,3 +99,39 @@ fn a_finding_and_a_verdict_name_one_of_their_words() {
     let err = check_one_of("verdict", "ship", &["merge", "block"]).unwrap_err();
     assert!(err.contains("merge, block"));
 }
+
+#[test]
+fn every_write_tool_takes_a_request_key_and_sends_it_on() {
+    let writes = [
+        "decide",
+        "edit",
+        "record_step",
+        "work_answer",
+        "work_ask",
+        "work_context",
+        "work_finding",
+        "work_link",
+        "work_post",
+        "work_progress",
+        "work_triage",
+        "work_verdict",
+    ];
+    let tools = Server::tool_router().list_all();
+    for name in writes {
+        let tool = tools.iter().find(|t| t.name == name).expect(name);
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        assert!(schema["properties"]["request_key"].is_object(), "{name}");
+    }
+    // The terminal calls replay by claim, so they take none.
+    for name in ["work_complete", "work_release", "work_next", "work_extend"] {
+        let tool = tools.iter().find(|t| t.name == name).expect(name);
+        let schema = serde_json::to_value(&tool.input_schema).unwrap();
+        assert!(schema["properties"]["request_key"].is_null(), "{name}");
+    }
+    let sent = with_key(json!({ "item": "a1" }), Some("k-1".into()));
+    assert_eq!(sent, json!({ "item": "a1", "request_key": "k-1" }));
+    assert_eq!(
+        with_key(json!({ "item": "a1" }), None),
+        json!({ "item": "a1" })
+    );
+}
