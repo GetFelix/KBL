@@ -9,7 +9,8 @@ export interface PricesHandlers {
   /** Whether the viewer is signed in to the tracker, which is what setting a price needs. */
   canSetPrice(): boolean;
   /** Sends a price typed in dollars, from an optional UTC day; resolves to why it was refused, or null once written. */
-  setPrice(model: string, unit: PriceUnit, dollarsText: string, from: string): Promise<string | null>;
+  /** `replaced` is the price the person saw and confirmed; the tracker refuses if another is in effect by then. */
+  setPrice(model: string, unit: PriceUnit, dollarsText: string, from: string, replaced: PriceEntry | null): Promise<string | null>;
   now(): number;
 }
 
@@ -91,7 +92,7 @@ export function pricesView(on: PricesHandlers) {
           return;
         }
         save.disabled = true;
-        const why = await on.setPrice(pm.model, r.unit, price.value, from.value);
+        const why = await on.setPrice(pm.model, r.unit, price.value, from.value, asked);
         statusText = why ?? `Price set for ${pm.model}, ${unitName(r.unit).toLowerCase()}.`;
         status.textContent = statusText;
         if (why === null) {
@@ -99,6 +100,8 @@ export function pricesView(on: PricesHandlers) {
           if (lastSpend) render(lastSpend);
           focusRow(pm.model, r.unit);
         } else {
+          // A refused change is confirmed again: the price it replaces may have moved.
+          confirm.checked = false;
           update();
         }
       });

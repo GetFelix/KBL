@@ -118,3 +118,10 @@ test('a confirm holds only while the replaced price is the same one', () => {
   assert.equal(samePrice(a, entry('m', 'input', 2, 5)), false);
   assert.equal(samePrice(a, entry('m', 'input', 1, 6)), false);
 });
+
+test('a change names the price it replaces, so the tracker can refuse a stale one', () => {
+  const replaced = entry('m', 'input', 3_000_000, 1_000);
+  const body = (r: PriceEntry | null) => (priceRequest('m', 'input', '4', '', 5_000, r) as { body: Record<string, unknown> }).body;
+  assert.deepEqual(body(replaced).expected_price, { price_micros: 3_000_000, since_ms: 1_000 });
+  assert.equal('expected_price' in body(null), false);
+});

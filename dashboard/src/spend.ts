@@ -301,9 +301,10 @@ export function samePrice(a: PriceEntry | null, b: PriceEntry | null): boolean {
 /**
  * The `POST /v1/work/prices` request for a price typed in dollars (per million tokens, or per credit for `aic`),
  * or why it cannot be sent. `from` is an optional UTC day: one that has not come yet is sent as a price for later,
- * a day that has passed or is near means now, since a price cannot reach back.
+ * a day that has passed or is near means now, since a price cannot reach back. `replaced` is the price a change
+ * replaces (see `replacedPrice`); it goes as `expected_price`.
  */
-export function priceRequest(model: string, unit: PriceUnit, dollarsText: string, from = '', now = Date.now()): { path: string; body: Record<string, unknown> } | string {
+export function priceRequest(model: string, unit: PriceUnit, dollarsText: string, from = '', now = Date.now(), replaced: PriceEntry | null = null): { path: string; body: Record<string, unknown> } | string {
   const micros = parseDollars(dollarsText);
   if (typeof micros === 'string') return micros;
   const body: Record<string, unknown> = { model, unit, price_micros: micros };
@@ -312,5 +313,7 @@ export function priceRequest(model: string, unit: PriceUnit, dollarsText: string
     if (ms === null) return 'Type the day as YYYY-MM-DD, such as 2026-12-01.';
     if (ms > now + NOW_MARGIN_MS) body.effective_from_ms = ms;
   }
+  // The price this one replaces, as read, so the tracker refuses if someone changed it since.
+  if (replaced) body.expected_price = { price_micros: replaced.price_micros, since_ms: replaced.effective_from_ms };
   return { path: '/v1/work/prices', body };
 }

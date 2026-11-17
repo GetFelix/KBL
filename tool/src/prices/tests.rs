@@ -55,7 +55,14 @@ fn a_price_in_effect_is_skipped_a_new_one_written_a_different_one_listed() {
         .collect();
     assert_eq!(
         steps,
-        [Step::Skip, Step::Differs { in_effect: 99 }, Step::Write]
+        [
+            Step::Skip,
+            Step::Differs {
+                in_effect: 99,
+                since_ms: 0
+            },
+            Step::Write
+        ]
     );
 }
 
@@ -168,4 +175,20 @@ fn the_shipped_table_says_haiku_is_a_tiered_price() {
     ] {
         assert!(t.prices.iter().any(|e| e.model == m), "{m}");
     }
+}
+
+#[test]
+fn an_update_names_the_price_it_replaces() {
+    let t = table(r#"{"model":"a","unit":"input","price_micros":7}"#);
+    let at = |_: u64| {
+        vec![PriceInEffect {
+            since_ms: 1234,
+            ..in_effect("a", PriceUnit::Input, 5)
+        }]
+    };
+    let p = plan(&t, &at, NOW).unwrap();
+    assert_eq!(
+        body(&p[0]),
+        json!({"model":"a","unit":"input","price_micros":7,"as_of":"2026-11-15","expected_price":{"price_micros":5,"since_ms":1234}})
+    );
 }
