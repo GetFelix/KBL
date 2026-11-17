@@ -125,7 +125,7 @@ struct Cli {
     /// only the records since the newest instead of all of work.events. Unset keeps none.
     #[arg(long, env = "KBL_TRACKER_SNAPSHOT_DIR")]
     snapshot_dir: Option<std::path::PathBuf>,
-    /// Records between snapshots.
+    /// Records between snapshots, saved by a rebuild and by the running tracker. 0 turns saving off.
     #[arg(
         long,
         env = "KBL_TRACKER_SNAPSHOT_EVERY",

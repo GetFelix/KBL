@@ -102,8 +102,8 @@ pub(crate) struct Settings {
     pub(crate) review_limit: usize,
     /// Where fold snapshots are kept, if anywhere. One folder per team inside.
     pub(crate) snapshot_dir: Option<std::path::PathBuf>,
-    /// Records between snapshots; a boot saves one when this many have
-    /// accumulated since the newest.
+    /// Records between snapshots. A rebuild and the running tracker each save
+    /// one when this many have accumulated since the newest. Zero turns it off.
     pub(crate) snapshot_every: u64,
     /// How long an agent assignee may make no call before the tracker drops it.
     pub(crate) assignee_away: Duration,
@@ -248,6 +248,9 @@ struct Core {
     /// handed the record to before it landed (felix#2207).
     handed_back: HashMap<ItemId, u64>,
     recall: Recall,
+    /// Saves of snapshots from this running state. None when snapshots are off
+    /// or saving stopped until the next rebuild.
+    snap: Option<snapshots::Periodic>,
     /// Agents whose token was revoked. A claim checks it under this lock, so a
     /// `work_next` that passed the token check before the revoke cannot claim
     /// after the revoke has released the agent's holds.
@@ -756,12 +759,13 @@ impl<B: Broker> Tracker<B> {
         // must not hold the lease and keep a build that can from starting.
         tracker.read_state().await?;
         tracker.acquire_lease().await?;
-        let (state, recall, tail) = tracker.read_state().await?;
+        let (state, recall, tail, snap) = tracker.read_state().await?;
         {
             let mut core = tracker.0.core.lock().await;
             core.state = state;
             core.recall = recall;
             core.tail = tail;
+            core.snap = snap;
         }
         // Like a retake: the lease was granted before the read, so it is
         // confirmed by version before the first write.
@@ -2659,6 +2663,7 @@ impl<B: Broker> Tracker<B> {
                 core.tail = offset + 1;
                 core.recall
                     .remember(offset, &logged, &self.0.me, absent, false);
+                self.note_landed(core, offset, &logged);
                 if logged.req.is_some() {
                     request_keys::landed();
                 }
@@ -2678,6 +2683,52 @@ impl<B: Broker> Tracker<B> {
                 Err(Error::Felix(e))
             }
         }
+    }
+
+    /// The record at `offset` landed and is applied: the one point where the
+    /// state is exactly the fold of the log to `offset`. Takes the copy a
+    /// periodic snapshot is built from, and saves it off the async workers so
+    /// the append does not wait on hashing or disk.
+    fn note_landed(&self, core: &mut Core, offset: u64, logged: &WorkLogged) {
+        let Some(snap) = core.snap.as_mut() else {
+            return;
+        };
+        match snap.note(offset, logged, &core.state, &core.recall) {
+            Ok(None) => {}
+            Ok(Some(job)) => self.spawn_save(job),
+            Err(why) => {
+                eprintln!("kbl-tracker: {why}; snapshots stop until the next rebuild");
+                core.snap = None;
+            }
+        }
+    }
+
+    /// Runs a save off the async workers and then hands its anchor back to the
+    /// core, which may start the next one.
+    fn spawn_save(&self, job: snapshots::Job) {
+        let me = self.clone();
+        tokio::spawn(async move {
+            let id = job.id();
+            let anchor = tokio::task::spawn_blocking(move || job.run())
+                .await
+                .ok()
+                .flatten();
+            let mut core = me.0.core.lock().await;
+            let core = &mut *core;
+            let Some(snap) = core.snap.as_mut() else {
+                return;
+            };
+            match snap.finished(id, anchor, &core.state, &core.recall) {
+                Ok(None) => {}
+                Ok(Some(next)) => me.spawn_save(next),
+                Err(()) => {
+                    eprintln!(
+                        "kbl-tracker: could not build a snapshot; saving stops until the next rebuild"
+                    );
+                    core.snap = None;
+                }
+            }
+        });
     }
 
     /// Refuses to serve without the writer lease, and rebuilds the state first
@@ -2739,7 +2790,7 @@ impl<B: Broker> Tracker<B> {
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
         let rebuilt_at = Instant::now();
-        let (state, recall, tail) = self
+        let (state, recall, tail, snap) = self
             .read_state()
             .instrument(tracing::info_span!(
                 "tracker.fold.rebuild",
@@ -2761,6 +2812,7 @@ impl<B: Broker> Tracker<B> {
         let mut core = self.0.core.lock().await;
         core.state = state;
         core.recall = recall;
+        core.snap = snap;
         // Assigned, not raised: a shard failover can lower the tip.
         core.tail = tail;
         // A retake during the read may have let records in that it missed.
@@ -2773,7 +2825,9 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// The fold of every record in `work.events`, and the committed tip.
-    async fn read_state(&self) -> anyhow::Result<(State, Recall, u64)> {
+    async fn read_state(
+        &self,
+    ) -> anyhow::Result<(State, Recall, u64, Option<snapshots::Periodic>)> {
         let mut entries = Vec::new();
         let (records, tail) = self
             .io(None, self.0.broker.read_to_tip(WORK_EVENTS, 0))
@@ -2813,14 +2867,16 @@ impl<B: Broker> Tracker<B> {
             let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
             recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
+        let mut snap = None;
         if let Some(store) = store {
-            (state, recall) = tokio::task::spawn_blocking(move || {
-                store.save(&entries, saved.as_ref(), &state, &recall);
-                (state, recall)
+            (state, recall, snap) = tokio::task::spawn_blocking(move || {
+                let anchor = store.save(&entries, saved.as_ref(), &state, &recall);
+                let snap = snapshots::Periodic::new(store, anchor, &entries);
+                (state, recall, snap)
             })
             .await?;
         }
-        Ok((state, recall, tail))
+        Ok((state, recall, tail, snap))
     }
 
     /// The text at `offset` if memory still has it.

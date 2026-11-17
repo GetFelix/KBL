@@ -221,13 +221,33 @@ record count. With none usable it folds from the start. The folder is derived
 data, so deleting it only costs a slower rebuild. A team folder that is a
 symlink is not used. The disk work runs off the async workers.
 
-When a rebuild has folded `KBL_TRACKER_SNAPSHOT_EVERY` records (2,000 by default)
-past the newest snapshot it writes a new one: temp file, `fsync`, rename, `fsync`
-of the folder, so a crash leaves the old file. The last three are kept, and the
-folder is mode 700. A failed write is logged and the tracker starts anyway.
-Snapshots are written by a rebuild, not by the running tracker, because the
-hash chain is built from the log the rebuild has just read. Run the tracker on a
-disk that survives restarts, or the folder is empty each time.
+`KBL_TRACKER_SNAPSHOT_EVERY` (2,000 records by default, `--snapshot-every`) sets
+how often a snapshot is written, and 0 turns saving off. Smaller means a restart
+folds less and the disk is written more; each save copies the whole state and
+writes it, so it should stay well above the records a busy minute adds. A save
+is temp file, `fsync`, rename, `fsync` of the folder, so a crash leaves the old
+file. The last three are kept (the one just written always among them), and the
+folder is mode 700. A failed write is logged and the tracker carries on.
+
+Two things write snapshots. A rebuild (boot, lease retake, stale recovery)
+writes one when it folded `every` records past the newest. The running tracker
+writes one each time `every` records have landed since the last save, so a
+tracker that never restarts keeps its snapshots current. Each landed record is
+applied under the core lock and then, if a save is due, the state and the
+per-record data are copied at that record, which is the one point where they
+equal the fold of the log to its offset. The hashing and the file write run on
+a blocking thread, so an append waits only for the copy, once per `every`
+records. The hash chain is extended from the last save: the tracker keeps the
+chain's head and the records since, not the log, so a save hashes only those
+records. One save runs at a time per state, so one copy exists beside the live one (a
+rebuild can briefly overlap the last save of the state it replaced). Records that land during a save wait for the next; if a stuck
+disk lets more than the larger of 4 x `every` and 10,000 pile up, the tracker
+logs it and stops saving until its next rebuild, which restarts from the log.
+A snapshot is never trusted on how it was made: the next rebuild checks every
+file against the log, and a file that does not match is skipped, so a
+stale or foreign file costs a full fold. The check covers the records, not the
+state inside the file, which is why the copy is taken at a record boundary. Run the tracker on a disk that survives
+restarts, or the folder is empty each time.
 
 Each record carries a format. A tracker that finds a record of a newer format
 than it reads does not serve, instead of skipping the record.
