@@ -439,18 +439,12 @@ attempt, or another agent took it, the agent's next `extend`, `complete` or
 Memory can miss a record another writer appended, for example a release a
 broker failover wrote. So before it hands a held claim back to its agent (a
 `work_next` that answers `resumed`, or an `extend`), the tracker reads the log
-from the last record it read. It rebuilds from the log and checks the hold
-again, as after a refused write, if the log moved past that record (a record
-landed, or a new leader's blank start), ends before it (a failover cut the end
-short), or holds anything but that record followed by exactly the records
-this tracker wrote since. The last case is a cut end that another writer
-filled back: Felix can cut a record that a majority had not stored and commit
-a different one at its offset, and this tracker's next write still lands on
-top, since a conditional publish checks only the offset. A refill that encodes
-exactly as the cut record leaves the log as the state has it. `work_next` then answers from the rebuilt
-state, and `extend` answers 503 so the agent calls again and hears `lost` if
-the hold ended. A new claim needs no read, since its `claimed` record is
-written only if nothing landed after the state's end.
+from the end of its state. If the log's end moved (a record landed, a new
+leader's blank start, or a failover that cut the end short), it rebuilds from the log
+and checks the hold again, as after a refused write: `work_next` then answers
+from the rebuilt state, and `extend` answers 503 so the agent calls again and
+hears `lost` if the hold ended. A new claim needs no read, since its `claimed`
+record is written only if nothing landed after the state's end.
 
 When Felix answers an extend with `stale_claim` (it no longer has the
 delivery), the tracker renews its lease by version before it answers `lost`.

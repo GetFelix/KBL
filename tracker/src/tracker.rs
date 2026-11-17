@@ -66,9 +66,6 @@ const MAX_LOOKED_AT: u32 = 64;
 /// Visibility periods after which a ready record is published again. Felix dead-letters
 /// at five handouts, and a handout cannot come sooner than one period after the last.
 const RECORD_LAPSE_PERIODS: u32 = 6;
-
-/// Writes kept for `hold_at_tip` to confirm before the state is rebuilt instead.
-const MAX_UNCHECKED: usize = 1024;
 /// How long a tracker without the writer lease keeps running before it exits.
 const FENCE_GRACE: Duration = Duration::from_secs(10);
 /// How long an agent's broker connection stays open with no call from it.
@@ -181,9 +178,6 @@ pub(crate) enum Which {
     Claim(u64),
 }
 
-/// The last record a state folded: its offset and its bytes.
-type Last = Option<(u64, Vec<u8>)>;
-
 /// What `hold_at_tip` found.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AtTip {
@@ -226,15 +220,6 @@ struct Core {
     /// refusal: Felix's tail there counts offsets claimed but not committed,
     /// and writing past one would skip a record this tracker never folded.
     tail: u64,
-    /// The last record read from the log, or confirmed on it by
-    /// `hold_at_tip`, by offset and bytes. None when the log was empty.
-    checked: Last,
-    /// This tracker's writes since `checked`, in order. A write lands on the
-    /// tail Felix has, not on the one this state folded: a failover can cut
-    /// a record this tracker wrote and another writer refill its offset. So
-    /// the log is the state's only while it holds `checked` and then exactly
-    /// these.
-    written: Vec<(u64, Vec<u8>)>,
     /// The ready record each item is waiting on: tier and stamp.
     live: HashMap<ItemId, (u8, u64)>,
     /// Since when each Ready item's `live` record has stood, and how often it was
@@ -760,14 +745,12 @@ impl<B: Broker> Tracker<B> {
         // must not hold the lease and keep a build that can from starting.
         tracker.read_state().await?;
         tracker.acquire_lease().await?;
-        let (state, recall, tail, last) = tracker.read_state().await?;
+        let (state, recall, tail) = tracker.read_state().await?;
         {
             let mut core = tracker.0.core.lock().await;
             core.state = state;
             core.recall = recall;
             core.tail = tail;
-            core.checked = last;
-            core.written.clear();
         }
         // Like a retake: the lease was granted before the read, so it is
         // confirmed by version before the first write.
@@ -2217,48 +2200,35 @@ impl<B: Broker> Tracker<B> {
     /// Whether `d`'s hold stands at the tip of the log. The single check
     /// before a held claim is answered to its agent (a resume, an extension):
     /// memory misses a release another writer appended after a failover, so
-    /// the log is read from the last record read. A tip that moved, or a
-    /// record that is not the one read or written (a cut tail refilled, even
-    /// under a later write of ours), marks
-    /// the state refused, as a refused write would, so the next call rebuilds
-    /// and confirms the lease. A fresh claim needs no check: its write is
+    /// the log is read from the tail. A tip that moved marks the state
+    /// refused, as a refused write would, so the next call rebuilds and
+    /// confirms the lease. A fresh claim needs no check: its write is
     /// conditional on the tail.
     async fn hold_at_tip(&self, agent: &AgentName, d: &Delivery) -> Result<AtTip, Error> {
-        let (tail, checked, written) = {
-            let core = self.0.core.lock().await;
-            (core.tail, core.checked.clone(), core.written.clone())
-        };
-        let expected: Vec<&(u64, Vec<u8>)> = checked.iter().chain(&written).collect();
-        // From the last record read, so a tip a failover lowered shows, and so
-        // does a record put in place of one this state folded or wrote.
-        let from = checked.as_ref().map_or(0, |(o, _)| *o);
-        let (records, tip) = self
-            .io(None, self.0.broker.read_to_tip(WORK_EVENTS, from))
+        let tail = self.0.core.lock().await.tail;
+        // From one before the tail, so a tip a failover lowered shows too.
+        let (_, tip) = self
+            .io(
+                None,
+                self.0
+                    .broker
+                    .read_to_tip(WORK_EVENTS, tail.saturating_sub(1)),
+            )
             .await
             .map_err(|e| {
                 Error::Unavailable(format!("could not check your claim against the log: {e:#}"))
             })?;
-        let mut core = self.0.core.lock().await;
+        let core = self.0.core.lock().await;
         let mut lease = self.lease();
         if lease.stale || lease.retaken {
             return Ok(AtTip::Moved);
         }
         // Our own write may land during the read and raise the tail; it was
-        // conditional on the tail, so the only records past these are ours.
-        let raced = core.tail != tail;
-        let mut read = records.iter();
-        let replaced = expected.iter().any(|e| read.next() != Some(*e));
-        let foreign = !raced && read.next().is_some();
-        let lowered = !raced && tip < tail;
-        if tip > core.tail || lowered || replaced || foreign {
+        // conditional on the tail, so nothing foreign came before it.
+        let lowered = core.tail == tail && tip < tail;
+        if tip > core.tail || lowered {
             lease.refused();
             return Ok(AtTip::Moved);
-        }
-        drop(lease);
-        // Confirmed on the log, unless a rebuild replaced them during the read.
-        if core.checked == checked && core.written.starts_with(&written) {
-            core.checked = expected.last().map(|r| (*r).clone());
-            core.written.drain(..written.len());
         }
         let ours = core.owner.get(&d.item).is_some_and(|o| o.id == d.id);
         let shown = core
@@ -2488,25 +2458,18 @@ impl<B: Broker> Tracker<B> {
             lease: &self.0.lease,
             armed: true,
         };
-        let payload = logged.encode();
         let written = self
             .io(
                 None,
                 self.0
                     .broker
-                    .publish_if(WORK_EVENTS, payload.clone(), guess),
+                    .publish_if(WORK_EVENTS, logged.encode(), guess),
             )
             .await;
         unanswered.armed = false;
         match written {
             Ok(ConditionalWrite::Written { offset }) => {
                 core.tail = offset + 1;
-                core.written.push((offset, payload));
-                // Bounds the memory and the next check's read: a rebuild
-                // starts the check over from the log.
-                if core.written.len() > MAX_UNCHECKED {
-                    self.lease().refused();
-                }
                 core.recall
                     .remember(offset, &logged, &self.0.me, absent, false);
                 if logged.req.is_some() {
@@ -2589,7 +2552,7 @@ impl<B: Broker> Tracker<B> {
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
         let rebuilt_at = Instant::now();
-        let (state, recall, tail, last) = self
+        let (state, recall, tail) = self
             .read_state()
             .instrument(tracing::info_span!(
                 "tracker.fold.rebuild",
@@ -2606,8 +2569,6 @@ impl<B: Broker> Tracker<B> {
         core.recall = recall;
         // Assigned, not raised: a shard failover can lower the tip.
         core.tail = tail;
-        core.checked = last;
-        core.written.clear();
         // A retake during the read may have let records in that it missed.
         let mut lease = self.lease();
         if lease.retakes == retakes {
@@ -2617,17 +2578,14 @@ impl<B: Broker> Tracker<B> {
         Ok(())
     }
 
-    /// The fold of every record in `work.events`, the committed tip, and the
-    /// last record.
-    async fn read_state(&self) -> anyhow::Result<(State, Recall, u64, Last)> {
+    /// The fold of every record in `work.events`, and the committed tip.
+    async fn read_state(&self) -> anyhow::Result<(State, Recall, u64)> {
         let mut entries = Vec::new();
-        let (mut records, tail) = self
+        let (records, tail) = self
             .io(None, self.0.broker.read_to_tip(WORK_EVENTS, 0))
             .await?;
-        let last = records.pop();
-        for (offset, payload) in records.iter().chain(last.as_ref()) {
-            let (offset, payload) = (*offset, payload.as_slice());
-            match read(payload) {
+        for (offset, payload) in records {
+            match read(&payload) {
                 Ok(rec) => entries.push((offset, rec)),
                 // Folding past a record of a newer format would give a state its
                 // writer did not mean, so the tracker does not serve at all.
@@ -2668,7 +2626,7 @@ impl<B: Broker> Tracker<B> {
             })
             .await?;
         }
-        Ok((state, recall, tail, last))
+        Ok((state, recall, tail))
     }
 
     /// The text at `offset` if memory still has it.
