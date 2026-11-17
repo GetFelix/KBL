@@ -32,14 +32,14 @@ pub enum WaitKind {
 
 /// One unbroken stretch of waiting. `acted` is set once a person has written
 /// a record about the item; the stretch ends when the item stops waiting.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Open {
     kind: WaitKind,
     since_ms: u64,
     acted: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 struct Finished {
     kind: WaitKind,
     acted_ms: u64,
@@ -49,7 +49,7 @@ struct Finished {
 /// Not in the wire form, so a state restored from a snapshot starts with none
 /// of it. Equality ignores it for that reason: two states are equal when
 /// their wire forms are, whether or not one was restored.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct Waits {
     open: BTreeMap<ItemId, Open>,
     finished: VecDeque<Finished>,

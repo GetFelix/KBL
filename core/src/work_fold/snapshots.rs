@@ -7,7 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{State, fold};
+use super::human_wait::Waits;
+use super::{State, Waiting, fold};
 use crate::artifact::ArtifactId;
 use crate::codec::Codec;
 use crate::work::WorkLogged;
@@ -18,7 +19,7 @@ pub const SNAPSHOT_EVERY: u64 = 2_000;
 
 /// Bump when a change to the fold would make an old snapshot differ from a
 /// fold of the same prefix. Snapshots from another revision are dropped.
-pub const FOLD_REV: u32 = 1;
+pub const FOLD_REV: u32 = 2;
 
 /// Every record at an offset up to and including `upto`.
 ///
@@ -31,6 +32,11 @@ pub fn fold_to<'a>(log: impl IntoIterator<Item = &'a (u64, WorkLogged)>, upto: u
 
 /// The state after the record at `through`, with what is needed to tell
 /// whether it still describes the log.
+///
+/// `state` has no wire form for the proposals waiting on a person or the
+/// human-wait record, so the snapshot keeps them beside it and puts them back
+/// in [`Snapshot::state`]. Replaying them would need the records the snapshot
+/// exists to skip, so only keeping them restores a state exactly equal to a fold.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub rev: u32,
@@ -38,43 +44,62 @@ pub struct Snapshot {
     pub through: u64,
     /// Records folded in, which is the index of the next one.
     pub records: u64,
-    /// Hash of the record at `through` and its offset.
-    pub tail: String,
-    pub state: State,
+    /// Hash over every record folded in, chained from the previous
+    /// snapshot's, so an edit anywhere in the prefix changes it.
+    pub chain: String,
+    pub(in crate::work_fold) state: State,
+    waiting: Waiting,
+    human_waits: Waits,
 }
 
 impl Snapshot {
-    fn of(through: u64, records: u64, rec: &WorkLogged, state: &State) -> Self {
+    fn of(through: u64, records: u64, chain: String, state: &State) -> Self {
+        let mut state = state.clone();
         Self {
             rev: FOLD_REV,
             through,
             records,
-            tail: tail_hash(through, rec),
-            state: state.clone(),
+            chain,
+            waiting: std::mem::take(&mut state.waiting),
+            human_waits: std::mem::take(&mut state.human_waits),
+            state,
         }
     }
 
-    /// Whether this snapshot is the fold of `log` up to `through`: same
-    /// revision, the record count and tail record match, and the state ends
-    /// where it says. A log rewritten or trimmed below `through` fails.
-    fn describes(&self, log: &[(u64, WorkLogged)]) -> bool {
-        let Some(i) = usize::try_from(self.records)
-            .ok()
-            .and_then(|n| n.checked_sub(1))
+    /// The state this snapshot holds, as a fold of the same prefix would.
+    pub fn state(&self) -> State {
+        let mut state = self.state.clone();
+        state.waiting = self.waiting.clone();
+        state.human_waits = self.human_waits.clone();
+        state
+    }
+
+    /// Whether this snapshot is the fold of `log` up to `through`, given that
+    /// the one before it (`prev_chain`, `prev_records`) is: same revision, the
+    /// chain over the records since the previous snapshot matches, and the
+    /// state ends where it says. Costs only those records.
+    fn describes(&self, log: &[(u64, WorkLogged)], prev_chain: &str, prev_records: u64) -> bool {
+        let (Ok(from), Ok(to)) = (usize::try_from(prev_records), usize::try_from(self.records))
         else {
             return false;
         };
         self.rev == FOLD_REV
             && self.state.at == Some(self.through)
-            && log
-                .get(i)
-                .is_some_and(|(o, rec)| *o == self.through && tail_hash(*o, rec) == self.tail)
+            && from < to
+            && log.get(to - 1).is_some_and(|(o, _)| *o == self.through)
+            && link(prev_chain, &log[from..to]) == self.chain
     }
 }
 
-fn tail_hash(offset: u64, rec: &WorkLogged) -> String {
-    let mut bytes = offset.to_be_bytes().to_vec();
-    bytes.extend(rec.encode());
+/// The chain after `records`, which follow a prefix whose chain is `prev`.
+fn link(prev: &str, records: &[(u64, WorkLogged)]) -> String {
+    let mut bytes = prev.as_bytes().to_vec();
+    for (offset, rec) in records {
+        let enc = rec.encode();
+        bytes.extend(offset.to_be_bytes());
+        bytes.extend((enc.len() as u64).to_be_bytes());
+        bytes.extend(enc);
+    }
     ArtifactId::of(&bytes).as_str().to_owned()
 }
 
@@ -93,7 +118,7 @@ impl Snapshots {
     /// As [`Snapshots::build`] with another spacing. A spacing of 0 makes none.
     pub fn build_every(log: &[(u64, WorkLogged)], every: u64) -> Self {
         let mut s = Self::default();
-        s.extend(log, every, State::default(), 0);
+        s.extend(log, every, State::default(), 0, String::new());
         s
     }
 
@@ -106,6 +131,21 @@ impl Snapshots {
         &self.snaps
     }
 
+    /// How many leading snapshots describe `log`, each checked against the
+    /// one before it.
+    fn good_prefix(&self, log: &[(u64, WorkLogged)]) -> usize {
+        let (mut chain, mut records) = (String::new(), 0);
+        self.snaps
+            .iter()
+            .take_while(|s| {
+                let ok = s.describes(log, &chain, records);
+                chain.clone_from(&s.chain);
+                records = s.records;
+                ok
+            })
+            .count()
+    }
+
     /// Drops the snapshots that do not describe `log` and every one after
     /// them, then builds on from the last good one, so a log that grew gets
     /// its new snapshots and a stale tail is rebuilt.
@@ -114,46 +154,51 @@ impl Snapshots {
     }
 
     pub fn refresh_every(&mut self, log: &[(u64, WorkLogged)], every: u64) {
-        let good = self
-            .snaps
-            .iter()
-            .enumerate()
-            .take_while(|(i, s)| {
-                s.describes(log) && (*i == 0 || self.snaps[*i - 1].records < s.records)
-            })
-            .count();
+        let good = self.good_prefix(log);
         self.snaps.truncate(good);
-        let (state, from) = match self.snaps.last() {
-            Some(s) => (s.state.clone(), s.records),
-            None => (State::default(), 0),
-        };
-        self.extend(log, every, state, from);
+        match self.snaps.last() {
+            Some(s) => {
+                let (state, from, chain) = (s.state(), s.records, s.chain.clone());
+                self.extend(log, every, state, from, chain);
+            }
+            None => self.extend(log, every, State::default(), 0, String::new()),
+        }
     }
 
-    fn extend(&mut self, log: &[(u64, WorkLogged)], every: u64, mut state: State, from: u64) {
+    fn extend(
+        &mut self,
+        log: &[(u64, WorkLogged)],
+        every: u64,
+        mut state: State,
+        from: u64,
+        mut chain: String,
+    ) {
         if every == 0 {
             return;
         }
         let from = usize::try_from(from).expect("a log fits in memory");
+        let mut since = from;
         for (i, (offset, rec)) in log.iter().enumerate().skip(from) {
             state.apply(*offset, rec);
             let records = i as u64 + 1;
             if records.is_multiple_of(every) {
-                self.snaps.push(Snapshot::of(*offset, records, rec, &state));
+                chain = link(&chain, &log[since..=i]);
+                since = i + 1;
+                self.snaps
+                    .push(Snapshot::of(*offset, records, chain.clone(), &state));
             }
         }
     }
 
     /// The state at `upto`, the same as [`fold_to`] over `log`, starting from
     /// the newest snapshot at or before `upto` that still describes `log`.
+    /// Checking one hashes the records before it, which costs far less than
+    /// folding them.
     pub fn fold_to(&self, log: &[(u64, WorkLogged)], upto: u64) -> State {
-        let usable = self
-            .snaps
-            .iter()
-            .rev()
-            .find(|s| s.through <= upto && s.describes(log));
+        let good = &self.snaps[..self.good_prefix(log)];
+        let usable = good.iter().rev().find(|s| s.through <= upto);
         let (mut state, from) = match usable {
-            Some(s) => (s.state.clone(), s.records as usize),
+            Some(s) => (s.state(), s.records as usize),
             None => (State::default(), 0),
         };
         for (offset, rec) in &log[from..] {

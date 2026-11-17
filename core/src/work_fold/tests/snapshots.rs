@@ -32,6 +32,27 @@ fn held_at(held: &[(u64, State)], n: u64) -> State {
         .map_or_else(State::default, |(_, s)| s.clone())
 }
 
+/// What a state answers from the data `State`'s `PartialEq` ignores: the
+/// pending counts and budget refusals per root, human-wait figures, the
+/// queue and any trial in flight. Compared directly, since equality cannot.
+fn derived(s: &State) -> String {
+    let roots: Vec<_> = s.items.keys().cloned().collect();
+    let exceed: Vec<_> = roots.iter().map(|r| s.proposals_exceed_budget(r)).collect();
+    format!(
+        "{:?}\n{:?}\n{exceed:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        s.waiting,
+        s.human_waits,
+        s.time_to_human_action(0, u64::MAX),
+        s.time_to_human_action(35, 75),
+        s.queue(),
+        s.probing,
+        s.items
+            .keys()
+            .map(|r| (r.clone(), s.waiting.per_root.get(r).copied()))
+            .collect::<Vec<_>>(),
+    )
+}
+
 fn check_every_offset(log: &[(u64, WorkLogged)], every: u64) {
     let held = held(log);
     let snaps = Snapshots::build_every(log, every);
@@ -44,6 +65,13 @@ fn check_every_offset(log: &[(u64, WorkLogged)], every: u64) {
         assert_eq!(fold_to(log, n), want, "fold_to({n})");
         assert_eq!(snaps.fold_to(log, n), want, "snapshots, at {n}");
         assert_eq!(stored.fold_to(log, n), want, "snapshots read back, at {n}");
+        let d = derived(&want);
+        assert_eq!(derived(&snaps.fold_to(log, n)), d, "derived, at {n}");
+        assert_eq!(
+            derived(&stored.fold_to(log, n)),
+            d,
+            "derived read back, at {n}"
+        );
     }
 }
 
@@ -91,8 +119,8 @@ fn a_stale_or_foreign_snapshot_is_not_trusted() {
     let bad = [
         // A state that lies about where it ends.
         tamper(&|s| s.state.at = Some(s.through + 1)),
-        // A tail record that is not the log's.
-        tamper(&|s| s.tail = "sha256-nope".into()),
+        // A chain that is not the log's.
+        tamper(&|s| s.chain = "sha256-nope".into()),
         // Built by another fold.
         tamper(&|s| s.rev += 1),
         // A count that does not reach its record.
@@ -119,7 +147,7 @@ fn refresh_rebuilds_a_stale_tail_and_extends_a_grown_log() {
     let mut snaps = Snapshots::build_every(&log[..10], 4);
     // Corrupt the second snapshot: it and the ones after it go.
     let mut stored = snaps.as_slice().to_vec();
-    stored[1].tail = "sha256-nope".into();
+    stored[1].chain = "sha256-nope".into();
     snaps = Snapshots::from_stored(stored);
     snaps.refresh_every(&log, 4);
     assert_eq!(snaps, Snapshots::build_every(&log, 4));
@@ -152,4 +180,58 @@ fn a_snapshot_is_made_every_two_thousand_records_whatever_the_blanks() {
     // Asking exactly at a snapshot's offset lands on it.
     let first = snaps.as_slice()[0].through;
     assert_eq!(snaps.fold_to(&log, first).at, Some(first));
+}
+
+#[test]
+fn a_snapshot_read_back_keeps_the_waiting_and_human_wait_data() {
+    let mut l = held_root();
+    l.person(WorkRecord::BudgetSet {
+        root: id("r1"),
+        items_left: 2,
+        max_depth: 3,
+        cost_left_micros: 1_000_000,
+        redos_per_item: 3,
+    });
+    propose_n(&mut l, "w1", "a", 2);
+    let q = l.agent("w1", question_rec("q1"));
+    l.person(answer_rec(q));
+    l.person(accept("a0"));
+    propose_n(&mut l, "w1", "b", 1);
+    let log = l.0;
+    let end = fold(&log);
+    // The log leaves a root at its limit, so the checks below are not empty.
+    assert!(end.proposals_exceed_budget(&id("r1")));
+    assert!(end.time_to_human_action(0, u64::MAX).all.count > 0);
+
+    for every in [1, 2, 3] {
+        let snaps = Snapshots::build_every(&log, every);
+        let back: Vec<Snapshot> =
+            serde_json::from_slice(&serde_json::to_vec(snaps.as_slice()).unwrap()).unwrap();
+        assert!(back.iter().any(|s| !s.state().waiting.per_root.is_empty()));
+        for read in &back {
+            let want = fold_to(&log, read.through);
+            assert_eq!(
+                derived(&read.state()),
+                derived(&want),
+                "at {}",
+                read.through
+            );
+        }
+    }
+}
+
+#[test]
+fn an_edit_to_an_earlier_record_fails_the_snapshot_that_covers_it() {
+    let log = story().0;
+    let snaps = Snapshots::build_every(&log, 4);
+    assert!(snaps.as_slice().len() >= 3);
+    // Same count, same offsets and same last record; only a record near the start differs.
+    let mut edited = log.clone();
+    edited[1].1 = WorkLogged::new(99, key("tracker"), Actor::Tracker, imported("elsewhere"));
+    let want = fold(&edited);
+    assert_ne!(want, fold(&log));
+    assert_eq!(snaps.fold_to(&edited, u64::MAX), want);
+    let mut refreshed = snaps.clone();
+    refreshed.refresh_every(&edited, 4);
+    assert_eq!(refreshed, Snapshots::build_every(&edited, 4));
 }
