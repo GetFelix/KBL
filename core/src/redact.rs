@@ -1068,9 +1068,9 @@ pub fn redact_record(record: &mut WorkRecord) {
             }
         }
         WorkRecord::Shipped { release, .. } => redact_in(release),
-        WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {
-            redact_content(text)
-        }
+        WorkRecord::Context { text, .. }
+        | WorkRecord::HumanInput { text, .. }
+        | WorkRecord::Steered { text, .. } => redact_content(text),
         WorkRecord::Progress {
             note, branch, pr, ..
         } => {
@@ -1177,6 +1177,8 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::ChangesRequested { .. }
         | WorkRecord::MergeMarked { .. }
         | WorkRecord::SummaryRated { .. }
+        | WorkRecord::Taken { .. }
+        | WorkRecord::Reassigned { .. }
         | WorkRecord::Reopened { .. }
         | WorkRecord::AttemptClosed { .. }
         | WorkRecord::TierChanged { .. }

@@ -82,6 +82,8 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .fields dd { margin: 0; }
 
 .row-flag { margin-left: var(--space-2); flex-shrink: 0; padding: 0 var(--space-2); border: 1px solid var(--warn); border-radius: var(--radius-sm); font-size: var(--text-xs); color: var(--text); }
+.assignee { margin-left: var(--space-2); flex-shrink: 0; min-width: 1.5em; padding: 0 var(--space-1); border: 1px solid var(--line); border-radius: 999px; font-size: var(--text-xs); text-align: center; color: var(--text); }
+.card .assignee { margin-left: 0; align-self: flex-start; }
 .section-title { font-size: var(--text-md); font-weight: var(--weight-bold); margin: var(--space-5) 0 var(--space-2); }
 .overlap-notes, .overlap-files { list-style: none; margin: 0; padding: 0; }
 .overlap { border-left: 3px solid var(--warn); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-3); }

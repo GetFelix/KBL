@@ -23,9 +23,9 @@ import { metricsView } from './ui/metrics-view.ts';
 import { spendView } from './ui/spend-view.ts';
 import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
-import { confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
+import { assignDialog, confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { Tracker } from './tracker.ts';
-import { CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
+import { assigneePerson, assignTarget, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -177,6 +177,15 @@ const confirmKind = (kind: ConfirmKind, ids: string[]) => {
   if (list.length) confirm.open(kind, list);
 };
 
+const assignItem = (id: string) => {
+  const s = store.get();
+  const item = assignTarget(s.items, id, s.tracker.kind === 'signed-in');
+  if (item === 'sign-in') return signInBox.open();
+  if (!item || s.tracker.kind !== 'signed-in') return;
+  const names = [...new Set(s.items.flatMap((i) => assigneePerson(i) ?? []))].sort();
+  assignBox.open(item, s.tracker.person, names);
+};
+
 const openItem = (id: string) => {
   store.dispatch({ type: 'open', id });
   ui.panel.focus();
@@ -292,6 +301,10 @@ const run = (id: CommandId): void => {
       const ids = s.items.filter((i) => picked.includes(i.id) && CAN[id](i)).map((i) => i.id);
       return ids.length ? write(ids, { kind: id }) : undefined;
     }
+    case 'assign': {
+      const ids = targets();
+      return ids.length === 1 ? assignItem(ids[0]) : undefined;
+    }
     case 'undo':
       return undoLast();
     case 'signIn':
@@ -331,6 +344,9 @@ const ui = shell(
     confirm: confirmKind,
     setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
+    take: (item) => write([item], { kind: 'take' }),
+    assign: assignItem,
+    steer: (item, attempt, text) => write([item], { kind: 'steer', attempt, text }),
     rate: (item, attempt, accurate) => write([item], { kind: 'rate', attempt, accurate }),
     answer: (item, question, text, chosen) => write([item], { kind: 'answer', question, text, chosen }),
     undo: undoLast,
@@ -423,8 +439,9 @@ const views = viewDialog({
   },
 });
 const confirm = confirmDialog(write);
+const assignBox = assignDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, spendBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -451,7 +468,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;

@@ -4,7 +4,7 @@
 // own token, so the page can never do more than the person could with curl.
 import type { ItemRow } from './fold.ts';
 
-export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'undo';
+export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'undo';
 
 export interface Request {
   path: string;
@@ -23,10 +23,27 @@ export const NEEDS: Readonly<Record<string, string>> = {
   check_failed: 'A check failed',
   flagged: 'A person moved it here',
   merge_disputed: 'Marked merged, but upstream shows it open',
+  taken: 'Taken by a person',
 };
 
 export function needsText(needs: string | null | undefined): string {
   return needs ? (NEEDS[needs] ?? needs.replaceAll('_', ' ')) : '';
+}
+
+/** The person an item is assigned to, or null. An agent assignee has no person name. */
+export const assigneePerson = (i: Pick<ItemRow, 'assignee'>): string | null => (i.assignee && 'person' in i.assignee ? i.assignee.person : null);
+
+/** Why the item waits on a person, naming who took it when that is the reason. */
+export function needsLine(i: Pick<ItemRow, 'needs' | 'assignee'>): string {
+  const who = assigneePerson(i);
+  return i.needs === 'taken' && who ? `Taken by ${who}` : needsText(i.needs);
+}
+
+/** Up to two initials for an assignee chip: `ana lopez` is AL, `ana` is AN. */
+export function initials(name: string): string {
+  const parts = name.split(/[\s._-]+/).filter(Boolean);
+  const letters = parts.length > 1 ? parts[0][0] + parts[1][0] : (parts[0] ?? '?').slice(0, 2);
+  return letters.toUpperCase();
 }
 
 /** What triage could not settle, as the answer form asks it. Its question has no text of its own. */
@@ -64,6 +81,43 @@ export const RATE_FORMAT = 11;
  */
 export const canRate = (i: ItemRow): boolean => (i.format ?? 0) >= RATE_FORMAT;
 
+/** The first log format that takes `taken`, `reassigned` and `steered` records. */
+export const ASSIGN_FORMAT = 12;
+const ASSIGNABLE_LOG = (i: ItemRow) => (i.format ?? 0) >= ASSIGN_FORMAT;
+
+/** Whether the log is at a format that takes assignees. The palette lists the assign command only then. */
+export const logTakesAssignees = (items: readonly ItemRow[]) => items.some(ASSIGNABLE_LOG);
+
+/** Whether the page may offer an assignee on this item. The tracker refuses an item nobody accepted. */
+export const canAssign = (i: ItemRow): boolean => ASSIGNABLE_LOG(i) && OPEN(i) && i.accepted === true;
+
+/** The attempt an agent holds, from the fold's `held_attempt`, else the newest attempt of its story still open. */
+export function heldAttempt(i: ItemRow, story?: { attempts: readonly { attempt: number; done: boolean; closed: boolean }[] }): number | null {
+  if (i.stage !== 'held') return null;
+  if (i.held_attempt != null) return i.held_attempt;
+  return story?.attempts.filter((a) => !a.done && !a.closed).at(-1)?.attempt ?? null;
+}
+
+/** Whether a note can go to the agent holding the item. */
+export const canSteer = (i: ItemRow): boolean => ASSIGNABLE_LOG(i) && i.stage === 'held';
+
+/** Whether the item stopped because its attempt used its tries, where `viewer` can take it: not when it is theirs already. */
+export const canTakeAfterLimit = (i: ItemRow, viewer: string | null): boolean =>
+  canAssign(i) && i.needs === 'tries_used' && (viewer === null || assigneePerson(i) !== viewer);
+
+/** What a quick choice in the assign picker writes, or null when the item is already so. The fold would refuse it as `no_change`. */
+export function assignPick(now: string | null, me: string, choice: 'me' | 'nobody'): WriteArgs | null {
+  if (choice === 'me') return now === me ? null : { kind: 'take' };
+  return now === null ? null : { kind: 'reassign', to: null };
+}
+
+/** What `a` does on `id`: nothing for an item that takes no assignee, else sign in first, else the item. */
+export function assignTarget(items: readonly ItemRow[], id: string, signedIn: boolean): ItemRow | 'sign-in' | null {
+  const item = items.find((i) => i.id === id);
+  if (!item || !canAssign(item)) return null;
+  return signedIn ? item : 'sign-in';
+}
+
 export const FLAG_COMMANDS: ReadonlySet<string> = new Set(['flag', 'unflag']);
 
 /**
@@ -77,7 +131,7 @@ export function marksAfter(marked: readonly string[], ids: readonly string[]): s
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
-export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate'>, (i: ItemRow) => boolean>> = {
+export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer'>, (i: ItemRow) => boolean>> = {
   accept: (i) => i.stage === 'triage' || i.stage === 'proposed',
   // The fold rejects only a proposal nobody accepted; an imported root is closed instead.
   reject: (i) => i.stage === 'proposed',
@@ -105,7 +159,13 @@ export type WriteArgs =
   | { kind: 'flag' }
   | { kind: 'unflag' }
   /** Marks the summary an attempt handed off as accurate or not. The latest mark stands. */
-  | { kind: 'rate'; attempt: number; accurate: boolean };
+  | { kind: 'rate'; attempt: number; accurate: boolean }
+  /** Assigns the item to the signed-in person. */
+  | { kind: 'take' }
+  /** Assigns the item to the named person, or to nobody with null. */
+  | { kind: 'reassign'; to: string | null }
+  /** Sends a note to the agent holding `attempt`. */
+  | { kind: 'steer'; attempt: number; text: string };
 
 /** A route under the viewer's team when the address names one (`/v1/teams/{team}/work/...`). */
 export function route(path: string, team: string | null): string {
@@ -128,6 +188,12 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/unflag', body: { item } };
     case 'rate':
       return { path: '/v1/work/rate-summary', body: { item, attempt: a.attempt, accurate: a.accurate } };
+    case 'take':
+      return { path: '/v1/work/take', body: { item } };
+    case 'reassign':
+      return { path: '/v1/work/reassign', body: { item, to: a.to === null ? null : { person: a.to } } };
+    case 'steer':
+      return { path: '/v1/work/steer', body: { item, attempt: a.attempt, text: { text: a.text.trim() } } };
     case 'answer': {
       const body: Record<string, unknown> = { item, question: a.question };
       // The tracker reads `text` as content: inline text is `{ text }`, never a bare string.
@@ -148,6 +214,18 @@ export function checkAnswer(options: readonly string[], text: string, chosen: st
   // The tracker refuses inline text over 4 KiB; say so before sending.
   if (new TextEncoder().encode(text.trim()).length > 4096) return 'Keep the answer under 4 KiB, or link to the longer text.';
   return null;
+}
+
+/** What a steer note would send, or what is wrong with it. */
+export function checkSteer(text: string): string | null {
+  if (!text.trim()) return 'Write the note for the agent.';
+  if (new TextEncoder().encode(text.trim()).length > 4096) return 'Keep the note under 4 KiB, or link to the longer text.';
+  return null;
+}
+
+/** The name an assign picker sends, or why it is empty. */
+export function checkPerson(name: string): string | null {
+  return name.trim() ? null : 'Write the name of the person.';
 }
 
 export type Outcome =
@@ -192,6 +270,10 @@ export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> =
   unflag: null,
   // Marking the other way replaces the mark, so there is nothing to ask first.
   rate: null,
+  // Another assign sets each back, so none asks first.
+  take: null,
+  reassign: null,
+  steer: 'A note goes to the agent as it works; it cannot be taken back.',
 };
 
 export interface Undo {
@@ -261,6 +343,8 @@ export function putWrite(w: Writes, write: Write): Writes {
 function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly ItemRow[]): string | null {
   const now = items.find((i) => i.id === id);
   if (!now) return `${id} is no longer in the log.`;
+  if (kind === 'take' || kind === 'reassign') return canAssign(now) ? null : `${id} cannot be assigned now, so nothing was sent.`;
+  if (kind === 'steer') return canSteer(now) ? null : `${id} is not held by an agent now, so nothing was sent.`;
   if (kind === 'rate') return canRate(now) ? null : `The log is below format ${RATE_FORMAT}, so nothing was sent.`;
   if (CAN[kind](now)) return null;
   if (kind === 'flag' && OPEN(now) && now.flagged) return `${id} is already flagged, so nothing was sent.`;
@@ -308,6 +392,9 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
   answer: ['Answering', 'Answered'],
   flag: ['Flagging', 'Flagged'],
   rate: ['Marking the summary of', 'Marked the summary of'],
+  take: ['Taking', 'Took'],
+  reassign: ['Assigning', 'Assigned'],
+  steer: ['Sending the note on', 'Sent the note on'],
   unflag: ['Unflagging', 'Unflagged'],
   undo: ['Undoing the tier change on', 'Undid the tier change on'],
 };
@@ -335,7 +422,7 @@ export function summary(batch: readonly Write[]): { text: string; tone: 'busy' |
   for (const x of batch) if (x.status === 'ok' && x.noUndo) noUndo.set(x.noUndo, [...(noUndo.get(x.noUndo) ?? []), x.item]);
   for (const [why, ids] of noUndo) parts.push(`No undo for ${items(ids)}: ${why}`);
   for (const x of bad) {
-    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${kind === 'rate' ? `${RATE_FORMAT} to mark summaries` : `${FLAG_FORMAT} to use Needs-you flags`}.`);
+    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${kind === 'rate' ? `${RATE_FORMAT} to mark summaries` : kind === 'take' || kind === 'reassign' || kind === 'steer' ? `${ASSIGN_FORMAT} to assign and steer` : `${FLAG_FORMAT} to use Needs-you flags`}.`);
     else parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'failed'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
   }
   return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.filter((x) => x.status === 'ok' && x.undo).length };

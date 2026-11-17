@@ -99,6 +99,7 @@ pub(super) fn text_of(record: &WorkRecord) -> Option<Content> {
     match record {
         WorkRecord::Context { text, .. }
         | WorkRecord::HumanInput { text, .. }
+        | WorkRecord::Steered { text, .. }
         | WorkRecord::Question { text, .. } => Some(text.clone()),
         // An answer picks an option or says something, never both, so one entry reads back either.
         WorkRecord::Answer { text, chosen, .. } => Some(match chosen {

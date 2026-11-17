@@ -43,7 +43,8 @@
   "let h = t.hold.as_ref().filter(|h| h.by == rec.by)?;"
  ],
  "core/src/work_fold.rs#needs_you": [
-  "if it.flagged && it.hold.is_none() {"
+  "if it.flagged && it.hold.is_none() {",
+  "if matches!(it.assignee, Some(Assignee::Person(_)))"
  ],
  "core/src/work_fold.rs#prerequisite": [
   ".prerequisite_holder(item, attempt, triage, rec)?",
@@ -141,9 +142,6 @@
  ],
  "core/src/work_fold/trust.rs#summary_trust": [
   "for p in it.paths.iter().filter(|p| p.done) {"
- ],
- "core/src/work_fold/human_wait.rs#State::queue": [
-  "pub fn queue(&self, now_ms: u64) -> Vec<QueueEntry> {"
  ],
  "core/src/work_fold/human_wait.rs#hide_covers": [
   "pub(super) fn hide_covers(&self, id: &ItemId, at_ms: u64, kind: Option<WaitKind>) -> bool {"
@@ -381,8 +379,8 @@
  ],
  "tracker/src/tracker/tools.rs#check_sizes": [
   "pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {",
-  "WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {",
-  "check_content(\"text\", text)",
+  "| WorkRecord::HumanInput { text, .. }",
+  "| WorkRecord::Steered { text, .. } => check_content(\"text\", text),",
   "kbl_core::work::MAX_RULES_TEXT",
   "WorkRecord::Step { output, .. } => check_content(\"output\", output),",
   "WorkRecord::Edit { hunk, .. } => check_content(\"hunk\", hunk),",
@@ -436,5 +434,15 @@
  ],
  "tracker/src/tracker/tools.rs#triage_lists": [
   "if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {"
+ ],
+ "core/src/work_fold/human_wait.rs#State::queue_for": [
+  "Some(Assignee::Person(p)) => Some(p) == viewer,"
+ ],
+ "core/src/work_fold.rs#assign": [
+  "if rec.actor != Actor::Person {",
+  "if !it.accepted {"
+ ],
+ "tracker/src/http.rs#as_person": [
+  "&& !call.teams.is_member(&call.team, to)"
  ]
 }

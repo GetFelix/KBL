@@ -769,6 +769,15 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
             "/v1/work/rate-summary",
             json!({ "item": "a1", "attempt": 1, "accurate": true }),
         ),
+        ("/v1/work/take", json!({ "item": "a1" })),
+        (
+            "/v1/work/reassign",
+            json!({ "item": "a1", "to": { "person": "gab" } }),
+        ),
+        (
+            "/v1/work/steer",
+            json!({ "item": "a1", "attempt": 1, "text": { "text": "x" } }),
+        ),
         (
             "/v1/work/budget",
             json!({ "root": "a1", "items_left": 1, "max_depth": 1, "cost_left_micros": 1, "redos_per_item": 1 }),
@@ -1888,5 +1897,202 @@ async fn the_review_actions_act_only_in_the_tokens_team() {
         assert_eq!(status, StatusCode::CONFLICT, "{path}: {r}");
     }
     assert!(two.b.published().is_empty());
+    assert_eq!(two.a.published().len(), written);
+}
+
+/// The three format 12 routes, with a body each takes.
+fn assignee_routes() -> [(&'static str, Value); 3] {
+    [
+        ("take", json!({ "item": "a1" })),
+        (
+            "reassign",
+            json!({ "item": "a1", "to": { "person": "gab" } }),
+        ),
+        (
+            "steer",
+            json!({ "item": "a1", "attempt": 1, "text": { "text": "x" } }),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn the_assignee_actions_wait_for_format_12() {
+    let app = kept().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    raise_to(&app, 11).await;
+    for (path, body) in assignee_routes() {
+        let (status, reply) = call(
+            &app,
+            &format!("/v1/work/{path}"),
+            Some("tok-gab"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(
+            (status, reply["why"].as_str()),
+            (StatusCode::CONFLICT, Some("format")),
+            "{path}"
+        );
+    }
+    // Raised, the fold answers for each: nobody accepted it, nobody holds it.
+    raise_to(&app, 12).await;
+    let want = [
+        ("take", "not_ready"),
+        ("reassign", "not_ready"),
+        ("steer", "not_held"),
+    ];
+    for ((path, body), (_, why)) in assignee_routes().into_iter().zip(want) {
+        let (status, reply) = call(&app, &format!("/v1/work/{path}"), Some("tok-gab"), body).await;
+        assert_eq!(
+            (status, reply["why"].as_str()),
+            (StatusCode::CONFLICT, Some(why)),
+            "{path}"
+        );
+    }
+}
+
+/// Team `a` raised to 12 with `a1` accepted.
+async fn two_at_12() -> Two {
+    let two = two(64).await;
+    for record in [
+        json!({ "record": { "kind": "format_raised", "to": 12 } }),
+        imported("a1"),
+        json!({ "record": { "kind": "accepted", "item": "a1", "tier": 1 } }),
+    ] {
+        let (status, r) = call(
+            &two.app,
+            "/v1/teams/a/work/records",
+            Some("tok-a-gab"),
+            record,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{r}");
+    }
+    two
+}
+
+#[tokio::test]
+async fn the_assignee_actions_act_only_in_the_tokens_team() {
+    let two = two_at_12().await;
+    let written = two.a.published().len();
+    for (path, body) in assignee_routes() {
+        let (status, r) = call(
+            &two.app,
+            &format!("/v1/teams/b/work/{path}"),
+            Some("tok-a-gab"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(
+            (status, r["why"].as_str()),
+            (StatusCode::NOT_FOUND, Some("unknown_team")),
+            "{path}"
+        );
+    }
+    assert!(two.b.published().is_empty());
+    assert_eq!(two.a.published().len(), written);
+}
+
+#[tokio::test]
+async fn a_reassign_names_a_person_of_the_team() {
+    let two = two_at_12().await;
+    let written = two.a.published().len();
+    // ana is in team b only.
+    let to_ana = json!({ "item": "a1", "to": { "person": "ana" } });
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/a/work/reassign",
+        Some("tok-a-gab"),
+        to_ana,
+    )
+    .await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_member"))
+    );
+    assert_eq!(two.a.published().len(), written);
+    // kim is in team a: assigned, and the item leaves gab's queue for kim's.
+    let to_kim = json!({ "item": "a1", "to": { "person": "kim" } });
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/a/work/reassign",
+        Some("tok-a-gab"),
+        to_kim,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    let queue = |token| {
+        let app = two.app.clone();
+        async move {
+            let (status, q) = get_json(&app, "/v1/teams/a/work/queue", Some(token)).await;
+            assert_eq!(status, StatusCode::OK, "{q}");
+            q
+        }
+    };
+    let kim = queue("tok-both").await;
+    assert_eq!(kim["count"], 1);
+    assert_eq!(kim["queue"][0]["assignee"], json!({ "person": "kim" }));
+    assert_eq!(kim["queue"][0]["needs"], "taken");
+    assert_eq!(queue("tok-a-gab").await["count"], 0);
+    // The one-item read names the assignee too.
+    let (_, item) = get_json(&two.app, "/v1/teams/a/work/items/a1", Some("tok-a-gab")).await;
+    assert_eq!(item["item"]["assignee"], json!({ "person": "kim" }));
+    // Nobody: it is Ready again and in no one's queue.
+    let none = json!({ "item": "a1", "to": null });
+    let (status, _) = call(
+        &two.app,
+        "/v1/teams/a/work/reassign",
+        Some("tok-a-gab"),
+        none,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(queue("tok-both").await["count"], 0);
+}
+
+#[tokio::test]
+async fn a_reassign_through_records_names_a_person_of_the_team_too() {
+    let two = two_at_12().await;
+    let written = two.a.published().len();
+    let record = |who: &str| json!({ "record": { "kind": "reassigned", "item": "a1", "to": { "person": who } } });
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/a/work/records",
+        Some("tok-a-gab"),
+        record("ana"),
+    )
+    .await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_member"))
+    );
+    assert_eq!(two.a.published().len(), written);
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/a/work/records",
+        Some("tok-a-gab"),
+        record("kim"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+}
+
+#[tokio::test]
+async fn a_steer_over_the_inline_limit_is_refused_on_both_routes() {
+    let two = two_at_12().await;
+    let written = two.a.published().len();
+    let big = "x".repeat(kbl_core::artifact::INLINE_LIMIT + 1);
+    let body = json!({ "item": "a1", "attempt": 1, "text": { "text": big } });
+    let record = json!({ "record": { "kind": "steered", "item": "a1", "attempt": 1, "text": { "text": big } } });
+    for (path, body) in [("steer", body), ("records", record)] {
+        let (status, r) = call(
+            &two.app,
+            &format!("/v1/teams/a/work/{path}"),
+            Some("tok-a-gab"),
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {r}");
+    }
     assert_eq!(two.a.published().len(), written);
 }
