@@ -205,6 +205,7 @@ fn quiet_settings() -> crate::tracker::Settings {
         crash_after_done: false,
         review_tiers: crate::tracker::default_review_tiers(),
         cost_floor_micros: 0,
+        review_limit: 0,
     }
 }
 
@@ -220,6 +221,7 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             crash_after_done: false,
             review_tiers: crate::tracker::default_review_tiers(),
             cost_floor_micros: 0,
+            review_limit: 3,
         },
     )
     .await
@@ -977,7 +979,10 @@ async fn me_lists_the_persons_own_teams() {
     let (status, reply) = get_json(&two.app, "/v1/me", Some("tok-b-ana")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(reply["person"], "ana");
-    assert_eq!(reply["teams"], json!([{ "team": "b", "role": "admin" }]));
+    assert_eq!(
+        reply["teams"],
+        json!([{ "team": "b", "role": "admin", "review_limit": 3 }])
+    );
     let (_, reply) = get_json(&two.app, "/v1/me", Some("tok-both")).await;
     let names: Vec<&str> = reply["teams"]
         .as_array()

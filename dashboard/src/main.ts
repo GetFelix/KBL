@@ -151,7 +151,7 @@ const signIn = async (token: string): Promise<string | null> => {
       return reason;
     }
     tracker = t;
-    store.dispatch({ type: 'tracker', tracker: { kind: 'signed-in', person: me.person } });
+    store.dispatch({ type: 'tracker', tracker: { kind: 'signed-in', person: me.person, reviewLimit: me.limits[team ?? me.teams[0] ?? ''] ?? 0 } });
     return null;
   }
   const reason = me.status === 'refused' ? `${me.reason} (${me.why})` : me.status === 'failed' ? me.reason : 'The tracker answered without a person.';

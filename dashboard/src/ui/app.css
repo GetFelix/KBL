@@ -40,6 +40,10 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .status[data-tone='warn'] .status-icon { color: var(--warn); }
 .status[data-tone='error'] { color: var(--danger); }
 
+.review-full { margin: 0 0 0 auto; color: var(--text); font-size: var(--text-sm); display: flex; gap: var(--space-2); align-items: center; }
+.review-full[hidden] { display: none; }
+.review-full .status-icon { color: var(--warn); }
+.review-full:not([hidden]) + .status { margin-left: var(--space-3); }
 .content { display: grid; grid-template-columns: 1fr; flex: 1; }
 #work { min-width: 0; }
 .content:has(.panel:not([hidden])) { grid-template-columns: 1fr minmax(280px, 380px); }

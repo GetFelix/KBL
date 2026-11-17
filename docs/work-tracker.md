@@ -187,7 +187,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
-| `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
+| `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin", "review_limit": 3}]}` |
 
 A call that ends a claim (`complete`, `release`, `give_up`, and a
 `prerequisite` post that ends it) can be retried safely when its answer was
@@ -1867,13 +1867,34 @@ and per source on click.
 
 Agents open PRs faster than people review them, and a claim that only adds to
 the review pile makes every PR wait longer. So the tracker has a limit on
-agent PRs in In review. At the limit agents stop claiming, and the header says
-so: "review full: agents paused, 6/6". Triage, answers and reviews carry on, and
-the Ready column explains why nothing is moving.
+agent fixes headed for review. At the limit agents stop claiming new fixes.
+Triage, answers and reviews carry on, and the Ready column explains why nothing
+is moving.
 
-The limit is a setting. There is no evidence behind any default: the
-research found nothing that says how many open PRs a reviewer can handle. Pick
-a number, watch the review column, and change it.
+The limit is `KBL_REVIEW_LIMIT` (or `--review-limit`), 3 by default, and 0
+turns it off. It counts two things: items in In review (fixes an agent
+finished that nobody has closed) and fixes agents hold now that have not
+reached In review yet. Counting the held ones keeps a crowd of agents from all
+landing in review together. When that sum reaches the limit, `work_next` skips
+Ready fixes. It is soft only in that it never blocks triage, questions,
+reviews, resumed work or finding fixes. A finding fix is one a review asked for
+on a PR. It closes without a review of its own and the PR waits for it, so
+pausing it would stop that PR from ever leaving In review. The paused fixes
+come back on their own once a merge, a close or a finished hold brings the sum
+under the limit. Work an agent already holds is not taken back.
+
+The header says "review full: agents paused, 6/6 in review" when In review
+alone is at the limit. It counts only the In review column, so while held fixes
+are what fill the limit the header stays quiet even though new fixes wait.
+
+There is no evidence behind the default of 3: the research found nothing that
+says how many open PRs a reviewer can handle, and "two or three per active
+reviewer" was a guess. Pick a number, watch the review column, and change it.
+
+`GET /v1/me` carries each team's limit as `review_limit` (null while the team
+is not serving). The dashboard reads it once you sign in and counts the In
+review column itself, so a viewer who has not signed in sees no limit in the
+header.
 
 ### The footer names the constraint
 

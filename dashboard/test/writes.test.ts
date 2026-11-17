@@ -114,7 +114,7 @@ test('the client sends the viewer’s token to the page’s own routes, and read
     return { status: 409, json: async () => ({ error: 'not the open question', why: 'not_open_question' }) };
   };
   const t = new Tracker(fake, 'tok', 'default');
-  assert.deepEqual(await t.me(), { person: 'sam', teams: ['default'] });
+  assert.deepEqual(await t.me(), { person: 'sam', teams: ['default'], limits: {} });
   const o = await t.write(request('q', { kind: 'answer', question: 3, text: 'yes', chosen: null }));
   assert.deepEqual(o, { status: 'refused', why: 'not_open_question', reason: 'not the open question' });
   assert.deepEqual(seen.map((x) => [x.url, x.auth]), [['/v1/me', 'Bearer tok'], ['/v1/teams/default/work/questions/answer', 'Bearer tok']]);
@@ -256,4 +256,10 @@ test('acting on part of the selection keeps the other marks', () => {
   assert.deepEqual(marksAfter(['a', 'b'], ['a', 'b']), []);
   assert.deepEqual(marksAfter(['a', 'b'], ['z']), ['a', 'b']);
   assert.deepEqual(marksAfter(['a'], []), ['a']);
+});
+
+test('me carries each team’s review limit, and leaves out a team with none', async () => {
+  const fake: Fetch = async () => ({ status: 200, json: async () => ({ person: 'sam', teams: [{ team: 'a', review_limit: 3 }, { team: 'b', review_limit: 0 }, { team: 'c', review_limit: null }] }) });
+  const me = await new Tracker(fake, 'tok', null).me();
+  assert.deepEqual('limits' in me && me.limits, { a: 3 });
 });

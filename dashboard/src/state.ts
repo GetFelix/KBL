@@ -10,7 +10,7 @@ import { putWrite, type Write, type Writes } from './writes.ts';
 export type TrackerState =
   | { kind: 'signed-out' }
   | { kind: 'checking' }
-  | { kind: 'signed-in'; person: string }
+  | { kind: 'signed-in'; person: string; /** Agent PRs in In review at which agents pause; 0 is no limit. */ reviewLimit: number }
   | { kind: 'refused'; reason: string };
 
 export type Connection =
@@ -164,6 +164,13 @@ export function toAddress(search: string, s: AddressState): string {
   else q.delete('item');
   const out = q.toString();
   return out ? `?${out}` : '';
+}
+
+/** The header line when In review is at the tracker's limit, from the items the page folded and the limit the tracker reported. */
+export function reviewFull(items: readonly { stage: string }[], limit: number): string | null {
+  if (limit <= 0) return null;
+  const n = items.filter((i) => i.stage === 'in_review').length;
+  return n >= limit ? `review full: agents paused, ${n}/${limit} in review` : null;
 }
 
 /** One line for the status bar, and how loudly to say it. */
