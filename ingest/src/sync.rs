@@ -285,11 +285,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         if let Some(root) = p.roots.get(&key).cloned() {
             // Imported by a poll that stopped before it saved.
             let item = root.item.clone();
-            p.state
-                .items
-                .insert(key.clone(), tracked(&item, &rule, issue));
             // The writes below are idempotent, so each step the crashed poll
-            // may not have reached is redone.
+            // may not have reached is redone. The root is tracked only once
+            // they land: a saved item makes later polls follow it and skip them.
             self.context(&item, "issue", issue_text(issue)).await?;
             self.context(&item, "intake", intake_text(&rule, issue))
                 .await?;
@@ -304,6 +302,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 )
                 .await?;
             }
+            p.state
+                .items
+                .insert(key.clone(), tracked(&item, &rule, issue));
             self.park_unmapped(p, &rule, issue).await?;
             if was_waiting {
                 self.import_comments(p, issue).await?;
@@ -354,6 +355,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .to_owned(),
                 closed: false,
                 closed_by_sync: false,
+                closed_by_merge: false,
                 left_scope_by_sync: false,
                 reopened_by: None,
                 has_children: rule.mode == Mode::Admit,
@@ -485,7 +487,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 p.state.items.insert(key, t);
                 return Ok(());
             }
-            (None, None) => {}
+            // The close was written but the save that would have recorded it
+            // was lost, and the issue reopened before the next poll.
+            (None, None) => {
+                if root.closed && root.closed_by_sync && !root.closed_by_merge {
+                    self.write(&WorkRecord::Reopened {
+                        item: t.item.clone(),
+                    })
+                    .await?;
+                    set_closed(p, &key, false);
+                }
+            }
         }
         let open = p.roots.get(&key).filter(|r| !r.closed);
         if let Some(root) = open {
@@ -1383,6 +1395,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 stage: "ready".to_owned(),
                 closed: false,
                 closed_by_sync: false,
+                closed_by_merge: false,
                 left_scope_by_sync: false,
                 reopened_by: None,
                 has_children: false,

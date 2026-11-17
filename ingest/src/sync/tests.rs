@@ -617,6 +617,49 @@ async fn a_close_whose_save_failed_is_still_ours_when_the_issue_reopens() {
 }
 
 #[tokio::test]
+async fn a_poll_that_fails_mid_admission_of_an_imported_root_finishes_it_next_time() {
+    let rig = rig();
+    rig.tracker.append(&imported_record()).await.unwrap();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    // The tracker goes away after the import; the state is still saved.
+    rig.tracker.fail_appends(true);
+    ingest.poll(false).await.unwrap_err();
+    rig.tracker.fail_appends(false);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    let root = &s.items[&item_id(UP)];
+    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.children.len(), 2);
+}
+
+#[tokio::test]
+async fn a_close_whose_save_was_lost_is_undone_when_the_issue_reopens_before_the_next_poll() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    let item = rig.root(UP);
+
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "not_planned",
+        "2026-11-10T12:00:00Z",
+    )]);
+    rig.tracker.fail_saves();
+    ingest.poll(false).await.unwrap_err();
+    assert_eq!(rig.tracker.count("closed"), 1);
+    rig.tracker.allow_saves();
+
+    let mut open = issue(812, |_| {});
+    open["state_reason"] = json!("reopened");
+    rig.list(vec![at(open, "2026-11-10T13:00:00Z")]);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("reopened"), 1);
+    assert_eq!(rig.tracker.state().items[&item].closed, None);
+}
+
+#[tokio::test]
 async fn closed_issues_are_pruned_from_the_saved_state_and_still_reopen() {
     let rig = rig();
     let ingest = rig.ingest(json!([admit_rule()]));
