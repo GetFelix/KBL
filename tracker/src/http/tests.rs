@@ -54,6 +54,11 @@ struct Quiet {
     /// The next read takes this long. With a record, another tracker meanwhile
     /// takes the lease and appends it.
     slow_read: Arc<StdMutex<Option<SlowRead>>>,
+    /// Ingest source leases by source: value and version.
+    source_leases: Arc<StdMutex<std::collections::HashMap<String, (Vec<u8>, u64)>>>,
+    /// Another tracker writes this to a source's lease just before the next
+    /// lease put, so that put's version check fails.
+    race_lease_put: Arc<StdMutex<Option<Vec<u8>>>>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
@@ -192,6 +197,28 @@ impl Broker for Quiet {
             .unwrap()
             .is_some_and(|t| t > tokio::time::Instant::now());
         Ok(live.then(|| (self.lease_holder.lock().unwrap().clone(), version)))
+    }
+    async fn source_lease_get(&self, source: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        Ok(self.source_leases.lock().unwrap().get(source).cloned())
+    }
+    async fn source_lease_put(
+        &self,
+        source: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut leases = self.source_leases.lock().unwrap();
+        if let Some(other) = self.race_lease_put.lock().unwrap().take() {
+            let next = leases.get(source).map_or(1, |(_, v)| v + 1);
+            leases.insert(source.to_owned(), (other, next));
+        }
+        let now = leases.get(source).map(|(_, v)| *v);
+        if now != expect {
+            return Ok(None);
+        }
+        let next = now.unwrap_or(0) + 1;
+        leases.insert(source.to_owned(), (value, next));
+        Ok(Some(next))
     }
     async fn forget(&self, _: Option<&str>) {}
     async fn close_idle(&self, _: Duration) {}

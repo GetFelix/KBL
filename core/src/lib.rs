@@ -24,6 +24,7 @@
 pub mod artifact;
 pub mod codec;
 pub mod content;
+pub mod lease;
 pub mod legacy_env;
 pub mod names;
 pub mod org;

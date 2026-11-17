@@ -42,7 +42,7 @@ use crate::tracker::{
 };
 
 mod agents;
-mod ingest;
+pub(crate) mod ingest;
 mod org;
 
 /// A call the token does not allow: status and why.
@@ -57,6 +57,8 @@ struct App<B> {
     team_polls: std::sync::Mutex<
         std::collections::HashMap<kbl_core::org::TeamName, Arc<tokio::sync::Semaphore>>,
     >,
+    /// Live ingest workers per group and the source leases they hold.
+    leases: Arc<ingest::leases::Groups>,
 }
 
 /// The team named by a `/v1/teams/{team}/` path, set by [`in_team`] only.
@@ -64,10 +66,18 @@ struct App<B> {
 struct TeamPath(String);
 
 pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
+    router_with(teams, Default::default())
+}
+
+pub(crate) fn router_with<B: Broker>(
+    teams: Arc<Teams<B>>,
+    leases: Arc<ingest::leases::Groups>,
+) -> Router {
     let app = Arc::new(App {
         teams,
         polls: Arc::new(tokio::sync::Semaphore::new(ingest::MAX_HELD_POLLS)),
         team_polls: Default::default(),
+        leases,
     });
     // `route_layer` sees the matched route template, so the metrics label is
     // `/v1/work/items/{item}`, never an item id. The team-scoped catch-all is added

@@ -16,6 +16,7 @@ kbl-core = { path = "../core" }
 kbl-metrics = { path = "../metrics" }
 kbl-trace = { path = "../trace" }
 anyhow = "=1.0.100"
+futures = { version = "=0.3.34", default-features = false, features = ["std", "async-await"] }
 axum = { version = "=0.8.8", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path"] }
 bytes = "=1.12.1"
 clap = { version = "=4.5.51", features = ["derive", "env"] }

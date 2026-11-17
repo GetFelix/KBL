@@ -415,6 +415,34 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
+    /// A source's ingest lease and the version to write it back at.
+    pub(crate) async fn source_lease(
+        &self,
+        source: &str,
+    ) -> Result<Option<(kbl_core::lease::Lease, u64)>, Error> {
+        match self.0.broker.source_lease_get(source).await {
+            Ok(Some((bytes, version))) => serde_json::from_slice(&bytes)
+                .map(|l| Some((l, version)))
+                .map_err(|e| Error::Felix(anyhow::anyhow!("a source lease is not JSON: {e}"))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
+    /// Writes a source's lease if nobody wrote it since `version`.
+    pub(crate) async fn put_source_lease(
+        &self,
+        source: &str,
+        lease: &kbl_core::lease::Lease,
+        version: Option<u64>,
+    ) -> Result<bool, Error> {
+        let bytes = serde_json::to_vec(lease).map_err(|_| refused("invalid"))?;
+        match self.0.broker.source_lease_put(source, bytes, version).await {
+            Ok(put) => Ok(put.is_some()),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
     pub(crate) async fn ingest_state(&self, source: &str) -> Result<Value, Error> {
         let name = state_name(source)?;
         match self.0.broker.cursor_get(&name).await {
