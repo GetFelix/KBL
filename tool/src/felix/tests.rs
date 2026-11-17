@@ -72,3 +72,36 @@ async fn any_other_failure_is_returned_at_once() {
     assert!(got.is_err());
     assert_eq!(calls, 1);
 }
+
+#[tokio::test]
+async fn a_read_waits_out_a_shard_that_is_not_ready() {
+    let mut calls = 0;
+    let (records, tip) = pages_to_tip("org.events", |from| {
+        calls += 1;
+        let n = calls;
+        async move {
+            match (n, from) {
+                (1..=2, _) => Err(anyhow::anyhow!(
+                    "read refused: shard is not assigned to any broker"
+                )),
+                (_, 0) => Ok((vec![(0, b"a".to_vec())], 1)),
+                _ => Ok((Vec::new(), from)),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!((records.len(), tip, calls), (1, 1, 4));
+}
+
+#[tokio::test]
+async fn a_read_refused_for_another_reason_is_not_retried() {
+    let mut calls = 0;
+    let got = pages_to_tip("org.events", |_| {
+        calls += 1;
+        async { Err(anyhow::anyhow!("permission denied")) }
+    })
+    .await;
+    assert!(got.is_err());
+    assert_eq!(calls, 1);
+}

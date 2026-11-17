@@ -34,7 +34,7 @@ const ID_TOKEN_AUDIENCE: &str = "kbl";
 /// How long one request to Felix may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
-const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
+const PLACEMENT_WAIT: Duration = Duration::from_secs(60);
 /// The development stack's administrator, who may create runs.
 const ADMIN_SUBJECT: &str = "agents-admin";
 
@@ -241,33 +241,19 @@ impl Broker {
     /// The tip can pass the last record: a Raft shard's blank entries hold no
     /// record, and a refused conditional publish leaves one.
     pub(crate) async fn read_to_tip(&self, stream: &str) -> Result<(Vec<(u64, Vec<u8>)>, u64)> {
-        let mut records = Vec::new();
-        let mut from = 0;
-        loop {
-            let page = match self
+        pages_to_tip(stream, |from| async move {
+            let page = self
                 .client
                 .read(&self.tenant, &self.namespace, stream, 0, from, None, 0)
-                .await
-            {
-                Ok(page) => page,
-                // Felix refuses an offset past its tail: `from` is the tip.
-                Err(e) if past_the_tail(&e) => return Ok((records, from)),
-                Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
-            };
-            if page.records.is_empty() {
-                return Ok((records, from.max(page.next_offset)));
-            }
-            records.extend(
-                page.records
-                    .into_iter()
-                    .map(|r| (r.offset, r.payload.to_vec())),
-            );
-            anyhow::ensure!(
-                page.next_offset > from,
-                "reading {stream} did not advance past offset {from}"
-            );
-            from = page.next_offset;
-        }
+                .await?;
+            let records = page
+                .records
+                .into_iter()
+                .map(|r| (r.offset, r.payload.to_vec()))
+                .collect();
+            Ok((records, page.next_offset))
+        })
+        .await
     }
 
     /// Publishes `payload` only if it would land at `expected`.
@@ -306,6 +292,35 @@ impl Broker {
         .await
         .with_context(|| format!("publish to {stream}"))?;
         offset.context("the broker did not report an offset")
+    }
+}
+
+/// Reads pages from offset 0 until an empty one. `read` returns a page's
+/// records and the offset after it. A shard that is not ready yet is retried,
+/// since a read has no effect to repeat.
+async fn pages_to_tip<F, Fut>(stream: &str, mut read: F) -> Result<(Vec<(u64, Vec<u8>)>, u64)>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: Future<Output = Result<(Vec<(u64, Vec<u8>)>, u64)>>,
+{
+    let mut out = Vec::new();
+    let mut from = 0;
+    loop {
+        let (records, next) = match placed(|| read(from)).await {
+            Ok(page) => page,
+            // Felix refuses an offset past its tail: `from` is the tip.
+            Err(e) if past_the_tail(&e) => return Ok((out, from)),
+            Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+        };
+        if records.is_empty() {
+            return Ok((out, from.max(next)));
+        }
+        out.extend(records);
+        anyhow::ensure!(
+            next > from,
+            "reading {stream} did not advance past offset {from}"
+        );
+        from = next;
     }
 }
 
