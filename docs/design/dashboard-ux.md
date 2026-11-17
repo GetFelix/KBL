@@ -165,9 +165,9 @@ numbers live in `dashboard/check/budget.mjs`, and CI fails when one is over.
 | Measure | Where | Budget |
 | --- | --- | --- |
 | Fold of 10,000 items plus reading them back, wasm in node | `npm test` (`test/budget.test.ts`) | 2000 ms (140 ms on a laptop, 800 to 1100 ms on a CI runner running tests in parallel) |
-| Time spent in `fold.apply` while the page loads the log | `npm run check` | 1000 ms (measured 220 ms on a CI runner) |
-| First useful paint: the first list row on screen | `npm run check` | 5000 ms |
-| Live with the whole log | `npm run check` | 15000 ms |
+| Time spent in `fold.apply` while the page loads the log | `npm run check` | 1000 ms (220 to 290 ms on a CI runner) |
+| First useful paint: the first list row on screen | `npm run check` | 3000 ms (about 900 ms on a CI runner) |
+| Live with the whole log | `npm run check` | 6000 ms (about 1600 ms on a CI runner) |
 
 Budgets are a measured baseline plus margin for a shared CI runner. The browser check prints its numbers on a
 `perf:` line, so a budget can be tightened from a run. Raising one needs a reason in the change that does it.

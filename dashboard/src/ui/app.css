@@ -237,3 +237,4 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .story-edit code { overflow-wrap: anywhere; }
 .story-step { padding: var(--space-1) 0; }
 .story-step code { overflow-wrap: anywhere; }
+.story-edit summary { padding: var(--space-2) 0; cursor: pointer; }
