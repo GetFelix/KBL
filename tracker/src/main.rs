@@ -132,6 +132,10 @@ struct Cli {
         default_value_t = kbl_core::work_fold::SNAPSHOT_EVERY
     )]
     snapshot_every: u64,
+    /// Seconds an agent assignee may make no call before the tracker drops it
+    /// and its Ready items go to the whole team.
+    #[arg(long, env = "KBL_ASSIGNEE_AWAY_SECS", default_value_t = 600)]
+    assignee_away_secs: u64,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -234,6 +238,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
     let review_limit = cli.review_limit;
     let snapshot_dir = cli.snapshot_dir.clone();
     let snapshot_every = cli.snapshot_every;
+    let assignee_away = Duration::from_secs(cli.assignee_away_secs);
     let base = target(cli, "");
     Arc::new(move |team: TeamName| {
         let mut target = base.clone();
@@ -256,6 +261,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             review_limit,
             snapshot_dir: snapshot_dir.clone(),
             snapshot_every,
+            assignee_away,
         };
         Box::pin(async move {
             let felix = felix::connect(target, Kind::Team).await?;

@@ -626,3 +626,17 @@ fn spend_of_a_root_without_a_repo_counts_in_totals_but_not_by_repo() {
     assert_eq!(spend.by_root, BTreeMap::from([(id("r1"), 500)]));
     assert!(spend.by_repo.is_empty());
 }
+
+#[test]
+fn a_review_is_not_assigned_to_an_agent_that_worked_its_tree() {
+    let mut l = reviewed();
+    l.person(WorkRecord::FormatRaised { to: 13 });
+    let to = |a: &str| WorkRecord::Reassigned {
+        item: id("v1"),
+        to: Some(crate::work::Assignee::Agent(key(a))),
+    };
+    l.person(to("w1"));
+    assert_eq!(last(&l), Some(Reject::SelfReview));
+    l.person(to("w2"));
+    assert_eq!(state(&l).rejections.len(), 1);
+}

@@ -5,8 +5,8 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
-    FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, ReadError, WorkLogged, WorkRecord,
-    read,
+    FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, ReadError, WorkLogged,
+    WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1052,7 +1052,7 @@ const FORMAT_12_LOG: &str = include_str!("work_format_12.jsonl");
 #[test]
 fn the_twelfth_format_is_twelve_and_names_its_kinds() {
     assert_eq!(FORMAT_V12, 12);
-    assert_eq!(FORMAT, FORMAT_V12);
+    const { assert!(FORMAT >= FORMAT_V12) };
     let mut seen: Vec<&str> = entries(FORMAT_12_LOG)
         .iter()
         .filter(|(_, r)| r.v == FORMAT_V12 && r.record.kind() != "format_raised")
@@ -1115,4 +1115,47 @@ fn an_assignee_record_and_the_raise_to_it_stop_a_format_11_reader() {
         read(above.as_bytes()),
         Err(ReadError::Newer { v }) if v == FORMAT + 1
     ));
+}
+
+/// A log that raises to the thirteenth format and assigns an agent. Its
+/// folded state is pinned in `wasm/golden/format_13.state.json`.
+const FORMAT_13_LOG: &str = include_str!("work_format_13.jsonl");
+
+/// Format 13 adds no record: only the raise is stamped 13.
+#[test]
+fn the_thirteenth_format_is_thirteen_and_adds_no_record() {
+    assert_eq!(FORMAT_V13, 13);
+    assert_eq!(FORMAT, FORMAT_V13);
+    for (_, r) in entries(FORMAT_13_LOG) {
+        assert!(r.v <= FORMAT_V12 || r.record.kind() == "format_raised");
+        assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
+    }
+}
+
+/// Below 13 an agent assignee is refused; at 13 only the assignee claims,
+/// and the tracker may drop an agent that stayed away.
+#[test]
+fn an_agent_assignee_routes_the_claim_once_the_log_is_at_format_13() {
+    let log = entries(FORMAT_13_LOG);
+    let r1 = kbl_core::names::ItemId::new("r1").unwrap();
+    let holder = |n: usize| {
+        fold(&log[..n]).items[&r1]
+            .hold
+            .as_ref()
+            .map(|h| h.by.as_str().to_owned())
+    };
+    assert_eq!(holder(8), Some("w1".into()));
+    assert_eq!(holder(12), None);
+    assert_eq!(fold(&log[..13]).items[&r1].assignee, None);
+    assert_eq!(holder(14), Some("w1".into()));
+    let why = |offset, why| Rejection { offset, why };
+    assert_eq!(
+        fold(&log).rejections,
+        vec![
+            why(3, Reject::BadAssignee),
+            why(6, Reject::NotAssignee),
+            why(9, Reject::NotReady),
+            why(11, Reject::NotAssignee),
+        ]
+    );
 }

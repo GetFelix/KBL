@@ -125,7 +125,7 @@ fn a_reassign_sets_or_clears_the_assignee() {
 }
 
 #[test]
-fn a_reassign_to_an_agent_or_by_an_agent_is_refused() {
+fn a_reassign_to_an_agent_below_format_13_or_by_an_agent_is_refused() {
     let mut l = raised();
     l.person(to(Some(Assignee::Agent(key("w1")))));
     assert_eq!(last_reject(&l), Some(Reject::BadAssignee));
@@ -277,4 +277,115 @@ fn a_steer_on_an_earlier_attempt_is_refused_while_a_redo_is_held() {
     assert!(fold(&l.0).items[&id("r1")].paths[0].human_inputs.is_empty());
     let at = l.person(steered(2));
     assert_eq!(fold(&l.0).items[&id("r1")].paths[1].human_inputs, vec![at]);
+}
+
+fn agent(k: &str) -> Option<Assignee> {
+    Some(Assignee::Agent(key(k)))
+}
+
+/// A log raised to format 13, with `r1` accepted.
+fn raised_13() -> Log {
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 13 });
+    accepted_root(&mut l, "r1");
+    l
+}
+
+#[test]
+fn an_agent_assignee_is_the_only_agent_that_may_claim() {
+    let mut l = raised_13();
+    l.person(to(agent("w1")));
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("r1")].assignee, agent("w1"));
+    // Still Ready: an agent assignee does not wait on a person.
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+    assert_eq!(s.needs_you(&id("r1")), None);
+    l.agent("w2", claimed("r1", 1));
+    assert_eq!(last_reject(&l), Some(Reject::NotAssignee));
+    assert_eq!(fold(&l.0).items[&id("r1")].hold, None);
+    l.agent("w1", claimed("r1", 1));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.items[&id("r1")].hold.as_ref().map(|h| h.by.clone()),
+        Some(key("w1"))
+    );
+    // An agent assignee's waiting item is in everyone's queue.
+    l.agent("w1", released(1));
+    l.person(WorkRecord::Flagged {
+        item: id("r1"),
+        flagged: true,
+    });
+    assert_eq!(queue_of(&l, Some("ana")), vec!["r1"]);
+}
+
+#[test]
+fn a_reassign_while_held_never_makes_a_second_holder() {
+    let mut l = raised_13();
+    l.agent("w1", claimed("r1", 1));
+    // Reassigned and taken while w1 holds: w1 keeps the one hold.
+    l.person(to(agent("w2")));
+    l.agent("w2", claimed("r1", 1));
+    assert_eq!(last_reject(&l), Some(Reject::NotReady));
+    l.agent("w2", claimed("r1", 2));
+    assert_eq!(last_reject(&l), Some(Reject::NotReady));
+    l.person(taken());
+    l.person(to(agent("w2")));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.items[&id("r1")].hold.as_ref().map(|h| h.by.clone()),
+        Some(key("w1"))
+    );
+    // Once it lets go, only the new assignee may take the next try.
+    l.agent("w1", released(1));
+    l.agent("w1", claimed("r1", 1));
+    assert_eq!(last_reject(&l), Some(Reject::NotAssignee));
+    l.agent("w2", claimed("r1", 1));
+    let s = fold(&l.0);
+    assert_eq!(
+        s.items[&id("r1")].hold.as_ref().map(|h| h.by.clone()),
+        Some(key("w2"))
+    );
+}
+
+#[test]
+fn the_tracker_may_only_drop_an_agent_assignee() {
+    let mut l = raised_13();
+    l.tracker(to(None));
+    assert_eq!(last_reject(&l), Some(Reject::ActorNotAllowed));
+    l.person(to(person("ana")));
+    l.tracker(to(None));
+    assert_eq!(last_reject(&l), Some(Reject::ActorNotAllowed));
+    l.person(to(agent("w1")));
+    l.tracker(to(agent("w2")));
+    assert_eq!(last_reject(&l), Some(Reject::ActorNotAllowed));
+    l.tracker(to(None));
+    let s = fold(&l.0);
+    assert_eq!(s.items[&id("r1")].assignee, None);
+    l.agent("w2", claimed("r1", 1));
+    assert!(fold(&l.0).items[&id("r1")].hold.is_some());
+}
+
+#[test]
+fn an_agent_assignee_needs_a_log_at_format_13() {
+    // Stamped 12 like any reassign: the log's format decides, so a log
+    // below 13 folds as it did before.
+    assert_eq!(to(agent("w1")).format(), 12);
+    let mut l = raised();
+    l.person(to(agent("w1")));
+    assert_eq!(last_reject(&l), Some(Reject::BadAssignee));
+    l.agent("w2", claimed("r1", 1));
+    assert!(fold(&l.0).items[&id("r1")].hold.is_some());
+}
+
+#[test]
+fn the_tracker_cannot_drop_an_assignee_of_a_closed_item() {
+    let mut l = raised_13();
+    l.person(to(agent("w1")));
+    l.person(WorkRecord::Closed {
+        item: id("r1"),
+        why: CloseWhy::Dismissed,
+    });
+    l.tracker(to(None));
+    assert_eq!(fold(&l.0).items[&id("r1")].assignee, agent("w1"));
+    assert!(last_reject(&l).is_some());
 }

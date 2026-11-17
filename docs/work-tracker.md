@@ -788,9 +788,46 @@ they are refused with `format`. Each needs an open, accepted item (`closed`,
 - A take, a reassign and a steer each count as a person acting on the wait for
   [time to first human action](#time-to-first-human-action). The wait a take
   starts is counted as acted on, since the person chose it.
-- An agent cannot be an assignee yet: `reassigned` to `{"agent": ...}` is
-  refused as `bad_assignee`. Routing a claim to one agent is
-  [#324](https://github.com/GetFelix/KBL/issues/324).
+- **An agent assignee** (`{"agent": "w1"}`, from [format 13](upgrades.md#formats))
+  means only that agent works the item. It must be an agent of the team that
+  is not revoked (`not_member`), and only a person sets it. The item stays
+  Ready and shows in everyone's My queue when it waits on a person. Below
+  format 13 it is refused as `bad_assignee`.
+
+##### How the claim reaches the assigned agent
+
+The fold refuses `claimed` by any other agent as `not_assignee`. A hold is
+still one slot that a claim fills only from Ready, so assigning or reassigning
+while an agent holds the item never makes a second holder: the holder keeps
+it until it finishes, releases or lapses, and only then can the assignee claim.
+
+The tracker does not publish an agent's item to a ready lane. When the
+assignee calls `work_next`, the tracker claims its assigned Ready item in the highest-priority lane
+straight from the state, ahead of the lanes, and nobody else is ever handed
+it. A ready record published before the assignment is acked by whichever
+agent polls it and is not published again, so:
+
+- no agent gets the item back, and none passes it between them;
+- the item spends none of Felix's handouts, which dead-letter a record at
+  their limit: the record is acked, never nacked;
+- the assignee is never starved, since nothing else can claim the item.
+
+A direct claim has no Felix delivery. The agent extends it as usual and the
+tracker's sweep lapses it when it is not extended; a restarted tracker takes
+it back from the log without polling Felix.
+
+If the assigned agent goes away (it is revoked, or makes no call to the
+tracker to claim, extend or finish work for `KBL_ASSIGNEE_AWAY_SECS`, 600 by
+default, counted from the tracker's start), the sweep writes
+`reassigned` to nobody as the tracker, and the item goes to the whole team.
+The story shows why. A busy agent working another item still extends it, so
+it keeps its assigned items. A revoke drops the assignee at once only on the
+tracker that served it; a restarted tracker waits out the away time.
+
+Reassigning or clearing an agent while it holds the item leaves its hold in
+place until it finishes, releases or lapses. If the tracker restarts while an
+agent holds an item it no longer is the assignee of, that hold is recovered
+like a lane claim, which may cost it the hold.
 
 #### Review actions and summary marks
 
