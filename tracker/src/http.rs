@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{FromRequestParts, Path, Query, Request, State};
+use axum::extract::{FromRequest, FromRequestParts, Path, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
@@ -19,11 +19,12 @@ use axum::{Json, Router};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, PriceUnit,
-    RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
+    Actor, CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, PriceUnit,
+    RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
 };
 use kbl_core::work_fold::Stage;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::OwnedSemaphorePermit;
 use tower::ServiceExt;
@@ -156,6 +157,44 @@ async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, req: Request) -> Res
     }
 }
 
+/// A JSON body, and the request key it carries, if any. The digest covers the
+/// route and the rest of the body, so a key sent again with another body can be
+/// told from a retry.
+struct Keyed<T>(T, Option<RequestKey>);
+
+impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Keyed<T> {
+    type Rejection = Response;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Response> {
+        let route = req.uri().path().to_owned();
+        let Json(mut body) = Json::<Value>::from_request(req, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let key = match body.as_object_mut().and_then(|o| o.remove("request_key")) {
+            None | Some(Value::Null) => None,
+            Some(Value::String(k)) => Some(Key::new(k).map_err(|e| {
+                reply(Err(Error::Invalid(format!(
+                    "request_key: {e}; use letters, digits, - and _"
+                ))))
+            })?),
+            Some(_) => {
+                return Err(reply(Err(Error::Invalid(
+                    "request_key must be a string".into(),
+                ))));
+            }
+        };
+        let req = key.map(|k| RequestKey::new(k, &route, &body));
+        let typed = serde_json::from_value(body).map_err(|e| {
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("Failed to deserialize the JSON body into the target type: {e}"),
+            )
+                .into_response()
+        })?;
+        Ok(Self(typed, req))
+    }
+}
+
 /// Who is calling and in which team, with the team's slot for the call. Taken
 /// before the body is read, so an unknown token is refused first.
 struct Call<B> {
@@ -234,6 +273,26 @@ impl<B> Call<B> {
                 Err((StatusCode::FORBIDDEN, "this call is for an agent's token"))
             }
         }
+    }
+
+    /// Runs a write under the caller's request key, if it sent one.
+    async fn keyed(
+        &self,
+        req: Option<RequestKey>,
+        write: impl Future<Output = Result<Value, Error>>,
+    ) -> Result<Value, Error>
+    where
+        B: Broker,
+    {
+        let (actor, by) = match &self.caller {
+            Caller::Agent(a) => (
+                Actor::Agent,
+                Key::new(a.as_str()).expect("an agent name is a key"),
+            ),
+            Caller::Person(p) => (Actor::Person, p.clone()),
+            Caller::Ingest(_) => return write.await,
+        };
+        self.tracker.keyed(actor, &by, req, write).await
     }
 
     fn person(&self) -> Result<Key, Denied> {
@@ -636,19 +695,28 @@ async fn give_up<B: Broker>(call: Call<B>, Json(body): Json<GiveUpBody>) -> Resp
     }
 }
 
-async fn records<B: Broker>(call: Call<B>, Json(body): Json<RecordBody>) -> Response {
+async fn records<B: Broker>(call: Call<B>, Keyed(body, rk): Keyed<RecordBody>) -> Response {
     match call.person() {
-        Ok(p) => reply(call.tracker().person_record(p, body.record).await),
+        Ok(p) => reply(
+            call.keyed(rk, call.tracker().person_record(p, body.record))
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }
 
-async fn work_post<B: Broker>(call: Call<B>, Json(b): Json<PostBody>) -> Response {
+async fn work_post<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<PostBody>) -> Response {
     let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
     };
     if b.work == "prerequisite" {
+        // Its retry is replayed by the claim, and its reply says whether the claim goes on.
+        if rk.is_some() {
+            return reply(Err(Error::Invalid(
+                "a prerequisite is retried by its claim; send no request_key".into(),
+            )));
+        }
         let usage = match usage_of(b.usage, b.cost_micros) {
             Ok(u) => u,
             Err(e) => return reply(Err(e)),
@@ -685,12 +753,18 @@ async fn work_post<B: Broker>(call: Call<B>, Json(b): Json<PostBody>) -> Respons
         Ok(k) => k,
         Err(e) => return reply(Err(e)),
     };
-    reply(call.tracker().post(&a, &b.item, b.key, kind, b.title).await)
+    reply(
+        call.keyed(rk, call.tracker().post(&a, &b.item, b.key, kind, b.title))
+            .await,
+    )
 }
 
-async fn link<B: Broker>(call: Call<B>, Json(b): Json<LinkBody>) -> Response {
+async fn link<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<LinkBody>) -> Response {
     match call.agent() {
-        Ok(a) => reply(call.tracker().link(&a, &b.item, &b.to).await),
+        Ok(a) => reply(
+            call.keyed(rk, call.tracker().link(&a, &b.item, &b.to))
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }
@@ -702,29 +776,30 @@ async fn context_read<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Resp
     }
 }
 
-async fn context_add<B: Broker>(call: Call<B>, Json(b): Json<ContextAddBody>) -> Response {
+async fn context_add<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ContextAddBody>) -> Response {
     match call.agent() {
         Ok(a) => reply(
-            call.tracker()
-                .context_add(&a, &b.item, b.entry, b.text)
+            call.keyed(rk, call.tracker().context_add(&a, &b.item, b.entry, b.text))
                 .await,
         ),
         Err(d) => denied(d),
     }
 }
 
-async fn progress<B: Broker>(call: Call<B>, Json(b): Json<ProgressBody>) -> Response {
+async fn progress<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ProgressBody>) -> Response {
     match call.agent() {
         Ok(a) => reply(
-            call.tracker()
-                .progress(&a, &b.item, b.note, b.branch, b.pr)
-                .await,
+            call.keyed(
+                rk,
+                call.tracker().progress(&a, &b.item, b.note, b.branch, b.pr),
+            )
+            .await,
         ),
         Err(d) => denied(d),
     }
 }
 
-async fn decide<B: Broker>(call: Call<B>, Json(b): Json<DecideBody>) -> Response {
+async fn decide<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<DecideBody>) -> Response {
     let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
@@ -740,10 +815,10 @@ async fn decide<B: Broker>(call: Call<B>, Json(b): Json<DecideBody>) -> Response
         evidence: b.evidence,
         revert_check: b.revert_check,
     };
-    reply(call.tracker().decide(&a, &b.item, d).await)
+    reply(call.keyed(rk, call.tracker().decide(&a, &b.item, d)).await)
 }
 
-async fn finding<B: Broker>(call: Call<B>, Json(b): Json<FindingBody>) -> Response {
+async fn finding<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<FindingBody>) -> Response {
     let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
@@ -756,15 +831,17 @@ async fn finding<B: Broker>(call: Call<B>, Json(b): Json<FindingBody>) -> Respon
         scenario: b.scenario,
         verdict: b.verdict,
     };
-    reply(call.tracker().finding(&a, &b.item, f).await)
+    reply(call.keyed(rk, call.tracker().finding(&a, &b.item, f)).await)
 }
 
-async fn review_verdict<B: Broker>(call: Call<B>, Json(b): Json<VerdictBody>) -> Response {
+async fn review_verdict<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<VerdictBody>) -> Response {
     match call.agent() {
         Ok(a) => reply(
-            call.tracker()
-                .review_verdict(&a, &b.item, b.verdict, b.why)
-                .await,
+            call.keyed(
+                rk,
+                call.tracker().review_verdict(&a, &b.item, b.verdict, b.why),
+            )
+            .await,
         ),
         Err(d) => denied(d),
     }
@@ -785,11 +862,12 @@ struct TriageBody {
     split: Vec<String>,
 }
 
-async fn triage<B: Broker>(call: Call<B>, Json(b): Json<TriageBody>) -> Response {
+async fn triage<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<TriageBody>) -> Response {
     match call.agent() {
         Ok(a) => reply(
-            call.tracker()
-                .triage(
+            call.keyed(
+                rk,
+                call.tracker().triage(
                     &a,
                     &b.item,
                     TriageAnswer {
@@ -800,30 +878,36 @@ async fn triage<B: Broker>(call: Call<B>, Json(b): Json<TriageBody>) -> Response
                         depends_on: b.depends_on,
                         split: b.split,
                     },
-                )
-                .await,
+                ),
+            )
+            .await,
         ),
         Err(d) => denied(d),
     }
 }
 
-async fn step<B: Broker>(call: Call<B>, Json(b): Json<StepBody>) -> Response {
+async fn step<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<StepBody>) -> Response {
     match call.agent() {
         Ok(a) => reply(
-            call.tracker()
-                .record_step(&a, &b.item, b.command, b.exit_code, b.output)
-                .await,
+            call.keyed(
+                rk,
+                call.tracker()
+                    .record_step(&a, &b.item, b.command, b.exit_code, b.output),
+            )
+            .await,
         ),
         Err(d) => denied(d),
     }
 }
 
-async fn edit<B: Broker>(call: Call<B>, Json(b): Json<EditBody>) -> Response {
+async fn edit<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<EditBody>) -> Response {
     match call.agent() {
         Ok(a) => reply(
-            call.tracker()
-                .edit(&a, &b.item, b.file, b.hunk, b.decision)
-                .await,
+            call.keyed(
+                rk,
+                call.tracker().edit(&a, &b.item, b.file, b.hunk, b.decision),
+            )
+            .await,
         ),
         Err(d) => denied(d),
     }
@@ -844,22 +928,25 @@ struct AskBody {
     cost_micros: Option<u64>,
 }
 
-async fn ask<B: Broker>(call: Call<B>, Json(b): Json<AskBody>) -> Response {
+async fn ask<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AskBody>) -> Response {
     let usage = match usage_of(b.usage, b.cost_micros) {
         Ok(u) => u,
         Err(e) => return reply(Err(e)),
     };
     match call.agent() {
         Ok(a) => reply(
-            call.tracker()
-                .ask(&a, &b.item, b.text, b.options, b.default, usage)
-                .await,
+            call.keyed(
+                rk,
+                call.tracker()
+                    .ask(&a, &b.item, b.text, b.options, b.default, usage),
+            )
+            .await,
         ),
         Err(d) => denied(d),
     }
 }
 
-async fn answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> Response {
+async fn answer<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AnswerBody>) -> Response {
     let a = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
@@ -877,42 +964,55 @@ async fn answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> Response
         ));
     };
     reply(
-        call.tracker()
-            .answer(&a, &b.item, question, b.text, b.evidence, b.chosen)
-            .await,
+        call.keyed(
+            rk,
+            call.tracker()
+                .answer(&a, &b.item, question, b.text, b.evidence, b.chosen),
+        )
+        .await,
     )
 }
 
 /// A person's action that is one record.
-async fn as_person<B: Broker>(call: &Call<B>, record: WorkRecord) -> Response {
+async fn as_person<B: Broker>(
+    call: &Call<B>,
+    rk: Option<RequestKey>,
+    record: WorkRecord,
+) -> Response {
     match call.person() {
-        Ok(p) => reply(call.tracker().person_record(p, record).await),
+        Ok(p) => reply(
+            call.keyed(rk, call.tracker().person_record(p, record))
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }
 
-async fn accept<B: Broker>(call: Call<B>, Json(b): Json<AcceptBody>) -> Response {
+async fn accept<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AcceptBody>) -> Response {
     let record = WorkRecord::Accepted {
         item: b.item,
         tier: b.tier,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn edit_proposal<B: Broker>(call: Call<B>, Json(b): Json<EditProposalBody>) -> Response {
+async fn edit_proposal<B: Broker>(
+    call: Call<B>,
+    Keyed(b, rk): Keyed<EditProposalBody>,
+) -> Response {
     let record = WorkRecord::Edited {
         item: b.item,
         title: b.title,
         tier: b.tier,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn reject<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
-    as_person(&call, WorkRecord::Rejected { item: b.item }).await
+async fn reject<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::Rejected { item: b.item }).await
 }
 
-async fn person_answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> Response {
+async fn person_answer<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AnswerBody>) -> Response {
     let how = Reply {
         chosen: b.chosen,
         moves_to: b.moves_to.map(|m| {
@@ -927,9 +1027,12 @@ async fn person_answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> R
     };
     match call.person() {
         Ok(p) => reply(
-            call.tracker()
-                .person_answer(p, &b.item, b.question, b.text, b.evidence, how)
-                .await,
+            call.keyed(
+                rk,
+                call.tracker()
+                    .person_answer(p, &b.item, b.question, b.text, b.evidence, how),
+            )
+            .await,
         ),
         Err(d) => denied(d),
     }
@@ -938,7 +1041,7 @@ async fn person_answer<B: Broker>(call: Call<B>, Json(b): Json<AnswerBody>) -> R
 /// A person's note, review comment or priority change, as `human_input`. The
 /// log records which person wrote it. People paste tokens too, so the text
 /// is redacted like an agent's.
-async fn note<B: Broker>(call: Call<B>, Json(b): Json<NoteBody>) -> Response {
+async fn note<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<NoteBody>) -> Response {
     let mut record = WorkRecord::HumanInput {
         item: b.item,
         attempt: b.attempt,
@@ -946,34 +1049,34 @@ async fn note<B: Broker>(call: Call<B>, Json(b): Json<NoteBody>) -> Response {
         text: b.text,
     };
     kbl_core::redact::redact_record(&mut record);
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn tier<B: Broker>(call: Call<B>, Json(b): Json<TierBody>) -> Response {
+async fn tier<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<TierBody>) -> Response {
     let record = WorkRecord::TierChanged {
         item: b.item,
         tier: b.tier,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn close<B: Broker>(call: Call<B>, Json(b): Json<CloseBody>) -> Response {
+async fn close<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<CloseBody>) -> Response {
     let record = WorkRecord::Closed {
         item: b.item,
         why: b.why,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn unlink<B: Broker>(call: Call<B>, Json(b): Json<LinkBody>) -> Response {
+async fn unlink<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<LinkBody>) -> Response {
     let record = WorkRecord::Unlinked {
         item: b.item,
         to: b.to,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn budget<B: Broker>(call: Call<B>, Json(b): Json<BudgetBody>) -> Response {
+async fn budget<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<BudgetBody>) -> Response {
     let record = WorkRecord::BudgetSet {
         root: b.root,
         items_left: b.items_left,
@@ -981,10 +1084,10 @@ async fn budget<B: Broker>(call: Call<B>, Json(b): Json<BudgetBody>) -> Response
         cost_left_micros: b.cost_left_micros,
         redos_per_item: b.redos_per_item,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn price<B: Broker>(call: Call<B>, Json(b): Json<PriceBody>) -> Response {
+async fn price<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<PriceBody>) -> Response {
     let record = WorkRecord::PriceSet {
         model: b.model,
         unit: b.unit,
@@ -992,10 +1095,10 @@ async fn price<B: Broker>(call: Call<B>, Json(b): Json<PriceBody>) -> Response {
         effective_from_ms: b.effective_from_ms,
         as_of: b.as_of,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn rules<B: Broker>(call: Call<B>, Json(b): Json<RulesBody>) -> Response {
+async fn rules<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<RulesBody>) -> Response {
     let record = WorkRecord::RulesSet {
         target: Target {
             source: b.source,
@@ -1005,7 +1108,7 @@ async fn rules<B: Broker>(call: Call<B>, Json(b): Json<RulesBody>) -> Response {
         text: b.text,
         checks: b.checks,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
 async fn rules_read<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
@@ -1015,20 +1118,20 @@ async fn rules_read<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Respon
     }
 }
 
-async fn flag<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
+async fn flag<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
     let record = WorkRecord::Flagged {
         item: b.item,
         flagged: true,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
-async fn unflag<B: Broker>(call: Call<B>, Json(b): Json<ItemBody>) -> Response {
+async fn unflag<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
     let record = WorkRecord::Flagged {
         item: b.item,
         flagged: false,
     };
-    as_person(&call, record).await
+    as_person(&call, rk, record).await
 }
 
 #[derive(Deserialize)]

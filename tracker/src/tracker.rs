@@ -34,6 +34,7 @@ use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
 mod reads;
+mod request_keys;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
 const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
@@ -397,6 +398,8 @@ struct Recall {
     attempts: HashMap<(ItemId, u32), Vec<ClaimLog>>,
     /// The attempt each `claimed` record is in, by its offset.
     claims: HashMap<u64, (ItemId, u32)>,
+    /// The request keys callers sent lately, so a retry is answered with the first write.
+    requests: request_keys::Requests,
 }
 
 /// One `claimed` record and the record that ended it.
@@ -427,6 +430,9 @@ impl Recall {
         rejected: bool,
     ) {
         let record = &logged.record;
+        if !rejected {
+            self.requests.remember(offset, logged);
+        }
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
         }
@@ -627,6 +633,8 @@ struct Inner<B> {
     settles: AtomicU64,
     /// A round of `retry_recovering` is running.
     retrying: AtomicBool,
+    /// Request keys whose write is in progress.
+    running: StdMutex<HashSet<(request_keys::Caller, Key)>>,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -658,6 +666,7 @@ impl<B: Broker> Tracker<B> {
             next_delivery: AtomicU64::new(1),
             settles: AtomicU64::new(0),
             retrying: AtomicBool::new(false),
+            running: StdMutex::default(),
         }));
         // Read once before taking the lease: a build that cannot read the log
         // must not hold the lease and keep a build that can from starting.
@@ -2120,7 +2129,10 @@ impl<B: Broker> Tracker<B> {
         if actor == Actor::Agent {
             kbl_core::redact::redact_record(&mut record);
         }
-        let logged = WorkLogged::new(now_ms(), by, actor, record);
+        let req = (actor != Actor::Tracker)
+            .then(request_keys::current)
+            .flatten();
+        let logged = WorkLogged::new(now_ms(), by, actor, record).with_request(req);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied, or the read tip when a generation start moved it.
         let guess = core.state.at.map_or(0, |a| a + 1).max(core.tail);
@@ -2154,6 +2166,9 @@ impl<B: Broker> Tracker<B> {
                 core.tail = offset + 1;
                 core.recall
                     .remember(offset, &logged, &self.0.me, absent, false);
+                if logged.req.is_some() {
+                    request_keys::landed();
+                }
                 Ok(offset)
             }
             // The record was applied above, so the state is rebuilt, and the
