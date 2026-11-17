@@ -33,7 +33,10 @@ and fixed result words. A scrape never carries item ids, titles, comment or
 issue text, agent or person names, repo names, upstream ids or tokens. A
 request's route label is the template (`/v1/work/items/{item}`), not the path
 it was called with. The `team` label is the team's name as configured on the
-tracker, so anyone who can scrape learns which teams exist.
+tracker, so anyone who can scrape learns which teams exist. The set is bounded by
+the teams the org API can create, and nothing caps how many that is: an org
+admin can create as many as it likes, so the label has as many values as the
+org has teams.
 
 ## Every service
 
@@ -42,7 +45,7 @@ tracker, so anyone who can scrape learns which teams exist.
 | `process_start_time_seconds` | gauge | | Unix time the process started |
 | `kbl_uptime_seconds` | gauge | | Seconds since start |
 | `kbl_build_info` | gauge | `service`, `version` | Always 1 |
-| `process_cpu_seconds_total` | gauge | | CPU time used (Linux only) |
+| `process_cpu_seconds_total` | counter | | CPU time used, in whole seconds (Linux only) |
 | `process_resident_memory_bytes` | gauge | | Resident memory (Linux only) |
 | `process_open_fds` | gauge | | Open file descriptors (Linux only) |
 
@@ -80,7 +83,7 @@ from 1 second to 1 day.
 | `kbl_ingest_polls_total` | counter | `source`, `result` | Polls by result: `ok`, `rate_limited` or `failed` |
 | `kbl_ingest_poll_seconds` | histogram | `source` | Time a poll took |
 | `kbl_ingest_errors_total` | counter | `source`, `kind` | Failed polls by kind: `rate_limited` or `failed` |
-| `kbl_ingest_lag_seconds` | histogram | `source` | For each issue or comment recorded, the time from the upstream `updated_at` to the moment ingest finished with it |
+| `kbl_ingest_lag_seconds` | histogram | `source` | For each issue or comment recorded, the time from the upstream `updated_at` to the moment ingest finished with it. Not recorded on a first sync, after the cursors are lost, or on a forced reconcile, which read the whole backlog |
 | `kbl_ingest_last_success_timestamp_seconds` | gauge | `source` | Unix time the last good poll finished |
 | `kbl_ingest_denied_repos` | gauge | `source` | Repos the source could not read in the last poll |
 | `kbl_ingest_webhooks_total` | counter | `result` | Webhook deliveries: `woke` (woke the poll), `coalesced` (inside the minimum gap), `duplicate` or `unauthorized` |

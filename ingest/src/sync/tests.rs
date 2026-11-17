@@ -3060,3 +3060,15 @@ async fn upstream_dropping_a_link_to_an_agents_prerequisite_leaves_its_edge() {
     assert!(s.release_edges.contains(&edge));
     assert_eq!(rig.tracker.count("unlinked"), 0);
 }
+
+#[test]
+fn lag_is_not_tracked_for_a_first_sync_or_a_forced_reconcile() {
+    let mut cursors = BTreeMap::new();
+    assert!(!tracks_lag(false, &cursors), "first sync reads the backlog");
+    cursors.insert("o/r".to_owned(), crate::source::Cursor::default());
+    assert!(tracks_lag(false, &cursors));
+    assert!(
+        !tracks_lag(true, &cursors),
+        "a forced reconcile reads it all"
+    );
+}

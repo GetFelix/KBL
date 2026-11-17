@@ -24,6 +24,12 @@ async fn a_poll_counts_its_result_and_the_lag_of_what_it_recorded() {
     rig.list(vec![issue(812, |_| {})]);
     ingest.poll(false).await.unwrap();
     assert_eq!(ok("kbl_ingest_polls_total") - polls, 1.0);
+    // The first sync reads the backlog, so it is not lag.
+    assert_eq!(
+        read("kbl_ingest_lag_seconds_count", &["source=\"github\""]) - lagged,
+        0.0
+    );
+    ingest.poll(false).await.unwrap();
     assert_eq!(
         read("kbl_ingest_lag_seconds_count", &["source=\"github\""]) - lagged,
         1.0

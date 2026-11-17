@@ -40,7 +40,8 @@ fn linux() {
         let f: Vec<&str> = rest.split_whitespace().collect();
         let num = |i: usize| f.get(i).and_then(|v| v.parse::<f64>().ok());
         if let (Some(u), Some(s)) = (num(11), num(12)) {
-            metrics::gauge!("process_cpu_seconds_total").set((u + s) / TICKS);
+            // Whole seconds: a Prometheus counter is an integer.
+            metrics::counter!("process_cpu_seconds_total").absolute(((u + s) / TICKS) as u64);
         }
         if let Some(pages) = num(21) {
             metrics::gauge!("process_resident_memory_bytes").set(pages * PAGE);

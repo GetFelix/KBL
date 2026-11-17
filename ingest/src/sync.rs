@@ -149,13 +149,20 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .await?;
         crate::metrics::denied(self.source.name(), denied.len());
         self.report_stalls(p, &denied).await?;
+        // A first sync, a lost cursor or a forced reconcile reads the whole
+        // backlog; its age is not how far behind ingest is.
+        let live = tracks_lag(reconcile, &p.state.cursors);
         for issue in issues {
             self.on_issue(p, &issue).await?;
-            crate::metrics::recorded(self.source.name(), &issue.updated_at);
+            if live {
+                crate::metrics::recorded(self.source.name(), &issue.updated_at);
+            }
         }
         for c in comments {
             self.on_comment(p, &c).await?;
-            crate::metrics::recorded(self.source.name(), &c.updated_at);
+            if live {
+                crate::metrics::recorded(self.source.name(), &c.updated_at);
+            }
         }
         self.retry_waiting(p).await?;
         self.pull_requests(p).await?;
@@ -1282,6 +1289,11 @@ const MARKER: &str = "kbl-prerequisite:";
 
 /// The issue body. An agent wrote `why`, so a marker line in it is dropped:
 /// only ingest's own, written last, may name the item.
+/// Whether this poll's changes are fresh enough for the lag metric.
+fn tracks_lag(reconcile: bool, cursors: &BTreeMap<String, crate::source::Cursor>) -> bool {
+    !reconcile && !cursors.is_empty()
+}
+
 fn prerequisite_body(pre: &Prerequisite, link_waiter: bool) -> String {
     let why: String = pre
         .why

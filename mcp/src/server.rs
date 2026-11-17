@@ -95,6 +95,8 @@ struct WorkFindingArgs {
     scenario: String,
     /// `fix` (the author fixes it), `defer` (a person decides whether it is work) or `dismiss`.
     verdict: String,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -113,6 +115,8 @@ struct WorkTriageArgs {
     depends_on: Option<Vec<String>>,
     /// Titles this item should be split into, if it is too big for one change. A person decides; nothing is created.
     split: Option<Vec<String>>,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -123,6 +127,8 @@ struct WorkVerdictArgs {
     verdict: String,
     /// Why.
     why: String,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -215,6 +221,8 @@ struct WorkPostArgs {
     usage: Option<Vec<UsageArg>>,
     /// Not read any more: sending it is refused. Report `usage` instead.
     cost_micros: Option<u64>,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Not used with `prerequisite`, which is retried by its claim. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -223,6 +231,8 @@ struct WorkLinkArgs {
     item: String,
     /// The item it waits on. Refused if that would make a cycle.
     waits_on: String,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -232,6 +242,8 @@ struct WorkContextArgs {
     /// Give `entry` and `text` to add context; leave both out to read it. The same entry again replaces it.
     entry: Option<String>,
     text: Option<String>,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -249,6 +261,8 @@ struct WorkProgressArgs {
     branch: Option<String>,
     /// The pull request URL.
     pr: Option<String>,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -271,6 +285,8 @@ struct DecideArgs {
     evidence: Option<Vec<EvidenceArg>>,
     /// For a fix: the test, and whether it failed with the fix reverted and passed with it restored.
     revert_check: Option<RevertCheckArg>,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
@@ -329,6 +345,8 @@ struct RecordStepArgs {
     exit_code: i32,
     /// Its output. Long output is stored for you.
     output: String,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -340,6 +358,8 @@ struct EditArgs {
     hunk: String,
     /// The offset `decide` returned for the decision this edit carries out.
     decision: u64,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -357,6 +377,8 @@ struct WorkAskArgs {
     usage: Option<Vec<UsageArg>>,
     /// Not read any more: sending it is refused. Report `usage` instead.
     cost_micros: Option<u64>,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -370,6 +392,8 @@ struct WorkAnswerArgs {
     /// One of the options the question offered.
     chosen: Option<String>,
     evidence: Option<Vec<EvidenceArg>>,
+    /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
+    request_key: Option<String>,
 }
 
 /// Who the agent is and where it works.
@@ -481,15 +505,18 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/finding",
-                json!({
-                    "item": item,
-                    "severity": a.severity,
-                    "file": a.file,
-                    "line": a.line,
-                    "title": a.title,
-                    "scenario": a.scenario,
-                    "verdict": a.verdict,
-                }),
+                with_key(
+                    json!({
+                        "item": item,
+                        "severity": a.severity,
+                        "file": a.file,
+                        "line": a.line,
+                        "title": a.title,
+                        "scenario": a.scenario,
+                        "verdict": a.verdict,
+                    }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -510,15 +537,18 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/triage",
-                json!({
-                    "item": item,
-                    "tier": a.tier,
-                    "why": a.why,
-                    "duplicate_of": a.duplicate_of,
-                    "unclear": a.unclear,
-                    "depends_on": a.depends_on.unwrap_or_default(),
-                    "split": a.split.unwrap_or_default(),
-                }),
+                with_key(
+                    json!({
+                        "item": item,
+                        "tier": a.tier,
+                        "why": a.why,
+                        "duplicate_of": a.duplicate_of,
+                        "unclear": a.unclear,
+                        "depends_on": a.depends_on.unwrap_or_default(),
+                        "split": a.split.unwrap_or_default(),
+                    }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -537,7 +567,10 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/verdict",
-                json!({ "item": item, "verdict": a.verdict, "why": a.why }),
+                with_key(
+                    json!({ "item": item, "verdict": a.verdict, "why": a.why }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -599,7 +632,10 @@ impl Server {
                 .work()?
                 .tool(
                     "/v1/work/post",
-                    json!({ "item": item, "key": a.key, "work": a.work, "title": a.title }),
+                    with_key(
+                        json!({ "item": item, "key": a.key, "work": a.work, "title": a.title }),
+                        a.request_key.clone(),
+                    ),
                 )
                 .await?;
             return Ok(reply.to_string());
@@ -636,7 +672,13 @@ impl Server {
     async fn work_link(&self, Parameters(a): Parameters<WorkLinkArgs>) -> Result<String, String> {
         let reply = self
             .work()?
-            .tool("/v1/work/link", json!({ "item": a.item, "to": a.waits_on }))
+            .tool(
+                "/v1/work/link",
+                with_key(
+                    json!({ "item": a.item, "to": a.waits_on }),
+                    a.request_key.clone(),
+                ),
+            )
             .await?;
         Ok(reply.to_string())
     }
@@ -656,7 +698,10 @@ impl Server {
                     .work()?
                     .tool(
                         "/v1/work/context/add",
-                        json!({ "item": item, "entry": entry, "text": text }),
+                        with_key(
+                            json!({ "item": item, "entry": entry, "text": text }),
+                            a.request_key.clone(),
+                        ),
                     )
                     .await?;
                 Ok(reply.to_string())
@@ -686,7 +731,10 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/progress",
-                json!({ "item": item, "note": note, "branch": a.branch, "pr": a.pr }),
+                with_key(
+                    json!({ "item": item, "note": note, "branch": a.branch, "pr": a.pr }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -703,18 +751,21 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/decide",
-                json!({
-                    "item": item,
-                    "phase": a.phase,
-                    "so_far": a.so_far,
-                    "question": a.question.unwrap_or_default(),
-                    "options": a.options.unwrap_or_default(),
-                    "chosen": a.chosen.unwrap_or_default(),
-                    "why": a.why,
-                    "commit": a.commit,
-                    "evidence": evidence,
-                    "revert_check": a.revert_check,
-                }),
+                with_key(
+                    json!({
+                        "item": item,
+                        "phase": a.phase,
+                        "so_far": a.so_far,
+                        "question": a.question.unwrap_or_default(),
+                        "options": a.options.unwrap_or_default(),
+                        "chosen": a.chosen.unwrap_or_default(),
+                        "why": a.why,
+                        "commit": a.commit,
+                        "evidence": evidence,
+                        "revert_check": a.revert_check,
+                    }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -733,7 +784,7 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/step",
-                json!({ "item": item, "command": a.command, "exit_code": a.exit_code, "output": output }),
+                with_key(json!({ "item": item, "command": a.command, "exit_code": a.exit_code, "output": output }), a.request_key.clone()),
             )
             .await?;
         Ok(reply.to_string())
@@ -749,7 +800,10 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/edit",
-                json!({ "item": item, "file": a.file, "hunk": hunk, "decision": a.decision }),
+                with_key(
+                    json!({ "item": item, "file": a.file, "hunk": hunk, "decision": a.decision }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -765,14 +819,17 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/ask",
-                json!({
-                    "item": item,
-                    "text": text,
-                    "options": a.options.unwrap_or_default(),
-                    "default": a.default,
-                    "usage": a.usage.unwrap_or_default(),
-                    "cost_micros": a.cost_micros,
-                }),
+                with_key(
+                    json!({
+                        "item": item,
+                        "text": text,
+                        "options": a.options.unwrap_or_default(),
+                        "default": a.default,
+                        "usage": a.usage.unwrap_or_default(),
+                        "cost_micros": a.cost_micros,
+                    }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -791,13 +848,16 @@ impl Server {
             .work()?
             .tool(
                 "/v1/work/answer",
-                json!({
-                    "item": a.item,
-                    "question": a.question,
-                    "text": text,
-                    "chosen": a.chosen,
-                    "evidence": evidence,
-                }),
+                with_key(
+                    json!({
+                        "item": a.item,
+                        "question": a.question,
+                        "text": text,
+                        "chosen": a.chosen,
+                        "evidence": evidence,
+                    }),
+                    a.request_key.clone(),
+                ),
             )
             .await?;
         Ok(reply.to_string())
@@ -840,6 +900,14 @@ impl Server {
                 .to_owned()
         })
     }
+}
+
+/// The body of a write, with the caller's request key when it sent one.
+fn with_key(mut body: Value, key: Option<String>) -> Value {
+    if let Some(key) = key {
+        body["request_key"] = key.into();
+    }
+    body
 }
 
 const PHASES: [&str; 5] = ["understand", "reproduce", "cause", "fix", "verify"];

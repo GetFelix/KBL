@@ -1,0 +1,1 @@
+A write whose caller disconnects mid-flight (a client that hangs up) no longer lets its retry write a second record: the tracker rebuilds its state from the log before the next call. This also closes the same gap for retried claim-ending calls.

@@ -268,3 +268,64 @@ fn usage_is_priced_from_format_8_and_reported_costs_still_fold() {
     let back: State = serde_json::from_value(serde_json::to_value(&end).unwrap()).unwrap();
     assert_eq!(back, end);
 }
+
+/// A record that carries a request key folds as the same record without one,
+/// and one without a key is the bytes it always was.
+#[test]
+fn a_request_key_changes_neither_the_fold_nor_an_unkeyed_record() {
+    use kbl_core::work::RequestKey;
+    let log = log();
+    let plain = kbl_core::work_fold::fold(&log);
+    let keyed: Vec<_> = log
+        .iter()
+        .map(|(o, r)| {
+            let body = serde_json::json!({ "n": o });
+            let req = RequestKey::new(Key::new("k1").unwrap(), "/v1/work/note", &body);
+            (*o, r.clone().with_request(Some(req)))
+        })
+        .collect();
+    let folded = kbl_core::work_fold::fold(&keyed);
+    assert_eq!(
+        serde_json::to_value(&plain).unwrap(),
+        serde_json::to_value(&folded).unwrap()
+    );
+    for (_, r) in &log {
+        assert!(r.req.is_none());
+        assert!(!String::from_utf8(r.encode()).unwrap().contains("\"req\""));
+    }
+    let (_, first) = &keyed[0];
+    assert_eq!(&WorkLogged::decode(&first.encode()).unwrap(), first);
+}
+
+#[test]
+fn a_request_digest_ignores_key_order_and_names_the_route() {
+    use kbl_core::work::RequestKey;
+    let k = || Key::new("k1").unwrap();
+    let a = RequestKey::new(
+        k(),
+        "/v1/work/note",
+        &serde_json::json!({ "a": 1, "b": [1, 2] }),
+    );
+    let b = RequestKey::new(
+        k(),
+        "/v1/work/note",
+        &serde_json::json!({ "b": [1, 2], "a": 1 }),
+    );
+    assert_eq!(a, b);
+    assert_ne!(
+        a,
+        RequestKey::new(
+            k(),
+            "/v1/work/tier",
+            &serde_json::json!({ "a": 1, "b": [1, 2] })
+        )
+    );
+    assert_ne!(
+        a,
+        RequestKey::new(
+            k(),
+            "/v1/work/note",
+            &serde_json::json!({ "a": 2, "b": [1, 2] })
+        )
+    );
+}
