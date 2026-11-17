@@ -164,7 +164,7 @@ numbers live in `dashboard/check/budget.mjs`, and CI fails when one is over.
 
 | Measure | Where | Budget |
 | --- | --- | --- |
-| Fold of 10,000 items plus reading them back, wasm in node | `npm test` (`test/budget.test.ts`) | 500 ms (measured 140 ms) |
+| Fold of 10,000 items plus reading them back, wasm in node | `npm test` (`test/budget.test.ts`) | 2000 ms (140 ms on a laptop, 800 to 1100 ms on a CI runner running tests in parallel) |
 | Time spent in `fold.apply` while the page loads the log | `npm run check` | 1000 ms (measured 220 ms on a CI runner) |
 | First useful paint: the first list row on screen | `npm run check` | 5000 ms |
 | Live with the whole log | `npm run check` | 15000 ms |
