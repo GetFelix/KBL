@@ -347,6 +347,17 @@ fn default_tier() -> u8 {
 }
 
 impl Config {
+    /// The source's vendor word, as its sources' ids start: `github` in
+    /// `github:o/r`. The same as the adapter's `Source::name`.
+    pub(crate) fn vendor(&self) -> &'static str {
+        match (&self.github, &self.jira, &self.ado, &self.gitlab) {
+            (_, Some(_), _, _) => "jira",
+            (_, _, Some(_), _) => "ado",
+            (_, _, _, Some(_)) => "gitlab",
+            _ => "github",
+        }
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("read the config {}", path.display()))?;

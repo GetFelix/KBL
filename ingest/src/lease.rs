@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail};
 use kbl_core::lease::{FENCE_MS, HEARTBEAT_MS};
@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
+use crate::github::{Req, Res, Transport};
 use crate::source::{
     Changes, Comment, Cursor, Fetched, IssueRef, Links, PullRequest, Releases, Source, SourceError,
     WriteBack,
@@ -28,6 +29,10 @@ const HEARTBEAT: Duration = Duration::from_millis(HEARTBEAT_MS);
 const CONFIG_WAIT_S: u64 = 60;
 /// The wait after a failed config poll.
 const CONFIG_RETRY: Duration = Duration::from_secs(5);
+/// How often a vendor request in flight rechecks the fence. The wall clock
+/// is read each time, so a request across a suspend is cut within this of
+/// waking.
+const RECHECK: Duration = Duration::from_secs(1);
 
 /// What the worker may poll, as the config and heartbeat answers left it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,39 +44,77 @@ enum Mode {
     Leased {
         /// The connection's sources, ids like `github:o/r`.
         sources: BTreeSet<String>,
-        /// Source to the epoch held at the last successful renew.
-        held: BTreeMap<String, u64>,
-        /// When that renew was sent, by the monotonic clock. Taken before
-        /// the request, so the tracker's 90 s starts after it.
-        renewed: Option<Instant>,
+        /// Source to what the last successful renew answered for it.
+        held: BTreeMap<String, Held>,
+        /// When that renew was sent. Taken before the request, so the
+        /// tracker's 90 s starts after it.
+        renewed: Option<Renewed>,
     },
 }
 
-/// The worker's leases and fence, shared by the poll, the config task and
-/// the heartbeat task.
+/// One source's lease as a heartbeat answered it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Held {
+    pub(crate) epoch: u64,
+    /// For a source whose share moved to another worker: how long its lease
+    /// has left, from when the renew was sent. It is not renewed again.
+    pub(crate) until: Option<Duration>,
+}
+
+impl Held {
+    pub(crate) fn renewed(epoch: u64) -> Self {
+        Self { epoch, until: None }
+    }
+}
+
+/// When a renew was sent, by both clocks. The monotonic clock is immune to
+/// a stepped wall clock but stops while the machine sleeps; the wall clock
+/// keeps running, so the fence closes on whichever has passed further.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Renewed {
+    mono: Instant,
+    wall_ms: u64,
+}
+
+/// The wall clock in milliseconds, injectable so a test can suspend.
+type Wall = Box<dyn Fn() -> u64 + Send + Sync>;
+
+fn system_wall() -> Wall {
+    Box::new(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as u64)
+    })
+}
+
+/// The worker's leases and fence, shared by the poll, the config task, the
+/// heartbeat task and every vendor request.
 pub(crate) struct Lessee {
     /// The vendor word sources start with: `github` in `github:o/r`.
     vendor: &'static str,
     mode: Mutex<Mode>,
-    /// Wakes the poll loop and the heartbeat when the mode changes.
+    wall: Wall,
+    /// Wakes the poll loop, the heartbeat and requests in flight when the
+    /// mode changes.
     pub(crate) changed: Notify,
 }
 
 impl Lessee {
     /// A worker with no group: file-managed for good.
     pub(crate) fn file_managed(vendor: &'static str) -> Arc<Self> {
-        Self::new(vendor, Mode::FileManaged)
+        Self::new(vendor, Mode::FileManaged, system_wall())
     }
 
     /// A worker with a group, which polls nothing until the config answers.
     pub(crate) fn waiting(vendor: &'static str) -> Arc<Self> {
-        Self::new(vendor, Mode::Waiting)
+        Self::new(vendor, Mode::Waiting, system_wall())
     }
 
-    fn new(vendor: &'static str, mode: Mode) -> Arc<Self> {
+    fn new(vendor: &'static str, mode: Mode, wall: Wall) -> Arc<Self> {
         Arc::new(Self {
             vendor,
             mode: Mutex::new(mode),
+            wall,
             changed: Notify::new(),
         })
     }
@@ -96,7 +139,7 @@ impl Lessee {
                         held: held
                             .iter()
                             .filter(|(s, _)| sources.contains(*s))
-                            .map(|(s, e)| (s.clone(), *e))
+                            .map(|(s, h)| (s.clone(), *h))
                             .collect(),
                         renewed: *renewed,
                         sources,
@@ -120,9 +163,22 @@ impl Lessee {
         matches!(*self.mode.lock().expect("lessee lock"), Mode::Leased { .. })
     }
 
+    /// Both clocks now, taken right before a renew is sent.
+    pub(crate) fn sending(&self) -> (Instant, u64) {
+        (Instant::now(), (self.wall)())
+    }
+
+    /// The sources the worker holds now, which the heartbeat reports.
+    pub(crate) fn held(&self) -> Vec<String> {
+        match &*self.mode.lock().expect("lessee lock") {
+            Mode::Leased { held, .. } => held.keys().cloned().collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// A successful heartbeat sent at `sent` answered `leases`. Anything not in
     /// it is no longer held, so the fence stops it at once.
-    pub(crate) fn renewed(&self, sent: Instant, leases: BTreeMap<String, u64>) {
+    pub(crate) fn renewed(&self, sent: (Instant, u64), leases: BTreeMap<String, Held>) {
         let mut mode = self.mode.lock().expect("lessee lock");
         if let Mode::Leased {
             sources,
@@ -134,7 +190,10 @@ impl Lessee {
                 .into_iter()
                 .filter(|(s, _)| sources.contains(s))
                 .collect();
-            *renewed = Some(sent);
+            *renewed = Some(Renewed {
+                mono: sent.0,
+                wall_ms: sent.1,
+            });
         }
         drop(mode);
         self.changed.notify_waiters();
@@ -144,10 +203,12 @@ impl Lessee {
     /// tracker will fence state and record writes with it.
     #[allow(dead_code)]
     pub(crate) fn epoch(&self, source: &str) -> Option<u64> {
-        match &*self.mode.lock().expect("lessee lock") {
-            Mode::Leased { held, renewed, .. } if fresh(*renewed) => held.get(source).copied(),
-            _ => None,
-        }
+        let mode = self.mode.lock().expect("lessee lock");
+        let Mode::Leased { held, renewed, .. } = &*mode else {
+            return None;
+        };
+        let h = held.get(source)?;
+        self.left(*renewed, h.until).map(|_| h.epoch)
     }
 
     /// Whether a poll may run now: file-managed, or holding a lease inside
@@ -156,28 +217,80 @@ impl Lessee {
         match &*self.mode.lock().expect("lessee lock") {
             Mode::Waiting => false,
             Mode::FileManaged => true,
-            Mode::Leased { held, renewed, .. } => !held.is_empty() && fresh(*renewed),
+            Mode::Leased { held, renewed, .. } => {
+                !held.is_empty() && self.left(*renewed, None).is_some()
+            }
         }
     }
 
-    /// The fence, checked right before every vendor call. With leases, a call
-    /// is refused once the last successful renew is older than 60 s, and a
-    /// call into one of the connection's sources also needs its lease. A
-    /// repo outside the connection (another source's pull request) needs only
-    /// the first.
-    pub(crate) fn check(&self, repo: Option<&str>) -> Result<(), SourceError> {
+    /// How long the fence stays open after `renewed` for a lease good for
+    /// `until`, or none once closed. Measured on both clocks, whichever has
+    /// run further.
+    fn left(&self, renewed: Option<Renewed>, until: Option<Duration>) -> Option<Duration> {
+        let r = renewed?;
+        let mono = r.mono.elapsed();
+        let wall = Duration::from_millis((self.wall)().saturating_sub(r.wall_ms));
+        let limit = until.map_or(FENCE, |u| u.min(FENCE));
+        limit
+            .checked_sub(mono.max(wall))
+            .filter(|d| !d.is_zero())
+    }
+
+    /// How long a vendor call for `repos` may run, none for no limit, or why
+    /// it may not start. With leases, nothing runs once the last successful
+    /// renew is 60 s old by either clock, and a call into one of the
+    /// connection's sources also needs its lease. A repo outside the
+    /// connection (another source's pull request) needs only the first.
+    /// `None` for repos is a call tied to no repo.
+    fn open_for(&self, repos: Option<&[String]>) -> Result<Option<Duration>, &'static str> {
         match &*self.mode.lock().expect("lessee lock") {
-            Mode::FileManaged => Ok(()),
-            Mode::Waiting => Err(fenced("the config has not answered yet")),
-            Mode::Leased { renewed, .. } if !fresh(*renewed) => Err(fenced(
-                "no lease renew in the last 60 s; no upstream call until one succeeds",
-            )),
-            Mode::Leased { sources, held, .. } => match repo.map(|r| self.source_of(r)) {
-                Some(s) if sources.contains(&s) && !held.contains_key(&s) => {
-                    Err(fenced("another worker holds this source's lease"))
+            Mode::FileManaged => Ok(None),
+            Mode::Waiting => Err("the config has not answered yet"),
+            Mode::Leased {
+                sources,
+                held,
+                renewed,
+            } => {
+                let mut left = self.left(*renewed, None).ok_or(
+                    "no lease renew in the last 60 s; no upstream call until one succeeds",
+                )?;
+                for r in repos.into_iter().flatten() {
+                    let s = self.source_of(r);
+                    if !sources.contains(&s) {
+                        continue;
+                    }
+                    let h = held
+                        .get(&s)
+                        .ok_or("another worker holds this source's lease")?;
+                    let l = self
+                        .left(*renewed, h.until)
+                        .ok_or("this source's lease has run out")?;
+                    left = left.min(l);
                 }
-                _ => Ok(()),
-            },
+                Ok(Some(left))
+            }
+        }
+    }
+
+    /// The fence for one call into `repo`, or into no repo.
+    pub(crate) fn check(&self, repo: Option<&str>) -> Result<(), SourceError> {
+        let repos = repo.map(|r| vec![r.to_owned()]);
+        self.open_for(repos.as_deref()).map(|_| ()).map_err(fenced)
+    }
+
+    /// Resolves once the fence closes for `repos`: the deadline passes, a
+    /// heartbeat drops one of them, or the wall clock shows a suspend.
+    async fn closes(&self, repos: Option<&[String]>) -> &'static str {
+        loop {
+            let changed = self.changed.notified();
+            let wait = match self.open_for(repos) {
+                Err(why) => return why,
+                Ok(left) => left.map_or(RECHECK, |l| l.min(RECHECK)),
+            };
+            tokio::select! {
+                () = changed => {}
+                () = tokio::time::sleep(wait) => {}
+            }
         }
     }
 
@@ -191,23 +304,79 @@ impl Lessee {
     }
 }
 
-fn fresh(renewed: Option<Instant>) -> bool {
-    renewed.is_some_and(|at| at.elapsed() <= FENCE)
-}
-
 fn fenced(why: &str) -> SourceError {
     SourceError::Failed(anyhow::anyhow!("lease fence: {why}"))
 }
 
+tokio::task_local! {
+    /// The repos the vendor calls of the current source operation are for,
+    /// set by [`Fenced`] and read by [`Gate`].
+    static SCOPE: Scope;
+}
+
+#[derive(Clone)]
+enum Scope {
+    Repos(Arc<[String]>),
+    /// The worker's own identity, read once at start before any lease. Tied
+    /// to no source.
+    Identity,
+}
+
+/// Runs `f` with its vendor calls tied to no source: the start-up identity
+/// read, before the config has answered.
+pub(crate) async fn identity<F: Future>(f: F) -> F::Output {
+    SCOPE.scope(Scope::Identity, f).await
+}
+
+async fn scoped<F: Future>(repos: Vec<String>, f: F) -> F::Output {
+    SCOPE.scope(Scope::Repos(repos.into()), f).await
+}
+
+/// The HTTP under a source, fenced. Every vendor request passes here, so a
+/// paged listing stops at the fence between pages, and a request in flight
+/// is cancelled when the fence closes rather than running out a 30 s
+/// timeout.
+pub(crate) struct Gate<T> {
+    inner: T,
+    lessee: Arc<Lessee>,
+}
+
+impl<T> Gate<T> {
+    pub(crate) fn new(inner: T, lessee: Arc<Lessee>) -> Self {
+        Self { inner, lessee }
+    }
+}
+
+impl<T: Transport> Transport for Gate<T> {
+    async fn send(&self, req: Req) -> Result<Res> {
+        let repos = match SCOPE.try_with(Clone::clone) {
+            Ok(Scope::Identity) => return self.inner.send(req).await,
+            Ok(Scope::Repos(r)) => Some(r),
+            Err(_) => None,
+        };
+        let repos = repos.as_deref();
+        if let Err(why) = self.lessee.open_for(repos) {
+            bail!("lease fence: {why}");
+        }
+        tokio::select! {
+            biased;
+            why = self.lessee.closes(repos) => bail!("lease fence: {why}; request cancelled"),
+            res = self.inner.send(req) => res,
+        }
+    }
+}
+
 /// The tracker calls the two lease tasks make.
 pub(crate) trait LeaseApi: Send + Sync {
-    /// `PUT /v1/ingest/leases`: the leases held after it, by source.
+    /// `PUT /v1/ingest/leases`, reporting the sources `held` now: the leases
+    /// held after it, by source.
     fn heartbeat(
         &self,
         group: &str,
         instance: &str,
         leave: bool,
-    ) -> impl Future<Output = Result<BTreeMap<String, u64>>> + Send;
+        held: &[String],
+    ) -> impl Future<Output = Result<BTreeMap<String, Held>>> + Send;
 
     /// `GET /v1/ingest/config`: the answer and its `ETag`, or none when it did
     /// not change. `Ok(Some((Value::Null, _)))` means the tracker has no
@@ -232,8 +401,9 @@ pub(crate) async fn heartbeat_once<A: LeaseApi>(
     if !lessee.leased() {
         return;
     }
-    let sent = Instant::now();
-    match api.heartbeat(group, instance, false).await {
+    let held = lessee.held();
+    let sent = lessee.sending();
+    match api.heartbeat(group, instance, false, &held).await {
         Ok(leases) => lessee.renewed(sent, leases),
         Err(e) => eprintln!("kbl-ingest: lease heartbeat failed: {e:#}"),
     }
@@ -255,6 +425,21 @@ pub(crate) async fn heartbeat_task<A: LeaseApi>(
             () = tokio::time::sleep(HEARTBEAT) => {}
             () = became, if !was => {}
         }
+    }
+}
+
+/// Stops the heartbeat, then releases the worker's leases. The heartbeat is
+/// waited out first: a renew landing after the leave would take them back.
+pub(crate) async fn leave<A: LeaseApi>(
+    api: &A,
+    beating: tokio::task::JoinHandle<()>,
+    group: &str,
+    instance: &str,
+) {
+    beating.abort();
+    let _ = beating.await;
+    if let Err(e) = api.heartbeat(group, instance, true, &[]).await {
+        eprintln!("kbl-ingest: could not release the leases: {e:#}");
     }
 }
 
@@ -300,8 +485,9 @@ impl LeaseApi for crate::tracker_api::Http {
         group: &str,
         instance: &str,
         leave: bool,
-    ) -> Result<BTreeMap<String, u64>> {
-        let body = json!({ "group": group, "instance": instance, "leave": leave });
+        held: &[String],
+    ) -> Result<BTreeMap<String, Held>> {
+        let body = json!({ "group": group, "instance": instance, "leave": leave, "held": held });
         let (status, body) = self.put_json("/v1/ingest/leases", &body).await?;
         if status != 200 {
             bail!("the tracker answered {status} to the lease heartbeat: {body}");
@@ -310,7 +496,13 @@ impl LeaseApi for crate::tracker_api::Http {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|l| Some((l["source"].as_str()?.to_owned(), l["epoch"].as_u64()?)))
+            .filter_map(|l| {
+                let held = Held {
+                    epoch: l["epoch"].as_u64()?,
+                    until: l["until_ms"].as_u64().map(Duration::from_millis),
+                };
+                Some((l["source"].as_str()?.to_owned(), held))
+            })
             .collect())
     }
 
@@ -332,7 +524,8 @@ impl LeaseApi for crate::tracker_api::Http {
     }
 }
 
-/// A source whose every vendor call passes the fence first.
+/// A source whose every operation passes the fence first, and ties the
+/// vendor requests it makes to its repos, so [`Gate`] checks each one.
 pub(crate) struct Fenced<S> {
     inner: S,
     lessee: Arc<Lessee>,
@@ -376,44 +569,44 @@ impl<S: Source> Source for Fenced<S> {
         if repos.is_empty() {
             return Ok(Changes::default());
         }
-        self.inner.changed(&repos, cursors).await
+        scoped(repos.clone(), self.inner.changed(&repos, cursors)).await
     }
 
     async fn pull_request(&self, id: &IssueRef) -> Result<Option<PullRequest>, SourceError> {
         self.lessee.check(Some(&id.repo))?;
-        self.inner.pull_request(id).await
+        scoped(vec![id.repo.to_owned()], self.inner.pull_request(id)).await
     }
 
     async fn fetch(&self, id: &IssueRef) -> Result<Fetched, SourceError> {
         self.lessee.check(Some(&id.repo))?;
-        self.inner.fetch(id).await
+        scoped(vec![id.repo.to_owned()], self.inner.fetch(id)).await
     }
 
     async fn issue_comments(&self, id: &IssueRef) -> Result<Vec<Comment>, SourceError> {
         self.lessee.check(Some(&id.repo))?;
-        self.inner.issue_comments(id).await
+        scoped(vec![id.repo.to_owned()], self.inner.issue_comments(id)).await
     }
 
     async fn links(&self, id: &IssueRef) -> Result<Links, SourceError> {
         self.lessee.check(Some(&id.repo))?;
-        self.inner.links(id).await
+        scoped(vec![id.repo.to_owned()], self.inner.links(id)).await
     }
 
     async fn write_back(&self, what: &WriteBack) -> Result<(), SourceError> {
-        // Checked last thing before the write, as a write-back is the one
-        // upstream call a second worker could repeat.
+        // Checked here and again by the gate right before the request, as a
+        // write-back is the one upstream call a second worker could repeat.
         self.lessee.check(Some(written_repo(what)))?;
-        self.inner.write_back(what).await
+        scoped(vec![written_repo(what).to_owned()], self.inner.write_back(what)).await
     }
 
     async fn releases(&self, repo: &str, since_ms: u64) -> Result<Releases, SourceError> {
         self.lessee.check(Some(repo))?;
-        self.inner.releases(repo, since_ms).await
+        scoped(vec![repo.to_owned()], self.inner.releases(repo, since_ms)).await
     }
 
     async fn contains(&self, repo: &str, tag: &str, sha: &str) -> Result<bool, SourceError> {
         self.lessee.check(Some(repo))?;
-        self.inner.contains(repo, tag, sha).await
+        scoped(vec![repo.to_owned()], self.inner.contains(repo, tag, sha)).await
     }
 
     async fn open_issue(
@@ -423,7 +616,7 @@ impl<S: Source> Source for Fenced<S> {
         body: &str,
     ) -> Result<IssueRef, SourceError> {
         self.lessee.check(Some(repo))?;
-        self.inner.open_issue(repo, title, body).await
+        scoped(vec![repo.to_owned()], self.inner.open_issue(repo, title, body)).await
     }
 }
 
