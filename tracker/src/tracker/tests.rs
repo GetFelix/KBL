@@ -839,6 +839,7 @@ pub(super) fn settings() -> Settings {
         review_limit: 0,
         snapshot_dir: None,
         snapshot_every: 0,
+        assignee_away: Duration::from_secs(600),
     }
 }
 
@@ -2483,6 +2484,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
     assert_eq!(read["rules"], claimed["rules"]);
 }
 
+mod assignee;
 mod metrics;
 mod races;
 mod recover;

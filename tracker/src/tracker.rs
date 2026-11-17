@@ -22,8 +22,9 @@ use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS,
-    Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
+    Actor, Assignee, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason,
+    TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream,
+    valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
 use serde::{Deserialize, Serialize};
@@ -104,6 +105,8 @@ pub(crate) struct Settings {
     /// Records between snapshots; a boot saves one when this many have
     /// accumulated since the newest.
     pub(crate) snapshot_every: u64,
+    /// How long an agent assignee may make no call before the tracker drops it.
+    pub(crate) assignee_away: Duration,
 }
 
 #[cfg(test)]
@@ -195,7 +198,9 @@ struct Delivery {
     item: ItemId,
     attempt: u32,
     tier: u8,
-    record: GroupRecord,
+    /// None for a claim handed straight to the item's agent assignee: it
+    /// was never published, so there is nothing to settle in Felix.
+    record: Option<GroupRecord>,
 }
 
 /// The delivery the tracker currently stands behind for an item. Only its
@@ -708,6 +713,9 @@ struct Inner<B> {
     retrying: AtomicBool,
     /// Request keys whose write is in progress.
     running: StdMutex<HashSet<(request_keys::Caller, Key)>>,
+    /// When each agent last called, and when this tracker started, for
+    /// telling an agent assignee that went away.
+    seen: StdMutex<(Instant, HashMap<String, Instant>)>,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -740,6 +748,7 @@ impl<B: Broker> Tracker<B> {
             settles: AtomicU64::new(0),
             retrying: AtomicBool::new(false),
             running: StdMutex::default(),
+            seen: StdMutex::new((Instant::now(), HashMap::new())),
         }));
         // Read once before taking the lease: a build that cannot read the log
         // must not hold the lease and keep a build that can from starting.
@@ -852,6 +861,11 @@ impl<B: Broker> Tracker<B> {
                     }));
                 }
                 self.sync_ready().await;
+                if let Some(d) = self.try_assigned(agent).await? {
+                    let reply = claimed(&*self.0.core.lock().await, &d, false);
+                    *delivery = Some(d);
+                    return Ok(reply);
+                }
                 if let Some(d) = self.try_claim(agent, &lanes).await? {
                     let reply = claimed(&*self.0.core.lock().await, &d, false);
                     *delivery = Some(d);
@@ -952,14 +966,15 @@ impl<B: Broker> Tracker<B> {
         agent: &AgentName,
         d: &Delivery,
     ) -> Result<Duration, ExtendError> {
+        // A direct claim lives only in the tracker: the sweep times it out.
+        let Some(record) = &d.record else {
+            return Ok(self.0.settings.visibility);
+        };
         tokio::time::timeout(
             FELIX_TIMEOUT,
-            self.0.broker.extend(
-                stream,
-                agent.as_str(),
-                &d.record,
-                self.0.settings.visibility,
-            ),
+            self.0
+                .broker
+                .extend(stream, agent.as_str(), record, self.0.settings.visibility),
         )
         .await
         .unwrap_or_else(|_| {
@@ -1147,6 +1162,7 @@ impl<B: Broker> Tracker<B> {
                 core.owner.remove(&item);
             }
         }
+        self.drop_away_assignees().await;
         self.sync_ready().await;
     }
 
@@ -1572,6 +1588,159 @@ impl<B: Broker> Tracker<B> {
         Ok(None)
     }
 
+    /// Claims a Ready item assigned to `agent`, lowest lane first, straight
+    /// from the state. These items are never published, so no other agent is
+    /// handed them and Felix counts no handout. The fold refuses a claim by
+    /// anyone else, and the claim's write is conditional on the tail, so this
+    /// cannot make a second holder.
+    async fn try_assigned(&self, agent: &AgentName) -> Result<Option<Delivery>, Error> {
+        let mut core = self.0.core.lock().await;
+        if core.revoked.contains(agent) {
+            return Err(Error::Refused {
+                why: "agent_revoked".into(),
+            });
+        }
+        let key = agent_key(agent);
+        let mut mine: Vec<(u8, ItemId)> = core
+            .state
+            .items
+            .iter()
+            .filter(|(_, it)| it.assignee == Some(Assignee::Agent(key.clone())))
+            .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
+            .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
+            .filter(|(id, _)| !self.review_full(&core.state, id))
+            .map(|(id, it)| (self.0.settings.lane(it).unwrap_or(DEFAULT_TIER), id.clone()))
+            .collect();
+        mine.sort();
+        let Some((tier, item)) = mine.into_iter().next() else {
+            return Ok(None);
+        };
+        let attempt = core.state.items[&item].next_attempt();
+        let claim = WorkRecord::Claimed {
+            item: item.clone(),
+            attempt,
+            deadline_ms: now_ms() + self.0.settings.visibility.as_millis() as u64,
+        };
+        match self.append(&mut core, Actor::Agent, key, claim).await {
+            Ok(_) => {
+                core.published.remove(&item);
+                core.live.remove(&item);
+                let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
+                core.owner.insert(
+                    item.clone(),
+                    Owner {
+                        agent: agent.clone(),
+                        id,
+                        last_extended: Instant::now(),
+                    },
+                );
+                Ok(Some(Delivery {
+                    id,
+                    item,
+                    attempt,
+                    tier,
+                    record: None,
+                }))
+            }
+            Err(Error::Refused { why }) => {
+                // Looked at again only once the log moves, like a refused ready record.
+                eprintln!("kbl-tracker: {item} not claimable ({why}); skipped");
+                let at = core.state.at;
+                core.refused.insert(item.clone(), at);
+                if why == "over_budget" {
+                    self.log_over_budget(&mut core, &item).await;
+                }
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// After a restart, stands behind a hold on an item assigned to its
+    /// holder without looking in Felix: such a claim was handed out straight
+    /// from the state, and polling for it would cost other records a handout.
+    async fn adopt_direct(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        attempt: u32,
+        delivery: &mut Option<Delivery>,
+    ) -> bool {
+        let mut core = self.0.core.lock().await;
+        if assigned_agent(&core.state, item).map(Key::as_str) != Some(agent.as_str()) {
+            return false;
+        }
+        let tier = core
+            .state
+            .items
+            .get(item)
+            .and_then(|i| self.0.settings.lane(i))
+            .unwrap_or(DEFAULT_TIER);
+        let id = self.0.next_delivery.fetch_add(1, Ordering::Relaxed);
+        core.recovering.remove(agent.as_str());
+        core.owner.insert(
+            item.clone(),
+            Owner {
+                agent: agent.clone(),
+                id,
+                last_extended: Instant::now(),
+            },
+        );
+        *delivery = Some(Delivery {
+            id,
+            item: item.clone(),
+            attempt,
+            tier,
+            record: None,
+        });
+        true
+    }
+
+    /// Drops the agent assignee of each Ready item whose agent was revoked or
+    /// has made no call for `assignee_away`, so the item goes to the team.
+    /// Written to the log, so every reader sees why the item moved.
+    async fn drop_away_assignees(&self) {
+        let away = self.0.settings.assignee_away;
+        let (started, seen) = {
+            let seen = self.0.seen.lock().expect("seen lock");
+            (seen.0, seen.1.clone())
+        };
+        let gone = |core: &Core, a: &Key| {
+            let revoked = core.revoked.iter().any(|r| r.as_str() == a.as_str());
+            let last = seen.get(a.as_str()).copied().unwrap_or(started);
+            revoked || last.elapsed() >= away
+        };
+        let items: Vec<ItemId> = {
+            let core = self.0.core.lock().await;
+            core.state
+                .items
+                .keys()
+                .filter(|id| core.state.stage(id) == Some(Stage::Ready))
+                .filter(|id| assigned_agent(&core.state, id).is_some_and(|a| gone(&core, a)))
+                .cloned()
+                .collect()
+        };
+        for item in items {
+            let mut core = self.0.core.lock().await;
+            // Checked again: a claim or a person may have moved it meanwhile.
+            let still = core.state.stage(&item) == Some(Stage::Ready)
+                && assigned_agent(&core.state, &item).is_some_and(|a| gone(&core, a));
+            if !still {
+                continue;
+            }
+            let record = WorkRecord::Reassigned {
+                item: item.clone(),
+                to: None,
+            };
+            if let Err(e) = self
+                .append(&mut core, Actor::Tracker, self.0.me.clone(), record)
+                .await
+            {
+                eprintln!("kbl-tracker: could not drop the away assignee of {item}: {e}");
+            }
+        }
+    }
+
     /// Whether the lane has published Ready items and every one is a review of a
     /// tree this agent worked on. Items with no record in the lane (refused, or
     /// passed over and not yet published again) do not count.
@@ -1707,6 +1876,16 @@ impl<B: Broker> Tracker<B> {
             return Ok(None);
         };
         let item = ready.item.clone();
+        // Only its assignee takes an agent's item, and straight from the state
+        // (`try_assigned`). An ack spends none of Felix's handouts, and the
+        // record is not published again, so no other agent sees it twice.
+        if assigned_agent(&core.state, &item).is_some() {
+            if core.live.get(&item) == Some(&(ready.tier, ready.stamp)) {
+                core.live.remove(&item);
+            }
+            ack(ops, record.offset);
+            return Ok(None);
+        }
         // A newer record for the item (another tier, or published after a restart) wins.
         // No entry means this is the only record the tracker knows of, so it is adopted.
         match core.live.get(&item) {
@@ -1798,7 +1977,7 @@ impl<B: Broker> Tracker<B> {
                     item,
                     attempt,
                     tier,
-                    record,
+                    record: Some(record),
                 }))
             }
             Err(Error::Refused { why }) => {
@@ -1903,14 +2082,7 @@ impl<B: Broker> Tracker<B> {
                 && core.owner.get(item).is_some_and(|o| o.id == d.id)
             {
                 core.owner.remove(item);
-                let stream = ready_stream(d.tier);
-                ops.push(if ready {
-                    core.handed_back.insert(item.clone(), u64::MAX);
-                    marked = true;
-                    Op::Nack(stream, agent.clone(), d.record)
-                } else {
-                    Op::Ack(stream, agent.clone(), d.record.offset)
-                });
+                marked = settle_op(&mut core, agent, d, ready, &mut ops);
             }
         }
         drop(delivery);
@@ -1954,6 +2126,7 @@ impl<B: Broker> Tracker<B> {
         delivery: &mut Option<Delivery>,
     ) -> Option<ItemId> {
         let d = delivery.as_ref()?;
+        let item = d.item.clone();
         let mut ops = Vec::new();
         let mut marked = false;
         {
@@ -1971,24 +2144,18 @@ impl<B: Broker> Tracker<B> {
             if shown && ours {
                 return None;
             }
+            let d = delivery.take().expect("checked above");
             if ours {
                 core.owner.remove(&d.item);
                 let ready = core.state.stage(&d.item) == Some(Stage::Ready);
                 if !ready {
                     core.live.remove(&d.item);
                 }
-                let stream = ready_stream(d.tier);
-                ops.push(if ready {
-                    core.handed_back.insert(d.item.clone(), u64::MAX);
-                    marked = true;
-                    Op::Nack(stream, agent.clone(), d.record.clone())
-                } else {
-                    Op::Ack(stream, agent.clone(), d.record.offset)
-                });
+                marked = settle_op(&mut core, agent, d, ready, &mut ops);
             }
         }
-        self.settle(&d.item, ops, marked).await.ok();
-        delivery.take().map(|d| d.item)
+        self.settle(&item, ops, marked).await.ok();
+        Some(item)
     }
 
     /// Settles a finished holder's delivery, then ends the hand-back mark if
@@ -2042,6 +2209,9 @@ impl<B: Broker> Tracker<B> {
             self.0.core.lock().await.recovering.remove(agent.as_str());
             return;
         };
+        if self.adopt_direct(agent, &item, attempt, delivery).await {
+            return;
+        }
         // The broker reclaims in a connection's first poll, so that poll goes to
         // the tier the item was published on. Lanes an earlier try already
         // searched are skipped: polling them again would cost their head record
@@ -2109,7 +2279,7 @@ impl<B: Broker> Tracker<B> {
                         item: item.clone(),
                         attempt,
                         tier,
-                        record,
+                        record: Some(record),
                     });
                     break 'tiers;
                 }
@@ -2313,6 +2483,8 @@ impl<B: Broker> Tracker<B> {
                 .iter()
                 .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
                 .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
+                // Handed to its assignee by `try_assigned`, never through a lane.
+                .filter(|(_, it)| !matches!(it.assignee, Some(Assignee::Agent(_))))
                 .filter_map(|(id, it)| Some((id.clone(), self.0.settings.lane(it)?)))
                 .filter_map(|(id, tier)| {
                     let missing = core.live.get(&id).is_none_or(|(t, _)| *t != tier);
@@ -2692,6 +2864,10 @@ impl<B: Broker> Tracker<B> {
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {
+        let now = Instant::now();
+        let mut seen = self.0.seen.lock().expect("seen lock");
+        seen.1.insert(agent.as_str().to_owned(), now);
+        drop(seen);
         self.0
             .slots
             .lock()
@@ -2816,6 +2992,39 @@ fn unavailable(lease: &LeaseState, margin: Duration) -> Option<String> {
     match &lease.held {
         Some(l) if l.valid_until > Instant::now() + margin => None,
         _ => Some("this tracker does not hold the writer lease".into()),
+    }
+}
+
+/// The agent an item is assigned to, if it is assigned to one.
+fn assigned_agent<'a>(state: &'a State, item: &ItemId) -> Option<&'a Key> {
+    match state.items.get(item)?.assignee.as_ref()? {
+        Assignee::Agent(a) => Some(a),
+        Assignee::Person(_) => None,
+    }
+}
+
+/// Queues the Felix settle for a finished delivery and returns whether it
+/// marked a hand-back. A Ready item goes back to the lane by a nack, unless an
+/// agent is assigned it: that item is never claimed from a lane, so its record
+/// is acked and no handout of Felix's is spent on it.
+fn settle_op(
+    core: &mut Core,
+    agent: &AgentName,
+    d: Delivery,
+    ready: bool,
+    ops: &mut Vec<Op>,
+) -> bool {
+    let Some(record) = d.record else {
+        return false;
+    };
+    let stream = ready_stream(d.tier);
+    if ready && assigned_agent(&core.state, &d.item).is_none() {
+        core.handed_back.insert(d.item, u64::MAX);
+        ops.push(Op::Nack(stream, agent.clone(), record));
+        true
+    } else {
+        ops.push(Op::Ack(stream, agent.clone(), record.offset));
+        false
     }
 }
 

@@ -211,6 +211,7 @@ fn quiet_settings() -> crate::tracker::Settings {
         review_limit: 0,
         snapshot_dir: None,
         snapshot_every: 0,
+        assignee_away: Duration::from_secs(600),
     }
 }
 
@@ -230,6 +231,7 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             review_limit: 3,
             snapshot_dir: None,
             snapshot_every: 0,
+            assignee_away: Duration::from_secs(600),
         },
     )
     .await
