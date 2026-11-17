@@ -3466,3 +3466,45 @@ async fn history_pages_over_a_run_of_blanks() {
     assert!(!offsets.is_empty());
     assert_eq!(h["next"], serde_json::Value::Null);
 }
+
+/// The fold of the log to any offset, with or without snapshots, is the
+/// state the tracker held once it had applied that record, blanks included.
+#[tokio::test]
+async fn the_fold_to_an_offset_is_the_state_the_tracker_held_then() {
+    let fake = Fake::default();
+    fake.raft_blanks();
+    let t = start(&fake).await;
+    let mut held: Vec<(u64, State)> = Vec::new();
+    for (i, id) in ["a1", "b1", "c1", "d1"].into_iter().enumerate() {
+        // A leader change burns an offset before every other write.
+        if i % 2 == 1 {
+            fake.blank(WORK_EVENTS);
+        }
+        // The first write after a blank is refused once, then lands past it.
+        let mut landed = false;
+        for _ in 0..4 {
+            landed = t.person_record(key("gab"), imported(id)).await.is_ok();
+            if landed {
+                break;
+            }
+        }
+        assert!(landed, "{id} never landed");
+        let state = t.0.core.lock().await.state.clone();
+        held.push((state.at.unwrap(), state));
+    }
+    let log: Vec<(u64, WorkLogged)> = fake.net.lock().unwrap().streams[WORK_EVENTS]
+        .iter()
+        .map(|(o, p)| (*o, WorkLogged::decode(p).unwrap()))
+        .collect();
+    assert!(log.windows(2).any(|w| w[1].0 > w[0].0 + 1), "no blank");
+    let snaps = kbl_core::work_fold::Snapshots::build_every(&log, 3);
+    for n in 0..=log.last().unwrap().0 + 1 {
+        let want = held
+            .iter()
+            .rev()
+            .find(|(o, _)| *o <= n)
+            .map_or_else(State::default, |(_, s)| s.clone());
+        assert_eq!(kbl_core::work_fold::fold_to(&log, n), want, "at {n}");
+        assert_eq!(snaps.fold_to(&log, n), want, "from snapshots, at {n}");
+    }
+}
