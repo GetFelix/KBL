@@ -56,6 +56,8 @@ struct Quiet {
     slow_read: Arc<StdMutex<Option<SlowRead>>>,
     /// Ingest source leases by source: value and version.
     source_leases: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
+    /// Ingest worker groups' members by group: value and version.
+    group_members: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Another tracker writes this to a source's lease just before the next
     /// lease put, so that put's version check fails.
     race_lease_put: Arc<StdMutex<Option<Vec<u8>>>>,
@@ -220,6 +222,24 @@ impl Broker for Quiet {
         }
         let next = now.unwrap_or(0) + 1;
         leases.insert(source.to_owned(), (value, next));
+        Ok(Some(next))
+    }
+    async fn group_members_get(&self, group: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        Ok(self.group_members.lock().unwrap().get(group).cloned())
+    }
+    async fn group_members_put(
+        &self,
+        group: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut all = self.group_members.lock().unwrap();
+        let now = all.get(group).map(|(_, v)| *v);
+        if now != expect {
+            return Ok(None);
+        }
+        let next = now.unwrap_or(0) + 1;
+        all.insert(group.to_owned(), (value, next));
         Ok(Some(next))
     }
     async fn forget(&self, _: Option<&str>) {}

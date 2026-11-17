@@ -1,6 +1,6 @@
 //! `PUT /v1/ingest/leases`: who gets a source, when it moves, and its epoch.
 
-use kbl_core::lease::{LEASE_MS, Lease};
+use kbl_core::lease::{LEASE_MS, Lease, TAKE_MARGIN_MS};
 
 use super::*;
 use crate::http::ingest::leases::Groups;
@@ -49,8 +49,7 @@ async fn beat_in(
     instance: &str,
     leave: bool,
 ) -> (StatusCode, Vec<(String, u64)>) {
-    let body = json!({ "group": group, "instance": instance, "leave": leave });
-    let (status, body) = send(app, Request::put("/v1/ingest/leases"), Some("tok-i1"), body).await;
+    let (status, body) = beat_raw(app, group, instance, leave, &[]).await;
     let leases = body["leases"]
         .as_array()
         .into_iter()
@@ -63,6 +62,23 @@ async fn beat_in(
         })
         .collect();
     (status, leases)
+}
+
+async fn beat_raw(
+    app: &Router,
+    group: &str,
+    instance: &str,
+    leave: bool,
+    held: &[&str],
+) -> (StatusCode, Value) {
+    let body = json!({ "group": group, "instance": instance, "leave": leave, "held": held });
+    send(app, Request::put("/v1/ingest/leases"), Some("tok-i1"), body).await
+}
+
+/// A second tracker over the same Felix, with its own memory and clock.
+fn other_tracker(o: &OrgApp) -> (Router, Arc<Groups>) {
+    let groups = Arc::new(Groups::default());
+    (crate::http::router_with(o.teams.clone(), groups.clone()), groups)
 }
 
 fn advance(groups: &Groups, ms: u64) {
@@ -115,8 +131,12 @@ async fn a_joining_worker_gets_its_share_only_after_the_old_holder_lets_it_expir
         beat(&app, "b").await.1.is_empty(),
         "still inside the expiry"
     );
-    // Past the 90 s from a's first take, b takes its share at the next epoch.
+    // At a's expiry the take margin still holds it.
     advance(&groups, LEASE_MS - 30_000);
+    assert!(beat(&app, "b").await.1.is_empty(), "inside the take margin");
+    // Past the 90 s from a's first take and the margin, b takes its share at
+    // the next epoch.
+    advance(&groups, TAKE_MARGIN_MS);
     let (_, b_got) = beat(&app, "b").await;
     assert_eq!(names(&b_got), b_share);
     assert!(
@@ -139,21 +159,71 @@ async fn a_worker_that_stops_heartbeating_loses_its_sources_to_the_rest() {
     beat(&app, "b").await;
     // a goes quiet. Once it has been unheard for the expiry it leaves the
     // group, and its leases have run out too.
-    advance(&groups, LEASE_MS);
+    advance(&groups, LEASE_MS + TAKE_MARGIN_MS);
     let (_, b_got) = beat(&app, "b").await;
     assert_eq!(names(&b_got), SOURCES);
 }
 
 #[tokio::test]
-async fn a_leaving_worker_releases_at_once_and_the_next_take_bumps_the_epoch() {
-    let (o, app, _) = leased().await;
+async fn a_leaving_worker_releases_on_any_tracker_and_the_next_take_bumps_the_epoch() {
+    let (o, app, groups) = leased().await;
     beat(&app, "a").await;
-    let (status, _) = beat_in(&app, "g1", "a", true).await;
+    // The leave reaches a tracker that never served a's heartbeats.
+    let (other, other_groups) = other_tracker(&o);
+    let (status, _) = beat_in(&other, "g1", "a", true).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(stored(&o, "github:o/a").holder, None);
+    assert!(beat(&app, "b").await.1.is_empty(), "inside the take margin");
+    advance(&groups, TAKE_MARGIN_MS);
+    advance(&other_groups, TAKE_MARGIN_MS);
     let (_, b_got) = beat(&app, "b").await;
     assert_eq!(names(&b_got), SOURCES);
     assert!(b_got.iter().all(|(_, e)| *e == 2));
+}
+
+#[tokio::test]
+async fn trackers_agree_on_the_assignment_whichever_one_a_worker_reaches() {
+    let (o, app, groups) = leased().await;
+    let (other, other_groups) = other_tracker(&o);
+    beat(&app, "a").await;
+    // b is only ever heard by the other tracker.
+    beat(&other, "b").await;
+    advance(&groups, 30_000);
+    advance(&other_groups, 30_000);
+    let (_, a_got) = beat(&app, "a").await;
+    assert!(
+        !a_got.is_empty() && a_got.len() < SOURCES.len(),
+        "a's tracker knows b is live and renews only a's share: {a_got:?}"
+    );
+    // Both trackers give a the same share, so its leases do not flap.
+    let (_, a_other) = beat(&other, "a").await;
+    assert_eq!(a_other, a_got);
+}
+
+#[tokio::test]
+async fn a_moved_source_stays_in_the_answer_while_its_lease_is_live() {
+    let (o, app, groups) = leased().await;
+    beat(&app, "a").await;
+    beat(&app, "b").await;
+    advance(&groups, 30_000);
+    let (_, body) = beat_raw(&app, "g1", "a", false, &SOURCES).await;
+    let leases = body["leases"].as_array().unwrap();
+    assert_eq!(leases.len(), SOURCES.len(), "nothing dropped: {leases:?}");
+    let winding: Vec<&Value> = leases.iter().filter(|l| l["until_ms"].is_u64()).collect();
+    assert!(!winding.is_empty(), "b's share is winding down");
+    for l in winding {
+        // Taken at 0 with a 90 s expiry, 30 s ago, and not renewed since.
+        assert_eq!(l["until_ms"], json!(LEASE_MS - 30_000));
+        let s = l["source"].as_str().unwrap();
+        assert_eq!(stored(&o, s).holder.as_deref(), Some("i1/a"), "not renewed or moved");
+    }
+    // Past its expiry it is no longer answered.
+    advance(&groups, LEASE_MS - 30_000);
+    beat(&app, "b").await;
+    let (_, body) = beat_raw(&app, "g1", "a", false, &SOURCES).await;
+    let leases = body["leases"].as_array().unwrap();
+    assert!(leases.len() < SOURCES.len());
+    assert!(leases.iter().all(|l| l["until_ms"].is_null()));
 }
 
 #[tokio::test]

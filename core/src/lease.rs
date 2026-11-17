@@ -12,11 +12,16 @@ pub const LEASE_MS: u64 = 90_000;
 /// How often a worker renews all its leases.
 pub const HEARTBEAT_MS: u64 = 30_000;
 
-/// How old a worker's last successful renew may be, by its own monotonic
-/// clock from when it sent the renew, before it makes no more upstream calls.
-/// 30 s inside [`LEASE_MS`], so the old holder has stopped before the lease
-/// can expire and move.
+/// How old a worker's last successful renew may be, timed from when it sent
+/// the renew, before it makes no more upstream calls. 30 s inside
+/// [`LEASE_MS`], so the old holder has stopped before the lease can expire.
 pub const FENCE_MS: u64 = 60_000;
+
+/// How long past its expiry a lease stays unfree. Headroom for clock skew
+/// between trackers, a stepped clock and a request still in flight at the
+/// old holder's fence: a lease moves no sooner than 120 s after its last
+/// renew, 60 s after the old holder stopped.
+pub const TAKE_MARGIN_MS: u64 = 30_000;
 
 /// One source's lease as the cache holds it. A released or expired lease keeps
 /// its epoch, so the next take is still numbered after it.
@@ -47,9 +52,9 @@ impl Lease {
         self.holder.as_deref() == Some(who) && self.expires_ms > now_ms
     }
 
-    /// Free to take: never held, released, or expired.
+    /// Free to take: released or expired, and [`TAKE_MARGIN_MS`] past that.
     pub fn free(&self, now_ms: u64) -> bool {
-        self.holder.is_none() || self.expires_ms <= now_ms
+        self.expires_ms.saturating_add(TAKE_MARGIN_MS) <= now_ms
     }
 }
 

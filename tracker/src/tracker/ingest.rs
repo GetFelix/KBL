@@ -443,6 +443,40 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
+    /// A worker group's live members, each with the tracker time of its
+    /// last heartbeat, and the version to write them back at.
+    pub(crate) async fn group_members(
+        &self,
+        group: &Key,
+    ) -> Result<Option<(std::collections::BTreeMap<String, u64>, u64)>, Error> {
+        match self.0.broker.group_members_get(group.as_str()).await {
+            Ok(Some((bytes, version))) => serde_json::from_slice(&bytes)
+                .map(|m| Some((m, version)))
+                .map_err(|e| Error::Felix(anyhow::anyhow!("a group's members are not JSON: {e}"))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
+    /// Writes a group's members if nobody wrote them since `version`.
+    pub(crate) async fn put_group_members(
+        &self,
+        group: &Key,
+        members: &std::collections::BTreeMap<String, u64>,
+        version: Option<u64>,
+    ) -> Result<bool, Error> {
+        let bytes = serde_json::to_vec(members).map_err(|_| refused("invalid"))?;
+        match self
+            .0
+            .broker
+            .group_members_put(group.as_str(), bytes, version)
+            .await
+        {
+            Ok(put) => Ok(put.is_some()),
+            Err(e) => Err(Error::Felix(e)),
+        }
+    }
+
     pub(crate) async fn ingest_state(&self, source: &str) -> Result<Value, Error> {
         let name = state_name(source)?;
         match self.0.broker.cursor_get(&name).await {

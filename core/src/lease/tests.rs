@@ -17,25 +17,32 @@ fn a_take_raises_the_epoch_and_a_renew_keeps_it() {
 }
 
 #[test]
-fn a_live_lease_does_not_move_to_the_assigned_worker_until_it_expires() {
+fn a_live_lease_does_not_move_until_the_take_margin_past_its_expiry() {
     let a = held("a", 4, 1_000);
     assert_eq!(step(Some(&a), "b", true, 999), Step::Leave);
-    assert_eq!(step(Some(&a), "b", true, 1_000), Step::Take);
-    let b = next(Some(&a), "b", Step::Take, 1_000).unwrap();
+    // Expired, but a request of the old holder may still be in flight, or
+    // this tracker's clock may run ahead of the one that wrote it.
+    assert_eq!(step(Some(&a), "b", true, 1_000), Step::Leave);
+    let free_at = 1_000 + TAKE_MARGIN_MS;
+    assert_eq!(step(Some(&a), "b", true, free_at - 1), Step::Leave);
+    assert_eq!(step(Some(&a), "b", true, free_at), Step::Take);
+    let b = next(Some(&a), "b", Step::Take, free_at).unwrap();
     assert_eq!((b.holder.as_deref(), b.epoch), (Some("b"), 5));
     // The old holder's renew is refused: it no longer holds it.
-    assert_eq!(step(Some(&b), "a", true, 1_001), Step::Leave);
+    assert_eq!(step(Some(&b), "a", true, free_at + 1), Step::Leave);
 }
 
 #[test]
-fn a_released_lease_is_free_at_once() {
+fn a_released_lease_is_free_after_the_margin() {
     let released = Lease {
         holder: None,
         epoch: 7,
-        expires_ms: 0,
+        expires_ms: 100,
     };
-    assert_eq!(step(Some(&released), "b", true, 0), Step::Take);
-    assert_eq!(next(Some(&released), "b", Step::Take, 0).unwrap().epoch, 8);
+    assert_eq!(step(Some(&released), "b", true, 100), Step::Leave);
+    let at = 100 + TAKE_MARGIN_MS;
+    assert_eq!(step(Some(&released), "b", true, at), Step::Take);
+    assert_eq!(next(Some(&released), "b", Step::Take, at).unwrap().epoch, 8);
 }
 
 #[test]

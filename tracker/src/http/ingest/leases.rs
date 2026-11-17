@@ -1,8 +1,9 @@
 //! `PUT /v1/ingest/leases`: a worker's heartbeat, which renews the source
 //! leases it holds and takes the ones rendezvous hashing gives it once they are
-//! free. Who is live is kept in memory: a lease itself is only ever moved by a
-//! version-checked write, so two trackers that disagree on who is live cost a
-//! slower handover, never two holders.
+//! free. Who is live is one cache entry per group, so every tracker computes
+//! the same assignment; a lease itself only moves by a version-checked write,
+//! so even trackers that read membership at different moments never make two
+//! holders.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
@@ -29,50 +30,76 @@ pub(crate) const MAX_MEMBERS: usize = 256;
 /// Lease reads and writes one heartbeat has in flight.
 const IN_FLIGHT: usize = 16;
 
-/// The live workers of every group and the leases each last got.
+/// Tries at the membership entry before a heartbeat gives up with `503`.
+const JOIN_TRIES: usize = 8;
+
+/// This tracker's view of each group. The leases and membership themselves
+/// live in the cache; this holds only what the config answer shows and the
+/// owner map, each group behind its own lock.
 #[derive(Default)]
 pub(crate) struct Groups {
-    groups: Mutex<HashMap<(TeamName, Key), Group>>,
+    groups: Mutex<HashMap<(TeamName, Key), Arc<Group>>>,
     /// Added to the wall clock, so a test can let leases run out.
     pub(crate) skew_ms: AtomicU64,
 }
 
+#[derive(Default)]
 struct Group {
-    /// Worker to the time it was last heard from.
-    seen: BTreeMap<String, u64>,
-    /// Worker to the leases its last heartbeat answered.
-    held: BTreeMap<String, Vec<(String, u64)>>,
-    /// Bumped when either changes, to wake held config polls.
+    view: Mutex<View>,
+    /// Bumped when the view changes, to wake held config polls.
     changed: watch::Sender<u64>,
 }
 
-impl Default for Group {
-    fn default() -> Self {
-        Self {
-            seen: BTreeMap::new(),
-            held: BTreeMap::new(),
-            changed: watch::Sender::new(0),
-        }
-    }
+#[derive(Default)]
+struct View {
+    /// Live members as of the last membership read, sorted.
+    members: Vec<String>,
+    /// The connection's sources the owner map was computed for.
+    sources: Vec<String>,
+    /// Source to its rendezvous owner among `members`. Recomputed only when
+    /// `members` or `sources` change, not on every heartbeat.
+    owners: HashMap<String, String>,
+    /// Worker to the leases its last heartbeat here answered.
+    held: BTreeMap<String, Vec<(String, u64)>>,
 }
 
-impl Group {
-    fn prune(&mut self, now: u64) -> bool {
-        let before = self.seen.len();
-        self.seen.retain(|_, at| *at + LEASE_MS > now);
-        self.held.retain(|w, _| self.seen.contains_key(w));
-        before != self.seen.len()
-    }
-
-    fn bump(&self) {
-        self.changed.send_modify(|n| *n += 1);
+impl View {
+    fn refresh(&mut self, members: Vec<String>, sources: &[String]) -> bool {
+        self.held.retain(|w, _| members.binary_search(w).is_ok());
+        if self.members == members && self.sources == sources {
+            return false;
+        }
+        self.owners = sources
+            .iter()
+            .filter_map(|s| {
+                let o = lease::owner(s, members.iter().map(String::as_str))?;
+                Some((s.clone(), o.to_owned()))
+            })
+            .collect();
+        self.members = members;
+        self.sources = sources.to_vec();
+        true
     }
 
     fn assigned<'a>(&self, sources: &'a [String], me: &str) -> Vec<&'a String> {
         sources
             .iter()
-            .filter(|s| lease::owner(s, self.seen.keys().map(String::as_str)) == Some(me))
+            .filter(|s| self.owners.get(*s).map(String::as_str) == Some(me))
             .collect()
+    }
+}
+
+/// The group's live members as the cache holds them: member to the tracker
+/// time it last heartbeated.
+type Members = BTreeMap<String, u64>;
+
+fn live(members: &mut Members, now: u64) {
+    members.retain(|_, seen| *seen + LEASE_MS > now);
+}
+
+impl Group {
+    fn bump(&self) {
+        self.changed.send_modify(|n| *n += 1);
     }
 }
 
@@ -84,9 +111,20 @@ impl Groups {
         wall + self.skew_ms.load(Ordering::SeqCst)
     }
 
-    /// What the config answer says about `me`: the sources it is assigned and
-    /// the leases its last heartbeat got, with a receiver that changes when
-    /// either may have.
+    fn group(&self, team: &TeamName, group: &Key) -> Arc<Group> {
+        self.groups
+            .lock()
+            .expect("lease groups lock")
+            .entry((team.clone(), group.clone()))
+            .or_default()
+            .clone()
+    }
+
+    /// What the config answer says about `me`, from this tracker's last view:
+    /// the sources it is assigned and the leases its last heartbeat here got,
+    /// with a receiver that changes when either may have. Advisory only; the
+    /// heartbeat answer is what the worker acts on. Reads nothing from Felix,
+    /// so a held poll stays cheap.
     pub(super) fn view(
         &self,
         team: &TeamName,
@@ -94,22 +132,59 @@ impl Groups {
         me: &str,
         sources: &[String],
     ) -> (Value, watch::Receiver<u64>) {
-        let now = self.now_ms();
-        let mut groups = self.groups.lock().expect("lease groups lock");
-        let g = groups.entry((team.clone(), group.clone())).or_default();
-        if g.prune(now) {
-            g.bump();
-        }
-        let leases: Vec<Value> = g
+        let g = self.group(team, group);
+        let view = g.view.lock().expect("lease view lock");
+        let leases: Vec<Value> = view
             .held
             .get(me)
             .into_iter()
             .flatten()
             .map(|(s, e)| json!({ "source": s, "epoch": e }))
             .collect();
-        let view = json!({ "assigned": g.assigned(sources, me), "leases": leases });
-        (view, g.changed.subscribe())
+        let answer = json!({ "assigned": view.assigned(sources, me), "leases": leases });
+        (answer, g.changed.subscribe())
     }
+}
+
+/// Why a membership write did not go through.
+enum Join {
+    Full,
+    Failed,
+}
+
+/// Writes `me` into the group's membership at `now` (or out of it, when
+/// `leave`), dropping members past their expiry, and answers who is live.
+async fn join<B: Broker>(
+    tracker: &Tracker<B>,
+    group: &Key,
+    me: &str,
+    now: u64,
+    leave: bool,
+) -> Result<Members, Join> {
+    for _ in 0..JOIN_TRIES {
+        let Ok(current) = tracker.group_members(group).await else {
+            return Err(Join::Failed);
+        };
+        let (mut members, version) = match current {
+            Some((m, v)) => (m, Some(v)),
+            None => (Members::new(), None),
+        };
+        live(&mut members, now);
+        if leave {
+            members.remove(me);
+        } else {
+            if !members.contains_key(me) && members.len() >= MAX_MEMBERS {
+                return Err(Join::Full);
+            }
+            members.insert(me.to_owned(), now);
+        }
+        match tracker.put_group_members(group, &members, version).await {
+            Ok(true) => return Ok(members),
+            Ok(false) => continue,
+            Err(_) => return Err(Join::Failed),
+        }
+    }
+    Err(Join::Failed)
 }
 
 #[derive(Deserialize)]
@@ -120,6 +195,10 @@ pub(super) struct HeartbeatBody {
     /// The worker is stopping: release what it holds and leave the group.
     #[serde(default)]
     leave: bool,
+    /// The sources the worker holds now. One no longer assigned to it is
+    /// still answered while its lease is live, so it is not dropped early.
+    #[serde(default)]
+    held: Vec<String>,
 }
 
 /// The worker as leases and the group name it: its token's name and instance.
@@ -169,52 +248,53 @@ pub(super) async fn heartbeat<B: Broker>(
     let me = member(&worker.key, &instance);
     let tracker = call.tracker();
     let groups = &app.leases;
-    if body.leave {
-        let held: Vec<String> = groups
-            .groups
-            .lock()
-            .expect("lease groups lock")
-            .get(&(team.clone(), group.clone()))
-            .and_then(|g| g.held.get(&me))
-            .map(|h| h.iter().map(|(s, _)| s.clone()).collect())
-            .unwrap_or_default();
-        release_all(tracker, groups, &held, &me).await;
-        if let Some(g) = groups
-            .groups
-            .lock()
-            .expect("lease groups lock")
-            .get_mut(&(team, group))
-        {
-            g.seen.remove(&me);
-            g.held.remove(&me);
-            g.bump();
+    let g = groups.group(&team, &group);
+    let now = groups.now_ms();
+    let members = match join(tracker, &group, &me, now, body.leave).await {
+        Ok(m) => m,
+        Err(Join::Full) => {
+            return refused(
+                StatusCode::TOO_MANY_REQUESTS,
+                "this group has as many live workers as it may",
+                "too_many_workers",
+            );
         }
+        Err(Join::Failed) => {
+            return refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "could not record the heartbeat; try again",
+                "unavailable",
+            );
+        }
+    };
+    if body.leave {
+        // By what the cache says this worker holds, not by any tracker's
+        // memory: the worker may have heartbeated elsewhere.
+        release_all(tracker, groups, &sources, &me).await;
+        let mut view = g.view.lock().expect("lease view lock");
+        view.held.remove(&me);
+        view.refresh(members.into_keys().collect(), &sources);
+        drop(view);
+        g.bump();
         return Json(json!({ "leases": [] })).into_response();
     }
-    let now = groups.now_ms();
     let assigned: Vec<String> = {
-        let mut all = groups.groups.lock().expect("lease groups lock");
-        let g = all.entry((team.clone(), group.clone())).or_default();
-        let mut moved = g.prune(now);
-        if !g.seen.contains_key(&me) {
-            if g.seen.len() >= MAX_MEMBERS {
-                drop(all);
-                return refused(
-                    StatusCode::TOO_MANY_REQUESTS,
-                    "this group has as many live workers as it may",
-                    "too_many_workers",
-                );
-            }
-            moved = true;
-        }
-        g.seen.insert(me.clone(), now);
+        let mut view = g.view.lock().expect("lease view lock");
+        let moved = view.refresh(members.into_keys().collect(), &sources);
+        let assigned = view.assigned(&sources, &me).into_iter().cloned().collect();
+        drop(view);
         if moved {
             g.bump();
         }
-        g.assigned(&sources, &me).into_iter().cloned().collect()
+        assigned
     };
+    let leaving: Vec<String> = body
+        .held
+        .into_iter()
+        .filter(|s| sources.contains(s) && !assigned.contains(s))
+        .collect();
     let who = me.as_str();
-    let got: Vec<(String, u64)> = futures::stream::iter(assigned)
+    let mut got: Vec<(String, u64)> = futures::stream::iter(assigned)
         .map(|s| async move {
             let epoch = take_or_renew(tracker, &s, who, now).await;
             epoch.map(|e| (s, e))
@@ -223,21 +303,36 @@ pub(super) async fn heartbeat<B: Broker>(
         .filter_map(|x| async move { x })
         .collect()
         .await;
-    let mut got = got;
     got.sort();
-    if let Some(g) = groups
-        .groups
-        .lock()
-        .expect("lease groups lock")
-        .get_mut(&(team, group))
-        && g.held.get(&me) != Some(&got)
+    // A source whose share moved is not renewed, but while its lease is live
+    // the worker still holds it: it is told how long, rather than dropped.
+    let mut winding: Vec<(String, u64, u64)> = futures::stream::iter(leaving)
+        .map(|s| async move {
+            let (l, _) = tracker.source_lease(&s).await.ok()??;
+            l.held_by(who, now)
+                .then(|| (s, l.epoch, l.expires_ms.saturating_sub(now)))
+        })
+        .buffer_unordered(IN_FLIGHT)
+        .filter_map(|x| async move { x })
+        .collect()
+        .await;
+    winding.sort();
     {
-        g.held.insert(me.clone(), got.clone());
-        g.bump();
+        let mut view = g.view.lock().expect("lease view lock");
+        if view.held.get(&me) != Some(&got) {
+            view.held.insert(me.clone(), got.clone());
+            drop(view);
+            g.bump();
+        }
     }
     let leases: Vec<Value> = got
         .iter()
         .map(|(s, e)| json!({ "source": s, "epoch": e }))
+        .chain(
+            winding
+                .iter()
+                .map(|(s, e, left)| json!({ "source": s, "epoch": e, "until_ms": left })),
+        )
         .collect();
     Json(json!({
         "leases": leases,

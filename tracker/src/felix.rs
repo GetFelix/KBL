@@ -49,6 +49,12 @@ fn cursor_key(name: &str) -> String {
 fn source_lease_key(source: &str) -> String {
     format!("ingest/lease/{source}")
 }
+
+/// The key of a worker group's live members. A group is a key, with no `:`,
+/// so it never meets [`source_lease_key`].
+fn group_members_key(group: &str) -> String {
+    format!("ingest/members/{group}")
+}
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
 const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
@@ -205,6 +211,24 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
     fn source_lease_put(
         &self,
         _source: &str,
+        _value: Vec<u8>,
+        _expect: Option<u64>,
+    ) -> impl Future<Output = Result<Option<u64>>> + Send {
+        async { bail!("this broker keeps no ingest leases") }
+    }
+
+    /// A worker group's live members and their version.
+    fn group_members_get(
+        &self,
+        _group: &str,
+    ) -> impl Future<Output = Result<Option<(Vec<u8>, u64)>>> + Send {
+        async { bail!("this broker keeps no ingest leases") }
+    }
+
+    /// Writes a worker group's members if their version is still `expect`.
+    fn group_members_put(
+        &self,
+        _group: &str,
         _value: Vec<u8>,
         _expect: Option<u64>,
     ) -> impl Future<Output = Result<Option<u64>>> + Send {
@@ -843,6 +867,20 @@ impl Broker for Felix {
         expect: Option<u64>,
     ) -> Result<Option<u64>> {
         self.cache_put_key(&source_lease_key(source), value, expect)
+            .await
+    }
+
+    async fn group_members_get(&self, group: &str) -> Result<Option<(Vec<u8>, u64)>> {
+        self.cache_get_key(&group_members_key(group)).await
+    }
+
+    async fn group_members_put(
+        &self,
+        group: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> Result<Option<u64>> {
+        self.cache_put_key(&group_members_key(group), value, expect)
             .await
     }
 
