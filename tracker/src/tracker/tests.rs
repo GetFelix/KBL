@@ -1201,9 +1201,7 @@ fn refill_the_claim_for_w2(fake: &Fake, at: u64) {
         .iter_mut()
         .find(|(o, _)| *o == at)
         .expect("the claim");
-    let mut theirs = WorkLogged::decode(payload)
-        .unwrap()
-        .with_writer("another-tracker");
+    let mut theirs = WorkLogged::decode(payload).unwrap();
     assert!(matches!(theirs.record, WorkRecord::Claimed { .. }));
     theirs.by = Key::new("w2").unwrap();
     *payload = theirs.encode();
@@ -1242,6 +1240,56 @@ async fn a_claim_refilled_at_the_same_offset_is_not_extended() {
         Err(Error::Lost(_))
     ));
     assert_eq!(held_by(&t, "a1").as_deref(), Some("w2"));
+}
+
+/// The tracker, not yet fenced, writes again after the refill. Felix's
+/// conditional publish checks only the offset, so the write lands on w2's
+/// claim and the tip is again one past the tracker's own last record.
+#[tokio::test]
+async fn a_write_on_a_refilled_claim_does_not_hide_the_refill() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await;
+    let at = first["offset"].as_u64().unwrap();
+    refill_the_claim_for_w2(&fake, at);
+    let ours = t
+        .person_record(key("gab"), imported("b1"))
+        .await
+        .expect("the write lands on the refilled tail");
+    assert_eq!(ours["offset"].as_u64(), Some(at + 1));
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_err());
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
+    let again = claim(&t, "w1").await;
+    assert_ne!(again["resumed"], true);
+    assert_eq!(held_by(&t, "a1").as_deref(), Some("w2"));
+}
+
+/// A refill that encodes exactly as the cut record (same millisecond, same
+/// content, another tracker) leaves the log as this tracker folded it, so
+/// the hold stands: no writer stamp is needed to tell the two apart.
+#[tokio::test]
+async fn a_byte_identical_refill_keeps_the_hold() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await;
+    let at = first["offset"].as_u64().unwrap();
+    {
+        let mut net = fake.net.lock().unwrap();
+        let (_, payload) = (net.streams.get_mut(WORK_EVENTS).unwrap().iter_mut())
+            .find(|(o, _)| *o == at)
+            .unwrap();
+        *payload = WorkLogged::decode(payload).unwrap().encode();
+    }
+    t.person_record(key("gab"), imported("b1")).await.unwrap();
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_ok());
+    let again = claim(&t, "w1").await;
+    assert_eq!(again["resumed"], true);
+    assert_eq!(held_by(&t, "a1").as_deref(), Some("w1"));
 }
 
 #[tokio::test]
