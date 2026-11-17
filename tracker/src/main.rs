@@ -121,6 +121,17 @@ struct Cli {
     /// is a guess with no measurement behind it (docs/dashboard-research.md).
     #[arg(long, env = "KBL_REVIEW_LIMIT", default_value_t = 3)]
     review_limit: usize,
+    /// A folder for fold snapshots, one subfolder per team. A restart then folds
+    /// only the records since the newest instead of all of work.events. Unset keeps none.
+    #[arg(long, env = "KBL_TRACKER_SNAPSHOT_DIR")]
+    snapshot_dir: Option<std::path::PathBuf>,
+    /// Records between snapshots.
+    #[arg(
+        long,
+        env = "KBL_TRACKER_SNAPSHOT_EVERY",
+        default_value_t = kbl_core::work_fold::SNAPSHOT_EVERY
+    )]
+    snapshot_every: u64,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -221,6 +232,8 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
     // One floor for every team; each team's tracker charges it against its own fold.
     let cost_floor_micros = cli.cost_floor_micros;
     let review_limit = cli.review_limit;
+    let snapshot_dir = cli.snapshot_dir.clone();
+    let snapshot_every = cli.snapshot_every;
     let base = target(cli, "");
     Arc::new(move |team: TeamName| {
         let mut target = base.clone();
@@ -241,6 +254,8 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             cost_floor_micros,
             team: team.as_str().to_owned(),
             review_limit,
+            snapshot_dir: snapshot_dir.clone(),
+            snapshot_every,
         };
         Box::pin(async move {
             let felix = felix::connect(target, Kind::Team).await?;

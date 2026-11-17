@@ -5,12 +5,15 @@
 //! would stand in for, and a snapshot that fails is skipped, so a stale or
 //! foreign one costs a longer fold and never a wrong state.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::human_wait::Waits;
 use super::{State, Waiting, fold};
 use crate::artifact::ArtifactId;
 use crate::codec::Codec;
+use crate::names::{ItemId, Key};
 use crate::work::WorkLogged;
 
 /// Records between snapshots. Counted in records applied, not offsets, so
@@ -19,7 +22,7 @@ pub const SNAPSHOT_EVERY: u64 = 2_000;
 
 /// Bump when a change to the fold would make an old snapshot differ from a
 /// fold of the same prefix. Snapshots from another revision are dropped.
-pub const FOLD_REV: u32 = 2;
+pub const FOLD_REV: u32 = 3;
 
 /// Every record at an offset up to and including `upto`.
 ///
@@ -50,12 +53,35 @@ pub struct Snapshot {
     pub(in crate::work_fold) state: State,
     waiting: Waiting,
     human_waits: Waits,
+    /// What the state's wire form leaves out of each item.
+    #[serde(default)]
+    left_out: BTreeMap<ItemId, LeftOut>,
+}
+
+/// The item fields `State` does not serialize, which a fold of the log sets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct LeftOut {
+    proposed_from: Option<(Key, ItemId)>,
+    proposal_by: Option<Key>,
 }
 
 impl Snapshot {
     fn of(through: u64, records: u64, chain: String, state: &State) -> Self {
         let mut state = state.clone();
+        let left_out = (state.items.iter())
+            .filter_map(|(id, i)| {
+                let proposal_by = i.proposal.as_ref().and_then(|p| p.by.clone());
+                (i.proposed_from.is_some() || proposal_by.is_some()).then(|| {
+                    let left = LeftOut {
+                        proposed_from: i.proposed_from.clone(),
+                        proposal_by,
+                    };
+                    (id.clone(), left)
+                })
+            })
+            .collect();
         Self {
+            left_out,
             rev: FOLD_REV,
             through,
             records,
@@ -71,6 +97,14 @@ impl Snapshot {
         let mut state = self.state.clone();
         state.waiting = self.waiting.clone();
         state.human_waits = self.human_waits.clone();
+        for (id, left) in &self.left_out {
+            if let Some(item) = state.items.get_mut(id) {
+                item.proposed_from.clone_from(&left.proposed_from);
+                if let Some(p) = &mut item.proposal {
+                    p.by.clone_from(&left.proposal_by);
+                }
+            }
+        }
         state
     }
 
@@ -101,6 +135,81 @@ fn link(prev: &str, records: &[(u64, WorkLogged)]) -> String {
         bytes.extend(enc);
     }
     ArtifactId::of(&bytes).as_str().to_owned()
+}
+
+/// Where a saved snapshot's chain stood before it: the chain over the first
+/// `records` records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Link {
+    records: u64,
+    chain: String,
+}
+
+/// One snapshot kept on its own, for a store that holds only the newest.
+///
+/// Its chain is built over the links before it, so [`Saved::valid`] hashes
+/// every record once and needs no older snapshot. The state is not covered by
+/// the chain: the store must catch a damaged file itself, and the chain only
+/// decides whether the log still matches what the file was built from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Saved {
+    links: Vec<Link>,
+    snapshot: Snapshot,
+}
+
+impl Saved {
+    /// A snapshot of all of `log`, whose fold is `state`. `prev` is the saved
+    /// snapshot `log` was checked against, if one was.
+    pub fn capture(log: &[(u64, WorkLogged)], prev: Option<&Saved>, state: &State) -> Option<Self> {
+        let (last, _) = log.last()?;
+        let records = log.len() as u64;
+        let (links, chain, from) = match prev {
+            Some(p) => {
+                let mut links = p.links.clone();
+                links.push(Link {
+                    records: p.snapshot.records,
+                    chain: p.snapshot.chain.clone(),
+                });
+                (links, p.snapshot.chain.as_str(), p.snapshot.records)
+            }
+            None => (Vec::new(), "", 0),
+        };
+        let from = usize::try_from(from).ok()?;
+        if from >= log.len() || state.at != Some(*last) {
+            return None;
+        }
+        let chain = link(chain, &log[from..]);
+        Some(Self {
+            links,
+            snapshot: Snapshot::of(*last, records, chain, state),
+        })
+    }
+
+    /// Whether this is the fold of the first [`Saved::records`] records of `log`.
+    pub fn valid(&self, log: &[(u64, WorkLogged)]) -> bool {
+        let (mut chain, mut records) = (String::new(), 0u64);
+        for l in &self.links {
+            let (Ok(from), Ok(to)) = (usize::try_from(records), usize::try_from(l.records)) else {
+                return false;
+            };
+            if from >= to || to > log.len() || link(&chain, &log[from..to]) != l.chain {
+                return false;
+            }
+            chain.clone_from(&l.chain);
+            records = l.records;
+        }
+        self.snapshot.describes(log, &chain, records)
+    }
+
+    /// How many records of the log this covers.
+    pub fn records(&self) -> u64 {
+        self.snapshot.records
+    }
+
+    /// The state, as a fold of the same records gives it.
+    pub fn state(&self) -> State {
+        self.snapshot.state()
+    }
 }
 
 /// Snapshots of one log, oldest first.

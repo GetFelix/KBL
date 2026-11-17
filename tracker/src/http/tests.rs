@@ -209,6 +209,8 @@ fn quiet_settings() -> crate::tracker::Settings {
         cost_floor_micros: 0,
         team: String::new(),
         review_limit: 0,
+        snapshot_dir: None,
+        snapshot_every: 0,
     }
 }
 
@@ -226,6 +228,8 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             cost_floor_micros: 0,
             team: name.to_owned(),
             review_limit: 3,
+            snapshot_dir: None,
+            snapshot_every: 0,
         },
     )
     .await
