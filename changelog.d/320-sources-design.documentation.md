@@ -1,0 +1,1 @@
+A design for a dashboard Sources view: connect GitHub, Azure DevOps, Jira and GitLab sources with admin-consented credentials, prove a person may connect them, and pick up changes without restarting ingest (`docs/design/sources.md`).
