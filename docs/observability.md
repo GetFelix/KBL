@@ -65,9 +65,13 @@ hand to anyone who can read the collector.
   query strings, or the raw path of a request.
 - A value that comes from a caller (a method, a tool name) is mapped to a
   fixed set before it becomes an attribute, as for metrics.
-- Incoming `traceparent` is accepted from any caller, before authentication,
-  because it only names the trace the span joins. The tracker never copies
-  `tracestate` or any other request header into a span.
+- Incoming `traceparent` is joined only when the request carries a token the
+  tracker accepts. A request with no token or a wrong one (including
+  `/healthz`) gets a root span, so a caller cannot force its spans to be
+  sampled or choose their trace. Those root spans follow the tracker's own
+  sampler (`OTEL_TRACES_SAMPLER`); the default records them, so set a ratio
+  sampler if unauthenticated traffic is a volume concern. The tracker never
+  copies `tracestate` or any other request header into a span.
 
 A new span or attribute follows this list, and its test checks that no
 secret reaches it.
