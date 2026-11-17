@@ -183,6 +183,12 @@ impl<B: Broker> Org<B> {
         view.state.role_in(team, person).is_some()
     }
 
+    /// Whether `agent` is an agent of `team` that is not revoked, by the last fold.
+    pub(crate) fn has_agent(&self, team: &TeamName, agent: &Key) -> bool {
+        let view = self.view.read().expect("org view lock");
+        view.state.agent(team, agent).is_some_and(|a| !a.revoked)
+    }
+
     /// Whether the lease is held with room for a write to land, and the log was
     /// read since it was taken. False is a hint, not a refusal: a write after a
     /// failed read may still get in by reading first.
