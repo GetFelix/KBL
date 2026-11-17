@@ -329,3 +329,74 @@ fn a_request_digest_ignores_key_order_and_names_the_route() {
         )
     );
 }
+
+/// A log at format 10: the card actions a person takes on My queue. Its
+/// folded state is pinned in `wasm/golden/format_10.state.json`.
+#[test]
+fn the_card_actions_fold_step_by_step() {
+    use kbl_core::work_fold::{NeedsYou, Rejection};
+    let log: Vec<_> = include_str!("work_format_10.jsonl")
+        .lines()
+        .enumerate()
+        .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+        .collect();
+    let r1 = ItemId::new("r1").unwrap();
+    let r2 = ItemId::new("r2").unwrap();
+    let fold = |n: usize| kbl_core::work_fold::fold(&log[..n]);
+
+    // The attempt used its tries; a retry before the raise changes nothing.
+    assert_eq!(fold(8).needs_you(&r1), Some(NeedsYou::TriesUsed));
+    assert_eq!(fold(9).needs_you(&r1), Some(NeedsYou::TriesUsed));
+    assert_eq!(stage(&fold(11), "r1"), Stage::Ready);
+
+    // The question waits; a snooze hides it for ten hours, then it is back.
+    assert_eq!(fold(14).queue(2000).len(), 1);
+    assert!(fold(15).queue(2000).is_empty());
+    assert_eq!(fold(15).queue(36_001_000).len(), 1);
+    // Parked, then shown again.
+    assert!(fold(17).queue(u64::MAX).is_empty());
+    assert_eq!(fold(19).queue(u64::MAX).len(), 1);
+
+    assert_eq!(stage(&fold(20), "r2"), Stage::Blocked);
+    let end = fold(log.len());
+    assert_eq!(stage(&end, "r2"), Stage::Ready);
+    assert!(!end.is_linked(&r2, &r1));
+    let why = |offset, why| Rejection { offset, why };
+    assert_eq!(
+        end.rejections,
+        vec![
+            why(8, Reject::Format),
+            why(11, Reject::NoChange),
+            why(15, Reject::BadTime),
+            why(17, Reject::NoChange),
+            why(20, Reject::ActorNotAllowed),
+            why(22, Reject::NoChange),
+        ]
+    );
+}
+
+/// Logs from before format 10 fold with nothing snoozed or parked, and their
+/// states serialize without those fields.
+#[test]
+fn an_old_log_has_no_snoozed_or_parked_items() {
+    for log in [
+        include_str!("work_pre_prerequisite.jsonl"),
+        include_str!("work_format_6.jsonl"),
+        include_str!("work_format_7.jsonl"),
+        include_str!("work_format_8.jsonl"),
+    ] {
+        let entries: Vec<_> = log
+            .lines()
+            .enumerate()
+            .map(|(i, l)| (i as u64, WorkLogged::decode(l.as_bytes()).unwrap()))
+            .collect();
+        let s = kbl_core::work_fold::fold(&entries);
+        assert!(
+            s.items
+                .values()
+                .all(|i| i.snoozed.is_none() && i.parked_at_ms.is_none())
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(!json.contains("snoozed") && !json.contains("parked_at_ms"));
+    }
+}

@@ -749,6 +749,11 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
         ("/v1/work/unlink", json!({ "item": "a1", "to": "a2" })),
         ("/v1/work/flag", json!({ "item": "a1" })),
         ("/v1/work/unflag", json!({ "item": "a1" })),
+        ("/v1/work/retry", json!({ "item": "a1" })),
+        ("/v1/work/snooze", json!({ "item": "a1", "until_ms": 1 })),
+        ("/v1/work/park", json!({ "item": "a1" })),
+        ("/v1/work/unpark", json!({ "item": "a1" })),
+        ("/v1/work/unblock", json!({ "item": "a1", "to": "a2" })),
         (
             "/v1/work/budget",
             json!({ "root": "a1", "items_left": 1, "max_depth": 1, "cost_left_micros": 1, "redos_per_item": 1 }),
@@ -1531,4 +1536,161 @@ async fn my_queue_is_for_a_person_and_stays_in_the_token_s_team() {
         (status, reply["why"].as_str()),
         (StatusCode::BAD_REQUEST, Some("team_required"))
     );
+}
+
+fn now_ms() -> u64 {
+    crate::tracker::now_ms()
+}
+
+/// A flagged item, so it waits on a person, in a log raised to format 10.
+async fn waiting_item(app: &Router, prefix: &str, token: &str, item: &str) {
+    let body = json!({ "item": item });
+    let raise = json!({ "record": { "kind": "format_raised", "to": 10 } });
+    call(app, &format!("{prefix}/work/records"), Some(token), raise).await;
+    call(
+        app,
+        &format!("{prefix}/work/records"),
+        Some(token),
+        imported(item),
+    )
+    .await;
+    call(
+        app,
+        &format!("{prefix}/work/proposals/accept"),
+        Some(token),
+        body.clone(),
+    )
+    .await;
+    let (status, r) = call(app, &format!("{prefix}/work/flag"), Some(token), body).await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+}
+
+#[tokio::test]
+async fn the_card_actions_wait_for_format_10() {
+    let app = kept().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    let item = json!({ "item": "a1" });
+    for (path, body) in [
+        ("/v1/work/retry", item.clone()),
+        (
+            "/v1/work/snooze",
+            json!({ "item": "a1", "until_ms": now_ms() + 60_000 }),
+        ),
+        ("/v1/work/park", item.clone()),
+        ("/v1/work/unpark", item.clone()),
+        ("/v1/work/unblock", json!({ "item": "a1", "to": "a2" })),
+    ] {
+        let (status, reply) = call(&app, path, Some("tok-gab"), body).await;
+        assert_eq!(
+            (status, reply["why"].as_str()),
+            (StatusCode::CONFLICT, Some("format")),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_parked_or_snoozed_item_leaves_my_queue_and_a_snooze_ends() {
+    let app = kept().await;
+    waiting_item(&app, "/v1", "tok-gab", "a1").await;
+    let count = |app: &Router| {
+        let app = app.clone();
+        async move { get_json(&app, "/v1/work/queue", Some("tok-gab")).await.1["count"].clone() }
+    };
+    assert_eq!(count(&app).await, 1);
+
+    let item = json!({ "item": "a1" });
+    let (status, r) = call(&app, "/v1/work/park", Some("tok-gab"), item.clone()).await;
+    assert_eq!(
+        (status, r["kind"].as_str()),
+        (StatusCode::OK, Some("parked")),
+        "{r}"
+    );
+    assert_eq!(count(&app).await, 0);
+    let (status, r) = call(&app, "/v1/work/park", Some("tok-gab"), item.clone()).await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("no_change"))
+    );
+    call(&app, "/v1/work/unpark", Some("tok-gab"), item.clone()).await;
+    assert_eq!(count(&app).await, 1);
+
+    let until = json!({ "item": "a1", "until_ms": now_ms() + 300 });
+    let (status, r) = call(&app, "/v1/work/snooze", Some("tok-gab"), until).await;
+    assert_eq!(
+        (status, r["kind"].as_str()),
+        (StatusCode::OK, Some("snoozed")),
+        "{r}"
+    );
+    assert_eq!(count(&app).await, 0);
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert_eq!(count(&app).await, 1);
+
+    let past = json!({ "item": "a1", "until_ms": 1 });
+    let (status, r) = call(&app, "/v1/work/snooze", Some("tok-gab"), past).await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("bad_time"))
+    );
+    let nothing = json!({ "item": "a1", "to": "a2" });
+    let (status, r) = call(&app, "/v1/work/unblock", Some("tok-gab"), nothing).await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("no_change"))
+    );
+    let (status, r) = call(&app, "/v1/work/retry", Some("tok-gab"), item).await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("no_change"))
+    );
+}
+
+#[tokio::test]
+async fn the_card_actions_act_only_in_the_tokens_team() {
+    let two = two(64).await;
+    waiting_item(&two.app, "/v1/teams/a", "tok-a-gab", "a1").await;
+    let written = two.a.published().len();
+    let item = json!({ "item": "a1" });
+    for path in ["retry", "park", "unpark", "unblock"] {
+        let (status, r) = call(
+            &two.app,
+            &format!("/v1/teams/b/work/{path}"),
+            Some("tok-a-gab"),
+            json!({ "item": "a1", "to": "a2" }),
+        )
+        .await;
+        assert_eq!(
+            (status, r["why"].as_str()),
+            (StatusCode::NOT_FOUND, Some("unknown_team")),
+            "{path}"
+        );
+    }
+    let until = json!({ "item": "a1", "until_ms": now_ms() + 60_000 });
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/b/work/snooze",
+        Some("tok-a-gab"),
+        until,
+    )
+    .await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::NOT_FOUND, Some("unknown_team"))
+    );
+    assert!(two.b.published().is_empty());
+    assert_eq!(two.a.published().len(), written);
+
+    // Its own team parks it, and the other team's person cannot see or park it.
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/a/work/park",
+        Some("tok-a-gab"),
+        item.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    let (_, q) = get_json(&two.app, "/v1/teams/a/work/queue", Some("tok-a-gab")).await;
+    assert_eq!(q["count"], 0);
+    let (status, _) = call(&two.app, "/v1/teams/b/work/park", Some("tok-b-ana"), item).await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }

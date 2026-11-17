@@ -90,7 +90,7 @@ fn a_failure_starts_a_wait_of_its_own() {
 }
 
 #[test]
-fn agent_and_tracker_records_and_a_snooze_do_not_end_a_wait() {
+fn agent_and_tracker_records_and_an_unknown_kind_do_not_end_a_wait() {
     let mut l = held_root();
     l.agent("w1", question_rec("r1")); // 4: at 40
     l.agent(
@@ -103,9 +103,9 @@ fn agent_and_tracker_records_and_a_snooze_do_not_end_a_wait() {
             pr: None,
         },
     );
-    // A snooze is not a kind this build knows, even when a person wrote it.
+    // A kind this build does not know is no action, even when a person wrote it.
     let line =
-        br#"{"at_ms":70,"by":"gabriel","actor":"person","kind":"snoozed","item":"r1","hours":4}"#;
+        br#"{"at_ms":70,"by":"gabriel","actor":"person","kind":"summary_rated","item":"r1","accurate":true}"#;
     let snooze = WorkLogged::decode(line).unwrap();
     assert_eq!(snooze.record, WorkRecord::Unknown);
     let offset = l.0.len() as u64;
@@ -254,12 +254,12 @@ fn the_queue_lists_waits_oldest_first_then_by_tier() {
     l.agent("w1", proposed("c1", None, "a", WorkKind::Fix)); // 4: at 40
     l.agent("w1", proposed("c2", None, "b", WorkKind::Fix)); // 5: at 50
     let ids = |l: &Log| {
-        let q = fold(&l.0).queue();
+        let q = fold(&l.0).queue(0);
         q.iter()
             .map(|e| e.item.as_str().to_owned())
             .collect::<Vec<_>>()
     };
-    let q = fold(&l.0).queue();
+    let q = fold(&l.0).queue(0);
     assert_eq!((q[0].item.as_str(), q[0].since_ms), ("c1", Some(40)));
     assert_eq!(q[0].kind, WaitKind::Proposal);
     assert_eq!(ids(&l), ["c1", "c2"]);
@@ -334,7 +334,7 @@ fn a_restored_state_queues_its_unseen_waits_first() {
         restored.apply(*o, r);
     }
     let q: Vec<_> = restored
-        .queue()
+        .queue(0)
         .iter()
         .map(|e| (e.item.as_str().to_owned(), e.since_ms))
         .collect();

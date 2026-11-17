@@ -1169,6 +1169,10 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::LeftScope { .. }
         | WorkRecord::ReturnedToScope { .. }
         | WorkRecord::Flagged { .. }
+        | WorkRecord::Retried { .. }
+        | WorkRecord::Snoozed { .. }
+        | WorkRecord::Parked { .. }
+        | WorkRecord::Unblocked { .. }
         | WorkRecord::Reopened { .. }
         | WorkRecord::AttemptClosed { .. }
         | WorkRecord::TierChanged { .. }

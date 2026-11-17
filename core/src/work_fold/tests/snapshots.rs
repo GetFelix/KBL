@@ -39,12 +39,14 @@ fn derived(s: &State) -> String {
     let roots: Vec<_> = s.items.keys().cloned().collect();
     let exceed: Vec<_> = roots.iter().map(|r| s.proposals_exceed_budget(r)).collect();
     format!(
-        "{:?}\n{:?}\n{exceed:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        "{:?}\n{:?}\n{exceed:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
         s.waiting,
         s.human_waits,
         s.time_to_human_action(0, u64::MAX),
         s.time_to_human_action(35, 75),
-        s.queue(),
+        s.queue(0),
+        s.queue(HIDE_UNTIL / 2),
+        s.queue(u64::MAX),
         s.probing,
         s.items
             .keys()
@@ -52,6 +54,8 @@ fn derived(s: &State) -> String {
             .collect::<Vec<_>>(),
     )
 }
+
+const HIDE_UNTIL: u64 = 3_600_000;
 
 fn check_every_offset(log: &[(u64, WorkLogged)], every: u64) {
     let held = held(log);
@@ -234,4 +238,41 @@ fn an_edit_to_an_earlier_record_fails_the_snapshot_that_covers_it() {
     let mut refreshed = snaps.clone();
     refreshed.refresh_every(&edited, 4);
     assert_eq!(refreshed, Snapshots::build_every(&edited, 4));
+}
+
+/// A snooze and a park restored from a snapshot hide the item from the queue
+/// and then show it again exactly as a fresh fold does.
+#[test]
+fn a_restored_park_or_snooze_folds_and_queues_like_a_fresh_one() {
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 10 });
+    for c in ["c1", "c2", "c3"] {
+        accepted_root(&mut l, c);
+        for _ in 0..2 {
+            l.agent("w1", claimed(c, 1));
+            l.agent("w1", release(c, 1));
+        }
+    }
+    l.person(WorkRecord::Parked {
+        item: id("c1"),
+        parked: true,
+    });
+    let at = l.0.last().unwrap().1.at_ms;
+    l.person(WorkRecord::Snoozed {
+        item: id("c2"),
+        until_ms: at + HIDE_UNTIL,
+    });
+    let fresh = fold(&l.0);
+    assert!(fresh.items[&id("c1")].parked_at_ms.is_some());
+    assert!(fresh.items[&id("c2")].snoozed.is_some());
+    let ids = |s: &State, now| -> Vec<String> {
+        s.queue(now)
+            .iter()
+            .map(|e| e.item.as_str().to_owned())
+            .collect()
+    };
+    assert_eq!(ids(&fresh, 0), ["c3"]);
+    assert_eq!(ids(&fresh, u64::MAX), ["c2", "c3"]);
+    check_every_offset(&l.0, 3);
+    check_every_offset(&with_blanks(&l.0), 4);
 }

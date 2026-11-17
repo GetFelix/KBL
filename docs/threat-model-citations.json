@@ -139,6 +139,12 @@
  "core/src/work_fold/human_wait.rs#KEPT_WAITS": [
   "const KEPT_WAITS: usize = 20_000;"
  ],
+ "core/src/work_fold/human_wait.rs#State::queue": [
+  "pub fn queue(&self, now_ms: u64) -> Vec<QueueEntry> {"
+ ],
+ "core/src/work_fold/human_wait.rs#hide_covers": [
+  "pub(super) fn hide_covers(&self, id: &ItemId, at_ms: u64, kind: Option<WaitKind>) -> bool {"
+ ],
  "ingest/src/github.rs#check_state": [
   ".any(|o| o.eq_ignore_ascii_case(&format!(\"{app}[bot]\")))",
   "if own.iter().any(|o| o.eq_ignore_ascii_case(by)) {"

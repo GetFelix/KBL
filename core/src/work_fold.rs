@@ -351,6 +351,20 @@ impl Item {
     }
 }
 
+/// A snooze: when a person set it and until when My queue hides the item.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snooze {
+    pub at_ms: u64,
+    pub until_ms: u64,
+    /// The reason the item waited when it was snoozed. A wait for another
+    /// reason shows it again even when its start is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<WaitKind>,
+}
+
+/// Longest a snooze may run, so a typo cannot hide an item for good.
+pub const MAX_SNOOZE_MS: u64 = 30 * 86_400_000;
+
 /// Who holds an item.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hold {
@@ -526,6 +540,16 @@ pub struct Item {
     /// A person moved it into Needs you. Cleared by `flagged: false` or a reopen.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flagged: bool,
+    /// A person hid it from My queue until a time. Applies only to the wait it
+    /// was set on: a wait that begins later shows again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snoozed: Option<Snooze>,
+    /// When a person parked it, out of My queue until it waits for a new reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_at_ms: Option<u64>,
+    /// The reason the item waited when it was parked, as for `Snooze::kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_kind: Option<WaitKind>,
     pub accepted: bool,
     /// A person wrote the last `accepted` on a log at format 6 or above.
     /// An earlier acceptance does not count, so a format 5 state is unchanged.
@@ -668,6 +692,8 @@ pub enum Reject {
     BadPrice,
     /// A `flagged` record that would leave the item as it is.
     NoChange,
+    /// A snooze that ends in the past or more than 30 days out.
+    BadTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1361,6 +1387,9 @@ impl State {
             changed_upstream: false,
             left_scope: false,
             flagged: false,
+            snoozed: None,
+            parked_at_ms: None,
+            parked_kind: None,
             left_scope_by_sync: false,
             accepted: false,
             accepted_by_person: false,
@@ -2258,6 +2287,84 @@ impl State {
                 }
                 it.flagged = *flagged;
             }
+            WorkRecord::Retried { item } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item_mut(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // Only the item that stopped for want of tries: anything else
+                // is not waiting on a retry.
+                let stopped = it.hold.is_none() && it.pending_fork.is_none();
+                let path = it.paths.iter_mut().rev().find(|p| !p.closed);
+                match path {
+                    Some(p) if stopped && !p.done && p.tries >= ATTEMPTS_ALLOWED => p.tries = 0,
+                    _ => return Err(Reject::NoChange),
+                }
+            }
+            WorkRecord::Snoozed { item, until_ms } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if self.item(item)?.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                if *until_ms <= rec.at_ms || *until_ms - rec.at_ms > MAX_SNOOZE_MS {
+                    return Err(Reject::BadTime);
+                }
+                // An item that waits on nobody is not in My queue to hide.
+                if self.waiting_kind(item).is_none() {
+                    return Err(Reject::NoChange);
+                }
+                let kind = self.waiting_kind(item);
+                self.item_mut(item)?.snoozed = Some(Snooze {
+                    at_ms: rec.at_ms,
+                    until_ms: *until_ms,
+                    kind,
+                });
+            }
+            WorkRecord::Parked { item, parked } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // A park covers only the wait it was set on, so one that has
+                // ended no longer blocks a park on the next wait.
+                let still_parked = it
+                    .parked_at_ms
+                    .is_some_and(|at| self.hide_covers(item, at, it.parked_kind));
+                let refused = if *parked {
+                    still_parked || self.waiting_kind(item).is_none()
+                } else {
+                    it.parked_at_ms.is_none()
+                };
+                if refused {
+                    return Err(Reject::NoChange);
+                }
+                let kind = self.waiting_kind(item);
+                let it = self.item_mut(item)?;
+                it.parked_at_ms = parked.then_some(rec.at_ms);
+                it.parked_kind = if *parked { kind } else { None };
+            }
+            WorkRecord::Unblocked { item, to } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if self.item(item)?.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // The same edge `unlinked` drops, but only one that still holds the item.
+                if !self.is_linked(item, to) || !self.waits_on(item, to) {
+                    return Err(Reject::NoChange);
+                }
+                self.edges.remove(&(item.clone(), to.clone()));
+                self.release_edges.remove(&(item.clone(), to.clone()));
+            }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
@@ -2282,6 +2389,9 @@ impl State {
                 it.left_scope = false;
                 it.left_scope_by_sync = false;
                 it.flagged = false;
+                it.snoozed = None;
+                it.parked_at_ms = None;
+                it.parked_kind = None;
                 it.changed_upstream = true;
                 it.proposal = None;
             }
