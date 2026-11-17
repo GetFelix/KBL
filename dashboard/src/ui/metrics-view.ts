@@ -49,7 +49,7 @@ export function metricsView(on: MetricsHandlers) {
     card.replaceChildren(h('p', { class: 'muted' }, 'Reading the tracker.'));
     const t = await on.load(d);
     if (mine !== latest) return;
-    if (typeof t === 'string') card.replaceChildren(h('p', { class: 'metrics-error' }, t));
+    if (typeof t === 'string') card.replaceChildren(h('p', { class: 'metrics-error' }, t), h('button', { type: 'button', class: 'button', onclick: () => void show(days) }, 'Try again'));
     else draw(t);
   };
 

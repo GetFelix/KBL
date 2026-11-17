@@ -38,6 +38,11 @@ test('a small sample is said so, with the counts first', () => {
   assert.match(trustText(parseTrust(stats({ rated: 1, accurate: 1, not_accurate: 0, accurate_permille: 1000 }))!).headline, /^1 of 1 summary marked/);
 });
 
+test('a share is never rounded up to 100%', () => {
+  assert.equal(trustText(parseTrust(stats({ rated: 200, accurate: 199, not_accurate: 1, accurate_permille: 995 }))!).share, '99% accurate');
+  assert.equal(parseTrust(stats({ undated: 'x' })), null);
+});
+
 test('nothing marked, and only unmarked attempts, give no percentage', () => {
   const x = trustText(parseTrust(stats({ rated: 0, accurate: 0, not_accurate: 0, accurate_permille: null, unrated: 7 }))!);
   assert.equal(x.headline, 'No summaries marked in the last 30 days');

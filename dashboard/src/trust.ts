@@ -33,6 +33,7 @@ export function parseTrust(body: unknown): Trust | null {
   if (days === null || rated === null || accurate === null || notAccurate === null || unrated === null || minSample === null) return null;
   const permille = s.accurate_permille === null ? null : count(s.accurate_permille);
   if (s.accurate_permille !== null && permille === null) return null;
+  if (s.undated !== undefined && count(s.undated) === null) return null;
   return { days, rated, accurate, notAccurate, permille, unrated, minSample, undated: count(s.undated) ?? 0 };
 }
 
@@ -55,7 +56,7 @@ export function trustText(t: Trust): TrustText {
   const small = t.rated < t.minSample;
   return {
     headline: t.rated === 0 ? `No summaries marked in ${window}` : `${t.accurate.toLocaleString('en-US')} of ${plural(t.rated, 'summary', 'summaries')} marked accurate in ${window}`,
-    share: t.permille === null ? null : `${Math.round(t.permille / 10)}% accurate`,
+    share: t.permille === null ? null : `${Math.floor(t.permille / 10)}% accurate`,
     small,
     warning: t.rated === 0 ? null : small ? `Only ${plural(t.rated, 'mark', 'marks')}: too few to read a trend from (fewer than ${t.minSample}).` : null,
     unrated: `${t.unrated.toLocaleString('en-US')} finished ${t.unrated === 1 ? 'attempt has' : 'attempts have'} no mark yet.`,
