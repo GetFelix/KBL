@@ -461,13 +461,21 @@ async fn a_save_after_retention_trimmed_the_log_is_kept_though_its_count_is_low(
         store.begin_generation(),
         &high,
         &Seed::of(&Recall::default()),
+        None,
     );
     assert!(fresh.exists(), "the file just written survives the prune");
 }
 
-/// The log as retention leaves it: the first `cut` records gone.
+/// The log as retention leaves it: the first `cut` records gone, and the
+/// log has since grown past its old length.
 fn trimmed(log: &[(u64, WorkLogged)], cut: usize) -> Vec<(u64, WorkLogged)> {
-    log[cut..].to_vec()
+    let mut out = log[cut..].to_vec();
+    out.extend(
+        log.iter()
+            .take(cut + 1)
+            .map(|(o, r)| (o + 1_000, r.clone())),
+    );
+    out
 }
 
 #[tokio::test]
@@ -489,6 +497,7 @@ async fn files_of_a_log_that_was_trimmed_are_pruned_by_identity() {
         store.begin_generation(),
         &saved,
         &Seed::of(&Recall::default()),
+        Some(&log),
     );
     assert_eq!(files(&dir), vec![fresh], "files of the old log are gone");
 }
@@ -505,7 +514,7 @@ async fn a_save_of_an_older_generation_writes_and_prunes_nothing() {
     store.begin_generation();
     let state = kbl_core::work_fold::fold_to(&log[..3], u64::MAX);
     let saved = Saved::capture(&log[..3], None, &state).unwrap();
-    store.write(orphan, &saved, &Seed::of(&Recall::default()));
+    store.write(orphan, &saved, &Seed::of(&Recall::default()), None);
     assert_eq!(files(&dir), before);
 }
 
@@ -525,7 +534,8 @@ async fn the_newest_valid_file_survives_files_of_another_log_with_higher_counts(
         )
         .unwrap();
     }
-    let foreign = trimmed(&log, 1);
+    let mut foreign = log[1..].to_vec();
+    foreign.push((log.last().unwrap().0 + 1_000, log[0].1.clone()));
     let state = kbl_core::work_fold::fold_to(&foreign, u64::MAX);
     let other = Saved::capture(&foreign, None, &state).unwrap();
     let body = encode(&other, &Seed::of(&Recall::default()));
@@ -540,4 +550,27 @@ async fn the_newest_valid_file_survives_files_of_another_log_with_higher_counts(
     assert!(left.contains(&name), "the valid file is kept: {left:?}");
     assert!(!left.contains(&other_name), "{left:?}");
     assert!(left.len() <= KEEP);
+}
+
+#[tokio::test]
+async fn a_briefly_short_log_does_not_prune_files_it_has_not_reached() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let log = entries(&fake).await;
+    let before = files(&dir);
+    let store = store(&dir);
+    // A short read: a prefix of the same log, then a save over it.
+    let short = &log[..log.len() - 1];
+    assert!(store.restore(short).is_none());
+    let state = kbl_core::work_fold::fold_to(short, u64::MAX);
+    let saved = Saved::capture(short, None, &state).unwrap();
+    store.write(
+        store.begin_generation(),
+        &saved,
+        &Seed::of(&Recall::default()),
+        Some(short),
+    );
+    for f in before {
+        assert!(f.exists(), "{f:?} is of the same log and must stay");
+    }
 }

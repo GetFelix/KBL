@@ -247,12 +247,8 @@ impl Saved {
     }
 }
 
-/// The identity of a saved snapshot within its log: the chain at each point a
-/// snapshot was taken up to its own. Read from a file without its state.
-///
-/// Two snapshots of one log share a point, the older one's own, so one is
-/// [`Lineage::related`] to the other. Snapshots of logs that diverged (a
-/// retention trim, a log started over) share none.
+/// The chain points of a saved snapshot, read from a file without its state,
+/// so a file can be told apart from the log without loading it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(from = "LineageFile")]
 pub struct Lineage {
@@ -281,28 +277,29 @@ impl From<LineageFile> for Lineage {
 }
 
 impl Lineage {
-    fn head(&self) -> &(u64, String) {
-        self.points.last().expect("a lineage ends at its snapshot")
-    }
-
-    /// Whether one of the two was taken from a log the other also covers: the
-    /// newer holds the older's point.
-    pub fn related(&self, other: &Self) -> bool {
-        other.points.contains(self.head()) || self.points.contains(other.head())
-    }
-}
-
-impl Saved {
-    /// Where this snapshot sits in its log, for telling which files belong to
-    /// the same log without reading the log.
-    pub fn lineage(&self) -> Lineage {
-        Lineage::from(LineageFile {
-            links: self.links.clone(),
-            snapshot: LineageHead {
-                records: self.snapshot.records,
-                chain: self.snapshot.chain.clone(),
-            },
-        })
+    /// Whether `log` contradicts this snapshot: a point it covers whose chain
+    /// differs from the log's. After retention trims the head of the log, every
+    /// older file does. A snapshot ahead of `log` is not contradicted, since
+    /// the log may be short for a while, and neither is one that matches.
+    pub fn diverges_from(&self, log: &[(u64, WorkLogged)]) -> bool {
+        let (mut chain, mut done) = (String::new(), 0usize);
+        for (records, want) in &self.points {
+            let Ok(to) = usize::try_from(*records) else {
+                return false;
+            };
+            if to > log.len() {
+                return false;
+            }
+            if to <= done {
+                return true;
+            }
+            chain = link(&chain, &log[done..to]);
+            done = to;
+            if chain != *want {
+                return true;
+            }
+        }
+        false
     }
 }
 

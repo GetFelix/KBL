@@ -216,10 +216,12 @@ rebuild after the writer lease is retaken or goes stale. It uses the first that
 passes the digest, the fold revision and the hash chain over the log, and logs
 and skips each one that does not: damaged, cut short, from another revision, or
 ahead of a log that lost its tail. A skipped file stays, so a log that was only
-briefly short uses it again once it is back. A file of a different log is
-removed: each file carries the chain at every earlier save, and one that shares
-no point with the file just restored or written is of a log that was trimmed or
-started over, whatever its record count. Saving then keeps the last three of
+briefly short uses it again once it is back. A file the log contradicts
+is removed once a rebuild has the log: each file carries the chain at every
+earlier save, and one whose chain differs from the log at a point the log
+covers was made from a log that was trimmed or started over, whatever its
+record count. A file ahead of the log is kept, since the log may only be
+short. Saving then keeps the last three of
 what is left, and never removes the file it just wrote. With none usable it folds from the start. The folder is derived
 data, so deleting it only costs a slower rebuild. A team folder that is a
 symlink is not used. The disk work runs off the async workers.

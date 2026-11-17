@@ -232,7 +232,7 @@ impl Job {
     pub(super) fn run(self) -> Option<Anchor> {
         let saved = self.anchor.extend(&self.tail, &self.state)?;
         self.store
-            .write(self.generation, &saved, &self.seed.sorted());
+            .write(self.generation, &saved, &self.seed.sorted(), None);
         Some(saved.anchor())
     }
 }
@@ -304,7 +304,7 @@ impl Store {
             match read(&path).filter(|b| b.saved.valid(log)) {
                 Some(Body { saved, seed }) => {
                     let _held = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
-                    self.prune(&path, &saved.lineage());
+                    self.prune(&path, Some(log));
                     return Some((saved, seed.into_recall()));
                 }
                 None => {
@@ -346,12 +346,21 @@ impl Store {
         let Some(saved) = Saved::capture(log, from, state) else {
             return behind();
         };
-        self.write(generation, &saved, &Seed::of(recall));
+        self.write(generation, &saved, &Seed::of(recall), Some(log));
         saved.anchor()
     }
 
     /// Writes `saved` and prunes, unless a rebuild began since `generation`.
-    pub(super) fn write(&self, generation: u64, saved: &Saved, seed: &Seed) {
+    ///
+    /// With the `log` the file was built from, files that log contradicts are
+    /// removed first, see [`Store::prune`].
+    pub(super) fn write(
+        &self,
+        generation: u64,
+        saved: &Saved,
+        seed: &Seed,
+        log: Option<&[(u64, WorkLogged)]>,
+    ) {
         let held = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
         if *held != generation {
             return;
@@ -361,7 +370,7 @@ impl Store {
             .and_then(|()| stage(&self.dir, &name, &encode(saved, seed)))
             .and_then(|tmp| commit(&tmp, &self.dir.join(&name), &self.dir));
         match result {
-            Ok(()) => self.prune(&self.dir.join(&name), &saved.lineage()),
+            Ok(()) => self.prune(&self.dir.join(&name), log),
             Err(e) => eprintln!(
                 "kbl-tracker: could not save a snapshot in {}: {e}",
                 self.dir.display()
@@ -387,15 +396,21 @@ impl Store {
         files
     }
 
-    /// Drops the files of another log than `fresh`'s, then all but the newest
-    /// [`KEEP`], always keeping `fresh`. A file is of another log when neither it
-    /// nor `fresh` holds the other's chain point: after retention trims the
-    /// log, old files carry higher record counts than new ones and no longer
-    /// match. A file that cannot be read is not judged, only counted.
+    /// Drops the files `log` contradicts, then all but the newest [`KEEP`],
+    /// always keeping `fresh`. After retention trims the log, old files carry
+    /// higher record counts than new ones and can never validate again. A file
+    /// the log merely does not reach yet is kept, and so is one that could not
+    /// be read: those only count against the limit. Without a log (a running
+    /// tracker's save, whose log only grows) only the count applies.
     /// The caller holds the gate.
-    fn prune(&self, fresh: &Path, lineage: &Lineage) {
+    fn prune(&self, fresh: &Path, log: Option<&[(u64, WorkLogged)]>) {
         for path in self.files() {
-            if path != fresh && read_lineage(&path).is_some_and(|l| !l.related(lineage)) {
+            if path == fresh {
+                continue;
+            }
+            let gone =
+                log.is_some_and(|log| read_lineage(&path).is_some_and(|l| l.diverges_from(log)));
+            if gone {
                 let _ = fs::remove_file(path);
             }
         }
@@ -444,7 +459,7 @@ fn read(path: &Path) -> Option<Body> {
     serde_json::from_slice(json).ok()
 }
 
-/// The lineage of a file, without its digest check or its state.
+/// The chain points of a file, without its digest check or its state.
 fn read_lineage(path: &Path) -> Option<Lineage> {
     #[derive(Deserialize)]
     struct Head {
