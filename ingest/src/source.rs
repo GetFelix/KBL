@@ -234,7 +234,8 @@ pub(crate) trait Source: Send + Sync {
     fn name(&self) -> &'static str;
 
     /// Whether pull requests can be read through this source. Jira holds no
-    /// pull requests, so its worker skips that step.
+    /// pull requests, so its worker skips that step; the worker of a source
+    /// that does hold them records their state for every source's roots.
     fn reads_pull_requests(&self) -> bool {
         true
     }

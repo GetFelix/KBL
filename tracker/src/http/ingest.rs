@@ -8,11 +8,11 @@ use axum::extract::Path;
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use kbl_core::names::Key;
 use kbl_core::work::WorkRecord;
 use serde::Deserialize;
 
 use super::{App, Call, Caller, StatusCode, denied, reply};
+use crate::config::Worker;
 use crate::felix::Broker;
 
 pub(super) fn routes<B: Broker>() -> Router<Arc<App<B>>> {
@@ -34,10 +34,15 @@ struct SaveBody {
     version: Option<u64>,
 }
 
+const STATE_OF_OTHER: super::Denied = (
+    StatusCode::FORBIDDEN,
+    "this ingest token keeps another source's state",
+);
+
 impl<B> Call<B> {
-    fn worker(&self) -> Result<Key, super::Denied> {
+    fn worker(&self) -> Result<Worker, super::Denied> {
         match &self.caller {
-            Caller::Ingest(k) => Ok(k.clone()),
+            Caller::Ingest(w) => Ok(w.clone()),
             _ => Err((StatusCode::FORBIDDEN, "this call is for an ingest token")),
         }
     }
@@ -45,20 +50,25 @@ impl<B> Call<B> {
 
 async fn record<B: Broker>(call: Call<B>, Json(body): Json<RecordBody>) -> Response {
     match call.worker() {
-        Ok(by) => reply(call.tracker().ingest_record(by, body.record).await),
+        Ok(w) => reply(
+            call.tracker()
+                .ingest_record_in(w.key, w.source.as_deref(), body.record)
+                .await,
+        ),
         Err(d) => denied(d),
     }
 }
 
 async fn roots<B: Broker>(call: Call<B>) -> Response {
     match call.worker() {
-        Ok(_) => reply(call.tracker().ingest_roots().await),
+        Ok(w) => reply(call.tracker().ingest_roots(w.source.as_deref()).await),
         Err(d) => denied(d),
     }
 }
 
 async fn load<B: Broker>(call: Call<B>, Path(source): Path<String>) -> Response {
     match call.worker() {
+        Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),
         Ok(_) => reply(call.tracker().ingest_state(&source).await),
         Err(d) => denied(d),
     }
@@ -70,6 +80,7 @@ async fn save<B: Broker>(
     Json(body): Json<SaveBody>,
 ) -> Response {
     match call.worker() {
+        Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),
         Ok(_) => reply(
             call.tracker()
                 .ingest_save(&source, &body.state, body.version)
