@@ -488,9 +488,11 @@ impl<T: Transport> Source for Jira<T> {
             WriteBack::DraftPullRequest { .. } => {
                 Err(anyhow!("Jira holds no pull requests to draft").into())
             }
-            WriteBack::Comment { issue, body } => {
+            WriteBack::Comment { issue, body, .. } => {
                 let key = self.key(issue)?;
-                // A retry after a later step failed must not say it twice.
+                // A retry, after a later step failed or a post was cut short,
+                // must not say it twice. Wiki markup has no hidden text for
+                // a mark, but the body names the item, step and pull request.
                 if self
                     .issue_comments(issue)
                     .await?

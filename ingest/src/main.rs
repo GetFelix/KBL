@@ -140,7 +140,7 @@ async fn serve() -> Result<()> {
     let vendor = cfg.vendor();
     let lessee = match &cfg.tracker.group {
         None => lease::Lessee::file_managed(vendor),
-        Some(_) => lease::Lessee::waiting(vendor),
+        Some(_) => lease::Lessee::waiting(vendor, cfg.repos()),
     };
     let lanes = (tracker, lease_api, lessee.clone());
     match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {

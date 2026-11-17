@@ -380,6 +380,22 @@ impl<T: Transport> Gitlab<T> {
         })
     }
 
+    /// Whether a note our credential wrote under `path` carries `mark`.
+    async fn own_note(&self, project: &str, path: &[&str], mark: &str) -> Result<bool, SourceError> {
+        let listed = self
+            .listing(project, path, &[("sort", "asc")], COMMENT_PAGES)
+            .await?;
+        match listed {
+            Ok(items) => Ok(items.iter().any(|raw| {
+                raw["body"].as_str().is_some_and(|b| b.contains(mark))
+                    && raw["author"]["username"]
+                        .as_str()
+                        .is_some_and(|a| self.is_own(a))
+            })),
+            Err(status) => Err(anyhow!("GitLab answered {status} for the notes").into()),
+        }
+    }
+
     async fn project_issue(&self, id: &IssueRef) -> Result<Option<Value>, SourceError> {
         let project = self.project_of(&id.repo)?;
         let n = id.number.to_string();
@@ -802,7 +818,7 @@ impl<T: Transport> Source for Gitlab<T> {
         }
         match what {
             WriteBack::LinkPullRequest { .. } => unreachable!("returned above"),
-            WriteBack::DraftPullRequest { pr, note } => {
+            WriteBack::DraftPullRequest { pr, note, mark } => {
                 let project = self.project_of(&pr.repo)?.to_owned();
                 let n = pr.number.to_string();
                 let url = self.in_project(&project, &["merge_requests", &n], &[])?;
@@ -829,11 +845,16 @@ impl<T: Transport> Source for Gitlab<T> {
                     self.post_write(put_req(url, json!({ "title": format!("Draft: {title}") })))
                         .await?;
                 }
+                // A post the fence cut short may have landed.
+                if self.own_note(&project, &["merge_requests", &n, "notes"], mark).await? {
+                    return Ok(());
+                }
                 let notes = self.in_project(&project, &["merge_requests", &n, "notes"], &[])?;
-                self.post_write(Req::post(notes, json!({ "body": note })))
+                let body = format!("{note}\n\n{mark}");
+                self.post_write(Req::post(notes, json!({ "body": body })))
                     .await
             }
-            WriteBack::Comment { issue, body } => {
+            WriteBack::Comment { issue, body, mark } => {
                 let project = self.project_of(&issue.repo)?.to_owned();
                 // The engine's text names a merge request as `repo#n`, which
                 // GitLab would read as an issue. A merge request is `path!n`.
@@ -841,17 +862,17 @@ impl<T: Transport> Source for Gitlab<T> {
                     .projects
                     .iter()
                     .fold(body.clone(), |b, (alias, real)| mr_refs(&b, alias, real));
-                // A retry after a later step failed must not say it twice.
-                if self
-                    .issue_comments(issue)
-                    .await?
-                    .iter()
-                    .any(|c| c.body.trim() == body.trim() && self.is_own(&c.author))
-                {
+                // A retry, after a later step failed or a post was cut short,
+                // must not say it twice. Older notes carry no mark.
+                if self.issue_comments(issue).await?.iter().any(|c| {
+                    (c.body.contains(mark.as_str()) || c.body.trim() == body.trim())
+                        && self.is_own(&c.author)
+                }) {
                     return Ok(());
                 }
                 let n = issue.number.to_string();
                 let url = self.in_project(&project, &["issues", &n, "notes"], &[])?;
+                let body = format!("{body}\n\n{mark}");
                 self.post_write(Req::post(url, json!({ "body": body })))
                     .await
             }

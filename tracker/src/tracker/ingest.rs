@@ -443,12 +443,11 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
-    /// A worker group's live members, each with the tracker time of its
-    /// last heartbeat, and the version to write them back at.
-    pub(crate) async fn group_members(
+    /// A worker group's membership entry and the version to write it back at.
+    pub(crate) async fn group_members<T: serde::de::DeserializeOwned>(
         &self,
         group: &Key,
-    ) -> Result<Option<(std::collections::BTreeMap<String, u64>, u64)>, Error> {
+    ) -> Result<Option<(T, u64)>, Error> {
         match self.0.broker.group_members_get(group.as_str()).await {
             Ok(Some((bytes, version))) => serde_json::from_slice(&bytes)
                 .map(|m| Some((m, version)))
@@ -459,10 +458,10 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Writes a group's members if nobody wrote them since `version`.
-    pub(crate) async fn put_group_members(
+    pub(crate) async fn put_group_members<T: serde::Serialize>(
         &self,
         group: &Key,
-        members: &std::collections::BTreeMap<String, u64>,
+        members: &T,
         version: Option<u64>,
     ) -> Result<bool, Error> {
         let bytes = serde_json::to_vec(members).map_err(|_| refused("invalid"))?;

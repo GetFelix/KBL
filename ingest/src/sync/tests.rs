@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use super::*;
 use crate::config::Config;
 use crate::github::{Github, Res};
-use crate::testing::{Fake, Script, fixture, issue, labels, ok, status};
+use crate::testing::{Fake, Script, cut, fixture, issue, labels, ok, status};
 
 const LIST: &str = "/repos/GetFelix/felix/issues?";
 
@@ -1640,6 +1640,36 @@ async fn a_refused_write_back_does_not_hold_the_cursor_and_is_given_up_on() {
     assert_eq!(comments(&rig.gh), 3);
     ingest.poll(false).await.unwrap();
     assert_eq!(comments(&rig.gh), 3);
+}
+
+#[tokio::test]
+async fn a_write_back_the_fence_cut_short_is_retried_without_counting_a_try() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+    rig.hold(UP, Some("GetFelix/felix#2210"));
+    rig.gh.on("GET", "/pulls/2210", ok(fixture("pull")));
+    rig.gh.on("POST", "/graphql", ok(json!({ "data": {} })));
+    rig.gh.on("POST", "/issues/2210/comments", cut());
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "not_planned",
+        "2026-11-10T12:00:00Z",
+    )]);
+    // More cuts than a refused write gets tries: the outcome is unknown, so
+    // it is never given up on.
+    for _ in 0..=MAX_WRITE_BACK_TRIES {
+        assert!(ingest.poll(false).await.is_err());
+    }
+    let saved = rig.tracker.saved_state();
+    assert_eq!(saved.items[UP].write_back_tries, 0);
+    assert!(!saved.items[UP].written_back);
+    rig.gh
+        .on("POST", "/issues/2210/comments", status(201, &[]));
+    ingest.poll(false).await.unwrap();
+    let saved = rig.tracker.saved_state();
+    assert!(!saved.items.contains_key(UP), "written back and settled");
 }
 
 #[tokio::test]

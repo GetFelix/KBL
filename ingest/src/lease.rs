@@ -4,7 +4,8 @@
 //!
 //! A worker whose `tracker.group` is unset, or whose group no connection
 //! names, is file-managed: it polls every configured repo and nothing here
-//! stops it.
+//! stops it. A leased worker touches only repos its connection names and it
+//! holds, except to read a pull request elsewhere.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
@@ -86,6 +87,9 @@ fn system_wall() -> Wall {
 pub(crate) struct Lessee {
     /// The vendor word sources start with: `github` in `github:o/r`.
     vendor: &'static str,
+    /// The repos the worker's file configures, for the warning about ones
+    /// the connection does not name.
+    repos: Vec<String>,
     mode: Mutex<Mode>,
     wall: Wall,
     /// Wakes the poll loop, the heartbeat and requests in flight when the
@@ -100,21 +104,45 @@ impl Lessee {
     }
 
     /// A worker with a group, which polls nothing until the config answers.
-    pub(crate) fn waiting(vendor: &'static str) -> Arc<Self> {
-        Self::new(vendor, Mode::Waiting, system_wall())
+    pub(crate) fn waiting(vendor: &'static str, repos: Vec<String>) -> Arc<Self> {
+        let mut l = Self::new(vendor, Mode::Waiting, system_wall());
+        Arc::get_mut(&mut l).expect("new").repos = repos;
+        l
     }
 
     fn new(vendor: &'static str, mode: Mode, wall: Wall) -> Arc<Self> {
         Arc::new(Self {
             vendor,
+            repos: Vec::new(),
             mode: Mutex::new(mode),
             wall,
             changed: Notify::new(),
         })
     }
 
-    fn source_of(&self, repo: &str) -> String {
-        format!("{}:{repo}", self.vendor)
+    /// The connection source naming `repo`, matched as the vendor compares
+    /// names: GitHub, GitLab and Azure DevOps ignore case, Jira keys do not.
+    fn source_for<'a>(&self, sources: &'a BTreeSet<String>, repo: &str) -> Option<&'a String> {
+        let want = format!("{}:{repo}", self.vendor);
+        let same = |s: &&String| match self.vendor {
+            "jira" => **s == want,
+            _ => s.eq_ignore_ascii_case(&want),
+        };
+        sources.iter().find(same)
+    }
+
+    /// The configured repos the connection does not name. They are never
+    /// polled while the worker is leased.
+    pub(crate) fn outside(&self) -> Vec<String> {
+        match &*self.mode.lock().expect("lessee lock") {
+            Mode::Leased { sources, .. } => self
+                .repos
+                .iter()
+                .filter(|r| self.source_for(sources, r).is_none())
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     /// Takes the config answer's `connection`: null means file-managed.
@@ -149,6 +177,13 @@ impl Lessee {
         if *mode != next {
             *mode = next;
             drop(mode);
+            let outside = self.outside();
+            if !outside.is_empty() {
+                eprintln!(
+                    "kbl-ingest: warning: the connection does not name {}; they are not polled",
+                    outside.join(", ")
+                );
+            }
             self.changed.notify_waiters();
         }
     }
@@ -230,11 +265,15 @@ impl Lessee {
 
     /// How long a vendor call for `repos` may run, none for no limit, or why
     /// it may not start. With leases, nothing runs once the last successful
-    /// renew is 60 s old by either clock, and a call into one of the
-    /// connection's sources also needs its lease. A repo outside the
-    /// connection (another source's pull request) needs only the first.
-    /// `None` for repos is a call tied to no repo.
-    fn open_for(&self, repos: Option<&[String]>) -> Result<Option<Duration>, &'static str> {
+    /// renew is 60 s old by either clock, and a call into a repo needs the
+    /// lease of the connection source naming it. A repo the connection does
+    /// not name passes only when `elsewhere` allows it: a read of another
+    /// repo's pull request. `None` for repos is a call tied to no repo.
+    fn open_for(
+        &self,
+        repos: Option<&[String]>,
+        elsewhere: bool,
+    ) -> Result<Option<Duration>, &'static str> {
         match &*self.mode.lock().expect("lessee lock") {
             Mode::FileManaged => Ok(None),
             Mode::Waiting => Err("the config has not answered yet"),
@@ -247,12 +286,14 @@ impl Lessee {
                     "no lease renew in the last 60 s; no upstream call until one succeeds",
                 )?;
                 for r in repos.into_iter().flatten() {
-                    let s = self.source_of(r);
-                    if !sources.contains(&s) {
-                        continue;
-                    }
+                    let Some(s) = self.source_for(sources, r) else {
+                        if elsewhere {
+                            continue;
+                        }
+                        return Err("the worker's connection does not name this repo");
+                    };
                     let h = held
-                        .get(&s)
+                        .get(s)
                         .ok_or("another worker holds this source's lease")?;
                     let l = self
                         .left(*renewed, h.until)
@@ -266,16 +307,30 @@ impl Lessee {
 
     /// The fence for one call into `repo`, or into no repo.
     pub(crate) fn check(&self, repo: Option<&str>) -> Result<(), SourceError> {
+        self.check_in(repo, false)
+    }
+
+    fn check_in(&self, repo: Option<&str>, elsewhere: bool) -> Result<(), SourceError> {
         let repos = repo.map(|r| vec![r.to_owned()]);
-        self.open_for(repos.as_deref()).map(|_| ()).map_err(fenced)
+        self.open_for(repos.as_deref(), elsewhere)
+            .map(|_| ())
+            .map_err(fenced)
+    }
+
+    /// Whether the connection names `repo`. Only a leased worker has one.
+    fn names(&self, repo: &str) -> bool {
+        match &*self.mode.lock().expect("lessee lock") {
+            Mode::Leased { sources, .. } => self.source_for(sources, repo).is_some(),
+            _ => true,
+        }
     }
 
     /// Resolves once the fence closes for `repos`: the deadline passes, a
     /// heartbeat drops one of them, or the wall clock shows a suspend.
-    async fn closes(&self, repos: Option<&[String]>) -> &'static str {
+    async fn closes(&self, repos: Option<&[String]>, elsewhere: bool) -> &'static str {
         loop {
             let changed = self.changed.notified();
-            let wait = match self.open_for(repos) {
+            let wait = match self.open_for(repos, elsewhere) {
                 Err(why) => return why,
                 Ok(left) => left.map_or(RECHECK, |l| l.min(RECHECK)),
             };
@@ -296,8 +351,29 @@ impl Lessee {
     }
 }
 
+/// The fence refused a request or cut it short. A cut request may still
+/// have landed upstream, so its outcome is unknown, not failed.
+#[derive(Debug)]
+pub(crate) struct FenceClosed(pub(crate) String);
+
+impl std::fmt::Display for FenceClosed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "lease fence: {}", self.0)
+    }
+}
+
+impl std::error::Error for FenceClosed {}
+
+/// Whether `e` came from the fence.
+pub(crate) fn is_fenced(e: &SourceError) -> bool {
+    match e {
+        SourceError::Failed(e) => e.chain().any(|c| c.is::<FenceClosed>()),
+        SourceError::RateLimited { .. } => false,
+    }
+}
+
 fn fenced(why: &str) -> SourceError {
-    SourceError::Failed(anyhow::anyhow!("lease fence: {why}"))
+    SourceError::Failed(FenceClosed(why.to_owned()).into())
 }
 
 tokio::task_local! {
@@ -309,6 +385,9 @@ tokio::task_local! {
 #[derive(Clone)]
 enum Scope {
     Repos(Arc<[String]>),
+    /// A read of a pull request, or its releases, in a repo the connection
+    /// may not name. Only `GET` passes for a repo outside it.
+    Reads(Arc<[String]>),
     /// The worker's own identity, read once at start before any lease. Tied
     /// to no source.
     Identity,
@@ -322,6 +401,10 @@ pub(crate) async fn identity<F: Future>(f: F) -> F::Output {
 
 async fn scoped<F: Future>(repos: Vec<String>, f: F) -> F::Output {
     SCOPE.scope(Scope::Repos(repos.into()), f).await
+}
+
+async fn reading<F: Future>(repos: Vec<String>, f: F) -> F::Output {
+    SCOPE.scope(Scope::Reads(repos.into()), f).await
 }
 
 /// The HTTP under a source, fenced. Every vendor request passes here, so a
@@ -340,18 +423,22 @@ pub(crate) fn gated<T>(inner: T, lessee: Arc<Lessee>) -> Gate<T> {
 
 impl<T: Transport> Transport for Gate<T> {
     async fn send(&self, req: Req) -> Result<Res> {
-        let repos = match SCOPE.try_with(Clone::clone) {
+        let (repos, elsewhere) = match SCOPE.try_with(Clone::clone) {
             Ok(Scope::Identity) => return self.inner.send(req).await,
-            Ok(Scope::Repos(r)) => Some(r),
-            Err(_) => None,
+            Ok(Scope::Repos(r)) => (Some(r), false),
+            // A write never passes outside the connection.
+            Ok(Scope::Reads(r)) => (Some(r), req.method == "GET"),
+            Err(_) => (None, false),
         };
         let repos = repos.as_deref();
-        if let Err(why) = self.lessee.open_for(repos) {
-            bail!("lease fence: {why}");
+        if let Err(why) = self.lessee.open_for(repos, elsewhere) {
+            return Err(FenceClosed(why.to_owned()).into());
         }
         tokio::select! {
             biased;
-            why = self.lessee.closes(repos) => bail!("lease fence: {why}; request cancelled"),
+            why = self.lessee.closes(repos, elsewhere) => {
+                Err(FenceClosed(format!("{why}; request cancelled")).into())
+            }
             res = self.inner.send(req) => res,
         }
     }
@@ -400,8 +487,19 @@ pub(crate) async fn heartbeat_once<A: LeaseApi>(
     }
 }
 
-/// Renews every 30 s, apart from polling, and at once when the config moves
-/// the worker to leases.
+/// The wait before the next renew: 30 s give or take 20%, so workers that
+/// started together do not all renew in the same instant.
+fn heartbeat_gap() -> Duration {
+    use ring::rand::SecureRandom as _;
+    let mut b = [0u8; 2];
+    let r = ring::rand::SystemRandom::new()
+        .fill(&mut b)
+        .map_or(0.5, |()| f64::from(u16::from_le_bytes(b)) / f64::from(u16::MAX));
+    HEARTBEAT.mul_f64(0.8 + 0.4 * r)
+}
+
+/// Renews about every 30 s, apart from polling, and at once when the config
+/// moves the worker to leases.
 pub(crate) async fn heartbeat_task<A: LeaseApi>(
     api: Arc<A>,
     lessee: Arc<Lessee>,
@@ -413,7 +511,7 @@ pub(crate) async fn heartbeat_task<A: LeaseApi>(
         let was = lessee.leased();
         heartbeat_once(&*api, &lessee, &group, &instance).await;
         tokio::select! {
-            () = tokio::time::sleep(HEARTBEAT) => {}
+            () = tokio::time::sleep(heartbeat_gap()) => {}
             () = became, if !was => {}
         }
     }
@@ -526,6 +624,23 @@ impl<S> Fenced<S> {
     pub(crate) fn new(inner: S, lessee: Arc<Lessee>) -> Self {
         Self { inner, lessee }
     }
+
+    /// A read about a pull request in `repo`, which an agent may have opened
+    /// in a repo the connection does not name. In one it names, the lease
+    /// is needed as for any call; outside it, only reads pass the gate.
+    async fn read_elsewhere<T>(
+        &self,
+        repo: &str,
+        f: impl Future<Output = Result<T, SourceError>>,
+    ) -> Result<T, SourceError> {
+        if self.lessee.names(repo) {
+            self.lessee.check(Some(repo))?;
+            scoped(vec![repo.to_owned()], f).await
+        } else {
+            self.lessee.check_in(Some(repo), true)?;
+            reading(vec![repo.to_owned()], f).await
+        }
+    }
 }
 
 fn written_repo(what: &WriteBack) -> &str {
@@ -550,6 +665,8 @@ impl<S: Source> Source for Fenced<S> {
         self.inner.own_logins()
     }
 
+    /// Lists only the repos whose leases the worker holds; a repo the
+    /// connection does not name is never listed.
     async fn changed(
         &self,
         repos: &[String],
@@ -564,8 +681,8 @@ impl<S: Source> Source for Fenced<S> {
     }
 
     async fn pull_request(&self, id: &IssueRef) -> Result<Option<PullRequest>, SourceError> {
-        self.lessee.check(Some(&id.repo))?;
-        scoped(vec![id.repo.to_owned()], self.inner.pull_request(id)).await
+        self.read_elsewhere(&id.repo, self.inner.pull_request(id))
+            .await
     }
 
     async fn fetch(&self, id: &IssueRef) -> Result<Fetched, SourceError> {
@@ -595,13 +712,13 @@ impl<S: Source> Source for Fenced<S> {
     }
 
     async fn releases(&self, repo: &str, since_ms: u64) -> Result<Releases, SourceError> {
-        self.lessee.check(Some(repo))?;
-        scoped(vec![repo.to_owned()], self.inner.releases(repo, since_ms)).await
+        self.read_elsewhere(repo, self.inner.releases(repo, since_ms))
+            .await
     }
 
     async fn contains(&self, repo: &str, tag: &str, sha: &str) -> Result<bool, SourceError> {
-        self.lessee.check(Some(repo))?;
-        scoped(vec![repo.to_owned()], self.inner.contains(repo, tag, sha)).await
+        self.read_elsewhere(repo, self.inner.contains(repo, tag, sha))
+            .await
     }
 
     async fn open_issue(

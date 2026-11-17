@@ -280,6 +280,7 @@ async fn a_pull_request_that_is_merged_or_closed_is_left_alone() {
     gh.on("GET", "/pulls/2210", ok(pull));
     github(&gh)
         .write_back(&WriteBack::DraftPullRequest {
+            mark: "<!-- kbl:t -->".into(),
             pr: IssueRef::new("GetFelix/felix", 2210),
             note: "x".into(),
         })
@@ -372,6 +373,7 @@ async fn a_pull_request_by_someone_else_is_left_alone() {
         vec!["KBL[bot]".into()],
     );
     g.write_back(&WriteBack::DraftPullRequest {
+        mark: "<!-- kbl:t -->".into(),
         pr: IssueRef::new("GetFelix/felix", 2210),
         note: "x".into(),
     })
@@ -671,4 +673,40 @@ async fn releases_page_back_to_the_merge_and_no_further_than_five_pages() {
     let short = g.releases("GetFelix/felix", 0).await.unwrap();
     assert_eq!(pages(&gh), 15);
     assert!(short.whole && short.covers(0));
+}
+
+#[tokio::test]
+async fn a_draft_note_whose_post_may_have_landed_is_not_posted_again() {
+    let gh = Script::default();
+    let mut pull = fixture("pull");
+    pull["draft"] = json!(true);
+    gh.on("GET", "/pulls/2210", ok(pull));
+    let g = Github::new(
+        "https://api.github.com",
+        gh.clone(),
+        vec!["kbl[bot]".into()],
+    );
+    let draft = WriteBack::DraftPullRequest {
+        mark: "<!-- kbl:GetFelix/felix#9:draft:GetFelix/felix#2210 -->".into(),
+        pr: IssueRef::new("GetFelix/felix", 2210),
+        note: "x".into(),
+    };
+    gh.on("GET", "/issues/2210/comments", ok(json!([])));
+    gh.on("POST", "/issues/2210/comments", status(201, &[]));
+    g.write_back(&draft).await.unwrap();
+    let posted = gh.sent().into_iter().rfind(|r| r.method == "POST").unwrap();
+    assert_eq!(
+        posted.body.unwrap()["body"],
+        "x\n\n<!-- kbl:GetFelix/felix#9:draft:GetFelix/felix#2210 -->"
+    );
+    // The first post was cut short but landed: the retry finds its mark.
+    let landed = json!([{
+        "id": 1,
+        "issue_url": "https://api.github.com/repos/GetFelix/felix/issues/2210",
+        "user": { "login": "kbl[bot]" },
+        "body": "x\n\n<!-- kbl:GetFelix/felix#9:draft:GetFelix/felix#2210 -->",
+    }]);
+    gh.on("GET", "/issues/2210/comments", ok(landed));
+    g.write_back(&draft).await.unwrap();
+    assert_eq!(gh.writes().len(), 1, "{:?}", gh.writes());
 }

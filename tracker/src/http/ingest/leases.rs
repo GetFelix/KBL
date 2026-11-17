@@ -8,14 +8,14 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::response::IntoResponse as _;
 use futures::StreamExt as _;
 use kbl_core::lease::{self, FENCE_MS, HEARTBEAT_MS, LEASE_MS, Lease, Step};
 use kbl_core::names::Key;
 use kbl_core::org::TeamName;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
@@ -31,7 +31,18 @@ pub(crate) const MAX_MEMBERS: usize = 256;
 const IN_FLIGHT: usize = 16;
 
 /// Tries at the membership entry before a heartbeat gives up with `503`.
-const JOIN_TRIES: usize = 8;
+/// With the backoff below they span about 10 s, room for a whole group
+/// starting at once to get through one at a time.
+const JOIN_TRIES: u32 = 12;
+
+/// The first backoff after a lost write; each retry doubles it, to
+/// [`JOIN_BACKOFF_MAX`], and waits a random part of it.
+const JOIN_BACKOFF: Duration = Duration::from_millis(10);
+const JOIN_BACKOFF_MAX: Duration = Duration::from_secs(2);
+
+/// How long a worker that left stays refused. Longer than any heartbeat it
+/// sent before leaving can still be on its way.
+const LEFT_MS: u64 = 10 * 60_000;
 
 /// This tracker's view of each group. The leases and membership themselves
 /// live in the cache; this holds only what the config answer shows and the
@@ -89,12 +100,36 @@ impl View {
     }
 }
 
-/// The group's live members as the cache holds them: member to the tracker
-/// time it last heartbeated.
+/// The group's live members: member to the tracker time it last heartbeated.
 type Members = BTreeMap<String, u64>;
 
-fn live(members: &mut Members, now: u64) {
-    members.retain(|_, seen| *seen + LEASE_MS > now);
+/// The group's membership as the cache holds it.
+#[derive(Default, Serialize, Deserialize)]
+struct Membership {
+    #[serde(default)]
+    live: Members,
+    /// Members that left, to the tracker time they stay refused until. A
+    /// member is a worker run, so a heartbeat it sent before leaving that
+    /// lands after cannot bring it back.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    left: BTreeMap<String, u64>,
+}
+
+impl Membership {
+    fn prune(&mut self, now: u64) {
+        self.live.retain(|_, seen| *seen + LEASE_MS > now);
+        self.left.retain(|_, until| *until > now);
+    }
+}
+
+/// A random wait up to `JOIN_BACKOFF` doubled `attempt` times.
+fn backoff(attempt: u32) -> Duration {
+    let cap = JOIN_BACKOFF
+        .saturating_mul(1 << attempt.min(16))
+        .min(JOIN_BACKOFF_MAX);
+    let mut b = [0u8; 4];
+    let r = getrandom::fill(&mut b).map_or(u32::MAX / 2, |()| u32::from_le_bytes(b));
+    cap.mul_f64(f64::from(r) / f64::from(u32::MAX))
 }
 
 impl Group {
@@ -149,11 +184,15 @@ impl Groups {
 /// Why a membership write did not go through.
 enum Join {
     Full,
+    /// This worker run already left the group.
+    Left,
     Failed,
 }
 
 /// Writes `me` into the group's membership at `now` (or out of it, when
 /// `leave`), dropping members past their expiry, and answers who is live.
+/// A lost write race backs off before it reads again, so a group that
+/// starts at once spreads out instead of retrying in step.
 async fn join<B: Broker>(
     tracker: &Tracker<B>,
     group: &Key,
@@ -161,25 +200,32 @@ async fn join<B: Broker>(
     now: u64,
     leave: bool,
 ) -> Result<Members, Join> {
-    for _ in 0..JOIN_TRIES {
-        let Ok(current) = tracker.group_members(group).await else {
+    for attempt in 0..JOIN_TRIES {
+        if attempt > 0 {
+            tokio::time::sleep(backoff(attempt)).await;
+        }
+        let Ok(current) = tracker.group_members::<Membership>(group).await else {
             return Err(Join::Failed);
         };
-        let (mut members, version) = match current {
+        let (mut m, version) = match current {
             Some((m, v)) => (m, Some(v)),
-            None => (Members::new(), None),
+            None => (Membership::default(), None),
         };
-        live(&mut members, now);
+        m.prune(now);
         if leave {
-            members.remove(me);
+            m.live.remove(me);
+            m.left.insert(me.to_owned(), now + LEFT_MS);
         } else {
-            if !members.contains_key(me) && members.len() >= MAX_MEMBERS {
+            if m.left.contains_key(me) {
+                return Err(Join::Left);
+            }
+            if !m.live.contains_key(me) && m.live.len() >= MAX_MEMBERS {
                 return Err(Join::Full);
             }
-            members.insert(me.to_owned(), now);
+            m.live.insert(me.to_owned(), now);
         }
-        match tracker.put_group_members(group, &members, version).await {
-            Ok(true) => return Ok(members),
+        match tracker.put_group_members(group, &m, version).await {
+            Ok(true) => return Ok(m.live),
             Ok(false) => continue,
             Err(_) => return Err(Join::Failed),
         }
@@ -190,7 +236,8 @@ async fn join<B: Broker>(
 #[derive(Deserialize)]
 pub(super) struct HeartbeatBody {
     group: String,
-    /// Tells apart workers that share a token. Drawn fresh on every start.
+    /// Tells apart workers that share a token. Drawn fresh on every start,
+    /// so it names one run: once that run leaves, it is not let back in.
     instance: String,
     /// The worker is stopping: release what it holds and leave the group.
     #[serde(default)]
@@ -250,8 +297,23 @@ pub(super) async fn heartbeat<B: Broker>(
     let groups = &app.leases;
     let g = groups.group(&team, &group);
     let now = groups.now_ms();
-    let members = match join(tracker, &group, &me, now, body.leave).await {
+    let joined = join(tracker, &group, &me, now, body.leave).await;
+    if body.leave {
+        // By what the cache says this worker holds, not by any tracker's
+        // memory: the worker may have heartbeated elsewhere. Released even
+        // when the membership write failed, so the next holder need not
+        // wait out the leases.
+        release_all(tracker, groups, &sources, &me).await;
+    }
+    let members = match joined {
         Ok(m) => m,
+        Err(Join::Left) => {
+            return refused(
+                StatusCode::CONFLICT,
+                "this worker run left the group; a new run draws a new instance",
+                "left",
+            );
+        }
         Err(Join::Full) => {
             return refused(
                 StatusCode::TOO_MANY_REQUESTS,
@@ -268,9 +330,6 @@ pub(super) async fn heartbeat<B: Broker>(
         }
     };
     if body.leave {
-        // By what the cache says this worker holds, not by any tracker's
-        // memory: the worker may have heartbeated elsewhere.
-        release_all(tracker, groups, &sources, &me).await;
         let mut view = g.view.lock().expect("lease view lock");
         view.held.remove(&me);
         view.refresh(members.into_keys().collect(), &sources);

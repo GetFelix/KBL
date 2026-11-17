@@ -1154,14 +1154,18 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     "{key} was closed upstream as not planned, so this pull request is now a draft. \
                      Nothing further will be done on it until a person decides."
                 );
+                let mark = crate::source::mark(&key, "draft", &pr.to_string());
                 match self
                     .source
-                    .write_back(&WriteBack::DraftPullRequest { pr, note })
+                    .write_back(&WriteBack::DraftPullRequest { pr, note, mark })
                     .await
                 {
                     Ok(()) => {}
                     // The wait applies to the whole poll; try again after it.
                     Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                    // Cut short, it may have landed: not a failed try. The
+                    // retry finds the mark and does not post twice.
+                    Err(e) if crate::lease::is_fenced(&e) => return Err(e),
                     // An agent names the pull request, so a refusal must not hold the cursor.
                     Err(e) => {
                         eprintln!("kbl-ingest: write-back for {key} failed: {e}");
@@ -1255,6 +1259,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     calls.push(WriteBack::Comment {
                         issue: issue.clone(),
                         body: format!("An agent opened {pr} for this issue."),
+                        mark: crate::source::mark(&key, stage, &pr.to_string()),
                     });
                 }
                 if let Some(name) = &rule.transition_on_pr {
@@ -1268,6 +1273,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                     calls.push(WriteBack::Comment {
                         issue: issue.clone(),
                         body: format!("{pr} was merged."),
+                        mark: crate::source::mark(&key, stage, &pr.to_string()),
                     });
                 }
                 if let Some(name) = &rule.transition_on_merge {
@@ -1282,6 +1288,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 match self.source.write_back(&call).await {
                     Ok(()) => {}
                     Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+                    // An unknown outcome, not a failure: retried without
+                    // counting a try, and every call checks before it writes.
+                    Err(e) if crate::lease::is_fenced(&e) => return Err(e),
                     Err(e) => {
                         eprintln!("kbl-ingest: write-back for {key} failed: {e}");
                         failed = true;
@@ -1291,8 +1300,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             }
             if let Some(t) = p.state.items.get_mut(&key) {
                 t.announce_tries += u8::from(failed);
-                // Every call is idempotent upstream, so a retry after a
-                // failure is safe; after a few it is given up on.
+                // Every call checks upstream before it writes, so a retry
+                // after a failure is safe; after a few it is given up on.
                 if !failed || t.announce_tries >= MAX_WRITE_BACK_TRIES {
                     t.announced.insert(mark);
                     t.announce_tries = 0;

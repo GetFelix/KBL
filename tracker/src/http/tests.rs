@@ -58,6 +58,8 @@ struct Quiet {
     source_leases: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Ingest worker groups' members by group: value and version.
     group_members: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
+    /// Membership writes fail.
+    fail_members_put: Arc<AtomicBool>,
     /// Another tracker writes this to a source's lease just before the next
     /// lease put, so that put's version check fails.
     race_lease_put: Arc<StdMutex<Option<Vec<u8>>>>,
@@ -225,6 +227,8 @@ impl Broker for Quiet {
         Ok(Some(next))
     }
     async fn group_members_get(&self, group: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        // A real read is a round trip, so concurrent heartbeats interleave.
+        tokio::task::yield_now().await;
         Ok(self.group_members.lock().unwrap().get(group).cloned())
     }
     async fn group_members_put(
@@ -233,6 +237,9 @@ impl Broker for Quiet {
         value: Vec<u8>,
         expect: Option<u64>,
     ) -> anyhow::Result<Option<u64>> {
+        if self.fail_members_put.load(Ordering::SeqCst) {
+            anyhow::bail!("the cache is unreachable");
+        }
         let mut all = self.group_members.lock().unwrap();
         let now = all.get(group).map(|(_, v)| *v);
         if now != expect {

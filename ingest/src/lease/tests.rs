@@ -108,6 +108,7 @@ fn issue(repo: &str) -> IssueRef {
 
 fn comment_on(repo: &str) -> WriteBack {
     WriteBack::Comment {
+        mark: "<!-- kbl:t -->".into(),
         issue: issue(repo),
         body: "b".into(),
     }
@@ -152,16 +153,51 @@ async fn a_worker_polls_and_writes_only_the_sources_it_leases() {
     lessee.renewed(lessee.sending(), held(&[("github:o/a", 3)]));
     let repos = ["o/a".to_owned(), "o/b".to_owned(), "o/elsewhere".to_owned()];
     src.changed(&repos, &BTreeMap::new()).await.unwrap();
-    assert_eq!(*src.inner.1.lock().unwrap(), ["o/a", "o/elsewhere"]);
+    assert_eq!(
+        *src.inner.1.lock().unwrap(),
+        ["o/a"],
+        "a repo the connection does not name is never polled"
+    );
     assert!(src.write_back(&comment_on("o/b")).await.is_err());
     assert!(src.fetch(&issue("o/b")).await.is_err());
-    // A repo no connection source names, such as another source's pull
-    // request, needs only the fence.
+    let calls = src.inner.calls();
+    assert!(src.write_back(&comment_on("o/elsewhere")).await.is_err());
+    assert!(src.fetch(&issue("o/elsewhere")).await.is_err());
+    assert!(src.links(&issue("o/elsewhere")).await.is_err());
+    assert!(src.open_issue("o/elsewhere", "t", "b").await.is_err());
+    assert_eq!(src.inner.calls(), calls, "nothing outside the connection");
+    // Reading an agent's pull request in another repo passes.
     src.pull_request(&issue("o/elsewhere")).await.unwrap();
     // A heartbeat that no longer lists o/a stops it at once.
     lessee.renewed(lessee.sending(), BTreeMap::new());
     assert!(src.fetch(&issue("o/a")).await.is_err());
     assert!(!lessee.may_poll());
+}
+
+#[tokio::test(start_paused = true)]
+async fn repos_match_sources_as_the_vendor_compares_names() {
+    let lessee = leased(&["github:Owner/Repo"]);
+    let src = Fenced::new(Counting::default(), lessee.clone());
+    lessee.renewed(lessee.sending(), held(&[("github:Owner/Repo", 1)]));
+    src.changed(&["owner/repo".into()], &BTreeMap::new())
+        .await
+        .unwrap();
+    assert_eq!(*src.inner.1.lock().unwrap(), ["owner/repo"]);
+    src.write_back(&comment_on("OWNER/repo")).await.unwrap();
+
+    let jira = Lessee::new("jira", Mode::Waiting, system_wall());
+    jira.configure(&json!({ "sources": ["jira:ABC"] }));
+    jira.renewed(jira.sending(), held(&[("jira:ABC", 1)]));
+    assert!(jira.check(Some("ABC")).is_ok());
+    assert!(jira.check(Some("abc")).is_err(), "Jira keys keep their case");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_configured_repo_the_connection_does_not_name_is_reported() {
+    let lessee = Lessee::waiting("github", vec!["o/a".into(), "O/B".into(), "o/c".into()]);
+    assert!(lessee.outside().is_empty(), "nothing to say before the config");
+    lessee.configure(&json!({ "sources": ["github:o/a", "github:o/b"] }));
+    assert_eq!(lessee.outside(), ["o/c"]);
 }
 
 #[tokio::test(start_paused = true)]
@@ -175,7 +211,7 @@ async fn a_worker_with_no_connection_is_never_fenced_and_one_waiting_for_config_
         .unwrap();
     assert!(file.may_poll());
 
-    let waiting = Lessee::waiting("github");
+    let waiting = Lessee::waiting("github", Vec::new());
     let src = Fenced::new(Counting::default(), waiting.clone());
     assert!(src.fetch(&issue("o/a")).await.is_err());
     assert!(!waiting.may_poll());
@@ -197,6 +233,8 @@ struct Trackers {
     beats: Mutex<Vec<(String, bool)>>,
     /// How long a heartbeat takes to answer.
     slow: Duration,
+    /// The instance the source is assigned to; none assigns it to all.
+    owner: Mutex<Option<&'static str>>,
 }
 
 impl Trackers {
@@ -208,6 +246,7 @@ impl Trackers {
             skew_ms: skew_ms.iter().copied().collect(),
             beats: Mutex::default(),
             slow: Duration::ZERO,
+            owner: Mutex::default(),
         }
     }
 }
@@ -238,6 +277,21 @@ impl LeaseApi for Trackers {
                     ..l
                 };
                 leases.insert("github:o/a".to_owned(), released);
+            }
+            return Ok(got);
+        }
+        let assigned = self.owner.lock().unwrap().is_none_or(|o| o == me);
+        if !assigned {
+            // As the tracker answers a moved source: how long is left.
+            if let Some(l) = current.filter(|l| l.held_by(me, now)) {
+                let until = Duration::from_millis(l.expires_ms - now);
+                got.insert(
+                    "github:o/a".to_owned(),
+                    Held {
+                        epoch: l.epoch,
+                        until: Some(until),
+                    },
+                );
             }
             return Ok(got);
         }
@@ -393,6 +447,27 @@ async fn poll_loop<S: Source>(src: Arc<Fenced<S>>, lessee: Arc<Lessee>) {
     }
 }
 
+#[test]
+fn renews_are_spread_20_percent_either_side_of_30_s() {
+    let gaps: Vec<Duration> = (0..200).map(|_| heartbeat_gap()).collect();
+    assert!(
+        gaps.iter()
+            .all(|g| (HEARTBEAT.mul_f64(0.8)..=HEARTBEAT.mul_f64(1.2)).contains(g)),
+        "{gaps:?}"
+    );
+    let (lo, hi) = (gaps.iter().min().unwrap(), gaps.iter().max().unwrap());
+    assert!(hi.saturating_sub(*lo) > Duration::from_secs(6), "{lo:?}..{hi:?}");
+}
+
+/// Renews every second, so it takes a source the moment the tracker frees
+/// it.
+async fn eager(api: Arc<Trackers>, lessee: Arc<Lessee>, me: &'static str) {
+    loop {
+        heartbeat_once(&*api, &lessee, "g", me).await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+}
+
 #[tokio::test(start_paused = true)]
 async fn after_a_partition_no_two_workers_are_busy_upstream_for_one_source_at_once() {
     // A's renews reach a tracker on time; B's reach one whose clock runs 30 s
@@ -414,12 +489,7 @@ async fn after_a_partition_no_two_workers_are_busy_upstream_for_one_source_at_on
             "A".into(),
         )),
         tokio::spawn(poll_loop(src_a, a.clone())),
-        tokio::spawn(heartbeat_task(
-            api.clone(),
-            b.clone(),
-            "g".into(),
-            "B".into(),
-        )),
+        tokio::spawn(eager(api.clone(), b.clone(), "B")),
         tokio::spawn(poll_loop(src_b, b.clone())),
     ];
     tokio::time::sleep(Duration::from_secs(240)).await;
@@ -431,6 +501,10 @@ async fn after_a_partition_no_two_workers_are_busy_upstream_for_one_source_at_on
         !on_a.is_empty() && !on_b.is_empty(),
         "A {on_a:?}, B {on_b:?}"
     );
+    // B renews every second, so it takes the moment the lease is free: 90 s
+    // lease and 30 s margin after A's renew, less B's tracker's 30 s lead.
+    // Any shorter margin lets B in sooner.
+    assert!(on_b[0].0 >= 90.0, "B started at {} s", on_b[0].0);
     for (a0, a1) in &on_a {
         assert!(*a0 < 60.0, "A sent a request at {a0} s, past its fence");
         for (b0, b1) in &on_b {
@@ -445,6 +519,54 @@ async fn after_a_partition_no_two_workers_are_busy_upstream_for_one_source_at_on
         Some(2),
         "the takeover bumps the epoch"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_source_that_moves_is_polled_by_the_old_holder_only_until_its_lease_ends() {
+    let api = Arc::new(Trackers::new(&[]));
+    let vendor = Vendor::new(Duration::from_secs(7));
+    let (a, b) = (leased(&["github:o/a"]), leased(&["github:o/a"]));
+    *api.owner.lock().unwrap() = Some("A");
+    heartbeat_once(&*api, &a, "g", "A").await;
+    let tasks = [
+        tokio::spawn(heartbeat_task(
+            api.clone(),
+            a.clone(),
+            "g".into(),
+            "A".into(),
+        )),
+        tokio::spawn(poll_loop(
+            Arc::new(fenced_vendor(&vendor, "A", &a, 3)),
+            a.clone(),
+        )),
+        tokio::spawn(eager(api.clone(), b.clone(), "B")),
+        tokio::spawn(poll_loop(
+            Arc::new(fenced_vendor(&vendor, "B", &b, 3)),
+            b.clone(),
+        )),
+    ];
+    tokio::time::sleep(Duration::from_secs(20)).await;
+    // The share moves to B. A's next renew is answered with `until_ms`.
+    *api.owner.lock().unwrap() = Some("B");
+    tokio::time::sleep(Duration::from_secs(300)).await;
+    for t in tasks {
+        t.abort();
+    }
+    let (on_a, on_b) = (vendor.of("A"), vendor.of("B"));
+    assert!(
+        on_a.iter().any(|(a0, _)| *a0 > 20.0),
+        "A kept polling while its lease ran: {on_a:?}"
+    );
+    assert!(!on_b.is_empty(), "B took over");
+    for (a0, a1) in &on_a {
+        for (b0, b1) in &on_b {
+            assert!(
+                a1 <= b0 || b1 <= a0,
+                "A busy {a0}..{a1} s and B busy {b0}..{b1} s at once"
+            );
+        }
+    }
+    assert_eq!(b.epoch("github:o/a"), Some(2));
 }
 
 #[tokio::test(start_paused = true)]
@@ -519,11 +641,18 @@ async fn a_request_outside_any_operation_still_passes_the_fence() {
     identity(gate.send(req())).await.unwrap();
     lessee.renewed(lessee.sending(), held(&[("github:o/a", 1)]));
     gate.send(req()).await.unwrap();
+    assert!(scoped(vec!["o/a".into()], gate.send(req())).await.is_ok());
     assert!(
-        scoped(vec!["o/a".into()], gate.send(req())).await.is_ok()
-            && scoped(vec!["o/b".into()], gate.send(req())).await.is_ok(),
+        scoped(vec!["o/b".into()], gate.send(req())).await.is_err(),
         "o/b is no connection source"
     );
+    // A pull request read outside the connection: reads pass, writes do not.
+    assert!(reading(vec!["o/b".into()], gate.send(req())).await.is_ok());
+    let post = Req::post("https://vendor.test/x".into(), Value::Null);
+    let err = reading(vec!["o/b".into()], gate.send(post))
+        .await
+        .unwrap_err();
+    assert!(err.is::<FenceClosed>(), "{err}");
     lessee.renewed(lessee.sending(), BTreeMap::new());
     assert!(scoped(vec!["o/a".into()], gate.send(req())).await.is_err());
 }

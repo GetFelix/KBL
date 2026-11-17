@@ -216,7 +216,11 @@ async fn a_moved_source_stays_in_the_answer_while_its_lease_is_live() {
     assert!(!winding.is_empty(), "b's share is winding down");
     for l in winding {
         // Taken at 0 with a 90 s expiry, 30 s ago, and not renewed since.
-        assert_eq!(l["until_ms"], json!(LEASE_MS - 30_000));
+        let left = l["until_ms"].as_u64().unwrap();
+        assert!(
+            (LEASE_MS - 31_000..=LEASE_MS - 30_000).contains(&left),
+            "{left}"
+        );
         let s = l["source"].as_str().unwrap();
         assert_eq!(
             stored(&o, s).holder.as_deref(),
@@ -295,4 +299,73 @@ async fn the_config_answer_lists_the_workers_leases_and_wakes_on_a_heartbeat() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["leases"].as_array().unwrap().len(), SOURCES.len());
     assert_eq!(body["leases"][0]["epoch"], json!(1));
+}
+
+#[tokio::test]
+async fn a_heartbeat_that_lands_after_the_leave_does_not_bring_the_worker_back() {
+    let (o, app, groups) = leased().await;
+    beat(&app, "a").await;
+    let (status, _) = beat_in(&app, "g1", "a", true).await;
+    assert_eq!(status, StatusCode::OK);
+    // A renew a sent before leaving reaches another tracker afterwards.
+    let (other, other_groups) = other_tracker(&o);
+    advance(&groups, TAKE_MARGIN_MS);
+    advance(&other_groups, TAKE_MARGIN_MS);
+    let (status, body) = beat_raw(&other, "g1", "a", false, &[]).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["why"], "left");
+    assert_eq!(stored(&o, "github:o/a").holder, None);
+    // The group goes on without the ghost: b takes everything.
+    let (_, b_got) = beat(&app, "b").await;
+    assert_eq!(names(&b_got), SOURCES);
+}
+
+#[tokio::test]
+async fn a_leave_releases_the_leases_even_when_the_membership_write_fails() {
+    let (o, app, groups) = leased().await;
+    beat(&app, "a").await;
+    o.broker("default")
+        .fail_members_put
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (status, _) = beat_in(&app, "g1", "a", true).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(stored(&o, "github:o/a").holder, None, "released anyway");
+    o.broker("default")
+        .fail_members_put
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let _ = groups;
+}
+
+#[tokio::test]
+async fn two_hundred_workers_joining_at_once_all_get_in() {
+    let (_o, app, _groups) = leased().await;
+    let names: Vec<String> = (0..200).map(|i| format!("w{i}")).collect();
+    // Past the team's in-flight cap a call is turned away with a 1 s
+    // Retry-After and tried again. Any other refusal is a lost membership
+    // write.
+    let beats = names.iter().map(|n| {
+        let app = &app;
+        async move {
+            loop {
+                let (status, body) = beat_raw(app, "g1", n, false, &[]).await;
+                if body["why"] != "team_busy" {
+                    return (status, body);
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    });
+    let answers = tokio::time::timeout(
+        Duration::from_secs(30),
+        futures::future::join_all(beats),
+    )
+    .await
+    .expect("every worker in well inside the fence");
+    let refused: Vec<_> = answers
+        .iter()
+        .zip(&names)
+        .filter(|((s, _), _)| *s != StatusCode::OK)
+        .map(|((s, b), n)| format!("{n}: {s} {b}"))
+        .collect();
+    assert!(refused.is_empty(), "{} refused: {refused:?}", refused.len());
 }

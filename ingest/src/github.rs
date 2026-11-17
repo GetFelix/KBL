@@ -579,7 +579,7 @@ impl<T: Transport> Source for Github<T> {
     }
 
     async fn write_back(&self, what: &WriteBack) -> Result<(), SourceError> {
-        let WriteBack::DraftPullRequest { pr, note } = what else {
+        let WriteBack::DraftPullRequest { pr, note, mark } = what else {
             return Err(anyhow!("GitHub takes only the draft write-back").into());
         };
         let pull = format!("{}/repos/{}/pulls/{}", self.api, pr.repo, pr.number);
@@ -615,12 +615,25 @@ impl<T: Transport> Source for Github<T> {
                 return Err(anyhow!("could not make {pr} a draft: {}", out.body).into());
             }
         }
+        // A post the fence cut short may have landed.
+        if self
+            .issue_comments(pr)
+            .await?
+            .iter()
+            .any(|c| {
+                c.body.contains(mark.as_str())
+                    && self.own.iter().any(|o| o.eq_ignore_ascii_case(&c.author))
+            })
+        {
+            return Ok(());
+        }
         let comment = format!(
             "{}/repos/{}/issues/{}/comments",
             self.api, pr.repo, pr.number
         );
+        let body = format!("{note}\n\n{mark}");
         let out = self
-            .call(Req::post(comment, json!({ "body": note })))
+            .call(Req::post(comment, json!({ "body": body })))
             .await?;
         if out.status != 201 {
             return Err(anyhow!("could not comment on {pr}: {}", out.status).into());
