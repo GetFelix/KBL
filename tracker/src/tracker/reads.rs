@@ -98,6 +98,18 @@ impl<B: Broker> Tracker<B> {
         Ok(json!({ "days": days, "stats": stats, "at": core.state.at }))
     }
 
+    /// How many of the summaries a person marked in the last `days` days were
+    /// marked accurate, and how many finished attempts have no mark. Team level.
+    pub(crate) async fn summary_trust(&self, days: u64) -> Result<Value, Error> {
+        self.begin().await?;
+        let core = self.0.core.lock().await;
+        // The window is half open, so a mark written this millisecond needs the +1.
+        let to = super::now_ms() + 1;
+        let from = to.saturating_sub(days.saturating_mul(DAY_MS));
+        let stats = core.state.summary_trust(from, to);
+        Ok(json!({ "days": days, "stats": stats, "at": core.state.at }))
+    }
+
     /// One item as the fold holds it, with its stage and why it needs a person.
     pub(crate) async fn item(&self, id: &ItemId) -> Result<Value, Error> {
         self.begin().await?;

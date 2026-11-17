@@ -38,6 +38,10 @@ the teams the org API can create, and nothing caps how many that is: an org
 admin can create as many as it likes, so the label has as many values as the
 org has teams.
 
+Trust numbers from the summary marks people write are not Prometheus metrics.
+They are a REST read for people ([summary trust](work-tracker.md#summary-trust)),
+so a scrape never carries a count of marks, which could be tied to one reviewer.
+
 ## Every service
 
 | Metric | Type | Labels | Meaning |

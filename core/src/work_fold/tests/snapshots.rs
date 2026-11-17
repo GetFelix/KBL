@@ -39,9 +39,10 @@ fn derived(s: &State) -> String {
     let roots: Vec<_> = s.items.keys().cloned().collect();
     let exceed: Vec<_> = roots.iter().map(|r| s.proposals_exceed_budget(r)).collect();
     format!(
-        "{:?}\n{:?}\n{exceed:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
+        "{:?}\n{:?}\n{exceed:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}\n{:?}",
         s.waiting,
         s.human_waits,
+        s.summary_trust(0, u64::MAX),
         s.time_to_human_action(0, u64::MAX),
         s.time_to_human_action(35, 75),
         s.queue(0),

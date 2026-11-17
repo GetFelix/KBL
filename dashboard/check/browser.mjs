@@ -192,6 +192,13 @@ try {
     await shoot(`prices-${theme}`);
     await press(page, 'Escape');
     check(!(await page.eval(`document.querySelector('dialog.prices').open`)), `${theme}: Esc closes Models and prices`);
+
+    // Metrics: the trust numbers come from the tracker, so with no sign-in the card asks for one.
+    await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Metrics').click()`);
+    check(await page.eval(`document.querySelector('dialog.metrics').open && document.querySelector('#metrics-trust').textContent === 'Trust in summaries'`), `${theme}: the Metrics button opens the trust card`);
+    check(await page.eval(`/Sign in/.test(document.querySelector('.metrics-card').textContent)`), `${theme}: signed out, metrics asks to sign in`);
+    await axe(`metrics ${theme}`);
+    await press(page, 'Escape');
   }
 
   await open(connected);
