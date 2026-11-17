@@ -1,0 +1,22 @@
+[package]
+name = "kbl-metrics"
+version = "0.0.0"
+description = "Prometheus exposition shared by the tracker, ingest and kbl-mcp: one recorder, one /metrics listener"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow = "=1.0.100"
+axum = { version = "=0.8.8", default-features = false, features = ["http1", "tokio"] }
+metrics = "=0.24.6"
+metrics-exporter-prometheus = { version = "=0.18.3", default-features = false }
+tokio = { version = "=1.48.0", features = ["net", "rt"] }
+
+[dev-dependencies]
+tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread"] }
+tower = { version = "=0.5.3", features = ["util"] }
+
+[lints]
+workspace = true

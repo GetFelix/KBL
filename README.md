@@ -332,6 +332,8 @@ node dev/check-tracker-ingest.mjs            # kbl-ingest polls one issue from a
 kbl-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
 
+The dev checks start the tracker with `KBL_REVIEW_LIMIT=0`. The tracker's own default is 3, which pauses new fix claims once three agent PRs are in review ([the review limit](docs/work-tracker.md#the-review-limit)); a check that finishes many fixes would stall at it. A check that tests the limit passes its own value.
+
 The death check kills a worker and lets a stalled claim lapse with a 2 second claim visibility so it finishes quickly, and restarts a worker under the default 90 seconds to show it does not wait for the claim to lapse.
 
 To add it to Claude Code, put this in a project's `.mcp.json` (or use `claude mcp add`):
@@ -411,6 +413,7 @@ CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Ru
 - [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
 - [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
 - [docs/threat-model.md](docs/threat-model.md): who can reach what, and the check behind every route and record kind
+- [docs/metrics.md](docs/metrics.md): the Prometheus metrics of the tracker, ingest and `kbl-mcp`, and how to expose them
 - [docs/upgrades.md](docs/upgrades.md): upgrading a running KBL and going back, and the record format rules behind it
 - [docs/dashboard-research.md](docs/dashboard-research.md): the evidence behind the dashboard
 - [docs/brand/story.md](docs/brand/story.md): the story of the product

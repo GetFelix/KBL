@@ -37,6 +37,18 @@ struct Cli {
     /// carries a bearer token.
     #[arg(long, env = "KBL_TRACKER_BEHIND_TLS_PROXY")]
     behind_tls_proxy: bool,
+    /// Where `/metrics` is served, on a port of its own. Off unless set. The
+    /// endpoint has no authentication; see docs/metrics.md.
+    #[arg(long, env = "KBL_TRACKER_METRICS_LISTEN")]
+    metrics_listen: Option<SocketAddr>,
+    /// Allows a metrics address other than loopback. Set it only when the port
+    /// is reachable by the scraper alone.
+    #[arg(
+        long,
+        env = "KBL_TRACKER_METRICS_ALLOW_REMOTE",
+        requires = "metrics_listen"
+    )]
+    metrics_allow_remote: bool,
     /// JSON file mapping tokens to agent names and people:
     /// {"agents": {"<token>": "w1"}, "people": {"<token>": "gabriel"}}.
     #[arg(long, env = "KBL_TRACKER_TOKENS_FILE")]
@@ -104,6 +116,11 @@ struct Cli {
     /// millionths of a dollar, whatever the agent reports.
     #[arg(long, env = "KBL_COST_FLOOR_MICROS", default_value_t = 100_000)]
     cost_floor_micros: u64,
+    /// Agent pull requests in In review at which agents stop taking new fixes.
+    /// Triage, answers and reviews carry on. Zero turns the limit off. The default
+    /// is a guess with no measurement behind it (docs/dashboard-research.md).
+    #[arg(long, env = "KBL_REVIEW_LIMIT", default_value_t = 3)]
+    review_limit: usize,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -134,6 +151,13 @@ fn check_listen(addr: SocketAddr, behind_tls_proxy: bool) -> Result<()> {
 async fn serve() -> Result<()> {
     let cli = Cli::parse();
     check_listen(cli.listen, cli.behind_tls_proxy)?;
+    // Installed before any team starts, so startup is recorded too.
+    let exporter = kbl_metrics::install("kbl-tracker");
+    if let Some(addr) = cli.metrics_listen {
+        kbl_metrics::check_listen(addr, cli.metrics_allow_remote, "--metrics-allow-remote")?;
+        let bound = kbl_metrics::serve(addr, exporter).await?;
+        eprintln!("kbl-tracker: metrics on {bound}");
+    }
     let team = TeamName::new(cli.namespace.clone()).map_err(|e| {
         anyhow::anyhow!(
             "KBL_NAMESPACE {:?} cannot name a team: it must follow the key rule and not be `kbl`",
@@ -194,6 +218,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
     let review_tiers = cli.review_tiers.clone();
     // One floor for every team; each team's tracker charges it against its own fold.
     let cost_floor_micros = cli.cost_floor_micros;
+    let review_limit = cli.review_limit;
     let base = target(cli, "");
     Arc::new(move |team: TeamName| {
         let mut target = base.clone();
@@ -212,6 +237,8 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             crash_after_done,
             review_tiers: review_tiers.clone(),
             cost_floor_micros,
+            team: team.as_str().to_owned(),
+            review_limit,
         };
         Box::pin(async move {
             let felix = felix::connect(target, Kind::Team).await?;

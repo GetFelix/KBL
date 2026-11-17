@@ -174,3 +174,29 @@ async fn check_suite_pull_request_and_review_events_wake_the_poll() {
     // These events carry no data into the tracker and force no reconcile.
     assert!(!wake.reconcile.load(Ordering::SeqCst));
 }
+
+#[tokio::test]
+async fn deliveries_are_counted_by_result_and_never_by_content() {
+    let exporter = kbl_metrics::install("kbl-ingest-test");
+    let count = |result: &str| -> f64 {
+        exporter
+            .render()
+            .lines()
+            .find(|l| l.starts_with(&format!("kbl_ingest_webhooks_total{{result=\"{result}\"")))
+            .and_then(|l| l.rsplit_once(' ')?.1.parse().ok())
+            .unwrap_or(0.0)
+    };
+    let (bad, woke, dup) = (count("unauthorized"), count("woke"), count("duplicate"));
+    let wake = Arc::new(Wake::default());
+    let app = router("metrics-secret".into(), wake, Duration::ZERO);
+    let body = r#"{"action":"edited","issue":{"title":"private-title-4471"}}"#;
+    post(&app, None, body).await;
+    let sig = signed(b"metrics-secret", body.as_bytes());
+    post_with(&app, Some(sig.clone()), body, Some("d-1")).await;
+    post_with(&app, Some(sig), body, Some("d-1")).await;
+    assert_eq!(count("unauthorized") - bad, 1.0);
+    assert_eq!(count("woke") - woke, 1.0);
+    assert_eq!(count("duplicate") - dup, 1.0);
+    let text = exporter.render();
+    assert!(!text.contains("private-title-4471") && !text.contains("metrics-secret"));
+}

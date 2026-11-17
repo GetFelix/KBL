@@ -10,9 +10,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{FromRequest, FromRequestParts, Path, Query, Request, State};
+use axum::extract::{FromRequest, FromRequestParts, MatchedPath, Path, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri, header};
+use axum::middleware::{Next, from_fn};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
@@ -55,7 +56,12 @@ struct TeamPath(String);
 
 pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
     let app = Arc::new(App { teams });
-    let work = work_routes::<B>().with_state(app.clone());
+    // `route_layer` sees the matched route template, so the metrics label is
+    // `/v1/work/items/{item}`, never an item id. The team-scoped catch-all is added
+    // after the layer: the inner router's routes are counted once, not twice.
+    let work = work_routes::<B>()
+        .route_layer(from_fn(observe))
+        .with_state(app.clone());
     let scoped = work.clone();
     let for_agents = app.clone();
     Router::new()
@@ -65,12 +71,49 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
             "/v1/org/teams",
             get(org::list_teams::<B>).post(org::create_team::<B>),
         )
+        .route_layer(from_fn(observe))
         .route(
             "/v1/teams/{team}/{*rest}",
             any(move |req: Request| in_team(scoped.clone(), for_agents.clone(), req)),
         )
         .with_state(app)
         .merge(work)
+}
+
+/// Counts the call and times it, by route template, method and status.
+async fn observe(req: Request, next: Next) -> Response {
+    // The layer only runs on matched routes, so there is always a template.
+    let Some(route) = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|m| m.as_str().to_owned())
+    else {
+        return next.run(req).await;
+    };
+    let method = req.method().clone();
+    let started = std::time::Instant::now();
+    let res = next.run(req).await;
+    record_request(&route, method.as_str(), res.status(), started.elapsed());
+    res
+}
+
+/// The method label is one of a fixed set, so a client cannot mint labels.
+fn record_request(route: &str, method: &str, status: StatusCode, took: Duration) {
+    let method = match method {
+        "GET" | "POST" | "PUT" | "DELETE" | "PATCH" => method.to_owned(),
+        _ => "other".to_owned(),
+    };
+    let (route, status) = (route.to_owned(), status.as_u16().to_string());
+    metrics::counter!(
+        "kbl_tracker_http_requests_total",
+        "route" => route.clone(), "method" => method.clone(), "status" => status.clone()
+    )
+    .increment(1);
+    metrics::histogram!(
+        "kbl_tracker_http_request_seconds",
+        "route" => route, "method" => method, "status" => status
+    )
+    .record(took.as_secs_f64());
 }
 
 /// The routes that act in one team. They are served at `/v1/...`, for the
@@ -111,9 +154,11 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/rules/read", post(rules_read::<B>))
         .route("/v1/work/flag", post(flag::<B>))
         .route("/v1/work/unflag", post(unflag::<B>))
+        .route("/v1/work/queue", get(queue::<B>))
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
         .route("/v1/work/items/{item}/history", get(history::<B>))
+        .route("/v1/work/metrics/time-to-human", get(time_to_human::<B>))
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
@@ -129,7 +174,16 @@ async fn in_team<B: Broker>(work: Router, app: Arc<App<B>>, req: Request) -> Res
     };
     if rest == "agents" || rest.starts_with("agents/") {
         let (team, rest) = (team.to_owned(), rest.to_owned());
-        return agents::route(app, &team, &rest, req).await;
+        let method = req.method().clone();
+        let started = std::time::Instant::now();
+        let res = agents::route(app, &team, &rest, req).await;
+        record_request(
+            "/v1/teams/{team}/agents/{*rest}",
+            method.as_str(),
+            res.status(),
+            started.elapsed(),
+        );
+        return res;
     }
     if !(rest.starts_with("work/") || rest.starts_with("ingest/")) {
         return StatusCode::NOT_FOUND.into_response();
@@ -322,7 +376,11 @@ async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Re
     };
     let teams: Vec<Value> = found
         .iter()
-        .map(|(t, _)| json!({ "team": t.name(), "role": "admin" }))
+        .map(|(t, _)| {
+            // Null while the team is not serving, like its other calls answer 503.
+            let limit = t.tracker().map(|tr| tr.review_limit());
+            json!({ "team": t.name(), "role": "admin", "review_limit": limit })
+        })
         .collect();
     Json(json!({ "person": person, "org_admin": true, "teams": teams })).into_response()
 }
@@ -1197,6 +1255,41 @@ struct ItemsQuery {
 struct HistoryQuery {
     #[serde(default)]
     from: u64,
+}
+
+#[derive(Deserialize)]
+struct WindowQuery {
+    days: Option<u64>,
+}
+
+async fn time_to_human<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -> Response {
+    let days = q
+        .days
+        .unwrap_or(30)
+        .clamp(1, crate::tracker::reads::MAX_WINDOW_DAYS);
+    match call.person() {
+        Ok(_) => reply(call.tracker().time_to_human_action(days).await),
+        Err(d) => denied(d),
+    }
+}
+
+/// Entries My queue returns when `limit` is not given, and the most it returns.
+const QUEUE_DEFAULT_LIMIT: usize = 200;
+const QUEUE_MAX_LIMIT: usize = 1000;
+
+#[derive(Deserialize)]
+struct QueueQuery {
+    limit: Option<usize>,
+}
+
+async fn queue<B: Broker>(call: Call<B>, Query(q): Query<QueueQuery>) -> Response {
+    match call.person() {
+        Ok(_) => {
+            let limit = q.limit.unwrap_or(QUEUE_DEFAULT_LIMIT).min(QUEUE_MAX_LIMIT);
+            reply(call.tracker().queue(limit).await)
+        }
+        Err(d) => denied(d),
+    }
 }
 
 async fn items<B: Broker>(call: Call<B>, Query(q): Query<ItemsQuery>) -> Response {

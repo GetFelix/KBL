@@ -187,7 +187,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
-| `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin"}]}` |
+| `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin", "review_limit": 3}]}` |
 
 A call that ends a claim (`complete`, `release`, `give_up`, and a
 `prerequisite` post that ends it) can be retried safely when its answer was
@@ -271,7 +271,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 
 | Call | Does |
 |---|---|
-| `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing |
+| `POST /v1/work/post` `{item, key, work, title}` | `work` is `split`, `augment`, `question` or `test` for a child under the held `item`, or `proposal` for out-of-scope work. The item's id comes from the key, so the same key again answers with the first item (`created: false`) and writes nothing. That answer carries `stage` and `closure` (null while open), so a key that hit a closed or rejected item (`stage: closed`, `closure: rejected`) is not mistaken for live work; the call does not reopen it, so use a new key |
 | `POST /v1/work/post` `{item, key, work: "prerequisite", ...}` | Work another repo must do first. From a held triage item it is for the item under triage. See [Prerequisites in another repo](#prerequisites-in-another-repo) |
 | `POST /v1/work/link` `{item, to}` | `item` waits on `to`. The agent must hold `item`, a child of it, or its parent, and both must be in one tree. The edge is refused with `cycle` if `to` already waits on `item`, directly or through other items |
 | `POST /v1/work/rules/read` `{item}` | Reads the rules in effect for the held item |
@@ -358,9 +358,11 @@ A person's token can also read the team's work. These calls write nothing:
 
 | Call | Answers with |
 |---|---|
+| `GET /v1/work/queue` | My queue: every item that waits on a person, oldest wait first, then lower tier, as `{item, title, work, stage, needs, wait, tier, since_ms, root}`, with `count` (the whole queue) and `at`. `?limit=` trims `queue` to its first entries: 200 by default, at most 1000. `wait` is `proposal`, `question`, `failure`, `review` or `other`; an item whose reason changes starts a new wait from that record. `since_ms` is null for a wait the tracker did not see begin (it started before a snapshot), and those come first, since they are older than any known start. The same list for every person of the team. Person tokens only |
 | `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
 | `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A `from` past the end of the log is an empty answer with `next` null. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
+| `GET /v1/work/metrics/time-to-human` | Time to first human action over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.count`, `p50_ms` and `p90_ms` of the waits a person ended in the window, the same per reason in `by_kind` (`proposal`, `question`, `failure`, `review`, `other`), `open` (items waiting now with no person action yet) and `oldest_open_since_ms`. `truncated` is true, with `complete_since_ms`, when the oldest finished waits were dropped past the 20,000 kept, or the tracker restored its state from a snapshot, and the window reaches back before what the fold has seen. Open waits are not in the percentiles. See [Time to first human action](#time-to-first-human-action) |
 
 An unknown item answers `409` with `why: unknown_item`, like the agent calls.
 A path that is not a valid item id is a `400`.
@@ -1502,6 +1504,12 @@ slipping by.
   A prerequisite that files work in another repo and a deferred review
   finding count the same way. The tracker checks this before it appends, so
   the fold of an existing log does not change.
+- **Waiting proposals use up the root's budget.** A proposal takes nothing
+  from the root's budget, but a root whose waiting proposals number as many as
+  its remaining items, or whose cost budget is spent, refuses the next one as
+  `over_budget`, so repeated claims cannot flood it. A person's accept or
+  reject takes the proposal out of the count, which frees the room; an
+  accepted proposal is a root with a budget of its own.
 - **Attempts.** A claim that ends in a release, a lapse or a give-up may be
   retried once on the same attempt, so an attempt takes at most two claims.
   After that the item goes to Needs you. A redo starts a new attempt, at most
@@ -1519,6 +1527,11 @@ slipping by.
 
 Budgets are enforced by a compare-and-set on the budget key (`cache_put_if`),
 not by counters, because Felix has no bounded add (gap 42).
+
+The tracker keeps the text of context, note, question, answer, decision and
+triage records in memory, at most 8 MiB, least recently used first. A text it
+let go is read back from `work.events` when a call needs it, so the cap costs a
+read and never loses text.
 
 ### Cost and spend
 
@@ -1868,13 +1881,33 @@ and per source on click.
 
 Agents open PRs faster than people review them, and a claim that only adds to
 the review pile makes every PR wait longer. So the tracker has a limit on
-agent PRs in In review. At the limit agents stop claiming, and the header says
-so: "review full: agents paused, 6/6". Triage, answers and reviews carry on, and
-the Ready column explains why nothing is moving.
+agent fixes headed for review. At the limit agents stop claiming new fixes.
+Triage, answers and reviews carry on, and the Ready column explains why nothing
+is moving.
 
-The limit is a setting. There is no evidence behind any default: the
-research found nothing that says how many open PRs a reviewer can handle. Pick
-a number, watch the review column, and change it.
+The limit is `KBL_REVIEW_LIMIT` (or `--review-limit`), 3 by default, and 0
+turns it off. It counts two things: items in In review (fixes an agent
+finished that nobody has closed) and fixes agents hold now that have not
+reached In review yet. Counting the held ones keeps a crowd of agents from all
+landing in review together. When that sum reaches the limit, `work_next` skips
+Ready fixes. It is soft only in that it never blocks triage, questions,
+reviews, resumed work or finding fixes. A finding fix is one a review asked for
+on a PR. It closes without a review of its own and the PR waits for it, so
+pausing it would stop that PR from ever leaving In review. The paused fixes
+come back on their own once a merge, a close or a finished hold brings the sum
+under the limit. Work an agent already holds is not taken back.
+
+The header says "review full: agents paused, 3/3: 2 in review, 1 in progress"
+when the review load is at the limit. The page reads that load from the same
+fold function the pause uses, so the two cannot disagree: In review plus the
+fixes agents hold, split into its two parts.
+
+There is no evidence behind the default of 3: the research found nothing that
+says how many open PRs a reviewer can handle, and "two or three per active
+reviewer" was a guess. Pick a number, watch the review column, and change it.
+
+`GET /v1/me` carries each team's limit as `review_limit` (null while the team
+is not serving). The dashboard reads it once you sign in, so a viewer who has not signed in sees no limit in the header.
 
 ### The footer names the constraint
 
@@ -1892,7 +1925,9 @@ approvals are never counted as review.
 
 - Time in each stage, p50 and p85.
 - Time waiting on a human, per merged fix.
-- Time to the first human action on My queue and on In review.
+- Time to the first human action on My queue and on In review. The tracker
+  serves it today, see [Time to first human action](#time-to-first-human-action);
+  the dashboard has no Metrics tab yet.
 - Throughput against arrivals, and a cumulative flow chart. A band that widens
   is the constraint.
 - Blocked time and the items that hold the most up.
@@ -1904,6 +1939,35 @@ approvals are never counted as review.
 
 These come from `work.events` alone. Cost and minutes arrive as `cost` and
 `human` records. The numbers are published as they are, not picked.
+
+#### Time to first human action
+
+How long an item waits on a person before a person writes anything about it.
+The fold derives it from records that already exist; no new record is written
+and no model reads anything.
+
+An item starts waiting when it enters one of these:
+
+- an agent's proposal or triage answer waits to be accepted (`proposal`)
+- an agent's question, or triage that found the issue unclear (`question`)
+- a failed check, or an attempt that used its tries (`failure`)
+- the work is done and its pull request is in review (`review`)
+- any other Needs you reason, such as over budget or flagged (`other`)
+
+The wait ends at the first record whose actor is a person on that item: an
+answer, an accept, a note, a close. Agent and tracker records do not end it.
+A snooze does not either: it names no item the fold knows, so it is not an
+action. A wait is one unbroken stretch. If the item stops waiting and later
+waits again, that is a second wait and counts twice; a second person record
+during the same stretch does not count again. An item that stops waiting
+without a person acting (a green check, a close by upstream sync) leaves no
+wait at all.
+
+`GET /v1/work/metrics/time-to-human` counts a wait in the window its ending
+record falls in. Waits still open are reported as `open`, with the time the
+longest began, and are left out of p50 and p90. Percentiles use the nearest
+rank. The numbers are for the team whose log is folded; nothing names who
+acted. The fold keeps the last 20,000 finished waits; past that the response sets `truncated` for a window that reaches the dropped ones. The waits are not stored in a snapshot, so a state restored from one counts only from the first record after it, and `truncated` is true for any window reaching earlier.
 
 [dashboard-research.md](dashboard-research.md) says why each part is there and
 how much evidence stands behind it.

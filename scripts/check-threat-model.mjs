@@ -150,7 +150,7 @@ const telling = (text) => text.length >= 16 && /[a-z]{3}/i.test(text) && !text.s
 // Routes and tools from every workspace crate. The crate decides the section.
 const members = all(read('Cargo.toml').match(/members\s*=\s*\[([^\]]*)\]/)[1], /"([^"]+)"/g);
 if (members.some((m) => m.includes('*'))) throw new Error('Cargo.toml has a glob member; list members by name or teach this script globs');
-const ROUTE_SECTIONS = { tracker: ['Tracker routes', 'Teams'], ingest: ['Ingest'] };
+const ROUTE_SECTIONS = { tracker: ['Tracker routes', 'Teams'], ingest: ['Ingest'], metrics: ['Metrics endpoint'] };
 const TOOL_SECTIONS = { mcp: 'MCP tools' };
 const failures = [];
 const routes = Object.fromEntries(Object.keys(ROUTE_SECTIONS).map((c) => [c, new Map()]));

@@ -12,7 +12,7 @@
 //! extends, so one slow Felix call stalls that agent and nobody else.
 //! Every Felix call has a timeout.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -23,7 +23,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
     Actor, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason, TIERS,
-    Usage, WORK_EVENTS, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
+    Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
 use serde_json::{Value, json};
@@ -33,8 +33,9 @@ use tokio::time::Instant;
 use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
-mod reads;
+pub(crate) mod reads;
 mod request_keys;
+mod texts;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
 const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
@@ -90,6 +91,11 @@ pub(crate) struct Settings {
     /// The least a claim is charged, whatever usage the agent reports. Usage
     /// is the agent's word, so this is what bounds a tree's cost.
     pub(crate) cost_floor_micros: u64,
+    /// The team's name, the `team` label on this tracker's metrics.
+    pub(crate) team: String,
+    /// Agent pull requests in In review at which new fix claims pause. Zero
+    /// turns the limit off.
+    pub(crate) review_limit: usize,
 }
 
 #[cfg(test)]
@@ -449,7 +455,7 @@ fn retry_has_note(core: &Core, record: &WorkRecord) -> Result<(), Error> {
 #[derive(Default)]
 struct Recall {
     /// The text of context, note, question, answer, decision and triage records.
-    texts: HashMap<u64, Content>,
+    texts: texts::Texts,
     /// The item each record names, so evidence can be held to its tree.
     subjects: HashMap<u64, ItemId>,
     /// Edges ingest made: its `linked` found no edge and the fold created it
@@ -465,6 +471,16 @@ struct Recall {
     claims: HashMap<u64, (ItemId, u32)>,
     /// The request keys callers sent lately, so a retry is answered with the first write.
     requests: request_keys::Requests,
+}
+
+/// What reading a record's text back from the log found.
+#[derive(Clone)]
+enum TextRead {
+    Text(Content),
+    /// The record is there and has no text.
+    NoText,
+    /// No record at the offset: retention trimmed it.
+    Gone,
 }
 
 /// One `claimed` record and the record that ended it.
@@ -529,7 +545,9 @@ impl Recall {
             }
             _ => {}
         }
-        remember(&mut self.texts, offset, record);
+        if let Some(text) = texts::text_of(record) {
+            self.texts.insert(offset, text);
+        }
     }
 
     fn attempt(&mut self, offset: u64, logged: &WorkLogged) {
@@ -621,36 +639,6 @@ impl Recall {
 /// Whether `record` is a `linked` whose edge `state` does not have.
 fn edge_absent(state: &State, record: &WorkRecord) -> bool {
     matches!(record, WorkRecord::Linked { item, to } if !state.edges.contains(&(item.clone(), to.clone())))
-}
-
-/// Keeps the text of the records a read shows.
-fn remember(texts: &mut HashMap<u64, Content>, offset: u64, record: &WorkRecord) {
-    match record {
-        WorkRecord::Context { text, .. }
-        | WorkRecord::HumanInput { text, .. }
-        | WorkRecord::Question { text, .. } => {
-            texts.insert(offset, text.clone());
-        }
-        // An answer picks an option or says something, never both, so one entry reads back either.
-        WorkRecord::Answer { text, chosen, .. } => {
-            let text = match chosen {
-                Some(c) => Content::Text(c.clone()),
-                None => text.clone(),
-            };
-            texts.insert(offset, text);
-        }
-        // What the asker knew, which resume work reads as `so_far`.
-        WorkRecord::Decision { so_far, .. } => {
-            texts.insert(offset, Content::Text(so_far.clone()));
-        }
-        WorkRecord::Triaged { why, .. } => {
-            texts.insert(offset, Content::Text(why.clone()));
-        }
-        WorkRecord::Prerequisite { new: Some(n), .. } => {
-            texts.insert(offset, n.why.clone());
-        }
-        _ => {}
-    }
 }
 
 /// What to do to Felix once the core lock is released.
@@ -766,6 +754,11 @@ impl<B: Broker> Tracker<B> {
         Ok(tracker)
     }
 
+    /// Agent pull requests in In review at which new fix claims pause; zero is no limit.
+    pub(crate) fn review_limit(&self) -> usize {
+        self.0.settings.review_limit
+    }
+
     /// Claims the highest-priority ready item for `agent`, waiting up to `wait`.
     #[cfg(test)]
     pub(crate) async fn next(&self, agent: &AgentName, wait: Duration) -> Result<Value, Error> {
@@ -774,6 +767,28 @@ impl<B: Broker> Tracker<B> {
 
     /// Like `next`, and the agent also takes reviews of the tiers it names.
     pub(crate) async fn next_for(
+        &self,
+        agent: &AgentName,
+        wait: Duration,
+        reviews: &[String],
+    ) -> Result<Value, Error> {
+        let started = Instant::now();
+        let out = self.claim_loop(agent, wait, reviews).await;
+        let outcome = match &out {
+            Ok(v) if v["claimed"] == true && v["resumed"] == true => "resumed",
+            Ok(v) if v["claimed"] == true => "claimed",
+            Ok(_) => "empty",
+            Err(_) => "error",
+        };
+        let team = self.0.settings.team.clone();
+        metrics::counter!("kbl_tracker_claims_total", "team" => team.clone(), "outcome" => outcome)
+            .increment(1);
+        metrics::histogram!("kbl_tracker_claim_seconds", "team" => team, "outcome" => outcome)
+            .record(started.elapsed().as_secs_f64());
+        out
+    }
+
+    async fn claim_loop(
         &self,
         agent: &AgentName,
         wait: Duration,
@@ -1177,8 +1192,39 @@ impl<B: Broker> Tracker<B> {
     async fn keep_swept(&self) {
         loop {
             self.sweep().await;
+            self.sample_fold().await;
             self.0.broker.close_idle(MEMBER_IDLE).await;
             tokio::time::sleep(self.0.settings.lease_ttl / 3).await;
+        }
+    }
+
+    /// Sets the fold gauges: the offset the fold has reached, the stream's
+    /// committed tip, and the records between them. The tip is read from
+    /// Felix, so a record another writer appended shows as lag until a rebuild.
+    async fn sample_fold(&self) {
+        let (applied, tail) = {
+            let core = self.0.core.lock().await;
+            (core.state.at, core.tail)
+        };
+        let team = self.0.settings.team.clone();
+        match self
+            .io(None, self.0.broker.read_to_tip(WORK_EVENTS, tail))
+            .await
+        {
+            Ok((unfolded, tip)) => {
+                if let Some(at) = applied {
+                    metrics::gauge!("kbl_tracker_fold_applied_offset", "team" => team.clone())
+                        .set(at as f64);
+                }
+                metrics::gauge!("kbl_tracker_stream_tip_offset", "team" => team.clone())
+                    .set(tip as f64);
+                metrics::gauge!("kbl_tracker_fold_lag_records", "team" => team)
+                    .set(unfolded.len() as f64);
+            }
+            Err(_) => {
+                metrics::counter!("kbl_tracker_tip_read_failures_total", "team" => team)
+                    .increment(1);
+            }
         }
     }
 
@@ -1643,7 +1689,16 @@ impl<B: Broker> Tracker<B> {
             return Ok(None);
         }
         match core.state.stage(&item) {
-            Some(Stage::Ready) => {}
+            Some(Stage::Ready) => {
+                if self.review_full(&core.state, &item) {
+                    // Like a refusal: published again only after the log moves, which
+                    // is the only way the count can change.
+                    core.live.remove(&item);
+                    core.refused.insert(item.clone(), core.state.at);
+                    ack(ops, record.offset);
+                    return Ok(None);
+                }
+            }
             Some(Stage::Held) => {
                 let Some(hold) = core.state.items.get(&item).and_then(|i| i.hold.clone()) else {
                     return Ok(None);
@@ -1721,6 +1776,20 @@ impl<B: Broker> Tracker<B> {
                 Err(e)
             }
         }
+    }
+
+    /// Whether `item` is a new fix claim while In review plus held fixes is at the
+    /// limit. Triage, answers, reviews, resumed work and fixes a review asked for
+    /// never wait on it: a finding fix closes without entering In review, and
+    /// pausing it would strand the PR whose review asked for it.
+    fn review_full(&self, state: &State, item: &ItemId) -> bool {
+        let limit = self.0.settings.review_limit;
+        limit > 0
+            && state
+                .items
+                .get(item)
+                .is_some_and(|i| i.work == WorkKind::Fix && i.finding.is_none())
+            && state.review_load() >= limit
     }
 
     /// Writes the tracker's refusal so the root sits in Needs you and its ready
@@ -1815,6 +1884,12 @@ impl<B: Broker> Tracker<B> {
         self.sync_ready().await;
         let mut reply = reply;
         reply["offset"] = offset.into();
+        let counter = match kind {
+            "done" => "kbl_tracker_completions_total",
+            "released" => "kbl_tracker_releases_total",
+            _ => "kbl_tracker_give_ups_total",
+        };
+        metrics::counter!(counter, "team" => self.0.settings.team.clone()).increment(1);
         Ok(with_warning(reply, warning))
     }
 
@@ -2357,10 +2432,15 @@ impl<B: Broker> Tracker<B> {
         };
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
+        let rebuilt_at = Instant::now();
         let (state, recall, tail) = self
             .read_state()
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
+        let team = self.0.settings.team.clone();
+        metrics::counter!("kbl_tracker_fold_rebuilds_total", "team" => team.clone()).increment(1);
+        metrics::histogram!("kbl_tracker_fold_rebuild_seconds", "team" => team)
+            .record(rebuilt_at.elapsed().as_secs_f64());
         let mut core = self.0.core.lock().await;
         core.state = state;
         core.recall = recall;
@@ -2403,6 +2483,59 @@ impl<B: Broker> Tracker<B> {
             recall.remember(*offset, rec, &self.0.me, created, rejected);
         }
         Ok((state, recall, tail))
+    }
+
+    /// The text at `offset` if memory still has it.
+    fn cached_text(core: &mut Core, offset: u64) -> Option<Content> {
+        core.recall.texts.get(offset).cloned()
+    }
+
+    /// Reads the texts of the records at `offsets` back from the log, for the
+    /// ones the cache let go. It takes no lock: callers drop the core lock
+    /// first, so a slow read stalls no writer. One pass over the log serves
+    /// every offset, and a page that starts elsewhere or skips a blank offset
+    /// is scanned to the exact record. The caller puts what it gets in the cache.
+    async fn read_texts(&self, offsets: &[u64]) -> Result<HashMap<u64, TextRead>, Error> {
+        let mut pending: BTreeSet<u64> = offsets.iter().copied().collect();
+        let mut found = HashMap::new();
+        let mut from = 0;
+        while let Some(&want) = pending.first() {
+            from = from.max(want);
+            let (records, next) = self
+                .io(None, self.0.broker.read_page(WORK_EVENTS, from))
+                .await
+                .map_err(|e| {
+                    Error::Unavailable(format!("reading a text from the log failed: {e:#}"))
+                })?;
+            for (o, payload) in records {
+                // A wanted offset the page passed holds no record.
+                while let Some(&w) = pending.first()
+                    && w < o
+                {
+                    pending.pop_first();
+                    found.insert(w, TextRead::Gone);
+                }
+                if pending.first() == Some(&o) {
+                    pending.pop_first();
+                    let rec = read(&payload).map_err(|e| {
+                        Error::Unavailable(format!("{WORK_EVENTS} offset {o} does not decode: {e}"))
+                    })?;
+                    found.insert(
+                        o,
+                        texts::text_of(&rec.record).map_or(TextRead::NoText, TextRead::Text),
+                    );
+                }
+            }
+            match next {
+                Some(n) => from = n,
+                None => break,
+            }
+        }
+        // Past the end of the log, or trimmed away.
+        for w in pending {
+            found.insert(w, TextRead::Gone);
+        }
+        Ok(found)
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {

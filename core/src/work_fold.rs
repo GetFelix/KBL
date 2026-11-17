@@ -22,8 +22,11 @@ use crate::work::{
     Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
+mod human_wait;
 #[cfg(test)]
 mod tests;
+
+pub use human_wait::{HumanWaitStats, KindStats, QueueEntry, WaitKind};
 
 const DEFAULT_MAX_ITEMS: u32 = 12;
 const DEFAULT_MAX_DEPTH: u8 = 3;
@@ -705,7 +708,33 @@ pub struct State {
     /// Roots flagged over budget while a trial is running, to unflag on a refusal.
     #[serde(skip)]
     probing: Option<Vec<ItemId>>,
+    /// The proposals waiting for a person, kept in step as the fold goes. A
+    /// decoded state does not carry it, so only a folded one can answer.
+    #[serde(skip)]
+    waiting: Waiting,
+    /// Waits on a person, open and finished. Derived by replay, so not in the wire form.
+    #[serde(skip)]
+    human_waits: human_wait::Waits,
 }
+
+/// The root each proposal waiting for a person came from, by item, and how many
+/// wait per root. Kept in step with `accepted`, `closed` and `proposed_from`
+/// through `State::track`, so a post counts its root's proposals without
+/// scanning every item. Derived from the items, so two states are equal
+/// whether or not they hold it.
+#[derive(Debug, Clone, Default)]
+struct Waiting {
+    from: BTreeMap<ItemId, ItemId>,
+    per_root: BTreeMap<ItemId, u32>,
+}
+
+impl PartialEq for Waiting {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Waiting {}
 
 /// Whether a build that reads formats up to `reads` takes `rec` on a log at
 /// format `log`. A raise answers with the new format. Everything else must
@@ -921,6 +950,31 @@ impl State {
         sources
     }
 
+    /// How many items sit in In review: attempts agents finished that nobody
+    /// has closed.
+    pub fn in_review_count(&self) -> usize {
+        self.items
+            .keys()
+            .filter(|id| self.stage(id) == Some(Stage::InReview))
+            .count()
+    }
+
+    /// What the review limit counts: items in In review, plus fixes agents hold
+    /// that are headed there. A fix a review asked for (`finding`) is left out:
+    /// it closes without a PR of its own and is never paused.
+    pub fn review_load(&self) -> usize {
+        let held = self
+            .items
+            .iter()
+            .filter(|(id, it)| {
+                it.work == WorkKind::Fix
+                    && it.finding.is_none()
+                    && self.stage(id) == Some(Stage::Held)
+            })
+            .count();
+        self.in_review_count() + held
+    }
+
     pub fn stage(&self, id: &ItemId) -> Option<Stage> {
         let it = self.items.get(id)?;
         Some(match it.closed {
@@ -938,12 +992,7 @@ impl State {
             None if it.pending_fork.is_none() && it.open_path().is_some_and(|p| p.done) => {
                 Stage::InReview
             }
-            None if self
-                .edges
-                .iter()
-                .any(|(a, b)| a == id && self.waits_on(a, b))
-                || self.resuming(id) =>
-            {
+            None if self.links_from(id).any(|b| self.waits_on(id, b)) || self.resuming(id) => {
                 Stage::Blocked
             }
             None => Stage::Ready,
@@ -990,19 +1039,18 @@ impl State {
         {
             return Some(NeedsYou::CheckFailed);
         }
-        let dropped = self.edges.iter().any(|(a, b)| {
-            a == id
-                && self.items.get(b).is_some_and(|d| {
-                    matches!(
-                        d.closed,
-                        Some(
-                            Closure::Dismissed
-                                | Closure::Upstream
-                                | Closure::Cancelled
-                                | Closure::Rejected
-                        )
+        let dropped = self.links_from(id).any(|b| {
+            self.items.get(b).is_some_and(|d| {
+                matches!(
+                    d.closed,
+                    Some(
+                        Closure::Dismissed
+                            | Closure::Upstream
+                            | Closure::Cancelled
+                            | Closure::Rejected
                     )
-                })
+                )
+            })
         });
         if dropped {
             return Some(NeedsYou::DependencyDropped);
@@ -1112,6 +1160,17 @@ impl State {
         }
     }
 
+    /// What `id` waits on, open or not. A range scan, not a walk of every edge.
+    fn links_from<'a>(&'a self, id: &ItemId) -> impl Iterator<Item = &'a ItemId> + use<'a> {
+        let owner = id.clone();
+        // "-" sorts before every other valid name, so it bounds the range from below.
+        let lowest = ItemId::new("-").expect("a valid name");
+        self.edges
+            .range((owner.clone(), lowest)..)
+            .take_while(move |(a, _)| *a == owner)
+            .map(|(_, b)| b)
+    }
+
     /// Whether a link says `from` waits on `to`, open or not.
     pub fn is_linked(&self, from: &ItemId, to: &ItemId) -> bool {
         self.edges.contains(&(from.clone(), to.clone()))
@@ -1120,10 +1179,8 @@ impl State {
     /// The items that hold `id` back now, in id order. A link holds whatever
     /// tree, repo or source the other end is in.
     pub fn blockers(&self, id: &ItemId) -> Vec<&ItemId> {
-        self.edges
-            .iter()
-            .filter(|(a, b)| a == id && self.waits_on(a, b))
-            .map(|(_, b)| b)
+        self.links_from(id)
+            .filter(|b| self.waits_on(id, b))
             .collect()
     }
 
@@ -1255,7 +1312,35 @@ impl State {
         {
             parent.children.push(item.id.clone());
         }
-        self.items.insert(item.id.clone(), item);
+        let id = item.id.clone();
+        self.items.insert(id.clone(), item);
+        self.track(&id);
+    }
+
+    /// Brings the waiting-proposal count in line with `id` after anything
+    /// that can change whether it is a proposal waiting for a person.
+    fn track(&mut self, id: &ItemId) {
+        let now = self
+            .items
+            .get(id)
+            .filter(|i| !i.accepted && i.closed.is_none())
+            .and_then(|i| i.proposed_from.as_ref())
+            .map(|f| f.1.clone());
+        if self.waiting.from.get(id) == now.as_ref() {
+            return;
+        }
+        if let Some(old) = self.waiting.from.remove(id)
+            && let Some(n) = self.waiting.per_root.get_mut(&old)
+        {
+            *n -= 1;
+            if *n == 0 {
+                self.waiting.per_root.remove(&old);
+            }
+        }
+        if let Some(root) = now {
+            *self.waiting.per_root.entry(root.clone()).or_default() += 1;
+            self.waiting.from.insert(id.clone(), root);
+        }
     }
 
     fn blank(id: &ItemId, work: WorkKind, title: &str) -> Item {
@@ -1484,6 +1569,12 @@ impl State {
     }
 
     fn step(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
+        self.step_record(offset, rec)?;
+        self.track_human_wait(rec);
+        Ok(())
+    }
+
+    fn step_record(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
         if let Some(raised) = format_gate(FORMAT, self.format(), rec)? {
             self.format = Some(raised);
             return Ok(());
@@ -1607,6 +1698,7 @@ impl State {
                         .entry(item.clone())
                         .or_insert_with(Budget::for_new_root);
                 }
+                self.track(item);
                 // Resume work an unaccepted item's answer made waits for this.
                 let tier = self.item(item)?.tier;
                 let waiting: Vec<ItemId> = self.item(item)?.children.clone();
@@ -1857,6 +1949,7 @@ impl State {
                 if it.work != WorkKind::Fix || it.finding.is_some() {
                     it.closed = Some(Closure::Completed);
                 }
+                self.track(item);
                 self.charge(item, &root, rec);
             }
             WorkRecord::Released { item, attempt, .. } => {
@@ -2180,6 +2273,8 @@ impl State {
                 // Back to Triage: a person accepts it again.
                 it.accepted = false;
                 it.accepted_by_person = false;
+                self.track(item);
+                let it = self.item_mut(item)?;
                 it.left_scope = false;
                 it.left_scope_by_sync = false;
                 it.flagged = false;
@@ -2830,6 +2925,19 @@ impl State {
         mine >= MAX_PENDING_PER_AGENT || under_root >= MAX_PENDING_PER_ROOT
     }
 
+    /// Whether the proposals waiting from `root` already use up what is left
+    /// of its budget, so one more would have nowhere to go if every one were
+    /// accepted into the tree's work. A proposal takes nothing from the budget
+    /// itself; a person's accept or reject leaves the count, so it frees the
+    /// room. Checked by the tracker before it appends, so an old log folds the
+    /// same.
+    pub fn proposals_exceed_budget(&self, root: &ItemId) -> bool {
+        let pending = self.waiting.per_root.get(root).copied().unwrap_or(0);
+        self.budgets
+            .get(root)
+            .is_none_or(|b| b.cost_left_micros == 0 || pending >= b.items_left)
+    }
+
     /// Whether the attempt on a triage item has logged as many different
     /// answers as it may.
     pub fn triage_full(&self, triage: &ItemId, attempt: u32) -> bool {
@@ -2893,6 +3001,7 @@ impl State {
             if let Some(p) = self.items.get_mut(prerequisite) {
                 p.proposed_from = Some((rec.by.clone(), root));
             }
+            self.track(prerequisite);
             self.child_keys.insert(scope);
         }
         self.edges.insert((item.clone(), prerequisite.clone()));
@@ -3190,6 +3299,7 @@ impl State {
             it.hold = None;
             it.pending_fork = None;
             stack.extend(it.children.iter().map(|c| (c.clone(), Closure::Cancelled)));
+            self.track(&id);
         }
     }
 
@@ -3202,7 +3312,7 @@ impl State {
                 return true;
             }
             if seen.insert(n) {
-                stack.extend(self.edges.iter().filter(|(a, _)| a == n).map(|(_, b)| b));
+                stack.extend(self.links_from(n));
             }
         }
         false

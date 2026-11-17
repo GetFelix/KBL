@@ -11,6 +11,7 @@ use crate::config::Tokens;
 use crate::felix::ConditionalWrite;
 use crate::teams::Team;
 
+mod metrics;
 mod org;
 
 /// A Felix with no records that remembers which streams were published to, and
@@ -205,6 +206,8 @@ fn quiet_settings() -> crate::tracker::Settings {
         crash_after_done: false,
         review_tiers: crate::tracker::default_review_tiers(),
         cost_floor_micros: 0,
+        team: String::new(),
+        review_limit: 0,
     }
 }
 
@@ -220,6 +223,8 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             crash_after_done: false,
             review_tiers: crate::tracker::default_review_tiers(),
             cost_floor_micros: 0,
+            team: name.to_owned(),
+            review_limit: 3,
         },
     )
     .await
@@ -977,7 +982,10 @@ async fn me_lists_the_persons_own_teams() {
     let (status, reply) = get_json(&two.app, "/v1/me", Some("tok-b-ana")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(reply["person"], "ana");
-    assert_eq!(reply["teams"], json!([{ "team": "b", "role": "admin" }]));
+    assert_eq!(
+        reply["teams"],
+        json!([{ "team": "b", "role": "admin", "review_limit": 3 }])
+    );
     let (_, reply) = get_json(&two.app, "/v1/me", Some("tok-both")).await;
     let names: Vec<&str> = reply["teams"]
         .as_array()
@@ -1378,4 +1386,149 @@ async fn an_expected_price_that_is_not_a_price_or_none_true_is_a_bad_request() {
             "{expected}: {status} {reply}"
         );
     }
+}
+
+#[tokio::test]
+async fn a_person_reads_time_to_human_action_and_an_agent_cannot() {
+    let app = kept().await;
+    let path = "/v1/work/metrics/time-to-human";
+    let (status, m) = get_json(&app, path, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert_eq!(m["days"], 30);
+    assert_eq!(m["stats"]["count"], 0);
+    assert_eq!(m["stats"]["open"], 0);
+    assert!(m["stats"]["p50_ms"].is_null());
+    assert_eq!(m["stats"]["by_kind"]["question"]["count"], 0);
+
+    let (_, wide) = get_json(&app, &format!("{path}?days=99999"), Some("tok-gab")).await;
+    assert_eq!(wide["days"], 366);
+    let (_, one) = get_json(&app, &format!("{path}?days=0"), Some("tok-gab")).await;
+    assert_eq!(one["days"], 1);
+
+    let team = "/v1/teams/default/work/metrics/time-to-human";
+    let (status, in_team) = get_json(&app, team, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{in_team}");
+    assert_eq!(in_team["stats"]["by_kind"], m["stats"]["by_kind"]);
+
+    assert_eq!(
+        get_json(&app, path, Some("tok-w1")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(get_json(&app, path, None).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn my_queue_lists_what_waits_on_a_person_by_wait_then_tier() {
+    let app = kept().await;
+    raise_to(&app, 7).await;
+    for item in ["a1", "a2", "a3"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+        call(
+            &app,
+            "/v1/work/proposals/accept",
+            Some("tok-gab"),
+            json!({ "item": item, "tier": if item == "a2" { 1 } else { 2 } }),
+        )
+        .await;
+    }
+    // Accepted and unheld: nothing waits on a person yet.
+    let (status, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{q}");
+    assert_eq!(q["count"], 0);
+
+    // The tier 2 item is flagged first, so it is older: age beats tier. The
+    // pause keeps the two records in different milliseconds.
+    for item in ["a1", "a2"] {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let (status, r) = call(
+            &app,
+            "/v1/work/flag",
+            Some("tok-gab"),
+            json!({ "item": item }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{r}");
+    }
+    let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    let ids: Vec<&str> = q["queue"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["item"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["a1", "a2"], "{q}");
+    assert_eq!(q["queue"][0]["wait"], "other");
+    assert_eq!(q["queue"][0]["needs"], "flagged");
+
+    // The team form answers the same; an acted-on item leaves the queue.
+    let team = get_json(&app, "/v1/teams/default/work/queue", Some("tok-gab")).await;
+    assert_eq!(team.0, StatusCode::OK);
+    assert_eq!(team.1["queue"], q["queue"]);
+    call(
+        &app,
+        "/v1/work/unflag",
+        Some("tok-gab"),
+        json!({ "item": "a2" }),
+    )
+    .await;
+    let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    assert_eq!(q["count"], 1);
+}
+
+#[tokio::test]
+async fn my_queue_limit_trims_the_list_but_not_the_count() {
+    let app = kept().await;
+    raise_to(&app, 7).await;
+    for item in ["a1", "a2", "a3"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+        call(
+            &app,
+            "/v1/work/proposals/accept",
+            Some("tok-gab"),
+            json!({ "item": item, "tier": 1 }),
+        )
+        .await;
+        call(
+            &app,
+            "/v1/work/flag",
+            Some("tok-gab"),
+            json!({ "item": item }),
+        )
+        .await;
+    }
+    let (_, q) = get_json(&app, "/v1/work/queue?limit=2", Some("tok-gab")).await;
+    assert_eq!(
+        (q["queue"].as_array().unwrap().len(), &q["count"]),
+        (2, &json!(3))
+    );
+    let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    assert_eq!(q["queue"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn my_queue_is_for_a_person_and_stays_in_the_token_s_team() {
+    let app = app().await;
+    assert_eq!(
+        get_json(&app, "/v1/work/queue", Some("tok-w1")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        get_json(&app, "/v1/work/queue", Some("tok-ing")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        get_json(&app, "/v1/work/queue", None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let two = two(64).await;
+    let (status, reply) = get_json(&two.app, "/v1/teams/b/work/queue", Some("tok-a-gab")).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::NOT_FOUND, Some("unknown_team"))
+    );
+    let (status, reply) = get_json(&two.app, "/v1/work/queue", Some("tok-both")).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("team_required"))
+    );
 }
