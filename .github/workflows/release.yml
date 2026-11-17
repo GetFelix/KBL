@@ -138,14 +138,17 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      # Only the release files: the image archives share the run.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          # Not the image archives, which share the run.
-          pattern: |
-            kbl-*
-            SHA256SUMS
+          pattern: kbl-*
           path: dist
           merge-multiple: true
+      - name: Require the archives
+        run: |
+          ls -l dist || true
+          n=$(find dist -maxdepth 1 -type f \( -name 'kbl-*.tar.gz' -o -name 'kbl-*.zip' \) 2>/dev/null | wc -l)
+          [ "$n" -eq 5 ] || { echo "expected 5 archives in dist, found $n"; exit 1; }
       - name: Checksums
         working-directory: dist
         run: |
@@ -174,14 +177,21 @@ jobs:
       id-token: write
       attestations: write
     steps:
+      # Only the release files: the image archives share the run.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          # Not the image archives, which share the run.
-          pattern: |
-            kbl-*
-            SHA256SUMS
+          pattern: kbl-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: SHA256SUMS
+          path: dist
+      - name: Require the archives
+        run: |
+          ls -l dist || true
+          n=$(find dist -maxdepth 1 -type f \( -name 'kbl-*.tar.gz' -o -name 'kbl-*.zip' \) 2>/dev/null | wc -l)
+          [ "$n" -eq 5 ] || { echo "expected 5 archives in dist, found $n"; exit 1; }
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
@@ -199,14 +209,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the release files: the image archives share the run.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          # Not the image archives, which share the run.
-          pattern: |
-            kbl-*
-            SHA256SUMS
+          pattern: kbl-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: SHA256SUMS
+          path: dist
+      - name: Require the archives
+        run: |
+          ls -l dist || true
+          n=$(find dist -maxdepth 1 -type f \( -name 'kbl-*.tar.gz' -o -name 'kbl-*.zip' \) 2>/dev/null | wc -l)
+          [ "$n" -eq 5 ] || { echo "expected 5 archives in dist, found $n"; exit 1; }
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -253,19 +270,26 @@ jobs:
             echo "org.opencontainers.image.licenses=MIT"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
-      - name: Build into the local engine
+      - name: Build the image archive
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ${{ matrix.component }}/Dockerfile
           platforms: linux/${{ matrix.arch }}
-          load: true
-          tags: kbl-${{ matrix.component }}:check
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar
+          # One plain image manifest, so the archive loads and pushes as is.
+          provenance: false
+          sbom: false
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.arch }}
+      - name: Install skopeo
+        run: command -v skopeo || sudo apt-get install -y --no-install-recommends skopeo > /dev/null
       - name: Check the image starts
+        # The archive that is checked is the one uploaded and pushed.
         run: |
+          skopeo copy "oci-archive:${{ runner.temp }}/image.tar" \
+            "docker-daemon:kbl-${{ matrix.component }}:check"
           if [ "${{ matrix.component }}" = tracker ]; then
             docker run --rm --entrypoint kbl-tracker kbl-tracker:check --help > /dev/null
             docker run --rm --entrypoint kbl-ingest kbl-tracker:check --help > /dev/null
@@ -273,15 +297,6 @@ jobs:
             docker run --rm --entrypoint ls kbl-dashboard:check /usr/share/nginx/html/index.html
             test "$(docker run --rm --entrypoint id kbl-dashboard:check -u)" != 0
           fi
-      - name: Write the image archive
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: ${{ matrix.component }}/Dockerfile
-          platforms: linux/${{ matrix.arch }}
-          outputs: type=oci,dest=${{ runner.temp }}/image.tar
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.arch }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-${{ matrix.component }}-${{ matrix.arch }}
@@ -330,11 +345,12 @@ jobs:
           version="${REF_NAME#v}"
           sudo apt-get install -y --no-install-recommends skopeo > /dev/null
           for arch in amd64 arm64; do
-            skopeo copy "oci-archive:images/image-${{ matrix.component }}-$arch/image.tar" \
+            skopeo copy --digestfile "$RUNNER_TEMP/$arch.digest" \
+              "oci-archive:images/image-${{ matrix.component }}-$arch/image.tar" \
               "docker://$IMAGE:$version-$arch"
           done
           docker buildx imagetools create -t "$IMAGE:$version" \
-            "$IMAGE:$version-amd64" "$IMAGE:$version-arm64"
+            "$IMAGE@$(cat "$RUNNER_TEMP/amd64.digest")" "$IMAGE@$(cat "$RUNNER_TEMP/arm64.digest")"
           digest=$(docker buildx imagetools inspect "$IMAGE:$version" --format '{{.Manifest.Digest}}')
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
