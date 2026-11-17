@@ -457,9 +457,13 @@ async function main() {
   await init();
   const fold = new Folder();
   const questions = new Map<number, string>();
+  // Time spent in the fold, read by the browser check's performance budget (check/browser.mjs).
+  let foldMs = 0;
   const sink: Fold = {
     apply: (o, p) => {
+      const t0 = performance.now();
       const ok = fold.apply(o, p);
+      foldMs += performance.now() - t0;
       const text = ok ? questionText(p) : null;
       if (text !== null) questions.set(o, text);
       return ok;
@@ -508,6 +512,7 @@ async function main() {
         },
         onLive: () => {
           delay = 1000;
+          performance.mark('kbl-live', { detail: { foldMs } });
           store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();

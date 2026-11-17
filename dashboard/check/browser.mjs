@@ -7,7 +7,8 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launch, serve } from '../../scripts/lib/browser.mjs';
-import { fixtureLog } from './fixture.mjs';
+import { FOLD_BUDGET_MS, ITEMS, PAINT_BUDGET_MS } from './budget.mjs';
+import { bigLog, fixtureLog } from './fixture.mjs';
 
 const shots = process.argv[2];
 if (shots) mkdirSync(shots, { recursive: true });
@@ -18,7 +19,7 @@ const axeSource = readFileSync(createRequire(import.meta.url).resolve('axe-core/
 // `window.__push(record)` delivers one more record as a live event. A throw in the page's
 // handler is left to surface as a page exception, which fails the check.
 const encode = (r) => btoa(unescape(encodeURIComponent(JSON.stringify(r))));
-const fakeGateway = (log, mode) => `(() => {
+const fakeGateway = (log, mode, pageSize = 20) => `(() => {
   const encode = ${encode};
   const log = ${JSON.stringify(log.map(encode))};
   const mode = ${JSON.stringify(mode)};
@@ -36,7 +37,7 @@ const fakeGateway = (log, mode) => `(() => {
       if (m.type === 'read') {
         if (mode === 'loading') return;
         if (mode === 'trimmed') return this.reply({ type: 'error', code: 'trimmed', message: 'the log no longer holds offset 0' });
-        const records = log.slice(m.from, m.from + 20).map((payload, i) => ({ offset: m.from + i, payload }));
+        const records = log.slice(m.from, m.from + ${pageSize}).map((payload, i) => ({ offset: m.from + i, payload }));
         return this.reply({ type: 'records', id: m.id, records, next_offset: m.from + records.length });
       }
       if (m.type === 'subscribe') {
@@ -114,13 +115,13 @@ function clean() {
 // Runs before the page's own code: seeds local storage (saved views, density) for one load.
 const seed = (entries) => `(() => { try { ${Object.entries(entries).map(([k, v]) => `localStorage.setItem(${JSON.stringify(k)}, ${JSON.stringify(v)});`).join(' ')} } catch {} })();`;
 let seedScript = null;
-async function open(query, { mode = 'live', theme = 'dark', width = 1280, height = 800, storage = null } = {}) {
+async function open(query, { mode = 'live', theme = 'dark', width = 1280, height = 800, storage = null, log = null, pageSize = 20 } = {}) {
   if (seedScript) await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: seedScript });
   seedScript = storage ? (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: seed(storage) })).identifier : null;
   clean();
   loaded = `page ${mode} ${theme} ${width}px`;
   if (script) await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: script });
-  script = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeGateway(fixtureLog(), mode) })).identifier;
+  script = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeGateway(log ?? fixtureLog(), mode, pageSize) })).identifier;
   await page.setViewport(width, height, 1);
   await page.goto(`${server.origin}/index.html?theme=${theme}&${query}`);
   await page.eval(`document.fonts.ready.then(() => true)`);
@@ -545,6 +546,7 @@ try {
   await rec({ kind: 'edit', file: 'core/src/cache.rs', hunk: { text: '@@ -1 +1 @@' }, decision: decisionAt });
   await page.waitFor(`!!document.querySelector('.story-edit')`);
   check(await page.eval(`document.activeElement?.dataset.focus?.startsWith('ref:') === true && !!document.querySelector('.panel .story')`), 'a rebuild with a quote in a recorded command keeps the panel and the focus');
+  await axe('story panel');
 
   // A fresh page: after a blur, Chrome starts Tab from where focus was, not the top.
   await open(connected);
@@ -794,6 +796,68 @@ try {
   await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
   check(await page.eval(`document.querySelector('.actions p').textContent.startsWith('Sign in again: the tracker does not know this token')`), 'a token the tracker stops taking signs the page out, with the reason');
   await shoot('signed-out-dark');
+  clean();
+
+  // Landmarks and live regions: one main, named navigation, one h1, and announcers that exist before they speak.
+  await open(connected);
+  await page.waitFor(live);
+  const landmarks = await page.eval(`({
+    main: document.querySelectorAll('main, [role=main]').length,
+    h1: document.querySelectorAll('h1').length,
+    unnamedNav: [...document.querySelectorAll('nav')].filter((n) => !n.getAttribute('aria-label') && !n.getAttribute('aria-labelledby')).length,
+    nav: document.querySelectorAll('nav').length,
+    live: document.querySelectorAll('[aria-live], [role=status], [role=alert]').length,
+  })`);
+  check(landmarks.main === 1 && landmarks.h1 === 1, `landmarks: one main and one h1 (${landmarks.main}, ${landmarks.h1})`);
+  check(landmarks.nav >= 1 && landmarks.unnamedNav === 0, `landmarks: every nav has a name (${landmarks.unnamedNav} of ${landmarks.nav} unnamed)`);
+  check(landmarks.live >= 2, `live regions: the status line and the announcer are in the page (${landmarks.live})`);
+  check(await page.eval(`document.querySelector('.status').getAttribute('aria-live') === 'polite'`), 'live regions: the connection status is polite, not assertive');
+
+  // Keyboard: Tab walks the page in order, each stop shows a focus indicator, and nothing is a trap.
+  await page.eval(`document.activeElement?.blur(); window.scrollTo(0, 0); true`);
+  const stops = [];
+  for (let i = 0; i < 80; i++) {
+    await press(page, 'Tab');
+    const stop = await page.eval(`(() => {
+      const el = document.activeElement;
+      if (!el || el === document.body) return null;
+      const seen = (e) => { const c = getComputedStyle(e); return (c.outlineStyle !== 'none' && parseFloat(c.outlineWidth) > 0) || c.boxShadow !== 'none'; };
+      // A search field draws its ring on the wrapper that contains the focus.
+      const ring = seen(el) || (el.closest('.search') ? seen(el.closest('.search')) : false);
+      const r = el.getBoundingClientRect();
+      return { name: el.tagName.toLowerCase() + (el.className ? '.' + String(el.className).split(' ')[0] : ''), ring, onscreen: r.width > 0 && r.height > 0 };
+    })()`);
+    if (!stop) break;
+    stops.push(stop);
+    if (stops.length > 1 && stop.name === stops[0].name && stops.length > 3 && (await focused('.skip'))) break;
+  }
+  const noRing = stops.filter((st) => !st.ring).map((st) => st.name);
+  const hidden = stops.filter((st) => !st.onscreen).map((st) => st.name);
+  check(stops.length >= 5, `keyboard: Tab reaches the page's controls (${stops.length} stops)`);
+  check(noRing.length === 0, `keyboard: every Tab stop shows a focus indicator${noRing.length ? ` (missing on ${[...new Set(noRing)].join(', ')})` : ''}`);
+  check(hidden.length === 0, `keyboard: no Tab stop is an invisible element${hidden.length ? ` (${[...new Set(hidden)].join(', ')})` : ''}`);
+  clean();
+
+  // Performance budget: a log of ITEMS items (check/budget.mjs). The fold time is the page's own, from the
+  // wasm; the first useful paint is the first list row on screen. Numbers go in the log so a budget is set from them.
+  await open(`${connected}`, { log: bigLog(ITEMS), pageSize: 500 });
+  await page.eval(`(() => {
+    window.__firstRow = null;
+    const mark = () => { if (!document.querySelector('.row')) return false; window.__firstRow = performance.now(); return true; };
+    if (!mark()) new MutationObserver((_, o) => mark() && o.disconnect()).observe(document, { childList: true, subtree: true });
+    return true;
+  })()`);
+  await page.waitFor(`performance.getEntriesByName('kbl-live').length > 0`, 120000);
+  const perf = await page.eval(`(() => {
+    const live = performance.getEntriesByName('kbl-live')[0];
+    const fcp = performance.getEntriesByName('first-contentful-paint')[0];
+    return { foldMs: live.detail.foldMs, liveMs: live.startTime, firstRowMs: window.__firstRow, fcpMs: fcp ? fcp.startTime : null, rows: document.querySelectorAll('.row').length };
+  })()`);
+  console.log(`     perf: ${JSON.stringify(perf)}`);
+  check(perf.rows > 0 && perf.firstRowMs !== null, `perf: the ${ITEMS}-item log lists rows (${perf.rows})`);
+  check(perf.foldMs <= FOLD_BUDGET_MS.browser, `perf: folding ${ITEMS} items took ${Math.round(perf.foldMs)} ms, budget ${FOLD_BUDGET_MS.browser} ms`);
+  check(perf.firstRowMs !== null && perf.firstRowMs <= PAINT_BUDGET_MS.firstUseful, `perf: first useful paint (first row) at ${Math.round(perf.firstRowMs)} ms, budget ${PAINT_BUDGET_MS.firstUseful} ms`);
+  check(perf.liveMs <= PAINT_BUDGET_MS.fullLoad, `perf: live with the whole log at ${Math.round(perf.liveMs)} ms, budget ${PAINT_BUDGET_MS.fullLoad} ms`);
   clean();
 } catch (e) {
   console.error('page problems:', page.problems);

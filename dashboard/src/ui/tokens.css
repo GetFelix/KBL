@@ -1,7 +1,7 @@
 /* Design tokens: every colour, space, type size and radius the dashboard uses.
    Components read these and nothing else. Colours are the style frame's
    (prototype/intake-frame.html) and docs/brand/story.md; text pairs meet 4.5:1 and
-   UI edges 3:1 in both themes, checked by the axe run in check/a11y.mjs. */
+   UI edges 3:1 in both themes, checked by test/contrast.test.ts. */
 :root {
   color-scheme: dark;
   --bg: #080d13;
@@ -9,7 +9,7 @@
   --raised: #121c26;
   --hover: #17242f;
   --line: rgba(160, 200, 220, 0.11);
-  --line-strong: rgba(160, 200, 220, 0.42);
+  --line-strong: rgba(160, 200, 220, 0.5);
   --text: #e6eef4;
   --muted: #9aabb9;
   --accent: #c86a1e;
@@ -64,7 +64,7 @@
   --raised: #ffffff;
   --hover: #eaf2f6;
   --line: rgba(20, 50, 70, 0.1);
-  --line-strong: rgba(20, 50, 70, 0.45);
+  --line-strong: rgba(20, 50, 70, 0.58);
   --text: #0e1a24;
   --muted: #4f6170;
   --accent: #a4520f;

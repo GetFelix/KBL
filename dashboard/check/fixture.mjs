@@ -80,3 +80,27 @@ export function fixtureLog() {
   usage('ado-4401', 'Pin the lint config', [{ unit: 'aic', model: 'gpt-6', milli: 1_500 }]);
   return log;
 }
+
+// A log of `n` items spread over every stage, for the performance budget. Each item has an
+// import, and most have triage, acceptance and a claim, so the fold sees about 3.5 records an item.
+export function bigLog(n) {
+  const log = [];
+  let at = 1_700_000_000_000;
+  const rec = (r) => log.push({ actor: 'person', by: 'maintainer', at_ms: at++, ...r });
+  const repos = ['GetFelix/felix', 'GetFelix/felix-gateway', 'GetFelix/KBL', 'GetFelix/felix-blocks'];
+  for (let i = 0; i < n; i++) {
+    const item = `gh-${100000 + i}`;
+    const repo = repos[i % repos.length];
+    rec({ kind: 'imported', item, source: 'github', title: `Item ${i}: a recorded title of ordinary length`, upstream_id: `${repo}#${100000 + i}` });
+    const stage = i % 7;
+    if (stage === 0) continue;
+    rec({ kind: 'triaged', item, tier: 1 + (i % 3), why: 'seen in the field' });
+    rec({ kind: 'accepted', item, tier: 1 + (i % 3) });
+    if (stage < 3) continue;
+    rec({ actor: 'agent', by: 'agent-1', kind: 'claimed', item, attempt: 1, deadline_ms: at + 3_600_000 });
+    if (stage === 3) continue;
+    rec({ actor: 'agent', by: 'agent-1', kind: 'done', item, attempt: 1, cost_micros: 1_000_000 });
+    if (stage === 5) rec({ kind: 'closed', item, why: 'merged' });
+  }
+  return log;
+}
