@@ -381,7 +381,12 @@ impl<T: Transport> Gitlab<T> {
     }
 
     /// Whether a note our credential wrote under `path` carries `mark`.
-    async fn own_note(&self, project: &str, path: &[&str], mark: &str) -> Result<bool, SourceError> {
+    async fn own_note(
+        &self,
+        project: &str,
+        path: &[&str],
+        mark: &str,
+    ) -> Result<bool, SourceError> {
         let listed = self
             .listing(project, path, &[("sort", "asc")], COMMENT_PAGES)
             .await?;
@@ -846,7 +851,10 @@ impl<T: Transport> Source for Gitlab<T> {
                         .await?;
                 }
                 // A post the fence cut short may have landed.
-                if self.own_note(&project, &["merge_requests", &n, "notes"], mark).await? {
+                if self
+                    .own_note(&project, &["merge_requests", &n, "notes"], mark)
+                    .await?
+                {
                     return Ok(());
                 }
                 let notes = self.in_project(&project, &["merge_requests", &n, "notes"], &[])?;

@@ -616,15 +616,10 @@ impl<T: Transport> Source for Github<T> {
             }
         }
         // A post the fence cut short may have landed.
-        if self
-            .issue_comments(pr)
-            .await?
-            .iter()
-            .any(|c| {
-                c.body.contains(mark.as_str())
-                    && self.own.iter().any(|o| o.eq_ignore_ascii_case(&c.author))
-            })
-        {
+        if self.issue_comments(pr).await?.iter().any(|c| {
+            c.body.contains(mark.as_str())
+                && self.own.iter().any(|o| o.eq_ignore_ascii_case(&c.author))
+        }) {
             return Ok(());
         }
         let comment = format!(

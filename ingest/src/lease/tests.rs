@@ -189,13 +189,19 @@ async fn repos_match_sources_as_the_vendor_compares_names() {
     jira.configure(&json!({ "sources": ["jira:ABC"] }));
     jira.renewed(jira.sending(), held(&[("jira:ABC", 1)]));
     assert!(jira.check(Some("ABC")).is_ok());
-    assert!(jira.check(Some("abc")).is_err(), "Jira keys keep their case");
+    assert!(
+        jira.check(Some("abc")).is_err(),
+        "Jira keys keep their case"
+    );
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_configured_repo_the_connection_does_not_name_is_reported() {
     let lessee = Lessee::waiting("github", vec!["o/a".into(), "O/B".into(), "o/c".into()]);
-    assert!(lessee.outside().is_empty(), "nothing to say before the config");
+    assert!(
+        lessee.outside().is_empty(),
+        "nothing to say before the config"
+    );
     lessee.configure(&json!({ "sources": ["github:o/a", "github:o/b"] }));
     assert_eq!(lessee.outside(), ["o/c"]);
 }
@@ -456,7 +462,10 @@ fn renews_are_spread_20_percent_either_side_of_30_s() {
         "{gaps:?}"
     );
     let (lo, hi) = (gaps.iter().min().unwrap(), gaps.iter().max().unwrap());
-    assert!(hi.saturating_sub(*lo) > Duration::from_secs(6), "{lo:?}..{hi:?}");
+    assert!(
+        hi.saturating_sub(*lo) > Duration::from_secs(6),
+        "{lo:?}..{hi:?}"
+    );
 }
 
 /// Renews every second, so it takes a source the moment the tracker frees

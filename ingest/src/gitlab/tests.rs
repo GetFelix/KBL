@@ -811,12 +811,10 @@ async fn a_reported_merge_request_on_the_item_branch_closes_the_root_when_merged
     // The comment says the request is `path!7`, which GitLab reads as a merge request.
     let writes: Vec<(String, Value)> = lab.writes();
     assert!(
-        writes
-            .iter()
-            .any(|(w, b)| w.ends_with("/issues/12/notes")
-                && b["body"]
-                    .as_str()
-                    .is_some_and(|b| b.starts_with("group/sub/app!7 was merged.\n\n<!-- kbl:"))),
+        writes.iter().any(|(w, b)| w.ends_with("/issues/12/notes")
+            && b["body"]
+                .as_str()
+                .is_some_and(|b| b.starts_with("group/sub/app!7 was merged.\n\n<!-- kbl:"))),
         "{writes:?}"
     );
     assert!(
@@ -975,7 +973,10 @@ async fn a_comment_is_posted_once_and_a_state_change_only_when_needed() {
     let writes = lab.writes();
     assert_eq!(writes.len(), 1, "{writes:?}");
     assert_eq!(writes[0].0, format!("POST {PROJECT}/issues/12/notes"));
-    assert_eq!(writes[0].1, json!({ "body": "something new\n\n<!-- kbl:t -->" }));
+    assert_eq!(
+        writes[0].1,
+        json!({ "body": "something new\n\n<!-- kbl:t -->" })
+    );
 }
 
 #[tokio::test]

@@ -494,7 +494,9 @@ fn heartbeat_gap() -> Duration {
     let mut b = [0u8; 2];
     let r = ring::rand::SystemRandom::new()
         .fill(&mut b)
-        .map_or(0.5, |()| f64::from(u16::from_le_bytes(b)) / f64::from(u16::MAX));
+        .map_or(0.5, |()| {
+            f64::from(u16::from_le_bytes(b)) / f64::from(u16::MAX)
+        });
     HEARTBEAT.mul_f64(0.8 + 0.4 * r)
 }
 
@@ -624,22 +626,22 @@ impl<S> Fenced<S> {
     pub(crate) fn new(inner: S, lessee: Arc<Lessee>) -> Self {
         Self { inner, lessee }
     }
+}
 
-    /// A read about a pull request in `repo`, which an agent may have opened
-    /// in a repo the connection does not name. In one it names, the lease
-    /// is needed as for any call; outside it, only reads pass the gate.
-    async fn read_elsewhere<T>(
-        &self,
-        repo: &str,
-        f: impl Future<Output = Result<T, SourceError>>,
-    ) -> Result<T, SourceError> {
-        if self.lessee.names(repo) {
-            self.lessee.check(Some(repo))?;
-            scoped(vec![repo.to_owned()], f).await
-        } else {
-            self.lessee.check_in(Some(repo), true)?;
-            reading(vec![repo.to_owned()], f).await
-        }
+/// A read about a pull request in `repo`, which an agent may have opened
+/// in a repo the connection does not name. In one it names, the lease
+/// is needed as for any call; outside it, only reads pass the gate.
+async fn read_elsewhere<T>(
+    lessee: &Lessee,
+    repo: &str,
+    f: impl Future<Output = Result<T, SourceError>>,
+) -> Result<T, SourceError> {
+    if lessee.names(repo) {
+        lessee.check(Some(repo))?;
+        scoped(vec![repo.to_owned()], f).await
+    } else {
+        lessee.check_in(Some(repo), true)?;
+        reading(vec![repo.to_owned()], f).await
     }
 }
 
@@ -681,8 +683,7 @@ impl<S: Source> Source for Fenced<S> {
     }
 
     async fn pull_request(&self, id: &IssueRef) -> Result<Option<PullRequest>, SourceError> {
-        self.read_elsewhere(&id.repo, self.inner.pull_request(id))
-            .await
+        read_elsewhere(&self.lessee, &id.repo, self.inner.pull_request(id)).await
     }
 
     async fn fetch(&self, id: &IssueRef) -> Result<Fetched, SourceError> {
@@ -712,13 +713,11 @@ impl<S: Source> Source for Fenced<S> {
     }
 
     async fn releases(&self, repo: &str, since_ms: u64) -> Result<Releases, SourceError> {
-        self.read_elsewhere(repo, self.inner.releases(repo, since_ms))
-            .await
+        read_elsewhere(&self.lessee, repo, self.inner.releases(repo, since_ms)).await
     }
 
     async fn contains(&self, repo: &str, tag: &str, sha: &str) -> Result<bool, SourceError> {
-        self.read_elsewhere(repo, self.inner.contains(repo, tag, sha))
-            .await
+        read_elsewhere(&self.lessee, repo, self.inner.contains(repo, tag, sha)).await
     }
 
     async fn open_issue(

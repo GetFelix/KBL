@@ -1665,8 +1665,7 @@ async fn a_write_back_the_fence_cut_short_is_retried_without_counting_a_try() {
     let saved = rig.tracker.saved_state();
     assert_eq!(saved.items[UP].write_back_tries, 0);
     assert!(!saved.items[UP].written_back);
-    rig.gh
-        .on("POST", "/issues/2210/comments", status(201, &[]));
+    rig.gh.on("POST", "/issues/2210/comments", status(201, &[]));
     ingest.poll(false).await.unwrap();
     let saved = rig.tracker.saved_state();
     assert!(!saved.items.contains_key(UP), "written back and settled");

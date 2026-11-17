@@ -355,12 +355,9 @@ async fn two_hundred_workers_joining_at_once_all_get_in() {
             }
         }
     });
-    let answers = tokio::time::timeout(
-        Duration::from_secs(30),
-        futures::future::join_all(beats),
-    )
-    .await
-    .expect("every worker in well inside the fence");
+    let answers = tokio::time::timeout(Duration::from_secs(30), futures::future::join_all(beats))
+        .await
+        .expect("every worker in well inside the fence");
     let refused: Vec<_> = answers
         .iter()
         .zip(&names)
