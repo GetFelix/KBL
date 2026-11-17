@@ -351,3 +351,31 @@ async fn a_lease_that_never_comes_back_fails_after_the_wait() {
     assert!(err.to_string().contains("lease"), "{err}");
     assert_eq!(fake.tip(), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_blank_waits_out_a_lost_lease() {
+    let text = text_with_blanks();
+    let fake = Fake::new(true, 1);
+    *fake.lease_lost.lock().unwrap() = 3;
+    restore(&fake, WORK_EVENTS, &parsed(&text)).await.unwrap();
+    assert_eq!(fake.tip(), 6);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_blank_whose_shard_never_gets_a_leader_fails_after_the_wait() {
+    let fake = Fake::new(true, 1);
+    *fake.lease_lost.lock().unwrap() = usize::MAX;
+    let err = blank(&fake, WORK_EVENTS, 1).await.unwrap_err();
+    assert!(err.to_string().contains("lease"), "{err}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_retry_that_finds_another_record_at_the_offset_stops() {
+    let fake = Fake::new(true, 1);
+    fake.append(br#"{"other":1}"#);
+    *fake.lease_lost.lock().unwrap() = 1;
+    let err = write_at(&fake, WORK_EVENTS, 1, r#"{"a":1}"#)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("holds something else"), "{err}");
+}

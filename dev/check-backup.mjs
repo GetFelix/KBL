@@ -15,6 +15,7 @@
 //
 // This ends by recreating the stack, so it runs after the other checks.
 //   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-backup.mjs
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -266,6 +267,23 @@ try {
     "the restored alpha log's digest equals the original's",
   );
 
+  // A restore cut midway: the first half of the backup goes in, then the whole
+  // backup carries on after it.
+  const [headLine, ...offsetLines] = readFileSync(file, "utf8").replace(/\n$/, "").split("\n");
+  const head = JSON.parse(headLine);
+  const half = offsetLines.slice(0, Math.floor(offsetLines.length / 2));
+  const cutHash = createHash("sha256");
+  for (const l of half) cutHash.update(`${l}\n`);
+  const cutHead = {
+    ...head,
+    next_offset: head.first_offset + half.length,
+    records: half.filter((l) => l !== "").length,
+    sha256: cutHash.digest("hex"),
+  };
+  const cut = join(dir, "cut.backup");
+  writeFileSync(cut, `${JSON.stringify(cutHead)}\n${half.map((l) => `${l}\n`).join("")}`);
+  must(["work", "import", cut]);
+  check(digest(join(dir, "cut.json")).records === cutHead.records, "a restore cut midway leaves the start of the backup");
   must(["work", "import", file]);
   const after = digest(join(dir, "after.json"));
   check(after.records === before.records, "every record came back");

@@ -167,3 +167,44 @@ async fn a_read_that_never_recovers_fails_within_the_bound() {
         "{waited:?}"
     );
 }
+
+#[tokio::test]
+async fn a_read_with_no_records_but_a_moving_cursor_keeps_reading() {
+    // Refused conditional publishes leave blank offsets: a page can hold none
+    // and still not be the end.
+    let (records, tip) = pages_to_tip("work.events", |from| async move {
+        Ok(match from {
+            0 => (vec![(0, b"a".to_vec())], 1),
+            1 => (Vec::new(), 3),
+            3 => (vec![(3, b"b".to_vec())], 4),
+            _ => (Vec::new(), from),
+        })
+    })
+    .await
+    .unwrap();
+    assert_eq!((records.len(), tip), (2, 4));
+}
+
+#[test]
+fn a_missing_or_forbidden_stream_is_not_leaderless() {
+    for text in [
+        "stream work.events not found",
+        "namespace team is not assigned to this tenant",
+        "permission denied: not owner of stream work.events",
+        "read refused: not the owner",
+    ] {
+        assert!(!is_leaderless(&anyhow::anyhow!(text)), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn a_read_of_a_missing_stream_fails_at_once() {
+    let mut calls = 0;
+    let got = pages_to_tip("work.events", |_| {
+        calls += 1;
+        async { Err(anyhow::anyhow!("stream work.events not found")) }
+    })
+    .await;
+    assert!(got.is_err());
+    assert_eq!(calls, 1);
+}

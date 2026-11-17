@@ -2,6 +2,7 @@
 //! of a log and the check that a restore rebuilt the same state. See
 //! docs/backup-restore.md.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 
@@ -190,7 +191,7 @@ async fn restore(broker: &impl LogStore, stream: &str, backup: &Backup<'_>) -> R
         "{stream} ends at offset {tip}, past the backup's end at {}; it holds more than this backup",
         backup.next
     );
-    let have: Vec<u64> = existing.iter().map(|(o, _)| *o).collect();
+    let have: HashSet<u64> = existing.iter().map(|(o, _)| *o).collect();
     for offset in backup.record_offsets().filter(|o| *o < tip) {
         ensure!(
             have.contains(&offset),
@@ -278,8 +279,16 @@ async fn write_at(broker: &impl LogStore, stream: &str, offset: u64, line: &str)
 /// the offset after it. A broker that names `at` took no offset, so it cannot
 /// make a blank.
 async fn blank(broker: &impl LogStore, stream: &str, at: u64) -> Result<()> {
-    // No log ever expects this offset, so the publish is always refused.
-    match broker.publish_if(stream, b"{}".to_vec(), u64::MAX).await? {
+    // No log ever expects this offset, so the publish is always refused. A
+    // refusal takes an offset or none, so it is safe to ask again.
+    let mut patience = Patience::new();
+    let verdict = loop {
+        match broker.publish_if(stream, b"{}".to_vec(), u64::MAX).await {
+            Err(e) if patience.again(&e).await => {}
+            other => break other?,
+        }
+    };
+    match verdict {
         ConditionalWrite::Refused { tail } if tail == at + 1 => Ok(()),
         ConditionalWrite::Refused { tail } => bail!(
             "the backup has a blank at offset {at}, and this broker consumed no offset when it refused a conditional publish (it names {tail}), so the blank cannot be reproduced. Only a Raft shard can restore this backup. The records before offset {at} are in; run the import against a Raft broker to carry on."

@@ -317,7 +317,13 @@ where
             Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
         };
         if records.is_empty() {
-            return Ok((out, from.max(next)));
+            // A page of blank offsets (refused conditional publishes) holds no
+            // record but still moves the cursor; only a stalled one is the tip.
+            if next > from {
+                from = next;
+                continue;
+            }
+            return Ok((out, from));
         }
         out.extend(records);
         anyhow::ensure!(
@@ -333,14 +339,14 @@ const LEADERLESS: [&str; 7] = [
     "no longer holds a lease",
     "lease lapsed",
     "publish not served",
-    "not owner",
-    "not the owner",
-    "not assigned",
+    "this broker is not serving the shard",
+    "no committed mark yet",
+    "shard is not assigned to any broker",
     "still opening",
 ];
 
 /// What a broker says while a new stream's shard has no owner yet or is still opening.
-const NOT_READY: [&str; 2] = ["not assigned", "still opening"];
+const NOT_READY: [&str; 2] = ["shard is not assigned to any broker", "still opening"];
 
 /// Runs `op`, trying again while the broker says the shard is not ready. The
 /// control plane places a new stream's shard after it answers the create. No
