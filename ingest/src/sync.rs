@@ -81,6 +81,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     /// Polls once. `reconcile` forces a full reconcile now (a webhook said an
     /// issue was transferred or deleted).
     pub(crate) async fn poll(&self, reconcile: bool) -> Result<(), SourceError> {
+        let started = std::time::Instant::now();
+        let result = self.poll_once(reconcile).await;
+        crate::metrics::poll_finished(self.source.name(), started.elapsed(), &result);
+        result
+    }
+
+    async fn poll_once(&self, reconcile: bool) -> Result<(), SourceError> {
         let name = self.source.name();
         let (saved, version) = self.tracker.load(name).await?;
         let state: State = match saved {
@@ -140,12 +147,22 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .source
             .changed(&self.settings.repos, &p.state.cursors)
             .await?;
+        crate::metrics::denied(self.source.name(), denied.len());
         self.report_stalls(p, &denied).await?;
+        // A first sync, a lost cursor or a forced reconcile reads the whole
+        // backlog; its age is not how far behind ingest is.
+        let live = tracks_lag(reconcile, &p.state.cursors);
         for issue in issues {
             self.on_issue(p, &issue).await?;
+            if live {
+                crate::metrics::recorded(self.source.name(), &issue.updated_at);
+            }
         }
         for c in comments {
             self.on_comment(p, &c).await?;
+            if live {
+                crate::metrics::recorded(self.source.name(), &c.updated_at);
+            }
         }
         self.retry_waiting(p).await?;
         self.pull_requests(p).await?;
@@ -1272,6 +1289,11 @@ const MARKER: &str = "kbl-prerequisite:";
 
 /// The issue body. An agent wrote `why`, so a marker line in it is dropped:
 /// only ingest's own, written last, may name the item.
+/// Whether this poll's changes are fresh enough for the lag metric.
+fn tracks_lag(reconcile: bool, cursors: &BTreeMap<String, crate::source::Cursor>) -> bool {
+    !reconcile && !cursors.is_empty()
+}
+
 fn prerequisite_body(pre: &Prerequisite, link_waiter: bool) -> String {
     let why: String = pre
         .why

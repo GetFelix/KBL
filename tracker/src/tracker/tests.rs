@@ -779,6 +779,7 @@ pub(super) fn settings() -> Settings {
         crash_after_done: false,
         review_tiers: default_review_tiers(),
         cost_floor_micros: 0,
+        team: String::new(),
         review_limit: 0,
     }
 }
@@ -924,6 +925,7 @@ fn costs(fake: &Fake, kind: &str) -> Vec<u64> {
 fn floor(micros: u64) -> Settings {
     Settings {
         cost_floor_micros: micros,
+        team: String::new(),
         review_limit: 0,
         ..settings()
     }
@@ -2230,6 +2232,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
     assert_eq!(read["rules"], claimed["rules"]);
 }
 
+mod metrics;
 mod races;
 mod recover;
 mod renewal;

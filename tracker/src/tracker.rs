@@ -91,6 +91,8 @@ pub(crate) struct Settings {
     /// The least a claim is charged, whatever usage the agent reports. Usage
     /// is the agent's word, so this is what bounds a tree's cost.
     pub(crate) cost_floor_micros: u64,
+    /// The team's name, the `team` label on this tracker's metrics.
+    pub(crate) team: String,
     /// Agent pull requests in In review at which new fix claims pause. Zero
     /// turns the limit off.
     pub(crate) review_limit: usize,
@@ -770,6 +772,28 @@ impl<B: Broker> Tracker<B> {
         wait: Duration,
         reviews: &[String],
     ) -> Result<Value, Error> {
+        let started = Instant::now();
+        let out = self.claim_loop(agent, wait, reviews).await;
+        let outcome = match &out {
+            Ok(v) if v["claimed"] == true && v["resumed"] == true => "resumed",
+            Ok(v) if v["claimed"] == true => "claimed",
+            Ok(_) => "empty",
+            Err(_) => "error",
+        };
+        let team = self.0.settings.team.clone();
+        metrics::counter!("kbl_tracker_claims_total", "team" => team.clone(), "outcome" => outcome)
+            .increment(1);
+        metrics::histogram!("kbl_tracker_claim_seconds", "team" => team, "outcome" => outcome)
+            .record(started.elapsed().as_secs_f64());
+        out
+    }
+
+    async fn claim_loop(
+        &self,
+        agent: &AgentName,
+        wait: Duration,
+        reviews: &[String],
+    ) -> Result<Value, Error> {
         let lanes = self.review_lanes(reviews)?;
         let deadline = Instant::now() + wait.min(MAX_WAIT);
         loop {
@@ -1168,8 +1192,39 @@ impl<B: Broker> Tracker<B> {
     async fn keep_swept(&self) {
         loop {
             self.sweep().await;
+            self.sample_fold().await;
             self.0.broker.close_idle(MEMBER_IDLE).await;
             tokio::time::sleep(self.0.settings.lease_ttl / 3).await;
+        }
+    }
+
+    /// Sets the fold gauges: the offset the fold has reached, the stream's
+    /// committed tip, and the records between them. The tip is read from
+    /// Felix, so a record another writer appended shows as lag until a rebuild.
+    async fn sample_fold(&self) {
+        let (applied, tail) = {
+            let core = self.0.core.lock().await;
+            (core.state.at, core.tail)
+        };
+        let team = self.0.settings.team.clone();
+        match self
+            .io(None, self.0.broker.read_to_tip(WORK_EVENTS, tail))
+            .await
+        {
+            Ok((unfolded, tip)) => {
+                if let Some(at) = applied {
+                    metrics::gauge!("kbl_tracker_fold_applied_offset", "team" => team.clone())
+                        .set(at as f64);
+                }
+                metrics::gauge!("kbl_tracker_stream_tip_offset", "team" => team.clone())
+                    .set(tip as f64);
+                metrics::gauge!("kbl_tracker_fold_lag_records", "team" => team)
+                    .set(unfolded.len() as f64);
+            }
+            Err(_) => {
+                metrics::counter!("kbl_tracker_tip_read_failures_total", "team" => team)
+                    .increment(1);
+            }
         }
     }
 
@@ -1829,6 +1884,12 @@ impl<B: Broker> Tracker<B> {
         self.sync_ready().await;
         let mut reply = reply;
         reply["offset"] = offset.into();
+        let counter = match kind {
+            "done" => "kbl_tracker_completions_total",
+            "released" => "kbl_tracker_releases_total",
+            _ => "kbl_tracker_give_ups_total",
+        };
+        metrics::counter!(counter, "team" => self.0.settings.team.clone()).increment(1);
         Ok(with_warning(reply, warning))
     }
 
@@ -2371,10 +2432,15 @@ impl<B: Broker> Tracker<B> {
         };
         // Built beside the live state and swapped in on success, so a failed read
         // leaves the tracker refusing to serve rather than serving nothing.
+        let rebuilt_at = Instant::now();
         let (state, recall, tail) = self
             .read_state()
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
+        let team = self.0.settings.team.clone();
+        metrics::counter!("kbl_tracker_fold_rebuilds_total", "team" => team.clone()).increment(1);
+        metrics::histogram!("kbl_tracker_fold_rebuild_seconds", "team" => team)
+            .record(rebuilt_at.elapsed().as_secs_f64());
         let mut core = self.0.core.lock().await;
         core.state = state;
         core.recall = recall;
