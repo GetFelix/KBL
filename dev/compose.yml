@@ -125,10 +125,12 @@ services:
     build:
       context: ..
       dockerfile: tracker/Dockerfile
-    # Root, so it can read the 0600 token file the host user owns.
-    user: "0"
+    # The entrypoint reads the host's 0600 token file as root, then drops to the
+    # unprivileged user kbl, so only the capabilities for that are kept.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
     environment:
-      KBL_TRACKER_TOKENS_FILE: /state/tracker-tokens.json
+      KBL_TOKENS_SRC: /state/tracker-tokens.json
       KBL_FELIX_CONTROL_PLANE: http://controlplane:8443
       KBL_IDP: http://idp:9400
       KBL_FELIX_BROKER: broker:5000
@@ -154,8 +156,9 @@ services:
       dockerfile: dashboard/Dockerfile
     # nginx exits if the tracker's name does not resolve yet.
     restart: on-failure
+    # The image runs nginx as an unprivileged user, so it listens on 8080.
     ports:
-      - "127.0.0.1:8081:80"
+      - "127.0.0.1:8081:8080"
     depends_on:
       - tracker
 

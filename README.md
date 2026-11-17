@@ -46,7 +46,7 @@ who asks, the tracker speaks plain HTTP, and nothing keeps its data between star
 Self-hosting with a real identity provider is tracked in [issue 316](https://github.com/GetFelix/KBL/issues/316).
 
 You need Git, curl, Node 22 or later, Rust 1.97 or later (to build `kbl-mcp`), and Docker (Compose v2) or Podman (with podman-compose 1.4 or later). The first start
-builds the tracker and the dashboard, which takes several minutes.
+builds the tracker and the dashboard from source and takes about 10 minutes (CI allows 15); later starts reuse the build cache.
 
 ```bash
 git clone https://github.com/GetFelix/KBL.git
@@ -70,7 +70,8 @@ the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be f
    The item shows in the dashboard as ready. To bring in real issues from GitHub, Azure DevOps or Jira, see
    [Running the ingest worker](docs/work-tracker.md#running-the-ingest-worker).
 3. **Connect Claude Code.** Build `kbl-mcp` on the host (it is the program Claude Code starts, so it runs outside the
-   containers) and write a config for one agent:
+   containers) and write a config for one agent. Once a release is tagged you can instead
+   [download `kbl-mcp`](#getting-the-binaries) and pass its path with `--mcp`, in place of the `cargo build` line:
    ```bash
    cargo build --release -p kbl-mcp
    node dev/connect.mjs agent1 --out .mcp.json
@@ -83,6 +84,9 @@ the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be f
    ([issue 317](https://github.com/GetFelix/KBL/issues/317)).
 The dashboard link works once: the page removes the token from the address, so a reload needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
 4. **Stop it** with `dev/down.sh`, which also deletes its data.
+
+The tracker and the dashboard run as unprivileged users inside their containers, under both Docker and Podman. The
+tracker starts as root only long enough to read the token file the host owns, then drops to its own user.
 
 ## What it shows about Felix
 
