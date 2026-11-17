@@ -16,112 +16,6 @@ use super::*;
 const ISSUES: u64 = 6;
 const STEPS: usize = 40;
 
-/// Cases of a bug the sweep found on main, which this change does not fix:
-/// (seed, upstream issue, tracking KBL issue). A poll that fails partway
-/// through the existing-root branch of `consider` still saves the root as
-/// tracked, so later polls follow it and never finish its admission. The run
-/// expects exactly these roots to end unadmitted, so a fix, or a change that
-/// moves the failure, fails the sweep until the list is updated.
-const PINNED_ADMISSION: &[(u64, usize, u32)] = &[
-    (105, 0, 301),
-    (124, 2, 301),
-    (159, 3, 301),
-    (228, 5, 301),
-    (344, 0, 301),
-    (402, 2, 301),
-    (461, 1, 301),
-    (488, 0, 301),
-    (491, 5, 301),
-    (493, 4, 301),
-    (570, 3, 301),
-    (669, 5, 301),
-    (691, 2, 301),
-    (791, 2, 301),
-    (857, 3, 301),
-    (867, 4, 301),
-    (908, 1, 301),
-    (947, 0, 301),
-    (952, 3, 301),
-    (970, 4, 301),
-    (993, 0, 301),
-    (1075, 4, 301),
-    (1127, 4, 301),
-    (1256, 0, 301),
-    (1257, 2, 301),
-    (1452, 0, 301),
-    (1581, 0, 301),
-    (1585, 0, 301),
-    (1585, 1, 301),
-    (1602, 1, 301),
-    (1629, 0, 301),
-    (1772, 3, 301),
-    (1818, 2, 301),
-    (1841, 1, 301),
-    (1902, 4, 301),
-    (1918, 4, 301),
-    (2009, 0, 301),
-    (2069, 4, 301),
-    (2234, 1, 301),
-    (2334, 0, 301),
-    (2502, 5, 301),
-    (2589, 1, 301),
-    (2598, 3, 301),
-    (2648, 2, 301),
-    (2677, 5, 301),
-    (2678, 4, 301),
-    (2774, 1, 301),
-    (2800, 5, 301),
-    (2888, 1, 301),
-    (2985, 5, 301),
-    (3039, 3, 301),
-    (3085, 4, 301),
-    (3112, 2, 301),
-    (3186, 0, 301),
-    (3188, 2, 301),
-    (3195, 4, 301),
-    (3205, 3, 301),
-    (3242, 1, 301),
-    (3277, 5, 301),
-    (3315, 1, 301),
-    (3393, 1, 301),
-    (3411, 5, 301),
-    (3498, 5, 301),
-    (3553, 0, 301),
-    (3599, 2, 301),
-    (3606, 3, 301),
-    (3705, 5, 301),
-    (3723, 4, 301),
-    (3902, 1, 301),
-    (3941, 4, 301),
-    (4003, 1, 301),
-    (4016, 5, 301),
-    (4284, 4, 301),
-    (4307, 5, 301),
-    (4309, 3, 301),
-    (4333, 2, 301),
-    (4377, 5, 301),
-    (4421, 5, 301),
-    (4475, 1, 301),
-    (4555, 2, 301),
-    (4604, 0, 301),
-    (4622, 0, 301),
-    (4641, 2, 301),
-    (4766, 2, 301),
-    (4824, 0, 301),
-    (4917, 3, 301),
-];
-
-/// Seeds that fail on main with an item closed here while its issue is open,
-/// each with the tracking issue. The run expects that failure on them.
-const KNOWN_FAILING: [(u64, u32); 6] = [
-    (1194, 302),
-    (1398, 302),
-    (2097, 302),
-    (2380, 302),
-    (3059, 302),
-    (4996, 302),
-];
-
 struct Rng(u64);
 
 impl Rng {
@@ -281,43 +175,17 @@ fn settled(rig: &Rig, w: &World) -> Findings {
     found
 }
 
-/// A seed run on its own fails on what it finds. In a sweep, what is pinned to
-/// a tracking issue must show up, and nothing else may.
-fn judge(seed: u64, found: &Findings, strict: bool) {
+/// What the sweep found must be empty: every imported issue admitted, and no
+/// root closed here while its issue is open.
+fn judge(found: &Findings) {
     let upstream = |n: &usize| upstream_id(*n);
-    if strict {
-        let names: Vec<_> = found.unadmitted.iter().map(upstream).collect();
-        assert!(
-            names.is_empty(),
-            "{names:?} imported and never fully admitted"
-        );
-        let names: Vec<_> = found.reclosed.iter().map(upstream).collect();
-        assert!(names.is_empty(), "{names:?} open upstream and closed here");
-        return;
-    }
-    let mut pinned: Vec<usize> = PINNED_ADMISSION
-        .iter()
-        .filter(|(s, ..)| *s == seed)
-        .map(|(_, n, _)| *n)
-        .collect();
-    let mut seen = found.unadmitted.clone();
-    pinned.sort();
-    seen.sort();
-    assert_eq!(
-        seen, pinned,
-        "unadmitted issues differ from the pinned ones; update PINNED_ADMISSION"
+    let names: Vec<_> = found.unadmitted.iter().map(upstream).collect();
+    assert!(
+        names.is_empty(),
+        "{names:?} imported and never fully admitted"
     );
-    let known = KNOWN_FAILING.iter().any(|(s, _)| *s == seed);
-    assert_eq!(
-        !found.reclosed.is_empty(),
-        known,
-        "seed {seed} {} the known reclosed-root failure; update KNOWN_FAILING",
-        if known {
-            "no longer shows"
-        } else {
-            "now shows"
-        }
-    );
+    let names: Vec<_> = found.reclosed.iter().map(upstream).collect();
+    assert!(names.is_empty(), "{names:?} open upstream and closed here");
 }
 
 fn mutate(rig: &Rig, w: &mut World, rng: &mut Rng) {
@@ -391,7 +259,7 @@ async fn step(rig: &Rig, ingest: &Ingest<Github<Script>, Fake>, w: &mut World, r
     check(rig, w);
 }
 
-async fn run(seed: u64, strict: bool) {
+async fn run(seed: u64) {
     let _replay = Replay(seed);
     let mut rng = Rng(seed);
     let rig = rig();
@@ -409,16 +277,14 @@ async fn run(seed: u64, strict: bool) {
     for _ in 0..3 {
         ingest.poll(true).await.unwrap();
     }
-    judge(seed, &settled(&rig, &w), strict);
+    judge(&settled(&rig, &w));
 }
 
 #[tokio::test]
 async fn ingest_holds_its_invariants_under_seeded_faults() {
-    // Replaying one seed names what is wrong with it, known or not.
-    let strict = std::env::var("KBL_SWEEP_SEED").is_ok();
     let mut failed = Vec::new();
     for seed in seeds() {
-        if tokio::spawn(run(seed, strict)).await.is_err() {
+        if tokio::spawn(run(seed)).await.is_err() {
             failed.push(seed);
         }
     }
