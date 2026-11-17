@@ -247,6 +247,65 @@ impl Saved {
     }
 }
 
+/// The identity of a saved snapshot within its log: the chain at each point a
+/// snapshot was taken up to its own. Read from a file without its state.
+///
+/// Two snapshots of one log share a point, the older one's own, so one is
+/// [`Lineage::related`] to the other. Snapshots of logs that diverged (a
+/// retention trim, a log started over) share none.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "LineageFile")]
+pub struct Lineage {
+    /// `(records, chain)` oldest first, ending at the snapshot itself.
+    points: Vec<(u64, String)>,
+}
+
+#[derive(Deserialize)]
+struct LineageFile {
+    links: Vec<Link>,
+    snapshot: LineageHead,
+}
+
+#[derive(Deserialize)]
+struct LineageHead {
+    records: u64,
+    chain: String,
+}
+
+impl From<LineageFile> for Lineage {
+    fn from(f: LineageFile) -> Self {
+        let mut points: Vec<_> = f.links.into_iter().map(|l| (l.records, l.chain)).collect();
+        points.push((f.snapshot.records, f.snapshot.chain));
+        Self { points }
+    }
+}
+
+impl Lineage {
+    fn head(&self) -> &(u64, String) {
+        self.points.last().expect("a lineage ends at its snapshot")
+    }
+
+    /// Whether one of the two was taken from a log the other also covers: the
+    /// newer holds the older's point.
+    pub fn related(&self, other: &Self) -> bool {
+        other.points.contains(self.head()) || self.points.contains(other.head())
+    }
+}
+
+impl Saved {
+    /// Where this snapshot sits in its log, for telling which files belong to
+    /// the same log without reading the log.
+    pub fn lineage(&self) -> Lineage {
+        Lineage::from(LineageFile {
+            links: self.links.clone(),
+            snapshot: LineageHead {
+                records: self.snapshot.records,
+                chain: self.snapshot.chain.clone(),
+            },
+        })
+    }
+}
+
 /// Snapshots of one log, oldest first.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshots {

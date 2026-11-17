@@ -457,6 +457,87 @@ async fn a_save_after_retention_trimmed_the_log_is_kept_though_its_count_is_low(
     let fresh = dir
         .join("default")
         .join(format!("{PREFIX}{:020}{SUFFIX}", high.records()));
-    store.write(&high, &Seed::of(&Recall::default()));
+    store.write(
+        store.begin_generation(),
+        &high,
+        &Seed::of(&Recall::default()),
+    );
     assert!(fresh.exists(), "the file just written survives the prune");
+}
+
+/// The log as retention leaves it: the first `cut` records gone.
+fn trimmed(log: &[(u64, WorkLogged)], cut: usize) -> Vec<(u64, WorkLogged)> {
+    log[cut..].to_vec()
+}
+
+#[tokio::test]
+async fn files_of_a_log_that_was_trimmed_are_pruned_by_identity() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let old = files(&dir);
+    assert!(!old.is_empty());
+    let log = trimmed(&entries(&fake).await, 2);
+    let store = store(&dir);
+    // Nothing restores: every old file is of the log before the trim.
+    assert!(store.restore(&log).is_none());
+    let state = kbl_core::work_fold::fold_to(&log, u64::MAX);
+    let saved = Saved::capture(&log, None, &state).unwrap();
+    let fresh = dir
+        .join("default")
+        .join(format!("{PREFIX}{:020}{SUFFIX}", saved.records()));
+    store.write(
+        store.begin_generation(),
+        &saved,
+        &Seed::of(&Recall::default()),
+    );
+    assert_eq!(files(&dir), vec![fresh], "files of the old log are gone");
+}
+
+#[tokio::test]
+async fn a_save_of_an_older_generation_writes_and_prunes_nothing() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let before = files(&dir);
+    let log = entries(&fake).await;
+    let store = store(&dir);
+    let orphan = store.begin_generation();
+    // A rebuild starts while that save is still running.
+    store.begin_generation();
+    let state = kbl_core::work_fold::fold_to(&log[..3], u64::MAX);
+    let saved = Saved::capture(&log[..3], None, &state).unwrap();
+    store.write(orphan, &saved, &Seed::of(&Recall::default()));
+    assert_eq!(files(&dir), before);
+}
+
+#[tokio::test]
+async fn the_newest_valid_file_survives_files_of_another_log_with_higher_counts() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let log = entries(&fake).await;
+    let store = store(&dir);
+    let (valid, _) = store.restore(&log).unwrap();
+    let name = format!("{PREFIX}{:020}{SUFFIX}", valid.records());
+    // Unreadable files and a readable one of another log, all numbered above it.
+    for n in [1000, 1001, 1002] {
+        fs::write(
+            dir.join("default").join(format!("{PREFIX}{n:020}{SUFFIX}")),
+            b"x",
+        )
+        .unwrap();
+    }
+    let foreign = trimmed(&log, 1);
+    let state = kbl_core::work_fold::fold_to(&foreign, u64::MAX);
+    let other = Saved::capture(&foreign, None, &state).unwrap();
+    let body = encode(&other, &Seed::of(&Recall::default()));
+    let other_name = format!("{PREFIX}{:020}{SUFFIX}", 5000);
+    fs::write(dir.join("default").join(&other_name), body).unwrap();
+
+    assert!(store.restore(&log).is_some());
+    let left: Vec<_> = files(&dir)
+        .iter()
+        .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert!(left.contains(&name), "the valid file is kept: {left:?}");
+    assert!(!left.contains(&other_name), "{left:?}");
+    assert!(left.len() <= KEEP);
 }

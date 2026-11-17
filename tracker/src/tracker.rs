@@ -2660,15 +2660,18 @@ impl<B: Broker> Tracker<B> {
         }
         let store = snapshots::Store::new(&self.0.settings);
         // The disk work (reads, hashing the log, fsyncs) runs off the async workers.
-        let (entries, restored) = match store.clone() {
+        let (entries, restored, generation) = match store.clone() {
             Some(store) => {
                 tokio::task::spawn_blocking(move || {
+                    // Before restoring, so a save of the state this replaces
+                    // writes nothing after the files are judged.
+                    let generation = store.begin_generation();
                     let restored = store.restore(&entries);
-                    (entries, restored)
+                    (entries, restored, generation)
                 })
                 .await?
             }
-            None => (entries, None),
+            None => (entries, None, 0),
         };
         let (mut state, mut recall, from, saved) = match restored {
             Some((saved, recall)) => (saved.state(), recall, saved.records() as usize, Some(saved)),
@@ -2685,8 +2688,8 @@ impl<B: Broker> Tracker<B> {
         let mut snap = None;
         if let Some(store) = store {
             (state, recall, snap) = tokio::task::spawn_blocking(move || {
-                let anchor = store.save(&entries, saved.as_ref(), &state, &recall);
-                let snap = snapshots::Periodic::new(store, anchor, &entries);
+                let anchor = store.save(generation, &entries, saved.as_ref(), &state, &recall);
+                let snap = snapshots::Periodic::new(store, generation, anchor, &entries);
                 (state, recall, snap)
             })
             .await?;

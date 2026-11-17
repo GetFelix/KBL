@@ -216,8 +216,11 @@ rebuild after the writer lease is retaken or goes stale. It uses the first that
 passes the digest, the fold revision and the hash chain over the log, and logs
 and skips each one that does not: damaged, cut short, from another revision, or
 ahead of a log that lost its tail. A skipped file stays, so a log that was only
-briefly short uses it again once it is back; saving keeps the last three by
-record count. With none usable it folds from the start. The folder is derived
+briefly short uses it again once it is back. A file of a different log is
+removed: each file carries the chain at every earlier save, and one that shares
+no point with the file just restored or written is of a log that was trimmed or
+started over, whatever its record count. Saving then keeps the last three of
+what is left, and never removes the file it just wrote. With none usable it folds from the start. The folder is derived
 data, so deleting it only costs a slower rebuild. A team folder that is a
 symlink is not used. The disk work runs off the async workers.
 
@@ -240,7 +243,9 @@ a blocking thread, so an append waits only for the copy, once per `every`
 records. The hash chain is extended from the last save: the tracker keeps the
 chain's head and the records since, not the log, so a save hashes only those
 records. One save runs at a time per state, so one copy exists beside the live one (a
-rebuild can briefly overlap the last save of the state it replaced). Records that land during a save wait for the next; if a stuck
+rebuild can briefly overlap the last save of the state it replaced). Each
+rebuild starts a new generation for the folder, and a save taken before it
+writes and prunes nothing, so it cannot remove a file the rebuild restored from. Records that land during a save wait for the next; if a stuck
 disk lets more than the larger of 4 x `every` and 10,000 pile up, the tracker
 logs it and stops saving until its next rebuild, which restarts from the log.
 A snapshot is never trusted on how it was made: the next rebuild checks every
