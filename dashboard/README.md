@@ -58,7 +58,10 @@ npm run check   # after build: keyboard flows and axe-core in headless Chrome (s
 ```
 
 `npm run check` drives `dist/` against a fake gateway (`check/fixture.mjs`) and fails on a broken flow or a
-serious or critical axe-core violation. `node check/browser.mjs <dir>` also writes screenshots to `<dir>`.
+serious or critical axe-core violation. It also checks landmarks, live regions, Tab order with a visible focus
+indicator, and a performance budget on a 10,000-item log (`check/budget.mjs`). `npm test` holds the colour tokens to
+WCAG contrast in both themes and the fold of 10,000 items to its budget. Details in
+[docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md#wcag-22-aa). `node check/browser.mjs <dir>` also writes screenshots to `<dir>`.
 
 The gateway needs a scope that gives the page `subscribe` on `work.events`. `read` is a gateway feature the page
 asks for in `join`, not a scope action: a `read` of a stream needs `subscribe` on it, so one grant covers both.

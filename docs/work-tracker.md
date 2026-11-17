@@ -146,10 +146,39 @@ from the previous snapshot's, is checked against the log, with its record count
 and its fold revision against the build. An edit to any earlier record fails
 it, and one that fails is skipped and rebuilt by `refresh`, so a missing or
 stale one costs time and never changes the answer. A snapshot also keeps the
-waiting-proposal counts and the human-wait record that a state's wire form
-leaves out, so a restored state answers budget and wait questions exactly as a
+waiting-proposal counts, the human-wait record and the item fields that a
+state's wire form leaves out, so a restored state answers budget and wait questions exactly as a
 fold would. A test folds a log once, records the state at every offset,
 and checks `fold_to` at each one, with and without snapshots, blanks included.
+
+#### Snapshots on disk
+
+Set `KBL_TRACKER_SNAPSHOT_DIR` (or `--snapshot-dir`) and the tracker keeps
+snapshots in `<dir>/<team>/snapshot-<records>.json`, so a restart folds only the
+records since the newest one. The tracker still reads all of `work.events` and
+hashes it, so the saving is the fold, not the read. A file holds the state, the
+per-record data the tracker keeps beside it (claims, request keys, which edges
+ingest made) and the chain links before it, with a digest of the body on its
+first line. Message texts are not in it; a read of one that is not in memory
+fetches it from the log, as after an eviction.
+
+Every rebuild of the state tries the files newest first: the boot, and each
+rebuild after the writer lease is retaken or goes stale. It uses the first that
+passes the digest, the fold revision and the hash chain over the log, and logs
+and skips each one that does not: damaged, cut short, from another revision, or
+ahead of a log that lost its tail. A skipped file stays, so a log that was only
+briefly short uses it again once it is back; saving keeps the last three by
+record count. With none usable it folds from the start. The folder is derived
+data, so deleting it only costs a slower rebuild. A team folder that is a
+symlink is not used. The disk work runs off the async workers.
+
+When a rebuild has folded `KBL_TRACKER_SNAPSHOT_EVERY` records (2,000 by default)
+past the newest snapshot it writes a new one: temp file, `fsync`, rename, `fsync`
+of the folder, so a crash leaves the old file. The last three are kept, and the
+folder is mode 700. A failed write is logged and the tracker starts anyway.
+Snapshots are written by a rebuild, not by the running tracker, because the
+hash chain is built from the log the rebuild has just read. Run the tracker on a
+disk that survives restarts, or the folder is empty each time.
 
 Each record carries a format. A tracker that finds a record of a newer format
 than it reads does not serve, instead of skipping the record.
@@ -377,7 +406,7 @@ record if the fold accepts it:
 | `POST /v1/work/unblock` `{item, to}` | `unblocked`: marks the dependency `to` resolved, so the item no longer waits on it |
 | `POST /v1/work/request-review` `{item, reviewer}` | `review_requested`: records that the item's open pull request was put to `reviewer`. See [Review actions and summary marks](#review-actions-and-summary-marks) |
 | `POST /v1/work/request-changes` `{item}` | `changes_requested`: records that a person sent the open pull request back |
-| `POST /v1/work/mark-merged` `{item}` | `merge_marked`: records that the pull request was merged upstream, and closes the item as merged |
+| `POST /v1/work/mark-merged` `{item}` | `merge_marked`: records that the pull request was merged upstream, and closes the item as merged. Refused while upstream shows the request open; the item keeps who recorded it, and a later open or closed-unmerged status reopens it into Needs you as `merge_disputed` |
 | `POST /v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated`: marks the summary the attempt handed off accurate or not |
 
 A person's token can also read the team's work. These calls write nothing:

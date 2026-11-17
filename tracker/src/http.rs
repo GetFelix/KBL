@@ -29,6 +29,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tokio::sync::OwnedSemaphorePermit;
 use tower::ServiceExt;
+use tracing::Instrument as _;
 
 use crate::config::Caller;
 use crate::felix::Broker;
@@ -91,18 +92,36 @@ async fn observe(req: Request, next: Next) -> Response {
         return next.run(req).await;
     };
     let method = req.method().clone();
+    // Named by the template, with the same fixed method set as the metrics.
+    let span = tracing::info_span!(
+        "http.request",
+        otel.name = format!("{} {route}", method_label(method.as_str())),
+        http.route = %route,
+        http.request.method = method_label(method.as_str()),
+        http.response.status_code = tracing::field::Empty,
+    );
+    kbl_trace::adopt_parent(&span, req.headers());
     let started = std::time::Instant::now();
-    let res = next.run(req).await;
+    let res = next.run(req).instrument(span.clone()).await;
+    span.record("http.response.status_code", res.status().as_u16());
     record_request(&route, method.as_str(), res.status(), started.elapsed());
     res
 }
 
 /// The method label is one of a fixed set, so a client cannot mint labels.
+fn method_label(method: &str) -> &'static str {
+    match method {
+        "GET" => "GET",
+        "POST" => "POST",
+        "PUT" => "PUT",
+        "DELETE" => "DELETE",
+        "PATCH" => "PATCH",
+        _ => "other",
+    }
+}
+
 fn record_request(route: &str, method: &str, status: StatusCode, took: Duration) {
-    let method = match method {
-        "GET" | "POST" | "PUT" | "DELETE" | "PATCH" => method.to_owned(),
-        _ => "other".to_owned(),
-    };
+    let method = method_label(method).to_owned();
     let (route, status) = (route.to_owned(), status.as_u16().to_string());
     metrics::counter!(
         "kbl_tracker_http_requests_total",

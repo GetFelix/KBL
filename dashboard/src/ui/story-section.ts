@@ -49,8 +49,10 @@ function editLine(e: EditLine, decision: number, t: Targets): Node {
   const hunk = contentText(e.hunk);
   return h('li', { class: 'story-edit', 'data-at': String(e.offset), tabindex: '-1' },
     h('details', {},
-      h('summary', {}, h('code', {}, e.file), ` (edit ${e.offset}) carries out `, offsetButton(`decision ${decision}`, decision, `edit${e.offset}`, t)),
-      hunk === null ? h('p', { class: 'muted' }, 'The hunk is stored as an artifact.') : h('pre', { class: 'story-hunk' }, hunk)));
+      h('summary', {}, h('code', {}, e.file), ` (edit ${e.offset})`),
+      hunk === null ? h('p', { class: 'muted' }, 'The hunk is stored as an artifact.') : h('pre', { class: 'story-hunk' }, hunk)),
+    // Outside the summary: a control inside a summary is nested interactive content.
+    h('p', {}, 'Carries out ', offsetButton(`decision ${decision}`, decision, `edit${e.offset}`, t)));
 }
 
 function decisionLine(d: DecisionLine, story: Story, t: Targets): Node {

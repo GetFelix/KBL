@@ -781,6 +781,8 @@ pub(super) fn settings() -> Settings {
         cost_floor_micros: 0,
         team: String::new(),
         review_limit: 0,
+        snapshot_dir: None,
+        snapshot_every: 0,
     }
 }
 
@@ -2091,6 +2093,30 @@ async fn a_person_works_a_pull_request_and_marks_the_summary() {
         assert!(it.review_ask.is_none() && it.changes_ask.is_some());
         assert_eq!(it.paths[0].summary_accurate, Some(false));
     }
+    // Open upstream, the merge is not recorded; once upstream shows it merged it is.
+    assert_eq!(
+        refused(
+            person(WorkRecord::MergeMarked { item: item("a1") })
+                .await
+                .unwrap_err()
+        ),
+        "no_change"
+    );
+    t.ingest_record(
+        key("ingest-gh"),
+        WorkRecord::PrStatus {
+            item: item("a1"),
+            status: PrSnapshot {
+                pr: pr.into(),
+                phase: PrPhase::Merged,
+                review: PrReview::Approved,
+                checks: PrChecks::Green,
+                failing: None,
+            },
+        },
+    )
+    .await
+    .unwrap();
     person(WorkRecord::MergeMarked { item: item("a1") })
         .await
         .unwrap();
@@ -2299,6 +2325,7 @@ mod retry;
 mod review;
 mod review_limit;
 mod texts;
+mod traces;
 
 #[tokio::test(start_paused = true)]
 async fn a_dead_lettered_ready_record_is_published_again() {

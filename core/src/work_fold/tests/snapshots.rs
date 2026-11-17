@@ -334,3 +334,45 @@ fn restored_review_asks_and_summary_marks_fold_like_fresh_ones() {
     check_every_offset(&l.0, 3);
     check_every_offset(&with_blanks(&l.0), 4);
 }
+
+/// One snapshot kept on its own, read back from JSON, is the fold of its
+/// records, derived data included, and an edit anywhere below it fails it.
+#[test]
+fn a_saved_snapshot_read_back_is_the_fold_and_fails_on_an_edit_below_it() {
+    let mut l = held_root();
+    l.person(WorkRecord::BudgetSet {
+        root: id("r1"),
+        items_left: 2,
+        max_depth: 3,
+        cost_left_micros: 1_000_000,
+        redos_per_item: 3,
+    });
+    propose_n(&mut l, "w1", "a", 2);
+    let q = l.agent("w1", question_rec("q1"));
+    l.person(answer_rec(q));
+    l.person(accept("a0"));
+    propose_n(&mut l, "w1", "b", 1);
+    let log = l.0;
+    let end = fold(&log);
+    assert!(end.proposals_exceed_budget(&id("r1")));
+
+    // Saved in two steps, as two boots would.
+    let cut = log.len() / 2;
+    let first = Saved::capture(&log[..cut], None, &fold(&log[..cut])).unwrap();
+    let second = Saved::capture(&log, Some(&first), &end).unwrap();
+    let back: Saved = serde_json::from_slice(&serde_json::to_vec(&second).unwrap()).unwrap();
+    assert!(back.valid(&log));
+    assert_eq!(back.records() as usize, log.len());
+    assert_eq!(derived(&back.state()), derived(&end));
+    assert_eq!(back.state(), end);
+
+    let mut edited = log.clone();
+    edited[1].1 = log[3].1.clone();
+    assert!(!back.valid(&edited));
+    // Edited between the two saves: the link before the last one catches it.
+    edited = log.clone();
+    edited[cut - 1].1 = log[cut + 1].1.clone();
+    assert!(!back.valid(&edited));
+    assert!(!back.valid(&log[..log.len() - 1]));
+    assert!(first.valid(&log));
+}

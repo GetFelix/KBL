@@ -115,6 +115,17 @@ token to whatever tracker URL they are given, `http://` included. Tokens are lon
 There is no request rate limit; a refused call writes nothing, and the first
 cap an attempt hits is logged once (`tracker/src/tracker/tools.rs#note_refusal`).
 
+The snapshot folder (`KBL_TRACKER_SNAPSHOT_DIR`, off by default) holds a copy of
+each team's folded state, so whoever can write to it can change what the tracker
+believes at the next start. It is created mode 700 and is trusted like the token
+file. A file is used only if a digest over its body matches, its fold revision is
+the build's, and a hash over every record it covers still matches `work.events`
+(`tracker/src/tracker/snapshots.rs#restore`); the hash does not cover the state
+inside the file, so the digest stops damage and not a deliberate edit. A file that
+fails is removed and the next one is tried, then a full fold. A file is written
+to a temp file, synced, renamed and the folder synced
+(`tracker/src/tracker/snapshots.rs#save`), so a crash leaves the old one.
+
 ## Tracker routes
 
 Every route but `/healthz` needs a bearer token. A wrong kind of token gets
@@ -188,7 +199,7 @@ in `check_sizes` (`tracker/src/tracker/tools.rs#check_sizes`).
 | `/v1/work/unblock` `{item, to}` | `unblocked` | Person only in the fold too, item open, and `to` must be a dependency that still holds the item; a link that holds nothing is `no_change` (`core/src/work_fold.rs#step_record`). Drops the same edge `unlink` drops, so the item can be claimed once nothing else holds it. Format 10 |
 | `/v1/work/request-review` `{item, reviewer}` | `review_requested` | Person only in the fold too, item open, `reviewer` 1 to 100 bytes with no control character, and the item's request open upstream and not approved; a repeat of the same ask is `no_change` (`core/src/work_fold.rs#step_record`). It writes a note on the item and never touches `pr_status`; it is dropped when upstream answers or the request changes (`core/src/work_fold.rs#step_record`). Format 11 |
 | `/v1/work/request-changes` | `changes_requested` | Person only in the fold too, same conditions as the ask, and a repeat is `no_change` (`core/src/work_fold.rs#step_record`). Starts no redo and holds nothing back. Format 11 |
-| `/v1/work/mark-merged` | `merge_marked` | Person only in the fold too, item open and reporting a request that upstream does not show closed without a merge (`core/src/work_fold.rs#step_record`). It closes the item as merged, as a person's `closed` with `merged` already does, so it adds no power; the tracker never merges. Format 11 |
+| `/v1/work/mark-merged` | `merge_marked` | Person only in the fold too, item open and reporting a request that upstream shows neither open nor closed without a merge (`core/src/work_fold.rs#step_record`). It closes the item as merged, as a person's `closed` with `merged` already does, so it adds no power; the tracker never merges. Format 11 |
 | `/v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated` | Person only in the fold too, the attempt must exist and be finished, and the same mark again is `no_change` (`core/src/work_fold.rs#step_record`). A closed item can still be marked. It changes nothing the fold acts on: no stage, claim or wait. Format 11 |
 | `GET /v1/work/queue` | None: reads the fold | Person only. Lists what waits on a person, oldest wait first, then tier, at most 1000 entries per call (`?limit=`, default 200) (`core/src/work_fold/human_wait.rs#State::queue`). The fold keeps no assignee, so every person of the team sees the same list, which is what they see in `GET /v1/work/items` already. An item a person snoozed or parked is left out while the wait they hid continues. A read, so no request key |
 | `GET /v1/work/items`, `GET /v1/work/items/{item}` | None: reads the fold | A person sees every item of the team, as the dashboard does from `work.events` (`tracker/src/http.rs#items`) |
@@ -363,7 +374,7 @@ token. A kind an actor may not write is refused with `actor_not_allowed`.
 | `unblocked` | Person | Only a link that still holds the item (`core/src/work_fold.rs#step_record`). Format 10 |
 | `review_requested` | Person | Open items whose request upstream shows open and unapproved, with a reviewer name of 1 to 100 bytes and no control character (`core/src/work_fold.rs#step_record`). Format 11, so refused until a person raises the log (`core/src/work_fold.rs#format_gate`) |
 | `changes_requested` | Person | Open items whose request upstream shows open and unapproved, and only a change (`core/src/work_fold.rs#step_record`). Format 11 |
-| `merge_marked` | Person | Open items that report a request upstream does not show closed without a merge (`core/src/work_fold.rs#step_record`). Format 11 |
+| `merge_marked` | Person | Open items that report a request upstream shows neither open nor closed without a merge (`core/src/work_fold.rs#step_record`). Format 11 |
 | `summary_rated` | Person | An existing, finished attempt, and only a change (`core/src/work_fold.rs#step_record`). Format 11 |
 | `reopened` | Tracker, person | Closed roots only (`core/src/work_fold.rs#step_record`). Ingest reopens only what it closed. It keeps release waits and clears the item's release, so a waiter waits for the next release |
 | `attempt_closed` | Tracker, person | `core/src/work_fold.rs#step_record` |

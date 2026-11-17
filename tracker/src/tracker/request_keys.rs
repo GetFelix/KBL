@@ -13,6 +13,7 @@ use std::collections::{HashMap, VecDeque};
 
 use kbl_core::names::{ItemId, Key};
 use kbl_core::work::{Actor, RequestKey};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::*;
@@ -27,11 +28,12 @@ tokio::task_local! {
 }
 
 /// One remembered write.
-struct Seen {
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) struct Seen {
     key: Key,
     sig: String,
     offset: u64,
-    kind: &'static str,
+    kind: String,
     item: Option<ItemId>,
 }
 
@@ -63,12 +65,37 @@ impl Requests {
             key: req.key.clone(),
             sig: req.sig.clone(),
             offset,
-            kind: logged.record.kind(),
+            kind: logged.record.kind().to_owned(),
             item: logged.record.item().cloned(),
         });
         while window.len() > WINDOW {
             window.pop_front();
         }
+    }
+
+    /// Each caller's window as `(who, key, writes)`, for a snapshot.
+    pub(super) fn parts(&self) -> Vec<(String, Key, Vec<Seen>)> {
+        let mut out: Vec<_> = (self.0.iter())
+            .map(|((who, by), w)| ((*who).to_owned(), by.clone(), w.iter().cloned().collect()))
+            .collect();
+        out.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+        out
+    }
+
+    /// The windows [`Requests::parts`] gave. A caller kind this build does not
+    /// know is dropped: the window only helps a retry, and the log has the record.
+    pub(super) fn from_parts(parts: Vec<(String, Key, Vec<Seen>)>) -> Self {
+        let mut map = HashMap::new();
+        for (who, by, writes) in parts {
+            let who = match who.as_str() {
+                "agent" => "agent",
+                "person" => "person",
+                "tracker" => "tracker",
+                _ => continue,
+            };
+            map.insert((who, by), writes.into_iter().collect());
+        }
+        Self(map)
     }
 
     fn find(&self, who: &Caller, key: &Key) -> Option<&Seen> {

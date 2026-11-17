@@ -458,9 +458,13 @@ async function main() {
   await init();
   const fold = new Folder();
   const questions = new Map<number, string>();
+  // Time spent in the fold, read by the browser check's performance budget (check/browser.mjs).
+  let foldMs = 0;
   const sink: Fold = {
     apply: (o, p) => {
+      const t0 = performance.now();
       const ok = fold.apply(o, p);
+      foldMs += performance.now() - t0;
       const text = ok ? questionText(p) : null;
       if (text !== null) questions.set(o, text);
       return ok;
@@ -482,12 +486,15 @@ async function main() {
   const redraw = () => {
     if (queued) return;
     queued = true;
-    requestAnimationFrame(() => {
+    // While the history loads, a redraw rebuilds every row read so far, so a frame per page makes
+    // the load quadratic. Twice a second shows progress without that.
+    const wait = store.get().connection.kind === 'live' ? 0 : 500;
+    setTimeout(() => requestAnimationFrame(() => {
       queued = false;
       store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
       if (spendBox.isOpen()) showSpend();
       if (readSpend) pricesBox.refresh(readSpend());
-    });
+    }), wait);
   };
   let cursor = 0;
   let refused = 0;
@@ -509,6 +516,7 @@ async function main() {
         },
         onLive: () => {
           delay = 1000;
+          performance.mark('kbl-live', { detail: { foldMs } });
           store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();
