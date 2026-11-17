@@ -1646,16 +1646,18 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
-    /// Whether `item` is a new fix claim while In review is at the limit. Triage,
-    /// answers, reviews and the other kinds never wait on it.
+    /// Whether `item` is a new fix claim while In review plus held fixes is at the
+    /// limit. Triage, answers, reviews, resumed work and fixes a review asked for
+    /// never wait on it: a finding fix closes without entering In review, and
+    /// pausing it would strand the PR whose review asked for it.
     fn review_full(&self, state: &State, item: &ItemId) -> bool {
         let limit = self.0.settings.review_limit;
         limit > 0
             && state
                 .items
                 .get(item)
-                .is_some_and(|i| i.work == WorkKind::Fix)
-            && state.in_review_count() >= limit
+                .is_some_and(|i| i.work == WorkKind::Fix && i.finding.is_none())
+            && state.review_load() >= limit
     }
 
     /// Writes the tracker's refusal so the root sits in Needs you and its ready

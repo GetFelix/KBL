@@ -170,7 +170,7 @@ export function toAddress(search: string, s: AddressState): string {
 export function reviewFull(items: readonly { stage: string }[], limit: number): string | null {
   if (limit <= 0) return null;
   const n = items.filter((i) => i.stage === 'in_review').length;
-  return n >= limit ? `review full: agents paused, ${n}/${limit}` : null;
+  return n >= limit ? `review full: agents paused, ${n}/${limit} in review` : null;
 }
 
 /** One line for the status bar, and how loudly to say it. */

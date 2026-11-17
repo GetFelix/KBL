@@ -90,8 +90,8 @@ test('an items update replaces the overlaps with the ones from the same fold', (
 
 test('the header says when In review is at the limit, from the folded stages', () => {
   const rows = (n: number, other = 0) => [...Array(n).fill({ stage: 'in_review' }), ...Array(other).fill({ stage: 'ready' })];
-  assert.equal(reviewFull(rows(6, 4), 6), 'review full: agents paused, 6/6');
-  assert.equal(reviewFull(rows(7), 6), 'review full: agents paused, 7/6');
+  assert.equal(reviewFull(rows(6, 4), 6), 'review full: agents paused, 6/6 in review');
+  assert.equal(reviewFull(rows(7), 6), 'review full: agents paused, 7/6 in review');
   assert.equal(reviewFull(rows(5, 9), 6), null);
   assert.equal(reviewFull(rows(9), 0), null);
 });

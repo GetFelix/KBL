@@ -1778,17 +1778,25 @@ and per source on click.
 
 Agents open PRs faster than people review them, and a claim that only adds to
 the review pile makes every PR wait longer. So the tracker has a limit on
-agent PRs in In review. At the limit agents stop claiming, and the header says
-so: "review full: agents paused, 6/6". Triage, answers and reviews carry on, and
-the Ready column explains why nothing is moving.
+agent fixes headed for review. At the limit agents stop claiming new fixes.
+Triage, answers and reviews carry on, and the Ready column explains why nothing
+is moving.
 
 The limit is `KBL_REVIEW_LIMIT` (or `--review-limit`), 3 by default, and 0
-turns it off. It counts items in In review, which are fixes an agent finished
-that nobody has closed. At the limit `work_next` skips Ready fixes, so a new
-fix is not claimed. Triage, questions, resumed work and reviews are claimed as
-before. The paused fixes come back on their own once a merge or a close
-brings the count under the limit. Work an agent already holds is not taken
-back.
+turns it off. It counts two things: items in In review (fixes an agent
+finished that nobody has closed) and fixes agents hold now that have not
+reached In review yet. Counting the held ones keeps a crowd of agents from all
+landing in review together. When that sum reaches the limit, `work_next` skips
+Ready fixes. It is soft only in that it never blocks triage, questions,
+reviews, resumed work or finding fixes. A finding fix is one a review asked for
+on a PR. It closes without a review of its own and the PR waits for it, so
+pausing it would stop that PR from ever leaving In review. The paused fixes
+come back on their own once a merge, a close or a finished hold brings the sum
+under the limit. Work an agent already holds is not taken back.
+
+The header says "review full: agents paused, 6/6 in review" when In review
+alone is at the limit. It counts only the In review column, so while held fixes
+are what fill the limit the header stays quiet even though new fixes wait.
 
 There is no evidence behind the default of 3: the research found nothing that
 says how many open PRs a reviewer can handle, and "two or three per active
