@@ -1436,7 +1436,10 @@ async fn my_queue_lists_what_waits_on_a_person_by_wait_then_tier() {
     assert_eq!(status, StatusCode::OK, "{q}");
     assert_eq!(q["count"], 0);
 
-    for item in ["a2", "a1"] {
+    // The tier 2 item is flagged first, so it is older: age beats tier. The
+    // pause keeps the two records in different milliseconds.
+    for item in ["a1", "a2"] {
+        tokio::time::sleep(Duration::from_millis(5)).await;
         let (status, r) = call(
             &app,
             "/v1/work/flag",
@@ -1453,7 +1456,7 @@ async fn my_queue_lists_what_waits_on_a_person_by_wait_then_tier() {
         .iter()
         .map(|e| e["item"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["a2", "a1"], "{q}");
+    assert_eq!(ids, ["a1", "a2"], "{q}");
     assert_eq!(q["queue"][0]["wait"], "other");
     assert_eq!(q["queue"][0]["needs"], "flagged");
 
@@ -1470,6 +1473,36 @@ async fn my_queue_lists_what_waits_on_a_person_by_wait_then_tier() {
     .await;
     let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
     assert_eq!(q["count"], 1);
+}
+
+#[tokio::test]
+async fn my_queue_limit_trims_the_list_but_not_the_count() {
+    let app = kept().await;
+    raise_to(&app, 7).await;
+    for item in ["a1", "a2", "a3"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+        call(
+            &app,
+            "/v1/work/proposals/accept",
+            Some("tok-gab"),
+            json!({ "item": item, "tier": 1 }),
+        )
+        .await;
+        call(
+            &app,
+            "/v1/work/flag",
+            Some("tok-gab"),
+            json!({ "item": item }),
+        )
+        .await;
+    }
+    let (_, q) = get_json(&app, "/v1/work/queue?limit=2", Some("tok-gab")).await;
+    assert_eq!(
+        (q["queue"].as_array().unwrap().len(), &q["count"]),
+        (2, &json!(3))
+    );
+    let (_, q) = get_json(&app, "/v1/work/queue", Some("tok-gab")).await;
+    assert_eq!(q["queue"].as_array().unwrap().len(), 3);
 }
 
 #[tokio::test]

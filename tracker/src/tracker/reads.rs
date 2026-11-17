@@ -51,17 +51,20 @@ impl<B: Broker> Tracker<B> {
         Ok(json!({ "items": items, "at": s.at }))
     }
 
-    /// Everything that waits on a person, in the order My queue shows it:
-    /// longest wait first, then lower tier. A team view: the fold keeps no
-    /// assignee, so every person of the team sees the same list. `since_ms` is
-    /// null for a wait this tracker did not see begin.
-    pub(crate) async fn queue(&self) -> Result<Value, Error> {
+    /// What waits on a person, in the order My queue shows it: unknown start
+    /// first (it began before this tracker's snapshot), then longest wait,
+    /// then lower tier. A team view: the fold keeps no assignee, so every
+    /// person of the team sees the same list. `count` is the whole queue;
+    /// `queue` holds its first `limit` entries.
+    pub(crate) async fn queue(&self, limit: usize) -> Result<Value, Error> {
         self.begin().await?;
         let core = self.0.core.lock().await;
         let s = &core.state;
-        let entries: Vec<Value> = s
-            .queue()
+        let all = s.queue();
+        let count = all.len();
+        let entries: Vec<Value> = all
             .into_iter()
+            .take(limit)
             .map(|e| {
                 let it = &s.items[&e.item];
                 json!({
@@ -77,7 +80,9 @@ impl<B: Broker> Tracker<B> {
                 })
             })
             .collect();
-        Ok(json!({ "queue": entries, "count": entries.len(), "at": s.at }))
+        let at = s.at;
+        drop(core);
+        Ok(json!({ "queue": entries, "count": count, "at": at }))
     }
 
     /// Time to first human action over the last `days` days, team level:

@@ -1273,9 +1273,21 @@ async fn time_to_human<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -
     }
 }
 
-async fn queue<B: Broker>(call: Call<B>) -> Response {
+/// Entries My queue returns when `limit` is not given, and the most it returns.
+const QUEUE_DEFAULT_LIMIT: usize = 200;
+const QUEUE_MAX_LIMIT: usize = 1000;
+
+#[derive(Deserialize)]
+struct QueueQuery {
+    limit: Option<usize>,
+}
+
+async fn queue<B: Broker>(call: Call<B>, Query(q): Query<QueueQuery>) -> Response {
     match call.person() {
-        Ok(_) => reply(call.tracker().queue().await),
+        Ok(_) => {
+            let limit = q.limit.unwrap_or(QUEUE_DEFAULT_LIMIT).min(QUEUE_MAX_LIMIT);
+            reply(call.tracker().queue(limit).await)
+        }
         Err(d) => denied(d),
     }
 }

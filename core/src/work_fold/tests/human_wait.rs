@@ -41,18 +41,18 @@ fn a_question_waits_until_a_person_answers() {
 }
 
 #[test]
-fn a_pr_in_review_and_a_failed_check_are_one_wait_that_a_person_ends() {
+fn a_failed_check_on_a_pr_in_review_starts_a_new_wait_that_a_person_ends() {
     let mut l = with_pr(); // done at offset 4: in review from 40
     assert_eq!(stats(&l).open, 1);
     l.tracker(pr_status(
         "r1",
         snapshot("GetFelix/felix#9", PrChecks::Red, PrReview::Unreviewed),
     )); // 5: the item goes on waiting, from 40
-    assert_eq!(stats(&l).oldest_open_since_ms, Some(40));
+    assert_eq!(stats(&l).oldest_open_since_ms, Some(50));
     l.person(close("r1")); // 6: at 60
     let s = stats(&l);
-    assert_eq!((s.all.p50_ms, s.open), (Some(20), 0));
-    assert_eq!(s.by_kind[&WaitKind::Review].count, 1);
+    assert_eq!((s.all.p50_ms, s.open), (Some(10), 0));
+    assert_eq!(s.by_kind[&WaitKind::Failure].count, 1);
 }
 
 #[test]
@@ -268,4 +268,75 @@ fn the_queue_lists_waits_oldest_first_then_by_tier() {
         tier: None,
     });
     assert_eq!(ids(&l), ["c2"]);
+}
+
+fn entry(item: &str, tier: Option<u8>, since_ms: Option<u64>) -> QueueEntry {
+    QueueEntry {
+        item: id(item),
+        kind: WaitKind::Other,
+        tier,
+        since_ms,
+    }
+}
+
+fn order(mut v: Vec<QueueEntry>) -> Vec<String> {
+    super::super::human_wait::sort_queue(&mut v);
+    v.iter().map(|e| e.item.as_str().to_owned()).collect()
+}
+
+#[test]
+fn queue_order_breaks_ties_by_tier_then_id_and_puts_unknown_starts_first() {
+    // Equal start: the lower tier first, an untiered item last.
+    assert_eq!(
+        order(vec![
+            entry("a", None, Some(5)),
+            entry("b", Some(2), Some(5)),
+            entry("c", Some(1), Some(5)),
+        ]),
+        ["c", "b", "a"]
+    );
+    // Equal start and tier: id.
+    assert_eq!(
+        order(vec![
+            entry("z", Some(1), Some(5)),
+            entry("y", Some(1), Some(5))
+        ]),
+        ["y", "z"]
+    );
+    // A tier never beats age.
+    assert_eq!(
+        order(vec![
+            entry("a", Some(1), Some(9)),
+            entry("b", None, Some(3))
+        ]),
+        ["b", "a"]
+    );
+    // An unknown start began before the snapshot, so it is oldest, whatever its tier.
+    assert_eq!(
+        order(vec![
+            entry("a", Some(1), Some(0)),
+            entry("b", None, None),
+            entry("c", Some(2), None),
+        ]),
+        ["c", "b", "a"]
+    );
+}
+
+#[test]
+fn a_restored_state_queues_its_unseen_waits_first() {
+    let mut l = held_root();
+    l.agent("w1", proposed("c1", None, "a", WorkKind::Fix));
+    let cut = l.0.len();
+    l.agent("w1", proposed("c2", None, "b", WorkKind::Fix));
+    let mut restored: State =
+        serde_json::from_slice(&serde_json::to_vec(&fold(&l.0[..cut])).unwrap()).unwrap();
+    for (o, r) in &l.0[cut..] {
+        restored.apply(*o, r);
+    }
+    let q: Vec<_> = restored
+        .queue()
+        .iter()
+        .map(|e| (e.item.as_str().to_owned(), e.since_ms))
+        .collect();
+    assert_eq!(q, [("c1".to_owned(), None), ("c2".to_owned(), Some(50))]);
 }
