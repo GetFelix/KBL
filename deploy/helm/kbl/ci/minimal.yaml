@@ -1,0 +1,12 @@
+felix:
+  controlPlane: https://controlplane.felix.svc:8443
+  broker: broker.felix.svc:5000
+  brokerName: broker.felix.svc
+  idp: https://idp.example.com
+  ca:
+    pem: |
+      -----BEGIN CERTIFICATE-----
+      ci-placeholder
+      -----END CERTIFICATE-----
+tracker:
+  tokensSecret: { name: kbl-tracker-tokens }

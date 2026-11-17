@@ -1,0 +1,42 @@
+{{- if .Values.ingress.enabled }}
+{{- $hosts := list }}
+{{- if and .Values.dashboard.enabled .Values.ingress.host }}{{ $hosts = append $hosts .Values.ingress.host }}{{ end }}
+{{- if .Values.ingress.trackerHost }}{{ $hosts = append $hosts .Values.ingress.trackerHost }}{{ end }}
+{{- if not $hosts }}{{ fail "ingress.enabled needs ingress.host (dashboard) or ingress.trackerHost" }}{{ end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "kbl.fullname" . }}
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.secretName }}
+  tls:
+    - secretName: {{ .Values.ingress.tls.secretName }}
+      hosts: {{- toYaml $hosts | nindent 8 }}
+  {{- end }}
+  rules:
+    {{- if and .Values.dashboard.enabled .Values.ingress.host }}
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: {{ include "kbl.fullname" . }}-dashboard, port: { number: {{ .Values.dashboard.service.port }} } }
+    {{- end }}
+    {{- with .Values.ingress.trackerHost }}
+    - host: {{ . | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: {{ include "kbl.fullname" $ }}-tracker, port: { number: {{ $.Values.tracker.service.port }} } }
+    {{- end }}
+{{- end }}

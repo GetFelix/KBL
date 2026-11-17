@@ -529,6 +529,7 @@ CI runs five jobs: lint (with the fixture regeneration), dashboard frame, the Ru
 - [docs/work-tracker.md](docs/work-tracker.md): the tracker, its work kinds, grants, budgets and the dashboard
 - [docs/decision-replay.md](docs/decision-replay.md): how an agent's decisions are recorded and read back
 - [docs/threat-model.md](docs/threat-model.md): who can reach what, and the check behind every route and record kind
+- [docs/deploy.md](docs/deploy.md): the container images and the Helm chart for running KBL on Kubernetes
 - [docs/ingest-setup.md](docs/ingest-setup.md): setting up ingest: a starter config, `kbl-ingest check` and its dry run
 - [docs/metrics.md](docs/metrics.md): the Prometheus metrics of the tracker, ingest and `kbl-mcp`, and how to expose them
 - [docs/upgrades.md](docs/upgrades.md): upgrading a running KBL and going back, and the record format rules behind it
