@@ -404,6 +404,10 @@ record if the fold accepts it:
 | `POST /v1/work/park` `{item}` | `parked` with `parked: true`: My queue hides the item until it waits for a new reason |
 | `POST /v1/work/unpark` `{item}` | `parked` with `parked: false`: the item is in My queue again |
 | `POST /v1/work/unblock` `{item, to}` | `unblocked`: marks the dependency `to` resolved, so the item no longer waits on it |
+| `POST /v1/work/request-review` `{item, reviewer}` | `review_requested`: records that the item's open pull request was put to `reviewer`. See [Review actions and summary marks](#review-actions-and-summary-marks) |
+| `POST /v1/work/request-changes` `{item}` | `changes_requested`: records that a person sent the open pull request back |
+| `POST /v1/work/mark-merged` `{item}` | `merge_marked`: records that the pull request was merged upstream, and closes the item as merged. Refused while upstream shows the request open; the item keeps who recorded it, and a later open or closed-unmerged status reopens it into Needs you as `merge_disputed` |
+| `POST /v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated`: marks the summary the attempt handed off accurate or not |
 
 A person's token can also read the team's work. These calls write nothing:
 
@@ -617,8 +621,42 @@ is refused with `no_change`; a closed item with `closed`.
   in that the log says the person resolved it, and a link that holds nothing
   is `no_change`.
 
-Reassign, take, steer, request review, request changes, mark merged and rate
-summary need an assignee in the fold or a PR-side record and are not built yet.
+Reassign, take and steer need an assignee in the fold and are not built yet.
+
+#### Review actions and summary marks
+
+A person's moves on an item's pull request, and on the summary an agent handed
+off. Each is one record from a person's token, [format 11](upgrades.md#formats):
+until a person raises the log to 11 the calls are refused with `format`. A move
+that changes nothing is `no_change`.
+
+`pr_status` is what upstream says and only ingest writes it. These records never
+change it. They are what a person did, kept beside it on the item.
+
+- **Request review** names who was asked (`reviewer`, up to 100 characters, no
+  control characters). The pull request must be open upstream, reported by the
+  item, and not already approved; a repeat of the same ask is `no_change`, and
+  another reviewer replaces it. The tracker does not contact anyone: the ask is
+  a note on the item, so it is for a person to make it on GitHub as well.
+- **Request changes** records that a person sent the open pull request back.
+  Same conditions as the ask, and it answers a standing ask. It does not start a
+  redo: that is still a note or a redo, as before.
+- Both go stale rather than wrong. Upstream showing a review (approved, or
+  changes requested for an ask), the request no longer open, or the item
+  reporting a different request drops them, so a later round starts clean.
+  A new ask also drops the earlier send-back.
+- **Mark merged** is for a merge the person saw that ingest has not recorded. It
+  works when upstream has not reported the request, still shows it open, or
+  already shows it merged, and closes the item as merged, as a `close` with
+  `merged` does. It is refused as `no_change` when upstream shows the request
+  closed without a merge, or the item reports no request. The tracker never
+  merges.
+- **Rate summary** marks the summary one attempt handed off: `attempt` must
+  exist and be finished (`wrong_attempt`, `not_ready`). The latest mark for an
+  attempt stands, and the same mark again is `no_change`. It works on a closed
+  item too, since it judges what the agent wrote. It is not an action on the
+  wait, so time to first human action keeps running. The mark shows in the
+  story section of the panel; nothing computes a trust number from it yet.
 
 ### One agent token per session
 
@@ -1968,12 +2006,14 @@ the note box, not from search or other text fields:
 | Held by you | Release: `released` | | | |
 | PR with no reviewer | Ask a person to review it, picked from a list: `review_requested` | Approve: `approved` | Send back with changes: `changes_requested` | Reject: `rejected` |
 | PR waiting on you | Approve: `approved` | Send back with changes: `changes_requested` | Reject: `rejected` | |
-| PR approved, not merged | Record a merge done upstream: `done` | Reject: `rejected` | | |
+| PR approved, not merged | Record a merge done upstream: `merge_marked` | Reject: `rejected` | | |
 
 On a question, `Ctrl+Enter` sends what is typed in the free text field, or the
 default option if nothing is typed. Marking the agent's summary accurate or
 inaccurate (`summary_rated`) and parking an item are buttons on the card and
-entries on the palette.
+entries on the palette. In the live dashboard the summary marks are two buttons
+per finished attempt in the Story section of the item's panel, reachable with
+Tab; they write the record and show the mark once the log carries it.
 
 The letters changed to match other trackers. Someone who knew the old map can
 read this once:

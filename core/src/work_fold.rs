@@ -15,7 +15,7 @@ use crate::names::{ItemId, Key};
 use crate::work::{
     Actor, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5, FORMAT_V6,
     FORMAT_V8, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_CHECK_BYTES,
-    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST,
+    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWER,
     MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
     MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
     PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReviewPass, ReviewSpec, TIERS, Target,
@@ -292,6 +292,8 @@ pub enum NeedsYou {
     Unclear,
     /// A person moved it here with `flagged`.
     Flagged,
+    /// A person recorded the merge and upstream shows the request not merged.
+    MergeDisputed,
 }
 
 /// What the open question offers, kept so an answer can be checked and the
@@ -360,6 +362,34 @@ pub struct Snooze {
     /// reason shows it again even when its start is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<WaitKind>,
+}
+
+/// A person's ask that someone review the pull request an item reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewAsk {
+    pub reviewer: String,
+    /// The request the ask was made on. A status for another request drops it.
+    pub pr: String,
+    /// What upstream showed when the ask was made. The ask is answered by a
+    /// review that differs from it, not by one that repeats it.
+    pub review: PrReview,
+    pub at_ms: u64,
+}
+
+/// A person's record that the item's pull request merged, kept so the panel
+/// and the API can tell it from a merge upstream reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeMark {
+    pub by: Key,
+    /// Offset of the `merge_marked` record.
+    pub offset: u64,
+}
+
+/// A person's request that the pull request an item reports change before it merges.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangesAsk {
+    pub pr: String,
+    pub at_ms: u64,
 }
 
 /// Longest a snooze may run, so a typo cannot hide an item for good.
@@ -445,6 +475,10 @@ pub struct Path {
     /// and passed with it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proven: Vec<u64>,
+    /// A person's latest mark of the summary this attempt handed off: true if
+    /// accurate. None until someone marks it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_accurate: Option<bool>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -550,6 +584,19 @@ pub struct Item {
     /// The reason the item waited when it was parked, as for `Snooze::kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_kind: Option<WaitKind>,
+    /// A person asked someone to review the open pull request. Cleared once
+    /// upstream shows a review, the request is no longer open, or it changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_ask: Option<ReviewAsk>,
+    /// A person sent the open pull request back for changes. Cleared like `review_ask`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes_ask: Option<ChangesAsk>,
+    /// A person recorded the merge. While the item is closed as merged this is
+    /// who said so; if upstream then shows the request open or closed unmerged,
+    /// the item reopens into Needs you with this still set. Cleared by a
+    /// reopen or an upstream merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_marked: Option<MergeMark>,
     pub accepted: bool,
     /// A person wrote the last `accepted` on a log at format 6 or above.
     /// An earlier acceptance does not count, so a format 5 state is unchanged.
@@ -1044,6 +1091,9 @@ impl State {
         if it.over_budget {
             return Some(NeedsYou::OverBudget);
         }
+        if it.merge_marked.is_some() {
+            return Some(NeedsYou::MergeDisputed);
+        }
         // A holder may finish or release first; only then does the item stop.
         if it.left_scope && it.hold.is_none() {
             return Some(NeedsYou::LeftScope);
@@ -1390,6 +1440,9 @@ impl State {
             snoozed: None,
             parked_at_ms: None,
             parked_kind: None,
+            review_ask: None,
+            changes_ask: None,
+            merge_marked: None,
             left_scope_by_sync: false,
             accepted: false,
             accepted_by_person: false,
@@ -1894,7 +1947,11 @@ impl State {
                         capped: false,
                         findings: 0,
                         proven: Vec::new(),
+                        summary_accurate: None,
                     });
+                    // A new attempt answers the asks made on the last one's request.
+                    it.review_ask = None;
+                    it.changes_ask = None;
                 }
                 if it.work != WorkKind::Review
                     && !it.workers.contains(&rec.by)
@@ -1941,6 +1998,8 @@ impl State {
                     if it.pr != *pr {
                         it.pr_status = None;
                         it.red_since = None;
+                        it.review_ask = None;
+                        it.changes_ask = None;
                     }
                     it.pr = pr.clone();
                 }
@@ -2365,6 +2424,122 @@ impl State {
                 self.edges.remove(&(item.clone(), to.clone()));
                 self.release_edges.remove(&(item.clone(), to.clone()));
             }
+            WorkRecord::ReviewRequested { item, reviewer } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if reviewer.len() > MAX_REVIEWER {
+                    return Err(Reject::TooLong);
+                }
+                if reviewer.trim().is_empty() || reviewer.chars().any(char::is_control) {
+                    return Err(Reject::MissingField);
+                }
+                let it = self.item_mut(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // Only a request upstream shows open, and not one it shows approved.
+                let pr = match (&it.pr, &it.pr_status) {
+                    (Some(p), Some(s))
+                        if *p == s.pr
+                            && s.phase == PrPhase::Open
+                            && s.review != PrReview::Approved =>
+                    {
+                        p.clone()
+                    }
+                    _ => return Err(Reject::NoChange),
+                };
+                let same = it
+                    .review_ask
+                    .as_ref()
+                    .is_some_and(|a| a.pr == pr && a.reviewer == *reviewer);
+                if same {
+                    return Err(Reject::NoChange);
+                }
+                let review = it
+                    .pr_status
+                    .as_ref()
+                    .map_or(PrReview::Unreviewed, |s| s.review);
+                it.review_ask = Some(ReviewAsk {
+                    reviewer: reviewer.clone(),
+                    pr,
+                    review,
+                    at_ms: rec.at_ms,
+                });
+                // A new round of review: the earlier send-back has been taken up.
+                it.changes_ask = None;
+            }
+            WorkRecord::ChangesRequested { item } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item_mut(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                let pr = match (&it.pr, &it.pr_status) {
+                    (Some(p), Some(s))
+                        if *p == s.pr
+                            && s.phase == PrPhase::Open
+                            && s.review != PrReview::Approved =>
+                    {
+                        p.clone()
+                    }
+                    _ => return Err(Reject::NoChange),
+                };
+                if it.changes_ask.as_ref().is_some_and(|a| a.pr == pr) {
+                    return Err(Reject::NoChange);
+                }
+                it.changes_ask = Some(ChangesAsk {
+                    pr,
+                    at_ms: rec.at_ms,
+                });
+                // The ask was answered.
+                it.review_ask = None;
+            }
+            WorkRecord::MergeMarked { item } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // Upstream may not have said yet, or may already say merged. A
+                // request it shows open or closed unmerged was not merged.
+                let seen = it
+                    .pr_status
+                    .as_ref()
+                    .filter(|s| it.pr.as_deref() == Some(s.pr.as_str()))
+                    .map(|s| s.phase);
+                if it.pr.is_none() || matches!(seen, Some(PrPhase::Open | PrPhase::Closed)) {
+                    return Err(Reject::NoChange);
+                }
+                self.close(item, Closure::Merged);
+                self.item_mut(item)?.merge_marked = Some(MergeMark {
+                    by: rec.by.clone(),
+                    offset,
+                });
+            }
+            WorkRecord::SummaryRated {
+                item,
+                attempt,
+                accurate,
+            } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                // A closed item's summary can still be marked: this judges what
+                // the agent wrote, not the item.
+                let p = self.path_mut(item, *attempt)?;
+                if !p.done {
+                    return Err(Reject::NotReady);
+                }
+                if p.summary_accurate == Some(*accurate) {
+                    return Err(Reject::NoChange);
+                }
+                p.summary_accurate = Some(*accurate);
+            }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
@@ -2392,6 +2567,9 @@ impl State {
                 it.snoozed = None;
                 it.parked_at_ms = None;
                 it.parked_kind = None;
+                it.review_ask = None;
+                it.changes_ask = None;
+                it.merge_marked = None;
                 it.changed_upstream = true;
                 it.proposal = None;
             }
@@ -2592,6 +2770,22 @@ impl State {
                 }
             }
             WorkRecord::PrStatus { item, status } => {
+                // A person recorded the merge and upstream says otherwise: the
+                // item comes back for a person to look at.
+                if rec.actor != Actor::Agent
+                    && status.phase != PrPhase::Merged
+                    && status.fits()
+                    && status.consistent()
+                    && let Some(it) = self.items.get_mut(item)
+                    && it.parent.is_none()
+                    && matches!(it.closed, Some(Closure::Merged))
+                    && it.merge_marked.is_some()
+                    && it.pr.as_deref() == Some(status.pr.as_str())
+                {
+                    it.closed = None;
+                    it.release = None;
+                    self.track(item);
+                }
                 let it = self.upstream_sync(item, rec)?;
                 if it.pr.as_deref() != Some(status.pr.as_str()) {
                     return Err(Reject::WrongPr);
@@ -2607,6 +2801,26 @@ impl State {
                     it.red_since = None;
                 } else if !it.pr_status.as_ref().is_some_and(red) {
                     it.red_since = Some(offset);
+                }
+                // A person's ask lasts while upstream shows the same request open
+                // and has not answered it.
+                let open = status.phase == PrPhase::Open;
+                if it.review_ask.as_ref().is_some_and(|a| {
+                    !open
+                        || a.pr != status.pr
+                        || status.review == PrReview::Approved
+                        || (status.review == PrReview::ChangesRequested
+                            && a.review != PrReview::ChangesRequested)
+                }) {
+                    it.review_ask = None;
+                }
+                if status.phase == PrPhase::Merged {
+                    it.merge_marked = None;
+                }
+                if it.changes_ask.as_ref().is_some_and(|a| {
+                    !open || a.pr != status.pr || status.review == PrReview::Approved
+                }) {
+                    it.changes_ask = None;
                 }
                 it.pr_status = Some(status.clone());
             }

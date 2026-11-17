@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { acceptTier, CAN, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import { acceptTier, CAN, canRate, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
@@ -262,4 +262,16 @@ test('me carries each team’s review limit, and leaves out a team with none', a
   const fake: Fetch = async () => ({ status: 200, json: async () => ({ person: 'sam', teams: [{ team: 'a', review_limit: 3 }, { team: 'b', review_limit: 0 }, { team: 'c', review_limit: null }] }) });
   const me = await new Tracker(fake, 'tok', null).me();
   assert.deepEqual('limits' in me && me.limits, { a: 3 });
+});
+
+test('a summary mark is the tracker person route, and is offered only on a log at format 11', () => {
+  assert.deepEqual(request('a', { kind: 'rate', attempt: 2, accurate: false }), { path: '/v1/work/rate-summary', body: { item: 'a', attempt: 2, accurate: false } });
+  assert.equal(route('/v1/work/rate-summary', 'ops'), '/v1/teams/ops/work/rate-summary');
+  assert.equal(UNDO.rate, null);
+  // A closed item's summary can still be marked; a log below 11 refuses the record.
+  assert.deepEqual([item({ id: 'a', format: 10 }), item({ id: 'a', format: 11 }), item({ id: 'a', stage: 'done', format: 11 })].map(canRate), [false, true, true]);
+  const [old] = jobsFor(['a'], { kind: 'rate', attempt: 1, accurate: true }, [item({ id: 'a', format: 10 })], NO_WRITES);
+  assert.match(old.req as string, /below format 11/);
+  const [ok] = jobsFor(['a'], { kind: 'rate', attempt: 1, accurate: true }, [item({ id: 'a', stage: 'done', format: 11 })], NO_WRITES);
+  assert.deepEqual(ok.req, { path: '/v1/work/rate-summary', body: { item: 'a', attempt: 1, accurate: true } });
 });

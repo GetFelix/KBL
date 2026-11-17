@@ -105,7 +105,7 @@ fn agent_and_tracker_records_and_an_unknown_kind_do_not_end_a_wait() {
     );
     // A kind this build does not know is no action, even when a person wrote it.
     let line =
-        br#"{"at_ms":70,"by":"gabriel","actor":"person","kind":"summary_rated","item":"r1","accurate":true}"#;
+        br#"{"at_ms":70,"by":"gabriel","actor":"person","kind":"item_starred","item":"r1","stars":3}"#;
     let snooze = WorkLogged::decode(line).unwrap();
     assert_eq!(snooze.record, WorkRecord::Unknown);
     let offset = l.0.len() as u64;

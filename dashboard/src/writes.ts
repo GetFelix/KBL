@@ -4,7 +4,7 @@
 // own token, so the page can never do more than the person could with curl.
 import type { ItemRow } from './fold.ts';
 
-export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'undo';
+export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'undo';
 
 export interface Request {
   path: string;
@@ -22,6 +22,7 @@ export const NEEDS: Readonly<Record<string, string>> = {
   left_scope: 'The issue left its intake rule',
   check_failed: 'A check failed',
   flagged: 'A person moved it here',
+  merge_disputed: 'Marked merged, but upstream shows it open',
 };
 
 export function needsText(needs: string | null | undefined): string {
@@ -53,6 +54,16 @@ const FLAGGABLE_LOG = (i: ItemRow) => (i.format ?? 0) >= FLAG_FORMAT;
 
 /** Whether the log is at a format that takes flags. The palette lists the flag commands only then. */
 export const logTakesFlags = (items: readonly ItemRow[]) => items.some(FLAGGABLE_LOG);
+/** The first log format that takes `summary_rated` records. */
+export const RATE_FORMAT = 11;
+
+/**
+ * Whether the page may offer a mark on the summary of an attempt. Not part of `CAN`: a closed
+ * item's summary can still be marked, which would hide the closed notice there. A log below
+ * format 11 refuses every `summary_rated` record, so no button shows there.
+ */
+export const canRate = (i: ItemRow): boolean => (i.format ?? 0) >= RATE_FORMAT;
+
 export const FLAG_COMMANDS: ReadonlySet<string> = new Set(['flag', 'unflag']);
 
 /**
@@ -66,7 +77,7 @@ export function marksAfter(marked: readonly string[], ids: readonly string[]): s
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
-export const CAN: Readonly<Record<Exclude<WriteKind, 'undo'>, (i: ItemRow) => boolean>> = {
+export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate'>, (i: ItemRow) => boolean>> = {
   accept: (i) => i.stage === 'triage' || i.stage === 'proposed',
   // The fold rejects only a proposal nobody accepted; an imported root is closed instead.
   reject: (i) => i.stage === 'proposed',
@@ -92,7 +103,9 @@ export type WriteArgs =
   | { kind: 'close'; why: CloseWhy }
   | { kind: 'answer'; question: number; text: string; chosen: string | null }
   | { kind: 'flag' }
-  | { kind: 'unflag' };
+  | { kind: 'unflag' }
+  /** Marks the summary an attempt handed off as accurate or not. The latest mark stands. */
+  | { kind: 'rate'; attempt: number; accurate: boolean };
 
 /** A route under the viewer's team when the address names one (`/v1/teams/{team}/work/...`). */
 export function route(path: string, team: string | null): string {
@@ -113,6 +126,8 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/flag', body: { item } };
     case 'unflag':
       return { path: '/v1/work/unflag', body: { item } };
+    case 'rate':
+      return { path: '/v1/work/rate-summary', body: { item, attempt: a.attempt, accurate: a.accurate } };
     case 'answer': {
       const body: Record<string, unknown> = { item, question: a.question };
       // The tracker reads `text` as content: inline text is `{ text }`, never a bare string.
@@ -175,6 +190,8 @@ export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> =
   // Each takes the other back, so neither asks first.
   flag: null,
   unflag: null,
+  // Marking the other way replaces the mark, so there is nothing to ask first.
+  rate: null,
 };
 
 export interface Undo {
@@ -244,6 +261,7 @@ export function putWrite(w: Writes, write: Write): Writes {
 function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly ItemRow[]): string | null {
   const now = items.find((i) => i.id === id);
   if (!now) return `${id} is no longer in the log.`;
+  if (kind === 'rate') return canRate(now) ? null : `The log is below format ${RATE_FORMAT}, so nothing was sent.`;
   if (CAN[kind](now)) return null;
   if (kind === 'flag' && OPEN(now) && now.flagged) return `${id} is already flagged, so nothing was sent.`;
   if (kind === 'unflag' && OPEN(now)) return `${id} is not flagged now, so nothing was sent.`;
@@ -289,6 +307,7 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
   close: ['Closing', 'Closed'],
   answer: ['Answering', 'Answered'],
   flag: ['Flagging', 'Flagged'],
+  rate: ['Marking the summary of', 'Marked the summary of'],
   unflag: ['Unflagging', 'Unflagged'],
   undo: ['Undoing the tier change on', 'Undid the tier change on'],
 };
@@ -316,7 +335,7 @@ export function summary(batch: readonly Write[]): { text: string; tone: 'busy' |
   for (const x of batch) if (x.status === 'ok' && x.noUndo) noUndo.set(x.noUndo, [...(noUndo.get(x.noUndo) ?? []), x.item]);
   for (const [why, ids] of noUndo) parts.push(`No undo for ${items(ids)}: ${why}`);
   for (const x of bad) {
-    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${FLAG_FORMAT} to use Needs-you flags.`);
+    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${kind === 'rate' ? `${RATE_FORMAT} to mark summaries` : `${FLAG_FORMAT} to use Needs-you flags`}.`);
     else parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'failed'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
   }
   return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.filter((x) => x.status === 'ok' && x.undo).length };

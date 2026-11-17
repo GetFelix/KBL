@@ -760,6 +760,16 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
         ("/v1/work/unpark", json!({ "item": "a1" })),
         ("/v1/work/unblock", json!({ "item": "a1", "to": "a2" })),
         (
+            "/v1/work/request-review",
+            json!({ "item": "a1", "reviewer": "kim" }),
+        ),
+        ("/v1/work/request-changes", json!({ "item": "a1" })),
+        ("/v1/work/mark-merged", json!({ "item": "a1" })),
+        (
+            "/v1/work/rate-summary",
+            json!({ "item": "a1", "attempt": 1, "accurate": true }),
+        ),
+        (
             "/v1/work/budget",
             json!({ "root": "a1", "items_left": 1, "max_depth": 1, "cost_left_micros": 1, "redos_per_item": 1 }),
         ),
@@ -1698,4 +1708,101 @@ async fn the_card_actions_act_only_in_the_tokens_team() {
     assert_eq!(q["count"], 0);
     let (status, _) = call(&two.app, "/v1/teams/b/work/park", Some("tok-b-ana"), item).await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+/// The four format 11 routes, with a body each takes.
+fn review_routes() -> [(&'static str, Value); 4] {
+    [
+        ("request-review", json!({ "item": "a1", "reviewer": "kim" })),
+        ("request-changes", json!({ "item": "a1" })),
+        ("mark-merged", json!({ "item": "a1" })),
+        (
+            "rate-summary",
+            json!({ "item": "a1", "attempt": 1, "accurate": true }),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn the_review_actions_wait_for_format_11() {
+    let app = kept().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    raise_to(&app, 10).await;
+    for (path, body) in review_routes() {
+        let (status, reply) = call(
+            &app,
+            &format!("/v1/work/{path}"),
+            Some("tok-gab"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(
+            (status, reply["why"].as_str()),
+            (StatusCode::CONFLICT, Some("format")),
+            "{path}"
+        );
+    }
+    // Raised, the fold answers for each: there is no request and no attempt.
+    raise_to(&app, 11).await;
+    let want = [
+        ("request-review", "no_change"),
+        ("request-changes", "no_change"),
+        ("mark-merged", "no_change"),
+        ("rate-summary", "wrong_attempt"),
+    ];
+    for ((path, body), (_, why)) in review_routes().into_iter().zip(want) {
+        let (status, reply) = call(&app, &format!("/v1/work/{path}"), Some("tok-gab"), body).await;
+        assert_eq!(
+            (status, reply["why"].as_str()),
+            (StatusCode::CONFLICT, Some(why)),
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_review_actions_act_only_in_the_tokens_team() {
+    let two = two(64).await;
+    let raise = json!({ "record": { "kind": "format_raised", "to": 11 } });
+    call(
+        &two.app,
+        "/v1/teams/a/work/records",
+        Some("tok-a-gab"),
+        raise,
+    )
+    .await;
+    call(
+        &two.app,
+        "/v1/teams/a/work/records",
+        Some("tok-a-gab"),
+        imported("a1"),
+    )
+    .await;
+    let written = two.a.published().len();
+    for (path, body) in review_routes() {
+        // The other team is not this token's.
+        let (status, r) = call(
+            &two.app,
+            &format!("/v1/teams/b/work/{path}"),
+            Some("tok-a-gab"),
+            body.clone(),
+        )
+        .await;
+        assert_eq!(
+            (status, r["why"].as_str()),
+            (StatusCode::NOT_FOUND, Some("unknown_team")),
+            "{path}"
+        );
+        // Its own team reads the fold; the item does not exist in team b.
+        let (status, r) = call(
+            &two.app,
+            &format!("/v1/teams/b/work/{path}"),
+            Some("tok-b-ana"),
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{path}: {r}");
+    }
+    assert!(two.b.published().is_empty());
+    assert_eq!(two.a.published().len(), written);
 }

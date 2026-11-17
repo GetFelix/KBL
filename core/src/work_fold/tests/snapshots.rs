@@ -277,6 +277,64 @@ fn a_restored_park_or_snooze_folds_and_queues_like_a_fresh_one() {
     check_every_offset(&with_blanks(&l.0), 4);
 }
 
+/// A review ask, a changes request and a summary mark come back from a stored
+/// snapshot as a fresh fold has them, and later records act on them the same.
+#[test]
+fn restored_review_asks_and_summary_marks_fold_like_fresh_ones() {
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 11 });
+    for (n, item) in ["r1", "r2", "r3", "r4", "r5"].into_iter().enumerate() {
+        let pr = format!("GetFelix/felix#{n}");
+        accepted_root(&mut l, item);
+        l.agent("w1", claimed(item, 1));
+        l.agent(
+            "w1",
+            WorkRecord::Progress {
+                item: id(item),
+                attempt: 1,
+                note: text("opened"),
+                branch: None,
+                pr: Some(pr.clone()),
+            },
+        );
+        l.agent("w1", done(item, 1, 0));
+        if n < 3 {
+            let snap = snapshot(&pr, PrChecks::Green, PrReview::Unreviewed);
+            l.tracker(pr_status(item, snap));
+        }
+    }
+    l.person(WorkRecord::MergeMarked { item: id("r4") });
+    l.person(WorkRecord::MergeMarked { item: id("r5") });
+    // Upstream then shows r5's request open: it comes back disputed.
+    let snap = snapshot("GetFelix/felix#4", PrChecks::Green, PrReview::Unreviewed);
+    l.tracker(pr_status("r5", snap));
+    l.person(WorkRecord::ReviewRequested {
+        item: id("r1"),
+        reviewer: "kim".into(),
+    });
+    l.person(WorkRecord::ChangesRequested { item: id("r2") });
+    l.person(WorkRecord::SummaryRated {
+        item: id("r3"),
+        attempt: 1,
+        accurate: false,
+    });
+    // Upstream answers r1's ask after the stores above were taken.
+    let snap = snapshot("GetFelix/felix#0", PrChecks::Green, PrReview::Approved);
+    l.tracker(pr_status("r1", snap));
+    let fresh = fold(&l.0);
+    assert!(fresh.items[&id("r4")].merge_marked.is_some());
+    assert_eq!(fresh.needs_you(&id("r5")), Some(NeedsYou::MergeDisputed));
+    assert!(fresh.items[&id("r1")].review_ask.is_none());
+    assert!(fresh.items[&id("r2")].changes_ask.is_some());
+    assert_eq!(
+        fresh.items[&id("r3")].paths[0].summary_accurate,
+        Some(false)
+    );
+    assert!(fresh.rejections.is_empty(), "{:?}", fresh.rejections);
+    check_every_offset(&l.0, 3);
+    check_every_offset(&with_blanks(&l.0), 4);
+}
+
 /// One snapshot kept on its own, read back from JSON, is the fold of its
 /// records, derived data included, and an edit anywhere below it fails it.
 #[test]

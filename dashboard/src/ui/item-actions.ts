@@ -13,6 +13,8 @@ export interface WriteHandlers {
   setTier(ids: string[], tier: number): void;
   /** Flags the items for a person, or clears the flag. Neither asks first: each takes the other back. */
   flag(ids: string[], flagged: boolean): void;
+  /** Marks the summary of an attempt accurate or not. The other mark replaces it, so it asks nothing first. */
+  rate(item: string, attempt: number, accurate: boolean): void;
   answer(item: string, question: number, text: string, chosen: string | null): void;
   undo(): void;
   dismiss(): void;
@@ -47,6 +49,7 @@ const PENDING: Record<WriteKind, string> = {
   answer: 'Sending the answer…',
   flag: 'Flagging…',
   unflag: 'Unflagging…',
+  rate: 'Marking the summary…',
   undo: 'Undoing…',
 };
 
