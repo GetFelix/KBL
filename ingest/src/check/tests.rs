@@ -422,7 +422,7 @@ async fn a_config_the_worker_would_refuse_is_one_error() {
                  "github": { "token_env": "G" },
                  "jira": { "site": "a", "api": "x", "email": "e", "token_env": "J" },
                  "rules": [{ "name": "r", "repo": "o/n", "mode": "admit" }] }),
-            "exactly one of github, jira and ado",
+            "exactly one of github, jira, ado and gitlab",
         ),
         (
             json!({ "tracker": { "url": "u", "token_env": "T" }, "github": { "token_env": "G" },
@@ -599,4 +599,30 @@ async fn the_dry_run_skips_ingests_own_prerequisite_issues_and_other_sources_roo
         ["GetFelix/felix#1"]
     );
     assert!(first.over_cap.is_empty());
+}
+
+#[tokio::test]
+async fn an_ado_or_gitlab_config_is_reported_not_a_panic() {
+    let cases = [
+        (
+            "ado",
+            r#"{"tracker":{"url":"http://127.0.0.1:1","token_env":"KBL_CHECK_NO_TOKEN"},"ado":{"organization":"contoso","pat_env":"P"},"rules":[{"name":"r","repo":"contoso/Platform","mode":"admit"}]}"#,
+        ),
+        (
+            "gitlab",
+            r#"{"tracker":{"url":"http://127.0.0.1:1","token_env":"KBL_CHECK_NO_TOKEN"},"gitlab":{"token_env":"G"},"rules":[{"name":"r","repo":"team/app","mode":"admit"}]}"#,
+        ),
+    ];
+    for (source, cfg) in cases {
+        let path = temp(&format!("unsupported-{source}.json"), cfg);
+        let report = report_for(&path).await;
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.scope == source && f.message.contains("does not test")),
+            "{:?}",
+            report.findings
+        );
+    }
 }

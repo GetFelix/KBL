@@ -253,3 +253,87 @@ fn ado_rule_fields_belong_to_ado_and_a_query_path_stays_inside_queries() {
     let gh = r#"[{"name":"r","repo":"o/r","mode":"admit","area_paths":{"a":"o/r"}}]"#;
     assert!(parse(gh, GH).is_err());
 }
+
+fn gitlab(block: &str, rule: &str) -> Result<Config> {
+    Config::parse(&format!(
+        r#"{{"tracker":{{"url":"u","token_env":"T"}},"gitlab":{block},"rules":[{rule}]}}"#
+    ))
+}
+
+const GL_RULE: &str = r#"{"name":"r","repo":"team/app","mode":"admit"}"#;
+
+#[test]
+fn a_gitlab_worker_has_one_token_and_a_safe_address() {
+    let c = gitlab(r#"{"token_env":"G"}"#, GL_RULE).unwrap();
+    assert!(c.rules[0].gitlab && !c.rules[0].ado);
+    assert_eq!(c.gitlab.unwrap().api, "https://gitlab.com");
+    assert!(gitlab(r#"{"token_file":"/t"}"#, GL_RULE).is_ok());
+    // Exactly one place for the token.
+    assert!(gitlab(r#"{}"#, GL_RULE).is_err());
+    assert!(gitlab(r#"{"token_env":"G","token_file":"/t"}"#, GL_RULE).is_err());
+    // A self-managed instance: https, or http on loopback. Never a plain remote address.
+    let api = |a: &str| gitlab(&format!(r#"{{"token_env":"G","api":"{a}"}}"#), GL_RULE);
+    assert!(api("https://git.corp.example/gitlab").is_ok());
+    assert!(api("http://127.0.0.1:8929").is_ok());
+    for bad in [
+        "http://git.corp.example",
+        "https://u:p@git.corp.example",
+        "git.corp.example",
+        "https://git.corp.example/?x=1",
+    ] {
+        let err = api(bad).unwrap_err().to_string();
+        assert!(
+            err.contains("gitlab.api") && !err.contains("u:p"),
+            "{bad}: {err}"
+        );
+    }
+    // Only one source per worker.
+    let both = format!(
+        r#"{{"tracker":{{"url":"u","token_env":"T"}},"gitlab":{{"token_env":"G"}},"github":{{"token_env":"G"}},"rules":[{GL_RULE}]}}"#
+    );
+    assert!(Config::parse(&both).is_err());
+}
+
+#[test]
+fn a_gitlab_rule_names_a_project_and_a_subgroup_project_goes_through_projects() {
+    let block = r#"{"token_env":"G","projects":{"team/app":"group/sub/app"}}"#;
+    let rule = |repo: &str| format!(r#"{{"name":"r","repo":"{repo}","mode":"admit"}}"#);
+    assert!(gitlab(block, &rule("team/app")).is_ok());
+    assert!(gitlab(r#"{"token_env":"G"}"#, &rule("group/app")).is_ok());
+    // A subgroup path cannot be an issue id, so it needs an alias.
+    assert!(gitlab(r#"{"token_env":"G"}"#, &rule("group/sub/app")).is_err());
+    assert!(gitlab(r#"{"token_env":"G"}"#, &rule("app")).is_err());
+    // An alias is one slash, and the path it names is plain names.
+    for bad in [
+        r#"{"token_env":"G","projects":{"a/b/c":"x/y"}}"#,
+        r#"{"token_env":"G","projects":{"a/b":"x"}}"#,
+        r#"{"token_env":"G","projects":{"a/b":"x/../y"}}"#,
+        r#"{"token_env":"G","projects":{"a/b":"x/y?z"}}"#,
+    ] {
+        assert!(gitlab(bad, &rule("a/b")).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn gitlab_write_back_is_a_comment_and_a_close_or_reopen() {
+    let block = r#"{"token_env":"G"}"#;
+    let rule = |extra: &str| format!(r#"{{"name":"r","repo":"team/app","mode":"admit",{extra}}}"#);
+    assert!(
+        gitlab(
+            block,
+            &rule(r#""comment":true,"transition_on_pr":"reopen","transition_on_merge":"close""#)
+        )
+        .is_ok()
+    );
+    for bad in [
+        r#""link_pr":true"#,
+        r#""transition_on_merge":"Done""#,
+        r#""transition_on_pr":"Resolved""#,
+        r#""jql":"labels = x""#,
+        r#""ado_query":"Q""#,
+        r#""area_paths":{"a":"o/r"}"#,
+        r#""components":{"a":"o/r"}"#,
+    ] {
+        assert!(gitlab(block, &rule(bad)).is_err(), "{bad}");
+    }
+}

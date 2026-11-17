@@ -37,7 +37,7 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Pairs<T> {
 }
 
 /// The sources an ingest worker can be tied to.
-const KNOWN_SOURCES: [&str; 3] = ["github", "jira", "ado"];
+const KNOWN_SOURCES: [&str; 4] = ["github", "jira", "ado", "gitlab"];
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,7 +52,7 @@ struct File {
     #[serde(default = "Pairs::empty")]
     ingest: Pairs<Key>,
     /// Ingest worker key to the one source it works for, such as `github`,
-    /// `jira` or `ado`. A listed worker acts only on that source's roots, besides the
+    /// `jira`, `ado` or `gitlab`. A listed worker acts only on that source's roots, besides the
     /// pull request state the `github` worker records on any root. A worker
     /// not listed is not tied to a source.
     #[serde(default)]

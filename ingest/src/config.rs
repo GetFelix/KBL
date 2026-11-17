@@ -11,10 +11,12 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub(crate) struct Config {
     pub(crate) tracker: TrackerConfig,
-    /// Exactly one of `github`, `jira` and `ado`: a worker serves one source.
+    /// Exactly one of `github`, `jira`, `ado` and `gitlab`: a worker serves
+    /// one source.
     pub(crate) github: Option<GithubConfig>,
     pub(crate) jira: Option<JiraConfig>,
     pub(crate) ado: Option<AdoConfig>,
+    pub(crate) gitlab: Option<GitlabConfig>,
     /// Seconds between polls when no webhook wakes it.
     #[serde(default = "default_poll")]
     pub(crate) poll_seconds: u64,
@@ -115,6 +117,32 @@ pub(crate) struct EntraConfig {
     /// The sign-in service; `login.microsoftonline.com` unless a sovereign cloud.
     #[serde(default = "default_authority")]
     pub(crate) authority: String,
+}
+
+/// How ingest signs in to GitLab. The token is read from the environment or a
+/// file, never from this config, and only ingest holds it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GitlabConfig {
+    /// The instance's address. Set it for a self-managed GitLab. Plain http
+    /// is refused except on loopback.
+    #[serde(default = "default_gitlab_api")]
+    pub(crate) api: String,
+    /// Rule-repo `group/project` to the project's full path, for a project in
+    /// a subgroup (`group/sub/project`), which an issue id cannot hold.
+    #[serde(default)]
+    pub(crate) projects: BTreeMap<String, String>,
+    /// A group or project access token (a bot user) with `read_api`, and
+    /// `api` only where a rule writes back.
+    pub(crate) token_env: Option<String>,
+    pub(crate) token_file: Option<std::path::PathBuf>,
+    /// Usernames the credential writes as, besides the one GitLab reports.
+    #[serde(default)]
+    pub(crate) own_logins: Vec<String>,
+}
+
+fn default_gitlab_api() -> String {
+    "https://gitlab.com".into()
 }
 
 fn default_ado_api() -> String {
@@ -274,7 +302,11 @@ pub(crate) struct Rule {
     /// Set when the worker's source is Azure DevOps.
     #[serde(skip)]
     pub(crate) ado: bool,
-    /// Jira and Azure DevOps: comment on the issue when an agent's pull request is linked.
+    /// Set when the worker's source is GitLab.
+    #[serde(skip)]
+    pub(crate) gitlab: bool,
+    /// Jira, Azure DevOps and GitLab: comment on the issue when an agent's pull
+    /// request is linked.
     #[serde(default)]
     pub(crate) comment: bool,
     /// Jira and Azure DevOps: add the pull request as a link on the issue.
@@ -319,18 +351,20 @@ impl Config {
     pub(crate) fn parse(text: &str) -> Result<Self> {
         let mut cfg: Config = serde_json::from_str(text)?;
         ensure!(!cfg.rules.is_empty(), "there are no intake rules");
-        match (&cfg.github, &cfg.jira, &cfg.ado) {
-            (Some(g), None, None) => ensure!(
+        match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {
+            (Some(g), None, None, None) => ensure!(
                 g.token_file.is_some() || g.app.is_some() || g.token_env.is_some(),
                 "github needs a token_file, an app or a token_env"
             ),
-            (None, Some(j), None) => cfg.check_jira(j)?,
-            (None, None, Some(a)) => cfg.check_ado(a)?,
-            _ => anyhow::bail!("set exactly one of github, jira and ado"),
+            (None, Some(j), None, None) => cfg.check_jira(j)?,
+            (None, None, Some(a), None) => cfg.check_ado(a)?,
+            (None, None, None, Some(g)) => cfg.check_gitlab(g)?,
+            _ => anyhow::bail!("set exactly one of github, jira, ado and gitlab"),
         }
-        let is_ado = cfg.ado.is_some();
+        let (is_ado, is_gitlab) = (cfg.ado.is_some(), cfg.gitlab.is_some());
         for r in &mut cfg.rules {
             r.ado = is_ado;
+            r.gitlab = is_gitlab;
         }
         let mut seen = std::collections::HashSet::new();
         for r in &cfg.rules {
@@ -351,9 +385,31 @@ impl Config {
             );
             ensure!(
                 cfg.github.is_none() || !write_back,
-                "rule {:?}: comment, link_pr and transitions are for jira and ado",
+                "rule {:?}: comment, link_pr and transitions are for jira, ado and gitlab",
                 r.name
             );
+            if let Some(g) = &cfg.gitlab {
+                ensure!(
+                    !r.link_pr,
+                    "rule {:?}: link_pr is not for gitlab; the comment names the merge request",
+                    r.name
+                );
+                ensure!(
+                    [&r.transition_on_pr, &r.transition_on_merge]
+                        .into_iter()
+                        .flatten()
+                        .all(|t| matches!(t.as_str(), "close" | "reopen")),
+                    "rule {:?}: a gitlab transition is close or reopen",
+                    r.name
+                );
+                ensure!(
+                    crate::source::IssueRef::parse(&format!("{}#1", r.repo)).is_some()
+                        && crate::gitlab::project_path(&g.projects, &r.repo).is_some(),
+                    "rule {:?}: repo is group/project, with the full path of a subgroup \
+                     project under gitlab.projects",
+                    r.name
+                );
+            }
             if let Some(j) = &cfg.jira {
                 ensure!(
                     r.jql.is_some(),
@@ -454,6 +510,22 @@ impl Config {
                 "ado.entra.tenant_id is a tenant id or domain"
             );
             ensure!(!e.client_id.is_empty(), "ado.entra.client_id is empty");
+        }
+        Ok(())
+    }
+
+    fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {
+        crate::gitlab::base_url(&g.api).map_err(|e| anyhow::anyhow!("gitlab.api: {e}"))?;
+        ensure!(
+            g.token_env.is_some() != g.token_file.is_some(),
+            "gitlab needs exactly one of token_env and token_file"
+        );
+        for (alias, real) in &g.projects {
+            ensure!(
+                crate::gitlab::project_path(&g.projects, alias).is_some()
+                    && crate::source::IssueRef::parse(&format!("{alias}#1")).is_some(),
+                "gitlab.projects: {alias:?} is group/project and {real:?} a project path"
+            );
         }
         Ok(())
     }

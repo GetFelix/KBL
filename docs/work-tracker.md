@@ -16,7 +16,7 @@ priority change) becomes regular work or a record the tracker already keeps.
 
 ## The problem
 
-Bugs arrive in GitHub Issues, Azure DevOps or Jira. Agents fix them, but three
+Bugs arrive in GitHub Issues, GitLab, Azure DevOps or Jira. Agents fix them, but three
 things are missing:
 
 - **Asking for the next piece of work.** An agent has no way to say "give me
@@ -63,7 +63,7 @@ The agent named on each record is the one the tracker authenticated. Felix
 records the tracker as the publisher of every `work.events` record, so the
 agent's identity is the tracker's attestation, written into the record.
 
-An ingest worker pulls new and changed items from GitHub, ADO or Jira. For each
+An ingest worker pulls new and changed items from GitHub, GitLab, ADO or Jira. For each
 root it posts one triage item and one augment item, once. Triaging again is a
 person's action. People edit any record through REST or the viewer.
 
@@ -71,6 +71,7 @@ person's action. People edit any record through REST or the viewer.
 flowchart LR
     subgraph Sources
         GH[GitHub]
+        GL[GitLab]
         ADO[Azure DevOps]
         JIRA[Jira]
         P[People, in the dashboard]
@@ -89,6 +90,7 @@ flowchart LR
     end
     D[Dashboard]
     GH --> T
+    GL --> T
     ADO --> T
     JIRA --> T
     P --> T
@@ -1759,21 +1761,22 @@ it did. The tracker links each item to its runs.
 
 ## Sources
 
-GitHub, Azure DevOps and Jira are each an adapter behind one interface, so the
+GitHub, GitLab, Azure DevOps and Jira are each an adapter behind one interface, so the
 tracker, the tools and the dashboard never see which system an item came
 from. An adapter lists what changed since a cursor it keeps, fetches one item,
 maps its fields and links, and writes back. Polling is the record; webhooks
-(GitHub webhooks, ADO service hooks, Jira webhooks) only wake the poll early,
+(GitHub and GitLab webhooks, ADO service hooks, Jira webhooks) only wake the poll early,
 so a missed webhook costs latency, not an item.
 
-| | GitHub | Azure DevOps | Jira |
-|---|---|---|---|
-| Upstream id | `github:GetFelix/felix#812` | `ado:org/project#4410` | `jira:acme/FEL#123` (site `acme`, key `FEL-123`) |
-| Scope by | repo, labels (all or any), excluded labels, milestone, assignee, type | project, area path, iteration, tags, or a saved query | a JQL filter |
-| Priority from | a label mapping | the Priority field (1 to 4) | the priority field |
-| Links from | blocked by, sub-issues | predecessor, parent | blocks, sub-tasks |
-| Closed as | `completed` / `not_planned`, duplicate | Done, Closed, Removed | the resolution |
-| Credentials | GitHub App or token | personal access token or Entra service principal | API token or OAuth app |
+| | GitHub | GitLab | Azure DevOps | Jira |
+|---|---|---|---|---|
+| Upstream id | `github:GetFelix/felix#812` | `gitlab:group/project#812` (the issue's `iid`) | `ado:org/project#4410` | `jira:acme/FEL#123` (site `acme`, key `FEL-123`) |
+| Scope by | repo, labels (all or any), excluded labels, milestone, assignee, type | project, labels (all or any), excluded labels, milestone, assignee, type | project, area path, iteration, tags, or a saved query | a JQL filter |
+| Priority from | a label mapping | a label mapping (`priority::1`) | the Priority field (1 to 4) | the priority field |
+| Links from | blocked by, sub-issues | is blocked by | predecessor, parent | blocks, sub-tasks |
+| Closed as | `completed` / `not_planned`, duplicate | completed, or dropped by a `wontfix`, `duplicate` or `not planned` label, or a move | Done, Closed, Removed | the resolution |
+| Pull requests | pull requests | merge requests | none (the GitHub worker records them) | none (the GitHub worker records them) |
+| Credentials | GitHub App or token | group or project access token | personal access token or Entra service principal | API token or OAuth app |
 
 The ingest worker holds the source credentials. Agents never see them and
 write back only through the tracker, which checks the claim first.
@@ -1948,6 +1951,106 @@ the rule uses to the real one:
   long (30 s when none is named, at most an hour). A bad token is answered
   203 with a sign-in page or a redirect; both are read as a 401 and stall the
   project.
+
+### GitLab
+
+A GitLab worker has a `gitlab` block where a GitHub one has `github`. A rule's
+`repo` is `group/project`, and the issue id is the project's issue number
+(`iid`), so `gitlab:team/app#812` is issue 812 of that project. A project in a
+subgroup, whose path has more than one slash, is listed under `projects`,
+which maps the name the rule uses to the project's full path. GitLab.com is
+the default; a self-managed instance sets `api`:
+
+```json
+{
+  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN" },
+  "gitlab": {
+    "api": "https://gitlab.example.com",
+    "projects": { "team/app": "group/sub/app" },
+    "token_file": "/run/secrets/gitlab-token",
+    "own_logins": ["project_42_bot_8f3a"]
+  },
+  "rules": [{
+    "name": "agent-ok",
+    "repo": "team/app",
+    "labels_all": ["agent-ok"],
+    "mode": "admit",
+    "cap": 10,
+    "default_tier": 2,
+    "priority_labels": { "priority::1": 0, "priority::2": 1 },
+    "comment": true,
+    "transition_on_merge": "close"
+  }]
+}
+```
+
+- **Sign-in.** A group or project access token, which GitLab creates with a
+  bot user, in `token_env` or `token_file`. The file is read again for every
+  request, so a rotated token is picked up, and the secret is never in the
+  config, the saved state, a record, an error or a log line. The worker
+  learns its own username from `GET /user`, or from `own_logins`, and refuses
+  to start with neither.
+- **Address.** `api` is the instance's address and may carry a path prefix
+  (`https://example.com/gitlab`). It must be https; plain http is accepted
+  only on loopback (`localhost`, `127.0.0.1`, `::1`), and an address with a
+  user name, password, query or fragment is refused. Redirects are not
+  followed, so the token is never sent anywhere the config did not name. The
+  address comes from this file alone: no request is built from an issue's
+  text, and a page of a listing is asked for by number.
+- **Least privilege.** A worker with no rule that writes back needs only
+  the `read_api` scope, with the Reporter role, and the adapter refuses
+  every write. Give the token `api` only to a worker whose rules set
+  `comment` or a transition, or `open_prerequisites`. Without `api`, a
+  dropped issue's merge request is not made a draft either. Give the bot
+  access to the projects the rules read and no others: what the bot can see
+  is what ingest can import, confidential issues included.
+- **Selection.** The rule's own filters, run by ingest over each project's
+  issues: labels (`labels_all`, `labels_any`, `labels_excluded`), `milestone`,
+  `assignee` and `type` (`issue`, `incident` or `task`), as for GitHub. The
+  first poll reads open issues only, and later ones ask for what changed
+  since the cursor, which includes a close. Results are paged; a cut-short
+  listing resumes from the newest update it read. A project that answers 401,
+  403 or 404 stalls with its issues and cursor as they were. A note is read
+  only for an issue a rule takes and that has notes; a system note and an
+  internal note are not imported.
+- **Tiers.** `priority_labels` maps a label (a scoped label such as
+  `priority::1` works) to a tier, the lowest tier wins, and anything else takes
+  `default_tier`.
+- **Links.** An issue link of type "is blocked by" becomes an edge: the
+  issue waits on the issue that blocks it. "Blocks" is the other issue's
+  wait and shows in its own listing, and "relates to" waits on nothing, so
+  neither is an edge. A blocker in a project that no rule reads is not an
+  edge, and its issue's links are then not whole.
+- **Closed.** A closed issue is completed, unless GitLab moved it or it carries a
+  `wontfix`, `duplicate`, `invalid` or `not planned` label (or the same under
+  `resolution::`), which is dropped. GitLab keeps no reason on a closed
+  issue, so a label is the only signal.
+- **Merge requests.** Merge requests stand in for pull requests, and the
+  worker reads the one an agent reports on a root, in the issue's own
+  project: `team/app#7` is merge request 7 there. The rules are GitHub's.
+  Only a request our own login opened is read further. It is tied to the item
+  by the branch `kbl/<item>` or a `Closes #812` in its description, and must
+  have been created after the first claim. A merge counts only when it went
+  into the project's default branch and GitLab names a merger who is not one
+  of our logins, so a merge into a side branch, a merge by our own token, a
+  merge GitLab names no merger for and a request of someone else's all leave
+  the root open. The merge request's reviews (approvals and requested
+  changes, never the author's own) and pipeline (the first failed job that is
+  not allowed to fail) are recorded as its review and checks.
+- **Write-back.** For an agent's merge request in the rule's project (or its
+  `target_repo`), ingest posts a comment (`comment`) and sets the issue's
+  state (`transition_on_pr` and `transition_on_merge`, each `close` or
+  `reopen`). The comment names the request as `group/project!7`, which GitLab
+  links. Each is done once per merge request, a comment already there is not
+  posted again, and a state the issue is already in is skipped. When an issue is
+  dropped while our own request is open, the request becomes a draft with a
+  note. Only issues ingest imported are written to, and only in a project a
+  rule reads. `link_pr` is for Jira and Azure DevOps: GitLab links a request
+  from the comment and from `Closes`.
+- **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
+  long (30 s when none is named, at most an hour) before any further request.
+  A redirect is read as a refusal (a sign-in page or a moved instance) and
+  stalls the project.
 
 ### Intake rules
 

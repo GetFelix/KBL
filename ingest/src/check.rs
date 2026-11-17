@@ -203,6 +203,16 @@ async fn report_for(path: &Path) -> Report {
                     .push(Finding::new(Level::Error, "jira", safe(format!("{e:#}"))))
             }
         },
+        // Credential, permission and dry-run checks for these sources are not written yet
+        // (#335, #340); the config itself parsed above.
+        _ if cfg.ado.is_some() || cfg.gitlab.is_some() => {
+            let source = if cfg.ado.is_some() { "ado" } else { "gitlab" };
+            report.findings.push(Finding::new(
+                Level::Warn,
+                source,
+                format!("the config is valid; check does not test {source} credentials or run a dry run yet"),
+            ));
+        }
         _ => unreachable!("the config checks for exactly one source"),
     }
     if let Some(t) = &tracker {
