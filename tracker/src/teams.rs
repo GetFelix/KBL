@@ -94,6 +94,11 @@ impl<B> Team<B> {
         self.tokens.agent_names()
     }
 
+    /// Whether the token file names this person in this team.
+    pub(crate) fn has_file_person(&self, person: &Key) -> bool {
+        self.tokens.has_person(person)
+    }
+
     /// The team's tracker, or none while it is not serving.
     pub(crate) fn tracker(&self) -> Option<Tracker<B>> {
         self.tracker.read().expect("team lock").clone()
@@ -225,6 +230,15 @@ impl<B: Broker> Teams<B> {
             .insert(name.clone(), team.clone());
         let _ = self.added.send(team);
         serving
+    }
+
+    /// Whether `person` is in `team`: by its token file, or by the org log.
+    pub(crate) fn is_member(&self, team: &Team<B>, person: &Key) -> bool {
+        team.has_file_person(person)
+            || self
+                .org
+                .as_ref()
+                .is_some_and(|o| o.org.is_member(&team.name, person))
     }
 
     /// Every team the token belongs to, with who it is there. Each team's

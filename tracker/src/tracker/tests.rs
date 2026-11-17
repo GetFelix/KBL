@@ -2044,6 +2044,40 @@ fn shipped(tag: &str) -> WorkRecord {
 }
 
 #[tokio::test]
+async fn a_taken_item_is_not_handed_out_until_it_is_nobodys() {
+    use kbl_core::work::Assignee;
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let person = |r| t.person_record(key("gab"), r);
+    person(WorkRecord::FormatRaised { to: 12 }).await.unwrap();
+    seed_in_felix(&t, "a1").await;
+    person(WorkRecord::Taken { item: item("a1") }).await.unwrap();
+    // The ready record is still on the stream; the claim path acks it.
+    assert_eq!(claimed_id(&claim(&t, "w1").await), None);
+    person(WorkRecord::Reassigned {
+        item: item("a1"),
+        to: None,
+    })
+    .await
+    .unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+    // Held: a take leaves the hold, and a steer reaches the attempt.
+    person(WorkRecord::Taken { item: item("a1") }).await.unwrap();
+    person(WorkRecord::Steered {
+        item: item("a1"),
+        attempt: 1,
+        text: kbl_core::content::Content::Text("use the writer lock".into()),
+    })
+    .await
+    .unwrap();
+    let core = t.0.core.lock().await;
+    let it = &core.state.items[&item("a1")];
+    assert_eq!(it.hold.as_ref().map(|h| h.by.as_str()), Some("w1"));
+    assert_eq!(it.assignee, Some(Assignee::Person(key("gab"))));
+    assert_eq!(it.paths[0].human_inputs.len(), 1);
+}
+
+#[tokio::test]
 async fn a_person_works_a_pull_request_and_marks_the_summary() {
     use kbl_core::work::{PrChecks, PrPhase, PrReview, PrSnapshot};
     let fake = Fake::default();

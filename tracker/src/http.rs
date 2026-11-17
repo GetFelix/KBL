@@ -21,7 +21,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
     Actor, CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase, PriceUnit,
-    RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
+    Assignee, RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
 };
 use kbl_core::work_fold::Stage;
 use serde::Deserialize;
@@ -34,7 +34,7 @@ use tracing::Instrument as _;
 use crate::config::Caller;
 use crate::felix::Broker;
 use crate::org::OrgUnavailable;
-use crate::teams::Teams;
+use crate::teams::{Team, Teams};
 use crate::tracker::ExpectedPrice;
 use crate::tracker::{
     Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
@@ -182,6 +182,9 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/request-changes", post(request_changes::<B>))
         .route("/v1/work/mark-merged", post(mark_merged::<B>))
         .route("/v1/work/rate-summary", post(rate_summary::<B>))
+        .route("/v1/work/take", post(take::<B>))
+        .route("/v1/work/reassign", post(reassign::<B>))
+        .route("/v1/work/steer", post(steer::<B>))
         .route("/v1/work/queue", get(queue::<B>))
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
@@ -282,6 +285,7 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Keyed<T> {
 /// before the body is read, so an unknown token is refused first.
 struct Call<B> {
     tracker: Tracker<B>,
+    team: Arc<Team<B>>,
     caller: Caller,
     _slot: OwnedSemaphorePermit,
 }
@@ -338,6 +342,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
         };
         Ok(Self {
             tracker,
+            team,
             caller,
             _slot: slot,
         })
@@ -436,6 +441,19 @@ struct SnoozeBody {
 struct ReviewBody {
     item: ItemId,
     reviewer: String,
+}
+
+#[derive(Deserialize)]
+struct ReassignBody {
+    item: ItemId,
+    to: Option<Assignee>,
+}
+
+#[derive(Deserialize)]
+struct SteerBody {
+    item: ItemId,
+    attempt: u32,
+    text: Content,
 }
 
 #[derive(Deserialize)]
@@ -1360,6 +1378,42 @@ async fn rate_summary<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<RateBody>) -
     as_person(&call, rk, record).await
 }
 
+async fn take<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::Taken { item: b.item }).await
+}
+
+/// The fold does not read the org log, so membership is checked here.
+async fn reassign<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    call: Call<B>,
+    Keyed(b, rk): Keyed<ReassignBody>,
+) -> Response {
+    if let Some(Assignee::Person(p)) = &b.to
+        && call.person().is_ok()
+        && !app.teams.is_member(&call.team, p)
+    {
+        return refused(
+            StatusCode::CONFLICT,
+            "that person is not in this team",
+            "not_member",
+        );
+    }
+    let record = WorkRecord::Reassigned {
+        item: b.item,
+        to: b.to,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn steer<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<SteerBody>) -> Response {
+    let record = WorkRecord::Steered {
+        item: b.item,
+        attempt: b.attempt,
+        text: b.text,
+    };
+    as_person(&call, rk, record).await
+}
+
 #[derive(Deserialize)]
 struct ItemsQuery {
     stage: Option<Stage>,
@@ -1398,9 +1452,9 @@ struct QueueQuery {
 
 async fn queue<B: Broker>(call: Call<B>, Query(q): Query<QueueQuery>) -> Response {
     match call.person() {
-        Ok(_) => {
+        Ok(p) => {
             let limit = q.limit.unwrap_or(QUEUE_DEFAULT_LIMIT).min(QUEUE_MAX_LIMIT);
-            reply(call.tracker().queue(limit).await)
+            reply(call.tracker().queue(&p, limit).await)
         }
         Err(d) => denied(d),
     }
