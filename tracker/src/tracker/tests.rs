@@ -2242,6 +2242,7 @@ mod retry;
 mod review;
 mod review_limit;
 mod texts;
+mod traces;
 
 #[tokio::test(start_paused = true)]
 async fn a_dead_lettered_ready_record_is_published_again() {

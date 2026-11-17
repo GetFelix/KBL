@@ -101,6 +101,8 @@ async fn serve() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
     let exporter = kbl_metrics::install("kbl-ingest");
+    // Held to the end of `serve`, which flushes the last spans.
+    let _traces = kbl_trace::init("kbl-ingest");
     if let Some(addr) = cli.metrics_listen {
         kbl_metrics::check_listen(addr, cli.metrics_allow_remote, "--metrics-allow-remote")?;
         let bound = kbl_metrics::serve(addr, exporter).await?;

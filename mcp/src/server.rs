@@ -10,6 +10,7 @@ use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use tracing::Instrument as _;
 
 use crate::felix::Felix;
 use crate::tasks::{Post, Tasks};
@@ -993,9 +994,17 @@ impl ServerHandler for Server {
         let tool = request.name.to_string();
         let known = router.has_route(&tool);
         let started = std::time::Instant::now();
+        // Named like the metrics label: a name outside the tool list is `unknown`.
+        let span = tracing::info_span!(
+            "mcp.tool",
+            otel.name = format!("mcp.tool {}", if known { tool.as_str() } else { "unknown" }),
+            tool = if known { tool.as_str() } else { "unknown" },
+            outcome = tracing::field::Empty,
+        );
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        let result = router.call(tcc).await;
+        let result = router.call(tcc).instrument(span.clone()).await;
         crate::metrics::tool_finished(&tool, known, started.elapsed(), &result);
+        span.record("outcome", crate::metrics::outcome(&result));
         result
     }
 
