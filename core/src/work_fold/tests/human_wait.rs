@@ -190,14 +190,28 @@ fn waits_dropped_past_the_cap_are_reported_as_a_partial_window() {
 }
 
 #[test]
-fn states_with_different_waits_are_not_equal() {
+fn a_restored_state_equals_the_full_fold_but_reports_what_it_missed() {
     let mut l = held_root();
-    l.agent("w1", question_rec("r1"));
-    let a = fold(&l.0);
-    assert_eq!(a, fold(&l.0));
-    let mut b = a.clone();
-    b.human_waits = Default::default();
-    assert_ne!(a, b);
+    let q = l.agent("w1", question_rec("r1"));
+    let cut = l.0.len();
+    l.person(answer_rec(q));
+    let full = fold(&l.0);
+    let mut restored: State =
+        serde_json::from_slice(&serde_json::to_vec(&fold(&l.0[..cut])).unwrap()).unwrap();
+    // Nothing applied since the snapshot: the empty figures are not complete.
+    assert!(restored.time_to_human_action(0, u64::MAX).truncated);
+    for (o, r) in &l.0[cut..] {
+        restored.apply(*o, r);
+    }
+    assert_eq!(restored, full);
+    // The wait that began before the snapshot was never seen opening.
+    assert_eq!(restored.time_to_human_action(0, u64::MAX).all.count, 0);
+    assert_eq!(full.time_to_human_action(0, u64::MAX).all.count, 1);
+    let r = restored.time_to_human_action(0, u64::MAX);
+    assert!(r.truncated);
+    let from = r.complete_since_ms.unwrap();
+    assert!(!restored.time_to_human_action(from, u64::MAX).truncated);
+    assert!(!full.time_to_human_action(0, u64::MAX).truncated);
 }
 
 #[test]

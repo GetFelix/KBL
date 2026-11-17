@@ -2050,8 +2050,6 @@ fn a_log_from_before_pull_request_status_folds_the_same_and_old_snapshots_still_
     for item in v["items"].as_object_mut().unwrap().values_mut() {
         item.as_object_mut().unwrap().remove("pr_status");
     }
-    let mut s = s;
-    s.human_waits = Default::default();
     assert_eq!(serde_json::from_value::<State>(v).unwrap(), s);
     // A pre-change record line decodes to the record it always did.
     let line = br#"{"kind":"progress","item":"r1","attempt":1,"note":{"text":"x"},"pr":"GetFelix/felix#9"}"#;
@@ -2528,7 +2526,6 @@ fn a_state_with_a_release_edge_encodes() {
     assert_eq!(s.release_edges.len(), 1);
     // Where a proposal came from is not in the wire form.
     s.items.values_mut().for_each(|i| i.proposed_from = None);
-    s.human_waits = Default::default();
     let json = serde_json::to_string(&s).unwrap();
     assert_eq!(serde_json::from_str::<State>(&json).unwrap(), s);
 }

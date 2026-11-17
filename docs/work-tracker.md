@@ -314,7 +314,7 @@ A person's token can also read the team's work. These calls write nothing:
 | `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
 | `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A `from` past the end of the log is an empty answer with `next` null. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
-| `GET /v1/work/metrics/time-to-human` | Time to first human action over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.count`, `p50_ms` and `p90_ms` of the waits a person ended in the window, the same per reason in `by_kind` (`proposal`, `question`, `failure`, `review`, `other`), `open` (items waiting now with no person action yet) and `oldest_open_since_ms`. `truncated` is true, with `complete_since_ms`, when the oldest finished waits were dropped past the 20,000 kept and the window reaches back to them. Open waits are not in the percentiles. See [Time to first human action](#time-to-first-human-action) |
+| `GET /v1/work/metrics/time-to-human` | Time to first human action over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.count`, `p50_ms` and `p90_ms` of the waits a person ended in the window, the same per reason in `by_kind` (`proposal`, `question`, `failure`, `review`, `other`), `open` (items waiting now with no person action yet) and `oldest_open_since_ms`. `truncated` is true, with `complete_since_ms`, when the oldest finished waits were dropped past the 20,000 kept, or the tracker restored its state from a snapshot, and the window reaches back before what the fold has seen. Open waits are not in the percentiles. See [Time to first human action](#time-to-first-human-action) |
 
 An unknown item answers `409` with `why: unknown_item`, like the agent calls.
 A path that is not a valid item id is a `400`.
@@ -1856,7 +1856,7 @@ wait at all.
 record falls in. Waits still open are reported as `open`, with the time the
 longest began, and are left out of p50 and p90. Percentiles use the nearest
 rank. The numbers are for the team whose log is folded; nothing names who
-acted. The fold keeps the last 20,000 finished waits; past that the response sets `truncated` for a window that reaches the dropped ones.
+acted. The fold keeps the last 20,000 finished waits; past that the response sets `truncated` for a window that reaches the dropped ones. The waits are not stored in a snapshot, so a state restored from one counts only from the first record after it, and `truncated` is true for any window reaching earlier.
 
 [dashboard-research.md](dashboard-research.md) says why each part is there and
 how much evidence stands behind it.

@@ -46,9 +46,10 @@ struct Finished {
     waited_ms: u64,
 }
 
-/// Not in the wire form, so a state read back from JSON has none of it and
-/// differs from the one that was written; tests that round-trip clear it first.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Not in the wire form, so a state restored from a snapshot starts with none
+/// of it. Equality ignores it for that reason: two states are equal when
+/// their wire forms are, whether or not one was restored.
+#[derive(Debug, Clone)]
 pub(super) struct Waits {
     open: BTreeMap<ItemId, Open>,
     finished: VecDeque<Finished>,
@@ -58,7 +59,21 @@ pub(super) struct Waits {
     dropped_through_ms: Option<u64>,
     /// Items seen closed, so a close frees its dependents once, not on every later record.
     closed: BTreeSet<ItemId>,
+    /// Set once a record has been tracked here.
+    started: bool,
+    /// For a state restored from a snapshot: the time of the first record
+    /// tracked after it. Nothing earlier was seen, so windows reaching back
+    /// before it are partial.
+    restored_from_ms: Option<u64>,
 }
+
+impl PartialEq for Waits {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Waits {}
 
 impl Default for Waits {
     fn default() -> Self {
@@ -68,6 +83,8 @@ impl Default for Waits {
             cap: KEPT_WAITS,
             dropped_through_ms: None,
             closed: BTreeSet::new(),
+            started: false,
+            restored_from_ms: None,
         }
     }
 }
@@ -97,7 +114,8 @@ pub struct HumanWaitStats {
     /// window reaches back to them, so the figures cover only part of it.
     #[serde(default)]
     pub truncated: bool,
-    /// With `truncated`, the first time the figures are complete from.
+    /// With `truncated`, the first time the figures are complete from. A state
+    /// restored from a snapshot is complete only from its first later record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complete_since_ms: Option<u64>,
 }
@@ -135,6 +153,10 @@ impl State {
             by_kind.insert(kind, stats(of.map(|f| f.waited_ms).collect()));
         }
         let open = w.open.values().filter(|o| !o.acted);
+        // A restored state with no record since has seen nothing: partial, from an unknown time.
+        let unseen = !w.started && self.at.is_some();
+        let from_dropped = w.dropped_through_ms.map(|d| d.saturating_add(1));
+        let complete_since_ms = from_dropped.max(w.restored_from_ms);
         HumanWaitStats {
             from_ms,
             to_ms,
@@ -142,8 +164,8 @@ impl State {
             by_kind,
             open: open.clone().count() as u64,
             oldest_open_since_ms: open.map(|o| o.since_ms).min(),
-            truncated: w.dropped_through_ms.is_some_and(|d| from_ms <= d),
-            complete_since_ms: w.dropped_through_ms.map(|d| d.saturating_add(1)),
+            truncated: unseen || complete_since_ms.is_some_and(|c| from_ms < c),
+            complete_since_ms,
         }
     }
 
@@ -180,6 +202,14 @@ impl State {
     /// ends the wait; then the item's wait state is read again. A snooze is
     /// an unknown kind to this build, which names no item, so it is not an action.
     pub(super) fn track_human_wait(&mut self, rec: &WorkLogged) {
+        // `at` is still the previous offset here, so a first record on a state
+        // that already has one means the state came from a snapshot.
+        if !self.human_waits.started {
+            self.human_waits.started = true;
+            if self.at.is_some() {
+                self.human_waits.restored_from_ms = Some(rec.at_ms);
+            }
+        }
         let Some(id) = rec.record.item().cloned() else {
             return;
         };
