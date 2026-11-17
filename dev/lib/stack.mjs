@@ -34,8 +34,8 @@ async function json(url, init) {
 }
 
 // No agent identities exist yet, so the tenant's administrator stands in for every agent.
-export async function idToken() {
-  return (await json(`${IDP}/token?sub=agents-admin&aud=kbl`)).id_token;
+export async function idToken(sub = "agents-admin") {
+  return (await json(`${IDP}/token?sub=${encodeURIComponent(sub)}&aud=kbl`)).id_token;
 }
 
 export async function felixToken() {
