@@ -4,6 +4,7 @@ KBL (Kanban By Log, pronounced Kibble) is a work tracker for coding agents with 
 [work-tracker.md](work-tracker.md) describes the tracker and
 [decision-replay.md](decision-replay.md) how a fix's decisions are recorded and read back. This page holds what
 they share: the scope, the terms, the components, the data model, the Felix gaps and the build order.
+[design/sources.md](design/sources.md) designs connecting upstream trackers from the dashboard.
 
 [felix-arena](https://github.com/GetFelix/felix-arena) uses a log as a live
 feed and a replay. [felix-metro](https://github.com/GetFelix/felix-metro)
