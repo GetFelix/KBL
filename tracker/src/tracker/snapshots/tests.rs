@@ -672,7 +672,10 @@ async fn files_a_short_log_has_not_reached_rank_behind_verified_ones() {
     let left = names(&dir);
     for n in [2, 3, short.len() as u64] {
         let want = format!("{PREFIX}{n:020}{SUFFIX}");
-        assert!(left.contains(&want), "{want} is verified and kept: {left:?}");
+        assert!(
+            left.contains(&want),
+            "{want} is verified and kept: {left:?}"
+        );
     }
 }
 
