@@ -1,6 +1,6 @@
 [package]
 name = "kbl-tool"
-version = "0.0.0"
+version.workspace = true
 description = "Creates a Felix Agents run's resources on a Felix tenant"
 edition.workspace = true
 rust-version.workspace = true
