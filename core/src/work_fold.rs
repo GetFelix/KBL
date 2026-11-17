@@ -26,7 +26,7 @@ mod human_wait;
 mod snapshots;
 mod trust;
 
-pub use snapshots::{FOLD_REV, SNAPSHOT_EVERY, Saved, Snapshot, Snapshots, fold_to};
+pub use snapshots::{Anchor, FOLD_REV, SNAPSHOT_EVERY, Saved, Snapshot, Snapshots, fold_to};
 
 #[cfg(test)]
 mod tests;
