@@ -908,6 +908,8 @@ Start each `kbl-mcp` session with one of those tokens as its
 
 ### Running the ingest worker
 
+To set ingest up for the first time, start with [Setting up ingest](ingest-setup.md): `kbl-tool source init` writes a config and `kbl-ingest check` tests it, writing nothing.
+
 `kbl-ingest` is a separate binary. It never writes to Felix: it reads
 GitHub, then writes through the three `ingest` calls above under its own token,
 and it makes no model calls. `kbl-ingest --config ingest.json` polls every

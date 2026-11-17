@@ -3,6 +3,7 @@
 //! its own token, and makes no model calls. See docs/work-tracker.md "Sources".
 
 mod ado;
+mod check;
 mod config;
 mod github;
 mod gitlab;
@@ -35,11 +36,17 @@ use source::{Source, SourceError};
 use sync::{Ingest, Settings};
 
 #[derive(Parser)]
-#[command(version, about = "The upstream issue ingest worker for Felix Agents")]
+#[command(
+    version,
+    about = "The upstream issue ingest worker for Felix Agents",
+    args_conflicts_with_subcommands = true
+)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
     /// JSON file with the tracker, GitHub and intake rules. See docs/work-tracker.md.
-    #[arg(long, env = "KBL_INGEST_CONFIG")]
-    config: PathBuf,
+    #[arg(long, env = "KBL_INGEST_CONFIG", required = true)]
+    config: Option<PathBuf>,
     /// Where the optional webhook endpoint listens. Webhooks only wake the poll.
     #[arg(
         long,
@@ -79,6 +86,13 @@ struct Cli {
     once: bool,
 }
 
+#[derive(clap::Subcommand)]
+enum Command {
+    /// Validate a config, test its credentials and show what each rule would
+    /// import. Reads only: it writes nothing to the tracker or the source.
+    Check(check::Args),
+}
+
 /// Plain HTTP stays on loopback unless a TLS proxy is said to be in front, so
 /// a private repo's issue text never crosses a network in the clear by accident.
 fn check_listen(addr: SocketAddr, behind_tls_proxy: bool) -> Result<()> {
@@ -101,7 +115,15 @@ fn main() -> Result<()> {
 
 async fn serve() -> Result<()> {
     let cli = Cli::parse();
-    let cfg = Config::load(&cli.config)?;
+    if let Some(Command::Check(args)) = &cli.command {
+        return if check::run(args).await? {
+            Ok(())
+        } else {
+            std::process::exit(1)
+        };
+    }
+    let config = cli.config.as_deref().context("--config is required")?;
+    let cfg = Config::load(config)?;
     let exporter = kbl_metrics::install("kbl-ingest");
     // Held to the end of `serve`, which flushes the last spans.
     let _traces = kbl_trace::init("kbl-ingest");
@@ -134,8 +156,22 @@ async fn serve() -> Result<()> {
     }
 }
 
+/// A token_file wins over an app, and an app over a token_env.
+pub(crate) fn github_token(gh: &config::GithubConfig) -> Result<Token> {
+    Ok(match (&gh.token_file, &gh.app, &gh.token_env) {
+        (Some(f), _, _) => Token::File(f.clone()),
+        (None, Some(app), _) => Token::App(Box::new(AppAuth::new(
+            app,
+            &gh.api,
+            app::system_clock(),
+            app::stderr_log(),
+        )?)),
+        (None, None, Some(e)) => Token::Env(e.clone()),
+        (None, None, None) => unreachable!("the config checks for a token"),
+    })
+}
+
 async fn github_source(gh: &config::GithubConfig) -> Result<Github<Reqwest>> {
-    // A token_file wins over an app, and an app over a token_env.
     let sources = [
         ("token_file", gh.token_file.is_some()),
         ("app", gh.app.is_some()),
@@ -149,18 +185,11 @@ async fn github_source(gh: &config::GithubConfig) -> Result<Github<Reqwest>> {
             set[0]
         );
     }
-    let gh_token = match (&gh.token_file, &gh.app, &gh.token_env) {
-        (Some(f), _, _) => Token::File(f.clone()),
-        (None, Some(app), _) => Token::App(Box::new(AppAuth::new(
-            app,
-            &gh.api,
-            app::system_clock(),
-            app::stderr_log(),
-        )?)),
-        (None, None, Some(e)) => Token::Env(e.clone()),
-        (None, None, None) => unreachable!("the config checks for a token"),
-    };
-    let mut github = Github::new(&gh.api, Reqwest::new(gh_token)?, gh.own_logins.clone());
+    let mut github = Github::new(
+        &gh.api,
+        Reqwest::new(github_token(gh)?)?,
+        gh.own_logins.clone(),
+    );
     // A user token names itself; an App installation token cannot, so the config lists its bot login.
     if let Some(login) = github.login().await {
         github.add_own(login);
@@ -168,26 +197,25 @@ async fn github_source(gh: &config::GithubConfig) -> Result<Github<Reqwest>> {
     Ok(github)
 }
 
-async fn jira_source(
-    j: &config::JiraConfig,
-    cfg: &Config,
-) -> Result<jira::Jira<jira::transport::Reqwest>> {
+pub(crate) fn jira_auth(j: &config::JiraConfig) -> jira::transport::Auth {
     use jira::transport::{Auth, Secret};
     let secret = match (&j.token_file, &j.token_env) {
         (Some(f), _) => Some(Secret::File(f.clone())),
         (None, Some(e)) => Some(Secret::Env(e.clone())),
         (None, None) => None,
     };
-    let auth = match (&j.email, secret, &j.oauth_token_file) {
+    match (&j.email, secret, &j.oauth_token_file) {
         (Some(email), Some(secret), None) => Auth::Token {
             email: email.clone(),
             secret,
         },
         (None, None, Some(f)) => Auth::Bearer(Secret::File(f.clone())),
         _ => unreachable!("the config checks the sign-in"),
-    };
-    let scopes = cfg
-        .rules
+    }
+}
+
+pub(crate) fn jira_scopes(cfg: &Config) -> Vec<jira::Scope> {
+    cfg.rules
         .iter()
         .filter_map(|r| {
             Some(jira::Scope {
@@ -196,13 +224,19 @@ async fn jira_source(
                 jql: r.jql.clone()?,
             })
         })
-        .collect();
+        .collect()
+}
+
+async fn jira_source(
+    j: &config::JiraConfig,
+    cfg: &Config,
+) -> Result<jira::Jira<jira::transport::Reqwest>> {
     let mut jira = jira::Jira::new(
         &j.site,
         &j.api,
-        jira::transport::Reqwest::new(auth)?,
+        jira::transport::Reqwest::new(jira_auth(j))?,
         j.own_logins.clone(),
-        scopes,
+        jira_scopes(cfg),
         &j.pr_url_base,
     );
     jira.add_own(jira.login().await);

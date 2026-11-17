@@ -104,6 +104,15 @@ impl<T: Transport> Jira<T> {
             .collect()
     }
 
+    /// A GET of one API path, for `kbl-ingest check`'s credential and permission probes.
+    pub(crate) async fn probe(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+    ) -> Result<Res, SourceError> {
+        self.call(Req::get(self.url(path, query))).await
+    }
+
     fn url(&self, path: &str, query: &[(&str, &str)]) -> String {
         let base = format!("{}/rest/api/2{path}", self.api);
         if query.is_empty() {

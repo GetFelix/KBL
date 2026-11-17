@@ -70,6 +70,11 @@ impl<T: Transport> Github<T> {
         res.body["login"].as_str().map(str::to_owned)
     }
 
+    /// A GET of one API path, for `kbl-ingest check`'s credential and permission probes.
+    pub(crate) async fn probe(&self, path: &str) -> Result<Res, SourceError> {
+        self.call(Req::get(format!("{}{path}", self.api))).await
+    }
+
     async fn call(&self, req: Req) -> Result<Res, SourceError> {
         if let Some(until) = *self.limited_until.lock().expect("lock") {
             let now = epoch();
