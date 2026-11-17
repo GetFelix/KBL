@@ -137,11 +137,11 @@ try {
   const mine = id("root");
   await take(w1, (i) => i.id === mine);
   await w1.tool("work_context", { entry: "repro", text: "restart between fill and read" });
-  const child = await w1.tool("work_post", { key: "reader", work: "split", title: "fix the reader" });
+  const child = await w1.tool("work_post", { key: `reader-${tag}`, work: "split", title: "fix the reader" });
   await w1.tool("decide", { phase: "cause", so_far: "the read beats the fill", why: "the writer holds the lock", commit: "abc123" });
   await w1.tool("record_step", { command: "cargo test", exit_code: 0, output: "ok" });
   await w1.tool("work_progress", { note: "reader fixed", branch: "fix/reader", pr: PR });
-  const proposal = await w1.tool("work_post", { key: "found", work: "proposal", title: "the writer leaks a handle" });
+  const proposal = await w1.tool("work_post", { key: `found-${tag}`, work: "proposal", title: "the writer leaks a handle" });
   const kid = await take(w2, (i) => i.id === child.item);
   await w2.tool("work_complete", { item: kid.item.id, usage: [{ model: "claude-sonnet-5-5", unit: "tokens", input: 4000, output: 900 }] });
   await w1.tool("work_complete", { item: mine, usage: [{ model: "claude-opus-5-5", unit: "tokens", input: 12000, output: 3000 }] });
