@@ -145,8 +145,9 @@ The tracker then:
 2. Takes each picked repo's level from that listing. Read needs `pull`. Write needs `push`: anyone can comment
    on or open issues in a public repo, but turning another person's pull request into a draft needs push, and
    KBL must not do more than the person could. So a person who can only read a public repo cannot make KBL
-   write to it under the org's App. A repo listed without `permissions` falls back to one
-   `GET /repos/{owner}/{repo}`; it never counts as proven.
+   write to it under the org's App. A repo listed without `permissions` gets one
+   `GET /repos/{owner}/{repo}` as the person, only to read the same `permissions` field from the repo itself.
+   If that answer has none either, the repo is shown as "access unknown" and cannot be picked.
 
 The token is dropped once these calls finish. It is never refreshed, so the App's "expire user tokens" setting
 does not matter here.
@@ -239,15 +240,26 @@ A connection holds a **secret reference**, never a secret. The secret stays wher
   (`ingest_key_added`, with the key id) after comparing the fingerprint with that worker's output. A group has
   several active keys at once. An ingest token cannot add a key and neither can a team admin, so neither can
   redirect a secret to a key they hold.
+- **Keys are pinned on the workers.** The operator lists the fingerprints of the group's keys in each
+  worker's `ingest.json` (`trusted_keys`). A worker re-seals only to keys that are both active on the org log
+  and pinned in its own file, so a tracker that adds a key to its list cannot get a secret re-sealed to it.
+  The paste dialog shows each recipient's fingerprint and the org admin confirms them before sealing, as at
+  registration. Together these keep the tracker from ever seeing plaintext, even if it lies about the keys.
 - **Adding a key re-seals.** A new key is useless until the group's secrets are sealed to it. A worker that
   already holds an active key of the group opens each sealed secret and seals it again to exactly the active
-  keys the org log lists, under the same secret version, with a version-checked cache write. The tracker gives
-  each secret's recipient list on the config route, so the dashboard shows "sealed to 2 of 3 keys" until the
+  keys the org log lists, under the same secret version, with a version-checked cache write. If an active key
+  is not pinned on that worker, it does not re-seal and reports which key is missing. The tracker gives each
+  secret's recipient list on the config route, so the dashboard shows "sealed to 2 of 3 keys" until the
   re-seal finishes. Nobody pastes again.
-- **Retiring a key waits.** `ingest_key_retired` (org admin) is refused while a secret of the group is not yet
-  sealed to some other active key, so retiring can never leave a secret no worker can open. After it, the next
-  re-seal drops the retired key from every secret. A lost or leaked key is retired at once with `force`,
-  which an org admin confirms knowing the secrets it alone could open must be pasted again.
+- **Retiring a key waits, then re-seals at once.** `ingest_key_retired` (org admin) is refused while a secret of
+  the group is not yet sealed to some other active key, so retiring can never leave a secret no worker can
+  open. A retirement queues a re-seal straight away, handed to a worker holding another active key through its
+  config long poll, which drops the retired key from every secret.
+- **A leaked key means rotating at the vendor.** Whoever holds a leaked private key can open every secret
+  ever sealed to it, from any copy of the ciphertext, so re-sealing does not help. Each of those secrets must
+  be rotated at the vendor (a new App key, client secret or token) and pasted again. A lost or leaked key is
+  retired at once with `force`; the confirm lists every connection whose secret was sealed to it, and those
+  connections show "Needs attention" until rotated.
 - **Files are allowed by the operator.** A team admin cannot point a connection at an arbitrary file: a
   `file:` reference must be listed in that worker's local `allowed_secrets`, so one team cannot name another
   team's App key.
@@ -274,8 +286,8 @@ new kinds.
 |---|---|---|
 | `ingest_key_added` | Org admin | Team, worker group, worker name, key id, the vendor it serves, its public key. Adds to the group's active keys |
 | `ingest_key_retired` | Org admin | Team, worker group, key id, and `force` when the re-seal has not finished |
-| `budget_set` | Org admin | Budget pool, calls per hour it may spend, and the share kept back for write-backs and checks |
-| `connection_set` | Org admin; team admin for a connection with no pasted secret | Team, name, vendor, the worker group that uses it, budget pool, account (org, site, organization, group), API and browse addresses, Jira `email` and `pr_url_base`, credential kind, secret reference and version, expiry if known. Changing `own_logins` is org admin only |
+| `budget_set` | Org admin | Budget pool, calls per hour it may spend, the share kept back for write-backs, checks and mints, and the cap on wakes inside it |
+| `connection_set` | Org admin; team admin for a connection with no pasted secret | Team, name, vendor, the worker group that uses it, budget pool, account (org, site, organization, group), API and browse addresses, Jira `email` and `pr_url_base`, credential kind, secret reference and version, expiry if known; for a file-managed team, which of its `source_added` sources it serves. Changing `own_logins` is org admin only |
 | `connection_rotated` | Org admin | Team, name, new secret version |
 | `connection_removed` | Org admin, team admin | Team, name. Refused while a source uses it |
 | `sources_connected` | Team admin | Team, connection, and a batch of up to 100 sources, each with its rules (a template name, overrides or a full list), `paused: true`, and its proven level (read or write); the proof once for the batch: vendor, the upstream login and subject proven, when. One record per batch, so a crash cannot leave a source active without its rules. Takes the place of `source_added` for sources added this way, with the same one-team rule per source |
@@ -291,8 +303,9 @@ it write back beyond its proof, and a `sources_connected` whose proof does not c
 `rules_set` or `rules_template_set` is capped at 64 KiB and a `sources_connected` at 256 KiB, so no single
 record makes the org fold slow. A proof result lives 10 minutes and only for the person who made it; Save checks the
 person's role and the source's owner again in the fold, so two teams racing for one source get one owner. A `rules_set` is the only record of the rules:
-ingest no longer needs `rules` in its file for a dashboard-managed team. A rule in a template may leave `repo`
-out, and it then means the source that uses the template.
+ingest no longer needs `rules` in its file for a dashboard-managed team. A rule in a template has no `repo`:
+it always means the source that uses the template, and the fold refuses a `rules_template_set` whose rules name
+one, so a template cannot reach a repo outside the sources that name it.
 
 **Pickup without a restart.** A new ingest route serves the team's effective config:
 
@@ -309,7 +322,7 @@ out, and it then means the source that uses the template.
   not after a whole poll of 500. Rules for one source never change inside that source's read. Renaming or
   removing a rule takes its items out of scope, as editing `ingest.json` does today.
 - A worker's `ingest.json` keeps only what is local: its tracker URL and token, its secrets folder,
-  `allowed_secrets` and webhook settings. A worker whose file still has `rules` is file-managed and says so on
+  `allowed_secrets`, `trusted_keys` and webhook settings. A worker whose file still has `rules` is file-managed and says so on
   the config call. The tracker answers it `409` with `config_conflict` when its team has any connected source,
   and refuses source routes for a team whose workers declared file mode in the last hour, so the two places
   cannot both act. The dashboard shows a file-managed team's sources read only, "Managed in ingest.json".
@@ -333,7 +346,7 @@ harmless.
 
 Today's ingest is built for a few repos per worker. With one org-wide App installation serving 50 teams and
 500 repos, it breaks in five places, and none of them needs the Sources view to matter. The parts below fix
-them, and the first four milestones build them for file-managed workers too. The numbers are checked in
+them, and the first five milestones build them for file-managed workers too. The numbers are checked in
 [Scale targets](#scale-targets).
 
 ### Request budget
@@ -348,7 +361,10 @@ others did.
 
 - **A budget per pool.** Each budget pool has a budget in the vendor's unit, by default 90% of the vendor's
   documented limit, set by an org admin (`budget_set`) or, for file-managed workers, in `ingest.json`. A fifth
-  of it is kept back for webhook wakes, write-backs, checks and token mints, so polling cannot starve them.
+  of it is kept back for write-backs, checks, token mints and webhook wakes, so polling cannot starve them.
+  Wakes spend from their own sub-bucket inside the kept-back share, capped at a third of it by default, and
+  are served last: write-backs, checks and token mints take the kept-back share first, so a flood of
+  deliveries cannot delay a write-back.
 - **The tracker splits it.** The tracker gives each worker in the pool a share in proportion to the sources it
   holds leases on, on the config route, and recomputes it when leases move. A worker spends its share through
   a token bucket and waits rather than overspend.
@@ -369,33 +385,47 @@ others did.
   per reconcile period (24 hours by default, shorter when the budget allows). An item a webhook or a listing
   just showed is skipped, since it is fresh. A wake that says an item moved or was deleted re-reads only that
   item. The slice's position is kept in the source's state.
-- **Pull request reads follow change.** A root's pull request is read when a webhook names it, when its
-  source's listing shows the root's issue changed, while its checks are pending (once per source interval),
-  and in the reconcile slice. Not on every poll.
+- **Pull request reads follow change.** A root's pull request and its checks are read when a webhook names
+  it, when its source's listing shows the root's issue changed, while its checks are pending (once per source
+  interval), and in the reconcile slice. Not on every poll. They spend the polling share left after listings
+  and the reconcile slice, and wait for the next interval when it is spent, hook-named ones first.
 
 ### Webhooks
 
 Webhook first, polling to reconcile. A GitHub App has exactly one webhook URL, so 50 team workers cannot each
 listen for its deliveries, and today a webhook wake re-polls every repo the worker reads.
 
-- **The tracker receives them.** One route per vendor and pool, `POST /v1/hooks/{vendor}/{pool}`: the App's
-  webhook URL, an org's or group's webhook, an Azure DevOps service hook. The operator points the vendor at it
-  and puts the vendor's webhook secret in the tracker's secrets folder. A large install may run the same
-  route on a separate router process with the same verification; it needs only the hook secrets and read
-  access to leases.
+- **The tracker receives them, bound to one connection.** A hook secret is only as narrow as the people who
+  know it, and an upstream admin knows the secret of every hook they set up. So no hook secret is shared
+  between teams:
+  - **GitHub App:** one route per App, `POST /v1/hooks/github/app/{app}`, since an App has one webhook URL for
+    all its installations. Its secret is the App's, set by the operator who registered the App, and no
+    installing org owner or team admin knows it. After the signature checks, the router takes the
+    installation from the payload's `installation.id` and considers only the connections that name it.
+  - **GitLab and Azure DevOps:** one route per connection, `POST /v1/hooks/{vendor}/{connection}`, with a
+    secret the tracker generates for that connection alone and shows once to the admin who sets up the hook.
+    The tracker keeps only its SHA-256, in the team's `work.tracker` cache. One team's upstream admin can then sign deliveries only for that
+    team's own connection.
+
+  A large install may run the same routes on a separate router process with the same checks; it needs only
+  the hook secrets and read access to connections and leases.
 - **Verified first.** The signature is checked before the body is parsed: GitHub's `X-Hub-Signature-256`
-  HMAC, GitLab's `X-Gitlab-Token`, Azure DevOps' basic auth over TLS. Jira is polled only until its webhook
-  signing is confirmed (see [Open questions](#open-questions)). A delivery that fails is dropped and
-  counted. Bodies are size-capped, and the route refuses plain HTTP outside loopback, as ingest's own listener
-  does today.
+  HMAC, GitLab's `X-Gitlab-Token` and Azure DevOps' basic auth password over TLS, each compared in constant
+  time. Jira is polled only until its webhook signing is confirmed (see [Open questions](#open-questions)). A
+  delivery that fails is dropped and counted. Bodies are size-capped, and the route refuses plain HTTP outside
+  loopback, as ingest's own listener does today.
+- **Replays are dropped.** GitHub's HMAC covers the body but no timestamp, so a captured delivery stays valid.
+  The router keeps each `X-GitHub-Delivery` id it accepted for 24 hours, per App, in the cache, and drops a
+  repeat. The set is capped; a replay of an id that aged out only costs a coalesced wake.
 - **It wakes only the owner.** The router reads only the repo or project and the item number from the
-  payload, maps them to a source, the source to its lease holder, and wakes that worker through its config
-  long poll with the source id and item reference. A repo no team owns is dropped. The wake is a hint: the
+  payload and maps the repo to a source **among the sources of the connections the delivery was verified
+  for**. A repo outside them is dropped and counted, even if another team owns it. It then wakes the source's
+  lease holder through its config long poll with the source id and item reference. The wake is a hint: the
   worker reads upstream itself with its own credential, and nothing from the payload reaches the log, as with
   ingest's listener today.
 - **It polls only what woke.** A wake polls the named source (and re-reads the named item), not every repo.
-  Wakes for one source are coalesced over a short gap (10 s by default) and spend from the kept-back share, so
-  a flood of deliveries, forged or real, costs a bounded number of calls.
+  Wakes for one source are coalesced over a short gap (10 s by default) and spend only the wake sub-bucket, so
+  a flood of deliveries, forged or real, costs a bounded number of calls and never delays a write-back.
 - **A slow interval while hooks are healthy.** A pool's hooks are healthy while every change a poll finds was
   more than a minute old was already announced by a verified delivery. Then each source is polled every 30 minutes at most often, to
   catch a dropped delivery. A poll that finds a change no hook announced marks the pool's hooks unhealthy for
@@ -424,6 +454,11 @@ connection has exactly one worker.
   tracker refuses them from a worker that does not hold the current one. A worker that loses a lease stops
   at its next call, and the next holder starts from the last saved state. Across a handoff, `cache_put_if` on
   the upstream id still stops a double import.
+- **Fenced upstream by a local deadline.** The tracker cannot refuse a vendor call, so the holder fences
+  itself: once its own last successful renew is older than 60 s by its monotonic clock, it makes no upstream
+  call for any of those sources until a renew succeeds. That is 30 s inside the tracker's 90 s expiry, which
+  covers request time and clock rate drift, so the old holder has stopped before a new one can take the
+  lease. A write-back checks this deadline first, right before its upstream call.
 - **Only its own team's sources.** The tracker grants a lease only to a worker of the source's owning team
   whose group the source's connection names, so a lease cannot widen what a worker token may touch.
 
@@ -467,8 +502,8 @@ inside the `kbl-ingest` binary.
 A team with 40 repos does not want 40 copies of one rule list, and 500 `rules_set` records would make the org
 fold and the history panel slow.
 
-- **Templates.** A team admin saves a rule list once as a template (`rules_template_set`), with `repo` left
-  out to mean "this source". A source names a template, and changing the template changes every source using
+- **Templates.** A team admin saves a rule list once as a template (`rules_template_set`), with no `repo`,
+  which means "this source"; a template rule naming a repo is refused. A source names a template, and changing the template changes every source using
   it in one record. The editor says how many sources a template change reaches before Save.
 - **Overrides.** A source may override a template's cap, tier or write-back switches per rule, or replace the
   list outright. The detail panel shows the effective rules and marks what is overridden.
@@ -499,9 +534,9 @@ GitHub App installation, so one budget pool.
 
 | Limit | Today | With this design |
 |---|---|---|
-| Installation rate limit: 5,000 calls an hour (15,000 on Enterprise Cloud) | About 60,000 an hour for listings (500 repos, 2 listings, every 60 s), 60,000 for the full re-read every 20 polls, plus a pull request read per open root per poll | Budget 4,500, of which 900 is kept back. Hooks healthy: 500 sources polled every 30 minutes is 2,000 an hour, plus 20,000 re-reads spread over 24 hours, about 830, so 2,830 fits in 3,600. Hooks down: the interval adapts to about 22 minutes per source on 5,000 an hour and about 6 minutes on 15,000, shorter as free `304`s come back |
+| Installation rate limit: 5,000 calls an hour (15,000 on Enterprise Cloud) | About 60,000 an hour for listings (500 repos, 2 listings, every 60 s), 60,000 for the full re-read every 20 polls, plus a pull request read per open root per poll | Budget 4,500, of which 900 is kept back. Hooks healthy: 500 sources polled every 30 minutes is 2,000 an hour, plus 20,000 re-reads spread over 24 hours, about 830, so 2,830 of the 3,600 polling share; pull request and checks reads take the remaining 770 and wait when it is spent. Hooks down: the interval adapts to about 22 minutes per source on 5,000 an hour and about 6 minutes on 15,000, shorter as free `304`s come back |
 | A rate limit answer | Each worker finds it alone | `blocked_until` in the pool's cache key stops every worker of the pool before its next call |
-| Webhook wakes | One App webhook URL cannot reach 50 workers; a wake re-polls every repo | One tracker route verifies and wakes only the lease holder for the named source. Up to about 300 wakes an hour fit the 900 kept back when write-backs are quiet; more wait for the scheduled poll |
+| Webhook wakes | One App webhook URL cannot reach 50 workers; a wake re-polls every repo | One App route verifies, takes the installation from the payload and wakes only the lease holder for the named source. Wakes spend a sub-bucket of 300 an hour inside the 900 kept back, after write-backs, checks and mints; more wait for the scheduled poll |
 | Installation token `repositories`: at most 500 | One token for the team's repos | One token per chunk of at most 500 leased sources, about one mint per chunk an hour |
 | Ingest state: 4 MiB per version-checked entry | One entry per worker, full near 20,000 items | One entry per source: 40 open items each on average here. Only a single repo near 20,000 open items reaches the cap, and it is flagged at 75% |
 | Workers per connection | One, so no failover | Any number. Sources spread by lease; a dead worker's sources move within 90 s |
@@ -526,7 +561,7 @@ All person routes are team routes and check the role as the org routes do.
 | `POST /v1/teams/{team}/connections` | Team admin (no paste), org admin | `connection_set` |
 | `POST /v1/teams/{team}/ingest/{group}/keys`, `DELETE .../keys/{id}` | Org admin | `ingest_key_added`, `ingest_key_retired` |
 | `PUT /v1/org/budgets/{pool}` | Org admin | `budget_set` |
-| `PUT /v1/teams/{team}/connections/{name}/secret` | Org admin | Takes ciphertext sealed in the browser, writes the cache entry, then `connection_rotated` |
+| `PUT /v1/teams/{team}/connections/{name}/secret` | Org admin | Takes ciphertext sealed in the browser, refused unless its recipients are exactly the group's active keys (the re-seal check), writes the cache entry, then `connection_rotated` |
 | `POST /v1/teams/{team}/connect/{vendor}` | Team admin | Starts a person proof: answers the vendor's authorize URL with a one-time `state` bound to this person |
 | `POST /v1/teams/{team}/connect/finish` `{code, state}` | Team admin, the same person who started it | Finishes the sign-in, runs the checks, drops the token, keeps the result for that person's pending connect only |
 | `POST /v1/teams/{team}/sources` | Team admin | `sources_connected` from the caller's pending proof, up to 100 sources a record, with rules and paused |
@@ -539,7 +574,8 @@ All person routes are team routes and check the role as the org routes do.
 | `GET /v1/ingest/roots?source=&after=`, `GET`/`PUT /v1/ingest/state/{source}`, `PUT /v1/ingest/status/{source}` | Ingest, holding the source's lease | Above; writes carry the lease epoch |
 | `PUT /v1/ingest/backoff/{pool}` | Ingest, in the pool | Sets `blocked_until`, keeping the later time |
 | `PUT /v1/ingest/secrets/{id}` | Ingest, holding an active key of the group | Re-seal: the same secret version sealed to exactly the group's active keys |
-| `POST /v1/hooks/{vendor}/{pool}` | The vendor, by webhook signature | Verifies and wakes the lease holder |
+| `POST /v1/hooks/github/app/{app}` | GitHub, by the App's webhook signature | Verifies, drops a repeated `X-GitHub-Delivery`, maps the repo only within connections naming the payload's `installation.id`, wakes the lease holder |
+| `POST /v1/hooks/{vendor}/{connection}` | GitLab or Azure DevOps, by that connection's own hook secret | Verifies in constant time, maps the repo only within that connection's sources, wakes the lease holder |
 
 `kbl-tool source` gains the same verbs for people who script setup, except a person proof, which needs a
 browser: `kbl-tool` can connect a source only as an org admin, and the record then says it had no proof.
@@ -560,10 +596,11 @@ These rows go into [threat-model.md](../threat-model.md) with each milestone tha
 | A proof for one repo is reused to widen the scope | The proof lists the repos it covered; widening a source needs a new proof |
 | One team reads another team's repos through a shared installation | Source ownership is one team per source on `org.events`; installation tokens are minted with `repositories` set to the worker's leased sources, in chunks of at most 500; leases go only to the owning team's workers; the tracker refuses ingest records for roots outside the team's sources |
 | A team admin points a connection at another team's secret file | `file:` references must be in that worker's local `allowed_secrets`, set by the operator |
-| The tracker, a cache reader or a log reader learns a vendor secret | Pasted secrets are sealed in the browser to the worker group's registered keys; the tracker never sees plaintext; no record carries a secret |
+| The tracker, a cache reader or a log reader learns a vendor secret | Pasted secrets are sealed in the browser to the worker group's registered keys after the org admin confirms each fingerprint; workers re-seal only to keys pinned in their own `trusted_keys`; no record carries a secret |
 | Register your own worker key, then read the next pasted secret | Only an org admin writes `ingest_key_added`, after comparing the fingerprint the worker prints; an ingest token or a team admin cannot |
-| Get a secret re-sealed to a key nobody registered | A re-seal is taken only from a worker holding an active key of the group, and the tracker refuses one whose recipients are not exactly the group's keys from `ingest_key_added` records |
-| Retire every key that can open a secret | `ingest_key_retired` is refused until each secret is sealed to another active key, unless an org admin forces it knowing those secrets must be pasted again |
+| Get a secret re-sealed to a key nobody registered | A worker re-seals only to keys that are active on the org log and pinned in its local `trusted_keys`, so a tracker that adds its own key gets nothing. A re-seal is taken only from a worker holding an active key of the group, and the tracker refuses a re-seal or a pasted secret whose recipients are not exactly the group's active keys |
+| Retire every key that can open a secret | `ingest_key_retired` is refused until each secret is sealed to another active key, unless an org admin forces it. A retirement queues a re-seal at once that drops the retired key |
+| A worker's private key leaks | Its holder can open every secret ever sealed to it, so re-sealing does not help: each such secret is rotated at the vendor and pasted again. The `force` confirm lists every connection whose secret was sealed to the key, and they show "Needs attention" until rotated |
 | Add an agent-controlled login to `own_logins` so its prerequisite markers are trusted | Ingest reads its own login from the credential; adding more is org admin only |
 | A pasted secret crosses the network in the clear | Paste is refused unless the tracker is behind TLS |
 | The person's vendor token is kept or leaks | Held in memory for the check calls only, never stored or logged, errors pass the redactor. No refresh token is asked for where the vendor lets us |
@@ -571,8 +608,12 @@ These rows go into [threat-model.md](../threat-model.md) with each milestone tha
 | An attacker who can file issues in a newly connected repo floods the queue | Sources save paused, rules need a cap on an open filter, and the dry run shows the count before resume |
 | Ingest keeps syncing after removal | `source_removed` takes the source out of `GET /v1/ingest/config`, whose long poll answers at once; ingest drops it before its next repo read; its lease ends, and the tracker refuses ingest records for a removed source's roots |
 | A crafted rule injects into an upstream query | Rules are parsed by ingest's own strict parser; JQL and ADO saved queries run upstream under the connection's own access, as today, and ADO WIQL is never taken from a rule (#333) |
-| Forge webhook deliveries to read data or burn the budget | The signature is checked before the body is parsed; a delivery only wakes a poll and its payload never reaches the log; wakes are coalesced per source and spend only the kept-back share |
+| Forge webhook deliveries to read data or burn the budget | The signature is checked before the body is parsed, in constant time for tokens; a delivery only wakes a poll and its payload never reaches the log; wakes are coalesced per source and spend only a capped wake sub-bucket that write-backs, checks and mints are served before |
+| One team's upstream admin forges deliveries for another team's sources | No hook secret is shared between teams: the GitHub App's secret is the operator's, and the router takes the installation from the verified `installation.id`; GitLab and Azure DevOps hooks have a secret per connection. A repo is mapped to a source only among the verified connection's sources, and the rest is dropped |
+| Replay a captured GitHub delivery | GitHub's HMAC carries no timestamp, so the router drops a repeated `X-GitHub-Delivery` id for 24 hours; an older replay only costs a coalesced wake |
 | A worker writes state or records for a source it does not hold, or takes another team's source | Leases go only to workers of the source's owning team and group; every state write and record carries the lease epoch and is refused without the current one |
+| An old lease holder keeps calling upstream, or writes back, after its lease moved | The holder stops every upstream call once its own last successful renew is older than 60 s, inside the 90 s expiry; a write-back checks that deadline right before its call |
+| A template writes to a repo outside the sources that use it | The fold refuses a `rules_template_set` whose rules name a `repo` |
 | One team's worker spends the shared installation's whole limit | The split only governs honest workers. Each worker reports what the vendor charged it in `ingest/status`, the Sources view shows spend per team, and an org admin can revoke a worker's token. The vendor's limit is per installation, so a separate installation is the only hard wall between teams |
 | A worker stalls the pool with a far-future `blocked_until` | Only workers of the pool may set it, it is capped at the vendor's own reset window (one hour), and the writer is logged |
 | A template change switches on write-back for sources proven read only | The fold checks every source naming the template against its proof |
@@ -580,26 +621,33 @@ These rows go into [threat-model.md](../threat-model.md) with each milestone tha
 
 ## Milestones
 
-Each is one implementation issue. Drafts are in the pull request that adds this page. The first four fix
-today's ingest at scale and help file-managed workers with no Sources view, so they come first.
+Each is one implementation issue. Drafts are in the pull request that adds this page. The first five fix
+today's ingest at scale for file-managed workers with no Sources view, and each one ships on top of the ones
+before it.
 
-1. **Request budget and adaptive polling.** Budget pools set in `ingest.json` (later by `budget_set`), the
-   tracker's split per worker, token buckets charged what the vendor reports, an interval per source, shared
-   `blocked_until` per pool, reconcile spread over polls, pull request reads that follow change.
-2. **Per-source state, leases and sharding.** `ingest/state/{source}` with the blob split on first start,
-   leases with epochs and a heartbeat, rendezvous assignment over a group's live workers, epoch fencing on
-   state and records, per-source status keys, installation tokens in chunks of at most 500.
-3. **Roots by source.** `GET /v1/ingest/roots?source=&after=`, filtered to leased sources and the roots whose
+1. **Groups, pools and the config route.** The org `format_raised` and org format 2. `connection_set` (org
+   admin, with no secret reference yet: a file-managed worker keeps its credential in `ingest.json`) naming
+   the worker group, the budget pool and which of the team's `source_added` sources it serves; `budget_set`.
+   A minimal `GET /v1/ingest/config` long poll that answers the worker's connection, sources, budget share and
+   leases; `PUT /v1/ingest/leases` with epochs, the batch heartbeat, rendezvous assignment over a group's
+   live workers and the local 60 s upstream fence. Rules stay in `ingest.json`.
+2. **Per-source state and fencing.** `ingest/state/{source}` with the blob split on first start, epoch
+   fencing on state and records, per-source status keys, installation tokens in chunks of at most 500.
+3. **Request budget and adaptive polling.** The tracker's split per worker on the config route, token buckets
+   charged what the vendor reports, an interval per source, shared `blocked_until` per pool, reconcile spread
+   over polls, pull request and checks reads that follow change and stay within the share.
+4. **Roots by source.** `GET /v1/ingest/roots?source=&after=`, filtered to leased sources and the roots whose
    pull requests are in them.
-4. **Webhook router.** `POST /v1/hooks/{vendor}/{pool}` in the tracker, signature checks, wakes for the lease
-   holder through a long poll, per-source coalescing, hook health and the slow interval.
-5. **Config schema as a library, and sources on `org.events`.** Move ingest's config schema and
-   `static_findings` into a shared crate; add the records above at org format 2, with templates, bulk
-   connect and the size caps; tracker routes for connections, sources, rules, pause, resume and remove, org
-   admin and team admin, with paged lists; an org `format_raised`; org snapshots and the per-source history
-   index; `kbl-tool source` verbs.
-6. **Ingest reads its config from the tracker.** `GET /v1/ingest/config` as a long poll with `ETag`, pause and
-   remove between repos, file-managed versus tracker-managed teams, `allowed_secrets`.
+5. **Webhook router.** `POST /v1/hooks/github/app/{app}` and per-connection GitLab and Azure DevOps routes
+   with their own hook secrets, constant-time checks, `X-GitHub-Delivery` dedupe, repo mapping within the
+   verified connection, wakes through the long poll, per-source coalescing, the capped wake sub-bucket, hook
+   health and the slow interval.
+6. **Sources and rules on `org.events`.** Move ingest's config schema and `static_findings` into a shared
+   crate; add the remaining records above, with templates (no `repo`), bulk connect and the size caps;
+   secret references with `allowed_secrets`; tracker routes for connections, sources, rules, pause, resume
+   and remove, with paged lists; org snapshots and the per-source history index; `kbl-tool source` verbs.
+   The config route then also answers rules and paused flags, with pause and remove between repos, and
+   file-managed versus tracker-managed teams.
 7. **Checks on request.** The check queue, ingest running #325's checks and dry run against draft rules,
    reports in the cache.
 8. **Dashboard Sources view.** List, detail, add (with an existing connection, no person proof yet: org admins
@@ -608,9 +656,10 @@ today's ingest at scale and help file-managed workers with no Sources view, so t
 9. **Person proof for GitHub.** The connect routes, `state` handling, the App user authorization and levels
    read from the paginated installation listing; team admins may then connect.
 10. **Person proof for Azure DevOps and Jira.** One issue each.
-11. **Sealed secrets.** Worker key pairs with ids and fingerprints, several active keys per group, org admin
-    key registration and retirement, sealing in the browser to every active key, re-seal on key add, paste and
-    rotate in the dashboard, expiry warnings.
+11. **Sealed secrets.** Worker key pairs with ids and fingerprints, `trusted_keys` pinning, several active keys
+    per group, org admin key registration and retirement with an immediate re-seal, sealing in the browser to
+    every active key after a fingerprint confirm, the recipient check on paste and re-seal, the forced
+    retirement's list of connections to rotate, expiry warnings.
 12. **GitLab.** Credential and proof as above, with the adapter in #129.
 13. **KBL sign-in through the vendor's provider.** With #316, so a proof's subject can be matched to the person.
 
