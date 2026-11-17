@@ -170,13 +170,31 @@ So `work.events` must be acknowledged only once a quorum holds it:
   run it with `FELIX_ACK_ON_COMMIT=true` and `FELIX_DURABLE_FSYNC_MODE=on_commit`
   (the dev stack does), and do not abandon the shard's log.
 
+With one copy, the reliance also covers a record Felix never acknowledged:
+it must not become readable and then vanish. That holds under fsync
+`on_commit`, where a record is readable only once it is on disk.
+
 At start the tracker reads `work.events` from the control plane and refuses
-to start unless it is durable and either `Quorum` or one copy. The error names
-the settings it found. The control plane does not show the shard engine or the
+to start unless it is durable and either `Quorum` or one copy; a missing
+replication factor is refused, not read as one copy. It reads the settings
+again on every rebuild of its state, because a stream can be changed or
+recreated while the tracker runs. If they no longer hold, the rebuild fails,
+the state stays stale and every call is refused with an error that names the
+settings, until the stream is fixed. The tracker keeps running rather than
+exiting, so it serves again once the stream is fixed. The control plane does not show the shard engine or the
 broker's ack and fsync settings
 ([felix#2735](https://github.com/GetFelix/felix/issues/2735)), so a stream on
 Raft with more than one copy must still be `Quorum`, and fsync on a single copy
 is up to whoever runs the broker.
+
+The tracker also assumes a read of the log's tip shows every acknowledged
+write. Felix does not promise that once reads need no leader lease: a deposed
+`Quorum` leader can still serve a read that shows less
+([felix#2735](https://github.com/GetFelix/felix/issues/2735) asks for a
+read that reflects every acknowledged write). The cost is that a resumed or
+extended claim can be reported live briefly after its hold ended. That is
+wasted agent work and never two holders, because every claim is conditional on
+the tail, so Felix refuses it and the tracker rebuilds.
 
 The tracker does not defend against Felix losing a write it acknowledged. A
 record Felix never acknowledged can still be cut, such as a publish whose

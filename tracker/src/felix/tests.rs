@@ -84,3 +84,17 @@ fn work_events_must_be_acknowledged_durably() {
     let err = acks_are_durable(&work_events(true, "Leader", 2)).unwrap_err();
     assert!(err.to_string().contains("replication_factor: 2"), "{err}");
 }
+
+/// A stream whose copy count the control plane left out is not one copy.
+#[test]
+fn a_missing_replication_factor_is_refused() {
+    let stream = json!({ "durable": true, "consistency": "Leader" });
+    let err = acks_are_durable(&stream).unwrap_err();
+    assert!(
+        err.to_string().contains("replication_factor: unknown"),
+        "{err}"
+    );
+    let mut quorum = stream.clone();
+    quorum["consistency"] = json!("Quorum");
+    assert!(acks_are_durable(&quorum).is_ok());
+}

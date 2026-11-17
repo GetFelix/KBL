@@ -103,6 +103,8 @@ struct Net {
     gate_lease: bool,
     /// The next this many lease puts land, but their replies are lost.
     lose_lease_reply: u32,
+    /// `work.events` is no longer acknowledged durably.
+    acks_weakened: bool,
     /// Reads of the lease key fail.
     fail_lease_get: bool,
     /// The entry runs out right after the next read of the lease key.
@@ -340,6 +342,10 @@ impl Fake {
 
     fn lease_puts(&self) -> u32 {
         self.net.lock().unwrap().lease_puts
+    }
+
+    pub(super) fn weaken_acks(&self, weak: bool) {
+        self.net.lock().unwrap().acks_weakened = weak;
     }
 
     fn fail_lease_gets(&self, fail: bool) {
@@ -758,6 +764,13 @@ impl Broker for Fake {
         let next = now.unwrap_or(0) + 1;
         net.cursors.insert(name.to_owned(), (value, next));
         Ok(Some(next))
+    }
+
+    async fn check_acks(&self) -> anyhow::Result<()> {
+        if self.net.lock().unwrap().acks_weakened {
+            anyhow::bail!("work.events is no longer durable");
+        }
+        Ok(())
     }
 
     async fn forget(&self, member: Option<&str>) {

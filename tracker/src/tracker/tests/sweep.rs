@@ -124,6 +124,8 @@ struct Model {
     next_item: u32,
     /// What each agent believes it holds: item and attempt.
     beliefs: HashMap<&'static str, String>,
+    /// The attempt of the claim each agent believes it holds.
+    attempts: HashMap<&'static str, u32>,
     /// Who was handed each claim, by the offset of its `claimed` record.
     handed: HashMap<u64, &'static str>,
     /// Items whose import was acknowledged, and whose accept was.
@@ -229,6 +231,7 @@ async fn claim_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, who: &'static
     }
     m.start(&ended, &id, attempt, who, at);
     m.beliefs.insert(who, id);
+    m.attempts.insert(who, attempt);
 }
 
 async fn finish_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, who: &'static str) {
@@ -264,14 +267,16 @@ async fn extend_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, who: &'stati
     let Some(id) = m.beliefs.get(who).cloned() else {
         return;
     };
+    let attempt = m.attempts[who];
     match t.extend(&agent(who), &item(&id)).await {
         Ok(_) => {
             let state = replay(fake).state;
-            let holder = state.items[&item(&id)].hold.as_ref().map(|h| h.by.as_str());
+            let hold = state.items[&item(&id)].hold.as_ref();
+            let holder = hold.map(|h| (h.by.as_str(), h.attempt));
             assert_eq!(
                 holder,
-                Some(who),
-                "{who} was extended {id}, which the log shows held by {holder:?}"
+                Some((who, attempt)),
+                "{who} was extended {id} attempt {attempt}, which the log shows held by {holder:?}"
             );
         }
         Err(Error::Lost(_)) => {

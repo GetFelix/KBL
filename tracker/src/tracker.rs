@@ -2205,6 +2205,8 @@ impl<B: Broker> Tracker<B> {
     /// confirms the lease. A fresh claim needs no check: its write is
     /// conditional on the tail.
     async fn hold_at_tip(&self, agent: &AgentName, d: &Delivery) -> Result<AtTip, Error> {
+        // Assumes the tip read shows every acknowledged write; Felix does not
+        // promise that after a leader is deposed (docs/work-tracker.md).
         let tail = self.0.core.lock().await.tail;
         // From one before the tail, so a tip a failover lowered shows too.
         let (_, tip) = self
@@ -2560,6 +2562,13 @@ impl<B: Broker> Tracker<B> {
             ))
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
+        // After the read, so a failure leaves the state stale and every call
+        // refused: the tracker serves again once the stream is fixed.
+        self.0.broker.check_acks().await.map_err(|e| {
+            Error::Unavailable(format!(
+                "{e:#}; the tracker is refusing work until it is fixed"
+            ))
+        })?;
         let team = self.0.settings.team.clone();
         metrics::counter!("kbl_tracker_fold_rebuilds_total", "team" => team.clone()).increment(1);
         metrics::histogram!("kbl_tracker_fold_rebuild_seconds", "team" => team)
