@@ -129,6 +129,14 @@ pub(super) struct Fake {
 }
 
 impl Fake {
+    /// Retention: drops the records before `before`, as a trimmed stream.
+    pub(super) fn trim_before(&self, stream: &str, before: u64) {
+        let mut net = self.net.lock().unwrap();
+        if let Some(log) = net.streams.get_mut(stream) {
+            log.retain(|(o, _)| *o >= before);
+        }
+    }
+
     pub(super) fn page_size(&self, size: usize) {
         self.net.lock().unwrap().page_size = Some(size);
     }
@@ -2226,6 +2234,7 @@ mod renewal;
 mod replay;
 mod retry;
 mod review;
+mod texts;
 
 #[tokio::test(start_paused = true)]
 async fn a_dead_lettered_ready_record_is_published_again() {

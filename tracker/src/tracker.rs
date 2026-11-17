@@ -12,7 +12,7 @@
 //! extends, so one slow Felix call stalls that agent and nobody else.
 //! Every Felix call has a timeout.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -449,6 +449,16 @@ struct Recall {
     attempts: HashMap<(ItemId, u32), Vec<ClaimLog>>,
     /// The attempt each `claimed` record is in, by its offset.
     claims: HashMap<u64, (ItemId, u32)>,
+}
+
+/// What reading a record's text back from the log found.
+#[derive(Clone)]
+enum TextRead {
+    Text(Content),
+    /// The record is there and has no text.
+    NoText,
+    /// No record at the offset: retention trimmed it.
+    Gone,
 }
 
 /// One `claimed` record and the record that ended it.
@@ -2339,27 +2349,57 @@ impl<B: Broker> Tracker<B> {
         Ok((state, recall, tail))
     }
 
-    /// The text of the record at `offset`: from memory, or read back from the
-    /// log when the cache let it go.
-    async fn text_at(&self, core: &mut Core, offset: u64) -> Result<Option<Content>, Error> {
-        if let Some(text) = core.recall.texts.get(offset) {
-            return Ok(Some(text.clone()));
+    /// The text at `offset` if memory still has it.
+    fn cached_text(core: &mut Core, offset: u64) -> Option<Content> {
+        core.recall.texts.get(offset).cloned()
+    }
+
+    /// Reads the texts of the records at `offsets` back from the log, for the
+    /// ones the cache let go. It takes no lock: callers drop the core lock
+    /// first, so a slow read stalls no writer. One pass over the log serves
+    /// every offset, and a page that starts elsewhere or skips a blank offset
+    /// is scanned to the exact record. The caller puts what it gets in the cache.
+    async fn read_texts(&self, offsets: &[u64]) -> Result<HashMap<u64, TextRead>, Error> {
+        let mut pending: BTreeSet<u64> = offsets.iter().copied().collect();
+        let mut found = HashMap::new();
+        let mut from = 0;
+        while let Some(&want) = pending.first() {
+            from = from.max(want);
+            let (records, next) = self
+                .io(None, self.0.broker.read_page(WORK_EVENTS, from))
+                .await
+                .map_err(|e| {
+                    Error::Unavailable(format!("reading a text from the log failed: {e:#}"))
+                })?;
+            for (o, payload) in records {
+                // A wanted offset the page passed holds no record.
+                while let Some(&w) = pending.first()
+                    && w < o
+                {
+                    pending.pop_first();
+                    found.insert(w, TextRead::Gone);
+                }
+                if pending.first() == Some(&o) {
+                    pending.pop_first();
+                    let rec = read(&payload).map_err(|e| {
+                        Error::Unavailable(format!("{WORK_EVENTS} offset {o} does not decode: {e}"))
+                    })?;
+                    found.insert(
+                        o,
+                        texts::text_of(&rec.record).map_or(TextRead::NoText, TextRead::Text),
+                    );
+                }
+            }
+            match next {
+                Some(n) => from = n,
+                None => break,
+            }
         }
-        let (records, _) = self
-            .io(None, self.0.broker.read_page(WORK_EVENTS, offset))
-            .await
-            .map_err(|e| {
-                Error::Unavailable(format!("reading a text from the log failed: {e:#}"))
-            })?;
-        let text = records
-            .into_iter()
-            .find(|(o, _)| *o == offset)
-            .and_then(|(_, payload)| read(&payload).ok())
-            .and_then(|rec| texts::text_of(&rec.record));
-        if let Some(text) = &text {
-            core.recall.texts.insert(offset, text.clone());
+        // Past the end of the log, or trimmed away.
+        for w in pending {
+            found.insert(w, TextRead::Gone);
         }
-        Ok(text)
+        Ok(found)
     }
 
     fn slot(&self, agent: &AgentName) -> Slot {

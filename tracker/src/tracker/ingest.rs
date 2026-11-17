@@ -9,8 +9,9 @@ use kbl_core::work::{Actor, CloseWhy, PrPhase, ReviewPass, ReviewSpec, WorkKind,
 use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 
-use super::{Error, Tracker};
+use super::{Error, TextRead, Tracker};
 use crate::felix::Broker;
+use std::collections::HashMap;
 
 /// Longest saved state: a cache value, not a log.
 const MAX_STATE_BYTES: usize = 4 << 20;
@@ -80,6 +81,40 @@ fn refused(why: &str) -> Error {
 }
 
 impl<B: Broker> Tracker<B> {
+    /// For a context record over an entry no agent owns: the offset of the
+    /// entry now and what reading its text back found. The read happens with
+    /// the core lock dropped.
+    async fn stored_context(&self, record: &WorkRecord) -> Result<Option<(u64, TextRead)>, Error> {
+        let WorkRecord::Context { item, entry, .. } = record else {
+            return Ok(None);
+        };
+        let at = {
+            let mut core = self.0.core.lock().await;
+            let Some(it) = core.state.items.get(item) else {
+                return Ok(None);
+            };
+            let Some(&at) = it.context.get(entry) else {
+                return Ok(None);
+            };
+            if it.context_agents.contains_key(entry) {
+                return Ok(None);
+            }
+            if let Some(t) = Self::cached_text(&mut core, at) {
+                return Ok(Some((at, TextRead::Text(t))));
+            }
+            at
+        };
+        let read = self
+            .read_texts(&[at])
+            .await?
+            .remove(&at)
+            .unwrap_or(TextRead::Gone);
+        if let TextRead::Text(t) = &read {
+            self.0.core.lock().await.recall.texts.insert(at, t.clone());
+        }
+        Ok(Some((at, read)))
+    }
+
     /// Appends an upstream sync record if the fold accepts it.
     pub(crate) async fn ingest_record(&self, by: Key, record: WorkRecord) -> Result<Value, Error> {
         if !allowed(&record) {
@@ -100,6 +135,7 @@ impl<B: Broker> Tracker<B> {
         }
         self.begin().await?;
         let kind = record.kind();
+        let stored = self.stored_context(&record).await?;
         let offset = {
             let mut core = self.0.core.lock().await;
             if !targets(&record)
@@ -154,9 +190,25 @@ impl<B: Broker> Tracker<B> {
                 && let Some(it) = core.state.items.get(item)
                 && let Some(&at) = it.context.get(entry)
                 && !it.context_agents.contains_key(entry)
-                && self.text_at(&mut core, at).await? == Some(text.clone())
+                && let Some((known, read)) = &stored
+                && *known == at
             {
-                return Ok(json!({ "kind": kind, "offset": at, "unchanged": true }));
+                match read {
+                    TextRead::Text(old) if old == text => {
+                        return Ok(json!({ "kind": kind, "offset": at, "unchanged": true }));
+                    }
+                    // Retention trimmed the stored text, and the fold keeps no
+                    // digest to compare. Writing it again could only repeat an
+                    // entry ingest already sent, so it is left out.
+                    TextRead::Gone => {
+                        eprintln!(
+                            "kbl-tracker: context {entry} on {item} at offset {at} was trimmed; \
+                             not written again"
+                        );
+                        return Ok(json!({ "kind": kind, "offset": at, "unchanged": true }));
+                    }
+                    _ => {}
+                }
             }
             let opened = match &record {
                 WorkRecord::PrStatus { item, status } if status.phase == PrPhase::Open => {
@@ -234,68 +286,92 @@ impl<B: Broker> Tracker<B> {
     /// may open an upstream issue for.
     pub(crate) async fn ingest_roots(&self) -> Result<Value, Error> {
         self.begin().await?;
-        let mut core = self.0.core.lock().await;
-        let roots: Vec<Value> = core
-            .state
-            .imported()
-            .filter_map(|(source, upstream_id, item)| {
-                let it = core.state.items.get(item)?;
-                Some(json!({
-                    "item": item,
-                    "source": source,
-                    "upstream_id": upstream_id,
-                    "stage": core.state.stage(item),
-                    "closed": it.closed.is_some(),
-                    "closed_by_sync": it.closed_by_sync,
-                    "left_scope_by_sync": it.left_scope_by_sync,
-                    "reopened_by": it.reopened_by,
-                    "has_children": !it.children.is_empty(),
-                    "held": it.hold.is_some(),
-                    "pr": it.pr,
-                    "claimed_at_ms": it.first_claim_ms,
-                    "pr_status": it.pr_status,
-                    "release": it.release,
-                    "awaits_release": core.state.awaits_release(item),
-                }))
-            })
-            .collect();
-        let prerequisite = Key::new("prerequisite").expect("a valid key");
-        let unopened: Vec<_> = core
-            .state
-            .unopened_prerequisites()
-            .into_iter()
-            .filter_map(|(it, waiter)| {
-                let target = it.target.as_ref()?;
-                let at = it.context.get(&prerequisite).copied();
-                Some((
-                    it.id.clone(),
-                    it.title.clone(),
-                    target.clone(),
-                    waiter.map(str::to_owned),
-                    at,
-                ))
-            })
-            .collect();
-        let mut prerequisites: Vec<Value> = Vec::new();
-        for (id, title, target, waiter, at) in unopened {
-            // The `why` of the record that created it, when it is inline text.
-            let why = match at {
-                Some(at) => match self.text_at(&mut core, at).await? {
+        let mut fetched: HashMap<u64, TextRead> = HashMap::new();
+        loop {
+            let mut core = self.0.core.lock().await;
+            let roots: Vec<Value> = core
+                .state
+                .imported()
+                .filter_map(|(source, upstream_id, item)| {
+                    let it = core.state.items.get(item)?;
+                    Some(json!({
+                        "item": item,
+                        "source": source,
+                        "upstream_id": upstream_id,
+                        "stage": core.state.stage(item),
+                        "closed": it.closed.is_some(),
+                        "closed_by_sync": it.closed_by_sync,
+                        "left_scope_by_sync": it.left_scope_by_sync,
+                        "reopened_by": it.reopened_by,
+                        "has_children": !it.children.is_empty(),
+                        "held": it.hold.is_some(),
+                        "pr": it.pr,
+                        "claimed_at_ms": it.first_claim_ms,
+                        "pr_status": it.pr_status,
+                        "release": it.release,
+                        "awaits_release": core.state.awaits_release(item),
+                    }))
+                })
+                .collect();
+            let prerequisite = Key::new("prerequisite").expect("a valid key");
+            let unopened: Vec<_> = core
+                .state
+                .unopened_prerequisites()
+                .into_iter()
+                .filter_map(|(it, waiter)| {
+                    let target = it.target.as_ref()?;
+                    let at = it.context.get(&prerequisite).copied();
+                    Some((
+                        it.id.clone(),
+                        it.title.clone(),
+                        target.clone(),
+                        waiter.map(str::to_owned),
+                        at,
+                    ))
+                })
+                .collect();
+            // Texts the cache let go are read with the lock dropped, then this is redone.
+            let mut missing: Vec<u64> = Vec::new();
+            let mut whys: HashMap<u64, Option<Content>> = HashMap::new();
+            for at in unopened.iter().filter_map(|u| u.4) {
+                if let Some(t) = Self::cached_text(&mut core, at) {
+                    whys.insert(at, Some(t));
+                } else {
+                    match fetched.get(&at) {
+                        Some(TextRead::Text(t)) => {
+                            core.recall.texts.insert(at, t.clone());
+                            whys.insert(at, Some(t.clone()));
+                        }
+                        Some(TextRead::NoText | TextRead::Gone) => {
+                            whys.insert(at, None);
+                        }
+                        None => missing.push(at),
+                    }
+                }
+            }
+            if !missing.is_empty() {
+                drop(core);
+                fetched.extend(self.read_texts(&missing).await?);
+                continue;
+            }
+            let mut prerequisites: Vec<Value> = Vec::new();
+            for (id, title, target, waiter, at) in unopened {
+                // The `why` of the record that created it, when it is inline text.
+                let why = match at.and_then(|a| whys.get(&a).cloned().flatten()) {
                     Some(Content::Text(t)) => Some(t),
                     _ => None,
-                },
-                None => None,
-            };
-            prerequisites.push(json!({
-                "item": id,
-                "title": title,
-                "source": target.source,
-                "repo": target.repo,
-                "why": why,
-                "needed_by": waiter,
-            }));
+                };
+                prerequisites.push(json!({
+                    "item": id,
+                    "title": title,
+                    "source": target.source,
+                    "repo": target.repo,
+                    "why": why,
+                    "needed_by": waiter,
+                }));
+            }
+            return Ok(json!({ "roots": roots, "prerequisites": prerequisites }));
         }
-        Ok(json!({ "roots": roots, "prerequisites": prerequisites }))
     }
 
     pub(crate) async fn ingest_state(&self, source: &str) -> Result<Value, Error> {

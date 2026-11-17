@@ -19,9 +19,9 @@ use kbl_core::work::{
     Target, Then, Unclear, Usage, WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
-use super::{Core, Error, Tracker, Which, agent_key, holds, replay};
+use super::{Core, Error, TextRead, Tracker, Which, agent_key, holds, replay};
 use crate::felix::Broker;
 
 /// Longest title, command, file name or reason an agent may write.
@@ -459,65 +459,93 @@ impl<B: Broker> Tracker<B> {
         item: &ItemId,
     ) -> Result<Value, Error> {
         self.begin().await?;
-        let mut core = self.0.core.lock().await;
-        let it = core.state.items.get(item).ok_or_else(|| Error::Refused {
-            why: "unknown_item".into(),
-        })?;
-        let parent_held = it
-            .parent
-            .as_ref()
-            .and_then(|p| core.state.items.get(p))
-            .is_some_and(|p| holds(p, agent));
-        if !holds(it, agent) && !parent_held {
-            return Err(Error::NotHeld(format!(
-                "you hold neither {item} nor its parent"
-            )));
-        }
-        let attempt = it.hold.as_ref().map(|h| h.attempt);
-        let offsets = match attempt {
-            Some(a) => core.state.human_inputs_on_path(item, a),
-            None => it.human_inputs.clone(),
-        };
-        let context: Vec<_> = it.context.iter().map(|(e, o)| (e.clone(), *o)).collect();
-        let mut entries: Vec<Value> = Vec::new();
-        for (entry, offset) in context {
-            let text = self.text_at(&mut core, offset).await?;
-            entries.push(json!({ "entry": entry, "offset": offset, "text": text }));
-        }
-        let mut notes: Vec<Value> = Vec::new();
-        for o in &offsets {
-            let text = self.text_at(&mut core, *o).await?;
-            notes.push(json!({ "offset": o, "text": text }));
-        }
-        let it = &core.state.items[item];
-        // What the item waited on, so a resumed claim knows what landed and where.
-        let waited: Vec<Value> = core
-            .state
-            .edges
-            .iter()
-            .filter(|(a, _)| a == item)
-            .filter_map(|(_, b)| core.state.items.get(b))
-            .map(|p| {
-                json!({
-                    "item": p.id,
-                    "title": p.title,
-                    "repo": p.target.as_ref().map(|t| &t.repo),
-                    "stage": core.state.stage(&p.id),
-                    "pr": p.pr,
-                    "release": p.release,
+        // Texts the cache let go are read with the lock dropped, then the whole
+        // read is redone against the state as it is by then.
+        let mut fetched: HashMap<u64, TextRead> = HashMap::new();
+        loop {
+            let mut core = self.0.core.lock().await;
+            let it = core.state.items.get(item).ok_or_else(|| Error::Refused {
+                why: "unknown_item".into(),
+            })?;
+            let parent_held = it
+                .parent
+                .as_ref()
+                .and_then(|p| core.state.items.get(p))
+                .is_some_and(|p| holds(p, agent));
+            if !holds(it, agent) && !parent_held {
+                return Err(Error::NotHeld(format!(
+                    "you hold neither {item} nor its parent"
+                )));
+            }
+            let attempt = it.hold.as_ref().map(|h| h.attempt);
+            let offsets = match attempt {
+                Some(a) => core.state.human_inputs_on_path(item, a),
+                None => it.human_inputs.clone(),
+            };
+            let context: Vec<_> = it.context.iter().map(|(e, o)| (e.clone(), *o)).collect();
+            let mut texts: HashMap<u64, Option<Content>> = HashMap::new();
+            let mut missing: Vec<u64> = Vec::new();
+            for o in context.iter().map(|(_, o)| o).chain(&offsets) {
+                if let Some(t) = Self::cached_text(&mut core, *o) {
+                    texts.insert(*o, Some(t));
+                } else {
+                    match fetched.get(o) {
+                        Some(TextRead::Text(t)) => {
+                            core.recall.texts.insert(*o, t.clone());
+                            texts.insert(*o, Some(t.clone()));
+                        }
+                        Some(TextRead::NoText | TextRead::Gone) => {
+                            texts.insert(*o, None);
+                        }
+                        None => missing.push(*o),
+                    }
+                }
+            }
+            if !missing.is_empty() {
+                drop(core);
+                fetched.extend(self.read_texts(&missing).await?);
+                continue;
+            }
+            let mut entries: Vec<Value> = Vec::new();
+            for (entry, offset) in context {
+                let text = texts.get(&offset).cloned().flatten();
+                entries.push(json!({ "entry": entry, "offset": offset, "text": text }));
+            }
+            let mut notes: Vec<Value> = Vec::new();
+            for o in &offsets {
+                let text = texts.get(o).cloned().flatten();
+                notes.push(json!({ "offset": o, "text": text }));
+            }
+            let it = &core.state.items[item];
+            // What the item waited on, so a resumed claim knows what landed and where.
+            let waited: Vec<Value> = core
+                .state
+                .edges
+                .iter()
+                .filter(|(a, _)| a == item)
+                .filter_map(|(_, b)| core.state.items.get(b))
+                .map(|p| {
+                    json!({
+                        "item": p.id,
+                        "title": p.title,
+                        "repo": p.target.as_ref().map(|t| &t.repo),
+                        "stage": core.state.stage(&p.id),
+                        "pr": p.pr,
+                        "release": p.release,
+                    })
                 })
-            })
-            .collect();
-        Ok(json!({
-            "item": item,
-            "title": it.title,
-            "work": it.work,
-            "parent": it.parent,
-            "context": entries,
-            "notes": notes,
-            "open_question": it.open_question,
-            "prerequisites": waited,
-        }))
+                .collect();
+            return Ok(json!({
+                "item": item,
+                "title": it.title,
+                "work": it.work,
+                "parent": it.parent,
+                "context": entries,
+                "notes": notes,
+                "open_question": it.open_question,
+                "prerequisites": waited,
+            }));
+        }
     }
 
     /// The rules in effect for an item the agent holds. Read-only.
