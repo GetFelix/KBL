@@ -655,13 +655,14 @@ before it.
    health and spend per team.
 9. **Person proof for GitHub.** The connect routes, `state` handling, the App user authorization and levels
    read from the paginated installation listing; team admins may then connect.
-10. **Person proof for Azure DevOps and Jira.** One issue each.
-11. **Sealed secrets.** Worker key pairs with ids and fingerprints, `trusted_keys` pinning, several active keys
+10. **Person proof for Azure DevOps.** The delegated Entra sign-in and the project access check.
+11. **Person proof for Jira.** The OAuth 2.0 (3LO) sign-in and the project permission check.
+12. **Sealed secrets.** Worker key pairs with ids and fingerprints, `trusted_keys` pinning, several active keys
     per group, org admin key registration and retirement with an immediate re-seal, sealing in the browser to
     every active key after a fingerprint confirm, the recipient check on paste and re-seal, the forced
     retirement's list of connections to rotate, expiry warnings.
-12. **GitLab.** Credential and proof as above, with the adapter in #129.
-13. **KBL sign-in through the vendor's provider.** With #316, so a proof's subject can be matched to the person.
+13. **GitLab.** Credential and proof as above, with the adapter in #129.
+14. **KBL sign-in through the vendor's provider.** With #316, so a proof's subject can be matched to the person.
 
 ## Open questions
 
