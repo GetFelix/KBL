@@ -1199,7 +1199,11 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             ) else {
                 continue;
             };
-            let allowed = rule.target_repo.iter().chain(rule.components.values());
+            let allowed = rule
+                .target_repo
+                .iter()
+                .chain(rule.components.values())
+                .chain(rule.area_paths.values());
             if t.moved_to.is_some()
                 || !t.in_scope
                 || !allowed

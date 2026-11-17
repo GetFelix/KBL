@@ -1699,7 +1699,7 @@ so a missed webhook costs latency, not an item.
 | Priority from | a label mapping | the Priority field (1 to 4) | the priority field |
 | Links from | blocked by, sub-issues | predecessor, parent | blocks, sub-tasks |
 | Closed as | `completed` / `not_planned`, duplicate | Done, Closed, Removed | the resolution |
-| Credentials | GitHub App or token | personal access token or Entra app | API token or OAuth app |
+| Credentials | GitHub App or token | personal access token or Entra service principal | API token or OAuth app |
 
 The ingest worker holds the source credentials. Agents never see them and
 write back only through the tracker, which checks the claim first.
@@ -1784,6 +1784,97 @@ GitHub one has `github`. A rule's `repo` is `<site>/<PROJECT>`, and its
   long (30 s when none is named, at most an hour) before any further request.
   Re-polling and a lost cursor never import an issue twice.
 
+### Azure DevOps
+
+An Azure DevOps worker has an `ado` block where a GitHub one has `github`. A
+rule's `repo` is `<organization>/<project>`; the work item id is the number,
+so `ado:contoso/Platform#4410` is work item 4410 in project `Platform`. A
+project whose name has spaces is listed under `projects`, which maps the name
+the rule uses to the real one:
+
+```json
+{
+  "tracker": { "url": "http://127.0.0.1:8790", "token_env": "KBL_INGEST_TOKEN" },
+  "ado": {
+    "organization": "contoso",
+    "projects": { "Platform": "Platform Team" },
+    "pat_env": "ADO_PAT",
+    "own_logins": ["KBL Bot"]
+  },
+  "rules": [{
+    "name": "agent-ok",
+    "repo": "contoso/Platform",
+    "labels_all": ["agent-ok"],
+    "mode": "admit",
+    "area_paths": {
+      "Platform Team\\Storage": "GetFelix/felix",
+      "Platform Team\\Docs": "GetFelix/felix-docs"
+    },
+    "target_repo": "GetFelix/felix",
+    "comment": true,
+    "link_pr": true,
+    "transition_on_pr": "Resolved",
+    "transition_on_merge": "Closed"
+  }]
+}
+```
+
+- **Sign-in.** Either a personal access token (`pat_env` or `pat_file`, sent
+  as HTTP basic) or a Microsoft Entra service principal (`entra`: tenant,
+  client id, and `client_secret_env` or `client_secret_file`). Ingest signs
+  in with the client credentials flow for the Azure DevOps resource
+  (`499b84ac-1321-427f-aa17-267ca6975798/.default`), keeps the token until
+  two minutes before it expires, and signs in again once on a 401. Azure
+  DevOps no longer takes new OAuth app registrations, so there is no OAuth
+  option. Secrets are read from the environment or a file each time they are
+  used, never from the config, and are not in any error or log line. The
+  worker learns its own name from `connectionData`, or from `own_logins`, and
+  refuses to start with neither.
+- **Least privilege.** A worker with no rule that writes back needs only
+  Work Items (Read) on the PAT, and the adapter refuses every write. Give
+  Work Items (Read & write) only to a worker whose rules set `comment`,
+  `link_pr` or a transition. A service principal has no scopes to pick: its
+  rights are the access level and project permissions it was added with, so
+  add it as a Basic user with read access, and write access only for
+  write-back.
+- **Selection.** Either tags or a saved query. Tags are the rule's
+  `labels_all`, `labels_any` and `labels_excluded`, matched against the work
+  item's tags; the type, assignee and iteration (`milestone`) filters work as
+  for GitHub. `ado_query` names a saved query by id or by path
+  (`Shared Queries/Agent Work`) and replaces those filters: the query
+  decides, so an item that leaves it is withdrawn. Ingest asks for the
+  project's changes since its cursor with a WIQL query it builds itself, and
+  the saved query's own result is intersected with them. Nothing from a work
+  item, and no cursor that is not a date, is ever put in a query or an
+  address. The first poll reads open items only. A query that fails (401, 403
+  or 404) stalls that project with its items and cursor as they were.
+- **Tiers.** Priority 1 to 4 maps to tiers 0 to 3. `priority_labels` can map
+  a priority (`"2": 0`) or a tag, the lowest tier wins, and anything else
+  takes `default_tier`.
+- **Links.** A predecessor link and an item's children become edges: the
+  item waits on its predecessors and on its children. An end in a project
+  that no rule reads is not an edge.
+- **Closed.** The state Done, Closed or Completed is completed; Removed or
+  Cut is dropped; any other state is open.
+- **Repository.** The longest `area_paths` entry that is the item's area
+  path or an ancestor of it names the repository (`Platform\Team` covers
+  `Platform\Team\Sub`, not `Platform\Teamster`), then `target_repo`. An
+  item with neither is imported and shown in Needs you as out of scope, and
+  returns to its stage on the first poll after a mapping covers it.
+- **Write-back.** For an agent's pull request in a mapped repository, ingest
+  adds a hyperlink to the work item (`link_pr`), a comment (`comment`) and
+  sets the named state (`transition_on_pr`, and `transition_on_merge` once
+  the item's pull request is recorded as merged). Each is done once per pull
+  request, skipped when it is already there, and a state the work item's
+  process refuses from where it is is skipped. Only work items ingest
+  imported are written to, and only in a project a rule reads. As with Jira,
+  an Azure DevOps worker reads no pull requests: the GitHub worker records
+  their state, so `transition_on_merge` needs one beside it.
+- **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
+  long (30 s when none is named, at most an hour). A bad token is answered
+  203 with a sign-in page or a redirect; both are read as a 401 and stall the
+  project.
+
 ### Intake rules
 
 Each source has one or more intake rules. A rule is the source's own filter
@@ -1799,7 +1890,7 @@ Each source has one or more intake rules. A rule is the source's own filter
   as roots close.
 - **A default tier** and the mapping from the upstream priority.
 - **The repository** agents work in. ADO and Jira items do not name one, so
-  the rule maps a project, area path or component to it. An item with no
+  the rule maps an area path or component to it. An item with no
   repository goes to Needs you.
 
 Each upstream id is imported once (`cache_put_if` absent on the id), so
