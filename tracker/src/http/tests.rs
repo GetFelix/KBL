@@ -1438,6 +1438,34 @@ async fn a_person_reads_time_to_human_action_and_an_agent_cannot() {
 }
 
 #[tokio::test]
+async fn a_person_reads_summary_trust_and_an_agent_cannot() {
+    let app = kept().await;
+    let path = "/v1/work/metrics/summary-trust";
+    let (status, m) = get_json(&app, path, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert_eq!(m["days"], 30);
+    assert_eq!(m["stats"]["rated"], 0);
+    assert_eq!(m["stats"]["unrated"], 0);
+    assert!(m["stats"]["accurate_permille"].is_null());
+
+    let (_, wide) = get_json(&app, &format!("{path}?days=99999"), Some("tok-gab")).await;
+    assert_eq!(wide["days"], 366);
+    let (_, one) = get_json(&app, &format!("{path}?days=0"), Some("tok-gab")).await;
+    assert_eq!(one["days"], 1);
+    let team = "/v1/teams/default/work/metrics/summary-trust";
+    let (status, in_team) = get_json(&app, team, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{in_team}");
+    assert_eq!(in_team["stats"]["rated"], m["stats"]["rated"]);
+    assert_eq!(in_team["days"], 30);
+
+    assert_eq!(
+        get_json(&app, path, Some("tok-w1")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(get_json(&app, path, None).await.0, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
 async fn my_queue_lists_what_waits_on_a_person_by_wait_then_tier() {
     let app = kept().await;
     raise_to(&app, 7).await;

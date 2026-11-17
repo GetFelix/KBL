@@ -139,6 +139,9 @@
  "core/src/work_fold/human_wait.rs#KEPT_WAITS": [
   "const KEPT_WAITS: usize = 20_000;"
  ],
+ "core/src/work_fold/trust.rs#summary_trust": [
+  "for p in it.paths.iter().filter(|p| p.done) {"
+ ],
  "core/src/work_fold/human_wait.rs#State::queue": [
   "pub fn queue(&self, now_ms: u64) -> Vec<QueueEntry> {"
  ],

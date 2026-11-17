@@ -201,6 +201,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/items/{item}", get(item::<B>))
         .route("/v1/work/items/{item}/history", get(history::<B>))
         .route("/v1/work/metrics/time-to-human", get(time_to_human::<B>))
+        .route("/v1/work/metrics/summary-trust", get(summary_trust::<B>))
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
@@ -1397,6 +1398,17 @@ async fn time_to_human<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -
         .clamp(1, crate::tracker::reads::MAX_WINDOW_DAYS);
     match call.person() {
         Ok(_) => reply(call.tracker().time_to_human_action(days).await),
+        Err(d) => denied(d),
+    }
+}
+
+async fn summary_trust<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -> Response {
+    let days = q
+        .days
+        .unwrap_or(30)
+        .clamp(1, crate::tracker::reads::MAX_WINDOW_DAYS);
+    match call.person() {
+        Ok(_) => reply(call.tracker().summary_trust(days).await),
         Err(d) => denied(d),
     }
 }

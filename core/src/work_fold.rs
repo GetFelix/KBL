@@ -24,6 +24,7 @@ use crate::work::{
 
 mod human_wait;
 mod snapshots;
+mod trust;
 
 pub use snapshots::{FOLD_REV, SNAPSHOT_EVERY, Saved, Snapshot, Snapshots, fold_to};
 
@@ -31,6 +32,7 @@ pub use snapshots::{FOLD_REV, SNAPSHOT_EVERY, Saved, Snapshot, Snapshots, fold_t
 mod tests;
 
 pub use human_wait::{HumanWaitStats, KindStats, QueueEntry, WaitKind};
+pub use trust::{MIN_SAMPLE, TrustStats};
 
 const DEFAULT_MAX_ITEMS: u32 = 12;
 const DEFAULT_MAX_DEPTH: u8 = 3;
@@ -792,6 +794,9 @@ pub struct State {
     /// Waits on a person, open and finished. Derived by replay, so not in the wire form.
     #[serde(skip)]
     human_waits: human_wait::Waits,
+    /// When each attempt's summary mark was written. Derived by replay, so not in the wire form.
+    #[serde(skip)]
+    mark_times: trust::MarkTimes,
 }
 
 /// The root each proposal waiting for a person came from, by item, and how many
@@ -2539,6 +2544,7 @@ impl State {
                     return Err(Reject::NoChange);
                 }
                 p.summary_accurate = Some(*accurate);
+                self.mark_times.set(item, *attempt, rec.at_ms);
             }
             WorkRecord::Reopened { item } => {
                 if rec.actor == Actor::Agent {
