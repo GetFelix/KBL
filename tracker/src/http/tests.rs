@@ -1384,3 +1384,32 @@ async fn an_expected_price_that_is_not_a_price_or_none_true_is_a_bad_request() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_person_reads_time_to_human_action_and_an_agent_cannot() {
+    let app = kept().await;
+    let path = "/v1/work/metrics/time-to-human";
+    let (status, m) = get_json(&app, path, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{m}");
+    assert_eq!(m["days"], 30);
+    assert_eq!(m["stats"]["count"], 0);
+    assert_eq!(m["stats"]["open"], 0);
+    assert!(m["stats"]["p50_ms"].is_null());
+    assert_eq!(m["stats"]["by_kind"]["question"]["count"], 0);
+
+    let (_, wide) = get_json(&app, &format!("{path}?days=99999"), Some("tok-gab")).await;
+    assert_eq!(wide["days"], 366);
+    let (_, one) = get_json(&app, &format!("{path}?days=0"), Some("tok-gab")).await;
+    assert_eq!(one["days"], 1);
+
+    let team = "/v1/teams/default/work/metrics/time-to-human";
+    let (status, in_team) = get_json(&app, team, Some("tok-gab")).await;
+    assert_eq!(status, StatusCode::OK, "{in_team}");
+    assert_eq!(in_team["stats"]["by_kind"], m["stats"]["by_kind"]);
+
+    assert_eq!(
+        get_json(&app, path, Some("tok-w1")).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(get_json(&app, path, None).await.0, StatusCode::UNAUTHORIZED);
+}

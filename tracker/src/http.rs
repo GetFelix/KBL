@@ -114,6 +114,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
         .route("/v1/work/items/{item}/history", get(history::<B>))
+        .route("/v1/work/metrics/time-to-human", get(time_to_human::<B>))
 }
 
 /// Serves `/v1/teams/{team}/<rest>` as `/v1/<rest>` in that team. Only the
@@ -1201,6 +1202,22 @@ struct ItemsQuery {
 struct HistoryQuery {
     #[serde(default)]
     from: u64,
+}
+
+#[derive(Deserialize)]
+struct WindowQuery {
+    days: Option<u64>,
+}
+
+async fn time_to_human<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -> Response {
+    let days = q
+        .days
+        .unwrap_or(30)
+        .clamp(1, crate::tracker::reads::MAX_WINDOW_DAYS);
+    match call.person() {
+        Ok(_) => reply(call.tracker().time_to_human_action(days).await),
+        Err(d) => denied(d),
+    }
 }
 
 async fn items<B: Broker>(call: Call<B>, Query(q): Query<ItemsQuery>) -> Response {

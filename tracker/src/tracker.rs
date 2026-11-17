@@ -33,7 +33,7 @@ use tokio::time::Instant;
 use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
-mod reads;
+pub(crate) mod reads;
 mod request_keys;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
