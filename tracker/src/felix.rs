@@ -311,11 +311,25 @@ pub(crate) async fn connect(target: Target, kind: Kind) -> Result<Felix> {
         session
             .http
             .post(url)
-            .bearer_auth(admin)
+            .bearer_auth(&admin)
             .json(&streams_batch(kind)),
         "create the tracker's streams",
     )
     .await?;
+    if kind == Kind::Team {
+        let url = format!(
+            "{}/v1/tenants/{}/namespaces/{}/streams/{WORK_EVENTS}",
+            session.target.control_plane, session.target.tenant, session.target.namespace
+        );
+        let stream: Value = send(
+            session.http.get(url).bearer_auth(&admin),
+            "read how work.events is acknowledged",
+        )
+        .await?
+        .json()
+        .await?;
+        acks_are_durable(&stream)?;
+    }
 
     let felix = Felix {
         session,
@@ -332,6 +346,29 @@ pub(crate) async fn connect(target: Target, kind: Kind) -> Result<Felix> {
         }
     }
     Ok(felix)
+}
+
+/// Refuses a `work.events` whose acknowledged records a failover could cut.
+/// The claim path trusts an acknowledged record to stay at its offset: a cut
+/// record whose offset another writer refills reads as the same log. That
+/// holds for a durable stream acknowledged by a quorum, and for a durable
+/// stream with one copy, which Felix holds unplaced while its broker is down
+/// rather than failing it over. The control plane does not show a shard's
+/// replication engine, so a stream on Raft is held to the same settings.
+fn acks_are_durable(stream: &Value) -> Result<()> {
+    let durable = stream["durable"].as_bool() == Some(true);
+    let quorum = stream["consistency"].as_str() == Some("Quorum");
+    let copies = stream["replication_factor"].as_u64().unwrap_or(1);
+    if durable && (quorum || copies == 1) {
+        return Ok(());
+    }
+    bail!(
+        "{WORK_EVENTS} is acknowledged before a quorum holds it (durable: {durable}, \
+         consistency: {}, replication_factor: {copies}), so a failover could drop a \
+         record the tracker was told was written. Make it durable and either \
+         `Quorum` or one copy; see docs/work-tracker.md, \"What Felix must guarantee\"",
+        stream["consistency"].as_str().unwrap_or("unknown"),
+    )
 }
 
 /// A team's log and ready lanes, one durable stream each, and its lease

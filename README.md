@@ -150,7 +150,9 @@ dev/down.sh          # stop it and delete its data
 ```
 
 It runs Felix 0.6.2 (a control plane and one broker, with the fleet features that store each record's publisher and allow atomic commits turned on) and
-felix-gateway 0.8.0, plus a stand-in identity provider. The stack keeps nothing between starts, so every `up.sh`
+felix-gateway 0.8.0, plus a stand-in identity provider. The broker acknowledges a record only once it is written and
+fsynced, which the tracker requires of `work.events`: it refuses to start on a stream a failover could cut
+([What Felix must guarantee](docs/work-tracker.md#what-felix-must-guarantee)). The stack keeps nothing between starts, so every `up.sh`
 begins with a new tenant and an empty log.
 
 | What | Where |

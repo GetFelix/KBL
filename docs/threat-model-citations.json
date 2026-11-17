@@ -250,6 +250,9 @@
  "tracker/src/config.rs#parse": [
   "anyhow::ensure!(!token.is_empty(), \"a token is empty\");"
  ],
+ "tracker/src/felix.rs#acks_are_durable": [
+  "if durable && (quorum || copies == 1) {"
+ ],
  "tracker/src/http.rs#person": [
   "fn person(&self) -> Result<Key, Denied> {",
   "Err((StatusCode::FORBIDDEN, \"this call is for a person's token\"))"

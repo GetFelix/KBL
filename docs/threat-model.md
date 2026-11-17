@@ -528,6 +528,12 @@ each token and never a token. A format above the build's stops the reader.
 | Metrics that carry content | An item title, a token or an agent's name in a label, read by anyone who can scrape | Labels are fixed words and route templates; the tests scrape after calls that carry known secrets and fail if one appears |
 | Forged webhooks | Wake ingest in a loop | Signature and spacing. A captured body can be replayed under a new delivery id, and it only wakes the poll |
 
+## Assumptions
+
+| Assumption | What breaks without it | Check |
+|---|---|---|
+| Felix never cuts a record it acknowledged on `work.events`. A failover that did, with another writer refilling the offset, leaves the log ending where the tracker expects, so a resume or an extend could hand out a claim another agent holds | Two agents work one attempt | At start the tracker refuses a `work.events` that is not durable and either `Quorum` or one copy (`tracker/src/felix.rs#acks_are_durable`). A single copy also needs the broker to fsync before it acks, which the tracker cannot read ([felix#2735](https://github.com/GetFelix/felix/issues/2735)). KBL does not defend against Felix losing an acknowledged write |
+
 ## Gaps
 
 | Issue | Gap |

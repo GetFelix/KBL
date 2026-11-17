@@ -155,6 +155,10 @@ impl Model {
     }
 
     fn check(&self, fake: &Fake) {
+        // The fault model, not the tracker: KBL requires Felix to keep every
+        // record it acknowledged (docs/work-tracker.md), so no fault cuts one.
+        let cut = fake.cut_acked(WORK_EVENTS);
+        assert_eq!(cut, None, "the acknowledged record at {cut:?} was cut");
         let state = replay(fake).state;
         for id in &self.dismissed {
             let it = &state.items[&item(id)];
@@ -367,6 +371,9 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
             t.old = Some(std::mem::replace(&mut t.cur, new));
         }
         13..=17 => fake.lose_next_publish_reply(WORK_EVENTS),
+        // A write that never reached a quorum: a failover cuts it before
+        // anyone is told. A record Felix acknowledged is never cut.
+        41..=45 => fake.cut_next_lost_write(WORK_EVENTS),
         18..=22 => foreign_write(fake, m, rng).await,
         23..=30 => {
             // Felix hands a record out again: a lapsed lease, or a repeat of an acked one.
@@ -394,6 +401,11 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
         _ => dismiss_step(serving, m, rng).await,
     }
     fake.fail_polls(None);
+    // Another writer takes over at the offset the cut freed, racing the
+    // tracker's recovery from the lost reply.
+    if fake.take_cut().is_some() && rng.below(2) == 0 {
+        foreign_write(fake, m, rng).await;
+    }
     if crash_after {
         fake.lift_publish_budget();
         t.cur = restart(fake).await;

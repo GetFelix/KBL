@@ -151,6 +151,37 @@ state's wire form leaves out, so a restored state answers budget and wait questi
 fold would. A test folds a log once, records the state at every offset,
 and checks `fold_to` at each one, with and without snapshots, blanks included.
 
+#### What Felix must guarantee
+
+The tracker needs a record Felix acknowledged on `work.events` to stay at its
+offset. Its checks look at where the log ends: a resume or an extend compares
+the log's tip with the end of its state, and every append is conditional on
+that offset. If a failover cut an acknowledged record and another writer
+filled the offset again, the log would end where the tracker expects, and it
+could hand an agent a claim that another agent now holds.
+
+So `work.events` must be acknowledged only once a quorum holds it:
+
+- a durable stream with `consistency: Quorum`, or one on Felix's per-shard
+  Raft engine, where an ack is a Raft commit;
+- or a durable stream with `replication_factor: 1`. With one copy there is no
+  failover: Felix keeps the shard unplaced while its broker is down. This
+  relies on the broker not losing an acknowledged record when it restarts, so
+  run it with `FELIX_ACK_ON_COMMIT=true` and `FELIX_DURABLE_FSYNC_MODE=on_commit`
+  (the dev stack does), and do not abandon the shard's log.
+
+At start the tracker reads `work.events` from the control plane and refuses
+to start unless it is durable and either `Quorum` or one copy. The error names
+the settings it found. The control plane does not show the shard engine or the
+broker's ack and fsync settings
+([felix#2735](https://github.com/GetFelix/felix/issues/2735)), so a stream on
+Raft with more than one copy must still be `Quorum`, and fsync on a single copy
+is up to whoever runs the broker.
+
+The tracker does not defend against Felix losing a write it acknowledged. A
+record Felix never acknowledged can still be cut, such as a publish whose
+reply was lost; the tracker treats that as a lost reply and reads the log again.
+
 #### Snapshots on disk
 
 Set `KBL_TRACKER_SNAPSHOT_DIR` (or `--snapshot-dir`) and the tracker keeps
@@ -444,7 +475,9 @@ leader's blank start, or a failover that cut the end short), it rebuilds from th
 and checks the hold again, as after a refused write: `work_next` then answers
 from the rebuilt state, and `extend` answers 503 so the agent calls again and
 hears `lost` if the hold ended. A new claim needs no read, since its `claimed`
-record is written only if nothing landed after the state's end.
+record is written only if nothing landed after the state's end. The read sees
+where the log ends, not what it holds, which is why the tracker needs
+acknowledged records to stay put ([What Felix must guarantee](#what-felix-must-guarantee)).
 
 When Felix answers an extend with `stale_claim` (it no longer has the
 delivery), the tracker renews its lease by version before it answers `lost`.

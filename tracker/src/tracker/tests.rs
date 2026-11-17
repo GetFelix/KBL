@@ -64,6 +64,12 @@ struct Net {
     fail_publish_on: Option<String>,
     /// The next conditional publish to this stream lands, and its reply is lost.
     lose_publish_reply: Option<String>,
+    /// That lost write is also cut, as by a failover before a quorum held it.
+    cut_lost_write: bool,
+    /// The offset of the last write cut that way, until it is taken.
+    was_cut: Option<u64>,
+    /// Every record a conditional publish acknowledged, by stream.
+    acked: HashMap<String, Vec<(u64, Vec<u8>)>>,
     /// Publishes to the stream that still succeed, then every one fails.
     publish_budget: Option<(String, u32)>,
     fail_reads: bool,
@@ -264,6 +270,38 @@ impl Fake {
 
     pub(super) fn lose_next_publish_reply(&self, stream: &str) {
         self.net.lock().unwrap().lose_publish_reply = Some(stream.to_owned());
+    }
+
+    /// The next conditional publish to `stream` lands and a failover cuts it
+    /// before anyone is told or reads it: the only kind of record a durable
+    /// stream may lose.
+    pub(super) fn cut_next_lost_write(&self, stream: &str) {
+        let mut net = self.net.lock().unwrap();
+        net.lose_publish_reply = Some(stream.to_owned());
+        net.cut_lost_write = true;
+    }
+
+    /// The offset a lost write was cut from, if one was since the last call.
+    /// A cut not yet made is called off.
+    pub(super) fn take_cut(&self) -> Option<u64> {
+        let mut net = self.net.lock().unwrap();
+        if std::mem::take(&mut net.cut_lost_write) {
+            net.lose_publish_reply = None;
+        }
+        net.was_cut.take()
+    }
+
+    /// The first record a conditional publish acknowledged on `stream` that
+    /// the stream no longer holds as written.
+    pub(super) fn cut_acked(&self, stream: &str) -> Option<u64> {
+        let net = self.net.lock().unwrap();
+        let log = net
+            .streams
+            .get(stream)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let acked = net.acked.get(stream)?;
+        acked.iter().find(|r| !log.contains(r)).map(|(o, _)| *o)
     }
 
     fn fail_publishes_to(&self, stream: Option<&str>) {
@@ -513,14 +551,19 @@ impl Broker for Fake {
             }
             return Ok(ConditionalWrite::Refused { tail });
         }
-        let offset = self.publish(stream, payload).await?;
-        let lost = {
-            let mut net = self.net.lock().unwrap();
-            net.lose_publish_reply.take_if(|s| s == stream).is_some()
-        };
-        if lost {
+        let offset = self.publish(stream, payload.clone()).await?;
+        let mut net = self.net.lock().unwrap();
+        if net.lose_publish_reply.take_if(|s| s == stream).is_some() {
+            if std::mem::take(&mut net.cut_lost_write)
+                && let Some(records) = net.streams.get_mut(stream)
+            {
+                records.retain(|(o, _)| *o != offset);
+                net.was_cut = Some(offset);
+            }
             anyhow::bail!("the reply was lost");
         }
+        let acked = net.acked.entry(stream.to_owned()).or_default();
+        acked.push((offset, payload));
         Ok(ConditionalWrite::Written { offset })
     }
 

@@ -1,7 +1,9 @@
 use anyhow::Context;
 use felix_client::{CursorErrorReason, SubscribeCursorError};
 
-use super::{pages_to_tip, past_the_tail};
+use serde_json::json;
+
+use super::{acks_are_durable, pages_to_tip, past_the_tail};
 
 fn refused(reason: CursorErrorReason) -> anyhow::Error {
     anyhow::Error::from(SubscribeCursorError {
@@ -59,4 +61,26 @@ async fn the_tip_passes_trailing_blanks() {
     assert_eq!((records.len(), tip), (3, 6));
     // Rebuilt from a cursor that sits on a blank.
     assert_eq!(pages_to_tip("s", 4, page).await.unwrap(), (Vec::new(), 6));
+}
+
+fn work_events(durable: bool, consistency: &str, copies: u64) -> serde_json::Value {
+    json!({
+        "stream": "work.events",
+        "durable": durable,
+        "consistency": consistency,
+        "replication_factor": copies,
+    })
+}
+
+/// The tracker starts only on a work.events whose acks a failover cannot
+/// undo: a durable quorum, or a durable single copy that never fails over.
+#[test]
+fn work_events_must_be_acknowledged_durably() {
+    assert!(acks_are_durable(&work_events(true, "Quorum", 3)).is_ok());
+    assert!(acks_are_durable(&work_events(true, "Leader", 1)).is_ok());
+    assert!(acks_are_durable(&work_events(true, "Leader", 3)).is_err());
+    assert!(acks_are_durable(&work_events(false, "Leader", 1)).is_err());
+    assert!(acks_are_durable(&work_events(false, "Quorum", 3)).is_err());
+    let err = acks_are_durable(&work_events(true, "Leader", 2)).unwrap_err();
+    assert!(err.to_string().contains("replication_factor: 2"), "{err}");
 }
