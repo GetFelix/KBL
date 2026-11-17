@@ -28,16 +28,21 @@
 
 ## Cutting a release
 
-A maintainer tags a commit on `main` and pushes the tag; nothing else publishes. The crate versions are still 0.0.0,
-so the binaries report that until they are bumped.
+A maintainer tags a commit on `main` and pushes the tag; nothing else publishes. The crates share one version, set
+once as `version` under `[workspace.package]` in `Cargo.toml`, and the binaries report it.
 
-1. Move the `changelog.d` fragments into `CHANGELOG.md` and merge that.
-2. Tag and push: `git tag v0.1.0 origin/main && git push origin v0.1.0`.
+1. Bump `version` in `Cargo.toml`, run `cargo update --workspace` so `Cargo.lock` follows, and merge that.
+2. Move the `changelog.d` fragments into `CHANGELOG.md` and merge that.
+3. Tag and push, with the tag set to `v` plus the version: `git tag v0.1.0 origin/main && git push origin v0.1.0`.
 
 The `Release` workflow builds `kbl-mcp` and `kbl-tool` for five targets (Linux x86_64 and aarch64, macOS aarch64 and
-x86_64, Windows x86_64) and creates a GitHub release with one archive per target plus `SHA256SUMS`. It refuses a tag
-that is not on `main`. The checksums catch a corrupt download; they are not a signature.
+x86_64, Windows x86_64), attests each archive and `SHA256SUMS`, and creates a GitHub release with one archive per
+target plus `SHA256SUMS`. It refuses a tag that is not on `main` and a tag that does not equal `v` plus the workspace
+version, before it builds anything. The attestations are signed build provenance (GitHub artifact attestations, backed
+by Sigstore): `gh attestation verify <file> -R GetFelix/KBL` proves an archive was built by this repository's release
+workflow. Only the `attest` job holds `id-token` and `attestations` write.
 
 To rehearse, open a pull request that changes `.github/workflows/release.yml` (it runs as a dry run) or run the
 workflow from the Actions tab with `dry_run` on. It builds every target and keeps the archives as run artifacts for 14
-days. It creates no release, and a run on a branch cannot create one.
+days. It creates no release, and a run on a branch cannot create one. A dry run checks the version and builds, but it does
+not attest: attestation runs only for a tag.

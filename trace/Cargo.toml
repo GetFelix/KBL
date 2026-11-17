@@ -1,6 +1,6 @@
 [package]
 name = "kbl-trace"
-version = "0.0.0"
+version.workspace = true
 description = "OpenTelemetry traces shared by the tracker, ingest and kbl-mcp: an OTLP exporter that is off unless configured, and W3C trace context over HTTP"
 edition.workspace = true
 rust-version.workspace = true
