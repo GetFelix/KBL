@@ -177,7 +177,10 @@ async fn check_suite_pull_request_and_review_events_wake_the_poll() {
 
 #[tokio::test]
 async fn deliveries_are_counted_by_result_and_never_by_content() {
-    let exporter = kbl_metrics::install("kbl-ingest-test");
+    // A recorder local to this test's thread: the global one is shared with
+    // every webhook test running in parallel.
+    let (recorder, exporter) = kbl_metrics::local_recorder();
+    let _guard = metrics::set_default_local_recorder(&recorder);
     let count = |result: &str| -> f64 {
         exporter
             .render()
