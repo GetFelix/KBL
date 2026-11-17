@@ -14,9 +14,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { agent as spawnAgent, check, createRun, felixToken, giveUpAfter, idToken, killAll, newRunId, sleep, whenReady } from "./lib/stack.mjs";
+import { agent as spawnAgent, check, createRunWhenReady, felixToken, giveUpAfter, idToken, killAll, sleep, whenReady } from "./lib/stack.mjs";
 
-const RUN = newRunId("renewal");
 const CONTROL_PLANE = process.env.KBL_FELIX_CONTROL_PLANE || "http://127.0.0.1:8443";
 // The broker accepts a token this long past its `exp`.
 const LEEWAY_MS = 60_000;
@@ -46,7 +45,7 @@ const counter = createServer(async (req, res) => {
 await new Promise((resolve) => counter.listen(0, "127.0.0.1", resolve));
 
 try {
-  createRun(RUN, "renewal check");
+  const RUN = await createRunWhenReady("renewal", "renewal check");
   await whenReady("the first task", async () => {
     const planner = await spawnAgent(await felixToken(), RUN, "planner");
     try {

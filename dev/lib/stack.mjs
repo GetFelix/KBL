@@ -55,12 +55,18 @@ const START_TRIES = 60;
 const START_PAUSE_MS = 2000;
 
 export function createRun(run, goal) {
-  for (let tries = 1; ; tries++) {
-    const created = spawnSync(TOOL, ["run", "create", run, "--goal", goal, "--budget-usd", "1"], { stdio: "inherit" });
-    if (created.status === 0) return;
-    if (tries === START_TRIES) throw new Error(`could not create run ${run}`);
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, START_PAUSE_MS);
-  }
+  const created = spawnSync(TOOL, ["run", "create", run, "--goal", goal, "--budget-usd", "1"], { stdio: "inherit" });
+  if (created.status !== 0) throw new Error(`could not create run ${run}`);
+}
+
+// A create that fails partway leaves the run's record behind and refuses its
+// id from then on, so each attempt takes a new id. Returns the id that worked.
+export async function createRunWhenReady(prefix, goal) {
+  return whenReady(`create a ${prefix} run`, async () => {
+    const run = newRunId(prefix);
+    createRun(run, goal);
+    return run;
+  });
 }
 
 // `call` again until it stops failing, for what a fresh stack answers before its leases are held.
