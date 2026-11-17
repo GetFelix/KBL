@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use serde_json::{Value, json};
 
 use super::*;
@@ -601,28 +603,712 @@ async fn the_dry_run_skips_ingests_own_prerequisite_issues_and_other_sources_roo
     assert!(first.over_cap.is_empty());
 }
 
+/// A vendor answered by a handler, with every request kept.
+#[derive(Clone)]
+struct Vendor {
+    handler: Arc<dyn Fn(&Req) -> Res + Send + Sync>,
+    sent: Arc<Mutex<Vec<Req>>>,
+}
+
+impl Vendor {
+    fn new(handler: impl Fn(&Req) -> Res + Send + Sync + 'static) -> Self {
+        Self {
+            handler: Arc::new(handler),
+            sent: Arc::default(),
+        }
+    }
+
+    fn sent(&self) -> Vec<Req> {
+        self.sent.lock().unwrap().clone()
+    }
+
+    /// Methods and paths of every request that is not a GET.
+    fn non_gets(&self) -> Vec<String> {
+        self.sent()
+            .iter()
+            .filter(|r| r.method != "GET")
+            .map(|r| format!("{} {}", r.method, path(r)))
+            .collect()
+    }
+
+    fn touched(&self, part: &str) -> bool {
+        self.sent().iter().any(|r| path(r).contains(part))
+    }
+}
+
+impl Transport for Vendor {
+    async fn send(&self, req: Req) -> Result<Res> {
+        let res = (self.handler)(&req);
+        self.sent.lock().unwrap().push(req);
+        Ok(res)
+    }
+}
+
+fn res(status: u16, body: Value) -> Res {
+    Res {
+        status,
+        headers: BTreeMap::new(),
+        body,
+    }
+}
+
+fn path(req: &Req) -> String {
+    reqwest::Url::parse(&req.url).unwrap().path().to_owned()
+}
+
+fn messages(findings: &[Finding], level: Level) -> Vec<String> {
+    findings
+        .iter()
+        .filter(|f| f.level == level)
+        .map(|f| format!("{}: {}", f.scope, f.message))
+        .collect()
+}
+
+fn has(findings: &[Finding], level: Level, part: &str) -> bool {
+    messages(findings, level).iter().any(|m| m.contains(part))
+}
+
+fn ids(report: &Report, rule: &str) -> Vec<String> {
+    let mut v: Vec<String> = pick(&report.rules, rule)
+        .would_import
+        .iter()
+        .map(|p| p.issue.clone())
+        .collect();
+    v.sort();
+    v
+}
+
+/// What the worker's first poll imported, as the tracker holds it.
+async fn imported(tracker: &Fake) -> Vec<String> {
+    let mut v: Vec<String> = tracker
+        .roots()
+        .await
+        .unwrap()
+        .roots
+        .into_iter()
+        .map(|r| r.upstream_id)
+        .collect();
+    v.sort();
+    v
+}
+
+fn ado_item(id: u64, tags: &str, state: &str) -> Value {
+    json!({
+        "id": id,
+        "fields": {
+            "System.TeamProject": "Platform Team",
+            "System.Title": format!("Item {id}"),
+            "System.Description": "text",
+            "System.State": state,
+            "System.Tags": tags,
+            "System.WorkItemType": "Bug",
+            "System.CreatedBy": { "displayName": "Alice" },
+            "System.ChangedDate": format!("2026-11-10T12:00:0{id}.000Z"),
+        },
+        "relations": []
+    })
+}
+
+fn ado_config(rule: Value) -> Config {
+    let mut base = json!({ "name": "agent-ok", "repo": "contoso/Platform",
+        "labels_all": ["agent-ok"], "mode": "admit" });
+    base.as_object_mut()
+        .unwrap()
+        .extend(rule.as_object().unwrap().clone());
+    Config::parse(
+        &json!({
+            "tracker": { "url": "http://t", "token_env": "T" },
+            "ado": { "organization": "contoso", "pat_env": "ADO_PAT",
+                     "projects": { "Platform": "Platform Team" } },
+            "rules": [base],
+        })
+        .to_string(),
+    )
+    .unwrap()
+}
+
+/// An Azure DevOps organization. `write` is what the permission service
+/// answers for work item edit: None is a refusal to say.
+fn ado_org(items: Vec<Value>, write: Option<bool>) -> Vendor {
+    Vendor::new(move |req| {
+        let p = path(req);
+        if p.ends_with("/_apis/connectionData") {
+            return res(
+                200,
+                json!({ "authenticatedUser": { "providerDisplayName": "KBL Bot" } }),
+            );
+        }
+        if p.contains("/wit/classificationnodes/areas") {
+            return res(200, json!({ "identifier": "node-1" }));
+        }
+        if p.contains("/_apis/permissions/") {
+            return match write {
+                Some(w) => res(200, json!({ "value": [w] })),
+                None => res(403, Value::Null),
+            };
+        }
+        if p.ends_with("/_apis/wit/wiql") && req.method == "POST" {
+            let listed: Vec<Value> = items.iter().map(|i| json!({ "id": i["id"] })).collect();
+            return res(200, json!({ "workItems": listed }));
+        }
+        if p.ends_with("/_apis/wit/workitems") {
+            return res(200, json!({ "value": items }));
+        }
+        if p.ends_with("/comments") {
+            return res(200, json!({ "comments": [] }));
+        }
+        res(404, Value::Null)
+    })
+}
+
+fn ado_source(org: &Vendor, cfg: &Config) -> Ado<ReadOnlyWiql<Vendor>> {
+    let a = cfg.ado.as_ref().unwrap();
+    Ado::new(
+        &a.organization,
+        &a.api,
+        ReadOnlyWiql(org.clone()),
+        vec![],
+        crate::ado_scopes(cfg),
+        &a.projects,
+        &a.pr_url_base,
+    )
+}
+
 #[tokio::test]
-async fn an_ado_or_gitlab_config_is_reported_not_a_panic() {
+async fn ado_sign_in_and_permissions_are_reported_per_rule() {
+    let org = ado_org(vec![], Some(true));
+    let cfg = ado_config(json!({ "comment": true }));
+    let mut out = Vec::new();
+    ado_findings(&cfg, &mut ado_source(&org, &cfg), &mut out).await;
+    assert!(has(&out, Level::Ok, "signs in as KBL Bot"), "{out:?}");
+    assert!(has(&out, Level::Ok, "can read work items in Platform Team"));
+    assert!(has(
+        &out,
+        Level::Ok,
+        "work items: may edit in Platform Team"
+    ));
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+}
+
+#[tokio::test]
+async fn an_ado_credential_the_service_refuses_is_one_error_and_stops_the_probe() {
+    // A bad personal access token is a 203 sign-in page, which the adapter reads as 401.
+    let org = Vendor::new(|_| res(203, Value::Null));
+    let cfg = ado_config(json!({}));
+    let mut out = Vec::new();
+    ado_findings(&cfg, &mut ado_source(&org, &cfg), &mut out).await;
+    assert!(
+        has(&out, Level::Error, "refused the credential (401)"),
+        "{out:?}"
+    );
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(!org_touched_projects(&org));
+}
+
+fn org_touched_projects(v: &Vendor) -> bool {
+    v.touched("classificationnodes")
+}
+
+#[tokio::test]
+async fn a_project_the_ado_credential_cannot_read_is_an_error() {
+    let org = Vendor::new(|req| {
+        if path(req).ends_with("/_apis/connectionData") {
+            res(
+                200,
+                json!({ "authenticatedUser": { "providerDisplayName": "KBL" } }),
+            )
+        } else {
+            res(404, Value::Null)
+        }
+    });
+    let cfg = ado_config(json!({}));
+    let mut out = Vec::new();
+    ado_findings(&cfg, &mut ado_source(&org, &cfg), &mut out).await;
+    assert!(has(&out, Level::Error, "repo contoso/Platform"), "{out:?}");
+    assert!(has(
+        &out,
+        Level::Error,
+        "answered 404 reading project Platform Team"
+    ));
+}
+
+#[tokio::test]
+async fn a_missing_ado_write_right_is_an_error_only_where_a_rule_writes() {
+    let cfg = ado_config(json!({ "comment": true, "transition_on_pr": "Resolved" }));
+    let org = ado_org(vec![], Some(false));
+    let mut out = Vec::new();
+    ado_findings(&cfg, &mut ado_source(&org, &cfg), &mut out).await;
+    assert!(
+        has(
+            &out,
+            Level::Error,
+            "may not edit work items in Platform Team"
+        ),
+        "{out:?}"
+    );
+
+    // The permission service saying nothing is a warning, not a verdict.
+    let org = ado_org(vec![], None);
+    let mut out = Vec::new();
+    ado_findings(&cfg, &mut ado_source(&org, &cfg), &mut out).await;
+    assert!(has(&out, Level::Warn, "could not tell whether"), "{out:?}");
+    assert!(messages(&out, Level::Error).is_empty());
+
+    // A read-only rule never asks, so a read-only credential passes.
+    let cfg = ado_config(json!({}));
+    let org = ado_org(vec![], Some(false));
+    let mut out = Vec::new();
+    ado_findings(&cfg, &mut ado_source(&org, &cfg), &mut out).await;
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+    assert!(!org.touched("/permissions/"));
+}
+
+#[tokio::test]
+async fn the_ado_guard_lets_through_one_query_and_nothing_else() {
+    let org = ado_org(vec![], None);
+    let guard = ReadOnlyWiql(org.clone());
+    let q = json!({ "query": "SELECT [System.Id] FROM WorkItems" });
+    let base = "https://dev.azure.com/contoso/Platform%20Team/_apis";
+    let post = |url: String, body: Value| Req::post(url, body);
+    assert!(
+        guard
+            .send(post(format!("{base}/wit/wiql?api-version=7.1"), q.clone()))
+            .await
+            .is_ok()
+    );
+    let id = "0b9e1d3e-7c1a-4f0e-9a52-5f2f0c0d1e11";
+    let refused = [
+        post(
+            format!("{base}/wit/workItems/1/comments"),
+            json!({ "text": "x" }),
+        ),
+        post(format!("{base}/wit/wiql/{id}"), q.clone()),
+        post(format!("{base}/wit/wiql/../workitems"), q.clone()),
+        post(format!("{base}/wit/wiql"), json!({ "query": "DELETE" })),
+        post(
+            format!("{base}/wit/wiql"),
+            json!({ "query": "SELECT x", "extra": 1 }),
+        ),
+        post(format!("{base}/wit/wiql"), json!([])),
+        Req {
+            method: "PATCH",
+            url: format!("{base}/wit/wiql"),
+            if_none_match: None,
+            body: Some(q.clone()),
+        },
+    ];
+    for req in refused {
+        let what = format!("{} {}", req.method, req.url);
+        assert!(guard.send(req).await.is_err(), "{what}");
+    }
+    // Only the one query reached the organization.
+    assert_eq!(org.non_gets().len(), 1, "{:?}", org.non_gets());
+}
+
+#[tokio::test]
+async fn the_ado_check_sends_only_reads_and_the_query() {
+    let org = ado_org(vec![ado_item(1, "agent-ok", "Active")], Some(true));
+    let cfg =
+        ado_config(json!({ "comment": true, "link_pr": true, "transition_on_pr": "Resolved" }));
+    let mut report = Report::default();
+    let ado = ado_source(&org, &cfg);
+    dry_run(&cfg, &ado, None::<&Fake>, &mut report).await;
+    ado_findings(&cfg, &mut ado_source(&org, &cfg), &mut report.findings).await;
+    assert_eq!(
+        org.non_gets(),
+        ["POST /contoso/Platform%20Team/_apis/wit/wiql"]
+    );
+}
+
+#[tokio::test]
+async fn the_ado_dry_run_picks_what_the_worker_imports() {
+    let items = vec![
+        ado_item(1, "agent-ok", "Active"),
+        ado_item(2, "agent-ok; storage", "New"),
+        ado_item(3, "other", "Active"),
+        ado_item(4, "agent-ok", "Active"),
+    ];
+    let cfg = ado_config(json!({ "cap": 2 }));
+    let org = ado_org(items.clone(), None);
+    let mut report = Report::default();
+    dry_run(&cfg, &ado_source(&org, &cfg), None::<&Fake>, &mut report).await;
+    let planned = ids(&report, "agent-ok");
+    assert_eq!(planned.len(), 2, "{planned:?}");
+    assert_eq!(pick(&report.rules, "agent-ok").over_cap.len(), 1);
+
+    let tracker = Fake::default();
+    let worker = crate::sync::Ingest::new(
+        Ado::new(
+            "contoso",
+            "https://dev.azure.com/",
+            ado_org(items, None),
+            vec!["KBL".into()],
+            crate::ado_scopes(&cfg),
+            &cfg.ado.as_ref().unwrap().projects,
+            &cfg.ado.as_ref().unwrap().pr_url_base,
+        ),
+        tracker.clone(),
+        crate::sync::Settings {
+            rules: cfg.rules.clone(),
+            repos: cfg.repos(),
+            reconcile_every: 1000,
+            release_compares: 20,
+        },
+    );
+    worker.poll(false).await.unwrap();
+    assert_eq!(imported(&tracker).await, planned);
+}
+
+fn gitlab_config(rule: Value) -> Config {
+    let mut base = json!({ "name": "agent-ok", "repo": "team/app",
+        "labels_all": ["agent-ok"], "mode": "admit" });
+    base.as_object_mut()
+        .unwrap()
+        .extend(rule.as_object().unwrap().clone());
+    Config::parse(
+        &json!({
+            "tracker": { "url": "http://t", "token_env": "T" },
+            "gitlab": { "api": "https://gitlab.example.com", "token_env": "GL",
+                        "projects": { "team/app": "group/sub/app" } },
+            "rules": [base],
+        })
+        .to_string(),
+    )
+    .unwrap()
+}
+
+fn gitlab_issue(iid: u64, labels: &[&str]) -> Value {
+    json!({
+        "id": 9000 + iid, "iid": iid, "title": format!("Issue {iid}"),
+        "description": "text", "state": "opened", "labels": labels,
+        "assignees": [], "author": { "username": "alice" }, "type": "ISSUE",
+        "web_url": format!("https://gitlab.example.com/group/sub/app/-/issues/{iid}"),
+        "user_notes_count": 0, "moved_to_id": null,
+        "updated_at": format!("2026-11-10T12:00:0{iid}.000Z"),
+    })
+}
+
+/// A GitLab instance. `token` is what the token's own details say.
+fn lab(token: Res, access: u64, issues: Vec<Value>) -> Vendor {
+    Vendor::new(move |req| {
+        let p = path(req);
+        if p == "/api/v4/user" {
+            return res(200, json!({ "username": "kbl-bot" }));
+        }
+        if p == "/api/v4/personal_access_tokens/self" {
+            return token.clone();
+        }
+        if p == "/api/v4/projects/group%2Fsub%2Fapp" {
+            return res(
+                200,
+                json!({ "permissions": { "project_access": { "access_level": access } } }),
+            );
+        }
+        if p == "/api/v4/projects/group%2Fsub%2Fapp/issues" {
+            return res(200, Value::Array(issues.clone()));
+        }
+        if p.ends_with("/notes") {
+            return res(200, json!([]));
+        }
+        res(404, Value::Null)
+    })
+}
+
+fn token(scopes: &[&str], expires: Option<&str>) -> Res {
+    res(
+        200,
+        json!({ "scopes": scopes, "expires_at": expires, "active": true, "revoked": false }),
+    )
+}
+
+fn gitlab_source(v: &Vendor, cfg: &Config) -> Gitlab<ReadOnly<Vendor>> {
+    let g = cfg.gitlab.as_ref().unwrap();
+    Gitlab::new(
+        &g.api,
+        ReadOnly(v.clone()),
+        vec![],
+        cfg.rules.clone(),
+        &g.projects,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn gitlab_sign_in_scopes_expiry_and_role_are_reported() {
+    let v = lab(token(&["api"], Some("2099-01-01")), 30, vec![]);
+    let cfg = gitlab_config(json!({ "comment": true }));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(has(&out, Level::Ok, "signs in as kbl-bot"), "{out:?}");
+    assert!(has(&out, Level::Ok, "token scopes: api"));
+    assert!(has(&out, Level::Ok, "expires on 2099-01-01"));
+    assert!(has(&out, Level::Ok, "can read group/sub/app"));
+    assert!(has(&out, Level::Ok, "role in group/sub/app is enough"));
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+}
+
+#[tokio::test]
+async fn a_rejected_gitlab_token_is_one_error() {
+    let v = Vendor::new(|_| res(401, Value::Null));
+    let cfg = gitlab_config(json!({}));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(
+        has(&out, Level::Error, "rejected the token (401)"),
+        "{out:?}"
+    );
+    assert_eq!(out.len(), 1);
+    assert!(!v.touched("/projects/"));
+}
+
+#[tokio::test]
+async fn a_gitlab_token_without_api_cannot_write_back() {
+    let cfg = gitlab_config(json!({ "comment": true }));
+    let v = lab(token(&["read_api"], None), 30, vec![]);
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(has(&out, Level::Error, "lacks the api scope"), "{out:?}");
+
+    // A reading rule is fine with read_api alone.
+    let cfg = gitlab_config(json!({}));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+
+    // A token with neither scope cannot read.
+    let v = lab(token(&["read_user"], None), 30, vec![]);
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(has(&out, Level::Error, "needs read_api"), "{out:?}");
+}
+
+#[tokio::test]
+async fn a_gitlab_guest_may_comment_but_not_close() {
+    let v = lab(token(&["api"], None), 10, vec![]);
+    let cfg = gitlab_config(json!({ "comment": true }));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+
+    let cfg = gitlab_config(json!({ "transition_on_merge": "close" }));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(has(&out, Level::Error, "below Reporter"), "{out:?}");
+}
+
+#[tokio::test]
+async fn a_gitlab_project_that_lists_no_role_is_a_warning_not_an_error() {
+    let v = Vendor::new(|req| match path(req).as_str() {
+        "/api/v4/user" => res(200, json!({ "username": "kbl-bot" })),
+        "/api/v4/personal_access_tokens/self" => token(&["api"], None),
+        "/api/v4/projects/group%2Fsub%2Fapp" => res(
+            200,
+            json!({ "permissions": {
+            "project_access": null, "group_access": null } }),
+        ),
+        _ => res(404, Value::Null),
+    });
+    let cfg = gitlab_config(json!({ "comment": true }));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+    assert!(
+        has(&out, Level::Warn, "could not tell the token's role"),
+        "{out:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_revoked_or_nearly_expired_gitlab_token_is_flagged() {
+    let cfg = gitlab_config(json!({}));
+    let revoked = res(
+        200,
+        json!({ "scopes": ["api"], "expires_at": null, "active": false, "revoked": true }),
+    );
+    let mut out = Vec::new();
+    gitlab_findings(
+        &cfg,
+        &mut gitlab_source(&lab(revoked, 30, vec![]), &cfg),
+        &mut out,
+    )
+    .await;
+    assert!(
+        has(&out, Level::Error, "revoked or no longer active"),
+        "{out:?}"
+    );
+
+    let soon = std::time::SystemTime::now() + std::time::Duration::from_secs(3 * 86_400);
+    let secs = soon
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let date = civil(secs / 86_400);
+    let v = lab(token(&["api"], Some(&date)), 30, vec![]);
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(
+        has(&out, Level::Warn, &format!("expires on {date}")),
+        "{out:?}"
+    );
+}
+
+/// YYYY-MM-DD of a day count since the epoch.
+fn civil(days: i64) -> String {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+#[test]
+fn the_sources_check_builds_are_guarded_by_type() {
+    let cfg = ado_config(json!({}));
+    let _: Ado<ReadOnlyWiql<crate::ado::transport::Reqwest>> =
+        ado_guarded(&cfg, cfg.ado.as_ref().unwrap()).unwrap();
+    let cfg = gitlab_config(json!({}));
+    let _: Gitlab<ReadOnly<crate::gitlab::transport::Reqwest>> =
+        gitlab_guarded(&cfg, cfg.gitlab.as_ref().unwrap()).unwrap();
+}
+
+#[tokio::test]
+async fn an_expired_or_unreported_gitlab_token_is_said_plainly() {
+    let cfg = gitlab_config(json!({}));
+    let v = lab(token(&["api"], Some("2020-01-01")), 30, vec![]);
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(has(&out, Level::Error, "expired on 2020-01-01"), "{out:?}");
+
+    // GitLab before 15.5 has no endpoint for it: a warning, and reads go on.
+    let v = lab(res(404, Value::Null), 30, vec![]);
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(
+        has(&out, Level::Warn, "scopes and expiry are not checked"),
+        "{out:?}"
+    );
+    assert!(has(&out, Level::Ok, "can read group/sub/app"));
+    assert!(messages(&out, Level::Error).is_empty());
+}
+
+#[tokio::test]
+async fn the_gitlab_check_sends_no_write_and_the_dry_run_matches_the_worker() {
+    let issues = vec![
+        gitlab_issue(1, &["agent-ok"]),
+        gitlab_issue(2, &["agent-ok"]),
+        gitlab_issue(3, &["other"]),
+        gitlab_issue(4, &["agent-ok"]),
+    ];
+    let cfg = gitlab_config(json!({ "cap": 2, "comment": true }));
+    let v = lab(token(&["api"], None), 30, issues.clone());
+    let mut report = Report::default();
+    let mut gitlab = gitlab_source(&v, &cfg);
+    gitlab_findings(&cfg, &mut gitlab, &mut report.findings).await;
+    dry_run(&cfg, &gitlab, None::<&Fake>, &mut report).await;
+    assert!(v.non_gets().is_empty(), "{:?}", v.non_gets());
+    assert!(v.touched("/issues"));
+    let planned = ids(&report, "agent-ok");
+    assert_eq!(planned.len(), 2, "{planned:?}");
+
+    let tracker = Fake::default();
+    let g = cfg.gitlab.as_ref().unwrap();
+    let worker = crate::sync::Ingest::new(
+        Gitlab::new(
+            &g.api,
+            lab(token(&["api"], None), 30, issues),
+            vec!["kbl-bot".into()],
+            cfg.rules.clone(),
+            &g.projects,
+        )
+        .unwrap(),
+        tracker.clone(),
+        crate::sync::Settings {
+            rules: cfg.rules.clone(),
+            repos: cfg.repos(),
+            reconcile_every: 1000,
+            release_compares: 20,
+        },
+    );
+    worker.poll(false).await.unwrap();
+    assert_eq!(imported(&tracker).await, planned);
+}
+
+#[tokio::test]
+async fn an_ado_or_gitlab_config_gets_real_findings_and_no_secret() {
+    // Loopback addresses, so a request fails at once; the credentials are unset.
     let cases = [
         (
             "ado",
-            r#"{"tracker":{"url":"http://127.0.0.1:1","token_env":"KBL_CHECK_NO_TOKEN"},"ado":{"organization":"contoso","pat_env":"P"},"rules":[{"name":"r","repo":"contoso/Platform","mode":"admit"}]}"#,
+            r#"{"tracker":{"url":"http://127.0.0.1:1","token_env":"KBL_CHECK_NO_TOKEN"},"ado":{"organization":"contoso","api":"http://127.0.0.1:1","pat_env":"KBL_CHECK_NO_ADO_PAT"},"rules":[{"name":"r","repo":"contoso/Platform","mode":"admit"}]}"#,
         ),
         (
             "gitlab",
-            r#"{"tracker":{"url":"http://127.0.0.1:1","token_env":"KBL_CHECK_NO_TOKEN"},"gitlab":{"token_env":"G"},"rules":[{"name":"r","repo":"team/app","mode":"admit"}]}"#,
+            r#"{"tracker":{"url":"http://127.0.0.1:1","token_env":"KBL_CHECK_NO_TOKEN"},"gitlab":{"api":"http://127.0.0.1:1","token_env":"KBL_CHECK_NO_GL"},"rules":[{"name":"r","repo":"team/app","mode":"admit"}]}"#,
         ),
     ];
     for (source, cfg) in cases {
-        let path = temp(&format!("unsupported-{source}.json"), cfg);
+        let path = temp(&format!("real-{source}.json"), cfg);
         let report = report_for(&path).await;
+        assert!(!report.ok);
+        let text = render(&report);
+        assert!(!text.contains("does not test"), "{text}");
+        assert!(text.contains(&format!("ERROR {source}:")), "{text}");
         assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.scope == source && f.message.contains("does not test")),
-            "{:?}",
-            report.findings
+            text.contains(&format!("parses: 1 rule(s) for {source}")),
+            "{text}"
         );
     }
+}
+
+/// A transport whose failure text quotes a token, as a library error can.
+struct Leaky;
+
+impl Transport for Leaky {
+    async fn send(&self, _req: Req) -> Result<Res> {
+        Err(anyhow!("connect failed with glpat-abcdefghij0123456789"))
+    }
+}
+
+#[tokio::test]
+async fn a_transport_error_that_quotes_a_token_is_cut_from_the_report() {
+    let cfg = gitlab_config(json!({}));
+    let g = cfg.gitlab.as_ref().unwrap();
+    let mut gitlab = Gitlab::new(
+        &g.api,
+        ReadOnly(Leaky),
+        vec![],
+        cfg.rules.clone(),
+        &g.projects,
+    )
+    .unwrap();
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab, &mut out).await;
+    assert!(has(&out, Level::Error, "connect failed"), "{out:?}");
+    assert!(
+        !format!("{out:?}").contains("abcdefghij0123456789"),
+        "{out:?}"
+    );
+
+    let cfg = ado_config(json!({}));
+    let a = cfg.ado.as_ref().unwrap();
+    let mut ado = Ado::new(
+        &a.organization,
+        &a.api,
+        ReadOnlyWiql(Leaky),
+        vec![],
+        crate::ado_scopes(&cfg),
+        &a.projects,
+        &a.pr_url_base,
+    );
+    let mut out = Vec::new();
+    ado_findings(&cfg, &mut ado, &mut out).await;
+    assert!(
+        !format!("{out:?}").contains("abcdefghij0123456789"),
+        "{out:?}"
+    );
 }

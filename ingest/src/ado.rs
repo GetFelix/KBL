@@ -190,8 +190,20 @@ impl<T: Transport> Ado<T> {
         Ok(res)
     }
 
+    /// A GET of one API path, for `kbl-ingest check`'s credential and permission probes.
+    pub(crate) async fn probe(
+        &self,
+        project: Option<&str>,
+        path: &str,
+        query: &[(&str, &str)],
+        version: &str,
+    ) -> Result<Res, SourceError> {
+        self.call(Req::get(self.url(project, path, query, version)?))
+            .await
+    }
+
     /// The real name of a rule-repo project.
-    fn project_name(&self, repo: &str) -> Option<&str> {
+    pub(crate) fn project_name(&self, repo: &str) -> Option<&str> {
         let slug = repo.strip_prefix(self.org.as_str())?.strip_prefix('/')?;
         self.projects.get(slug).map(String::as_str)
     }

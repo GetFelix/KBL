@@ -5,7 +5,8 @@
 //!
 //! It reads only. The vendor transport refuses any request that is not a GET
 //! and the tracker is called through `roots` and `load`, so a check cannot
-//! change either side. An App credential still mints its installation token,
+//! change either side. Azure DevOps has one exception, a query (see
+//! [`ReadOnlyWiql`]). An App or Entra credential still mints its token,
 //! which is how it is tested. Output names environment variables and files,
 //! never their contents.
 
@@ -17,9 +18,11 @@ use anyhow::{Result, anyhow};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::config::{Config, GithubConfig, Mode, Rule};
+use crate::ado::Ado;
+use crate::config::{AdoConfig, Config, GithubConfig, Mode, Rule};
 use crate::github::transport::Reqwest as GithubHttp;
-use crate::github::{Github, Req, Res, Transport};
+use crate::github::{Github, Req, Res, Transport, parse_utc_ms};
+use crate::gitlab::Gitlab;
 use crate::jira::Jira;
 use crate::jira::transport::Reqwest as JiraHttp;
 use crate::rules::first_match;
@@ -122,6 +125,48 @@ impl<T: Transport> Transport for ReadOnly<T> {
     }
 }
 
+/// A [`ReadOnly`] that also lets through Azure DevOps's work item query.
+///
+/// WIQL is only ever sent as a POST of a query, and the service has no GET
+/// form that takes the query text. That one request reads and changes nothing,
+/// so it is the only non-GET allowed: a POST to exactly
+/// `{org}[/{project}]/_apis/wit/wiql` whose body is a lone `SELECT` query.
+/// Any other method, path or body is refused as in `ReadOnly`.
+pub(crate) struct ReadOnlyWiql<T>(pub(crate) T);
+
+impl<T: Transport> Transport for ReadOnlyWiql<T> {
+    async fn send(&self, req: Req) -> Result<Res> {
+        if req.method != "GET" && !is_wiql_query(&req) {
+            return Err(anyhow!(
+                "check does not write: refused a {} request",
+                req.method
+            ));
+        }
+        self.0.send(req).await
+    }
+}
+
+fn is_wiql_query(req: &Req) -> bool {
+    if req.method != "POST" {
+        return false;
+    }
+    let Ok(url) = reqwest::Url::parse(&req.url) else {
+        return false;
+    };
+    let segments: Vec<&str> = url.path_segments().map_or_else(Vec::new, Iterator::collect);
+    let Some(tail) = segments.len().checked_sub(3).map(|n| &segments[n..]) else {
+        return false;
+    };
+    let Some(body) = req.body.as_ref().and_then(Value::as_object) else {
+        return false;
+    };
+    tail == ["_apis", "wit", "wiql"]
+        && body.len() == 1
+        && body["query"]
+            .as_str()
+            .is_some_and(|q| q.trim_start().to_ascii_uppercase().starts_with("SELECT "))
+}
+
 /// Runs the check and prints it. False when anything is an error.
 pub(crate) async fn run(args: &Args) -> Result<bool> {
     let report = report_for(&args.config).await;
@@ -152,11 +197,7 @@ async fn report_for(path: &Path) -> Report {
             "{} parses: {} rule(s) for {}",
             path.display(),
             cfg.rules.len(),
-            if cfg.github.is_some() {
-                "github"
-            } else {
-                "jira"
-            }
+            source_name(&cfg)
         ),
     ));
     report
@@ -203,15 +244,32 @@ async fn report_for(path: &Path) -> Report {
                     .push(Finding::new(Level::Error, "jira", safe(format!("{e:#}"))))
             }
         },
-        // Credential, permission and dry-run checks for these sources are not written yet
-        // (#335, #340); the config itself parsed above.
-        _ if cfg.ado.is_some() || cfg.gitlab.is_some() => {
-            let source = if cfg.ado.is_some() { "ado" } else { "gitlab" };
-            report.findings.push(Finding::new(
-                Level::Warn,
-                source,
-                format!("the config is valid; check does not test {source} credentials or run a dry run yet"),
-            ));
+        (None, None) => {
+            if let Some(a) = &cfg.ado {
+                match ado_guarded(&cfg, a) {
+                    Ok(mut ado) => {
+                        ado_findings(&cfg, &mut ado, &mut report.findings).await;
+                        dry_run(&cfg, &ado, tracker.as_ref(), &mut report).await;
+                    }
+                    Err(e) => report.findings.push(Finding::new(
+                        Level::Error,
+                        "ado",
+                        safe(format!("{e:#}")),
+                    )),
+                }
+            } else if let Some(g) = &cfg.gitlab {
+                match gitlab_guarded(&cfg, g) {
+                    Ok(mut gitlab) => {
+                        gitlab_findings(&cfg, &mut gitlab, &mut report.findings).await;
+                        dry_run(&cfg, &gitlab, tracker.as_ref(), &mut report).await;
+                    }
+                    Err(e) => report.findings.push(Finding::new(
+                        Level::Error,
+                        "gitlab",
+                        safe(format!("{e:#}")),
+                    )),
+                }
+            }
         }
         _ => unreachable!("the config checks for exactly one source"),
     }
@@ -225,6 +283,48 @@ async fn report_for(path: &Path) -> Report {
         ));
     }
     report.finish()
+}
+
+/// The Azure DevOps source as check uses it. The return type is the guarantee
+/// that no request leaves except through [`ReadOnlyWiql`].
+fn ado_guarded(
+    cfg: &Config,
+    a: &AdoConfig,
+) -> Result<Ado<ReadOnlyWiql<crate::ado::transport::Reqwest>>> {
+    let http = crate::ado::transport::Reqwest::new(crate::ado_auth(a))?;
+    Ok(Ado::new(
+        &a.organization,
+        &a.api,
+        ReadOnlyWiql(http),
+        a.own_logins.clone(),
+        crate::ado_scopes(cfg),
+        &a.projects,
+        &a.pr_url_base,
+    ))
+}
+
+/// The GitLab source as check uses it, behind [`ReadOnly`] by type.
+fn gitlab_guarded(
+    cfg: &Config,
+    g: &crate::config::GitlabConfig,
+) -> Result<Gitlab<ReadOnly<crate::gitlab::transport::Reqwest>>> {
+    let http = crate::gitlab::transport::Reqwest::new(crate::gitlab_secret(g))?;
+    Gitlab::new(
+        &g.api,
+        ReadOnly(http),
+        g.own_logins.clone(),
+        cfg.rules.clone(),
+        &g.projects,
+    )
+}
+
+fn source_name(cfg: &Config) -> &'static str {
+    match (&cfg.github, &cfg.jira, &cfg.ado) {
+        (Some(_), ..) => "github",
+        (_, Some(_), _) => "jira",
+        (.., Some(_)) => "ado",
+        _ => "gitlab",
+    }
 }
 
 async fn tracker_finding<T: Tracker>(cfg: &Config, tracker: &T) -> Finding {
@@ -327,6 +427,17 @@ pub(crate) fn static_findings(cfg: &Config, env: &dyn Fn(&str) -> Option<String>
             }
         }
     }
+    if let Some(a) = &cfg.ado {
+        out.extend(ado_static(a, &var));
+    }
+    if let Some(g) = &cfg.gitlab {
+        if let Some(name) = &g.token_env {
+            out.push(var("gitlab", name));
+        }
+        if let Some(f) = &g.token_file {
+            out.push(secret_file("gitlab", "token_file", f));
+        }
+    }
     for r in &cfg.rules {
         let scope = format!("rule {}", r.name);
         if r.cap == Some(0) {
@@ -351,6 +462,34 @@ pub(crate) fn static_findings(cfg: &Config, env: &dyn Fn(&str) -> Option<String>
                 Level::Warn,
                 &scope,
                 "transition_on_merge fires only when a merged pr_status comes from elsewhere; a Jira worker records no merges",
+            ));
+        }
+    }
+    out
+}
+
+fn ado_static(a: &AdoConfig, var: &dyn Fn(&str, &str) -> Finding) -> Vec<Finding> {
+    let mut out = Vec::new();
+    if let Some(name) = &a.pat_env {
+        out.push(var("ado", name));
+    }
+    if let Some(f) = &a.pat_file {
+        out.push(secret_file("ado", "pat_file", f));
+    }
+    if let Some(e) = &a.entra {
+        if let Some(name) = &e.client_secret_env {
+            out.push(var("ado", name));
+        }
+        if let Some(f) = &e.client_secret_file {
+            out.push(secret_file("ado", "entra.client_secret_file", f));
+        }
+    }
+    for url in std::iter::once(&a.api).chain(a.entra.iter().map(|e| &e.authority)) {
+        if !url.starts_with("https://") {
+            out.push(Finding::new(
+                Level::Warn,
+                "ado",
+                safe(format!("address {url} is not https")),
             ));
         }
     }
@@ -622,6 +761,430 @@ pub(crate) async fn jira_findings<T: Transport>(
     }
 }
 
+/// Work item rights, as the organization's permission service reports them.
+/// Classification nodes hold work item read (16) and write (32).
+const CSS_NAMESPACE: &str = "83e28ad4-2d72-4ceb-97b0-c7726d5502c3";
+const WORK_ITEM_WRITE: &str = "32";
+
+fn ado_rule_writes(r: &Rule) -> bool {
+    r.comment || r.link_pr || r.transition_on_pr.is_some() || r.transition_on_merge.is_some()
+}
+
+/// Azure DevOps: sign-in, then per rule the project read and, where the rule
+/// writes back, the work item edit right.
+pub(crate) async fn ado_findings<T: Transport>(
+    cfg: &Config,
+    ado: &mut Ado<T>,
+    out: &mut Vec<Finding>,
+) {
+    match ado.probe(None, "/connectionData", &[], "7.1-preview").await {
+        Ok(res) if res.status == 200 => {
+            let user = &res.body["authenticatedUser"];
+            let names: Vec<String> = ["providerDisplayName", "customDisplayName"]
+                .iter()
+                .filter_map(|k| user[k].as_str().map(str::to_owned))
+                .collect();
+            out.push(Finding::new(
+                Level::Ok,
+                "ado",
+                format!(
+                    "the credential signs in as {}",
+                    names.first().map_or("an identity", String::as_str)
+                ),
+            ));
+            ado.add_own(names);
+        }
+        Ok(res) if matches!(res.status, 401 | 403) => {
+            out.push(Finding::new(
+                Level::Error,
+                "ado",
+                format!(
+                    "Azure DevOps refused the credential ({}): the personal access token is wrong, \
+                     expired or revoked, or the service principal is not a member of the organization",
+                    res.status
+                ),
+            ));
+            return;
+        }
+        Ok(res) => out.push(Finding::new(
+            Level::Error,
+            "ado",
+            format!("Azure DevOps answered {} to the sign-in test", res.status),
+        )),
+        Err(e) => {
+            out.push(Finding::new(Level::Error, "ado", safe(e)));
+            return;
+        }
+    }
+    if let Err(e) = ado.require_own() {
+        out.push(Finding::new(Level::Error, "ado", safe(format!("{e:#}"))));
+    }
+
+    // Per project: whether it reads, and its work item write answer, once.
+    let mut seen: BTreeMap<&str, bool> = BTreeMap::new();
+    let mut writes: BTreeMap<&str, Option<bool>> = BTreeMap::new();
+    for r in &cfg.rules {
+        let Some(project) = ado.project_name(&r.repo).map(str::to_owned) else {
+            continue;
+        };
+        let scope = format!("repo {}", r.repo);
+        if !seen.contains_key(r.repo.as_str()) {
+            let mut readable = false;
+            // Area nodes are work item data, so a Work Items (Read) token reads them.
+            match ado
+                .probe(
+                    Some(&project),
+                    "/wit/classificationnodes/areas",
+                    &[("$depth", "0")],
+                    "7.1",
+                )
+                .await
+            {
+                Ok(res) if res.status == 200 => {
+                    readable = true;
+                    out.push(Finding::new(
+                        Level::Ok,
+                        &scope,
+                        format!("the credential can read work items in {project}"),
+                    ));
+                    let need_write = cfg
+                        .rules
+                        .iter()
+                        .any(|x| x.repo == r.repo && ado_rule_writes(x));
+                    if need_write {
+                        let node = res.body["identifier"].as_str().unwrap_or_default();
+                        writes.insert(&r.repo, ado_can_write(ado, node).await);
+                    }
+                }
+                Ok(res) if matches!(res.status, 401 | 403 | 404) => out.push(Finding::new(
+                    Level::Error,
+                    &scope,
+                    format!(
+                        "Azure DevOps answered {} reading project {project}: it does not exist, or the \
+                         credential cannot see it (grant Work Items: Read)",
+                        res.status
+                    ),
+                )),
+                Ok(res) => out.push(Finding::new(
+                    Level::Error,
+                    &scope,
+                    format!("Azure DevOps answered {} reading project {project}", res.status),
+                )),
+                Err(e) => out.push(Finding::new(Level::Error, &scope, safe(e))),
+            }
+            seen.insert(&r.repo, readable);
+        }
+        if !seen[r.repo.as_str()] {
+            continue;
+        }
+        let rule_scope = format!("rule {}", r.name);
+        out.push(Finding::new(
+            Level::Ok,
+            &rule_scope,
+            format!("work items: read in {project}"),
+        ));
+        if !ado_rule_writes(r) {
+            continue;
+        }
+        out.push(match writes.get(r.repo.as_str()).copied().flatten() {
+            Some(true) => Finding::new(
+                Level::Ok,
+                &rule_scope,
+                format!("work items: may edit in {project}"),
+            ),
+            Some(false) => Finding::new(
+                Level::Error,
+                &rule_scope,
+                format!(
+                    "the credential may not edit work items in {project}; comment, link_pr and \
+                     transitions need Work Items: Read & write"
+                ),
+            ),
+            // A personal access token's scopes are not visible to the API.
+            None => Finding::new(
+                Level::Warn,
+                &rule_scope,
+                format!(
+                    "could not tell whether the credential may edit work items in {project}; \
+                     comment, link_pr and transitions need Work Items: Read & write"
+                ),
+            ),
+        });
+    }
+}
+
+/// Whether the credential may edit work items under an area node, or None
+/// when the permission service would not say.
+async fn ado_can_write<T: Transport>(ado: &Ado<T>, node: &str) -> Option<bool> {
+    if node.is_empty() {
+        return None;
+    }
+    let token = format!("vstfs:///Classification/Node/{node}");
+    let path = format!("/permissions/{CSS_NAMESPACE}/{WORK_ITEM_WRITE}");
+    let res = ado
+        .probe(None, &path, &[("tokens", &token)], "7.1")
+        .await
+        .ok()?;
+    (res.status == 200)
+        .then(|| res.body["value"][0].as_bool())
+        .flatten()
+}
+
+/// GitLab access levels: Guest, Reporter.
+const GUEST: u64 = 10;
+const REPORTER: u64 = 20;
+
+/// The access level a rule's writes need: a comment or opening an issue takes
+/// a Guest, a close or reopen takes a Reporter.
+fn gitlab_write_level(r: &Rule) -> Option<u64> {
+    if r.transition_on_pr.is_some() || r.transition_on_merge.is_some() {
+        Some(REPORTER)
+    } else if r.comment || r.open_prerequisites {
+        Some(GUEST)
+    } else {
+        None
+    }
+}
+
+/// GitLab: sign-in, the token's scopes and expiry where the API says them,
+/// then per rule the project read and the role its writes need.
+pub(crate) async fn gitlab_findings<T: Transport>(
+    cfg: &Config,
+    gitlab: &mut Gitlab<T>,
+    out: &mut Vec<Finding>,
+) {
+    match gitlab.probe(&["user"], &[]).await {
+        Ok(res) if res.status == 200 => {
+            let who = res.body["username"].as_str().unwrap_or("a user");
+            out.push(Finding::new(
+                Level::Ok,
+                "gitlab",
+                format!("the token signs in as {who}"),
+            ));
+            gitlab.add_own(vec![who.to_owned()]);
+        }
+        Ok(res) if res.status == 401 => {
+            out.push(Finding::new(
+                Level::Error,
+                "gitlab",
+                "GitLab rejected the token (401): it is wrong, expired or revoked",
+            ));
+            return;
+        }
+        Ok(res) => out.push(Finding::new(
+            Level::Warn,
+            "gitlab",
+            format!(
+                "GitLab answered {} to GET /user, so it did not say who the token is",
+                res.status
+            ),
+        )),
+        Err(e) => {
+            out.push(Finding::new(Level::Error, "gitlab", safe(e)));
+            return;
+        }
+    }
+    if let Err(e) = gitlab.require_own() {
+        out.push(Finding::new(Level::Error, "gitlab", safe(format!("{e:#}"))));
+    }
+    let has_api = gitlab_token_findings(gitlab, out).await;
+
+    let mut seen: BTreeMap<&str, Option<u64>> = BTreeMap::new();
+    for r in &cfg.rules {
+        let Ok(project) = gitlab.project_of(&r.repo).map(str::to_owned) else {
+            continue;
+        };
+        let scope = format!("repo {}", r.repo);
+        if !seen.contains_key(r.repo.as_str()) {
+            let level = match gitlab.probe(&["projects", &project], &[]).await {
+                Ok(res) if res.status == 200 => {
+                    out.push(Finding::new(
+                        Level::Ok,
+                        &scope,
+                        format!("the token can read {project}"),
+                    ));
+                    let p = &res.body["permissions"];
+                    let level = ["project_access", "group_access"]
+                        .iter()
+                        .filter_map(|k| p[k]["access_level"].as_u64())
+                        .max();
+                    // No role is listed for an admin, a member through a shared group or
+                    // a visitor of a public project, so nothing is known.
+                    Some(level.unwrap_or(u64::MAX))
+                }
+                Ok(res) if matches!(res.status, 401 | 403 | 404) => {
+                    out.push(Finding::new(
+                        Level::Error,
+                        &scope,
+                        format!(
+                            "GitLab answered {} reading {project}: it does not exist, or the token \
+                             cannot see it (grant read_api and a role in the project)",
+                            res.status
+                        ),
+                    ));
+                    None
+                }
+                Ok(res) => {
+                    out.push(Finding::new(
+                        Level::Error,
+                        &scope,
+                        format!("GitLab answered {} reading {project}", res.status),
+                    ));
+                    None
+                }
+                Err(e) => {
+                    out.push(Finding::new(Level::Error, &scope, safe(e)));
+                    None
+                }
+            };
+            seen.insert(&r.repo, level);
+        }
+        let Some(Some(level)) = seen.get(r.repo.as_str()).copied() else {
+            continue;
+        };
+        let rule_scope = format!("rule {}", r.name);
+        out.push(Finding::new(
+            Level::Ok,
+            &rule_scope,
+            format!("issues: read in {project}"),
+        ));
+        let Some(need) = gitlab_write_level(r) else {
+            continue;
+        };
+        let role = if need == GUEST { "Guest" } else { "Reporter" };
+        out.push(if level == u64::MAX {
+            Finding::new(
+                Level::Warn,
+                &rule_scope,
+                format!(
+                    "could not tell the token's role in {project}; the rule's writes need {role} or higher"
+                ),
+            )
+        } else if level >= need {
+            Finding::new(
+                Level::Ok,
+                &rule_scope,
+                format!("role in {project} is enough to write ({role} or higher)"),
+            )
+        } else {
+            Finding::new(
+                Level::Error,
+                &rule_scope,
+                format!(
+                    "the token's role in {project} is below {role}, which the rule's writes (comment, \
+                     transitions, open_prerequisites) need"
+                ),
+            )
+        });
+        if has_api == Some(false) {
+            out.push(Finding::new(
+                Level::Error,
+                &rule_scope,
+                "the token lacks the api scope, which the rule's writes need; read_api only reads",
+            ));
+        }
+    }
+}
+
+/// The token's own scopes and expiry. Returns whether it holds `api`, or None
+/// when GitLab would not say.
+async fn gitlab_token_findings<T: Transport>(
+    gitlab: &Gitlab<T>,
+    out: &mut Vec<Finding>,
+) -> Option<bool> {
+    let res = match gitlab.probe(&["personal_access_tokens", "self"], &[]).await {
+        Ok(res) => res,
+        Err(e) => {
+            out.push(Finding::new(Level::Error, "gitlab", safe(e)));
+            return None;
+        }
+    };
+    match res.status {
+        200 => {}
+        401 => {
+            out.push(Finding::new(
+                Level::Error,
+                "gitlab",
+                "GitLab rejected the token (401): it is wrong, expired or revoked",
+            ));
+            return None;
+        }
+        s => {
+            out.push(Finding::new(
+                Level::Warn,
+                "gitlab",
+                format!(
+                    "GitLab answered {s} for the token's own details (it needs GitLab 15.5 or later \
+                     and an access token), so its scopes and expiry are not checked"
+                ),
+            ));
+            return None;
+        }
+    }
+    let body = &res.body;
+    let scopes: Vec<&str> = body["scopes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    let api = scopes.contains(&"api");
+    if body["revoked"] == Value::Bool(true) || body["active"] == Value::Bool(false) {
+        out.push(Finding::new(
+            Level::Error,
+            "gitlab",
+            "the token is revoked or no longer active",
+        ));
+    }
+    out.push(if api || scopes.contains(&"read_api") {
+        Finding::new(
+            Level::Ok,
+            "gitlab",
+            format!("token scopes: {}", scopes.join(", ")),
+        )
+    } else {
+        Finding::new(
+            Level::Error,
+            "gitlab",
+            format!(
+                "token scopes are [{}]: it needs read_api, or api where a rule writes back",
+                scopes.join(", ")
+            ),
+        )
+    });
+    match body["expires_at"].as_str() {
+        None => out.push(Finding::new(
+            Level::Ok,
+            "gitlab",
+            "the token does not expire",
+        )),
+        Some(date) => {
+            let at = parse_utc_ms(&format!("{date}T00:00:00Z"));
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_millis() as u64);
+            match at {
+                Some(at) if at <= now => out.push(Finding::new(
+                    Level::Error,
+                    "gitlab",
+                    format!("the token expired on {date}"),
+                )),
+                Some(at) if at - now < 14 * 86_400_000 => out.push(Finding::new(
+                    Level::Warn,
+                    "gitlab",
+                    format!("the token expires on {date}"),
+                )),
+                _ => out.push(Finding::new(
+                    Level::Ok,
+                    "gitlab",
+                    format!("the token expires on {date}"),
+                )),
+            }
+        }
+    }
+    Some(api)
+}
+
 /// Lists what each rule would import on a first poll, as the worker decides it:
 /// open issues in the rules' repos, the first matching rule, each rule's cap
 /// against the roots it already has. Nothing is written.
@@ -650,8 +1213,8 @@ pub(crate) async fn dry_run<S: Source, T: Tracker>(
             Level::Error,
             format!("repo {repo}"),
             format!(
-                "the source answered {code} listing its issues; for GitHub the credential cannot read them, \
-                 for Jira a 400 is a JQL it rejects and a 401 or 403 is no access"
+                "the source answered {code} listing its issues; for GitHub, Azure DevOps and GitLab the \
+                 credential cannot read them, for Jira a 400 is a JQL it rejects and a 401 or 403 is no access"
             ),
         ));
     }

@@ -173,6 +173,15 @@ of our logins, so a merge whose merger or default branch cannot be read counts
 nothing (`ingest/src/gitlab.rs#pull_request`). A system note and an internal
 note are not imported as comments (`ingest/src/gitlab.rs#parse_note`).
 
+`kbl-ingest check` writes nothing upstream. Its connection to the source refuses
+every request that is not a GET (`ingest/src/check.rs#ReadOnly::send`). Azure DevOps
+reads work items with a query that is a POST, so its guard lets through one
+request and no other: a POST to `.../_apis/wit/wiql` whose body is a lone `SELECT`
+query, which the service cannot turn into a write
+(`ingest/src/check.rs#ReadOnlyWiql::send`, `ingest/src/check.rs#is_wiql_query`). Error text from a failed probe is run
+through the secret redactor and never carries a response body
+(`ingest/src/check.rs#safe`).
+
 The token file must be mode 600 or 400 (`tracker/src/config.rs#load`), a token
 may be listed once (`tracker/src/config.rs#parse`), and the lookup takes the
 same time for a wrong token as for a right one (`tracker/src/config.rs#entries`).
