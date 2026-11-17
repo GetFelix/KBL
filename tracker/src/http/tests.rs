@@ -60,6 +60,9 @@ struct Quiet {
     group_members: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Membership writes fail.
     fail_members_put: Arc<AtomicBool>,
+    /// This many membership writes lose the version check, as when other
+    /// trackers write the entry first.
+    lose_members_puts: Arc<std::sync::atomic::AtomicU32>,
     /// Another tracker writes this to a source's lease just before the next
     /// lease put, so that put's version check fails.
     race_lease_put: Arc<StdMutex<Option<Vec<u8>>>>,
@@ -239,6 +242,12 @@ impl Broker for Quiet {
     ) -> anyhow::Result<Option<u64>> {
         if self.fail_members_put.load(Ordering::SeqCst) {
             anyhow::bail!("the cache is unreachable");
+        }
+        let lost = self
+            .lose_members_puts
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
+        if lost.is_ok() {
+            return Ok(None);
         }
         let mut all = self.group_members.lock().unwrap();
         let now = all.get(group).map(|(_, v)| *v);

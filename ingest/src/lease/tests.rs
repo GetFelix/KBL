@@ -691,3 +691,42 @@ async fn a_leaving_worker_stops_its_heartbeat_before_it_releases() {
     let l = api.leases.lock().unwrap()["github:o/a"].clone();
     assert_eq!(l.holder, None, "released, not taken back");
 }
+
+/// The tracker's reply as JSON, so a rename of `until_ms` on either side
+/// shows up here and not as a moved source renewed past its lease.
+#[tokio::test]
+async fn the_heartbeat_reply_carries_until_ms_to_the_worker() {
+    let app = axum::Router::new().route(
+        "/v1/ingest/leases",
+        axum::routing::put(|| async {
+            axum::Json(json!({ "leases": [
+                { "source": "github:o/a", "epoch": 3 },
+                { "source": "github:o/b", "epoch": 4, "until_ms": 7500 },
+            ] }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let api = crate::tracker_api::Http::new(&base, "tok".into()).unwrap();
+    let got = api.heartbeat("g1", "i1", false, &[]).await.unwrap();
+    assert_eq!(
+        got,
+        BTreeMap::from([
+            (
+                "github:o/a".to_owned(),
+                Held {
+                    epoch: 3,
+                    until: None
+                }
+            ),
+            (
+                "github:o/b".to_owned(),
+                Held {
+                    epoch: 4,
+                    until: Some(Duration::from_millis(7500))
+                }
+            ),
+        ])
+    );
+}
