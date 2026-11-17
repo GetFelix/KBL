@@ -799,6 +799,31 @@ async fn an_org_retry_does_not_skip_another_writers_record_in_flight() {
     assert_eq!((applied, offset), (Applied::Changed, Some(1)));
 }
 
+/// Finding 3 and 5 of the Raft blank audit: a refusal burns an offset, so the
+/// log ends in a blank. The retry in the same call must take the tip past it.
+#[tokio::test(start_paused = true)]
+async fn an_org_write_after_a_raft_blank_lands_past_it() {
+    let broker = Quiet::default();
+    broker.keeps.store(true, Ordering::SeqCst);
+    broker.fences.store(true, Ordering::SeqCst);
+    broker.raft_blanks.store(true, Ordering::SeqCst);
+    let org = Org::start(broker.clone(), Duration::from_secs(15), Duration::ZERO)
+        .await
+        .unwrap();
+    // Another writer's record, then ours is refused and stored as a blank.
+    let theirs = OrgLogged::new(0, Key::new("ops").unwrap(), team_created("beta"));
+    broker.publish(ORG_EVENTS, theirs.encode()).await.unwrap();
+    let (applied, offset) = org
+        .append(Key::new("ops").unwrap(), team_created("alpha"))
+        .await
+        .unwrap();
+    // Offset 0 is beta, 1 the blank, and alpha follows the blank.
+    assert_eq!((applied, offset), (Applied::Changed, Some(2)));
+    assert_eq!(org_teams(&broker), ["beta", "alpha"]);
+    // Only the one refusal burned an offset: the retry was not refused again.
+    assert_eq!(broker.published.lock().unwrap().len(), 3);
+}
+
 /// The org log as written, by team created.
 fn org_teams(broker: &Quiet) -> Vec<String> {
     broker

@@ -41,6 +41,9 @@ struct Quiet {
     fail_lease_get: Arc<AtomicBool>,
     /// A conditional publish is refused unless it names the next offset.
     fences: Arc<AtomicBool>,
+    /// With `fences`, a refusal takes the offset it asked for, as on a Raft
+    /// stream shard: the record is never stored, and the tip passes it.
+    raft_blanks: Arc<AtomicBool>,
     /// Offsets another writer was given whose records are not committed yet:
     /// Felix's tail counts them, reads do not show them.
     in_flight: Arc<std::sync::atomic::AtomicU64>,
@@ -84,6 +87,10 @@ impl Broker for Quiet {
         let tail =
             self.published.lock().unwrap().len() as u64 + self.in_flight.load(Ordering::SeqCst);
         if self.fences.load(Ordering::SeqCst) && expected != tail {
+            if self.raft_blanks.load(Ordering::SeqCst) {
+                self.published.lock().unwrap().push(stream.to_owned());
+                return Ok(ConditionalWrite::Refused { tail: tail + 1 });
+            }
             return Ok(ConditionalWrite::Refused { tail });
         }
         let offset = self.publish(stream, payload).await?;
@@ -102,6 +109,15 @@ impl Broker for Quiet {
             }
         }
         Ok(self.log.lock().unwrap().clone())
+    }
+    async fn read_to_tip(&self, stream: &str, from: u64) -> anyhow::Result<crate::felix::ToTip> {
+        let records = self.read_from(stream, from).await?;
+        let mut tip = records.last().map_or(from, |(o, _)| o + 1);
+        // Felix's empty page points past a trailing blank.
+        if self.raft_blanks.load(Ordering::SeqCst) {
+            tip = tip.max(self.published.lock().unwrap().len() as u64);
+        }
+        Ok((records, tip))
     }
     async fn poll(
         &self,
