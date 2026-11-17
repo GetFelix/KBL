@@ -163,12 +163,13 @@ impl State {
             let kind = self.waiting_kind(id)?;
             let it = &self.items[id];
             let since_ms = self.human_waits.open.get(id).map(|o| o.since_ms);
-            // A wait that began after the hide is a new reason to look.
-            let hidden = |at_ms: u64| since_ms.is_none_or(|s| s <= at_ms);
             let snoozed = it
                 .snoozed
-                .is_some_and(|z| z.until_ms > now_ms && hidden(z.at_ms));
-            if snoozed || it.parked_at_ms.is_some_and(hidden) {
+                .is_some_and(|z| z.until_ms > now_ms && self.hide_covers(id, z.at_ms, z.kind));
+            let parked = it
+                .parked_at_ms
+                .is_some_and(|at| self.hide_covers(id, at, it.parked_kind));
+            if snoozed || parked {
                 return None;
             }
             Some(QueueEntry {
@@ -232,6 +233,20 @@ impl State {
     #[cfg(test)]
     pub(super) fn keep_waits(&mut self, cap: usize) {
         self.human_waits.cap = cap;
+    }
+
+    /// Whether a snooze or park set at `at_ms` on a wait for `kind` still
+    /// covers the wait `id` is in. A wait that began later, or one for another
+    /// reason, is a new reason to look; a start the state never saw counts as
+    /// the same wait unless the reason differs.
+    pub(super) fn hide_covers(&self, id: &ItemId, at_ms: u64, kind: Option<WaitKind>) -> bool {
+        if kind.is_some_and(|k| self.waiting_kind(id) != Some(k)) {
+            return false;
+        }
+        self.human_waits
+            .open
+            .get(id)
+            .is_none_or(|o| o.since_ms <= at_ms)
     }
 
     /// Why `id` waits on a person now, if it does.

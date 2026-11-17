@@ -352,6 +352,10 @@ impl Item {
 pub struct Snooze {
     pub at_ms: u64,
     pub until_ms: u64,
+    /// The reason the item waited when it was snoozed. A wait for another
+    /// reason shows it again even when its start is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<WaitKind>,
 }
 
 /// Longest a snooze may run, so a typo cannot hide an item for good.
@@ -539,6 +543,9 @@ pub struct Item {
     /// When a person parked it, out of My queue until it waits for a new reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_at_ms: Option<u64>,
+    /// The reason the item waited when it was parked, as for `Snooze::kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parked_kind: Option<WaitKind>,
     pub accepted: bool,
     /// A person wrote the last `accepted` on a log at format 6 or above.
     /// An earlier acceptance does not count, so a format 5 state is unchanged.
@@ -1378,6 +1385,7 @@ impl State {
             flagged: false,
             snoozed: None,
             parked_at_ms: None,
+            parked_kind: None,
             left_scope_by_sync: false,
             accepted: false,
             accepted_by_person: false,
@@ -2306,9 +2314,11 @@ impl State {
                 if self.waiting_kind(item).is_none() {
                     return Err(Reject::NoChange);
                 }
+                let kind = self.waiting_kind(item);
                 self.item_mut(item)?.snoozed = Some(Snooze {
                     at_ms: rec.at_ms,
                     until_ms: *until_ms,
+                    kind,
                 });
             }
             WorkRecord::Parked { item, parked } => {
@@ -2319,12 +2329,23 @@ impl State {
                 if it.closed.is_some() {
                     return Err(Reject::Closed);
                 }
-                if it.parked_at_ms.is_some() == *parked
-                    || (*parked && self.waiting_kind(item).is_none())
-                {
+                // A park covers only the wait it was set on, so one that has
+                // ended no longer blocks a park on the next wait.
+                let still_parked = it
+                    .parked_at_ms
+                    .is_some_and(|at| self.hide_covers(item, at, it.parked_kind));
+                let refused = if *parked {
+                    still_parked || self.waiting_kind(item).is_none()
+                } else {
+                    it.parked_at_ms.is_none()
+                };
+                if refused {
                     return Err(Reject::NoChange);
                 }
-                self.item_mut(item)?.parked_at_ms = parked.then_some(rec.at_ms);
+                let kind = self.waiting_kind(item);
+                let it = self.item_mut(item)?;
+                it.parked_at_ms = parked.then_some(rec.at_ms);
+                it.parked_kind = if *parked { kind } else { None };
             }
             WorkRecord::Unblocked { item, to } => {
                 if rec.actor != Actor::Person {
@@ -2366,6 +2387,7 @@ impl State {
                 it.flagged = false;
                 it.snoozed = None;
                 it.parked_at_ms = None;
+                it.parked_kind = None;
                 it.changed_upstream = true;
                 it.proposal = None;
             }

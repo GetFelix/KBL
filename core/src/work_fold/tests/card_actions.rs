@@ -235,3 +235,68 @@ fn the_new_kinds_are_refused_before_the_raise() {
         assert_eq!(last_reject(&l), Some(Reject::Format));
     }
 }
+
+#[test]
+fn a_park_on_a_new_wait_is_accepted_after_the_covered_wait_ended() {
+    let mut l = raised();
+    l.agent("w1", claimed("r1", 1));
+    let q = l.agent("w1", question_rec("r1"));
+    let park = || WorkRecord::Parked {
+        item: id("r1"),
+        parked: true,
+    };
+    l.person(park());
+    assert!(queue_ids(&l, 0).is_empty());
+    // Same reason again, so only the later start tells the waits apart.
+    l.person(answer_rec(q));
+    l.agent("w1", question_rec("r1"));
+    assert_eq!(queue_ids(&l, 0), ["r1"]);
+    let before = fold(&l.0).items[&id("r1")].parked_at_ms;
+    l.person(park());
+    let s = fold(&l.0);
+    assert_ne!(s.items[&id("r1")].parked_at_ms, before);
+    assert!(queue_ids(&l, 0).is_empty());
+    // A park still in force is refused.
+    l.person(park());
+    assert_eq!(last_reject(&l), Some(Reject::NoChange));
+}
+
+#[test]
+fn a_restored_park_or_snooze_ends_when_the_reason_differs_with_an_unknown_start() {
+    let mut l = held();
+    l.agent("w1", proposed("c1", None, "a", WorkKind::Fix));
+    let at = l.0.last().unwrap().1.at_ms;
+    l.person(WorkRecord::Parked {
+        item: id("c1"),
+        parked: true,
+    });
+    l.person(WorkRecord::Snoozed {
+        item: id("c1"),
+        until_ms: at + 4 * HOUR,
+    });
+    let restore = |kind| {
+        let mut s = fold(&l.0);
+        let it = s.items.get_mut(&id("c1")).unwrap();
+        it.parked_kind = kind;
+        it.snoozed.as_mut().unwrap().kind = kind;
+        let mut r: State = serde_json::from_slice(&serde_json::to_vec(&s).unwrap()).unwrap();
+        // A record on another item leaves c1's start unknown.
+        let mut next = l.0.last().unwrap().1.clone();
+        next.at_ms = at + 2 * HOUR;
+        next.record = WorkRecord::Parked {
+            item: id("r1"),
+            parked: true,
+        };
+        r.apply(999, &next);
+        r
+    };
+    let ids = |s: &State| -> Vec<String> {
+        s.queue(at + HOUR)
+            .iter()
+            .map(|e| e.item.as_str().to_owned())
+            .collect()
+    };
+    // Covered the same reason: still hidden. Another reason: shown again.
+    assert!(ids(&restore(Some(WaitKind::Proposal))).is_empty());
+    assert_eq!(ids(&restore(Some(WaitKind::Question))), ["c1"]);
+}
