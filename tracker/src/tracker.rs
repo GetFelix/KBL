@@ -34,6 +34,7 @@ use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
 mod reads;
+mod request_keys;
 mod texts;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
@@ -277,6 +278,20 @@ impl LeaseState {
     }
 }
 
+/// Marks the state stale if dropped while armed: see `append`.
+struct Unanswered<'a> {
+    lease: &'a StdMutex<LeaseState>,
+    armed: bool,
+}
+
+impl Drop for Unanswered<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.lease.lock().expect("lease lock").refused();
+        }
+    }
+}
+
 /// What a review lane looked like when an agent last left it with nothing to take.
 struct Emptied {
     at: Option<u64>,
@@ -449,6 +464,8 @@ struct Recall {
     attempts: HashMap<(ItemId, u32), Vec<ClaimLog>>,
     /// The attempt each `claimed` record is in, by its offset.
     claims: HashMap<u64, (ItemId, u32)>,
+    /// The request keys callers sent lately, so a retry is answered with the first write.
+    requests: request_keys::Requests,
 }
 
 /// What reading a record's text back from the log found.
@@ -489,6 +506,9 @@ impl Recall {
         rejected: bool,
     ) {
         let record = &logged.record;
+        if !rejected {
+            self.requests.remember(offset, logged);
+        }
         if let Some(item) = record.item() {
             self.subjects.insert(offset, item.clone());
         }
@@ -661,6 +681,8 @@ struct Inner<B> {
     settles: AtomicU64,
     /// A round of `retry_recovering` is running.
     retrying: AtomicBool,
+    /// Request keys whose write is in progress.
+    running: StdMutex<HashSet<(request_keys::Caller, Key)>>,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -692,6 +714,7 @@ impl<B: Broker> Tracker<B> {
             next_delivery: AtomicU64::new(1),
             settles: AtomicU64::new(0),
             retrying: AtomicBool::new(false),
+            running: StdMutex::default(),
         }));
         // Read once before taking the lease: a build that cannot read the log
         // must not hold the lease and keep a build that can from starting.
@@ -2188,7 +2211,10 @@ impl<B: Broker> Tracker<B> {
         if actor == Actor::Agent {
             kbl_core::redact::redact_record(&mut record);
         }
-        let logged = WorkLogged::new(now_ms(), by, actor, record);
+        let req = (actor != Actor::Tracker)
+            .then(request_keys::current)
+            .flatten();
+        let logged = WorkLogged::new(now_ms(), by, actor, record).with_request(req);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied, or the read tip when a generation start moved it.
         let guess = core.state.at.map_or(0, |a| a + 1).max(core.tail);
@@ -2212,19 +2238,32 @@ impl<B: Broker> Tracker<B> {
         }
         // Conditional on the tail: if another tracker took the lease and wrote,
         // Felix refuses this, whatever this tracker's clock says.
-        match self
+        // A caller that drops this future mid-write (a client that hung up)
+        // leaves a record that may have landed and was applied above, with
+        // nothing learned from the reply. Armed until the reply is handled, the
+        // guard marks the state stale so the next call rebuilds from the log,
+        // which also re-learns a request key the record carried.
+        let mut unanswered = Unanswered {
+            lease: &self.0.lease,
+            armed: true,
+        };
+        let written = self
             .io(
                 None,
                 self.0
                     .broker
                     .publish_if(WORK_EVENTS, logged.encode(), guess),
             )
-            .await
-        {
+            .await;
+        unanswered.armed = false;
+        match written {
             Ok(ConditionalWrite::Written { offset }) => {
                 core.tail = offset + 1;
                 core.recall
                     .remember(offset, &logged, &self.0.me, absent, false);
+                if logged.req.is_some() {
+                    request_keys::landed();
+                }
                 Ok(offset)
             }
             // The record was applied above, so the state is rebuilt, and the

@@ -197,15 +197,14 @@ impl<B: Broker> Tracker<B> {
                     TextRead::Text(old) if old == text => {
                         return Ok(json!({ "kind": kind, "offset": at, "unchanged": true }));
                     }
-                    // Retention trimmed the stored text, and the fold keeps no
-                    // digest to compare. Writing it again could only repeat an
-                    // entry ingest already sent, so it is left out.
+                    // Retention trimmed the stored text, so readers can no longer
+                    // see it. Writing the current text may repeat an entry; skipping
+                    // would leave the item without it.
                     TextRead::Gone => {
                         eprintln!(
-                            "kbl-tracker: context {entry} on {item} at offset {at} was trimmed; \
-                             not written again"
+                            "kbl-tracker: context {entry} on {item} at offset {at}: \
+                             previous text trimmed; writing current text"
                         );
-                        return Ok(json!({ "kind": kind, "offset": at, "unchanged": true }));
                     }
                     _ => {}
                 }

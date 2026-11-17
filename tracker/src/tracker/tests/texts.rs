@@ -89,7 +89,7 @@ async fn a_text_miss_does_not_hold_the_core_lock_across_the_read() {
 }
 
 #[tokio::test]
-async fn ingest_does_not_write_an_entry_again_when_the_text_to_compare_was_trimmed() {
+async fn ingest_writes_the_current_text_when_the_text_to_compare_was_trimmed() {
     let fake = Fake::default();
     let t = start(&fake).await;
     let at = evicted_issue(&t).await;
@@ -99,8 +99,8 @@ async fn ingest_does_not_write_an_entry_again_when_the_text_to_compare_was_trimm
         .ingest_record(key("ingest-gh"), context("issue", "the body"))
         .await
         .unwrap();
-    assert_eq!(again["unchanged"], true);
-    assert_eq!(fake.log().len(), before);
+    assert_ne!(again["unchanged"], true);
+    assert_eq!(fake.log().len(), before + 1);
 }
 
 #[tokio::test]
