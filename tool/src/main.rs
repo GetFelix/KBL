@@ -5,6 +5,7 @@
 //! ```
 
 mod agents;
+mod backup;
 mod felix;
 mod prices;
 mod run;
@@ -73,7 +74,7 @@ enum Command {
     /// Read the work tracker's log.
     #[command(subcommand)]
     Work(WorkCommand),
-    /// Set up the organization that holds teams.
+    /// Set up the organization that holds teams, and back up its log.
     #[command(subcommand)]
     Org(OrgCommand),
     /// Work with teams.
@@ -91,6 +92,12 @@ enum Command {
 enum OrgCommand {
     /// Create the organization's namespace, streams and grants. Safe to run again.
     Init(teams::InitArgs),
+    /// Write `org.events` to a backup file. See docs/backup-restore.md.
+    Export(backup::ExportArgs),
+    /// Load a backup file into an empty `org.events`.
+    Import(backup::ImportArgs),
+    /// Print the digest of `org.events`, to compare two logs.
+    Digest(backup::DigestArgs),
 }
 
 #[derive(Subcommand)]
@@ -112,6 +119,12 @@ enum WorkCommand {
     /// Fold `work.events` and print what claims cost, in micro-dollars, per
     /// root, reviewer tier and repo.
     Spend,
+    /// Write `work.events` to a backup file. See docs/backup-restore.md.
+    Export(backup::ExportArgs),
+    /// Load a backup file into an empty `work.events`.
+    Import(backup::ImportArgs),
+    /// Fold `work.events` and print the fold's digest, to compare two logs.
+    Digest(backup::DigestArgs),
 }
 
 #[derive(Subcommand)]
@@ -164,6 +177,24 @@ async fn serve() -> Result<()> {
         Command::Run(RunCommand::Log { run }) => log(target, &run).await,
         Command::Work(WorkCommand::Log) => print_stream(target, WORK_EVENTS).await,
         Command::Work(WorkCommand::Spend) => print_spend(target).await,
+        Command::Work(WorkCommand::Export(args)) => {
+            backup::export(backup::Log::Work, target, args).await
+        }
+        Command::Work(WorkCommand::Import(args)) => {
+            backup::import(backup::Log::Work, target, args).await
+        }
+        Command::Work(WorkCommand::Digest(args)) => {
+            backup::digest(backup::Log::Work, target, args).await
+        }
+        Command::Org(OrgCommand::Export(args)) => {
+            backup::export(backup::Log::Org, target, args).await
+        }
+        Command::Org(OrgCommand::Import(args)) => {
+            backup::import(backup::Log::Org, target, args).await
+        }
+        Command::Org(OrgCommand::Digest(args)) => {
+            backup::digest(backup::Log::Org, target, args).await
+        }
         Command::Org(OrgCommand::Init(args)) => teams::org_init(target, args).await,
         Command::Team(TeamCommand::Create(args)) => teams::team_create(target, args).await,
         Command::Prices(PricesCommand::Import(args)) => prices::import(target, args).await,
@@ -244,7 +275,7 @@ fn spend(records: &[(u64, Vec<u8>)]) -> Result<Spend> {
 
 /// Folds `records`. A record of a newer format than this build reads stops it,
 /// since every total after it would be short.
-fn fold_log(records: &[(u64, Vec<u8>)]) -> Result<State> {
+pub(crate) fn fold_log(records: &[(u64, Vec<u8>)]) -> Result<State> {
     let mut state = State::default();
     for (offset, payload) in records {
         match read(payload) {

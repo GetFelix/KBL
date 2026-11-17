@@ -4,13 +4,16 @@
 use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
-    AckMode, Client, ClientConfig, StartPosition, quic_client_config, root_store_from_pem_file,
+    AckMode, Client, ClientConfig, CursorErrorReason, StartPosition, SubscribeCursorError,
+    quic_client_config, root_store_from_pem_file,
 };
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
 /// Where Felix is and who `kbl-tool` is.
 #[derive(Debug, Clone)]
@@ -32,7 +35,10 @@ const ID_TOKEN_AUDIENCE: &str = "kbl";
 /// How long one request to Felix may take.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
-const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
+const PLACEMENT_WAIT: Duration = Duration::from_secs(60);
+/// How long a read or restore waits for a shard to have a leader. A broker
+/// that has just started can take a while to hold its leases.
+const LEADERLESS_WAIT: Duration = Duration::from_secs(120);
 /// The development stack's administrator, who may create runs.
 const ADMIN_SUBJECT: &str = "agents-admin";
 
@@ -232,28 +238,47 @@ impl Broker {
 
     /// Every record on `stream` with its offset, oldest first.
     pub(crate) async fn read_all(&self, stream: &str) -> Result<Vec<(u64, Vec<u8>)>> {
-        let mut payloads = Vec::new();
-        let mut from = 0;
-        loop {
+        Ok(self.read_to_tip(stream).await?.0)
+    }
+
+    /// Every record on `stream`, and the offset after the committed log's end.
+    /// The tip can pass the last record: a Raft shard's blank entries hold no
+    /// record, and a refused conditional publish leaves one.
+    pub(crate) async fn read_to_tip(&self, stream: &str) -> Result<(Vec<(u64, Vec<u8>)>, u64)> {
+        pages_to_tip(stream, |from| async move {
             let page = self
                 .client
                 .read(&self.tenant, &self.namespace, stream, 0, from, None, 0)
-                .await
-                .with_context(|| format!("read {stream} from offset {from}"))?;
-            if page.records.is_empty() {
-                return Ok(payloads);
-            }
-            payloads.extend(
-                page.records
-                    .into_iter()
-                    .map(|r| (r.offset, r.payload.to_vec())),
-            );
-            anyhow::ensure!(
-                page.next_offset > from,
-                "reading {stream} did not advance past offset {from}"
-            );
-            from = page.next_offset;
-        }
+                .await?;
+            let records = page
+                .records
+                .into_iter()
+                .map(|r| (r.offset, r.payload.to_vec()))
+                .collect();
+            Ok((records, page.next_offset))
+        })
+        .await
+    }
+
+    /// Publishes `payload` only if it would land at `expected`.
+    pub(crate) async fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> Result<ConditionalWrite> {
+        placed(|| {
+            self.client.publish_if(
+                &self.tenant,
+                &self.namespace,
+                stream,
+                None,
+                vec![payload.clone()],
+                expected,
+            )
+        })
+        .await
+        .with_context(|| format!("publish to {stream}"))
     }
 
     /// Publishes `payload` and returns the offset the broker gave it.
@@ -274,8 +299,54 @@ impl Broker {
     }
 }
 
+/// Reads pages from offset 0 until an empty one. `read` returns a page's
+/// records and the offset after it. A shard with no leader is waited out, since
+/// a read has no effect to repeat.
+async fn pages_to_tip<F, Fut>(stream: &str, mut read: F) -> Result<(Vec<(u64, Vec<u8>)>, u64)>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: Future<Output = Result<(Vec<(u64, Vec<u8>)>, u64)>>,
+{
+    let mut out = Vec::new();
+    let mut from = 0;
+    loop {
+        let (records, next) = match leaderless(|| read(from)).await {
+            Ok(page) => page,
+            // Felix refuses an offset past its tail: `from` is the tip.
+            Err(e) if past_the_tail(&e) => return Ok((out, from)),
+            Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+        };
+        if records.is_empty() {
+            // A page of blank offsets (refused conditional publishes) holds no
+            // record but still moves the cursor; only a stalled one is the tip.
+            if next > from {
+                from = next;
+                continue;
+            }
+            return Ok((out, from));
+        }
+        out.extend(records);
+        anyhow::ensure!(
+            next > from,
+            "reading {stream} did not advance past offset {from}"
+        );
+        from = next;
+    }
+}
+
+/// What a broker says while its shard has no leader to serve the request.
+const LEADERLESS: [&str; 7] = [
+    "no longer holds a lease",
+    "lease lapsed",
+    "publish not served",
+    "this broker is not serving the shard",
+    "no committed mark yet",
+    "shard is not assigned to any broker",
+    "still opening",
+];
+
 /// What a broker says while a new stream's shard has no owner yet or is still opening.
-const NOT_READY: [&str; 2] = ["not assigned", "still opening"];
+const NOT_READY: [&str; 2] = ["shard is not assigned to any broker", "still opening"];
 
 /// Runs `op`, trying again while the broker says the shard is not ready. The
 /// control plane places a new stream's shard after it answers the create. No
@@ -294,6 +365,62 @@ where
             done => return done,
         }
     }
+}
+
+/// The bounded wait every read and restore step shares: how long is left and
+/// how long to sleep before the next try.
+pub(crate) struct Patience {
+    deadline: Instant,
+    wait: Duration,
+}
+
+impl Patience {
+    pub(crate) fn new() -> Self {
+        Self {
+            deadline: Instant::now() + LEADERLESS_WAIT,
+            wait: Duration::from_millis(250),
+        }
+    }
+
+    /// Sleeps and returns true if `err` is a shard with no leader and the wait
+    /// is not used up; false means the caller should give the error up.
+    pub(crate) async fn again(&mut self, err: &anyhow::Error) -> bool {
+        if Instant::now() >= self.deadline || !is_leaderless(err) {
+            return false;
+        }
+        tokio::time::sleep(self.wait).await;
+        self.wait = (self.wait * 2).min(Duration::from_secs(4));
+        true
+    }
+}
+
+/// Runs `op` again while the broker says the shard has no leader, up to the
+/// bound. Only for calls that are safe to repeat, such as reads.
+pub(crate) async fn leaderless<T, F, Fut>(mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let mut patience = Patience::new();
+    loop {
+        match op().await {
+            Err(err) if patience.again(&err).await => {}
+            done => return done,
+        }
+    }
+}
+
+fn past_the_tail(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<SubscribeCursorError>()
+        .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
+}
+
+/// Whether the broker says the shard has no leader to take the request right
+/// now: a lost lease, a shard that moved, or one not yet open. Nothing else is
+/// transient.
+pub(crate) fn is_leaderless(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}");
+    LEADERLESS.iter().any(|marker| text.contains(marker))
 }
 
 fn is_not_ready(err: &anyhow::Error) -> bool {

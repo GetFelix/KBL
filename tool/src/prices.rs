@@ -35,6 +35,9 @@ pub(crate) struct ImportArgs {
     /// A person's tracker token. Only a person may set a price.
     #[arg(long, env = "KBL_TRACKER_TOKEN", hide_env_values = true)]
     tracker_token: Option<String>,
+    /// The team to set prices in. Needed when the token is in more than one team.
+    #[arg(long, env = "KBL_TEAM")]
+    team: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,7 +271,7 @@ pub(crate) async fn import(target: crate::felix::Target, args: ImportArgs) -> Re
             }
             _ => {
                 let Some(token) = &token else { continue };
-                post(&session, &args.tracker_url, token, p).await?;
+                post(&session, &args.tracker_url, args.team.as_deref(), token, p).await?;
                 wrote += 1;
                 println!("  wrote   {name}: {}", p.price_micros);
             }
@@ -279,8 +282,18 @@ pub(crate) async fn import(target: crate::felix::Target, args: ImportArgs) -> Re
     Ok(())
 }
 
-async fn post(session: &Session, url: &str, token: &str, p: &Planned) -> Result<()> {
-    let url = format!("{}/v1/work/prices", url.trim_end_matches('/'));
+async fn post(
+    session: &Session,
+    url: &str,
+    team: Option<&str>,
+    token: &str,
+    p: &Planned,
+) -> Result<()> {
+    let base = url.trim_end_matches('/');
+    let url = match team {
+        Some(team) => format!("{base}/v1/teams/{team}/work/prices"),
+        None => format!("{base}/v1/work/prices"),
+    };
     let response = session
         .http()
         .post(url)
