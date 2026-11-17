@@ -781,7 +781,7 @@ while an agent holds the item never makes a second holder: the holder keeps
 it until it finishes, releases or lapses, and only then can the assignee claim.
 
 The tracker does not publish an agent's item to a ready lane. When the
-assignee calls `work_next`, the tracker claims its oldest-lane assigned item
+assignee calls `work_next`, the tracker claims its assigned Ready item in the highest-priority lane
 straight from the state, ahead of the lanes, and nobody else is ever handed
 it. A ready record published before the assignment is acked by whichever
 agent polls it and is not published again, so:
@@ -796,10 +796,17 @@ tracker's sweep lapses it when it is not extended; a restarted tracker takes
 it back from the log without polling Felix.
 
 If the assigned agent goes away (it is revoked, or makes no call to the
-tracker for `KBL_ASSIGNEE_AWAY_SECS`, 600 by default), the sweep writes
+tracker to claim, extend or finish work for `KBL_ASSIGNEE_AWAY_SECS`, 600 by
+default, counted from the tracker's start), the sweep writes
 `reassigned` to nobody as the tracker, and the item goes to the whole team.
-The story shows why. A busy agent working another item still calls the
-tracker, so it keeps its assigned items.
+The story shows why. A busy agent working another item still extends it, so
+it keeps its assigned items. A revoke drops the assignee at once only on the
+tracker that served it; a restarted tracker waits out the away time.
+
+Reassigning or clearing an agent while it holds the item leaves its hold in
+place until it finishes, releases or lapses. If the tracker restarts while an
+agent holds an item it no longer is the assignee of, that hold is recovered
+like a lane claim, which may cost it the hold.
 
 #### Review actions and summary marks
 
