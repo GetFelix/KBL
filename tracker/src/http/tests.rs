@@ -13,6 +13,7 @@ use crate::teams::Team;
 
 mod metrics;
 mod org;
+mod traces;
 
 /// A Felix with no records that remembers which streams were published to, and
 /// whose writer lease can be taken away.

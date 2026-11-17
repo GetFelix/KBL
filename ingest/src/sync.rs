@@ -16,6 +16,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{ItemId, Key};
 use kbl_core::work::{Actor, CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord};
 use sha2::{Digest, Sha256};
+use tracing::Instrument as _;
 
 use crate::config::{Mode, Rule};
 use crate::rules::first_match;
@@ -82,7 +83,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     /// issue was transferred or deleted).
     pub(crate) async fn poll(&self, reconcile: bool) -> Result<(), SourceError> {
         let started = std::time::Instant::now();
-        let result = self.poll_once(reconcile).await;
+        // The source is a kind word (`github`, `jira`), as in the metrics.
+        let span = tracing::info_span!(
+            "ingest.poll",
+            source = self.source.name(),
+            reconcile,
+            outcome = tracing::field::Empty,
+        );
+        let result = self.poll_once(reconcile).instrument(span.clone()).await;
+        span.record("outcome", if result.is_ok() { "ok" } else { "failed" });
         crate::metrics::poll_finished(self.source.name(), started.elapsed(), &result);
         result
     }
@@ -180,7 +189,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             self.reconcile(p).await?;
         }
         self.link(p).await?;
-        self.write_back(p).await?;
+        let span = tracing::info_span!("ingest.write_back", source = self.source.name());
+        self.write_back(p).instrument(span).await?;
         self.announce(p).await?;
         // Last, so a crash after the issue is opened leaves it to the next
         // listing, which finds it by its marker.

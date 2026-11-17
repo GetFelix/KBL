@@ -153,6 +153,8 @@ async fn serve() -> Result<()> {
     check_listen(cli.listen, cli.behind_tls_proxy)?;
     // Installed before any team starts, so startup is recorded too.
     let exporter = kbl_metrics::install("kbl-tracker");
+    // Held to the end of `serve`, which flushes the last spans.
+    let _traces = kbl_trace::init("kbl-tracker");
     if let Some(addr) = cli.metrics_listen {
         kbl_metrics::check_listen(addr, cli.metrics_allow_remote, "--metrics-allow-remote")?;
         let bound = kbl_metrics::serve(addr, exporter).await?;

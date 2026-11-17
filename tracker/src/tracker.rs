@@ -29,6 +29,7 @@ use kbl_core::work_fold::{Stage, State};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
+use tracing::Instrument as _;
 
 use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
@@ -773,13 +774,22 @@ impl<B: Broker> Tracker<B> {
         reviews: &[String],
     ) -> Result<Value, Error> {
         let started = Instant::now();
-        let out = self.claim_loop(agent, wait, reviews).await;
+        let span = tracing::info_span!(
+            "tracker.claim",
+            team = %self.0.settings.team,
+            outcome = tracing::field::Empty,
+        );
+        let out = self
+            .claim_loop(agent, wait, reviews)
+            .instrument(span.clone())
+            .await;
         let outcome = match &out {
             Ok(v) if v["claimed"] == true && v["resumed"] == true => "resumed",
             Ok(v) if v["claimed"] == true => "claimed",
             Ok(_) => "empty",
             Err(_) => "error",
         };
+        span.record("outcome", outcome);
         let team = self.0.settings.team.clone();
         metrics::counter!("kbl_tracker_claims_total", "team" => team.clone(), "outcome" => outcome)
             .increment(1);
@@ -2319,6 +2329,12 @@ impl<B: Broker> Tracker<B> {
             price_is_expected(core, &logged, expected)?;
         }
         let absent = edge_absent(&core.state, &logged.record);
+        let apply_span = tracing::info_span!(
+            "tracker.fold.apply",
+            team = %self.0.settings.team,
+            record.kind = logged.record.kind(),
+        )
+        .entered();
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.
         if let Err(why) = core.state.try_apply(guess, &logged) {
@@ -2328,6 +2344,8 @@ impl<B: Broker> Tracker<B> {
                 .unwrap_or_else(|| "invalid".into());
             return Err(Error::Refused { why });
         }
+        // Not held across the write below.
+        drop(apply_span);
         // Conditional on the tail: if another tracker took the lease and wrote,
         // Felix refuses this, whatever this tracker's clock says.
         // A caller that drops this future mid-write (a client that hung up)
@@ -2435,6 +2453,10 @@ impl<B: Broker> Tracker<B> {
         let rebuilt_at = Instant::now();
         let (state, recall, tail) = self
             .read_state()
+            .instrument(tracing::info_span!(
+                "tracker.fold.rebuild",
+                team = %self.0.settings.team
+            ))
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
         let team = self.0.settings.team.clone();
