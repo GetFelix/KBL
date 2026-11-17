@@ -1,0 +1,1 @@
+The replay corpus in `wasm/golden` now has a log for format 9 and for the logs written before reviews, and a test fails if a format or an old log is missing from it. CI fails a pull request that changes a stored fold result there (for example `format_9`) without a changelog fragment naming it.
