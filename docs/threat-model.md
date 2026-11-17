@@ -96,7 +96,10 @@ GitHub's: a filter that matches an issue says only that the issue is in scope,
 never that its text is safe. Ingest writes to Jira only what its rule asks for
 (a comment, a remote link, a workflow transition), only on an issue it
 imported, and only for a pull request in a repository the rule maps issues to
-(`ingest/src/sync.rs#announce`). An issue whose component maps to no repository
+(`ingest/src/sync.rs#announce`). That pull request is the agent's claim: a Jira
+worker does not read pull requests, so only the repository is checked, not that
+the pull request exists or is ours, and the link and comment on the issue say
+what the agent named. An issue whose component maps to no repository
 is imported but stays in Needs you (`ingest/src/sync.rs#park_unmapped`), so no
 agent is handed work with no repository to run in.
 

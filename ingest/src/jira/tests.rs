@@ -579,3 +579,50 @@ async fn the_transport_signs_requests_and_reads_the_retry_wait() {
     );
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[tokio::test]
+async fn a_failed_rule_search_stalls_the_project_and_keeps_its_scopes() {
+    let site = Site::new(|req| {
+        if req.url.contains("/search/jql") {
+            if jql_of(req).contains("labels = agent-ok") {
+                return res(401, Value::Null);
+            }
+            return res(
+                200,
+                json!({ "issues": [raw("FEL-12", |_| {})], "isLast": true }),
+            );
+        }
+        res(200, json!({ "comments": [] }))
+    });
+    let changes = jira(&site).changed(&repos(), &none()).await.unwrap();
+    assert_eq!(changes.denied["acme/FEL"], 401);
+    // No issue is reported without its scopes, and the cursor stays put.
+    assert!(changes.issues.is_empty());
+    assert!(changes.cursors.is_empty());
+}
+
+#[test]
+fn an_unknown_credential_with_no_own_logins_fails_startup() {
+    let site = Site::new(|_| res(403, Value::Null));
+    let mut j = jira(&site);
+    j.own.clear();
+    let err = j.require_own().unwrap_err().to_string();
+    assert!(
+        err.contains("read:me") && err.contains("own_logins"),
+        "{err}"
+    );
+    j.add_own(vec!["KBL".into()]);
+    assert!(j.require_own().is_ok());
+}
+
+#[tokio::test]
+async fn an_issue_link_is_built_from_the_site_and_key_not_the_self_field() {
+    let site = listing(vec![raw("FEL-12", |v| {
+        v["self"] = json!("https://evil.test/rest/api/2/issue/1");
+    })]);
+    let changes = jira(&site).changed(&repos(), &none()).await.unwrap();
+    assert_eq!(
+        changes.issues[0].url,
+        "https://acme.atlassian.net/browse/FEL-12"
+    );
+}

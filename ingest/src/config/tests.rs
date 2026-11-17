@@ -105,3 +105,22 @@ fn a_worker_serves_exactly_one_source_with_one_sign_in() {
         );
     }
 }
+
+#[test]
+fn a_jira_filter_may_not_order_itself() {
+    let parse = |jql: &str| {
+        Config::parse(&format!(
+            r#"{{"tracker":{{"url":"u","token_env":"T"}},"jira":{{"site":"acme","api":"https://a.test","oauth_token_file":"/t"}},
+               "rules":[{{"name":"r","repo":"acme/FEL","jql":{jql:?},"mode":"admit"}}]}}"#
+        ))
+    };
+    for bad in [
+        "labels = x order by created",
+        "labels = x ORDER  BY created DESC",
+    ] {
+        let err = format!("{:#}", parse(bad).unwrap_err());
+        assert!(err.contains("ORDER BY"), "{err}");
+    }
+    assert!(parse(r#"summary ~ "order by" AND labels = x"#).is_ok());
+    assert!(parse("labels = x").is_ok());
+}

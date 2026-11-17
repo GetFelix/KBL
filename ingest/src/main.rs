@@ -194,6 +194,16 @@ async fn jira_source(
         &j.pr_url_base,
     );
     jira.add_own(jira.login().await);
+    jira.require_own()?;
+    if let Some(b) = &j.browse_url {
+        jira.browse_at(b);
+    }
+    if cfg.rules.iter().any(|r| r.transition_on_merge.is_some()) {
+        eprintln!(
+            "kbl-ingest: transition_on_merge is set, but a Jira worker records no pull request \
+             merges; it fires only when a merged pr_status comes from elsewhere"
+        );
+    }
     Ok(jira)
 }
 

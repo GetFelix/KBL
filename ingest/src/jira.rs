@@ -48,6 +48,7 @@ pub(crate) struct Jira<T> {
     own: Vec<String>,
     scopes: Vec<Scope>,
     pr_base: String,
+    browse: String,
     limited_until: Mutex<Option<Instant>>,
 }
 
@@ -67,8 +68,25 @@ impl<T: Transport> Jira<T> {
             own,
             scopes,
             pr_base: pr_base.trim_end_matches('/').to_owned(),
+            browse: api.trim_end_matches('/').to_owned(),
             limited_until: Mutex::new(None),
         }
+    }
+
+    /// The address issue links are built on, when it is not the API's.
+    pub(crate) fn browse_at(&mut self, base: &str) {
+        self.browse = base.trim_end_matches('/').to_owned();
+    }
+
+    /// Fails when nothing says which comments are ours. Without it a retried
+    /// write-back posts its comment again and our own come back as foreign.
+    pub(crate) fn require_own(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.own.is_empty(),
+            "Jira did not say who this credential is (GET /myself failed; an OAuth token needs the \
+             read:me scope) and jira.own_logins is empty; set own_logins or grant the scope"
+        );
+        Ok(())
     }
 
     pub(crate) fn add_own(&mut self, names: Vec<String>) {
@@ -202,10 +220,6 @@ impl<T: Transport> Jira<T> {
                 Some(_) => Closed::Dropped,
             }
         });
-        let site = raw["self"]
-            .as_str()
-            .and_then(|s| s.split_once("/rest/api/").map(|(b, _)| b))
-            .unwrap_or(&self.api);
         Ok(Issue {
             id,
             title: text(&f["summary"]),
@@ -225,7 +239,7 @@ impl<T: Transport> Jira<T> {
                 .collect(),
             kind: f["issuetype"]["name"].as_str().map(str::to_owned),
             author: text(&f["reporter"]["displayName"]),
-            url: format!("{site}/browse/{key}"),
+            url: format!("{}/browse/{key}", self.browse),
             updated_at: text(&f["updated"]),
             priority: f["priority"]["name"].as_str().map(str::to_owned),
             components: names(&f["components"]),
@@ -303,6 +317,7 @@ impl<T: Transport> Source for Jira<T> {
             // Which rules' filters pick each issue is asked of Jira, which
             // alone can evaluate JQL.
             let mut picked: Vec<(&Scope, BTreeSet<String>)> = Vec::new();
+            let mut refused = None;
             for s in self.scopes.iter().filter(|s| &s.repo == repo) {
                 let jql = format!("{base} AND ({}) ORDER BY updated ASC", s.jql);
                 let keys = match self.search(&jql, "summary").await? {
@@ -310,13 +325,22 @@ impl<T: Transport> Source for Jira<T> {
                         .iter()
                         .filter_map(|v| v["key"].as_str().map(str::to_owned))
                         .collect(),
-                    // A bad filter takes this rule's issues out of scope.
+                    // A failed search says nothing about scope, so the project
+                    // stalls with its scopes and cursor as they were.
                     Err(status) => {
-                        changes.denied.insert(repo.clone(), status);
-                        BTreeSet::new()
+                        eprintln!(
+                            "kbl-ingest: Jira answered {status} to the filter of rule {}",
+                            s.name
+                        );
+                        refused = Some(status);
+                        break;
                     }
                 };
                 picked.push((s, keys));
+            }
+            if let Some(status) = refused {
+                changes.denied.insert(repo.clone(), status);
+                continue;
             }
             let mut newest = cursor.issues_since.clone();
             for raw in &listed {

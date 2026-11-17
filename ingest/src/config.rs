@@ -58,6 +58,9 @@ pub(crate) struct JiraConfig {
     /// The site, such as `https://acme.atlassian.net`. With `oauth` it is
     /// `https://api.atlassian.com/ex/jira/<cloud id>`.
     pub(crate) api: String,
+    /// The site's browser address, the base of issue links. Defaults to
+    /// `api`; set it with `oauth`, whose `api` is not a site people open.
+    pub(crate) browse_url: Option<String>,
     /// API token sign-in: the account email and the token.
     pub(crate) email: Option<String>,
     pub(crate) token_env: Option<String>,
@@ -71,6 +74,27 @@ pub(crate) struct JiraConfig {
     /// Where the agents' pull requests live, for the link written back.
     #[serde(default = "default_pr_base")]
     pub(crate) pr_url_base: String,
+}
+
+/// Whether JQL has an ORDER BY outside its quoted strings. Ingest appends
+/// its own, and Jira rejects a search with two.
+fn has_order_by(jql: &str) -> bool {
+    let mut quote = None;
+    let mut out = String::new();
+    for c in jql.chars() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == '"' || c == '\'' => quote = Some(c),
+            None => out.push(c),
+        }
+    }
+    let words: Vec<String> = out
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| !w.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect();
+    words.windows(2).any(|w| w[0] == "order" && w[1] == "by")
 }
 
 fn default_pr_base() -> String {
@@ -262,6 +286,13 @@ impl Config {
                     "rule {:?}: a jira rule needs a jql filter",
                     r.name
                 );
+                if let Some(jql) = &r.jql {
+                    ensure!(
+                        !has_order_by(jql),
+                        "rule {:?}: jql must not have ORDER BY; ingest orders the search itself",
+                        r.name
+                    );
+                }
                 let project = r.repo.strip_prefix(&format!("{}/", j.site));
                 ensure!(
                     project.is_some_and(|p| !p.is_empty() && !p.contains('/')),
