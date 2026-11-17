@@ -2800,7 +2800,7 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
         Error::Refused { why } => why,
         e => panic!("{e}"),
     };
-    let listed = t.ingest_roots().await.unwrap()["prerequisites"].clone();
+    let listed = t.ingest_roots(None).await.unwrap()["prerequisites"].clone();
     assert_eq!(listed, json!([]), "not accepted yet");
     let err = t
         .ingest_record(key("ingest-gh"), attach("GetFelix/felix-gateway#5"))
@@ -2816,7 +2816,7 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
         },
     )
     .await;
-    let listed = t.ingest_roots().await.unwrap()["prerequisites"].clone();
+    let listed = t.ingest_roots(None).await.unwrap()["prerequisites"].clone();
     assert_eq!(
         listed,
         json!([{
@@ -2833,7 +2833,7 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
     t.ingest_record(key("ingest-gh"), attach("GetFelix/felix-gateway#5"))
         .await
         .unwrap();
-    let roots = t.ingest_roots().await.unwrap();
+    let roots = t.ingest_roots(None).await.unwrap();
     assert_eq!(roots["prerequisites"], json!([]));
     assert!(
         roots["roots"]

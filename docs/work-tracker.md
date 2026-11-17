@@ -242,9 +242,23 @@ once only, and tokens are compared in constant time:
 ```json
 {
   "agents": { "<token>": "w1" }, "people": { "<token>": "gabriel" }, "ingest": { "<token>": "ingest-gh" },
+  "ingest_sources": { "ingest-gh": "github" },
   "grants": { "w1": ["github:GetFelix/felix-gateway"] }
 }
 ```
+
+`ingest_sources` is optional. It ties an ingest worker (by the name its token
+maps to) to one source, `github` or `jira`. A tied worker imports and writes
+only for that source's roots, with one exception: the `github` worker may
+record the state of a pull request on a root from any source, since agents
+open their requests on GitHub whatever tracker the issue is in. A worker with
+no entry is not tied and reaches every root, which is only appropriate when
+one worker runs, so the tracker refuses to start when some workers are tied
+and another is not. A tied worker other than `github` lists only its own
+source's roots. Tie each worker when a Jira worker and a GitHub worker run
+together. The tracker refuses a key it does not know in this file, so a
+misspelling fails at startup. A tracker from before `ingest_sources` ignores
+it, so downgrading removes the ties.
 
 `grants` is optional. It lists, per agent, the repositories it may file a
 [prerequisite](#prerequisites-in-another-repo) in or link to, beyond the
@@ -1788,10 +1802,13 @@ GitHub one has `github`. A rule's `repo` is `<site>/<PROJECT>`, and its
   issue through the named workflow transition (`transition_on_pr`, and
   `transition_on_merge` once the item's pull request is recorded as merged).
   A transition the workflow does not offer from the issue's status is
-  skipped. Each step is done once per pull request. A Jira worker records no
-  pull request merges, so `transition_on_merge` fires only when a merged
-  `pr_status` comes from elsewhere, and the worker warns at startup when a
-  rule sets it ([#298](https://github.com/GetFelix/KBL/issues/298)).
+  skipped. Each step is done once per pull request. A Jira worker reads no
+  pull requests and holds no GitHub credential. The GitHub worker records the
+  state of an agent's request on a Jira root, so `transition_on_merge` needs
+  a GitHub worker running beside it with a rule for the repository the
+  request is in. That worker writes the request's `pr_status` on the root (the
+  tracker then opens the request's review items, as for any root) and nothing
+  else; the Jira worker alone moves the issue and the root.
 - **Limits.** A 429, or a 503 with `Retry-After`, makes the worker wait that
   long (30 s when none is named, at most an hour) before any further request.
   Re-polling and a lost cursor never import an issue twice.

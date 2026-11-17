@@ -120,7 +120,10 @@ fn listing(issues: Vec<Value>) -> Site {
         if req.url.ends_with("/transitions") && req.method == "GET" {
             return res(
                 200,
-                json!({ "transitions": [{ "id": "21", "name": "In Review", "to": { "name": "In Review" } }] }),
+                json!({ "transitions": [
+                    { "id": "21", "name": "In Review", "to": { "name": "In Review" } },
+                    { "id": "31", "name": "Done", "to": { "name": "Done" } }
+                ] }),
             );
         }
         if req.method == "GET" {
@@ -625,4 +628,142 @@ async fn an_issue_link_is_built_from_the_site_and_key_not_the_self_field() {
         changes.issues[0].url,
         "https://acme.atlassian.net/browse/FEL-12"
     );
+}
+
+/// A Jira root whose agent reported `pr`, and the GitHub worker that can see
+/// a merged pull request on `head`.
+struct Cross {
+    site: Site,
+    tracker: Fake,
+    jira: Ingest<Jira<Site>, Fake>,
+    github: Ingest<crate::github::Github<crate::testing::Script>, Fake>,
+    item: kbl_core::names::ItemId,
+}
+
+async fn cross(pr: &str, head: impl FnOnce(&kbl_core::names::ItemId) -> String) -> Cross {
+    use crate::github::Github;
+    use crate::testing::{Script, ok};
+    use kbl_core::work::WorkRecord;
+
+    let site = listing(vec![raw("FEL-12", |_| {})]);
+    let tracker = Fake::default();
+    let rule = json!({ "transition_on_merge": "Done", "transition_on_pr": null });
+    let jira = engine(&site, &tracker, rule);
+    jira.poll(false).await.unwrap();
+    let item = tracker.item_of("acme/FEL#12");
+    tracker.agent(
+        "w1",
+        WorkRecord::Claimed {
+            item: item.clone(),
+            attempt: 1,
+            deadline_ms: 90_000,
+        },
+    );
+    tracker.agent(
+        "w1",
+        WorkRecord::Progress {
+            item: item.clone(),
+            attempt: 1,
+            note: kbl_core::content::Content::Text("fixing".into()),
+            branch: None,
+            pr: Some(pr.into()),
+        },
+    );
+    let gh = Script::default();
+    gh.on("GET", "/repos/GetFelix/felix/issues?", ok(json!([])));
+    gh.on("GET", "/issues/comments?", ok(json!([])));
+    let mut pull = crate::testing::fixture("pull");
+    pull["head"] = json!({ "sha": "abc123", "ref": head(&item) });
+    pull["base"] = json!({ "ref": "main", "repo": { "default_branch": "main" } });
+    pull["state"] = json!("closed");
+    pull["merged"] = json!(true);
+    pull["merged_by"] = json!({ "login": "gabriel" });
+    pull["created_at"] = json!("2027-01-15T09:00:00Z");
+    pull["requested_reviewers"] = json!([]);
+    pull["requested_teams"] = json!([]);
+    gh.on("GET", "/pulls/2210", ok(pull));
+    gh.on("GET", "/pulls/2210/reviews", ok(json!([])));
+    gh.on(
+        "GET",
+        "/status?",
+        ok(json!({ "total_count": 0, "statuses": [] })),
+    );
+    gh.on(
+        "GET",
+        "/check-runs",
+        ok(json!({ "total_count": 0, "check_runs": [] })),
+    );
+    let cfg = Config::parse(
+        &json!({
+            "tracker": { "url": "http://t", "token_env": "T" },
+            "github": { "token_env": "G" },
+            "rules": [{
+                "name": "agent-ok", "repo": "GetFelix/felix", "labels_all": ["agent-ok"],
+                "mode": "admit"
+            }],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let repos = cfg.repos();
+    let github = Ingest::new(
+        Github::new("https://api.github.com", gh, vec!["KBL[bot]".into()]),
+        tracker.clone(),
+        Settings {
+            rules: cfg.rules,
+            repos,
+            reconcile_every: 1000,
+            release_compares: 5,
+        },
+    );
+    Cross {
+        site,
+        tracker,
+        jira,
+        github,
+        item,
+    }
+}
+
+fn transitions(site: &Site) -> usize {
+    site.writes()
+        .iter()
+        .filter(|w| w.0.ends_with("/transitions"))
+        .count()
+}
+
+/// The GitHub worker records the merge of a Jira root's pull request, and the
+/// Jira worker then moves the issue on, with no GitHub credential of its own.
+#[tokio::test]
+async fn a_merge_the_github_worker_records_fires_transition_on_merge() {
+    let c = cross("GetFelix/felix#2210", kbl_core::work::pr_branch).await;
+    // Nothing is merged yet, so a Jira poll moves nothing.
+    c.jira.poll(false).await.unwrap();
+    assert_eq!(transitions(&c.site), 0);
+    let before = c.tracker.kinds().len();
+    c.github.poll(false).await.unwrap();
+    // The GitHub worker wrote the request's state on the Jira root, and
+    // nothing else: it did not close the root or touch its context.
+    assert_eq!(c.tracker.kinds()[before..], ["pr_status"]);
+    assert_eq!(c.tracker.state().items[&c.item].closed, None);
+    c.jira.poll(false).await.unwrap();
+    assert_eq!(transitions(&c.site), 1);
+    // Once per request.
+    c.jira.poll(false).await.unwrap();
+    assert_eq!(transitions(&c.site), 1);
+}
+
+/// The request is the agent's word, so the GitHub worker records a Jira root's
+/// only for a repo its own rules name and a branch the tracker derived.
+#[tokio::test]
+async fn the_github_worker_ignores_a_jira_roots_request_it_cannot_tie_to_the_item() {
+    let elsewhere = cross("Evil/repo#2210", kbl_core::work::pr_branch).await;
+    let wrong_branch = cross("GetFelix/felix#2210", |_| "somebody/else".to_owned()).await;
+    for c in [elsewhere, wrong_branch] {
+        let before = c.tracker.kinds().len();
+        c.github.poll(false).await.unwrap();
+        c.jira.poll(false).await.unwrap();
+        assert_eq!(c.tracker.kinds().len(), before);
+        assert_eq!(transitions(&c.site), 0);
+    }
 }

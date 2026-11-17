@@ -1838,9 +1838,168 @@ async fn ingest_writes_upstream_records_as_the_tracker_under_its_own_name() {
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].by, key("ingest-gh"));
     assert_eq!(log[0].actor, Actor::Tracker);
-    let roots = t.ingest_roots().await.unwrap();
+    let roots = t.ingest_roots(None).await.unwrap();
     assert_eq!(roots["roots"][0]["upstream_id"], "GetFelix/felix#1");
     assert_eq!(roots["roots"][0]["closed"], false);
+}
+
+/// A Jira root with an agent's pull request, and a GitHub root beside it.
+async fn jira_and_github_roots(t: &Tracker<Fake>, pr: &str) {
+    let person = |r| t.person_record(key("gab"), r);
+    for (id, source, up) in [
+        ("j1", "jira", "FEL-1"),
+        ("g1", "github", "GetFelix/felix#1"),
+    ] {
+        person(WorkRecord::Imported {
+            item: item(id),
+            source: source.into(),
+            upstream_id: up.into(),
+            title: format!("fix {id}"),
+        })
+        .await
+        .unwrap();
+    }
+    person(WorkRecord::Accepted {
+        item: item("j1"),
+        tier: Some(2),
+    })
+    .await
+    .unwrap();
+    claim(t, "w1").await;
+    let j1 = item("j1");
+    let by = agent("w1");
+    t.progress(
+        &by,
+        &j1,
+        Content::Text("fixed".into()),
+        None,
+        Some(pr.into()),
+    )
+    .await
+    .unwrap();
+    t.complete(&by, &j1, None, Vec::new()).await.unwrap();
+}
+
+fn pr_state(id: &str, pr: &str, phase: kbl_core::work::PrPhase) -> WorkRecord {
+    use kbl_core::work::{PrChecks, PrReview, PrSnapshot};
+    WorkRecord::PrStatus {
+        item: item(id),
+        status: PrSnapshot {
+            pr: pr.into(),
+            phase,
+            review: PrReview::Unreviewed,
+            checks: PrChecks::Green,
+            failing: None,
+        },
+    }
+}
+
+#[tokio::test]
+async fn a_source_tied_worker_acts_only_on_its_own_roots_but_the_github_worker_records_pr_state() {
+    use kbl_core::work::PrPhase;
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let pr = "GetFelix/felix#9";
+    jira_and_github_roots(&t, pr).await;
+    let as_worker = |source: &'static str, r| {
+        let t = &t;
+        async move { t.ingest_record_in(key("ingest"), Some(source), r).await }
+    };
+    let refusal = |r: Result<Value, Error>| match r {
+        Err(Error::Refused { why }) => why,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+    // The GitHub worker may record the request's state on the Jira root ...
+    as_worker("github", pr_state("j1", pr, PrPhase::Open))
+        .await
+        .unwrap();
+    as_worker("github", pr_state("j1", pr, PrPhase::Merged))
+        .await
+        .unwrap();
+    // ... and nothing else on it.
+    let on_jira = [
+        WorkRecord::Closed {
+            item: item("j1"),
+            why: kbl_core::work::CloseWhy::Merged,
+        },
+        WorkRecord::Context {
+            item: item("j1"),
+            entry: key("issue"),
+            text: Content::Text("x".into()),
+        },
+        WorkRecord::Updated {
+            item: item("j1"),
+            title: Some("t".into()),
+        },
+        WorkRecord::LeftScope { item: item("j1") },
+        WorkRecord::Linked {
+            item: item("g1"),
+            to: item("j1"),
+        },
+    ];
+    let before = fake.log().len();
+    for r in on_jira {
+        assert_eq!(refusal(as_worker("github", r).await), "not_imported");
+    }
+    assert_eq!(fake.log().len(), before);
+    // The Jira worker reaches its own root and not the GitHub one, and may not
+    // write a request's state anywhere else's.
+    as_worker(
+        "jira",
+        WorkRecord::Context {
+            item: item("j1"),
+            entry: key("issue"),
+            text: Content::Text("from jira".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        refusal(as_worker("jira", pr_state("g1", pr, PrPhase::Merged)).await),
+        "not_imported"
+    );
+    // A worker tied to no source keeps reaching every root.
+    let free = t
+        .ingest_record_in(
+            key("ingest"),
+            None,
+            WorkRecord::Context {
+                item: item("j1"),
+                entry: key("intake"),
+                text: Content::Text("unscoped".into()),
+            },
+        )
+        .await;
+    free.unwrap();
+}
+
+#[tokio::test]
+async fn a_tied_worker_lists_only_its_sources_roots_but_the_github_worker_lists_all() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    jira_and_github_roots(&t, "GetFelix/felix#9").await;
+    let sources = |v: Value| {
+        let mut s: Vec<String> = v["roots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["source"].as_str().unwrap().to_owned())
+            .collect();
+        s.sort();
+        s
+    };
+    assert_eq!(
+        sources(t.ingest_roots(Some("jira")).await.unwrap()),
+        ["jira"]
+    );
+    assert_eq!(
+        sources(t.ingest_roots(Some("github")).await.unwrap()),
+        ["github", "jira"]
+    );
+    assert_eq!(
+        sources(t.ingest_roots(None).await.unwrap()),
+        ["github", "jira"]
+    );
 }
 
 #[tokio::test]
