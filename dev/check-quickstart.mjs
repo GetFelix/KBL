@@ -2,11 +2,14 @@
 // the dashboard serves its page and every script and wasm file the page loads,
 // and forwards /v1, then the README's own commands run as written: they add an
 // item as a person and write an .mcp.json, and kbl-mcp started from that file
-// claims the item.
+// claims the item. The optional ingest step runs against a stand-in GitHub,
+// since CI has no real repository or token.
 //
-//   KBL_QUICKSTART=1 dev/up.sh && cargo build --release -p kbl-mcp && node dev/check-quickstart.mjs
-import { execFileSync } from "node:child_process";
+//   KBL_QUICKSTART=1 dev/up.sh && cargo build --release -p kbl-mcp -p kbl-ingest && node dev/check-quickstart.mjs
+import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
 import { readFileSync, statSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { agent, check, giveUpAfter, killAll } from "./lib/stack.mjs";
 
@@ -88,6 +91,46 @@ try {
   const reply = await who.tool("work_next", { wait_seconds: 10 });
   check(reply.claimed && reply.item.id === item, "kbl-mcp from the generated config claimed the item");
   await who.tool("work_complete", { item });
+
+  // README step 4: ingest, with the check first, against a stand-in GitHub.
+  const ghRepo = `check/quickstart-${Date.now().toString(36)}`;
+  const issue = JSON.parse(readFileSync(new URL("../ingest/fixtures/issue.json", import.meta.url), "utf8"));
+  issue.url = `https://api.github.com/repos/${ghRepo}/issues/812`;
+  issue.repository_url = `https://api.github.com/repos/${ghRepo}`;
+  const github = createServer((req, res) => {
+    const path = new URL(req.url, "http://gh").pathname;
+    const empty = path.endsWith("/comments") || path.endsWith("/blocked_by") || path.endsWith("/sub_issues");
+    const body = req.method !== "GET" ? null : path === "/user" ? { login: "octocat" } : path === `/repos/${ghRepo}` ? { permissions: { pull: true } } : path === `/repos/${ghRepo}/issues` ? [issue] : path.endsWith("/issues/812") ? issue : empty ? [] : null;
+    res.writeHead(body ? 200 : 404, { "content-type": "application/json" });
+    res.end(JSON.stringify(body ?? { message: "Not Found" }));
+  });
+  await new Promise((resolve) => github.listen(0, "127.0.0.1", resolve));
+  const ingest = (extra) =>
+    new Promise((resolve) => {
+      const child = spawn("node", ["dev/ingest.mjs", "--repo", ghRepo, "--github-api", `http://127.0.0.1:${github.address().port}`, ...extra], {
+        cwd: repo,
+        env: { ...process.env, GITHUB_TOKEN: "unused" },
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+      child.on("exit", resolve);
+    });
+  check((await ingest(["--check-only"])) === 0, "kbl-ingest check passes against the quick start tracker");
+  check((await ingest(["--once"])) === 0, "kbl-ingest imports once into the quick start tracker");
+  // Async so the stand-in GitHub on this event loop keeps answering.
+  const after = JSON.parse(
+    await new Promise((resolve, reject) => {
+      const child = spawn(join(repo, "target/release/kbl-ingest"), ["check", "--config", join(repo, "dev/state/ingest.json"), "--json"], {
+        env: { ...process.env, GITHUB_TOKEN: "unused", KBL_INGEST_TOKEN: Object.keys(tokens.ingest)[0] },
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.on("error", reject);
+      child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`kbl-ingest check exited ${code}`))));
+    }),
+  );
+  check(after.rules[0].already_imported === 1, "the issue is a root in the tracker");
+  github.close();
 } finally {
   rmSync(fileURLToPath(new URL("../.mcp.json", import.meta.url)), { force: true });
   killAll();
