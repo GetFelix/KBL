@@ -1089,3 +1089,26 @@ async fn an_org_retake_adopted_a_round_late_reads_what_another_wrote() {
         Ok((Applied::Unchanged, None))
     ));
 }
+
+#[tokio::test]
+async fn a_person_lists_the_teams_agents_to_assign_without_the_revoked() {
+    let o = org_app().await;
+    for name in ["w2", "w3"] {
+        assert_eq!(
+            add_agent(&o.app, Some("tok-ops"), "default", name).await.0,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        revoke_agent(&o.app, Some("tok-ops"), "default", "w3")
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let (status, body) = get_json(&o.app, "/v1/teams/default/work/agents", Some("tok-ops")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["agents"], json!(["w1", "w2"]));
+    // A person's call: an agent token does not read it.
+    let (status, _) = get_json(&o.app, "/v1/teams/default/work/agents", Some("tok-w1")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

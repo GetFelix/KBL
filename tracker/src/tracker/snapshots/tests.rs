@@ -353,7 +353,7 @@ async fn assert_files_are_folds(t: &Tracker<Fake>, fake: &Fake, dir: &Path) -> u
             state.apply(*o, rec);
             let created = absent && !edge_absent(&state, &rec.record);
             let rejected = state.rejections.last().is_some_and(|r| r.offset == *o);
-            recall.remember(*o, rec, &t.0.me, created, rejected);
+            recall.remember(*o, rec, &state, &t.0.me, created, rejected);
         }
         assert_eq!(
             serde_json::to_string(&body.seed).unwrap(),

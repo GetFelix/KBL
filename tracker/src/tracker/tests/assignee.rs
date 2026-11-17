@@ -283,3 +283,90 @@ async fn an_agent_that_calls_during_the_sweep_keeps_its_assignment() {
         .count();
     assert_eq!(kept, 1);
 }
+
+/// Every ready record's handout count, across the lanes.
+fn handouts(fake: &Fake) -> Vec<Vec<(u64, u32)>> {
+    (0..LANES).map(|t| fake.tries(&ready_stream(t))).collect()
+}
+
+#[tokio::test]
+async fn a_restart_keeps_a_direct_claim_reassigned_while_held_and_spends_no_handout() {
+    let fake = Fake::default();
+    let first = at_13(&fake).await;
+    seed(&first, "b1", 2).await;
+    seed(&first, "a1", 2).await;
+    assign(&first, "a1", Some("w1")).await;
+    assert_eq!(
+        claimed_id(&claim(&first, "w1").await).as_deref(),
+        Some("a1")
+    );
+    assign(&first, "a1", Some("w2")).await;
+    drop(first);
+    let before = handouts(&fake);
+    let second = start(&fake).await;
+    // The boot sweep left w1's hold alone, and nothing was polled for it.
+    assert!(!fake.kinds().contains(&"released".to_owned()));
+    assert_eq!(handouts(&fake), before);
+    assert_eq!(count(&fake, "nack"), 0);
+    assert_eq!(holder(&second).await.as_deref(), Some("w1"));
+    // The new assignee waits for the holder.
+    assert_eq!(
+        claimed_id(&claim(&second, "w2").await).as_deref(),
+        Some("b1")
+    );
+    second
+        .complete(&agent("w2"), &item("b1"), None, Vec::new())
+        .await
+        .unwrap();
+    assert!(second.extend(&agent("w1"), &item("a1")).await.is_ok());
+    second
+        .release(&agent("w1"), &item("a1"), None, None, Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        claimed_id(&claim(&second, "w2").await).as_deref(),
+        Some("a1")
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reassigned_direct_claim_lapses_one_visibility_after_a_restart() {
+    let fake = Fake::default();
+    let first = at_13(&fake).await;
+    seed(&first, "b1", 2).await;
+    seed(&first, "a1", 2).await;
+    assign(&first, "a1", Some("w1")).await;
+    claim(&first, "w1").await;
+    assign(&first, "a1", Some("w2")).await;
+    drop(first);
+    let second = start(&fake).await;
+    pass(&second, VIS - Duration::from_secs(5)).await;
+    second.sweep().await;
+    assert_eq!(holder(&second).await.as_deref(), Some("w1"));
+    // w1 stopped calling: the hold ends, and the item goes to w2.
+    pass(&second, Duration::from_secs(10)).await;
+    second.sweep().await;
+    assert_eq!(holder(&second).await, None);
+    assert_eq!(
+        claimed_id(&claim(&second, "w2").await).as_deref(),
+        Some("a1")
+    );
+}
+
+#[tokio::test]
+async fn a_lane_claim_assigned_to_its_holder_is_recovered_from_felix() {
+    let fake = Fake::default();
+    let first = at_13(&fake).await;
+    seed(&first, "a1", 2).await;
+    assert_eq!(
+        claimed_id(&claim(&first, "w1").await).as_deref(),
+        Some("a1")
+    );
+    assign(&first, "a1", Some("w1")).await;
+    drop(first);
+    let second = start(&fake).await;
+    // Its record stands in Felix, so the restart takes back that delivery.
+    let core = second.0.core.lock().await;
+    let owner = core.owner.get(&item("a1")).expect("recovered");
+    assert!(!owner.direct);
+}
