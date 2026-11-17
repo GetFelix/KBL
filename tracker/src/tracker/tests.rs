@@ -2241,6 +2241,7 @@ mod request_keys;
 mod retry;
 mod review;
 mod review_limit;
+mod sweep;
 mod texts;
 
 #[tokio::test(start_paused = true)]

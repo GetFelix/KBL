@@ -58,6 +58,10 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
+      # A bounded run of the seeded fault sweeps; docs/fault-sweep.md.
+      - run: cargo test --locked -p kbl-tracker -p kbl-ingest sweep
+        env:
+          KBL_SWEEP_SEEDS: 400
 
   dashboard:
     name: dashboard build (wasm, tsc, tests)
