@@ -253,12 +253,32 @@ pub(super) struct Store {
 fn gate_for(dir: &Path) -> Arc<Mutex<u64>> {
     static GATES: Mutex<Vec<(PathBuf, Arc<Mutex<u64>>)>> = Mutex::new(Vec::new());
     let mut gates = GATES.lock().unwrap_or_else(PoisonError::into_inner);
+    let dir = &canonical(dir);
     if let Some((_, g)) = gates.iter().find(|(d, _)| d == dir) {
         return g.clone();
     }
     let g = Arc::new(Mutex::new(0));
     gates.push((dir.to_owned(), g.clone()));
     g
+}
+
+/// The folder's path with symlinks and `..` resolved as far as it exists, so
+/// two spellings of one folder share a gate. The folder may not exist yet.
+fn canonical(dir: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = dir;
+    loop {
+        if let Ok(real) = fs::canonicalize(at) {
+            return rest.iter().rev().fold(real, |p, part| p.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = parent;
+            }
+            _ => return dir.to_owned(),
+        }
+    }
 }
 
 impl Store {
@@ -400,8 +420,9 @@ impl Store {
     /// always keeping `fresh`. After retention trims the log, old files carry
     /// higher record counts than new ones and can never validate again. A file
     /// the log merely does not reach yet is kept, and so is one that could not
-    /// be read: those only count against the limit. Without a log (a running
-    /// tracker's save, whose log only grows) only the count applies.
+    /// be read: those only count against the limit, after the verified ones.
+    /// Without a log (a running tracker's save, whose log only grows) only the
+    /// count applies.
     /// The caller holds the gate.
     fn prune(&self, fresh: &Path, log: Option<&[(u64, WorkLogged)]>) {
         for path in self.files() {
@@ -414,9 +435,20 @@ impl Store {
                 let _ = fs::remove_file(path);
             }
         }
-        let files = self.files();
-        let excess = files.len().saturating_sub(KEEP);
-        for old in files.iter().filter(|f| f.as_path() != fresh).take(excess) {
+        // Verified files outrank the rest: a file ahead of a short log, or one
+        // that could not be read, must not push a checked file out.
+        let verified = |p: &Path| match log {
+            Some(log) => read_lineage(p).is_some_and(|l| l.within(log)),
+            None => true,
+        };
+        let mut ranked: Vec<_> = self
+            .files()
+            .into_iter()
+            .filter(|f| f.as_path() != fresh)
+            .map(|f| (verified(&f), f))
+            .collect();
+        ranked.sort_by(|a, b| b.cmp(a));
+        for (_, old) in ranked.iter().skip(KEEP.saturating_sub(1)) {
             let _ = fs::remove_file(old);
         }
         self.clear_temps();

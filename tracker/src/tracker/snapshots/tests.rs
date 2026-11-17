@@ -574,3 +574,116 @@ async fn a_briefly_short_log_does_not_prune_files_it_has_not_reached() {
         assert!(f.exists(), "{f:?} is of the same log and must stay");
     }
 }
+
+/// Writes a file for the first `upto` records of `log`, named `name_count`.
+fn put(dir: &Path, log: &[(u64, WorkLogged)], upto: usize, name_count: u64) {
+    let part = &log[..upto];
+    let state = kbl_core::work_fold::fold_to(part, u64::MAX);
+    let saved = Saved::capture(part, None, &state).unwrap();
+    let name = format!("{PREFIX}{name_count:020}{SUFFIX}");
+    let body = encode(&saved, &Seed::of(&Recall::default()));
+    fs::write(dir.join("default").join(name), body).unwrap();
+}
+
+fn names(dir: &Path) -> Vec<String> {
+    files(dir)
+        .iter()
+        .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn stale_files_ahead_of_a_trimmed_log_do_not_push_out_valid_ones() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let full = entries(&fake).await;
+    for f in files(&dir) {
+        fs::remove_file(f).unwrap();
+    }
+    // Retention drops the head; the old files are all ahead of what is left.
+    let log = full[3..].to_vec();
+    for n in [1000, 1100, 1200] {
+        put(&dir, &full, full.len(), n);
+    }
+    put(&dir, &log, 1, 1);
+    put(&dir, &log, 2, 2);
+    let store = store(&dir);
+    let state = kbl_core::work_fold::fold_to(&log, u64::MAX);
+    let saved = Saved::capture(&log, None, &state).unwrap();
+    store.write(
+        store.begin_generation(),
+        &saved,
+        &Seed::of(&Recall::default()),
+        Some(&log),
+    );
+    let left = names(&dir);
+    for n in [1, 2, log.len() as u64] {
+        let want = format!("{PREFIX}{n:020}{SUFFIX}");
+        assert!(left.contains(&want), "{want} is valid and kept: {left:?}");
+    }
+    assert_eq!(left.len(), 3, "{left:?}");
+}
+
+#[tokio::test]
+async fn a_stale_file_ahead_of_a_trimmed_log_is_pruned_by_its_last_offset() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let full = entries(&fake).await;
+    for f in files(&dir) {
+        fs::remove_file(f).unwrap();
+    }
+    let log = full[3..].to_vec();
+    put(&dir, &full, full.len(), 1000);
+    let store = store(&dir);
+    let state = kbl_core::work_fold::fold_to(&log, u64::MAX);
+    let saved = Saved::capture(&log, None, &state).unwrap();
+    store.write(
+        store.begin_generation(),
+        &saved,
+        &Seed::of(&Recall::default()),
+        Some(&log),
+    );
+    assert_eq!(files(&dir).len(), 1, "{:?}", names(&dir));
+}
+
+#[tokio::test]
+async fn files_a_short_log_has_not_reached_rank_behind_verified_ones() {
+    let dir = scratch();
+    let (fake, _) = logged(&dir).await;
+    let full = entries(&fake).await;
+    for f in files(&dir) {
+        fs::remove_file(f).unwrap();
+    }
+    for n in [1000, 1100, 1200] {
+        put(&dir, &full, full.len(), n);
+    }
+    let short = &full[..full.len() - 1];
+    put(&dir, short, 2, 2);
+    put(&dir, short, 3, 3);
+    let store = store(&dir);
+    let state = kbl_core::work_fold::fold_to(short, u64::MAX);
+    let saved = Saved::capture(short, None, &state).unwrap();
+    store.write(
+        store.begin_generation(),
+        &saved,
+        &Seed::of(&Recall::default()),
+        Some(short),
+    );
+    let left = names(&dir);
+    for n in [2, 3, short.len() as u64] {
+        let want = format!("{PREFIX}{n:020}{SUFFIX}");
+        assert!(left.contains(&want), "{want} is verified and kept: {left:?}");
+    }
+}
+
+#[tokio::test]
+async fn two_spellings_of_one_folder_share_a_gate() {
+    let dir = scratch();
+    fs::create_dir_all(dir.join("sub")).unwrap();
+    let plain = Store::new(&with_dir(&dir, 2)).unwrap();
+    let roundabout = Store::new(&with_dir(&dir.join("sub").join(".."), 2)).unwrap();
+    assert!(Arc::ptr_eq(&plain.gate, &roundabout.gate));
+    let old = plain.begin_generation();
+    roundabout.begin_generation();
+    assert!(old < *plain.gate.lock().unwrap());
+}

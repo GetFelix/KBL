@@ -254,6 +254,8 @@ impl Saved {
 pub struct Lineage {
     /// `(records, chain)` oldest first, ending at the snapshot itself.
     points: Vec<(u64, String)>,
+    /// Offset of the last record the snapshot folded in.
+    through: u64,
 }
 
 #[derive(Deserialize)]
@@ -264,6 +266,7 @@ struct LineageFile {
 
 #[derive(Deserialize)]
 struct LineageHead {
+    through: u64,
     records: u64,
     chain: String,
 }
@@ -272,15 +275,24 @@ impl From<LineageFile> for Lineage {
     fn from(f: LineageFile) -> Self {
         let mut points: Vec<_> = f.links.into_iter().map(|l| (l.records, l.chain)).collect();
         points.push((f.snapshot.records, f.snapshot.chain));
-        Self { points }
+        Self {
+            points,
+            through: f.snapshot.through,
+        }
     }
 }
 
 impl Lineage {
     /// Whether `log` contradicts this snapshot: a point it covers whose chain
     /// differs from the log's. After retention trims the head of the log, every
-    /// older file does. A snapshot ahead of `log` is not contradicted, since
-    /// the log may be short for a while, and neither is one that matches.
+    /// older file does.
+    ///
+    /// A snapshot with more records than `log` may only be a short read of
+    /// the same log, which the log will outgrow. The two are told apart by
+    /// offsets: offsets ascend, so a short prefix ends before the snapshot's
+    /// last offset, and a log that already holds an offset at or past it with
+    /// fewer records has lost its head. That holds even when no chain point of
+    /// the snapshot falls inside the log.
     pub fn diverges_from(&self, log: &[(u64, WorkLogged)]) -> bool {
         let (mut chain, mut done) = (String::new(), 0usize);
         for (records, want) in &self.points {
@@ -288,7 +300,7 @@ impl Lineage {
                 return false;
             };
             if to > log.len() {
-                return false;
+                return log.last().is_some_and(|(o, _)| *o >= self.through);
             }
             if to <= done {
                 return true;
@@ -300,6 +312,15 @@ impl Lineage {
             }
         }
         false
+    }
+
+    /// Whether every point of this snapshot lies inside `log`. Together with
+    /// [`Lineage::diverges_from`] returning false, that means `log` has been
+    /// checked against all of it.
+    pub fn within(&self, log: &[(u64, WorkLogged)]) -> bool {
+        self.points
+            .last()
+            .is_some_and(|(r, _)| usize::try_from(*r).is_ok_and(|r| r <= log.len()))
     }
 }
 
