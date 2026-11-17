@@ -20,7 +20,9 @@ use crate::work_fold::{Item, Path, State};
 mod tests;
 
 /// The fields of a record the story reads, kept by offset. The fold keeps only
-/// the offsets, and a page has no log to read the rest from.
+/// the offsets, and a page has no log to read the rest from. A holder keeps one
+/// per accepted decision, step, edit and note, so its size is bounded by those
+/// records' own text (a hunk or command at most as large as the record).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Kept {
     Decision(Box<KeptDecision>),
@@ -271,18 +273,20 @@ pub fn story<'a>(
     let mut flags = Vec::new();
     let mut lines: BTreeMap<u64, (Phase, DecisionLine)> = BTreeMap::new();
     for p in &it.paths {
-        let edits: Vec<(u64, &str, &Content, u64)> = p
-            .edits
-            .iter()
-            .filter_map(|&o| match kept(o)? {
-                Kept::Edit {
-                    file,
-                    hunk,
-                    decision,
-                } => Some((o, file.as_str(), hunk, *decision)),
-                _ => None,
-            })
-            .collect();
+        let mut edits: BTreeMap<u64, Vec<(u64, &str, &Content)>> = BTreeMap::new();
+        for &o in &p.edits {
+            if let Some(Kept::Edit {
+                file,
+                hunk,
+                decision,
+            }) = kept(o)
+            {
+                edits
+                    .entry(*decision)
+                    .or_default()
+                    .push((o, file.as_str(), hunk));
+            }
+        }
         for &o in &p.decisions {
             let Some(Kept::Decision(d)) = kept(o) else {
                 continue;
@@ -345,7 +349,7 @@ fn decision_line<'a>(
     offset: u64,
     d: &KeptDecision,
     path: &Path,
-    edits: &[(u64, &str, &Content, u64)],
+    edits: &BTreeMap<u64, Vec<(u64, &str, &Content)>>,
     kept: &impl Fn(u64) -> Option<&'a Kept>,
 ) -> DecisionLine {
     DecisionLine {
@@ -373,9 +377,10 @@ fn decision_line<'a>(
         revert_check: d.revert_check.clone(),
         proven: path.proven.contains(&offset),
         edits: edits
-            .iter()
-            .filter(|e| e.3 == offset)
-            .map(|&(o, file, hunk, _)| EditLine {
+            .get(&offset)
+            .into_iter()
+            .flatten()
+            .map(|&(o, file, hunk)| EditLine {
                 offset: o,
                 file: file.to_owned(),
                 hunk: hunk.clone(),
@@ -405,9 +410,47 @@ fn claims_pass(d: &KeptDecision) -> bool {
     said.contains("test") && said.contains("pass")
 }
 
-/// A step that ran tests: a command naming `test` (`cargo test`, `pytest`, `npm test`).
+/// Programs whose `test` subcommand runs tests.
+const TEST_DRIVERS: [&str; 18] = [
+    "cargo", "npm", "yarn", "pnpm", "bun", "deno", "go", "make", "task", "just", "mvn", "gradle",
+    "gradlew", "dotnet", "swift", "mix", "rake", "flutter",
+];
+
+/// Programs that are a test runner by themselves.
+const TEST_RUNNERS: [&str; 9] = [
+    "pytest", "py.test", "jest", "vitest", "mocha", "rspec", "phpunit", "nextest", "ctest",
+];
+
+/// A step that ran tests: a test runner (`pytest`), a driver's `test`
+/// subcommand (`cargo test`, `npm run test`, `go test`) or `node --test`.
+/// Words are matched whole, so `latest` or `grep attest` do not count.
 fn is_test_run(command: &str) -> bool {
-    command.to_lowercase().contains("test")
+    let lower = command.to_lowercase();
+    lower.split([';', '|', '&', '(', ')']).any(|part| {
+        let words: Vec<&str> = part
+            .split_whitespace()
+            .map(|w| w.trim_matches(|c| c == '"' || c == '\''))
+            .map(|w| w.rsplit('/').next().unwrap_or(w))
+            .collect();
+        words.iter().enumerate().any(|(i, &w)| {
+            if TEST_RUNNERS.contains(&w) || w == "unittest" {
+                return true;
+            }
+            let before = || {
+                words[..i]
+                    .iter()
+                    .rev()
+                    .find(|p| !p.starts_with(['-', '+']) && **p != "run")
+            };
+            match w {
+                "--test" => words[..i].last() == Some(&"node"),
+                _ if w == "test" || w.starts_with("test:") => {
+                    before().is_some_and(|p| TEST_DRIVERS.contains(p))
+                }
+                _ => false,
+            }
+        })
+    })
 }
 
 fn passing_run(k: &Kept) -> bool {

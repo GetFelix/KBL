@@ -75,10 +75,31 @@ export interface Flag {
 
 export interface Story {
   item: string;
+  /** Changes whenever the item takes a record, so a view can tell a changed story from the same one. */
+  rev: number;
   attempts: { attempt: number; forked_from: [number, number] | null; done: boolean; closed: boolean }[];
   groups: Group[];
   people: PersonLine[];
   flags: Flag[];
+}
+
+/** A step some decision cites, by offset, once however many cite it. */
+export interface CitedStep {
+  offset: number;
+  command: string;
+  exit_code: number;
+}
+
+export function citedSteps(story: Story): CitedStep[] {
+  const seen = new Map<number, CitedStep>();
+  for (const g of story.groups) {
+    for (const d of g.decisions) {
+      for (const c of d.evidence) {
+        if (c.found?.kind === 'step' && !seen.has(c.offset)) seen.set(c.offset, { offset: c.offset, command: c.found.command, exit_code: c.found.exit_code });
+      }
+    }
+  }
+  return [...seen.values()].sort((a, b) => a.offset - b.offset);
 }
 
 export type Stories = ReadonlyMap<string, Story>;

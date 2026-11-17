@@ -172,12 +172,21 @@ fields only:
 
 | Rule | Flags when |
 |---|---|
-| `claims_pass_without_run` | A decision's `so_far`, `chosen` or `why` says tests pass (the words "test" and "pass" both appear), and no step of that attempt, between its last edit before the decision and the decision, ran a command containing "test" and exited 0. With no edit before it, any earlier passing test step counts |
+| `claims_pass_without_run` | A decision's `so_far`, `chosen` or `why` says tests pass (the words "test" and "pass" both appear), and no step of that attempt, between its last edit before the decision and the decision, ran tests and exited 0. With no edit before it, any earlier passing test step counts |
 | `cited_step_failed` | A decision that says tests pass cites a step that exited non-zero |
 | `evidence_not_recorded` | A decision cites an offset on `work.events` that is not a recorded step, edit, decision or person's note |
 | `revert_check_not_proven` | A decision carries a revert check that did not both fail without the fix and pass with it |
 | `fix_without_edit` | A `fix` decision has no recorded `edit` carrying it out |
 | `edits_never_run` | An attempt recorded edits and no passing test step after its last one |
+
+A step counts as a test run when its command has a test runner as a whole
+word (`pytest`, `jest`, `vitest`, `mocha`, `rspec`, `phpunit`, `nextest`,
+`ctest`, `python -m unittest`), a `test` subcommand of a build tool (`cargo`,
+`npm`, `yarn`, `pnpm`, `bun`, `deno`, `go`, `make`, `task`, `just`, `mvn`,
+`gradle`, `dotnet`, `swift`, `mix`, `rake`, `flutter`, including `npm run
+test`), or `node --test`. A command that only contains the letters, like
+`git checkout latest` or `grep attest`, does not count. A runner this list
+does not know is invisible to the rules, like any unrecorded step.
 
 The claim rules match words, so "tests do not pass" is read the same way as
 "tests pass". A flag is a prompt to look, never a verdict.

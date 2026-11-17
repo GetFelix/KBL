@@ -235,3 +235,5 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .story-ref { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); text-decoration: underline; background: none; border: 0; padding: 0; cursor: pointer; }
 .story-hunk { overflow-x: auto; font-family: var(--font-mono); font-size: var(--text-sm); }
 .story-edit code { overflow-wrap: anywhere; }
+.story-step { padding: var(--space-1) 0; }
+.story-step code { overflow-wrap: anywhere; }

@@ -4,7 +4,7 @@ import type { ItemRow } from '../fold.ts';
 import { stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { FACETS, valueOf } from '../views.ts';
-import { h } from './dom.ts';
+import { byFocus, h } from './dom.ts';
 import { itemHref } from './item-list.ts';
 import { overlapField } from './overlap-section.ts';
 import { storyField } from './story-section.ts';
@@ -103,7 +103,7 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
               h('p', { class: 'muted' }, WHY[why as keyof typeof WHY](s.open))),
       );
       if (hadFocus) {
-        const same = focusKey ? el.querySelector<HTMLElement>(`[data-focus="${focusKey}"]`) : null;
+        const same = focusKey ? byFocus(el, focusKey) : null;
         (same ?? el).focus({ preventScroll: true });
       }
     },

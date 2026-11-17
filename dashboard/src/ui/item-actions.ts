@@ -4,7 +4,7 @@
 import type { ItemRow } from '../fold.ts';
 import type { ViewState } from '../state.ts';
 import { CAN, checkAnswer, latestFor, pending, shownTier, UNCLEAR, type WriteKind } from '../writes.ts';
-import { h } from './dom.ts';
+import { byFocus, h } from './dom.ts';
 
 export interface WriteHandlers {
   signIn(): void;
@@ -152,7 +152,7 @@ export function itemActions(on: WriteHandlers) {
         if (hadFocus !== null && !el.contains(document.activeElement)) {
           // Flag and Unflag swap places: the focus follows the toggle.
           const toggled = ({ flag: 'unflag', unflag: 'flag' } as Record<string, string>)[hadFocus] ?? hadFocus;
-          const same = hadFocus ? (el.querySelector<HTMLElement>(`[data-focus="${hadFocus}"]`) ?? el.querySelector<HTMLElement>(`[data-focus="${toggled}"]`)) : null;
+          const same = hadFocus ? (byFocus(el, hadFocus) ?? byFocus(el, toggled)) : null;
           (same ?? head).focus({ preventScroll: true });
         }
       }

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { attemptFlags, citedText, contentText, decisionCount, flagsFor, stories, type Story } from '../src/story.ts';
+import { attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, stories, type Story } from '../src/story.ts';
 
 const story: Story = {
   item: 'r1',
+  rev: 3,
   attempts: [{ attempt: 1, forked_from: null, done: false, closed: false }],
   groups: [{ phase: 'fix', decisions: [{ offset: 7, attempt: 1, by: 'w1', so_far: 's', question: 'q', options: [], chosen: 'c', why: 'w', commit: 'abc', evidence: [], revert_check: null, proven: false, edits: [] }] }],
   people: [],
@@ -33,4 +34,14 @@ test('content shows inline text and not an artifact', () => {
 test('stories are keyed by item', () => {
   const got = stories({ storiesJson: () => JSON.stringify({ r1: story }) });
   assert.equal(got.get('r1')?.groups.length, 1);
+});
+
+test('a step cited by two decisions is listed once, in offset order', () => {
+  const step = (offset: number, exit_code: number) => ({ stream: 'work.events', offset, found: { kind: 'step' as const, command: `run ${offset}`, exit_code } });
+  const d = story.groups[0]!.decisions[0]!;
+  const two: Story = {
+    ...story,
+    groups: [{ phase: 'fix', decisions: [{ ...d, evidence: [step(5, 0), step(3, 1)] }, { ...d, offset: 8, evidence: [step(3, 1), { stream: 'work.events', offset: 9, found: null }] }] }],
+  };
+  assert.deepEqual(citedSteps(two), [{ offset: 3, command: 'run 3', exit_code: 1 }, { offset: 5, command: 'run 5', exit_code: 0 }]);
 });

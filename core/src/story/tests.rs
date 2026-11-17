@@ -213,6 +213,49 @@ fn a_run_that_is_not_a_test_does_not_clear_the_claim() {
 }
 
 #[test]
+fn only_whole_test_runner_words_count_as_a_test_run() {
+    for yes in [
+        "cargo test cache",
+        "cargo +nightly test -p x",
+        "cargo nextest run",
+        "npm test",
+        "npm run test:unit",
+        "pnpm test",
+        "pytest -q",
+        "python -m pytest",
+        "python -m unittest",
+        "go test ./...",
+        "node --test test/*.ts",
+        "cd core && cargo test",
+        "task test",
+    ] {
+        assert!(is_test_run(yes), "{yes}");
+    }
+    for no in [
+        "git checkout latest",
+        "cargo build --contest",
+        "grep attest log",
+        "cat tests/data.json",
+        "cargo build --tests",
+        "echo test",
+        "node script.js",
+        "ls test",
+    ] {
+        assert!(!is_test_run(no), "{no}");
+    }
+}
+
+#[test]
+fn a_command_that_only_contains_test_does_not_clear_the_claim() {
+    let mut l = Log::new();
+    let d = l.decide("fix", "guard the read", &[]);
+    l.edit(d);
+    l.step("git checkout latest", 0);
+    l.decide("verify", "tests pass", &[]);
+    assert!(l.rules().contains(&Rule::ClaimsPassWithoutRun));
+}
+
+#[test]
 fn citing_a_failed_step_for_a_pass_claim_is_flagged() {
     let mut l = Log::new();
     let run = l.step("cargo test", 101);

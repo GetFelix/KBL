@@ -521,6 +521,31 @@ try {
   const cardFlag = (id) => page.eval(`document.querySelector('.card[data-id=${id}] .row-flag:not([hidden])')?.textContent ?? ''`);
   check((await cardFlag('gh-2219')) === '1 file overlap' && (await cardFlag('gh-2204')) === '', 'board cards carry the same overlap flag');
 
+  // The story: a cited step is a record the reference lands on, and recorded text (a `"` or `]` in a
+  // command) cannot break the panel.
+  await open(`${connected}&item=sv-1`);
+  await page.waitFor(live);
+  const at = () => page.eval('window.__ws.liveAt');
+  const rec = (r) => page.eval(`window.__push({ actor: 'agent', by: 'agent-1', at_ms: Date.now(), item: 'sv-1', attempt: 1, ...${JSON.stringify(r)} })`);
+  await page.eval(`window.__push({ kind: 'imported', item: 'sv-1', source: 'github', title: 'Story of a fix', upstream_id: 'GetFelix/felix#9001', actor: 'person', by: 'maintainer', at_ms: Date.now() })`);
+  await page.eval(`window.__push({ kind: 'accepted', item: 'sv-1', tier: 1, actor: 'person', by: 'maintainer', at_ms: Date.now() })`);
+  await rec({ kind: 'claimed', deadline_ms: Date.now() + 3_600_000 });
+  const stepAt = await at();
+  await rec({ kind: 'step', command: 'grep "a]b" -r core/', exit_code: 1, output: { text: 'nothing' } });
+  const decisionAt = await at();
+  await rec({ kind: 'decision', phase: 'fix', so_far: 'guarding the read', question: 'how', chosen: 'fill before read', why: 'the tests pass', commit: 'c1', evidence: [{ stream: 'work.events', offset: stepAt }] });
+  await page.waitFor(`!!document.querySelector('.panel .story .story-step')`);
+  check(await page.eval(`document.querySelector('.panel .story .story-step')?.dataset.at === '${stepAt}'`), 'a step a decision cites is a record in the story');
+  await page.eval(`document.querySelector('.story-evidence .story-ref').click()`);
+  check(await focused(`.story-step[data-at="${stepAt}"]`), 'a step citation moves the focus to the step');
+  await page.eval(`document.querySelector('.panel').focus()`);
+  await page.eval(`document.querySelector('.story-flag[data-rule=cited_step_failed] .story-ref').click()`);
+  check(await focused(`.story-step[data-at="${stepAt}"]`), 'the offset in a failed-step flag moves the focus to the step');
+  await page.eval(`document.querySelector('.story-evidence .story-ref').focus()`);
+  await rec({ kind: 'edit', file: 'core/src/cache.rs', hunk: { text: '@@ -1 +1 @@' }, decision: decisionAt });
+  await page.waitFor(`!!document.querySelector('.story-edit')`);
+  check(await page.eval(`document.activeElement?.dataset.focus?.startsWith('ref:') === true && !!document.querySelector('.panel .story')`), 'a rebuild with a quote in a recorded command keeps the panel and the focus');
+
   // A fresh page: after a blur, Chrome starts Tab from where focus was, not the top.
   await open(connected);
   await page.waitFor(live);
