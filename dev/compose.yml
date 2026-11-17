@@ -118,5 +118,72 @@ services:
       finalize:
         condition: service_completed_successfully
 
+  # The quick start (`dev/quickstart.sh`): the work tracker, the dashboard and a
+  # gateway for it, built from this checkout. Published on loopback only.
+  tracker:
+    profiles: [quickstart]
+    build:
+      context: ..
+      dockerfile: tracker/Dockerfile
+    # The entrypoint reads the host's 0600 token file as root, then drops to the
+    # unprivileged user kbl, so only the capabilities for that are kept.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
+    environment:
+      KBL_TOKENS_SRC: /state/tracker-tokens.json
+      KBL_FELIX_CONTROL_PLANE: http://controlplane:8443
+      KBL_IDP: http://idp:9400
+      KBL_FELIX_BROKER: broker:5000
+      KBL_FELIX_CA_FILE: /state/broker-cert.pem
+      KBL_FELIX_BROKER_NAME: localhost
+      KBL_TRACKER_LISTEN: 0.0.0.0:8790
+      # The proxy flag only lifts the loopback-only check inside the container:
+      # the port is published to 127.0.0.1 and nothing else.
+      KBL_TRACKER_BEHIND_TLS_PROXY: "true"
+    ports:
+      - "127.0.0.1:8790:8790"
+    volumes:
+      - ./state:/state:ro,z
+    restart: on-failure
+    depends_on:
+      finalize:
+        condition: service_completed_successfully
+
+  dashboard:
+    profiles: [quickstart]
+    build:
+      context: ..
+      dockerfile: dashboard/Dockerfile
+    # nginx exits if the tracker's name does not resolve yet.
+    restart: on-failure
+    # The image runs nginx as an unprivileged user, so it listens on 8080.
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      - tracker
+
+  # The dashboard reads work.events through its own gateway, because a gateway
+  # has one scope file and the one above is for runs.
+  dashboard-gateway:
+    profiles: [quickstart]
+    image: ghcr.io/getfelix/felix-gateway:0.8.0
+    environment:
+      GATEWAY_FELIX_BROKERS: broker:5000
+      GATEWAY_FELIX_CA_FILE: /state/broker-cert.pem
+      GATEWAY_FELIX_CONTROL_PLANE: http://controlplane:8443
+      GATEWAY_TENANT: agents
+      GATEWAY_OIDC_ISSUER: http://127.0.0.1:9400
+      GATEWAY_OIDC_CLIENT_ID: kbl
+      RUST_LOG: info
+    ports:
+      - "127.0.0.1:8788:8787"
+    volumes:
+      - ./scope-work.toml:/etc/felix-gateway/scope.toml:ro,z
+      - ./state:/state:ro,z
+    restart: on-failure
+    depends_on:
+      finalize:
+        condition: service_completed_successfully
+
 volumes:
   felix-data:

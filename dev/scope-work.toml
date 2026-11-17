@@ -1,0 +1,10 @@
+# What the dashboard's gateway lets a browser read: the work log, read only.
+# The dashboard sends `room` in its join; the value is not used for anything.
+[scope]
+field = "room"
+
+[[scope.streams]]
+alias = "events"
+name = "work.events"
+shared = true
+actions = ["subscribe"]
