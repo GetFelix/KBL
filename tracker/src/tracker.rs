@@ -516,6 +516,10 @@ enum TextRead {
 struct ClaimLog {
     offset: u64,
     by: Key,
+    /// Handed straight to its agent assignee, so no ready record stands
+    /// behind it. Kept so a restart recovers it as such after a reassign.
+    /// Required: a snapshot from before it is skipped and the log refolded.
+    direct: bool,
     ended: Option<Ended>,
 }
 
@@ -532,10 +536,12 @@ struct Ended {
 
 impl Recall {
     /// `created` says the record made an edge that was not there before it.
+    /// `state` is the fold with the record applied.
     fn remember(
         &mut self,
         offset: u64,
         logged: &WorkLogged,
+        state: &State,
         me: &Key,
         created: bool,
         rejected: bool,
@@ -548,7 +554,7 @@ impl Recall {
             self.subjects.insert(offset, item.clone());
         }
         if !rejected {
-            self.attempt(offset, logged);
+            self.attempt(offset, logged, state);
         }
         match record {
             WorkRecord::Linked { item, to } => {
@@ -580,7 +586,7 @@ impl Recall {
         }
     }
 
-    fn attempt(&mut self, offset: u64, logged: &WorkLogged) {
+    fn attempt(&mut self, offset: u64, logged: &WorkLogged, state: &State) {
         let (item, attempt, ends) = match &logged.record {
             WorkRecord::Claimed { item, attempt, .. } => (item, *attempt, false),
             WorkRecord::Done { item, attempt, .. }
@@ -598,9 +604,15 @@ impl Recall {
         let claims = self.attempts.entry((item.clone(), attempt)).or_default();
         if !ends {
             self.claims.insert(offset, (item.clone(), attempt));
+            // A claim leaves the assignee alone, and a lane claim is never
+            // written for an item assigned to an agent (`claim_from` acks
+            // it), so this is exactly a claim `try_assigned` made.
+            let direct = state.items.get(item).and_then(|i| i.assignee.as_ref())
+                == Some(&Assignee::Agent(logged.by.clone()));
             claims.push(ClaimLog {
                 offset,
                 by: logged.by.clone(),
+                direct,
                 ended: None,
             });
         } else if let Some(c) = claims.last_mut().filter(|c| c.ended.is_none()) {
@@ -615,6 +627,14 @@ impl Recall {
                 by: logged.by.clone(),
             });
         }
+    }
+
+    /// Whether `agent`'s newest claim of `attempt` was handed straight to it.
+    fn direct(&self, item: &ItemId, attempt: u32, agent: &AgentName) -> bool {
+        self.attempts
+            .get(&(item.clone(), attempt))
+            .and_then(|c| c.last())
+            .is_some_and(|c| c.direct && c.by.as_str() == agent.as_str())
     }
 
     /// The offset of the newest `claimed` record of `attempt`.
@@ -1663,9 +1683,11 @@ impl<B: Broker> Tracker<B> {
         }
     }
 
-    /// After a restart, stands behind a hold on an item assigned to its
-    /// holder without looking in Felix: such a claim was handed out straight
-    /// from the state, and polling for it would cost other records a handout.
+    /// After a restart, stands behind a hold that was a direct claim without
+    /// looking in Felix, whoever the item is assigned to now: no ready record
+    /// stands behind it, and polling for one would cost other records a
+    /// handout. The hold runs one visibility from here, past any deadline the
+    /// last tracker gave, unless the agent extends it.
     async fn adopt_direct(
         &self,
         agent: &AgentName,
@@ -1676,7 +1698,7 @@ impl<B: Broker> Tracker<B> {
         let mut core = self.0.core.lock().await;
         // The hold may have lapsed since `recover` read it.
         if core.state.held_by(agent.as_str()) != Some((item.clone(), attempt))
-            || assigned_agent(&core.state, item).map(Key::as_str) != Some(agent.as_str())
+            || !core.recall.direct(item, attempt, agent)
         {
             return false;
         }
@@ -2228,7 +2250,19 @@ impl<B: Broker> Tracker<B> {
             self.0.core.lock().await.recovering.remove(agent.as_str());
             return;
         };
-        if self.adopt_direct(agent, &item, attempt, delivery).await {
+        // A direct claim is never looked for in Felix, even if its hold ended
+        // since the read above.
+        let direct = self
+            .0
+            .core
+            .lock()
+            .await
+            .recall
+            .direct(&item, attempt, agent);
+        if direct {
+            if !self.adopt_direct(agent, &item, attempt, delivery).await {
+                self.0.core.lock().await.recovering.remove(agent.as_str());
+            }
             return;
         }
         // The broker reclaims in a connection's first poll, so that poll goes to
@@ -2665,7 +2699,7 @@ impl<B: Broker> Tracker<B> {
             Ok(ConditionalWrite::Written { offset }) => {
                 core.tail = offset + 1;
                 core.recall
-                    .remember(offset, &logged, &self.0.me, absent, false);
+                    .remember(offset, &logged, &core.state, &self.0.me, absent, false);
                 self.note_landed(core, offset, &logged);
                 if logged.req.is_some() {
                     request_keys::landed();
@@ -2868,7 +2902,7 @@ impl<B: Broker> Tracker<B> {
             let created = absent && !edge_absent(&state, &rec.record);
             // The append path remembers only what the fold took; so does a rebuild.
             let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
-            recall.remember(*offset, rec, &self.0.me, created, rejected);
+            recall.remember(*offset, rec, &state, &self.0.me, created, rejected);
         }
         let mut snap = None;
         if let Some(store) = store {

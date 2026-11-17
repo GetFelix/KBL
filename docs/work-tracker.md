@@ -492,7 +492,7 @@ record if the fold accepts it:
 | `POST /v1/work/mark-merged` `{item}` | `merge_marked`: records that the pull request was merged upstream, and closes the item as merged. Refused while upstream shows the request open; the item keeps who recorded it, and a later open or closed-unmerged status reopens it into Needs you as `merge_disputed` |
 | `POST /v1/work/rate-summary` `{item, attempt, accurate}` | `summary_rated`: marks the summary the attempt handed off accurate or not |
 | `POST /v1/work/take` `{item}` | `taken`: assigns the item to the caller. See [Assignees](#assignees) |
-| `POST /v1/work/reassign` `{item, to}` | `reassigned`: assigns the item to `to`, `{"person": name}` of the caller's team (`not_member` otherwise), or to nobody with `null` |
+| `POST /v1/work/reassign` `{item, to}` | `reassigned`: assigns the item to `to`, `{"person": name}` of the caller's team (`not_member` otherwise), `{"agent": name}` of a team agent not revoked (format 13), or to nobody with `null` |
 | `POST /v1/work/steer` `{item, attempt, text}` | `steered`: a note to the agent holding `attempt` |
 
 A person's token can also read the team's work. These calls write nothing:
@@ -502,6 +502,7 @@ A person's token can also read the team's work. These calls write nothing:
 | `GET /v1/work/queue` | My queue: every item that waits on the caller, oldest wait first, then lower tier, as `{item, title, work, stage, needs, wait, tier, since_ms, root, assignee}`, with `count` (the whole queue) and `at`. `?limit=` trims `queue` to its first entries: 200 by default, at most 1000. `wait` is `proposal`, `question`, `failure`, `review` or `other`; an item whose reason changes starts a new wait from that record. An item a person snoozed or parked is left out while that wait continues (see [Card actions on My queue](#card-actions-on-my-queue)). `since_ms` is null for a wait the tracker did not see begin (it started before a snapshot), and those come first, since they are older than any known start. An item assigned to a person is only in that person's queue; anything else waiting is in everyone's. Person tokens only |
 | `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, assignee, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
+| `GET /v1/work/agents` | The names of the team's agents an item can be assigned to, as `{agents}`: the token file's, and those added with `kbl-tool agent add` and not revoked. The dashboard's assign picker lists them |
 | `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A `from` past the end of the log is an empty answer with `next` null. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
 | `GET /v1/work/metrics/time-to-human` | Time to first human action over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.count`, `p50_ms` and `p90_ms` of the waits a person ended in the window, the same per reason in `by_kind` (`proposal`, `question`, `failure`, `review`, `other`), `open` (items waiting now with no person action yet) and `oldest_open_since_ms`. `truncated` is true, with `complete_since_ms`, when the oldest finished waits were dropped past the 20,000 kept, or the tracker restored its state from a snapshot, and the window reaches back before what the fold has seen. Open waits are not in the percentiles. See [Time to first human action](#time-to-first-human-action) |
 | `GET /v1/work/metrics/summary-trust` | How often the summaries people marked were marked accurate over the last `?days=` days (default 30, from 1 to 366), for the team: `stats.rated` (attempts whose standing mark was written in the window), `accurate`, `not_accurate`, `accurate_permille` (null with nothing rated), `unrated` (finished attempts with no mark now, whatever the window), `min_sample` (10) and `undated`. A person only. See [Summary trust](#summary-trust) |
@@ -813,8 +814,17 @@ agent polls it and is not published again, so:
 - the assignee is never starved, since nothing else can claim the item.
 
 A direct claim has no Felix delivery. The agent extends it as usual and the
-tracker's sweep lapses it when it is not extended; a restarted tracker takes
-it back from the log without polling Felix.
+tracker's sweep lapses it when it is not extended.
+
+A restarted tracker takes a direct claim back from the log without polling
+Felix, whoever the item is assigned to by then. The tracker records whether
+each claim was direct: the item was assigned to the claiming agent when its
+`claimed` record landed, since a lane claim is never written for an item
+assigned to an agent. The hold then runs one visibility period from the
+restart, past any deadline the old tracker gave, and lapses unless the agent
+extends it. So a restart neither ends a direct claim early, which would let a
+new assignee start a second attempt while the holder still works, nor spends a
+handout on another item's ready record looking for it.
 
 If the assigned agent goes away (it is revoked, or makes no call to the
 tracker to claim, extend or finish work for `KBL_ASSIGNEE_AWAY_SECS`, 600 by
@@ -825,9 +835,7 @@ it keeps its assigned items. A revoke drops the assignee at once only on the
 tracker that served it; a restarted tracker waits out the away time.
 
 Reassigning or clearing an agent while it holds the item leaves its hold in
-place until it finishes, releases or lapses. If the tracker restarts while an
-agent holds an item it no longer is the assignee of, that hold is recovered
-like a lane claim, which may cost it the hold.
+place until it finishes, releases or lapses, across a tracker restart too.
 
 #### Review actions and summary marks
 

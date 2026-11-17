@@ -82,6 +82,17 @@ export class Tracker {
     return parseTrust(r.body) ?? { status: 'failed', reason: 'The tracker answered with numbers this page does not read. Reload the page.' };
   }
 
+  /** The team's agents an item can be assigned to, revoked ones left out, or why the tracker would not say. */
+  async agents(): Promise<string[] | Outcome> {
+    const r = await this.send('GET', route('/v1/work/agents', this.team));
+    if (r.network === TIMED_OUT) return { status: 'failed', reason: 'No answer from the tracker.' };
+    const o = outcome(r.status, r.body, r.network);
+    if (o.status !== 'ok') return o;
+    const list = (r.body as { agents?: unknown } | null)?.agents;
+    if (!Array.isArray(list)) return { status: 'failed', reason: 'The tracker answered without a list of agents.' };
+    return list.filter((a): a is string => typeof a === 'string');
+  }
+
   async write(req: Request): Promise<Outcome> {
     const r = await this.send('POST', route(req.path, this.team), req.body);
     // The tracker may have appended the record before the page stopped waiting.
