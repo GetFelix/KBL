@@ -138,9 +138,9 @@ async function shoot(name) {
 async function axe(name) {
   await page.eval(axeSource);
   const result = await page.eval(`axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'] })
-    .then((r) => r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, help: v.help })))`);
+    .then((r) => r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 3).map((n) => n.target.join(' ')) })))`);
   const bad = result.filter((v) => v.impact === 'serious' || v.impact === 'critical');
-  for (const v of result) console.log(`     axe ${name}: ${v.impact} ${v.id} (${v.nodes}) ${v.help}`);
+  for (const v of result) console.log(`     axe ${name}: ${v.impact} ${v.id} (${v.nodes}) ${v.help} [${v.targets.join(' | ')}]`);
   check(bad.length === 0, `axe ${name}: no serious or critical violations (${result.length} total)`);
 }
 
