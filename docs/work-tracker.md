@@ -239,13 +239,14 @@ equal the fold of the log to its offset. The hashing and the file write run on
 a blocking thread, so an append waits only for the copy, once per `every`
 records. The hash chain is extended from the last save: the tracker keeps the
 chain's head and the records since, not the log, so a save hashes only those
-records. One save runs at a time and only one copy of the state exists beside
-the live one. Records that land during a save wait for the next; if a stuck
+records. One save runs at a time per state, so one copy exists beside the live one (a
+rebuild can briefly overlap the last save of the state it replaced). Records that land during a save wait for the next; if a stuck
 disk lets more than the larger of 4 x `every` and 10,000 pile up, the tracker
 logs it and stops saving until its next rebuild, which restarts from the log.
 A snapshot is never trusted on how it was made: the next rebuild checks every
-file against the log, and a file that does not match is skipped, so the worst
-case of a wrong save is a full fold. Run the tracker on a disk that survives
+file against the log, and a file that does not match is skipped, so a
+stale or foreign file costs a full fold. The check covers the records, not the
+state inside the file, which is why the copy is taken at a record boundary. Run the tracker on a disk that survives
 restarts, or the folder is empty each time.
 
 Each record carries a format. A tracker that finds a record of a newer format
