@@ -1,0 +1,138 @@
+# Felix is not part of this chart. Install it from Felix's own chart, then point
+# the values below at it. Nothing secret belongs in this file: the tracker's
+# token file, the ingest config and every credential come from Secrets you
+# create yourself (see docs/deploy.md).
+
+image:
+  registry: ghcr.io/getfelix
+  # Empty means the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+felix:
+  # Felix control plane URL the tracker reads stream settings from and
+  # exchanges its token with.
+  controlPlane: ""
+  # host:port of a broker the tracker connects to.
+  broker: ""
+  # TLS server name in the broker's certificate.
+  brokerName: ""
+  tenant: agents
+  # The team's namespace.
+  namespace: default
+  # The CA that signed the broker's certificate (a public certificate). Name an
+  # existing ConfigMap, or paste the PEM and the chart makes one.
+  ca:
+    existingConfigMap: ""
+    key: ca.crt
+    pem: ""
+  # Where the tracker gets the ID token it trades for a Felix token. Set
+  # idp to your identity provider's token endpoint base, or name a Secret that
+  # holds a ready ID token. An ID token that expires is not renewed.
+  idp: ""
+  idTokenSecret:
+    name: ""
+    key: id-token
+
+tracker:
+  # Always one: the tracker is the single writer of work.events, and running
+  # more than one is not supported yet.
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+  # Secret with the token file, a key holding
+  # {"agents": {"<token>": "name"}, "people": {"<token>": "name"}}.
+  tokensSecret:
+    name: ""
+    key: tokens.json
+  # Records between fold snapshots; empty uses the tracker's default.
+  snapshotEvery: ""
+  # Snapshots live in an emptyDir, so they survive a container restart and
+  # not a rescheduled pod. A missing snapshot only costs a longer start.
+  snapshotSizeLimit: 1Gi
+  metrics:
+    enabled: false
+    port: 9790
+  env: {}
+  service:
+    port: 8790
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+dashboard:
+  enabled: true
+  replicas: 1
+  resources:
+    requests: { cpu: 25m, memory: 32Mi }
+    limits: { memory: 128Mi }
+  service:
+    port: 8080
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+# The ingest worker pulls upstream issues into the tracker. Off by default.
+ingest:
+  enabled: false
+  # Secret holding the worker's JSON config (see docs/work-tracker.md).
+  configSecret:
+    name: ""
+    key: ingest.json
+  # Secrets exposed as environment variables. The config names them
+  # (tracker.token_env, github.token_env); the values never appear here.
+  # Example: [{env: KBL_INGEST_TOKEN, secretName: kbl-ingest, key: tracker-token}]
+  secretEnv: []
+  # A GitHub App private key. Ingest refuses a key that is not mode 400 or
+  # 600, which a mounted Secret is not, so an init step copies it. In the
+  # config, set github.app.private_key_file to /run/kbl/app.pem.
+  privateKey:
+    secretName: ""
+    key: private-key.pem
+  metrics:
+    enabled: false
+    port: 9791
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # The dashboard, which also forwards /v1 to the tracker.
+  host: ""
+  # A second host straight to the tracker, for kbl-mcp and agents outside the
+  # cluster. Empty leaves the tracker cluster-internal.
+  trackerHost: ""
+  # The tracker serves plain HTTP with bearer tokens, so terminate TLS here.
+  tls:
+    secretName: ""
+
+networkPolicy:
+  enabled: false
+  # Where the ingress controller runs.
+  ingressNamespaceLabels:
+    kubernetes.io/metadata.name: ingress-nginx
+  # Who may scrape metrics ports (empty: nobody).
+  metricsFromNamespaceLabels: {}
+  # With egress on, the tracker and ingest reach DNS and what you list here
+  # and nothing else. felixCidrs covers Felix's control plane and brokers and
+  # the identity provider; ingestCidrs the upstream tracker's API (HTTPS).
+  egress:
+    enabled: false
+    felixCidrs: []
+    ingestCidrs: []
+    dnsNamespaceLabels:
+      kubernetes.io/metadata.name: kube-system
+
+serviceAccount:
+  create: true
+  annotations: {}

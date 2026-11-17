@@ -503,6 +503,20 @@
  "ingest/src/ado.rs#call": [
   "if res.status == 203 || (300..400).contains(&res.status) {"
  ],
+ "core/src/org_fold.rs#check": [
+  "if logged.v > self.format {",
+  "return Err(OrgRefusal::SourceServed);"
+ ],
+ "tracker/src/http/ingest.rs#config_answer": [
+  ".connection_of_group(team, group)",
+  ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor));"
+ ],
+ "tracker/src/http/ingest.rs#config": [
+  "None => return busy(),"
+ ],
+ "tracker/src/http/org.rs#org_record": [
+  "let (org, by) = match org_admin(&app, req.headers()) {"
+ ],
  "ingest/src/gitlab.rs#base_url": [
   "\"http\" if loopback => {}",
   "url.username().is_empty() && url.password().is_none(),"

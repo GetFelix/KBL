@@ -1,0 +1,120 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+# Pods take traffic only from what needs them. The tracker is reached by the
+# dashboard, ingest and the ingress controller; the dashboard by the ingress
+# controller alone.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kbl.fullname" . }}-tracker
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "kbl.selector" (dict "root" . "component" "tracker") | nindent 6 }}
+  policyTypes: [Ingress{{ if $np.egress.enabled }}, Egress{{ end }}]
+  ingress:
+    {{- /* A rule with no sources would admit every pod. */}}
+    {{- if or .Values.dashboard.enabled .Values.ingest.enabled .Values.ingress.trackerHost }}
+    - from:
+        {{- if .Values.dashboard.enabled }}
+        - podSelector:
+            matchLabels: {{- include "kbl.selector" (dict "root" . "component" "dashboard") | nindent 14 }}
+        {{- end }}
+        {{- if .Values.ingest.enabled }}
+        - podSelector:
+            matchLabels: {{- include "kbl.selector" (dict "root" . "component" "ingest") | nindent 14 }}
+        {{- end }}
+        {{- if .Values.ingress.trackerHost }}
+        - namespaceSelector:
+            matchLabels: {{- toYaml $np.ingressNamespaceLabels | nindent 14 }}
+        {{- end }}
+      ports:
+        - { port: {{ .Values.tracker.service.port }}, protocol: TCP }
+    {{- end }}
+    {{- if and .Values.tracker.metrics.enabled $np.metricsFromNamespaceLabels }}
+    - from:
+        - namespaceSelector:
+            matchLabels: {{- toYaml $np.metricsFromNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: {{ .Values.tracker.metrics.port }}, protocol: TCP }
+    {{- end }}
+  {{- if $np.egress.enabled }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {{- toYaml $np.egress.dnsNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    # Felix's control plane and broker, and the identity provider. An empty
+    # list adds no rule, so those calls are refused rather than left open.
+    {{- if $np.egress.felixCidrs }}
+    - to:
+        {{- range $np.egress.felixCidrs }}
+        - ipBlock: { cidr: {{ . | quote }} }
+        {{- end }}
+    {{- end }}
+  {{- end }}
+{{- if .Values.dashboard.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kbl.fullname" . }}-dashboard
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "kbl.selector" (dict "root" . "component" "dashboard") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {{- toYaml $np.ingressNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: 8080, protocol: TCP }
+{{- end }}
+{{- if .Values.ingest.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kbl.fullname" . }}-ingest
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "kbl.selector" (dict "root" . "component" "ingest") | nindent 6 }}
+  policyTypes: [Ingress{{ if $np.egress.enabled }}, Egress{{ end }}]
+  {{- if and .Values.ingest.metrics.enabled $np.metricsFromNamespaceLabels }}
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {{- toYaml $np.metricsFromNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: {{ .Values.ingest.metrics.port }}, protocol: TCP }
+  {{- else }}
+  ingress: []
+  {{- end }}
+  {{- if $np.egress.enabled }}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {{- toYaml $np.egress.dnsNamespaceLabels | nindent 14 }}
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+    - to:
+        - podSelector:
+            matchLabels: {{- include "kbl.selector" (dict "root" . "component" "tracker") | nindent 14 }}
+      ports:
+        - { port: {{ .Values.tracker.service.port }}, protocol: TCP }
+    {{- if $np.egress.ingestCidrs }}
+    - to:
+        {{- range $np.egress.ingestCidrs }}
+        - ipBlock: { cidr: {{ . | quote }} }
+        {{- end }}
+      ports:
+        - { port: 443, protocol: TCP }
+    {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

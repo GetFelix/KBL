@@ -473,3 +473,137 @@ fn a_team_repeated_with_other_fields_is_not_the_same_team() {
     };
     assert_eq!(run(&mut s, again), Err(OrgRefusal::NameTaken));
 }
+
+fn at(v: u32, r: OrgRecord) -> OrgLogged {
+    OrgLogged { v, ..log(r) }
+}
+fn source(t: &str, s: &str) -> OrgRecord {
+    OrgRecord::SourceAdded {
+        team: team(t),
+        source: s.into(),
+    }
+}
+fn connection(t: &str, name: &str, group: &str, sources: &[&str]) -> OrgRecord {
+    OrgRecord::ConnectionSet {
+        team: team(t),
+        name: key(name),
+        vendor: "github".into(),
+        group: key(group),
+        pool: key("gh-app"),
+        sources: sources.iter().map(|s| s.to_string()).collect(),
+    }
+}
+fn raised() -> OrgState {
+    let mut s = OrgState::default();
+    s.apply(&log(create("a"))).unwrap();
+    s.apply(&log(create("b"))).unwrap();
+    s.apply(&log(source("a", "github:o/one"))).unwrap();
+    s.apply(&log(source("b", "github:o/two"))).unwrap();
+    s.apply(&at(2, OrgRecord::FormatRaised { to: 2 })).unwrap();
+    s
+}
+
+#[test]
+fn format_2_records_wait_for_the_raise() {
+    let mut s = OrgState::default();
+    s.apply(&log(create("a"))).unwrap();
+    s.apply(&log(source("a", "github:o/one"))).unwrap();
+    let conn = connection("a", "gh", "g1", &["github:o/one"]);
+    assert_eq!(s.apply(&log(conn.clone())), Err(OrgRefusal::Format));
+    // A raise stamped below what it raises to would not stop an older reader.
+    assert_eq!(
+        s.apply(&at(1, OrgRecord::FormatRaised { to: 2 })),
+        Err(OrgRefusal::Format)
+    );
+    s.apply(&at(2, OrgRecord::FormatRaised { to: 2 })).unwrap();
+    assert_eq!(s.format(), 2);
+    assert_eq!(
+        s.apply(&at(2, OrgRecord::FormatRaised { to: 2 })),
+        Err(OrgRefusal::Format),
+        "the format never stays or goes down"
+    );
+    assert_eq!(s.apply(&log(conn)), Ok(Applied::Changed));
+    assert_eq!(
+        s.check(&at(3, OrgRecord::FormatRaised { to: 3 })),
+        Err(OrgRefusal::Format),
+        "a raise past this build would leave the log unreadable"
+    );
+}
+
+#[test]
+fn an_older_reader_stops_at_the_raise() {
+    let raise = OrgLogged::new(1, key("ana"), OrgRecord::FormatRaised { to: 3 });
+    assert_eq!(raise.v, 3);
+    let payload = crate::codec::Codec::encode(&raise);
+    assert!(matches!(
+        crate::org::read(&payload),
+        Err(crate::org::OrgReadError::Newer { v: 3 })
+    ));
+}
+
+#[test]
+fn a_connection_serves_only_its_own_teams_sources_once() {
+    let mut s = raised();
+    assert_eq!(
+        s.check(&log(connection("a", "gh", "g1", &["github:o/two"]))),
+        Err(OrgRefusal::UnknownSource),
+        "another team's source"
+    );
+    assert_eq!(
+        s.check(&log(connection(
+            "a",
+            "gh",
+            "g1",
+            &["github:o/one", "github:o/one"]
+        ))),
+        Err(OrgRefusal::UnknownSource)
+    );
+    s.apply(&log(connection("a", "gh", "g1", &["github:o/one"])))
+        .unwrap();
+    assert_eq!(
+        s.check(&log(connection("a", "gh2", "g2", &["github:o/one"]))),
+        Err(OrgRefusal::SourceServed)
+    );
+    assert_eq!(
+        s.check(&log(connection("a", "gh2", "g1", &[]))),
+        Err(OrgRefusal::NameTaken),
+        "one connection per group"
+    );
+    assert_eq!(
+        s.apply(&log(connection("a", "gh", "g1", &["github:o/one"]))),
+        Ok(Applied::Unchanged)
+    );
+    s.apply(&log(connection("b", "gh", "g1", &["github:o/two"])))
+        .unwrap();
+    let (name, c) = s.connection_of_group(&team("a"), &key("g1")).unwrap();
+    assert_eq!((name.as_str(), c.sources.len()), ("gh", 1));
+    assert_eq!(s.pool_sources(&key("gh-app")), 2);
+}
+
+#[test]
+fn a_budget_keeps_back_no_more_than_it_has() {
+    let mut s = raised();
+    let budget = |per_hour, kept_back, wake_cap| OrgRecord::BudgetSet {
+        pool: key("gh-app"),
+        per_hour,
+        kept_back,
+        wake_cap,
+    };
+    assert_eq!(s.check(&log(budget(0, 0, 0))), Err(OrgRefusal::BadBudget));
+    assert_eq!(s.check(&log(budget(10, 11, 0))), Err(OrgRefusal::BadBudget));
+    assert_eq!(s.check(&log(budget(10, 5, 6))), Err(OrgRefusal::BadBudget));
+    s.apply(&log(budget(4500, 900, 300))).unwrap();
+    assert_eq!(s.budget(&key("gh-app")).unwrap().kept_back, 900);
+}
+
+#[test]
+fn a_connection_names_its_sources_own_vendor() {
+    let mut s = raised();
+    let mut jira = connection("a", "gh", "g1", &["github:o/one"]);
+    if let OrgRecord::ConnectionSet { vendor, .. } = &mut jira {
+        *vendor = "jira".into();
+    }
+    assert_eq!(s.check(&log(jira)), Err(OrgRefusal::UnknownSource));
+    s.apply(&log(connection("a", "gh", "g1", &["github:o/one"])))
+        .unwrap();
+}

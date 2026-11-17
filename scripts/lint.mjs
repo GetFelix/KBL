@@ -31,5 +31,15 @@ for (const f of ['README.md', 'CONTRIBUTING.md', ...readdirSync(join(root, 'docs
   if (readFileSync(join(root, f), 'utf8').includes('—')) failures.push(`${f}: contains an em dash`);
 }
 
+// The chart's default image tag is its appVersion, so it must name a version the release publishes.
+{
+  const ws = readFileSync(join(root, 'Cargo.toml'), 'utf8').match(/\[workspace\.package\][^[]*?\nversion = "([^"]+)"/)?.[1];
+  const chart = readFileSync(join(root, 'deploy/helm/kbl/Chart.yaml'), 'utf8');
+  for (const key of ['version', 'appVersion']) {
+    const v = chart.match(new RegExp(`^${key}: (\\S+)$`, 'm'))?.[1];
+    if (v !== ws) failures.push(`deploy/helm/kbl/Chart.yaml: ${key} is ${v}, the workspace version is ${ws}`);
+  }
+}
+
 if (failures.length) { failures.forEach((f) => console.error('FAIL', f)); process.exit(1); }
 console.log('lint ok');
