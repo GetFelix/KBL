@@ -251,6 +251,7 @@
   "anyhow::ensure!(!token.is_empty(), \"a token is empty\");"
  ],
  "tracker/src/http.rs#person": [
+  "fn person(&self) -> Result<Key, Denied> {",
   "Err((StatusCode::FORBIDDEN, \"this call is for a person's token\"))"
  ],
  "tracker/src/http.rs#agent": [
@@ -277,9 +278,6 @@
  ],
  "tracker/src/http.rs#observe": [
   ".map(|m| m.as_str().to_owned())"
- ],
- "tracker/src/http.rs#person": [
-  "fn person(&self) -> Result<Key, Denied> {"
  ],
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"

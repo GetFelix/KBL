@@ -347,6 +347,8 @@ the call is made (`mcp/src/person.rs#check`).
 | `unpark_item` | `POST /v1/work/unpark` | Person only (`tracker/src/http.rs#person`) |
 | `unblock_item` | `POST /v1/work/unblock` | Person only (`tracker/src/http.rs#person`) |
 
+`my_queue` returns raw item text to the host model. Tool names and routes are static, so that text cannot change which calls exist, but hosts should treat it as untrusted.
+
 ## Records on work.events
 
 Only the tracker appends. "Agent" below means a record written for an agent's
