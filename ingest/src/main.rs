@@ -329,7 +329,10 @@ async fn gitlab_source(
 ) -> Result<gitlab::Gitlab<Gated<gitlab::transport::Reqwest>>> {
     let mut gitlab = gitlab::Gitlab::new(
         &g.api,
-        lease::gated(gitlab::transport::Reqwest::new(gitlab_secret(g))?, lessee.clone()),
+        lease::gated(
+            gitlab::transport::Reqwest::new(gitlab_secret(g))?,
+            lessee.clone(),
+        ),
         g.own_logins.clone(),
         cfg.rules.clone(),
         &g.projects,

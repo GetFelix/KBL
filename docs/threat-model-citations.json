@@ -570,7 +570,7 @@
   ".ok_or(\"another worker holds this source's lease\")?;"
  ],
  "ingest/src/lease.rs#Lessee::left": [
-  ".checked_sub(mono.max(wall))"
+  "limit.checked_sub(mono.max(wall)).filter(|d| !d.is_zero())"
  ],
  "ingest/src/lease.rs#leave": [
   "beating.abort();"
