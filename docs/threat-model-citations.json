@@ -440,6 +440,16 @@
   "if !it.accepted {"
  ],
  "tracker/src/http.rs#as_person": [
-  "&& !call.teams.is_member(&call.team, to)"
+  "} => (!call.teams.is_member(&call.team, to)).then_some(\"that person is not in this team\"),",
+  "(!call.teams.is_team_agent(&call.team, to)).then_some(\"that agent is not in this team\")"
+ ],
+ "tracker/src/tracker.rs#try_assigned": [
+  ".filter(|(_, it)| it.assignee == Some(Assignee::Agent(key.clone())))"
+ ],
+ "tracker/src/tracker.rs#claim_from": [
+  "if assigned_agent(&core.state, &item).is_some() {"
+ ],
+ "tracker/src/tracker.rs#drop_away_assignees": [
+  "revoked || last.elapsed() >= away"
  ]
 }
