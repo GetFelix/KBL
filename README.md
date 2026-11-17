@@ -78,10 +78,13 @@ the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be f
    claude --mcp-config .mcp.json --strict-mcp-config
    ```
    Ask Claude Code to call `work_next`. It claims `demo-1`, and the dashboard shows the item held by `agent1`.
-   `connect.mjs` writes the file with mode 600 (it holds the agent's tokens) and with absolute paths, so any directory
-   works. The stack has agents `agent1` to `agent8`, one tracker token each. A Felix token lasts 24 hours and
-   `kbl-mcp` does not renew it: after that, run `node dev/connect.mjs` again and restart the host
-   ([issue 317](https://github.com/GetFelix/KBL/issues/317)).
+   `connect.mjs` writes the file with mode 600 (it holds the agent's tracker token) and with absolute paths, so any
+   directory works. The stack has agents `agent1` to `agent8`, one tracker token each. The agent's ID token goes in
+   `dev/state/agent1.id-token` (mode 600), and the config points `KBL_FELIX_ID_TOKEN_FILE` and
+   `KBL_FELIX_CONTROL_PLANE` at it, so `kbl-mcp` renews its Felix token by itself. The ID token lasts 24 hours: run
+   `node dev/connect.mjs agent1` again to write a new one, and the running `kbl-mcp` picks it up at its next renewal.
+   `--fixed-token` writes a Felix token into the config as `KBL_FELIX_TOKEN` instead; that one is not renewed, so after
+   24 hours run `connect.mjs` again and restart the host.
 The dashboard link works once: the page removes the token from the address, so a reload needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
 4. **Stop it** with `dev/down.sh`, which also deletes its data.
 
@@ -447,12 +450,14 @@ The command is passed to `sh -c`, so its text shows in the process list while it
 
 Set exactly one of the file and the command, and not `KBL_FELIX_TOKEN` as well. `kbl-mcp` trades the ID token at
 `/v1/tenants/<tenant>/token/exchange` for a token for the broker when it starts, and again once two thirds of that
-token's life has passed. The broker checks a token when a stream opens, so a renewal reaches the next request without
-a reconnect, and a claim the agent holds keeps standing across it. If a renewal fails (the control plane is down, the
+token's life has passed, whether or not the agent is busy. The Felix client keeps its publish and cache streams open
+for the life of a connection, and a write the broker forwards to another broker carries the token its stream opened
+with, so after each renewal `kbl-mcp` opens a new connection and switches to it
+([felix issue 2736](https://github.com/GetFelix/felix/issues/2736)). A claim the agent holds keeps standing across the
+switch: Felix ties an ack or an extension to the delivery, not to the connection. If a renewal fails (the control plane is down, the
 ID token expired or was revoked), `kbl-mcp` keeps using the Felix token it has and tries again every few seconds. Once
 that token expires too, calls that open a new stream fail and the error says the control plane refused the ID token.
-The Felix client opens its publish and cache streams once, when it connects, and the broker does not end an open stream
-when its token expires, so those keep the first token; a restart of `kbl-mcp` is what replaces them. Nothing prints a token, the control plane's answer or the command line, and the command's error output is
+Nothing prints a token, the control plane's answer or the command line, and the command's error output is
 discarded.
 
 The ID token itself must outlast the agent's work or be replaced in the file or by the command before then, since

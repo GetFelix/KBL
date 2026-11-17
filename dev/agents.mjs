@@ -154,7 +154,13 @@ const PASSED_ENV = [
 export function mcpConfig(options, agent) {
   const env = {};
   for (const key of PASSED_ENV) if (process.env[key] !== undefined) env[key] = process.env[key];
-  Object.assign(env, { KBL_RUN: options.run, KBL_AGENT: agent.name, KBL_FELIX_TOKEN: agent.felix, KBL_TRACKER_TOKEN: agent.tracker });
+  Object.assign(env, { KBL_RUN: options.run, KBL_AGENT: agent.name, KBL_TRACKER_TOKEN: agent.tracker });
+  // An ID token file lets kbl-mcp renew its Felix token; a Felix token is fixed.
+  if (agent.idTokenFile) {
+    Object.assign(env, { KBL_FELIX_ID_TOKEN_FILE: agent.idTokenFile, KBL_FELIX_CONTROL_PLANE: agent.controlPlane });
+  } else {
+    env.KBL_FELIX_TOKEN = agent.felix;
+  }
   if (options.caFile) env.KBL_FELIX_CA_FILE = options.caFile;
   if (options.trackerUrl) env.KBL_TRACKER_URL = options.trackerUrl;
   return { mcpServers: { [SERVER]: { command: options.mcp, env } } };

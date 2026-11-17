@@ -122,10 +122,6 @@ jobs:
           node dev/check-mcp.mjs
       - name: Run the task tools against Felix
         run: node dev/check-tasks.mjs
-      - name: Keep a claim across Felix token renewals
-        run: |
-          cargo build -p kbl-tool -p kbl-mcp
-          node dev/check-renewal.mjs
       - name: Run the tracker's claim path against Felix
         run: |
           cargo build -p kbl-tool -p kbl-mcp -p kbl-tracker
@@ -175,6 +171,13 @@ jobs:
         run: node dev/check-death.mjs
       - name: Dead-letter a poison task
         run: node dev/check-poison.mjs
+      # On a stack of its own with 20 s tokens, then the stack is recreated as it was.
+      - name: Outlive the first Felix token, holding a claim
+        run: |
+          cargo build -p kbl-tool -p kbl-mcp
+          KBL_DEV_TOKEN_TTL_SECONDS=20 dev/up.sh
+          node dev/check-renewal.mjs
+          dev/up.sh
       # Last, because it recreates the stack.
       - name: Back up, restore into a fresh stack, and compare the folds
         run: |
