@@ -2021,3 +2021,50 @@ async fn a_reassign_names_a_person_of_the_team() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(queue("tok-both").await["count"], 0);
 }
+
+#[tokio::test]
+async fn a_reassign_through_records_names_a_person_of_the_team_too() {
+    let two = two_at_12().await;
+    let written = two.a.published().len();
+    let record = |who: &str| json!({ "record": { "kind": "reassigned", "item": "a1", "to": { "person": who } } });
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/a/work/records",
+        Some("tok-a-gab"),
+        record("ana"),
+    )
+    .await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_member"))
+    );
+    assert_eq!(two.a.published().len(), written);
+    let (status, r) = call(
+        &two.app,
+        "/v1/teams/a/work/records",
+        Some("tok-a-gab"),
+        record("kim"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+}
+
+#[tokio::test]
+async fn a_steer_over_the_inline_limit_is_refused_on_both_routes() {
+    let two = two_at_12().await;
+    let written = two.a.published().len();
+    let big = "x".repeat(kbl_core::artifact::INLINE_LIMIT + 1);
+    let body = json!({ "item": "a1", "attempt": 1, "text": { "text": big } });
+    let record = json!({ "record": { "kind": "steered", "item": "a1", "attempt": 1, "text": { "text": big } } });
+    for (path, body) in [("steer", body), ("records", record)] {
+        let (status, r) = call(
+            &two.app,
+            &format!("/v1/teams/a/work/{path}"),
+            Some("tok-a-gab"),
+            body,
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {r}");
+    }
+    assert_eq!(two.a.published().len(), written);
+}

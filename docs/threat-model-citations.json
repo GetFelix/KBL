@@ -370,8 +370,8 @@
  ],
  "tracker/src/tracker/tools.rs#check_sizes": [
   "pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {",
-  "WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {",
-  "check_content(\"text\", text)",
+  "| WorkRecord::HumanInput { text, .. }",
+  "| WorkRecord::Steered { text, .. } => check_content(\"text\", text),",
   "kbl_core::work::MAX_RULES_TEXT",
   "WorkRecord::Step { output, .. } => check_content(\"output\", output),",
   "WorkRecord::Edit { hunk, .. } => check_content(\"hunk\", hunk),",
@@ -433,7 +433,7 @@
   "if rec.actor != Actor::Person {",
   "if !it.accepted {"
  ],
- "tracker/src/http.rs#reassign": [
-  "&& !app.teams.is_member(&call.team, p)"
+ "tracker/src/http.rs#as_person": [
+  "&& !call.teams.is_member(&call.team, to)"
  ]
 }

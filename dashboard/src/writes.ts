@@ -101,8 +101,22 @@ export function heldAttempt(i: ItemRow, story?: { attempts: readonly { attempt: 
 /** Whether a note can go to the agent holding the item. */
 export const canSteer = (i: ItemRow): boolean => ASSIGNABLE_LOG(i) && i.stage === 'held';
 
-/** Whether the item stopped because its attempt used its tries, where a person can take it. */
-export const canTakeAfterLimit = (i: ItemRow): boolean => canAssign(i) && i.needs === 'tries_used';
+/** Whether the item stopped because its attempt used its tries, where `viewer` can take it: not when it is theirs already. */
+export const canTakeAfterLimit = (i: ItemRow, viewer: string | null): boolean =>
+  canAssign(i) && i.needs === 'tries_used' && (viewer === null || assigneePerson(i) !== viewer);
+
+/** What a quick choice in the assign picker writes, or null when the item is already so. The fold would refuse it as `no_change`. */
+export function assignPick(now: string | null, me: string, choice: 'me' | 'nobody'): WriteArgs | null {
+  if (choice === 'me') return now === me ? null : { kind: 'take' };
+  return now === null ? null : { kind: 'reassign', to: null };
+}
+
+/** What `a` does on `id`: nothing for an item that takes no assignee, else sign in first, else the item. */
+export function assignTarget(items: readonly ItemRow[], id: string, signedIn: boolean): ItemRow | 'sign-in' | null {
+  const item = items.find((i) => i.id === id);
+  if (!item || !canAssign(item)) return null;
+  return signedIn ? item : 'sign-in';
+}
 
 export const FLAG_COMMANDS: ReadonlySet<string> = new Set(['flag', 'unflag']);
 

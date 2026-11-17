@@ -286,6 +286,7 @@ impl<S: Send + Sync, T: DeserializeOwned> FromRequest<S> for Keyed<T> {
 struct Call<B> {
     tracker: Tracker<B>,
     team: Arc<Team<B>>,
+    teams: Arc<Teams<B>>,
     caller: Caller,
     _slot: OwnedSemaphorePermit,
 }
@@ -343,6 +344,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
         Ok(Self {
             tracker,
             team,
+            teams: app.teams.clone(),
             caller,
             _slot: slot,
         })
@@ -863,13 +865,7 @@ async fn give_up<B: Broker>(call: Call<B>, Json(body): Json<GiveUpBody>) -> Resp
 }
 
 async fn records<B: Broker>(call: Call<B>, Keyed(body, rk): Keyed<RecordBody>) -> Response {
-    match call.person() {
-        Ok(p) => reply(
-            call.keyed(rk, call.tracker().person_record(p, body.record))
-                .await,
-        ),
-        Err(d) => denied(d),
-    }
+    as_person(&call, rk, body.record).await
 }
 
 async fn work_post<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<PostBody>) -> Response {
@@ -1140,19 +1136,34 @@ async fn answer<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AnswerBody>) -> Re
     )
 }
 
-/// A person's action that is one record.
+/// A person's action that is one record. Every record a person writes
+/// passes here, so the assignee check holds for `/v1/work/records` too: the
+/// fold does not read the org log, so it cannot tell who is in the team.
 async fn as_person<B: Broker>(
     call: &Call<B>,
     rk: Option<RequestKey>,
     record: WorkRecord,
 ) -> Response {
-    match call.person() {
-        Ok(p) => reply(
-            call.keyed(rk, call.tracker().person_record(p, record))
-                .await,
-        ),
-        Err(d) => denied(d),
+    let p = match call.person() {
+        Ok(p) => p,
+        Err(d) => return denied(d),
+    };
+    if let WorkRecord::Reassigned {
+        to: Some(Assignee::Person(to)),
+        ..
+    } = &record
+        && !call.teams.is_member(&call.team, to)
+    {
+        return refused(
+            StatusCode::CONFLICT,
+            "that person is not in this team",
+            "not_member",
+        );
     }
+    reply(
+        call.keyed(rk, call.tracker().person_record(p, record))
+            .await,
+    )
 }
 
 async fn accept<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AcceptBody>) -> Response {
@@ -1383,21 +1394,7 @@ async fn take<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Respon
 }
 
 /// The fold does not read the org log, so membership is checked here.
-async fn reassign<B: Broker>(
-    State(app): State<Arc<App<B>>>,
-    call: Call<B>,
-    Keyed(b, rk): Keyed<ReassignBody>,
-) -> Response {
-    if let Some(Assignee::Person(p)) = &b.to
-        && call.person().is_ok()
-        && !app.teams.is_member(&call.team, p)
-    {
-        return refused(
-            StatusCode::CONFLICT,
-            "that person is not in this team",
-            "not_member",
-        );
-    }
+async fn reassign<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ReassignBody>) -> Response {
     let record = WorkRecord::Reassigned {
         item: b.item,
         to: b.to,

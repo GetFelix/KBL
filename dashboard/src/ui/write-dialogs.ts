@@ -1,7 +1,7 @@
 // The sign-in dialog and the confirm step before a write that cannot be undone
 // (WCAG 3.3.4: the person reviews what will be written, and can cancel).
 import type { ItemRow } from '../fold.ts';
-import { acceptTier, assigneePerson, checkPerson, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
+import { acceptTier, assigneePerson, assignPick, checkPerson, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
 import { modal } from './dialog.ts';
 import { h } from './dom.ts';
 import { tierSelect } from './item-actions.ts';
@@ -136,12 +136,13 @@ export function assignDialog(send: (ids: string[], args: WriteArgs) => void) {
     isOpen: m.isOpen,
     open(item: ItemRow, me: string, names: readonly string[]) {
       const now = assigneePerson(item);
-      const pick = (args: WriteArgs) => {
+      const pick = (args: WriteArgs | null) => {
+        if (!args) return;
         m.close();
         send([item.id], args);
       };
-      const meButton = h('button', { type: 'button', class: 'button primary', 'data-focus': 'assign-me', onclick: () => pick({ kind: 'take' }) }, `Me (${me})`);
-      const nobody = h('button', { type: 'button', class: 'button', 'data-focus': 'assign-nobody', onclick: () => pick({ kind: 'reassign', to: null }) }, 'Nobody');
+      const meButton = h('button', { type: 'button', class: 'button primary', 'data-focus': 'assign-me', onclick: () => pick(assignPick(now, me, 'me')) }, `Me (${me})`);
+      const nobody = h('button', { type: 'button', class: 'button', 'data-focus': 'assign-nobody', onclick: () => pick(assignPick(now, me, 'nobody')) }, 'Nobody');
       if (now === me) meButton.setAttribute('aria-disabled', 'true');
       if (now === null) nobody.setAttribute('aria-disabled', 'true');
       const others = names.filter((n) => n !== me);

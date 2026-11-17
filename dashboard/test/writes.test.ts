@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { acceptTier, assigneePerson, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkSteer, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import { acceptTier, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkSteer, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
@@ -294,8 +294,12 @@ test('assigning is offered only on a log at format 12, on an accepted open item'
   assert.equal(canSteer(item({ id: 'a', ...twelve, stage: 'held' })), true);
   assert.equal(canSteer(item({ id: 'a', ...twelve, stage: 'held', format: 11 })), false);
   assert.equal(canSteer(item({ id: 'a', ...twelve, stage: 'ready' })), false);
-  assert.equal(canTakeAfterLimit(item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'tries_used' })), true);
-  assert.equal(canTakeAfterLimit(item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'question' })), false);
+  assert.equal(canTakeAfterLimit(item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'tries_used' }), 'ana'), true);
+  assert.equal(canTakeAfterLimit(item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'question' }), 'ana'), false);
+  // Already the viewer's: taking it again would change nothing.
+  const hers = item({ id: 'a', ...twelve, stage: 'needs_you', needs: 'tries_used', assignee: { person: 'ana' } });
+  assert.equal(canTakeAfterLimit(hers, 'ana'), false);
+  assert.equal(canTakeAfterLimit(hers, 'bo'), true);
   // The write itself is refused before sending on a log that is too old.
   const old = item({ id: 'a', ...twelve, format: 11 });
   const [job] = jobsFor(['a'], { kind: 'take' }, [old], NO_WRITES);
@@ -342,8 +346,8 @@ test('my queue holds what is unassigned or assigned to the signed-in person', as
   ];
   assert.deepEqual(myQueue(items, 'ana').map((i) => i.id), ['free', 'mine', 'agent']);
   assert.deepEqual(myQueue(items, 'bo').map((i) => i.id), ['free', 'theirs', 'agent']);
-  // Signed out there is no one to filter for.
-  assert.equal(myQueue(items, null).length, 4);
+  // Signed out, an assigned item is no one's, as in the tracker's queue.
+  assert.deepEqual(myQueue(items, null).map((i) => i.id), ['free', 'agent']);
   const signed = { kind: 'signed-in' as const, person: 'ana', reviewLimit: 0 };
   assert.deepEqual(inScope({ items, blocked: [], view: 'inbox', tracker: signed }).map((i) => i.id), ['free', 'mine', 'agent']);
   // The other views are not narrowed by who is signed in.
@@ -361,4 +365,20 @@ test('the assign key and command exist', async () => {
   assert.equal(commandFor({ key: 'a', metaKey: false, ctrlKey: false, altKey: false, inText: false }, false), 'assign');
   assert.equal(commandFor({ key: 'a', metaKey: false, ctrlKey: false, altKey: false, inText: true }, false), undefined);
   assert.ok(COMMANDS.some((c) => c.id === 'assign'));
+});
+
+test('the assign picker writes nothing for the choice the item already has', () => {
+  assert.deepEqual(assignPick(null, 'ana', 'me'), { kind: 'take' });
+  assert.equal(assignPick('ana', 'ana', 'me'), null);
+  assert.equal(assignPick(null, 'ana', 'nobody'), null);
+  assert.deepEqual(assignPick('bo', 'ana', 'nobody'), { kind: 'reassign', to: null });
+});
+
+test('assigning asks to sign in only for an item that takes an assignee', () => {
+  const open = item({ id: 'a', ...twelve });
+  const old = item({ id: 'b', ...twelve, format: 11 });
+  assert.equal(assignTarget([open, old], 'a', true), open);
+  assert.equal(assignTarget([open, old], 'a', false), 'sign-in');
+  assert.equal(assignTarget([open, old], 'b', false), null);
+  assert.equal(assignTarget([open, old], 'nope', false), null);
 });

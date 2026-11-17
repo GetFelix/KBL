@@ -24,7 +24,7 @@ import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { assignDialog, confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { Tracker } from './tracker.ts';
-import { assigneePerson, CAN, canAssign, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
+import { assigneePerson, assignTarget, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -178,9 +178,9 @@ const confirmKind = (kind: ConfirmKind, ids: string[]) => {
 
 const assignItem = (id: string) => {
   const s = store.get();
-  if (s.tracker.kind !== 'signed-in') return signInBox.open();
-  const item = s.items.find((i) => i.id === id);
-  if (!item || !canAssign(item)) return;
+  const item = assignTarget(s.items, id, s.tracker.kind === 'signed-in');
+  if (item === 'sign-in') return signInBox.open();
+  if (!item || s.tracker.kind !== 'signed-in') return;
   const names = [...new Set(s.items.flatMap((i) => assigneePerson(i) ?? []))].sort();
   assignBox.open(item, s.tracker.person, names);
 };

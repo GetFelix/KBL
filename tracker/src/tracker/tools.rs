@@ -1238,9 +1238,9 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             check_content("text", text)?;
             check_options(options, default.as_deref())
         }
-        WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {
-            check_content("text", text)
-        }
+        WorkRecord::Context { text, .. }
+        | WorkRecord::HumanInput { text, .. }
+        | WorkRecord::Steered { text, .. } => check_content("text", text),
         WorkRecord::Edited {
             title: Some(title), ..
         } => {

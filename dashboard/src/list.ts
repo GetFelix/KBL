@@ -61,14 +61,14 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
 }
 
 /**
- * What needs `viewer`: an item assigned to another person is in that person's queue, not here.
- * Unassigned items show for everyone. Signed out there is no one to filter for, so all show.
+ * What needs `viewer`: an item assigned to a person is only in that person's queue. Unassigned
+ * items show for everyone. Signed out, assigned items show for no one, as the tracker's queue does.
  */
 export function myQueue(items: readonly ItemRow[], viewer: string | null): ItemRow[] {
   return items.filter((i) => {
     if (i.stage !== 'needs_you') return false;
     const who = assigneePerson(i);
-    return who === null || viewer === null || who === viewer;
+    return who === null || who === viewer;
   });
 }
 
