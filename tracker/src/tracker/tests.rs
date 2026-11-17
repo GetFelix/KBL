@@ -1189,6 +1189,61 @@ async fn a_claim_a_failover_cut_from_the_log_is_not_extended() {
     ));
 }
 
+/// A failover cuts w1's claim of a1 and another tracker refills the same
+/// offset with w2's claim, so the log is as long as the tracker's state but
+/// no longer shows w1's hold.
+fn refill_the_claim_for_w2(fake: &Fake, at: u64) {
+    let mut net = fake.net.lock().unwrap();
+    let (_, payload) = net
+        .streams
+        .get_mut(WORK_EVENTS)
+        .unwrap()
+        .iter_mut()
+        .find(|(o, _)| *o == at)
+        .expect("the claim");
+    let mut theirs = WorkLogged::decode(payload)
+        .unwrap()
+        .with_writer("another-tracker");
+    assert!(matches!(theirs.record, WorkRecord::Claimed { .. }));
+    theirs.by = Key::new("w2").unwrap();
+    *payload = theirs.encode();
+}
+
+fn held_by(t: &Tracker<Fake>, i: &str) -> Option<String> {
+    let core = t.0.core.try_lock().unwrap();
+    let hold = core.state.items.get(&item(i))?.hold.as_ref()?;
+    Some(hold.by.as_str().to_owned())
+}
+
+#[tokio::test]
+async fn a_claim_refilled_at_the_same_offset_is_not_resumed() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await;
+    let len = fake.log().len();
+    refill_the_claim_for_w2(&fake, first["offset"].as_u64().unwrap());
+    assert_eq!(fake.log().len(), len);
+    let again = claim(&t, "w1").await;
+    assert_ne!(again["resumed"], true);
+    assert_eq!(held_by(&t, "a1").as_deref(), Some("w2"));
+}
+
+#[tokio::test]
+async fn a_claim_refilled_at_the_same_offset_is_not_extended() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await;
+    refill_the_claim_for_w2(&fake, first["offset"].as_u64().unwrap());
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_err());
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
+    assert_eq!(held_by(&t, "a1").as_deref(), Some("w2"));
+}
+
 #[tokio::test]
 async fn extend_reports_a_lapsed_claim_and_drops_it() {
     let fake = Fake::default();

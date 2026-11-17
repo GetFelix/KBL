@@ -1258,6 +1258,12 @@ pub struct WorkLogged {
     /// the first result. A reader that predates it ignores the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub req: Option<RequestKey>,
+    /// The lease holder name of the tracker that wrote the record. Not part
+    /// of the fold: it tells two writes apart that would otherwise encode the
+    /// same, so a tracker can tell its own record at an offset from another
+    /// writer's. A reader that predates it ignores the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer: Option<String>,
     #[serde(flatten)]
     pub record: WorkRecord,
 }
@@ -1329,8 +1335,15 @@ impl WorkLogged {
             by,
             actor,
             req: None,
+            writer: None,
             record,
         }
+    }
+
+    /// Names the tracker that writes the record.
+    pub fn with_writer(mut self, writer: &str) -> Self {
+        self.writer = Some(writer.to_owned());
+        self
     }
 
     /// The same record, written for a call that sent `req`.

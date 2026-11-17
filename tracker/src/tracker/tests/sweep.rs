@@ -1,5 +1,5 @@
 //! A seeded sweep of the claim path under faults. Each seed drives imports,
-//! claims, completions, dismissals and restarts against a Raft-style `Fake`
+//! claims, extensions, completions, dismissals and restarts against a Raft-style `Fake`
 //! while the broker misbehaves, and checks the log after every step.
 //!
 //! `KBL_SWEEP_SEEDS=n` runs seeds 0..n (default 40), `KBL_SWEEP_SEED=s` replays
@@ -254,6 +254,29 @@ async fn finish_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, who: &'sta
     }
 }
 
+/// An agent extends what it believes it holds. A tracker that missed the
+/// end of that hold must not extend it.
+async fn extend_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, who: &'static str) {
+    let Some(id) = m.beliefs.get(who).cloned() else {
+        return;
+    };
+    match t.extend(&agent(who), &item(&id)).await {
+        Ok(_) => {
+            let state = replay(fake).state;
+            let holder = state.items[&item(&id)].hold.as_ref().map(|h| h.by.as_str());
+            assert_eq!(
+                holder,
+                Some(who),
+                "{who} was extended {id}, which the log shows held by {holder:?}"
+            );
+        }
+        Err(Error::Lost(_)) => {
+            m.beliefs.remove(who);
+        }
+        Err(_) => {}
+    }
+}
+
 async fn dismiss_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
     let mut ids: Vec<_> = m.imported.iter().cloned().collect();
     ids.sort();
@@ -363,10 +386,11 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     let who = AGENTS[rng.below(AGENTS.len())];
     let serving = t.serving(rng.below(100) < 40);
-    match rng.below(10) {
+    match rng.below(11) {
         0..=1 => seed_item(serving, m).await,
         2..=5 => claim_step(serving, fake, m, who).await,
         6..=8 => finish_step(serving, m, rng, who).await,
+        9 => extend_step(serving, fake, m, who).await,
         _ => dismiss_step(serving, m, rng).await,
     }
     fake.fail_polls(None);
