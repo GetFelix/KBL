@@ -83,6 +83,10 @@ fn logs() -> Vec<(&'static str, String)> {
             std::fs::read_to_string(format!("{core}/work_format_8.jsonl")).unwrap(),
         ),
         (
+            "format_10",
+            std::fs::read_to_string(format!("{core}/work_format_10.jsonl")).unwrap(),
+        ),
+        (
             "agent_context",
             std::fs::read_to_string(format!("{core}/work_agent_context.jsonl")).unwrap(),
         ),

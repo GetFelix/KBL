@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{NeedsYou, Stage, State};
 use crate::names::ItemId;
-use crate::work::{Actor, WorkLogged};
+use crate::work::{Actor, WorkLogged, WorkRecord};
 
 /// Finished waits kept, oldest dropped first, so a long log costs bounded memory.
 const KEPT_WAITS: usize = 20_000;
@@ -156,15 +156,26 @@ pub(super) fn sort_queue(out: &mut [QueueEntry]) {
 impl State {
     /// Every open item that waits on a person: unknown start first (it began
     /// before this state's first record), then oldest wait, then the lower
-    /// tier number (untiered last), then id.
-    pub fn queue(&self) -> Vec<QueueEntry> {
+    /// tier number (untiered last), then id. An item a person snoozed (until
+    /// `now_ms`) or parked is left out while the wait they hid continues.
+    pub fn queue(&self, now_ms: u64) -> Vec<QueueEntry> {
         let entry = |id: &ItemId| {
             let kind = self.waiting_kind(id)?;
+            let it = &self.items[id];
+            let since_ms = self.human_waits.open.get(id).map(|o| o.since_ms);
+            // A wait that began after the hide is a new reason to look.
+            let hidden = |at_ms: u64| since_ms.is_none_or(|s| s <= at_ms);
+            let snoozed = it
+                .snoozed
+                .is_some_and(|z| z.until_ms > now_ms && hidden(z.at_ms));
+            if snoozed || it.parked_at_ms.is_some_and(hidden) {
+                return None;
+            }
             Some(QueueEntry {
                 item: id.clone(),
                 kind,
-                tier: self.items[id].tier,
-                since_ms: self.human_waits.open.get(id).map(|o| o.since_ms),
+                tier: it.tier,
+                since_ms,
             })
         };
         // Open waits cover every wait this state saw begin. A restored state
@@ -224,7 +235,7 @@ impl State {
     }
 
     /// Why `id` waits on a person now, if it does.
-    fn waiting_kind(&self, id: &ItemId) -> Option<WaitKind> {
+    pub(super) fn waiting_kind(&self, id: &ItemId) -> Option<WaitKind> {
         let it = self.items.get(id)?;
         if it.closed.is_some() {
             return None;
@@ -247,8 +258,8 @@ impl State {
     }
 
     /// Runs after each accepted record. A person's record on a waiting item
-    /// ends the wait; then the item's wait state is read again. A snooze is
-    /// an unknown kind to this build, which names no item, so it is not an action.
+    /// ends the wait; then the item's wait state is read again. A snooze or a
+    /// park only hides the item from My queue, so it is not an action.
     pub(super) fn track_human_wait(&mut self, rec: &WorkLogged) {
         // `at` is still the previous offset here, so a first record on a state
         // that already has one means the state came from a snapshot.
@@ -261,7 +272,12 @@ impl State {
         let Some(id) = rec.record.item().cloned() else {
             return;
         };
+        let hides = matches!(
+            rec.record,
+            WorkRecord::Snoozed { .. } | WorkRecord::Parked { .. }
+        );
         if rec.actor == Actor::Person
+            && !hides
             && let Some(o) = self.human_waits.open.get_mut(&id)
             && !o.acted
         {

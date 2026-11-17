@@ -154,6 +154,11 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/rules/read", post(rules_read::<B>))
         .route("/v1/work/flag", post(flag::<B>))
         .route("/v1/work/unflag", post(unflag::<B>))
+        .route("/v1/work/retry", post(retry::<B>))
+        .route("/v1/work/snooze", post(snooze::<B>))
+        .route("/v1/work/park", post(park::<B>))
+        .route("/v1/work/unpark", post(unpark::<B>))
+        .route("/v1/work/unblock", post(unblock::<B>))
         .route("/v1/work/queue", get(queue::<B>))
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
@@ -396,6 +401,18 @@ struct NextBody {
 #[derive(Deserialize)]
 struct ItemBody {
     item: ItemId,
+}
+
+#[derive(Deserialize)]
+struct SnoozeBody {
+    item: ItemId,
+    until_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct UnblockBody {
+    item: ItemId,
+    to: ItemId,
 }
 
 #[derive(Deserialize)]
@@ -1242,6 +1259,42 @@ async fn unflag<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Resp
     let record = WorkRecord::Flagged {
         item: b.item,
         flagged: false,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn retry<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::Retried { item: b.item }).await
+}
+
+async fn snooze<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<SnoozeBody>) -> Response {
+    let record = WorkRecord::Snoozed {
+        item: b.item,
+        until_ms: b.until_ms,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn park<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    let record = WorkRecord::Parked {
+        item: b.item,
+        parked: true,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn unpark<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    let record = WorkRecord::Parked {
+        item: b.item,
+        parked: false,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn unblock<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<UnblockBody>) -> Response {
+    let record = WorkRecord::Unblocked {
+        item: b.item,
+        to: b.to,
     };
     as_person(&call, rk, record).await
 }

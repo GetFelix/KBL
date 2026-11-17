@@ -56,8 +56,12 @@ pub const FORMAT_V8: u32 = 8;
 /// was copied. The fold reads it and refuses a malformed day.
 pub const FORMAT_V9: u32 = 9;
 
+/// The format that added `retried`, `snoozed`, `parked` and `unblocked`: the
+/// card actions a person takes on My queue.
+pub const FORMAT_V10: u32 = 10;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V9;
+pub const FORMAT: u32 = FORMAT_V10;
 
 /// Usage entries one report may carry: one per model.
 pub const MAX_USAGE_ENTRIES: usize = 16;
@@ -830,6 +834,18 @@ pub enum WorkRecord {
     /// not handed out until a person moves it back out (`flagged: false`). A
     /// holder finishes or releases first. Format 7.
     Flagged { item: ItemId, flagged: bool },
+    /// A person gives an item that used its tries a fresh set of claims on
+    /// the attempt it was working. Format 10.
+    Retried { item: ItemId },
+    /// A person hides an item from My queue until `until_ms`, or until its
+    /// reason for waiting changes. Format 10.
+    Snoozed { item: ItemId, until_ms: u64 },
+    /// A person hides an item from My queue (`parked: true`) until its reason
+    /// for waiting changes, or shows it again (`parked: false`). Format 10.
+    Parked { item: ItemId, parked: bool },
+    /// A person marks what an item waits on as resolved: the link is dropped
+    /// and the item no longer waits on `to`. Format 10.
+    Unblocked { item: ItemId, to: ItemId },
     /// The upstream issue was reopened: the same root goes back to Triage with
     /// its history and its remaining budget.
     Reopened { item: ItemId },
@@ -947,6 +963,10 @@ impl WorkRecord {
             WorkRecord::LeftScope { .. } => "left_scope",
             WorkRecord::ReturnedToScope { .. } => "returned_to_scope",
             WorkRecord::Flagged { .. } => "flagged",
+            WorkRecord::Retried { .. } => "retried",
+            WorkRecord::Snoozed { .. } => "snoozed",
+            WorkRecord::Parked { .. } => "parked",
+            WorkRecord::Unblocked { .. } => "unblocked",
             WorkRecord::Reopened { .. } => "reopened",
             WorkRecord::AttemptClosed { .. } => "attempt_closed",
             WorkRecord::TierChanged { .. } => "tier_changed",
@@ -996,6 +1016,10 @@ impl WorkRecord {
             | WorkRecord::LeftScope { item }
             | WorkRecord::ReturnedToScope { item }
             | WorkRecord::Flagged { item, .. }
+            | WorkRecord::Retried { item }
+            | WorkRecord::Snoozed { item, .. }
+            | WorkRecord::Parked { item, .. }
+            | WorkRecord::Unblocked { item, .. }
             | WorkRecord::Reopened { item }
             | WorkRecord::AttemptClosed { item, .. }
             | WorkRecord::TierChanged { item, .. }
@@ -1121,6 +1145,10 @@ impl WorkRecord {
             WorkRecord::FormatRaised { to } => (*to).max(FORMAT_V2),
             WorkRecord::ReturnedToScope { .. } => FORMAT_V2,
             WorkRecord::Flagged { .. } => FORMAT_V7,
+            WorkRecord::Retried { .. }
+            | WorkRecord::Snoozed { .. }
+            | WorkRecord::Parked { .. }
+            | WorkRecord::Unblocked { .. } => FORMAT_V10,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,
             WorkRecord::PriceSet { .. } => FORMAT_V8,
             r if r

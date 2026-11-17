@@ -353,12 +353,17 @@ record if the fold accepts it:
 | `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` (`text` is a string) | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |
 | `POST /v1/work/flag` `{item}` | `flagged` with `flagged: true`: the item moves to Needs you and is not handed out. See [Flagging an item for a person](#flagging-an-item-for-a-person) |
 | `POST /v1/work/unflag` `{item}` | `flagged` with `flagged: false`: the item leaves Needs you, unless it waits there for another reason |
+| `POST /v1/work/retry` `{item}` | `retried`: an item that used its tries gets a fresh set. See [Card actions on My queue](#card-actions-on-my-queue) |
+| `POST /v1/work/snooze` `{item, until_ms}` | `snoozed`: My queue hides the item until `until_ms` |
+| `POST /v1/work/park` `{item}` | `parked` with `parked: true`: My queue hides the item until it waits for a new reason |
+| `POST /v1/work/unpark` `{item}` | `parked` with `parked: false`: the item is in My queue again |
+| `POST /v1/work/unblock` `{item, to}` | `unblocked`: marks the dependency `to` resolved, so the item no longer waits on it |
 
 A person's token can also read the team's work. These calls write nothing:
 
 | Call | Answers with |
 |---|---|
-| `GET /v1/work/queue` | My queue: every item that waits on a person, oldest wait first, then lower tier, as `{item, title, work, stage, needs, wait, tier, since_ms, root}`, with `count` (the whole queue) and `at`. `?limit=` trims `queue` to its first entries: 200 by default, at most 1000. `wait` is `proposal`, `question`, `failure`, `review` or `other`; an item whose reason changes starts a new wait from that record. `since_ms` is null for a wait the tracker did not see begin (it started before a snapshot), and those come first, since they are older than any known start. The same list for every person of the team. Person tokens only |
+| `GET /v1/work/queue` | My queue: every item that waits on a person, oldest wait first, then lower tier, as `{item, title, work, stage, needs, wait, tier, since_ms, root}`, with `count` (the whole queue) and `at`. `?limit=` trims `queue` to its first entries: 200 by default, at most 1000. `wait` is `proposal`, `question`, `failure`, `review` or `other`; an item whose reason changes starts a new wait from that record. An item a person snoozed or parked is left out while that wait continues (see [Card actions on My queue](#card-actions-on-my-queue)). `since_ms` is null for a wait the tracker did not see begin (it started before a snapshot), and those come first, since they are older than any known start. The same list for every person of the team. Person tokens only |
 | `GET /v1/work/items` | Every item, in id order, as `{item, title, work, stage, needs, tier, parent, root, held_by, flagged, closed}`, and `at`, the log offset the answer reflects. `?stage=needs_you` (or any stage, such as `ready`, `held` or `blocked`) lists only that stage; a stage that does not exist is a `400` |
 | `GET /v1/work/items/{item}` | The item as the fold holds it, with its `stage`, `needs` (why it waits on a person, or null) and `waits_on` (the items it waits for) |
 | `GET /v1/work/items/{item}/history` | The records about the item, oldest first, each as `{offset, record}`: every record that names it, and those that point at it (a link to it, a prerequisite that created it or waits on it, a triage answer that calls it a duplicate). One answer holds at most 500 records and reads at most 20,000; `next` is the offset to pass as `?from=` for the rest, or null at the end of the log. A `from` past the end of the log is an empty answer with `next` null. A record the fold refused carries `rejected` with the reason, as of `at`, the log offset the tracker's state has reached |
@@ -537,6 +542,37 @@ on the log.
   as `no_change` shows with the tracker's reason.
 - `flagged` is a record of [format 7](upgrades.md#formats). Until a person
   raises the log to 7, both calls are refused with `format`.
+
+#### Card actions on My queue
+
+These are the person's moves on a card in [My queue](#my-queue). Each is one
+record, written with a person's token for the team the token belongs to, and
+each is [format 10](upgrades.md#formats): until a person raises the log to 10
+the calls are refused with `format`. A repeat, or a move that changes nothing,
+is refused with `no_change`; a closed item with `closed`.
+
+- **Retry** gives an item that stopped for want of tries a fresh set on the
+  attempt it was working. The item must be held by nobody, with an open
+  attempt that is not done and has used its tries; for anything else the call
+  is `no_change`. A failed check is not retried here: it takes a note or a
+  redo, as before.
+- **Snooze** hides an item from My queue until `until_ms`, which must be after
+  now and at most 30 days away (`bad_time` otherwise). The item must wait on a
+  person. **Park** hides it with no end time, and **unpark** shows it again.
+  Both leave the item's stage alone, so an agent can still claim what is
+  claimable, and neither counts as the person acting on the wait: the time to
+  first human action keeps running.
+- A snooze or a park covers the wait it was set on. If the item later waits for
+  a new reason (an answered question that then fails, a proposal accepted and
+  then stopped), the wait is new and the item is back in My queue. An item
+  restored from a snapshot, whose wait began earlier, stays hidden.
+- **Unblock** marks one dependency resolved: `to` must be an item the item
+  still waits on, and the link is dropped, as `unlink` drops it. It differs
+  in that the log says the person resolved it, and a link that holds nothing
+  is `no_change`.
+
+Reassign, take, steer, request review, request changes, mark merged and rate
+summary need an assignee in the fold or a PR-side record and are not built yet.
 
 ### One agent token per session
 
@@ -1755,7 +1791,7 @@ The landing view. It lists everything that waits on the person looking:
 
 Items are ordered by how long they have waited, oldest first, with tier as the
 tie-break. The count is in the tab title, so it shows without opening the page.
-Snoozed and parked items drop out of the count.
+Snoozed and parked items drop out of the count, and come back when the snooze ends or the item waits for a new reason.
 
 Every card is keyboard first, and the keys mean what they mean in Linear,
 GitHub and Jira. `?` shows the map in the page.
@@ -1956,7 +1992,7 @@ An item starts waiting when it enters one of these:
 
 The wait ends at the first record whose actor is a person on that item: an
 answer, an accept, a note, a close. Agent and tracker records do not end it.
-A snooze does not either: it names no item the fold knows, so it is not an
+A snooze or a park does not either: it only hides the card, so it is not an
 action. A wait is one unbroken stretch. If the item stops waiting and later
 waits again, that is a second wait and counts twice; a second person record
 during the same stretch does not count again. An item that stops waiting

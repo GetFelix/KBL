@@ -324,7 +324,7 @@ fn a_child_without_a_held_parent_is_refused() {
 #[test]
 fn unknown_kinds_are_skipped() {
     let line =
-        br#"{"at_ms":5,"by":"tracker","actor":"tracker","kind":"snoozed","item":"r1","hours":4}"#;
+        br#"{"at_ms":5,"by":"tracker","actor":"tracker","kind":"summary_rated","item":"r1","accurate":true}"#;
     let rec = WorkLogged::decode(line).unwrap();
     assert_eq!(rec.record, WorkRecord::Unknown);
     let mut l = story();
@@ -3046,6 +3046,7 @@ fn chained_answers_stop_at_the_depth_cap() {
     assert!(fold(&l.0).items[&id(&at)].open_question.is_some());
 }
 
+mod card_actions;
 mod human_wait;
 mod review;
 mod spend;

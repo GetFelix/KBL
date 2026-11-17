@@ -5,7 +5,7 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
-    FORMAT_V8, FORMAT_V9, ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V8, FORMAT_V9, FORMAT_V10, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -901,7 +901,7 @@ fn a_price_with_as_of_is_format_9() {
     use kbl_core::names::Key;
     use kbl_core::work::PriceUnit;
     assert_eq!(FORMAT_V9, 9);
-    assert_eq!(FORMAT, FORMAT_V9);
+    const { assert!(FORMAT >= FORMAT_V9) };
     let price = |as_of: Option<&str>| WorkRecord::PriceSet {
         model: "m".into(),
         unit: PriceUnit::Aic,
@@ -921,5 +921,58 @@ fn a_price_with_as_of_is_format_9() {
         String::from_utf8(rec.encode())
             .unwrap()
             .starts_with(r#"{"v":9,"#)
+    );
+}
+
+/// A log that raises to the tenth format and takes the card actions. Its
+/// folded state is pinned in `wasm/golden/format_10.state.json`; `work_replay.rs`
+/// checks each step.
+const FORMAT_10_LOG: &str = include_str!("work_format_10.jsonl");
+
+#[test]
+fn the_tenth_format_is_ten_and_names_its_kinds() {
+    assert_eq!(FORMAT_V10, 10);
+    assert_eq!(FORMAT, FORMAT_V10);
+    let mut seen: Vec<&str> = entries(FORMAT_10_LOG)
+        .iter()
+        .filter(|(_, r)| r.v == FORMAT_V10 && r.record.kind() != "format_raised")
+        .map(|(_, r)| {
+            assert_eq!(r.record.format(), FORMAT_V10, "{}", r.record.kind());
+            r.record.kind()
+        })
+        .collect();
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen, ["parked", "retried", "snoozed", "unblocked"]);
+}
+
+#[test]
+fn a_card_action_is_written_with_its_format() {
+    let item = |s: &str| kbl_core::names::ItemId::new(s).unwrap();
+    let write = |record| {
+        String::from_utf8(
+            WorkLogged::new(
+                7,
+                kbl_core::names::Key::new("gabriel").unwrap(),
+                Actor::Person,
+                record,
+            )
+            .encode(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        write(WorkRecord::Snoozed {
+            item: item("r1"),
+            until_ms: 9
+        }),
+        r#"{"v":10,"at_ms":7,"by":"gabriel","actor":"person","kind":"snoozed","item":"r1","until_ms":9}"#
+    );
+    assert_eq!(
+        write(WorkRecord::Parked {
+            item: item("r1"),
+            parked: true
+        }),
+        r#"{"v":10,"at_ms":7,"by":"gabriel","actor":"person","kind":"parked","item":"r1","parked":true}"#
     );
 }
