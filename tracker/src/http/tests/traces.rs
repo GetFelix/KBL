@@ -133,10 +133,13 @@ async fn traced_root(path: &str, method: &str, token: Option<&str>) -> (StatusCo
         .status();
     let spans = capture.finished();
     let caller = spans.iter().find(|s| s.name == "caller").unwrap();
-    let request = spans
+    let mut requests = spans
         .iter()
-        .find(|s| s.name.starts_with(method) && s.attributes.contains_key("http.route"))
+        .filter(|s| s.name.starts_with(method) && s.attributes.contains_key("http.route"));
+    let request = requests
+        .next()
         .unwrap_or_else(|| panic!("no request span: {spans:#?}"));
+    assert!(requests.next().is_none(), "one request span: {spans:#?}");
     (status, request.trace_id == caller.trace_id)
 }
 

@@ -141,7 +141,7 @@ fn the_tool_span_names_a_listed_tool_and_hides_an_unlisted_one() {
     let capture = kbl_trace::capture();
     let router = Server::tool_router();
     for name in ["work_next", "secret-tool-9f3a"] {
-        let span = tool_span(router.has_route(name), name);
+        let span = tool_span(&router, name);
         span.in_scope(|| {});
         span.record("outcome", "ok");
     }
