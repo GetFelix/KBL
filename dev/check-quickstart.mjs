@@ -32,10 +32,20 @@ try {
   check((await get(`${DASHBOARD}/v1/me`, me)).ok, "the dashboard forwards /v1 to the tracker");
   check((await get("http://127.0.0.1:8788/oidc")).ok, "the dashboard's gateway answers");
 
+  // The dashboard's own join: the scope field and stream must match what the page sends.
+  const { id_token } = await (await fetch("http://127.0.0.1:9400/token?sub=agents-admin&aud=kbl")).json();
+  const hello = await new Promise((resolve, reject) => {
+    const ws = new WebSocket("ws://127.0.0.1:8788/ws");
+    setTimeout(() => reject(new Error("no hello from the dashboard's gateway")), 15000).unref();
+    ws.onopen = () => ws.send(JSON.stringify({ type: "join", protocol: 1, features: ["read"], room: "kbl", token: id_token }));
+    ws.onmessage = (e) => { resolve(JSON.parse(e.data)); ws.close(); };
+  });
+  check(hello.type === "hello", "the dashboard's gateway lets the page join");
+
   const item = `qs-${Date.now().toString(36)}`;
   for (const record of [
     { kind: "imported", item, source: "quickstart", upstream_id: item, title: "Quick start check" },
-    { kind: "accepted", item, tier: 0 },
+    { kind: "accepted", item, tier: 1 },
   ]) {
     const reply = await post("/v1/work/records", me, { record });
     check(reply.ok, `a person wrote ${record.kind}`);

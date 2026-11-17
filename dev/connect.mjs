@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
 import { mcpConfig } from "./agents.mjs";
 import { felixToken } from "./lib/stack.mjs";
 
@@ -45,7 +46,7 @@ export async function connect(argv) {
   return { out, name };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   connect(process.argv.slice(2)).then(
     ({ out, name }) => console.log(`wrote ${out} for ${name} (mode 600). Its Felix token lasts 24 hours.`),
     (e) => {

@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
+import { pathToFileURL } from "node:url";
 
 // What a session prints, on a line of its own, when work_next says nothing is ready.
 export const EMPTY_MARKER = "KBL_QUEUE_EMPTY";
@@ -292,7 +293,7 @@ export async function runAgents(argv, log = console.log) {
   return stopping ? 130 : failed ? 1 : 0;
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   runAgents(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e) => {

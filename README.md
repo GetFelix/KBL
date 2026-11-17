@@ -43,9 +43,9 @@ fixtures. The [quick start](#quick-start) runs the real thing.</sub>
 This runs KBL on one machine: Felix, felix-gateway, the work tracker and the dashboard, each in a container built from
 this checkout. It is a local, single-user stack, **not a deployment**: the stand-in identity provider signs in anyone
 who asks, the tracker speaks plain HTTP, and nothing keeps its data between starts. Every port is bound to `127.0.0.1`.
-Self-hosting with a real identity provider is tracked in [issue 313](https://github.com/GetFelix/KBL/issues/316).
+Self-hosting with a real identity provider is tracked in [issue 316](https://github.com/GetFelix/KBL/issues/316).
 
-You need Git, Node 22 or later, and Docker (Compose v2) or Podman (with podman-compose 1.4 or later). The first start
+You need Git, curl, Node 22 or later, Rust 1.97 or later (to build `kbl-mcp`), and Docker (Compose v2) or Podman (with podman-compose 1.4 or later). The first start
 builds the tracker and the dashboard, which takes several minutes.
 
 ```bash
@@ -55,7 +55,7 @@ dev/quickstart.sh
 ```
 
 When it finishes it prints a dashboard link (the sign-in token is in it, so keep it to yourself), the tracker address and
-the token for the dashboard's write actions. Choose the engine with `CONTAINER_ENGINE=docker` or `podman`.
+the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be free. Choose the engine with `CONTAINER_ENGINE=docker` or `podman`.
 
 1. **Open the dashboard.** Open the printed link. Its queue is empty.
 2. **Add work.** Post an item to the tracker with the person token (the dashboard's Sign in takes the same token for its accept, reject, tier and close actions):
@@ -80,7 +80,8 @@ the token for the dashboard's write actions. Choose the engine with `CONTAINER_E
    `connect.mjs` writes the file with mode 600 (it holds the agent's tokens) and with absolute paths, so any directory
    works. The stack has agents `agent1` to `agent8`, one tracker token each. A Felix token lasts 24 hours and
    `kbl-mcp` does not renew it: after that, run `node dev/connect.mjs` again and restart the host
-   ([issue 314](https://github.com/GetFelix/KBL/issues/317)).
+   ([issue 317](https://github.com/GetFelix/KBL/issues/317)).
+The dashboard link works once: the page removes the token from the address, so a reload needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
 4. **Stop it** with `dev/down.sh`, which also deletes its data.
 
 ## What it shows about Felix
