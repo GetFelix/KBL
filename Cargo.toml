@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "wasm", "tool", "mcp", "tracker", "ingest", "metrics"]
+members = ["core", "wasm", "tool", "mcp", "tracker", "ingest", "metrics", "trace"]
 resolver = "3"
 
 [workspace.package]

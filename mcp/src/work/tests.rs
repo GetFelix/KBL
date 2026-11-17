@@ -2,6 +2,8 @@ use std::sync::Mutex as StdMutex;
 
 use super::*;
 
+mod traces;
+
 /// A tracker that answers from a script and remembers what it was asked.
 #[derive(Clone, Default)]
 struct Fake(Arc<StdMutex<Script>>);

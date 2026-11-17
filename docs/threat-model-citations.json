@@ -354,6 +354,12 @@
  "tracker/src/tracker/request_keys.rs#take": [
   "if !set.lock().expect(\"running lock\").insert(id.clone()) {"
  ],
+ "tracker/src/tracker/snapshots.rs#restore": [
+  "match read(&path).filter(|b| b.saved.valid(log)) {"
+ ],
+ "tracker/src/tracker/snapshots.rs#save": [
+  ".and_then(|tmp| commit(&tmp, &self.dir.join(&name), &self.dir));"
+ ],
  "tracker/src/tracker/tools.rs#check_options": [
   "if options.len() > MAX_ASK_OPTIONS {"
  ],
