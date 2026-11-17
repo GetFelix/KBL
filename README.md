@@ -83,7 +83,16 @@ the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be f
    `kbl-mcp` does not renew it: after that, run `node dev/connect.mjs` again and restart the host
    ([issue 317](https://github.com/GetFelix/KBL/issues/317)).
 The dashboard link works once: the page removes the token from the address, so a reload needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
-4. **Stop it** with `dev/down.sh`, which also deletes its data.
+4. **Bring in GitHub issues (optional).** Ingest turns the issues carrying one label in one repository into work. Build it, then point it at a repository and a token file (or export `GITHUB_TOKEN`). The token needs read access to that repository's issues:
+   ```bash
+   cargo build --release -p kbl-ingest
+   node dev/ingest.mjs --repo OWNER/NAME --token-file ~/.github-token --label agent-ok
+   ```
+   It first runs `kbl-ingest check`, which tests the token and lists what the first poll would import without writing
+   anything, then keeps polling the local tracker until you press Ctrl-C. The issues appear in the dashboard's Ready
+   column. Add `--check-only` to stop after the check, or `--once` for a single poll. The config it writes is
+   `dev/state/ingest.json`; [Setting up ingest](docs/ingest-setup.md) explains the rest.
+5. **Stop it** with `dev/down.sh`, which also deletes its data.
 
 The tracker and the dashboard run as unprivileged users inside their containers, under both Docker and Podman. The
 tracker starts as root only long enough to read the token file the host owns, then drops to its own user.

@@ -397,8 +397,9 @@ pub(crate) async fn github_findings<T: Transport>(
             "github",
             "GitHub rejected the credential (401): it is wrong, expired or revoked",
         )),
-        // An App installation token has no user behind it.
-        Ok(res) if matches!(res.status, 403 | 404) => {
+        // Only an App installation token has no user behind it. A token that
+        // GitHub will not name was refused or cannot see its owner.
+        Ok(res) if gh.app.is_some() && matches!(res.status, 403 | 404) => {
             out.push(Finding::new(
                 Level::Ok,
                 "github",
@@ -412,6 +413,14 @@ pub(crate) async fn github_findings<T: Transport>(
                 ));
             }
         }
+        Ok(res) if matches!(res.status, 403 | 404) => out.push(Finding::new(
+            Level::Error,
+            "github",
+            format!(
+                "GitHub answered {} to the sign-in test: the token is not accepted as a user token (wrong, revoked, or missing the access to name its owner). For an App, configure `app` instead of a token",
+                res.status
+            ),
+        )),
         Ok(res) => out.push(Finding::new(
             Level::Error,
             "github",

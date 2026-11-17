@@ -243,6 +243,49 @@ async fn a_rejected_credential_and_a_hidden_repo_are_errors() {
     );
 }
 
+fn app_config() -> Config {
+    Config::parse(
+        &json!({
+            "tracker": { "url": "http://t", "token_env": "TRACKER_TOKEN" },
+            "github": { "app": { "id": "1", "installation_id": 2,
+                                 "private_key_file": "/nonexistent.pem" } },
+            "rules": [{ "name": "r", "repo": "GetFelix/felix", "labels_all": ["agent-ok"], "mode": "admit" }],
+        })
+        .to_string(),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_token_credential_refused_at_user_fails_sign_in_but_an_app_passes() {
+    for status_code in [401, 403, 404] {
+        let cfg = config(vec![]);
+        let gh = Script::default();
+        gh.on("GET", "/user", status(status_code, &[]));
+        let mut out = Vec::new();
+        github_findings(&cfg, cfg.github.as_ref().unwrap(), &github(&gh), &mut out).await;
+        assert!(
+            out.iter().any(|f| f.level == Level::Error
+                && f.scope == "github"
+                && f.message.contains(&status_code.to_string())),
+            "{status_code}: {out:?}"
+        );
+        assert!(!out.iter().any(|f| f.message.contains("no user")));
+    }
+    let cfg = app_config();
+    for status_code in [403, 404] {
+        let gh = Script::default();
+        gh.on("GET", "/user", status(status_code, &[]));
+        let mut out = Vec::new();
+        github_findings(&cfg, cfg.github.as_ref().unwrap(), &github(&gh), &mut out).await;
+        assert!(
+            out.iter()
+                .any(|f| f.level == Level::Ok && f.message.contains("no user")),
+            "{out:?}"
+        );
+    }
+}
+
 fn jira_config() -> Config {
     Config::parse(
         &json!({

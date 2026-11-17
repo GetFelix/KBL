@@ -147,9 +147,18 @@ Ready columns. If the result is not what `check` showed, run `check` again with
 
 ## Quick start
 
-The development stack's quick start does not run ingest yet. To see items
-arrive there, run steps 1 to 4 against a repository you own, with the quick
-start's tracker URL and ingest token.
+The development stack's [quick start](../README.md#quick-start) has the tracker
+and its ingest token ready. From the checkout:
+
+```bash
+cargo build --release -p kbl-ingest
+node dev/ingest.mjs --repo OWNER/NAME --token-file ~/.github-token --label agent-ok
+```
+
+`dev/ingest.mjs` writes `dev/state/ingest.json` for that repository and label,
+runs `kbl-ingest check` against the tracker, and then runs the worker on your
+machine until you press Ctrl-C. Without `--token-file` it reads `GITHUB_TOKEN`.
+`--check-only` stops after the check and `--once` polls once.
 
 ## When something fails
 

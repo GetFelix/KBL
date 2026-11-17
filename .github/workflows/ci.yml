@@ -204,7 +204,7 @@ jobs:
           took=$((SECONDS - start))
           echo "quick start took ${took}s"
           test "$took" -le 900 || { echo "over the 900s budget"; exit 1; }
-      - run: cargo build --release -p kbl-mcp
+      - run: cargo build --release -p kbl-mcp -p kbl-ingest
       - run: node dev/check-quickstart.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml --profile quickstart logs
