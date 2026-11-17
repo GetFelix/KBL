@@ -81,6 +81,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     /// Polls once. `reconcile` forces a full reconcile now (a webhook said an
     /// issue was transferred or deleted).
     pub(crate) async fn poll(&self, reconcile: bool) -> Result<(), SourceError> {
+        let started = std::time::Instant::now();
+        let result = self.poll_once(reconcile).await;
+        crate::metrics::poll_finished(self.source.name(), started.elapsed(), &result);
+        result
+    }
+
+    async fn poll_once(&self, reconcile: bool) -> Result<(), SourceError> {
         let name = self.source.name();
         let (saved, version) = self.tracker.load(name).await?;
         let state: State = match saved {
@@ -140,12 +147,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .source
             .changed(&self.settings.repos, &p.state.cursors)
             .await?;
+        crate::metrics::denied(self.source.name(), denied.len());
         self.report_stalls(p, &denied).await?;
         for issue in issues {
             self.on_issue(p, &issue).await?;
+            crate::metrics::recorded(self.source.name(), &issue.updated_at);
         }
         for c in comments {
             self.on_comment(p, &c).await?;
+            crate::metrics::recorded(self.source.name(), &c.updated_at);
         }
         self.retry_waiting(p).await?;
         self.pull_requests(p).await?;

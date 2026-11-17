@@ -77,10 +77,12 @@ async fn hook(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> S
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("sha256="));
     let Some(signed) = signed else {
+        crate::metrics::webhook("unauthorized");
         return StatusCode::UNAUTHORIZED;
     };
     // An empty key makes the signature computable by anyone.
     if app.secret.is_empty() || !same(&hex(&hmac_sha256(&app.secret, &body)), signed) {
+        crate::metrics::webhook("unauthorized");
         return StatusCode::UNAUTHORIZED;
     }
     let delivery = headers
@@ -88,6 +90,7 @@ async fn hook(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> S
         .and_then(|v| v.to_str().ok());
     let mut recent = app.recent.lock().expect("lock");
     if delivery.is_some_and(|id| !recent.first_time(id)) {
+        crate::metrics::webhook("duplicate");
         return StatusCode::ACCEPTED;
     }
     let action = serde_json::from_slice::<Value>(&body)
@@ -104,6 +107,9 @@ async fn hook(State(app): State<Arc<App>>, headers: HeaderMap, body: Bytes) -> S
     {
         recent.last_wake = Some(now);
         app.wake.notify.notify_one();
+        crate::metrics::webhook("woke");
+    } else {
+        crate::metrics::webhook("coalesced");
     }
     StatusCode::ACCEPTED
 }

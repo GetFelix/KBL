@@ -6,10 +6,12 @@
 
 mod felix;
 mod keepalive;
+mod metrics;
 mod server;
 mod tasks;
 mod work;
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -50,6 +52,18 @@ struct Cli {
     /// Where the tracker's REST API is. Without it the work tools answer that they are not set up.
     #[arg(long, env = "KBL_TRACKER_URL")]
     tracker: Option<String>,
+    /// Where `/metrics` is served, on a port of its own. Off unless set. The
+    /// endpoint has no authentication; see docs/metrics.md.
+    #[arg(long, env = "KBL_MCP_METRICS_LISTEN")]
+    metrics_listen: Option<SocketAddr>,
+    /// Allows a metrics address other than loopback. Set it only when the port
+    /// is reachable by the scraper alone.
+    #[arg(
+        long,
+        env = "KBL_MCP_METRICS_ALLOW_REMOTE",
+        requires = "metrics_listen"
+    )]
+    metrics_allow_remote: bool,
     /// How long a claim stands without an extension, in milliseconds. For tests.
     #[arg(long, env = "KBL_CLAIM_VISIBILITY_MS", hide = true)]
     claim_visibility_ms: Option<u64>,
@@ -68,6 +82,12 @@ fn main() -> Result<()> {
 
 async fn serve() -> Result<()> {
     let cli = Cli::parse();
+    let exporter = kbl_metrics::install("kbl-mcp");
+    if let Some(addr) = cli.metrics_listen {
+        kbl_metrics::check_listen(addr, cli.metrics_allow_remote, "--metrics-allow-remote")?;
+        let bound = kbl_metrics::serve(addr, exporter).await?;
+        eprintln!("kbl-mcp: metrics on {bound}");
+    }
     // Environment only: a flag would show the token in `ps`.
     let token = std::env::var("KBL_FELIX_TOKEN")
         .context("set KBL_FELIX_TOKEN to the agent's Felix token for the broker")?;

@@ -11,6 +11,7 @@ use crate::config::Tokens;
 use crate::felix::ConditionalWrite;
 use crate::teams::Team;
 
+mod metrics;
 mod org;
 
 /// A Felix with no records that remembers which streams were published to, and
@@ -205,6 +206,7 @@ fn quiet_settings() -> crate::tracker::Settings {
         crash_after_done: false,
         review_tiers: crate::tracker::default_review_tiers(),
         cost_floor_micros: 0,
+        team: String::new(),
     }
 }
 
@@ -220,6 +222,7 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             crash_after_done: false,
             review_tiers: crate::tracker::default_review_tiers(),
             cost_floor_micros: 0,
+            team: name.to_owned(),
         },
     )
     .await

@@ -916,6 +916,21 @@ fn swap_artifacts(v: &mut Value, texts: &std::collections::HashMap<String, Strin
 
 #[tool_handler]
 impl ServerHandler for Server {
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        let router = Self::tool_router();
+        let tool = request.name.to_string();
+        let known = router.has_route(&tool);
+        let started = std::time::Instant::now();
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let result = router.call(tcc).await;
+        crate::metrics::tool_finished(&tool, known, started.elapsed(), &result);
+        result
+    }
+
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("kbl-mcp", env!("CARGO_PKG_VERSION")))

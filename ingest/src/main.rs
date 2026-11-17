@@ -4,6 +4,7 @@
 
 mod config;
 mod github;
+mod metrics;
 mod rules;
 mod source;
 mod state;
@@ -51,6 +52,18 @@ struct Cli {
         requires = "webhook_listen"
     )]
     webhook_behind_tls_proxy: bool,
+    /// Where `/metrics` is served, on a port of its own. Off unless set. The
+    /// endpoint has no authentication; see docs/metrics.md.
+    #[arg(long, env = "KBL_INGEST_METRICS_LISTEN")]
+    metrics_listen: Option<SocketAddr>,
+    /// Allows a metrics address other than loopback. Set it only when the port
+    /// is reachable by the scraper alone.
+    #[arg(
+        long,
+        env = "KBL_INGEST_METRICS_ALLOW_REMOTE",
+        requires = "metrics_listen"
+    )]
+    metrics_allow_remote: bool,
     /// The environment variable holding the webhook secret.
     #[arg(long, env = "KBL_INGEST_WEBHOOK_SECRET_ENV")]
     webhook_secret_env: Option<String>,
@@ -85,6 +98,12 @@ fn main() -> Result<()> {
 async fn serve() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load(&cli.config)?;
+    let exporter = kbl_metrics::install("kbl-ingest");
+    if let Some(addr) = cli.metrics_listen {
+        kbl_metrics::check_listen(addr, cli.metrics_allow_remote, "--metrics-allow-remote")?;
+        let bound = kbl_metrics::serve(addr, exporter).await?;
+        eprintln!("kbl-ingest: metrics on {bound}");
+    }
     let token = std::env::var(&cfg.tracker.token_env)
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
     let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
