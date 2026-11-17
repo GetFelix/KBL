@@ -57,7 +57,7 @@ jobs:
           else
             echo "version=dev-$(git rev-parse --short=12 HEAD)" >> "$GITHUB_ENV"
           fi
-      - run: rustup target add ${{ matrix.target }}
+      - run: rustup update stable && rustup default stable && rustup target add ${{ matrix.target }}
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }} -p kbl-mcp -p kbl-tool
       - name: Check the binary starts
@@ -107,6 +107,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a plain tag on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          case "$TAG" in */*) echo "tag name must not contain a slash"; exit 1;; esac
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "$TAG is not on main"; exit 1; }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: dist

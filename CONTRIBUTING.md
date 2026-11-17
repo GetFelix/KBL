@@ -28,16 +28,16 @@
 
 ## Cutting a release
 
-A maintainer tags `main` and pushes the tag; nothing else publishes.
+A maintainer tags a commit on `main` and pushes the tag; nothing else publishes. The crate versions are still 0.0.0,
+so the binaries report that until they are bumped.
 
-```bash
-git tag v0.1.0 origin/main && git push origin v0.1.0
-```
+1. Move the `changelog.d` fragments into `CHANGELOG.md` and merge that.
+2. Tag and push: `git tag v0.1.0 origin/main && git push origin v0.1.0`.
 
 The `Release` workflow builds `kbl-mcp` and `kbl-tool` for five targets (Linux x86_64 and aarch64, macOS aarch64 and
-x86_64, Windows x86_64) and creates a GitHub release with one archive per target plus `SHA256SUMS`. Move the
-`changelog.d` fragments into `CHANGELOG.md` before tagging.
+x86_64, Windows x86_64) and creates a GitHub release with one archive per target plus `SHA256SUMS`. It refuses a tag
+that is not on `main`. The checksums catch a corrupt download; they are not a signature.
 
-To rehearse, run the workflow from the Actions tab (or `gh workflow run release.yml --ref <branch>`) with `dry_run` on.
-It builds every target and keeps the archives as run artifacts for 14 days. It creates no release, and a run on a
-branch cannot create one.
+To rehearse, open a pull request that changes `.github/workflows/release.yml` (it runs as a dry run) or run the
+workflow from the Actions tab with `dry_run` on. It builds every target and keeps the archives as run artifacts for 14
+days. It creates no release, and a run on a branch cannot create one.
