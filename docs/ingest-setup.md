@@ -169,6 +169,11 @@ the tracker stops before another can take its sources. Time the machine spends
 asleep counts. A lease is free to take 30 s after it expires, so the trackers'
 clocks must agree within 30 s. When the worker stops, it releases its leases.
 
+A repo in the worker's rules that the connection does not name is not polled:
+the worker prints a warning naming it when the config arrives. Names match the
+way the vendor compares them, so `Owner/Repo` and `owner/repo` are one GitHub,
+GitLab or Azure DevOps repo; Jira project keys must match exactly.
+
 Leave `"group"` unset, or name a group no connection uses, and the worker polls
 every configured repo as before.
 

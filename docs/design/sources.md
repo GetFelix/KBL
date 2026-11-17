@@ -466,6 +466,21 @@ connection has exactly one worker.
   listing stops between pages and a slow request does not run out its 30 s timeout. The age is the larger
   of the monotonic and the wall-clock time since the renew, because the monotonic clock stops while the
   machine sleeps. A write-back checks the deadline right before its request.
+- **Only held repos.** A worker with a connection lists, fetches and writes back only to repos whose
+  connection source it holds. A configured repo the connection does not name is never polled; the worker
+  warns about it when the config arrives. The one call outside the connection is a read of an agent's pull
+  request (and its repo's releases) in another repo, and the gate lets only `GET` through for it. Repos
+  match sources the way the vendor compares names: GitHub, GitLab and Azure DevOps ignore case, Jira does
+  not.
+- **Unknown outcomes.** A request the fence cancels may still have landed. Every comment KBL writes carries
+  a hidden mark, `<!-- kbl:{item}:{kind}:{key} -->`, and the retry looks for it before it posts. Jira's wiki
+  markup hides nothing, so there the exact body, which names the item, the step and the pull request, is
+  the mark. A cancelled write-back does not count as a failed try.
+- **Joining and leaving.** A lost race on the membership entry backs off, doubling from 10 ms to 2 s with
+  a random part of each wait, so a group that starts at once gets in one by one. Renews come every 30 s
+  give or take 20%. A leave removes the worker run from the entry and marks it gone for 10 minutes, so a
+  renew it sent before leaving that lands afterwards is refused with `409 left` rather than bringing it
+  back. The instance is drawn fresh for each run, so a restarted worker is a new member.
 - **The margins.** A lease expires 90 s after its last renew, by the tracker's clock, and is free to take
   only 30 s after that. So the old holder's last request starts no later than 60 s after its renew was
   sent, and a new holder starts no sooner than 120 s after it was stamped. The 30 s from fence to expiry
