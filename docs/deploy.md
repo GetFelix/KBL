@@ -128,8 +128,9 @@ the new one starts. Running a standby that takes over is tracked in
 ## Metrics
 
 `tracker.metrics.enabled` and `ingest.metrics.enabled` open the metrics ports
-(9790 and 9791). They have no authentication: allow only your scraper, with
-`networkPolicy.metricsFromNamespaceLabels`. See [metrics.md](metrics.md).
+(9790 and 9791). They have no authentication and listen on every pod address,
+so turn on `networkPolicy` and allow only your scraper with
+`networkPolicy.metricsFromNamespaceLabels`; without it any pod can read them. See [metrics.md](metrics.md).
 
 ## Upgrading
 

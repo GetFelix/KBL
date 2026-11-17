@@ -13,6 +13,8 @@ spec:
     matchLabels: {{- include "kbl.selector" (dict "root" . "component" "tracker") | nindent 6 }}
   policyTypes: [Ingress{{ if $np.egress.enabled }}, Egress{{ end }}]
   ingress:
+    {{- /* A rule with no sources would admit every pod. */}}
+    {{- if or .Values.dashboard.enabled .Values.ingest.enabled .Values.ingress.trackerHost }}
     - from:
         {{- if .Values.dashboard.enabled }}
         - podSelector:
@@ -28,6 +30,7 @@ spec:
         {{- end }}
       ports:
         - { port: {{ .Values.tracker.service.port }}, protocol: TCP }
+    {{- end }}
     {{- if and .Values.tracker.metrics.enabled $np.metricsFromNamespaceLabels }}
     - from:
         - namespaceSelector:
