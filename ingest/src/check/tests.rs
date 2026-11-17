@@ -791,7 +791,7 @@ async fn ado_sign_in_and_permissions_are_reported_per_rule() {
 }
 
 #[tokio::test]
-async fn an_ado_credential_the_service_refuses_is_an_error_and_stops_the_probe() {
+async fn an_ado_credential_the_service_refuses_is_one_error_and_stops_the_probe() {
     // A bad personal access token is a 203 sign-in page, which the adapter reads as 401.
     let org = Vendor::new(|_| res(203, Value::Null));
     let cfg = ado_config(json!({}));
@@ -801,7 +801,12 @@ async fn an_ado_credential_the_service_refuses_is_an_error_and_stops_the_probe()
         has(&out, Level::Error, "refused the credential (401)"),
         "{out:?}"
     );
-    assert!(!has(&out, Level::Ok, "can read work items"));
+    assert_eq!(out.len(), 1, "{out:?}");
+    assert!(!org_touched_projects(&org));
+}
+
+fn org_touched_projects(v: &Vendor) -> bool {
+    v.touched("classificationnodes")
 }
 
 #[tokio::test]
@@ -1078,12 +1083,97 @@ async fn a_gitlab_token_without_api_cannot_write_back() {
 }
 
 #[tokio::test]
-async fn a_gitlab_role_below_reporter_cannot_comment() {
-    let cfg = gitlab_config(json!({ "comment": true }));
+async fn a_gitlab_guest_may_comment_but_not_close() {
     let v = lab(token(&["api"], None), 10, vec![]);
+    let cfg = gitlab_config(json!({ "comment": true }));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+
+    let cfg = gitlab_config(json!({ "transition_on_merge": "close" }));
     let mut out = Vec::new();
     gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
     assert!(has(&out, Level::Error, "below Reporter"), "{out:?}");
+}
+
+#[tokio::test]
+async fn a_gitlab_project_that_lists_no_role_is_a_warning_not_an_error() {
+    let v = Vendor::new(|req| match path(req).as_str() {
+        "/api/v4/user" => res(200, json!({ "username": "kbl-bot" })),
+        "/api/v4/personal_access_tokens/self" => token(&["api"], None),
+        "/api/v4/projects/group%2Fsub%2Fapp" => res(
+            200,
+            json!({ "permissions": {
+            "project_access": null, "group_access": null } }),
+        ),
+        _ => res(404, Value::Null),
+    });
+    let cfg = gitlab_config(json!({ "comment": true }));
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(messages(&out, Level::Error).is_empty(), "{out:?}");
+    assert!(
+        has(&out, Level::Warn, "could not tell the token's role"),
+        "{out:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_revoked_or_nearly_expired_gitlab_token_is_flagged() {
+    let cfg = gitlab_config(json!({}));
+    let revoked = res(
+        200,
+        json!({ "scopes": ["api"], "expires_at": null, "active": false, "revoked": true }),
+    );
+    let mut out = Vec::new();
+    gitlab_findings(
+        &cfg,
+        &mut gitlab_source(&lab(revoked, 30, vec![]), &cfg),
+        &mut out,
+    )
+    .await;
+    assert!(
+        has(&out, Level::Error, "revoked or no longer active"),
+        "{out:?}"
+    );
+
+    let soon = std::time::SystemTime::now() + std::time::Duration::from_secs(3 * 86_400);
+    let secs = soon
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let date = civil(secs / 86_400);
+    let v = lab(token(&["api"], Some(&date)), 30, vec![]);
+    let mut out = Vec::new();
+    gitlab_findings(&cfg, &mut gitlab_source(&v, &cfg), &mut out).await;
+    assert!(
+        has(&out, Level::Warn, &format!("expires on {date}")),
+        "{out:?}"
+    );
+}
+
+/// YYYY-MM-DD of a day count since the epoch.
+fn civil(days: i64) -> String {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+#[test]
+fn the_sources_check_builds_are_guarded_by_type() {
+    let cfg = ado_config(json!({}));
+    let _: Ado<ReadOnlyWiql<crate::ado::transport::Reqwest>> =
+        ado_guarded(&cfg, cfg.ado.as_ref().unwrap()).unwrap();
+    let cfg = gitlab_config(json!({}));
+    let _: Gitlab<ReadOnly<crate::gitlab::transport::Reqwest>> =
+        gitlab_guarded(&cfg, cfg.gitlab.as_ref().unwrap()).unwrap();
 }
 
 #[tokio::test]

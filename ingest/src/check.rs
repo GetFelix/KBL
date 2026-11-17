@@ -246,18 +246,8 @@ async fn report_for(path: &Path) -> Report {
         },
         (None, None) => {
             if let Some(a) = &cfg.ado {
-                let http = crate::ado::transport::Reqwest::new(crate::ado_auth(a));
-                match http {
-                    Ok(http) => {
-                        let mut ado = Ado::new(
-                            &a.organization,
-                            &a.api,
-                            ReadOnlyWiql(http),
-                            a.own_logins.clone(),
-                            crate::ado_scopes(&cfg),
-                            &a.projects,
-                            &a.pr_url_base,
-                        );
+                match ado_guarded(&cfg, a) {
+                    Ok(mut ado) => {
                         ado_findings(&cfg, &mut ado, &mut report.findings).await;
                         dry_run(&cfg, &ado, tracker.as_ref(), &mut report).await;
                     }
@@ -268,17 +258,7 @@ async fn report_for(path: &Path) -> Report {
                     )),
                 }
             } else if let Some(g) = &cfg.gitlab {
-                let http = crate::gitlab::transport::Reqwest::new(crate::gitlab_secret(g));
-                let built = http.and_then(|http| {
-                    Gitlab::new(
-                        &g.api,
-                        ReadOnly(http),
-                        g.own_logins.clone(),
-                        cfg.rules.clone(),
-                        &g.projects,
-                    )
-                });
-                match built {
+                match gitlab_guarded(&cfg, g) {
                     Ok(mut gitlab) => {
                         gitlab_findings(&cfg, &mut gitlab, &mut report.findings).await;
                         dry_run(&cfg, &gitlab, tracker.as_ref(), &mut report).await;
@@ -303,6 +283,39 @@ async fn report_for(path: &Path) -> Report {
         ));
     }
     report.finish()
+}
+
+/// The Azure DevOps source as check uses it. The return type is the guarantee
+/// that no request leaves except through [`ReadOnlyWiql`].
+fn ado_guarded(
+    cfg: &Config,
+    a: &AdoConfig,
+) -> Result<Ado<ReadOnlyWiql<crate::ado::transport::Reqwest>>> {
+    let http = crate::ado::transport::Reqwest::new(crate::ado_auth(a))?;
+    Ok(Ado::new(
+        &a.organization,
+        &a.api,
+        ReadOnlyWiql(http),
+        a.own_logins.clone(),
+        crate::ado_scopes(cfg),
+        &a.projects,
+        &a.pr_url_base,
+    ))
+}
+
+/// The GitLab source as check uses it, behind [`ReadOnly`] by type.
+fn gitlab_guarded(
+    cfg: &Config,
+    g: &crate::config::GitlabConfig,
+) -> Result<Gitlab<ReadOnly<crate::gitlab::transport::Reqwest>>> {
+    let http = crate::gitlab::transport::Reqwest::new(crate::gitlab_secret(g))?;
+    Gitlab::new(
+        &g.api,
+        ReadOnly(http),
+        g.own_logins.clone(),
+        cfg.rules.clone(),
+        &g.projects,
+    )
 }
 
 fn source_name(cfg: &Config) -> &'static str {
@@ -781,15 +794,18 @@ pub(crate) async fn ado_findings<T: Transport>(
             ));
             ado.add_own(names);
         }
-        Ok(res) if matches!(res.status, 401 | 403) => out.push(Finding::new(
-            Level::Error,
-            "ado",
-            format!(
-                "Azure DevOps refused the credential ({}): the personal access token is wrong, \
-                 expired or revoked, or the service principal is not a member of the organization",
-                res.status
-            ),
-        )),
+        Ok(res) if matches!(res.status, 401 | 403) => {
+            out.push(Finding::new(
+                Level::Error,
+                "ado",
+                format!(
+                    "Azure DevOps refused the credential ({}): the personal access token is wrong, \
+                     expired or revoked, or the service principal is not a member of the organization",
+                    res.status
+                ),
+            ));
+            return;
+        }
         Ok(res) => out.push(Finding::new(
             Level::Error,
             "ado",
@@ -918,12 +934,12 @@ async fn ado_can_write<T: Transport>(ado: &Ado<T>, node: &str) -> Option<bool> {
 const GUEST: u64 = 10;
 const REPORTER: u64 = 20;
 
-/// The access level a rule's writes need: opening an issue takes a Guest, a
-/// comment or a close takes a Reporter.
+/// The access level a rule's writes need: a comment or opening an issue takes
+/// a Guest, a close or reopen takes a Reporter.
 fn gitlab_write_level(r: &Rule) -> Option<u64> {
-    if r.comment || r.transition_on_pr.is_some() || r.transition_on_merge.is_some() {
+    if r.transition_on_pr.is_some() || r.transition_on_merge.is_some() {
         Some(REPORTER)
-    } else if r.open_prerequisites {
+    } else if r.comment || r.open_prerequisites {
         Some(GUEST)
     } else {
         None
@@ -992,8 +1008,9 @@ pub(crate) async fn gitlab_findings<T: Transport>(
                         .iter()
                         .filter_map(|k| p[k]["access_level"].as_u64())
                         .max();
-                    // No permissions object at all: nothing is known.
-                    Some(level.unwrap_or(if p.is_object() { 0 } else { u64::MAX }))
+                    // No role is listed for an admin, a member through a shared group or
+                    // a visitor of a public project, so nothing is known.
+                    Some(level.unwrap_or(u64::MAX))
                 }
                 Ok(res) if matches!(res.status, 401 | 403 | 404) => {
                     out.push(Finding::new(
