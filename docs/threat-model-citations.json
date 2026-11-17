@@ -370,7 +370,7 @@
  "tracker/src/tracker/snapshots.rs#restore": [
   "match read(&path).filter(|b| b.saved.valid(log)) {"
  ],
- "tracker/src/tracker/snapshots.rs#save": [
+ "tracker/src/tracker/snapshots.rs#write": [
   ".and_then(|tmp| commit(&tmp, &self.dir.join(&name), &self.dir));"
  ],
  "tracker/src/tracker/tools.rs#check_options": [

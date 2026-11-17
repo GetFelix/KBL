@@ -376,3 +376,44 @@ fn a_saved_snapshot_read_back_is_the_fold_and_fails_on_an_edit_below_it() {
     assert!(!back.valid(&log[..log.len() - 1]));
     assert!(first.valid(&log));
 }
+
+/// A running tracker extends a chain from an anchor with only the records
+/// since, without the log before it. The result is the snapshot a capture over
+/// the whole log gives, and an edit below either anchor still fails it.
+#[test]
+fn a_chain_extended_from_an_anchor_equals_a_capture_over_the_log() {
+    let mut l = held_root();
+    propose_n(&mut l, "w1", "a", 2);
+    propose_n(&mut l, "w1", "b", 2);
+    let log = l.0;
+    let (c1, c2) = (log.len() / 3, 2 * log.len() / 3);
+
+    let first = Anchor::default()
+        .extend(&log[..c1], &fold(&log[..c1]))
+        .unwrap();
+    // The second step sees only the records after the first.
+    let second = first
+        .anchor()
+        .extend(&log[c1..c2], &fold(&log[..c2]))
+        .unwrap();
+    let third = second.anchor().extend(&log[c2..], &fold(&log)).unwrap();
+    let whole = Saved::capture(&log, Some(&second), &fold(&log)).unwrap();
+    assert_eq!(third, whole);
+    assert!(third.valid(&log));
+    assert_eq!(third.state(), fold(&log));
+
+    let mut edited = log.clone();
+    edited[1].1 = log[2].1.clone();
+    assert!(!third.valid(&edited));
+    edited = log.clone();
+    edited[c1 + 1].1 = log[c1 + 2].1.clone();
+    assert!(!third.valid(&edited));
+    // A state that is not at the last record is refused.
+    assert!(
+        second
+            .anchor()
+            .extend(&log[c2..], &fold(&log[..c2]))
+            .is_none()
+    );
+    assert!(second.anchor().extend(&[], &fold(&log[..c2])).is_none());
+}
