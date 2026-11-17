@@ -3,10 +3,15 @@
 //!
 //! A fixed token (`KBL_FELIX_TOKEN`) is used as it is and stops working when it
 //! expires. A renewable credential is an ID token that `kbl-mcp` reads again
-//! each time it needs a new Felix token and trades at the control plane. The
-//! Felix client asks its provider for a token each time it opens a stream, so
-//! a renewal never replaces the connection: a held claim belongs to the
-//! agent's group member on the broker, not to a token, and keeps working.
+//! each time it needs a new Felix token and trades at the control plane.
+//!
+//! The Felix client authenticates a stream once, when it opens it, and keeps
+//! its pooled publish and cache streams for the life of the connection. A
+//! broker that forwards a write to the shard's owner sends the token that
+//! stream opened with, and the owner checks its expiry. So on each renewal
+//! `kbl-mcp` opens a new connection and swaps it in ([`reconnect_on_renewal`]).
+//! A held claim survives the swap: Felix ties an ack or an extension to the
+//! record and its delivery, not to the connection.
 //!
 //! Every secret comes from the environment or a file. None goes into an error:
 //! failures name what went wrong and never echo a token, a response body or the
@@ -43,7 +48,7 @@ pub(crate) enum Auth {
     Fixed(String),
     /// A provider that trades an ID token for a Felix token before the last
     /// one expires.
-    Renewing(Arc<dyn TokenProvider>),
+    Renewing(Arc<Renewer>),
 }
 
 /// Where the ID token is read from.
@@ -104,7 +109,7 @@ impl Auth {
 }
 
 /// The Felix token in hand, replaced before it expires.
-struct Renewer {
+pub(crate) struct Renewer {
     exchange: Exchange,
     /// Renew at least this often. For tests; the token's own life decides otherwise.
     max_age: Option<Duration>,
@@ -136,6 +141,64 @@ impl Renewer {
             expires_at,
             // A token that names no expiry is kept until the broker refuses it.
             renew_at: renew_at.unwrap_or(now + Duration::from_secs(365 * 24 * 3600)),
+        }
+    }
+}
+
+impl Renewer {
+    /// The Felix token in hand, if one was fetched.
+    pub(crate) async fn current(&self) -> Option<String> {
+        self.held.lock().await.as_ref().map(|h| h.token.clone())
+    }
+
+    /// How long until the token in hand is due for renewal.
+    async fn until_due(&self) -> Duration {
+        self.held.lock().await.as_ref().map_or(Duration::ZERO, |h| {
+            h.renew_at.saturating_duration_since(Instant::now())
+        })
+    }
+}
+
+/// Renews the token when it is due, without waiting for a stream to open, and
+/// after each renewal swaps in a connection from `connect` whose streams open
+/// with the new token. `connected_with` is the token the first connection used.
+/// Runs until the task is dropped.
+pub(crate) async fn reconnect_on_renewal<C, F, Fut>(
+    renewer: Arc<Renewer>,
+    slot: Arc<std::sync::RwLock<Arc<C>>>,
+    mut connected_with: Option<String>,
+    connect: F,
+) where
+    F: Fn() -> Fut,
+    Fut: Future<Output = Result<C>>,
+{
+    loop {
+        // A renewal that a stream open made counts too.
+        if renewer.current().await == connected_with {
+            tokio::time::sleep(renewer.until_due().await).await;
+            if let Err(e) = renewer.token().await {
+                tracing::warn!(error = %format!("{e:#}"), "could not renew the Felix token");
+                tokio::time::sleep(RETRY_AFTER).await;
+                continue;
+            }
+            if renewer.current().await == connected_with {
+                // The renewal failed and the token in hand is still good.
+                continue;
+            }
+        }
+        // Taken before connecting: a renewal during the connect leaves some
+        // streams on this token, so the next pass reconnects again.
+        let renewed = renewer.current().await;
+        match connect().await {
+            Ok(client) => {
+                *slot.write().expect("client lock") = Arc::new(client);
+                connected_with = renewed;
+                tracing::debug!("renewed the Felix token and reconnected");
+            }
+            Err(e) => {
+                tracing::warn!(error = %format!("{e:#}"), "could not reconnect with the renewed Felix token");
+                tokio::time::sleep(RETRY_AFTER).await;
+            }
         }
     }
 }

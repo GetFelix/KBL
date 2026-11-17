@@ -2,10 +2,10 @@
 
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use crate::credential::Auth;
+use crate::credential::{self, Auth};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_client::{
@@ -30,10 +30,16 @@ pub(crate) struct Target {
 #[derive(Clone)]
 pub(crate) struct Felix {
     // Opened at startup so a bad token or a down broker stops the server
-    // before the host lists any tools.
-    client: Arc<Client>,
+    // before the host lists any tools. Replaced after each token renewal.
+    client: Arc<RwLock<Arc<Client>>>,
     pub(crate) tenant: String,
     pub(crate) namespace: String,
+}
+
+impl Felix {
+    fn client(&self) -> Arc<Client> {
+        Arc::clone(&self.client.read().expect("client lock"))
+    }
 }
 
 pub(crate) async fn connect(target: Target) -> Result<Felix> {
@@ -46,12 +52,16 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
     let mut config =
         ClientConfig::optimized_defaults(quic_client_config(Some(Arc::new(roots)), false)?);
     config.auth_tenant_id = Some(target.tenant.clone());
-    // The client asks for a token each time it opens a stream, so a renewed
-    // token reaches new streams without a reconnect.
-    match target.auth {
-        Auth::Fixed(token) => config.auth_token = Some(token),
-        Auth::Renewing(provider) => config.token_provider = Some(provider),
-    }
+    let renewer = match target.auth {
+        Auth::Fixed(token) => {
+            config.auth_token = Some(token);
+            None
+        }
+        Auth::Renewing(renewer) => {
+            config.token_provider = Some(renewer.clone());
+            Some(renewer)
+        }
+    };
     // The ack carries the record's offset only once it is committed.
     config.ack_on_commit = true;
     let seeds: Vec<_> = target
@@ -59,15 +69,34 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         .to_socket_addrs()
         .with_context(|| format!("resolve {}", target.broker))?
         .collect();
-    let client = tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        Client::connect_any(&seeds, &target.broker_name, config),
-    )
-    .await
-    .context("the broker did not answer in time")?
-    .with_context(|| format!("connect to the broker at {}", target.broker))?;
+    let open = move || {
+        let (seeds, name, config) = (seeds.clone(), target.broker.clone(), config.clone());
+        let broker_name = target.broker_name.clone();
+        async move {
+            tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                Client::connect_any(&seeds, &broker_name, config),
+            )
+            .await
+            .context("the broker did not answer in time")?
+            .with_context(|| format!("connect to the broker at {name}"))
+        }
+    };
+    let client = open().await?;
+    let slot = Arc::new(RwLock::new(Arc::new(client)));
+    if let Some(renewer) = renewer {
+        // The streams just opened hold the token in hand. See credential.rs
+        // for why a renewal needs a new connection.
+        let connected_with = renewer.current().await;
+        tokio::spawn(credential::reconnect_on_renewal(
+            renewer,
+            Arc::clone(&slot),
+            connected_with,
+            open,
+        ));
+    }
     Ok(Felix {
-        client: Arc::new(client),
+        client: slot,
         tenant: target.tenant,
         namespace: target.namespace,
     })
@@ -160,7 +189,7 @@ pub(crate) trait Backend: Clone + Send + Sync + 'static {
 
 impl Backend for Felix {
     async fn publish(&self, stream: &str, payload: Vec<u8>) -> Result<u64> {
-        let publisher = self.client.publisher().await?;
+        let publisher = self.client().publisher().await?;
         let offset = publisher
             .publish(
                 &self.tenant,
@@ -174,7 +203,7 @@ impl Backend for Felix {
     }
 
     async fn cache_put(&self, cache: &str, key: &str, value: Vec<u8>) -> Result<()> {
-        self.client
+        self.client()
             .cache_put(
                 &self.tenant,
                 &self.namespace,
@@ -188,7 +217,7 @@ impl Backend for Felix {
 
     async fn cache_get(&self, cache: &str, key: &str) -> Result<Option<Vec<u8>>> {
         let value = self
-            .client
+            .client()
             .cache_get(&self.tenant, &self.namespace, cache, key)
             .await?;
         Ok(value.map(|bytes| bytes.to_vec()))
@@ -196,7 +225,7 @@ impl Backend for Felix {
 
     async fn cache_put_absent(&self, cache: &str, key: &str, value: Vec<u8>) -> Result<bool> {
         let done = self
-            .client
+            .client()
             .cache_put_if(
                 &self.tenant,
                 &self.namespace,
@@ -224,26 +253,26 @@ impl Backend for Felix {
             visibility: Some(visibility),
         };
         let records = self
-            .client
+            .client()
             .group_poll_with(&self.tenant, &self.namespace, stream, 0, group, 1, &options)
             .await?;
         Ok(records.into_iter().next())
     }
 
     async fn ack(&self, stream: &str, group: &str, offset: u64) -> Result<()> {
-        self.client
+        self.client()
             .group_ack(&self.tenant, &self.namespace, stream, 0, group, offset)
             .await
     }
 
     async fn nack(&self, stream: &str, group: &str, record: &GroupRecord) -> Result<()> {
-        self.client
+        self.client()
             .group_nack(&self.tenant, &self.namespace, stream, 0, group, record)
             .await
     }
 
     async fn dead_letter(&self, stream: &str, group: &str, offset: u64) -> Result<()> {
-        self.client
+        self.client()
             .group_dead_letter(&self.tenant, &self.namespace, stream, 0, group, offset)
             .await
     }
@@ -255,7 +284,7 @@ impl Backend for Felix {
         record: &GroupRecord,
         by: Duration,
     ) -> Result<Duration, ExtendError> {
-        self.client
+        self.client()
             .group_extend(&self.tenant, &self.namespace, stream, 0, group, record, by)
             .await
             .map_err(|e| {

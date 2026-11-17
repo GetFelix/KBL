@@ -460,3 +460,47 @@ async fn a_max_age_renews_a_token_that_would_last_longer() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(provider.token().await.unwrap().ends_with("t1"));
 }
+
+#[tokio::test]
+async fn a_renewal_swaps_in_a_connection_that_opened_with_the_new_token() {
+    let plane = control_plane(|n, _| {
+        (
+            200,
+            json!({ "felix_token": felix_token(&format!("t{n}"), now() + 3600) }).to_string(),
+        )
+    })
+    .await;
+    let dir = tmp();
+    let file = id_file(dir.path(), ID_TOKEN, 0o600);
+    let Auth::Renewing(renewer) = Auth::from_env(
+        env(&[
+            ("KBL_FELIX_ID_TOKEN_FILE", file.to_str().unwrap()),
+            ("KBL_FELIX_CONTROL_PLANE", &plane.base),
+            ("KBL_FELIX_TOKEN_MAX_AGE_MS", "200"),
+        ]),
+        "agents",
+    )
+    .unwrap() else {
+        panic!("expected a renewing credential");
+    };
+    // A "connection" here is the token its streams opened with.
+    let first = renewer.token().await.unwrap();
+    assert!(first.ends_with("t0"));
+    let slot = Arc::new(std::sync::RwLock::new(Arc::new(first.clone())));
+    let r = renewer.clone();
+    let task = tokio::spawn(reconnect_on_renewal(
+        renewer.clone(),
+        slot.clone(),
+        Some(first),
+        move || {
+            let r = r.clone();
+            async move { Ok(r.current().await.unwrap()) }
+        },
+    ));
+    // Nothing else asks for a token: the loop renews on its own.
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    task.abort();
+    let now_on = slot.read().unwrap().to_string();
+    assert!(!now_on.ends_with("t0"), "still on the first token");
+    assert!(plane.calls.load(Ordering::SeqCst) >= 3);
+}
