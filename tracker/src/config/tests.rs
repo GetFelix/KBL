@@ -20,6 +20,39 @@ fn a_token_listed_twice_or_for_both_kinds_is_refused() {
     assert!(Tokens::parse(r#"{"agents":{"":"w1"}}"#).is_err());
 }
 
+#[test]
+fn an_ingest_worker_can_be_tied_to_a_source() {
+    let tokens = Tokens::parse(
+        r#"{"ingest":{"t-gh":"ingest-gh","t-jira":"ingest-jira"},"ingest_sources":{"ingest-gh":"github","ingest-jira":"jira"}}"#,
+    )
+    .unwrap();
+    let source = |t| match tokens.who(t) {
+        Some(Caller::Ingest(w)) => w.source,
+        _ => panic!("not an ingest token"),
+    };
+    assert_eq!(source("t-gh").as_deref(), Some("github"));
+    assert_eq!(source("t-jira").as_deref(), Some("jira"));
+    // A tie for a name that is no ingest worker, or to a bad source, is a mistake.
+    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"b":"github"}}"#).is_err());
+    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"a":"Not A Key"}}"#).is_err());
+    // A source Felix has no worker for is refused at startup.
+    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_sources":{"a":"gitlab"}}"#).is_err());
+}
+
+#[test]
+fn once_one_worker_is_tied_every_worker_must_be() {
+    let one_left = r#"{"ingest":{"t1":"a","t2":"b"},"ingest_sources":{"a":"github"}}"#;
+    assert!(Tokens::parse(one_left).is_err());
+    // With no ties at all, workers stay untied.
+    let tokens = Tokens::parse(r#"{"ingest":{"t1":"a","t2":"b"}}"#).unwrap();
+    assert!(matches!(tokens.who("t1"), Some(Caller::Ingest(w)) if w.source.is_none()));
+}
+
+#[test]
+fn an_unknown_key_in_the_token_file_is_refused() {
+    assert!(Tokens::parse(r#"{"ingest":{"t":"a"},"ingest_source":{"a":"github"}}"#).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn the_token_file_must_be_private() {

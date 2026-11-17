@@ -56,6 +56,9 @@ struct Poll {
     state: State,
     /// Imported roots by upstream id.
     roots: HashMap<String, Root>,
+    /// Roots another source imported, whose pull requests this worker reads
+    /// when it can: see [`Ingest::foreign_pull_requests`].
+    foreign: Vec<Root>,
     /// Issues seen this poll that are open and in scope, whose links to read.
     touched: Vec<String>,
     /// Accepted prerequisites with no issue, from the same listing as `roots`.
@@ -106,16 +109,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         let mut state = state;
         state.migrate(&self.settings.repos);
         let listed = self.tracker.roots().await?;
-        let mut roots: HashMap<String, Root> = listed
-            .roots
+        let (own, foreign): (Vec<Root>, Vec<Root>) =
+            listed.roots.into_iter().partition(|r| r.source == name);
+        let mut roots: HashMap<String, Root> = own
             .into_iter()
-            .filter(|r| r.source == name)
             .map(|r| (r.upstream_id.clone(), r))
             .collect();
         alias_moved(&state, &mut roots);
         let mut poll = Poll {
             state,
             roots,
+            foreign,
             touched: Vec::new(),
             prerequisites: listed
                 .prerequisites
@@ -176,6 +180,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         self.retry_waiting(p).await?;
         if self.source.reads_pull_requests() {
             self.pull_requests(p).await?;
+            self.foreign_pull_requests(p).await?;
         }
         p.state.polls += 1;
         let reconciled = reconcile || p.state.polls >= self.settings.reconcile_every;
@@ -631,45 +636,115 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .collect();
         due.sort();
         for (key, pr) in due {
-            let pull = match self.source.pull_request(&pr).await {
-                Ok(Some(pull)) => pull,
-                Ok(None) => continue,
-                Err(e @ SourceError::RateLimited { .. }) => return Err(e),
-                // The name comes from an agent; one bad request must not stop the poll.
-                Err(e) => {
-                    eprintln!("kbl-ingest: could not read {pr} for {key}: {e}");
-                    continue;
-                }
-            };
-            let ours = self.own.contains(&pull.author.to_ascii_lowercase());
-            let Some(status) = pull.status.filter(|_| ours) else {
-                eprintln!("kbl-ingest: {pr} was not opened by us; not reading its state");
-                continue;
-            };
-            // The agent names the request, so it must be tied to this item by
-            // more than the agent's word: the branch name the tracker derives
-            // from the item id, or a closing reference to the issue.
             let item = p.roots.get(&key).map(|r| r.item.clone());
             let claimed = p.roots.get(&key).and_then(|r| r.claimed_at_ms);
-            let closes = closes_issue(&pull.body, &key);
-            // A request made before the first claim cannot be this item's
-            // work, whatever branch the agent names. With no claim time, only
-            // a closing reference will do.
-            let linked = match claimed {
-                Some(at) => {
-                    pull.created_ms.is_some_and(|c| c >= at)
-                        && (closes
-                            || item.is_some_and(|i| pull.head_ref == kbl_core::work::pr_branch(&i)))
-                }
-                None => closes,
+            let Some(status) = self
+                .linked_request(&key, &pr, item.as_ref(), claimed, Some(&key))
+                .await?
+            else {
+                continue;
             };
-            if !linked {
-                eprintln!(
-                    "kbl-ingest: {pr} is not linked to {key} (branch, reference or age); not reading its state"
-                );
+            self.on_pull_request(p, &key, status).await?;
+        }
+        Ok(())
+    }
+
+    /// Reads a request an agent named and returns its state, if it is ours
+    /// and tied to the item. The agent names the request, so it must be tied
+    /// by more than the agent's word: the branch name the tracker derives
+    /// from the item id, or, when `closes` names the issue, a closing
+    /// reference to it. A request made before the first claim cannot be the
+    /// item's work, whatever branch the agent names. With no claim time, only
+    /// a closing reference will do.
+    async fn linked_request(
+        &self,
+        key: &str,
+        pr: &IssueRef,
+        item: Option<&ItemId>,
+        claimed: Option<u64>,
+        closes: Option<&str>,
+    ) -> Result<Option<PrSnapshot>, SourceError> {
+        let pull = match self.source.pull_request(pr).await {
+            Ok(Some(pull)) => pull,
+            Ok(None) => return Ok(None),
+            Err(e @ SourceError::RateLimited { .. }) => return Err(e),
+            // The name comes from an agent; one bad request must not stop the poll.
+            Err(e) => {
+                eprintln!("kbl-ingest: could not read {pr} for {key}: {e}");
+                return Ok(None);
+            }
+        };
+        let ours = self.own.contains(&pull.author.to_ascii_lowercase());
+        let Some(status) = pull.status.filter(|_| ours) else {
+            eprintln!("kbl-ingest: {pr} was not opened by us; not reading its state");
+            return Ok(None);
+        };
+        let closes = closes.is_some_and(|issue| closes_issue(&pull.body, issue));
+        let branch = item.is_some_and(|i| pull.head_ref == kbl_core::work::pr_branch(i));
+        let linked = match claimed {
+            Some(at) => pull.created_ms.is_some_and(|c| c >= at) && (closes || branch),
+            None => closes,
+        };
+        if !linked {
+            eprintln!(
+                "kbl-ingest: {pr} is not linked to {key} (branch, reference or age); not reading its state"
+            );
+            return Ok(None);
+        }
+        Ok(Some(status))
+    }
+
+    /// Records the state of the request an agent opened for a root another
+    /// source imported, such as a Jira issue, so that source's worker can act
+    /// on a merge. It writes the state and nothing else: the root's own worker
+    /// decides what upstream says about it. Only a request in a repo this
+    /// worker's rules name is read, and only one tied to the item by its
+    /// branch, since a closing reference names issues of this source.
+    async fn foreign_pull_requests(&self, p: &mut Poll) -> Result<(), SourceError> {
+        let mut due: Vec<(String, Root, IssueRef)> = p
+            .foreign
+            .iter()
+            .filter(|r| !r.closed)
+            // A merge is final, and the root's own worker closes it soon.
+            .filter(|r| {
+                r.pr_status
+                    .as_ref()
+                    .is_none_or(|s| s.phase != PrPhase::Merged)
+            })
+            .filter_map(|r| {
+                let pr = IssueRef::parse(r.pr.as_deref()?)?;
+                let named = self
+                    .settings
+                    .repos
+                    .iter()
+                    .any(|repo| repo.eq_ignore_ascii_case(&pr.repo));
+                named.then(|| (format!("{}:{}", r.source, r.upstream_id), r.clone(), pr))
+            })
+            .collect();
+        due.sort_by(|a, b| a.0.cmp(&b.0));
+        for (label, root, pr) in due {
+            let Some(status) = self
+                .linked_request(&label, &pr, Some(&root.item), root.claimed_at_ms, None)
+                .await?
+            else {
+                continue;
+            };
+            if root.pr_status.as_ref() == Some(&status) {
                 continue;
             }
-            self.on_pull_request(p, &key, status).await?;
+            let record = WorkRecord::PrStatus {
+                item: root.item.clone(),
+                status,
+            };
+            match self.tracker.append(&record).await? {
+                Appended::Written => {}
+                Appended::Refused(why) if why == "duplicate" => {}
+                Appended::Refused(why) => {
+                    eprintln!(
+                        "kbl-ingest: the state of the pull request for {label} was refused: {why}"
+                    );
+                }
+            }
         }
         Ok(())
     }

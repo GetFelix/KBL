@@ -187,9 +187,12 @@
  "ingest/src/sync.rs#park_unmapped": [
   "if rule.target_for(issue).is_some() {"
  ],
- "ingest/src/sync.rs#pull_requests": [
+ "ingest/src/sync.rs#linked_request": [
   "let ours = self.own.contains(&pull.author.to_ascii_lowercase());",
   "let linked = match claimed {"
+ ],
+ "ingest/src/sync.rs#foreign_pull_requests": [
+  ".any(|repo| repo.eq_ignore_ascii_case(&pr.repo));"
  ],
  "ingest/src/sync.rs#write_back": [
   ".filter(|pr| self.may_write_to(&key, pr));"
@@ -286,8 +289,11 @@
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
  ],
+ "tracker/src/http/ingest.rs#load": [
+  "Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),"
+ ],
  "tracker/src/http/ingest.rs#worker": [
-  "fn worker(&self) -> Result<Key, super::Denied> {"
+  "fn worker(&self) -> Result<Worker, super::Denied> {"
  ],
  "tracker/src/main.rs#check_listen": [
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
@@ -340,9 +346,14 @@
  "tracker/src/tracker/ingest.rs#allowed": [
   "fn allowed(record: &WorkRecord) -> bool {"
  ],
- "tracker/src/tracker/ingest.rs#ingest_record": [
+ "tracker/src/tracker/ingest.rs#ingest_roots": [
+  ".filter(|(source, _, _)| only.is_none_or(|o| o == *source))"
+ ],
+ "tracker/src/tracker/ingest.rs#ingest_record_in": [
   "&& text.len() > INLINE_LIMIT",
-  "if !targets(&record)",
+  "if !targets(&record).into_iter().all(reaches) {",
+  "let reaches = |item: &ItemId| match (sources.get(item), source) {",
+  "if source.is_some() && imports.is_some() && imports != source {",
   "if let WorkRecord::Closed {",
   "if let WorkRecord::Shipped { item, .. } = &record {",
   "let ours = core.recall.ingest_edges.contains(&edge);",
