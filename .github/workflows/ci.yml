@@ -181,11 +181,29 @@ jobs:
       - if: always()
         run: dev/down.sh
 
+  quickstart:
+    name: quick start
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # What the README's quick start tells a new machine to run.
+      - run: dev/quickstart.sh
+      - run: cargo build --release -p kbl-mcp
+      - run: node dev/check-quickstart.mjs
+      - if: failure()
+        run: docker compose -f dev/compose.yml --profile quickstart logs
+      - if: always()
+        run: dev/down.sh
+
   # The one check branch protection requires.
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, intake, rust, dashboard, stack]
+    needs: [lint, intake, rust, dashboard, stack, quickstart]
     runs-on: ubuntu-latest
     steps:
       - run: |
@@ -194,3 +212,4 @@ jobs:
           test "${{ needs.rust.result }}" = success
           test "${{ needs.dashboard.result }}" = success
           test "${{ needs.stack.result }}" = success
+          test "${{ needs.quickstart.result }}" = success

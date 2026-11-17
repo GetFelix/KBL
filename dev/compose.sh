@@ -29,3 +29,8 @@ case "$engine" in
     ;;
 esac
 compose+=(-f "$(dirname "${BASH_SOURCE[0]}")/compose.yml")
+# The quick start adds the tracker, the dashboard and its gateway. down.sh
+# always asks for them, so it removes them too.
+if [[ -n "${KBL_QUICKSTART:-}" ]]; then
+  compose+=(--profile quickstart)
+fi

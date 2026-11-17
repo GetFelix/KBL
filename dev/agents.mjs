@@ -150,7 +150,7 @@ const PASSED_ENV = [
   "KBL_EXTEND_EVERY_MS",
 ];
 
-function mcpConfig(options, agent) {
+export function mcpConfig(options, agent) {
   const env = {};
   for (const key of PASSED_ENV) if (process.env[key] !== undefined) env[key] = process.env[key];
   Object.assign(env, { KBL_RUN: options.run, KBL_AGENT: agent.name, KBL_FELIX_TOKEN: agent.felix, KBL_TRACKER_TOKEN: agent.tracker });

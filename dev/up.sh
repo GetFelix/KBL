@@ -9,17 +9,29 @@ source ./compose.sh
 "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
 rm -rf state
 mkdir -p state
-if ! "${compose[@]}" up --detach; then
+if [[ -n "${KBL_QUICKSTART:-}" ]]; then
+  ./quickstart-tokens.sh
+fi
+up=(up --detach)
+[[ -n "${KBL_QUICKSTART:-}" ]] && up+=(--build)
+if ! "${compose[@]}" "${up[@]}"; then
   "${compose[@]}" logs >&2
   exit 1
 fi
 
-for _ in $(seq 1 90); do
+# The quick start also builds the tracker and the dashboard from source.
+tries=90
+[[ -n "${KBL_QUICKSTART:-}" ]] && tries=450
+for _ in $(seq 1 "$tries"); do
   if [[ -f state/seeded && -f state/finalized ]] \
     && curl -fsS http://127.0.0.1:8080/ready >/dev/null 2>&1 \
     && curl -fsS http://127.0.0.1:8787/oidc >/dev/null 2>&1 \
     && running="$("${compose[@]}" ps --status running --services 2>/dev/null)" \
-    && grep -qx gateway <<<"$running"; then
+    && grep -qx gateway <<<"$running" \
+    && { [[ -z "${KBL_QUICKSTART:-}" ]] || {
+      curl -fsS http://127.0.0.1:8790/healthz >/dev/null 2>&1 \
+        && curl -fsS http://127.0.0.1:8081/ >/dev/null 2>&1 \
+        && curl -fsS http://127.0.0.1:8788/oidc >/dev/null 2>&1; }; }; then
     echo "Felix is up for tenant agents."
     echo "  control plane:  http://127.0.0.1:8443"
     echo "  broker:         127.0.0.1:5000 (QUIC), certificate at dev/state/broker-cert.pem"
