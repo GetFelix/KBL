@@ -16,18 +16,6 @@ use super::*;
 const ISSUES: u64 = 6;
 const STEPS: usize = 40;
 
-/// A bug the sweep found on main, which this change does not fix: the issue
-/// that tracks it, or None once it is fixed. While it is set, a root that was
-/// imported and never admitted, or lost a proposal, is reported and not failed.
-/// Seed 42 shows it (KBL_SWEEP_SEED=42): a poll that fails partway through
-/// the existing-root branch of `consider` still saves the root as tracked, so
-/// later polls follow it and never finish its admission.
-const PINNED_ADMISSION: Option<u32> = Some(PINNED_ISSUE);
-const PINNED_ISSUE: u32 = 301;
-
-/// Seeds that fail on main, each with the issue that tracks it.
-const KNOWN_FAILING: [(u64, u32); 4] = [(1194, 302), (1398, 302), (2097, 302), (2380, 302)];
-
 struct Rng(u64);
 
 impl Rng {
@@ -131,8 +119,19 @@ fn check(rig: &Rig, w: &World) {
     }
 }
 
+/// What ingest still gets wrong once every fault is gone, for the seeds that
+/// are expected to show it.
+#[derive(Default)]
+struct Findings {
+    /// Issues whose root was imported and never fully admitted.
+    unadmitted: Vec<usize>,
+    /// Issues open upstream whose root is closed here.
+    reclosed: Vec<usize>,
+}
+
 /// With every fault gone, ingest has caught up with upstream.
-fn settled(rig: &Rig, w: &World) {
+fn settled(rig: &Rig, w: &World) -> Findings {
+    let mut found = Findings::default();
     check(rig, w);
     let state = rig.tracker.state();
     for (n, up) in w.issues.iter().enumerate() {
@@ -154,16 +153,16 @@ fn settled(rig: &Rig, w: &World) {
         }
         match up {
             Upstream::Open => {
-                assert!(it.closed.is_none(), "{id} is open upstream and closed here");
+                if it.closed.is_some() {
+                    found.reclosed.push(n);
+                    continue;
+                }
                 // A reopen puts the root back in triage for a person, whatever
                 // admission it had.
                 if it.reopened_by.is_none() {
                     let admitted = it.accepted && it.children.len() == 2;
-                    match PINNED_ADMISSION {
-                        Some(issue) if !admitted => {
-                            eprintln!("{id} was never admitted: known failing, KBL #{issue}");
-                        }
-                        _ => assert!(admitted, "{id} was imported and never fully admitted"),
+                    if !admitted {
+                        found.unadmitted.push(n);
                     }
                 }
             }
@@ -173,6 +172,20 @@ fn settled(rig: &Rig, w: &World) {
             Upstream::Unseen => unreachable!("an unseen issue was imported"),
         }
     }
+    found
+}
+
+/// What the sweep found must be empty: every imported issue admitted, and no
+/// root closed here while its issue is open.
+fn judge(found: &Findings) {
+    let upstream = |n: &usize| upstream_id(*n);
+    let names: Vec<_> = found.unadmitted.iter().map(upstream).collect();
+    assert!(
+        names.is_empty(),
+        "{names:?} imported and never fully admitted"
+    );
+    let names: Vec<_> = found.reclosed.iter().map(upstream).collect();
+    assert!(names.is_empty(), "{names:?} open upstream and closed here");
 }
 
 fn mutate(rig: &Rig, w: &mut World, rng: &mut Rng) {
@@ -264,17 +277,13 @@ async fn run(seed: u64) {
     for _ in 0..3 {
         ingest.poll(true).await.unwrap();
     }
-    settled(&rig, &w);
+    judge(&settled(&rig, &w));
 }
 
 #[tokio::test]
 async fn ingest_holds_its_invariants_under_seeded_faults() {
     let mut failed = Vec::new();
     for seed in seeds() {
-        if let Some((_, issue)) = KNOWN_FAILING.iter().find(|(s, _)| *s == seed) {
-            eprintln!("seed {seed} skipped: known failing, KBL #{issue}");
-            continue;
-        }
         if tokio::spawn(run(seed)).await.is_err() {
             failed.push(seed);
         }

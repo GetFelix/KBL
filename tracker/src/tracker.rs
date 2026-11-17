@@ -26,15 +26,18 @@ use kbl_core::work::{
     Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tokio::time::Instant;
+use tracing::Instrument as _;
 
 use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
 pub(crate) mod reads;
 mod request_keys;
+mod snapshots;
 mod texts;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
@@ -96,6 +99,11 @@ pub(crate) struct Settings {
     /// Agent pull requests in In review at which new fix claims pause. Zero
     /// turns the limit off.
     pub(crate) review_limit: usize,
+    /// Where fold snapshots are kept, if anywhere. One folder per team inside.
+    pub(crate) snapshot_dir: Option<std::path::PathBuf>,
+    /// Records between snapshots; a boot saves one when this many have
+    /// accumulated since the newest.
+    pub(crate) snapshot_every: u64,
 }
 
 #[cfg(test)]
@@ -484,6 +492,7 @@ enum TextRead {
 }
 
 /// One `claimed` record and the record that ended it.
+#[derive(Clone, Serialize, Deserialize)]
 struct ClaimLog {
     offset: u64,
     by: Key,
@@ -491,9 +500,10 @@ struct ClaimLog {
 }
 
 /// The record that ended a claim.
+#[derive(Clone, Serialize, Deserialize)]
 struct Ended {
     offset: u64,
-    kind: &'static str,
+    kind: String,
     /// What a `prerequisite` named, so a retry naming another is not replayed.
     prerequisite: Option<ItemId>,
     actor: Actor,
@@ -576,7 +586,7 @@ impl Recall {
         } else if let Some(c) = claims.last_mut().filter(|c| c.ended.is_none()) {
             c.ended = Some(Ended {
                 offset,
-                kind: logged.record.kind(),
+                kind: logged.record.kind().to_owned(),
                 prerequisite: match &logged.record {
                     WorkRecord::Prerequisite { prerequisite, .. } => Some(prerequisite.clone()),
                     _ => None,
@@ -773,13 +783,22 @@ impl<B: Broker> Tracker<B> {
         reviews: &[String],
     ) -> Result<Value, Error> {
         let started = Instant::now();
-        let out = self.claim_loop(agent, wait, reviews).await;
+        let span = tracing::info_span!(
+            "tracker.claim",
+            team = %self.0.settings.team,
+            outcome = tracing::field::Empty,
+        );
+        let out = self
+            .claim_loop(agent, wait, reviews)
+            .instrument(span.clone())
+            .await;
         let outcome = match &out {
             Ok(v) if v["claimed"] == true && v["resumed"] == true => "resumed",
             Ok(v) if v["claimed"] == true => "claimed",
             Ok(_) => "empty",
             Err(_) => "error",
         };
+        span.record("outcome", outcome);
         let team = self.0.settings.team.clone();
         metrics::counter!("kbl_tracker_claims_total", "team" => team.clone(), "outcome" => outcome)
             .increment(1);
@@ -2319,6 +2338,12 @@ impl<B: Broker> Tracker<B> {
             price_is_expected(core, &logged, expected)?;
         }
         let absent = edge_absent(&core.state, &logged.record);
+        let apply_span = tracing::info_span!(
+            "tracker.fold.apply",
+            team = %self.0.settings.team,
+            record.kind = logged.record.kind(),
+        )
+        .entered();
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.
         if let Err(why) = core.state.try_apply(guess, &logged) {
@@ -2328,6 +2353,8 @@ impl<B: Broker> Tracker<B> {
                 .unwrap_or_else(|| "invalid".into());
             return Err(Error::Refused { why });
         }
+        // Not held across the write below.
+        drop(apply_span);
         // Conditional on the tail: if another tracker took the lease and wrote,
         // Felix refuses this, whatever this tracker's clock says.
         // A caller that drops this future mid-write (a client that hung up)
@@ -2435,6 +2462,10 @@ impl<B: Broker> Tracker<B> {
         let rebuilt_at = Instant::now();
         let (state, recall, tail) = self
             .read_state()
+            .instrument(tracing::info_span!(
+                "tracker.fold.rebuild",
+                team = %self.0.settings.team
+            ))
             .await
             .map_err(|e| Error::Unavailable(format!("rebuilding from the log failed: {e:#}")))?;
         let team = self.0.settings.team.clone();
@@ -2472,15 +2503,36 @@ impl<B: Broker> Tracker<B> {
                 Err(e) => eprintln!("kbl-tracker: {WORK_EVENTS} offset {offset}: {e}; skipped"),
             }
         }
-        let mut recall = Recall::default();
-        let mut state = State::default();
-        for (offset, rec) in &entries {
+        let store = snapshots::Store::new(&self.0.settings);
+        // The disk work (reads, hashing the log, fsyncs) runs off the async workers.
+        let (entries, restored) = match store.clone() {
+            Some(store) => {
+                tokio::task::spawn_blocking(move || {
+                    let restored = store.restore(&entries);
+                    (entries, restored)
+                })
+                .await?
+            }
+            None => (entries, None),
+        };
+        let (mut state, mut recall, from, saved) = match restored {
+            Some((saved, recall)) => (saved.state(), recall, saved.records() as usize, Some(saved)),
+            None => (State::default(), Recall::default(), 0, None),
+        };
+        for (offset, rec) in &entries[from..] {
             let absent = edge_absent(&state, &rec.record);
             state.apply(*offset, rec);
             let created = absent && !edge_absent(&state, &rec.record);
             // The append path remembers only what the fold took; so does a rebuild.
             let rejected = state.rejections.last().is_some_and(|r| r.offset == *offset);
             recall.remember(*offset, rec, &self.0.me, created, rejected);
+        }
+        if let Some(store) = store {
+            (state, recall) = tokio::task::spawn_blocking(move || {
+                store.save(&entries, saved.as_ref(), &state, &recall);
+                (state, recall)
+            })
+            .await?;
         }
         Ok((state, recall, tail))
     }

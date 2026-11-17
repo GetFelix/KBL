@@ -1,0 +1,29 @@
+[package]
+name = "kbl-trace"
+version = "0.0.0"
+description = "OpenTelemetry traces shared by the tracker, ingest and kbl-mcp: an OTLP exporter that is off unless configured, and W3C trace context over HTTP"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# An in-memory exporter, for tests in the crates that add spans.
+test-util = ["opentelemetry_sdk/testing"]
+
+[dependencies]
+http = "=1.5.0"
+opentelemetry = { version = "=0.33.1", default-features = false, features = ["trace"] }
+opentelemetry-http = { version = "=0.33.1", default-features = false }
+opentelemetry-otlp = { version = "=0.33.1", default-features = false, features = ["trace", "http-proto", "reqwest-blocking-client", "reqwest-rustls"] }
+opentelemetry_sdk = { version = "=0.33.1", default-features = false, features = ["trace"] }
+tracing = "=0.1.44"
+tracing-core = "=0.1.36"
+tracing-opentelemetry = { version = "=0.34.0", default-features = false }
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["registry", "std"] }
+
+[dev-dependencies]
+tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

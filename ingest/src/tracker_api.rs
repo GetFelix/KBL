@@ -8,6 +8,7 @@ use kbl_core::names::ItemId;
 use kbl_core::work::{Actor, WorkRecord};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tracing::Instrument as _;
 
 /// An imported root, as the tracker folds it.
 #[derive(Debug, Clone, Deserialize)]
@@ -123,13 +124,28 @@ impl Http {
         })
     }
 
-    async fn send(&self, req: reqwest::RequestBuilder) -> Result<(u16, Value)> {
+    /// `route` is the tracker route template, so a source name in the URL never
+    /// reaches a span.
+    async fn send(
+        &self,
+        route: &'static str,
+        req: reqwest::RequestBuilder,
+    ) -> Result<(u16, Value)> {
+        let span = tracing::info_span!(
+            "tracker.request",
+            otel.kind = "client",
+            http.route = route,
+            http.response.status_code = tracing::field::Empty,
+        );
         let res = req
             .bearer_auth(&self.token)
+            .headers(span.in_scope(kbl_trace::headers))
             .send()
+            .instrument(span.clone())
             .await
             .context("reach the tracker")?;
         let status = res.status().as_u16();
+        span.record("http.response.status_code", status);
         let body = res.json().await.unwrap_or(Value::Null);
         Ok((status, body))
     }
@@ -138,7 +154,10 @@ impl Http {
 impl Tracker for Http {
     async fn roots(&self) -> Result<Listed> {
         let (status, body) = self
-            .send(self.client.get(format!("{}/v1/ingest/roots", self.base)))
+            .send(
+                "/v1/ingest/roots",
+                self.client.get(format!("{}/v1/ingest/roots", self.base)),
+            )
             .await?;
         if status != 200 {
             bail!("the tracker answered {status} to the roots call: {body}");
@@ -159,6 +178,7 @@ impl Tracker for Http {
     async fn append(&self, record: &WorkRecord) -> Result<Appended> {
         let (status, body) = self
             .send(
+                "/v1/ingest/records",
                 self.client
                     .post(format!("{}/v1/ingest/records", self.base))
                     .json(&json!({ "record": record })),
@@ -179,6 +199,7 @@ impl Tracker for Http {
     async fn load(&self, source: &str) -> Result<Saved> {
         let (status, body) = self
             .send(
+                "/v1/ingest/state/{source}",
                 self.client
                     .get(format!("{}/v1/ingest/state/{source}", self.base)),
             )
@@ -193,6 +214,7 @@ impl Tracker for Http {
     async fn save(&self, source: &str, state: &Value, version: Option<u64>) -> Result<u64> {
         let (status, body) = self
             .send(
+                "/v1/ingest/state/{source}",
                 self.client
                     .put(format!("{}/v1/ingest/state/{source}", self.base))
                     .json(&json!({ "state": state, "version": version })),
@@ -204,3 +226,6 @@ impl Tracker for Http {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
