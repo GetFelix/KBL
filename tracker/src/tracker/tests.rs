@@ -2421,6 +2421,17 @@ async fn a_person_works_a_pull_request_and_marks_the_summary() {
         assert!(it.review_ask.is_none() && it.changes_ask.is_some());
         assert_eq!(it.paths[0].summary_accurate, Some(false));
     }
+    let trust = t.summary_trust(30).await.unwrap();
+    let s = &trust["stats"];
+    assert_eq!(
+        (
+            s["rated"].as_u64(),
+            s["not_accurate"].as_u64(),
+            s["unrated"].as_u64()
+        ),
+        (Some(1), Some(1), Some(0))
+    );
+    assert_eq!(s["accurate_permille"], 0);
     // Open upstream, the merge is not recorded; once upstream shows it merged it is.
     assert_eq!(
         refused(

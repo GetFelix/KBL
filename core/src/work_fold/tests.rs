@@ -3053,6 +3053,7 @@ mod review;
 mod review_actions;
 mod snapshots;
 mod spend;
+mod trust;
 
 /// The tracker refuses such a replacement before it is logged, but a log that holds
 /// one must keep folding as it always has.

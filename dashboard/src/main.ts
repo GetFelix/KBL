@@ -19,6 +19,7 @@ import { deleteView, parseSaved, renameView, saveView, type SavedView } from './
 import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
+import { metricsView } from './ui/metrics-view.ts';
 import { spendView } from './ui/spend-view.ts';
 import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
@@ -216,6 +217,8 @@ const run = (id: CommandId): void => {
       return help.open();
     case 'spend':
       return showSpend();
+    case 'metrics':
+      return metricsBox.open();
     case 'prices':
       return showPrices();
     case 'search':
@@ -334,6 +337,7 @@ const ui = shell(
     palette: () => run('palette'),
     help: () => run('help'),
     spend: () => run('spend'),
+    metrics: () => run('metrics'),
     mark: (id) => store.dispatch({ type: 'mark', id }),
     signIn: () => signInBox.open(),
     signOut,
@@ -379,6 +383,17 @@ const spendBox = spendView({
   openPrices: () => showPrices(),
   now: () => Date.now(),
   priceAgeDays: priceAgeDays(q.get('price_age_days')),
+});
+const metricsBox = metricsView({
+  signedIn: () => tracker !== null,
+  load: async (days) => {
+    const t = tracker;
+    const r = t ? await t.summaryTrust(days) : null;
+    if (r === null) return 'Not signed in to the tracker.';
+    if ('status' in r) return r.status === 'ok' ? 'The tracker answered without numbers.' : r.reason;
+    return r;
+  },
+  signIn: () => signInBox.open(),
 });
 const pricesBox = pricesView({ canSetPrice: () => tracker !== null, setPrice, now: () => Date.now() });
 // Spend of a log still being read would be a partial total, so the dialog waits for live and fills in then.
@@ -426,7 +441,7 @@ const views = viewDialog({
 const confirm = confirmDialog(write);
 const assignBox = assignDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, spendBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -453,7 +468,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;
