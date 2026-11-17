@@ -33,7 +33,7 @@ source (an import and its `as_of` day, or a person), usage accrued, and any pric
 price history under a "History" disclosure. A signed-in person chooses Set or Change on a row, types dollars and
 optionally a UTC day (a day not yet come is sent as `effective_from_ms`; blank or past means now). Changing a price
 in effect shows `old -> new` and enables Save only after a confirm checkbox; nothing replaces a price silently.
-Save sends the price it showed as `expected_price`; if another person changed it first, the tracker refuses
+Save sends the price it showed as `expected_price` (`{"none": true}` when it showed none); if another person changed or set it first, the tracker refuses
 and the page says "Price changed, review and retry." and asks for the confirm again.
 A price of 0 is allowed, as in the import. A table with nothing recorded says so.
 

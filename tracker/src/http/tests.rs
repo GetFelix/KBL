@@ -1210,3 +1210,94 @@ async fn of_two_prices_that_expect_the_same_one_only_one_lands() {
         "{a:?} {b:?}"
     );
 }
+
+#[tokio::test]
+async fn a_first_price_that_expected_none_lands_when_there_is_none() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    let body = json!({ "model": "m", "unit": "input", "price_micros": 1, "expected_price": { "none": true } });
+    let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), body).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+}
+
+#[tokio::test]
+async fn a_price_that_expected_none_is_refused_when_one_is_in_effect() {
+    let app = kept().await;
+    let since = priced_for_later(&app).await;
+    let (status, reply) = call(
+        &app,
+        "/v1/work/prices",
+        Some("tok-gab"),
+        replacing(4_000_000, json!({ "none": true })),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("price_changed")),
+        "{reply}"
+    );
+    // Nothing was written: replacing the first price still works.
+    let ok = replacing(
+        5_000_000,
+        json!({ "price_micros": 3_000_000, "since_ms": since }),
+    );
+    let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), ok).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+}
+
+#[tokio::test]
+async fn a_price_that_expected_a_price_is_refused_when_none_is_in_effect() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    let expected = json!({ "price_micros": 3_000_000, "since_ms": 1 });
+    let (status, reply) = call(
+        &app,
+        "/v1/work/prices",
+        Some("tok-gab"),
+        replacing(4_000_000, expected),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("price_changed")),
+        "{reply}"
+    );
+}
+
+#[tokio::test]
+async fn of_two_first_prices_that_expect_none_only_one_lands() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    let body = |p: u64| json!({ "model": "m", "unit": "input", "price_micros": p, "expected_price": { "none": true } });
+    let (a, b) = tokio::join!(
+        call(&app, "/v1/work/prices", Some("tok-gab"), body(1)),
+        call(&app, "/v1/work/prices", Some("tok-gab"), body(2)),
+    );
+    let mut statuses = [a.0, b.0];
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [StatusCode::OK, StatusCode::CONFLICT],
+        "{a:?} {b:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_expected_price_that_is_not_a_price_or_none_true_is_a_bad_request() {
+    let app = kept().await;
+    raise_to(&app, 8).await;
+    for expected in [
+        json!({ "none": false }),
+        json!({}),
+        json!({ "none": true, "price_micros": 1 }),
+        json!({ "price_micros": 1 }),
+    ] {
+        let body =
+            json!({ "model": "m", "unit": "input", "price_micros": 1, "expected_price": expected });
+        let (status, reply) = call(&app, "/v1/work/prices", Some("tok-gab"), body).await;
+        assert!(
+            status.is_client_error() && status != StatusCode::CONFLICT,
+            "{expected}: {status} {reply}"
+        );
+    }
+}

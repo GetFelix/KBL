@@ -354,16 +354,43 @@ struct PriceBody {
     price_micros: u64,
     effective_from_ms: Option<u64>,
     as_of: Option<String>,
-    /// The price this one replaces, as read: refused as `price_changed` when
-    /// another is in effect. Absent means no check.
+    /// What the caller saw: the price this one replaces, or `{"none": true}`
+    /// for no price in effect. Refused as `price_changed` when it is not what
+    /// is in effect. Absent means no check.
     expected_price: Option<ExpectedPriceBody>,
 }
 
 #[derive(Deserialize)]
-struct ExpectedPriceBody {
+#[serde(untagged)]
+enum ExpectedPriceBody {
+    Seen(SeenPrice),
+    None(#[allow(dead_code)] NoPrice),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SeenPrice {
     price_micros: u64,
     /// When that price took effect, in milliseconds.
     since_ms: u64,
+}
+
+/// `{"none": true}`. A named field, and only `true` is accepted, so no price
+/// read wrongly or left out turns into "expect none".
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoPrice {
+    #[serde(deserialize_with = "only_true")]
+    #[allow(dead_code)]
+    none: bool,
+}
+
+fn only_true<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+    if bool::deserialize(d)? {
+        Ok(true)
+    } else {
+        Err(serde::de::Error::custom("none must be true"))
+    }
 }
 
 #[derive(Deserialize)]
@@ -1006,9 +1033,12 @@ async fn price<B: Broker>(call: Call<B>, Json(b): Json<PriceBody>) -> Response {
     let Some(e) = b.expected_price else {
         return as_person(&call, record).await;
     };
-    let expected = ExpectedPrice {
-        price_micros: e.price_micros,
-        since_ms: e.since_ms,
+    let expected = match e {
+        ExpectedPriceBody::Seen(s) => ExpectedPrice::Seen {
+            price_micros: s.price_micros,
+            since_ms: s.since_ms,
+        },
+        ExpectedPriceBody::None(_) => ExpectedPrice::None,
     };
     match call.person() {
         Ok(p) => reply(call.tracker().person_price(p, record, expected).await),

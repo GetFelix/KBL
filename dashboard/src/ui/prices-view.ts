@@ -8,8 +8,7 @@ import { h } from './dom.ts';
 export interface PricesHandlers {
   /** Whether the viewer is signed in to the tracker, which is what setting a price needs. */
   canSetPrice(): boolean;
-  /** Sends a price typed in dollars, from an optional UTC day; resolves to why it was refused, or null once written. */
-  /** `replaced` is the price the person saw and confirmed; the tracker refuses if another is in effect by then. */
+  /** Sends a price typed in dollars, from an optional UTC day; resolves to why it was refused, or null once written. `replaced` is the price the person saw (null when none): the tracker refuses if that is no longer what is in effect. */
   setPrice(model: string, unit: PriceUnit, dollarsText: string, from: string, replaced: PriceEntry | null): Promise<string | null>;
   now(): number;
 }

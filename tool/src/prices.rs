@@ -201,13 +201,14 @@ pub(crate) fn body(p: &Planned) -> Value {
     if let Some(ms) = p.effective_from_ms {
         b["effective_from_ms"] = json!(ms);
     }
-    // An update replaces the price that was read, so one set since is not overwritten unseen.
-    if let Step::Differs {
-        in_effect,
-        since_ms,
-    } = p.step
-    {
-        b["expected_price"] = json!({ "price_micros": in_effect, "since_ms": since_ms });
+    // A write names the price that was read, or that there was none, so one set since is not overwritten unseen.
+    match p.step {
+        Step::Differs {
+            in_effect,
+            since_ms,
+        } => b["expected_price"] = json!({ "price_micros": in_effect, "since_ms": since_ms }),
+        Step::Write => b["expected_price"] = json!({ "none": true }),
+        Step::Skip => {}
     }
     b
 }

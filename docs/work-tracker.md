@@ -1490,9 +1490,12 @@ To change a price without overwriting one someone else just set, send the price
 you read as `expected_price`: `{"price_micros": 15000000, "since_ms": 1760000000000}`
 (its value and when it took effect). If the price in effect when the new one starts
 is not that one, the tracker answers `409` with `why: "price_changed"` and writes
-nothing; read the price again and retry. The check and the write happen together,
-so of two posts that expected the same price only one lands. Leave it out and
-nothing is checked.
+nothing; read the price again and retry. For a first price, send
+`"expected_price": {"none": true}`: it is refused the same way if a price is in
+effect by then. `none` is its own field and only `true` is accepted, so a price
+left out or read wrongly cannot turn into "expect none" by accident. The check and
+the write happen together, so of two posts that expected the same price (or both
+expected none) only one lands. Leave `expected_price` out and nothing is checked.
 
 **Importing prices.** `kbl-tool prices import` writes `price_set` records from
 a price table, so a fresh install is not empty:

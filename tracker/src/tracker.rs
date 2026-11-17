@@ -348,15 +348,16 @@ fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), E
     Ok(())
 }
 
-/// The price a person saw when they chose to replace it.
+/// What a person saw when they chose to set a price: the price it replaces, or
+/// that there was none.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ExpectedPrice {
-    pub(crate) price_micros: u64,
-    pub(crate) since_ms: u64,
+pub(crate) enum ExpectedPrice {
+    Seen { price_micros: u64, since_ms: u64 },
+    None,
 }
 
-/// Refuses a `price_set` whose expected price is not the one in effect when the
-/// new price starts. Checked before the append, so the fold of an existing log
+/// Refuses a `price_set` whose expected price (or expected absence of one) is
+/// not what is in effect when the new price starts. Checked before the append, so the fold of an existing log
 /// does not change.
 fn price_is_expected(
     core: &Core,
@@ -373,14 +374,22 @@ fn price_is_expected(
         return Ok(());
     };
     let from = effective_from_ms.unwrap_or(logged.at_ms);
-    let same = core
+    let in_effect = core
         .state
         .prices_in_effect(from)
-        .iter()
-        .find(|p| p.model == *model && p.unit == *unit)
-        .is_some_and(|p| {
-            p.price_micros == expected.price_micros && p.since_ms == expected.since_ms
-        });
+        .into_iter()
+        .find(|p| p.model == *model && p.unit == *unit);
+    let same = match (expected, in_effect) {
+        (ExpectedPrice::None, found) => found.is_none(),
+        (
+            ExpectedPrice::Seen {
+                price_micros,
+                since_ms,
+            },
+            Some(p),
+        ) => p.price_micros == price_micros && p.since_ms == since_ms,
+        (ExpectedPrice::Seen { .. }, None) => false,
+    };
     if same {
         Ok(())
     } else {
