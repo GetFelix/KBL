@@ -114,10 +114,17 @@ try {
     });
   check((await ingest(["--check-only"])) === 0, "kbl-ingest check passes against the quick start tracker");
   check((await ingest(["--once"])) === 0, "kbl-ingest imports once into the quick start tracker");
+  // Async so the stand-in GitHub on this event loop keeps answering.
   const after = JSON.parse(
-    execFileSync(join(repo, "target/release/kbl-ingest"), ["check", "--config", join(repo, "dev/state/ingest.json"), "--json"], {
-      encoding: "utf8",
-      env: { ...process.env, GITHUB_TOKEN: "unused", KBL_INGEST_TOKEN: Object.keys(tokens.ingest)[0] },
+    await new Promise((resolve, reject) => {
+      const child = spawn(join(repo, "target/release/kbl-ingest"), ["check", "--config", join(repo, "dev/state/ingest.json"), "--json"], {
+        env: { ...process.env, GITHUB_TOKEN: "unused", KBL_INGEST_TOKEN: Object.keys(tokens.ingest)[0] },
+        stdio: ["ignore", "pipe", "inherit"],
+      });
+      let out = "";
+      child.stdout.on("data", (d) => (out += d));
+      child.on("error", reject);
+      child.on("exit", (code) => (code === 0 ? resolve(out) : reject(new Error(`kbl-ingest check exited ${code}`))));
     }),
   );
   check(after.rules[0].already_imported === 1, "the issue is a root in the tracker");
