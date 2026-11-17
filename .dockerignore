@@ -1,0 +1,7 @@
+.git
+target
+dev/state
+dashboard/node_modules
+dashboard/dist
+dashboard/.wasm-node
+dashboard/src/wasm
