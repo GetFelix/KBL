@@ -1,0 +1,1 @@
+Ingest can sign in as a GitHub App. `github.app` takes the App id, an installation (by id, repo or organization) and the private key file. Ingest signs the JWT, mints installation tokens, keeps each until five minutes before it expires, and mints again once if GitHub answers 401. `token_file` still works and wins when both are set; `token_env` comes last.

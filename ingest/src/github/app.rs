@@ -1,0 +1,254 @@
+//! GitHub App credentials: sign a short-lived JWT with the App's private
+//! key, trade it for an installation token, and keep that token until it is
+//! about to expire. The key, the JWT and the token are never logged and
+//! never put in an error.
+
+use std::fmt;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result, anyhow, bail};
+use base64::Engine;
+use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use ring::rand::SystemRandom;
+use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
+use serde_json::{Value, json};
+use tokio::sync::Mutex;
+
+use crate::config::{AppConfig, Installation};
+
+/// The JWT is backdated this far, so a clock a little ahead of GitHub's
+/// does not make it "issued in the future".
+const IAT_SKEW: u64 = 60;
+/// GitHub refuses a JWT valid for more than ten minutes. The expiry is the
+/// whole of that window counted from `iat`, so it stays under the limit.
+const JWT_LIFETIME: u64 = 9 * 60;
+/// A cached token is replaced once this little of its life is left.
+const REFRESH_BEFORE: u64 = 5 * 60;
+
+/// Unix seconds. A function so tests move time.
+pub(crate) type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
+/// Where progress lines go. A function so tests can read them.
+pub(crate) type Log = Arc<dyn Fn(&str) + Send + Sync>;
+
+pub(crate) fn system_clock() -> Clock {
+    Arc::new(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    })
+}
+
+pub(crate) fn stderr_log() -> Log {
+    Arc::new(|m| eprintln!("kbl-ingest: {m}"))
+}
+
+struct Cached {
+    token: String,
+    expires_at: u64,
+}
+
+pub(crate) struct AppAuth {
+    app_id: String,
+    installation: Installation,
+    key: RsaKeyPair,
+    api: String,
+    client: reqwest::Client,
+    clock: Clock,
+    log: Log,
+    // Held across the mint, so requests that arrive together mint once.
+    cache: Mutex<Option<Cached>>,
+    installation_id: Mutex<Option<u64>>,
+}
+
+impl fmt::Debug for AppAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AppAuth")
+            .field("app_id", &self.app_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AppAuth {
+    pub(crate) fn new(cfg: &AppConfig, api: &str, clock: Clock, log: Log) -> Result<Self> {
+        let pem = std::fs::read_to_string(&cfg.private_key_file).with_context(|| {
+            format!(
+                "read the GitHub App private key {}",
+                cfg.private_key_file.display()
+            )
+        })?;
+        let key = parse_key(&pem).with_context(|| {
+            format!(
+                "load the GitHub App private key {}",
+                cfg.private_key_file.display()
+            )
+        })?;
+        Ok(Self {
+            app_id: cfg.id.clone(),
+            installation: cfg.installation.clone(),
+            key,
+            api: api.trim_end_matches('/').to_owned(),
+            client: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(Duration::from_secs(30))
+                .user_agent("kbl-ingest")
+                .build()?,
+            clock,
+            log,
+            cache: Mutex::new(None),
+            installation_id: Mutex::new(match cfg.installation {
+                Installation::Id(id) => Some(id),
+                _ => None,
+            }),
+        })
+    }
+
+    /// A token with more than the refresh margin left, minted if needed.
+    pub(crate) async fn token(&self) -> Result<String> {
+        let mut cache = self.cache.lock().await;
+        let now = (self.clock)();
+        if let Some(c) = cache.as_ref()
+            && c.expires_at > now + REFRESH_BEFORE
+        {
+            return Ok(c.token.clone());
+        }
+        let fresh = self.mint(now).await?;
+        let token = fresh.token.clone();
+        *cache = Some(fresh);
+        Ok(token)
+    }
+
+    /// Drops the cached token, for GitHub having refused it.
+    pub(crate) async fn forget(&self, token: &str) {
+        let mut cache = self.cache.lock().await;
+        // Another request may have refreshed already; keep that one.
+        if cache.as_ref().is_some_and(|c| c.token == token) {
+            *cache = None;
+        }
+    }
+
+    async fn mint(&self, now: u64) -> Result<Cached> {
+        let jwt = self.jwt(now)?;
+        let id = self.installation_id(&jwt).await?;
+        let url = format!("{}/app/installations/{id}/access_tokens", self.api);
+        let (status, body) = self.call("POST", &url, &jwt).await?;
+        if status != 201 && status != 200 {
+            bail!(
+                "GitHub refused to mint an installation token for installation {id} ({status}): {}",
+                message(&body)
+            );
+        }
+        let token = body["token"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| anyhow!("GitHub's installation token answer has no token"))?
+            .to_owned();
+        let expires_at = body["expires_at"]
+            .as_str()
+            .and_then(super::parse_utc_ms)
+            .map(|ms| ms / 1000)
+            .ok_or_else(|| anyhow!("GitHub's installation token answer has no valid expires_at"))?;
+        (self.log)(&format!(
+            "minted a GitHub installation token for installation {id}, {}s of life",
+            expires_at.saturating_sub(now)
+        ));
+        Ok(Cached { token, expires_at })
+    }
+
+    async fn installation_id(&self, jwt: &str) -> Result<u64> {
+        let mut known = self.installation_id.lock().await;
+        if let Some(id) = *known {
+            return Ok(id);
+        }
+        let path = match &self.installation {
+            Installation::Repo(r) => format!("repos/{r}/installation"),
+            Installation::Org(o) => format!("orgs/{o}/installation"),
+            Installation::Id(_) => unreachable!("an id is known from the start"),
+        };
+        let (status, body) = self
+            .call("GET", &format!("{}/{path}", self.api), jwt)
+            .await?;
+        if status != 200 {
+            bail!(
+                "GitHub would not say which installation serves {path} ({status}): {}",
+                message(&body)
+            );
+        }
+        let id = body["id"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("GitHub's installation answer has no id"))?;
+        *known = Some(id);
+        Ok(id)
+    }
+
+    async fn call(&self, method: &str, url: &str, jwt: &str) -> Result<(u16, Value)> {
+        let res = self
+            .client
+            .request(reqwest::Method::from_bytes(method.as_bytes())?, url)
+            .bearer_auth(jwt)
+            .header("accept", "application/vnd.github+json")
+            .header("x-github-api-version", "2022-11-28")
+            .send()
+            .await
+            // A reqwest error can carry the URL but never a header.
+            .with_context(|| format!("reach {url}"))?;
+        let status = res.status().as_u16();
+        Ok((status, res.json().await.unwrap_or(Value::Null)))
+    }
+
+    fn jwt(&self, now: u64) -> Result<String> {
+        let iat = now.saturating_sub(IAT_SKEW);
+        let claims = json!({ "iat": iat, "exp": iat + JWT_LIFETIME, "iss": self.app_id });
+        let head = URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","typ":"JWT"}"#);
+        let mut signing = format!("{head}.{}", URL_SAFE_NO_PAD.encode(claims.to_string()));
+        let mut sig = vec![0; self.key.public().modulus_len()];
+        self.key
+            .sign(
+                &RSA_PKCS1_SHA256,
+                &SystemRandom::new(),
+                signing.as_bytes(),
+                &mut sig,
+            )
+            .map_err(|_| anyhow!("sign the GitHub App JWT"))?;
+        signing.push('.');
+        signing.push_str(&URL_SAFE_NO_PAD.encode(sig));
+        Ok(signing)
+    }
+}
+
+/// GitHub's `message`, with any known secret shape cut out.
+fn message(body: &Value) -> String {
+    let m = body["message"].as_str().unwrap_or("no message");
+    kbl_core::redact::redact(m).into_owned()
+}
+
+/// An RSA key in PEM, as GitHub hands it out (PKCS#1) or as PKCS#8.
+fn parse_key(pem: &str) -> Result<RsaKeyPair> {
+    let mut label = None;
+    let mut b64 = String::new();
+    for line in pem.lines().map(str::trim) {
+        if let Some(l) = line
+            .strip_prefix("-----BEGIN ")
+            .and_then(|l| l.strip_suffix("-----"))
+        {
+            label = Some(l.to_owned());
+        } else if line.starts_with("-----") || line.contains(':') {
+            continue;
+        } else if label.is_some() {
+            b64.push_str(line);
+        }
+    }
+    // The decoder's own error would not echo the input, but say less anyway.
+    let der = STANDARD
+        .decode(b64)
+        .map_err(|_| anyhow!("the key is not valid PEM"))?;
+    let pair = match label.as_deref() {
+        Some("RSA PRIVATE KEY") => RsaKeyPair::from_der(&der),
+        Some("PRIVATE KEY") => RsaKeyPair::from_pkcs8(&der),
+        _ => bail!("the key must be a PEM `RSA PRIVATE KEY` or `PRIVATE KEY`"),
+    };
+    pair.map_err(|_| anyhow!("the key is not a usable RSA private key (2048 bits or more)"))
+}
+
+#[cfg(test)]
+mod tests;

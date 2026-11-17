@@ -54,10 +54,70 @@ pub(crate) struct GithubConfig {
     /// A file holding a token, read again for every request so an App
     /// installation token can be refreshed beside the worker.
     pub(crate) token_file: Option<std::path::PathBuf>,
+    /// A GitHub App ingest mints installation tokens for itself.
+    pub(crate) app: Option<AppConfig>,
     pub(crate) token_env: Option<String>,
     /// Logins the credential writes as, such as `kbl[bot]`.
     #[serde(default)]
     pub(crate) own_logins: Vec<String>,
+}
+
+/// Which installation of the App ingest acts as.
+#[derive(Debug, Clone)]
+pub(crate) enum Installation {
+    Id(u64),
+    /// Looked up from this `owner/name` repository's installation.
+    Repo(String),
+    /// Looked up from this organization's installation.
+    Org(String),
+}
+
+/// A GitHub App: its id, the installation to act as, and the file holding
+/// its private key. The key itself never enters the config.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(try_from = "RawApp")]
+pub(crate) struct AppConfig {
+    pub(crate) id: String,
+    pub(crate) installation: Installation,
+    pub(crate) private_key_file: std::path::PathBuf,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawApp {
+    /// The App id or client id; GitHub accepts either as the JWT issuer.
+    id: serde_json::Value,
+    installation_id: Option<u64>,
+    installation_repo: Option<String>,
+    installation_org: Option<String>,
+    private_key_file: std::path::PathBuf,
+}
+
+impl TryFrom<RawApp> for AppConfig {
+    type Error = String;
+
+    fn try_from(r: RawApp) -> Result<Self, String> {
+        let id = match &r.id {
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::String(s) if !s.is_empty() => s.clone(),
+            _ => return Err("github.app.id is the App's id".into()),
+        };
+        let installation = match (r.installation_id, r.installation_repo, r.installation_org) {
+            (Some(i), None, None) => Installation::Id(i),
+            (None, Some(repo), None) if repo.contains('/') => Installation::Repo(repo),
+            (None, None, Some(org)) if !org.contains('/') => Installation::Org(org),
+            _ => {
+                return Err("github.app needs exactly one of installation_id, \
+                            installation_repo (owner/name) or installation_org"
+                    .into());
+            }
+        };
+        Ok(Self {
+            id,
+            installation,
+            private_key_file: r.private_key_file,
+        })
+    }
 }
 
 fn default_api() -> String {
@@ -126,8 +186,10 @@ impl Config {
         let cfg: Config = serde_json::from_str(text)?;
         ensure!(!cfg.rules.is_empty(), "there are no intake rules");
         ensure!(
-            cfg.github.token_file.is_some() || cfg.github.token_env.is_some(),
-            "github needs a token_file or a token_env"
+            cfg.github.token_file.is_some()
+                || cfg.github.app.is_some()
+                || cfg.github.token_env.is_some(),
+            "github needs a token_file, an app or a token_env"
         );
         let mut seen = std::collections::HashSet::new();
         for r in &cfg.rules {

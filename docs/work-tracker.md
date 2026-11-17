@@ -582,10 +582,34 @@ ingest closed it.
 A rule's `repo`, `labels_all`, `labels_any`, `labels_excluded`, `milestone`,
 `assignee` and `type` are ANDed; `mode` is `admit` or `propose`; `cap` limits
 open roots; `target_repo` names where agents work (default: the issue's repo).
-The first rule that matches takes the issue. The GitHub credential is a token
-read from `token_file` or `token_env`; the file is read again for every
-request, so a GitHub App installation token can be refreshed beside the worker
-(the worker does not mint installation tokens itself).
+The first rule that matches takes the issue.
+
+The GitHub credential is one of three, and the first one set is used:
+
+1. `token_file`: a file holding a token, read again for every request, so a
+   token refreshed beside the worker is picked up.
+2. `app`: ingest mints installation tokens itself.
+3. `token_env`: the environment variable holding a token.
+
+```json
+"github": {
+  "app": { "id": 123456, "installation_id": 7890123, "private_key_file": "/run/secrets/kbl-app.pem" },
+  "own_logins": ["kbl[bot]"]
+}
+```
+
+`app.id` is the App's id (or client id). Name the installation with exactly one
+of `installation_id`, `installation_repo` (`owner/name`) or `installation_org`;
+the last two ask GitHub which installation serves that repo or organization,
+once. `private_key_file` is the PEM GitHub gives out when the key is generated
+(`RSA PRIVATE KEY` or `PRIVATE KEY`). Ingest signs a JWT with it (RS256, issued
+60 seconds in the past, valid under ten minutes), trades it at
+`POST /app/installations/{id}/access_tokens` and keeps the token until five
+minutes of its hour are left. A request GitHub answers with 401 mints a new
+token and is sent once more; a second 401 stops the request with an error that
+names the App, never the credential. The key, the JWT and the token are never
+logged, and an error from GitHub is passed through the secret redactor first.
+The token stays in memory.
 
 `open_prerequisites: true` on a rule lets ingest open issues in that rule's
 `repo` for prerequisites, as in
