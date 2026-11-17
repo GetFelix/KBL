@@ -37,16 +37,18 @@ for the development stack). With one team and no organization, steps 1, 3, 5
 and 6 are all there is:
 
 1. Team mode only: `kbl-tool org init --tracker-subject <the tracker's subject>`.
-2. Start the tracker once, then stop it. This creates `work.events` and the
-   ready lanes (and, in team mode, takes the org lease). It must not run while
-   you import: it would not see records that appear under it.
+2. Single team only: start the tracker once, then stop it. This creates
+   `work.events` and the ready lanes. It must not run while you import: it
+   would not see records that appear under it. In team mode skip this step;
+   step 4 is the first start.
 3. Team mode only: `kbl-tool org import org.backup`. It holds the teams, who is
    in them, and the hash of every agent and ingest token, so the tokens that
    were handed out work again. No token itself is ever in a backup.
 4. Team mode only: start the tracker, run `kbl-tool team create <team>` for
-   each team, and stop the tracker. The org log already lists the team, so this
-   only creates its namespace and grants in the new Felix and lets the tracker
-   open its streams.
+   each team, and stop the tracker. Start it only after step 3: a tracker on an
+   empty org log writes its first team there, and the import would then refuse
+   the backup. The org log already lists the team, so this only creates its
+   namespace and grants in the new Felix and lets the tracker open its streams.
 5. Import each team's log into its empty `work.events`:
 
    ```bash

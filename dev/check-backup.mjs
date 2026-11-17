@@ -215,6 +215,11 @@ try {
   if (up.status !== 0) throw new Error("dev/up.sh failed");
   await felixToken(); // The new tenant answers.
   must(["org", "init", "--tracker-subject", "agents-admin"]);
+  // The org log goes in before any tracker starts: a tracker on an empty org log
+  // adopts its first team there, and the import would then refuse the backup.
+  must(["org", "import", orgFile]);
+  const orgAfter = orgDigest(join(dir, "org-after.json"));
+  check(orgAfter.sha256 === orgBefore.sha256, "the restored org log's digest equals the original's");
   // A broker that has just started may not hold its shards' leases yet.
   for (let tries = 1; ; tries++) {
     try {
@@ -225,6 +230,9 @@ try {
       await sleep(10000);
     }
   }
+  // The tracker opens the teams the log lists and creates their streams; alpha's
+  // namespace and grants are new in this Felix.
+  check(/already exists/.test(await teamCreate("alpha")), "alpha is in the restored org log");
   tracker.kill();
   await tracker.exited;
   check(digest(join(dir, "empty.json")).records === 0, "the fresh cluster's log is empty");
@@ -234,15 +242,6 @@ try {
   check(!tool(["work", "import", bad]).ok, "a damaged backup is refused");
   check(digest(join(dir, "empty.json")).records === 0, "the refused import wrote nothing");
 
-  // The org log goes in with the tracker stopped, then a tracker that reads it
-  // is given alpha's namespace and grants (the team already exists in the log).
-  must(["org", "import", orgFile]);
-  const orgAfter = orgDigest(join(dir, "org-after.json"));
-  check(orgAfter.sha256 === orgBefore.sha256, "the restored org log's digest equals the original's");
-  tracker = await startTracker(tokens, { ...timing, ...orgEnv });
-  check(/already exists/.test(await teamCreate("alpha")), "alpha is in the restored org log");
-  tracker.kill();
-  await tracker.exited;
   must(["work", "import", alphaFile], ALPHA);
   check(
     JSON.parse(must(["work", "digest", "--state", join(dir, "alpha-after.json")], ALPHA)).sha256 === alphaBefore.sha256,
