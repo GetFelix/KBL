@@ -78,6 +78,20 @@ Two more parties are outside KBL and can still steer it:
 5. **Agent to Felix.** `kbl-mcp` runs beside the model with the agent's
    Felix token. Nothing in `kbl-mcp` is a security check: an agent with its
    token and a raw client skips it. Felix grants are the check.
+
+`kbl-mcp` takes its Felix token from `KBL_FELIX_TOKEN`, or renews one from an
+ID token it reads from a file or a command (`mcp/src/credential.rs`). Both come
+from the environment or a file, never a flag, so nothing shows in the process
+list. The ID token file must be mode 600 or 400 (`mcp/src/credential.rs#read_file`).
+The ID token is sent only to an `https` control plane, or `http` on this
+machine (`mcp/src/credential.rs#exchange_url`), and the request does not
+follow redirects (`mcp/src/credential.rs#http_client`). Errors name the step and the status, never a
+token, the control plane's reply or the command line, and the command's stderr
+is dropped. The ID token is the standing secret here: whoever reads the file or
+runs the command can mint Felix tokens until the ID token expires or is revoked,
+so give an agent one narrowed to its own run, not the administrator's. A
+failed renewal keeps the current Felix token until it expires. Revoking the ID token stops renewals, not the Felix token in hand, and a stream already open outlives its
+token's expiry (Felix `docs/auth.md`), so cut an agent off by revoking its Felix principal, not only the ID token.
 6. **Browser to gateway.** Read only, one run.
 
 When ingest signs in as a GitHub App, the private key is the standing secret:

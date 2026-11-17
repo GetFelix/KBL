@@ -1,12 +1,14 @@
 //! `kbl-mcp`: the tools one agent in a Felix Agents run is given, served as
-//! MCP over stdio. The agent's token comes from the environment, so the agent
-//! can do on Felix what its token allows and nothing else.
+//! MCP over stdio. The agent's token comes from the environment, or is renewed
+//! from an ID token (see `credential.rs`), so the agent can do on Felix what its
+//! token allows and nothing else.
 //!
 //! `kbl-mcp person` is the person-side server: a person's card actions, with
 //! a person's token, in a process of its own. See `person.rs`.
 //!
 //! Stdout belongs to the protocol. Anything meant for a person goes to stderr.
 
+mod credential;
 mod felix;
 mod keepalive;
 mod metrics;
@@ -119,9 +121,8 @@ async fn serve() -> Result<()> {
         let bound = kbl_metrics::serve(addr, exporter).await?;
         eprintln!("kbl-mcp: metrics on {bound}");
     }
-    // Environment only: a flag would show the token in `ps`.
-    let token = std::env::var("KBL_FELIX_TOKEN")
-        .context("set KBL_FELIX_TOKEN to the agent's Felix token for the broker")?;
+    // Environment and files only: a flag would show a secret in `ps`.
+    let auth = credential::Auth::from_env(|name| std::env::var(name).ok(), &cli.tenant)?;
     let (Some(run), Some(agent)) = (cli.run, cli.agent) else {
         anyhow::bail!("--run and --agent are needed");
     };
@@ -133,7 +134,7 @@ async fn serve() -> Result<()> {
         broker: cli.broker,
         broker_ca: cli.broker_ca,
         broker_name: cli.broker_name,
-        token,
+        auth,
     })
     .await?;
     eprintln!(

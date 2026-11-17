@@ -34,19 +34,51 @@ async function json(url, init) {
 }
 
 // No agent identities exist yet, so the tenant's administrator stands in for every agent.
+export async function idToken(sub = "agents-admin") {
+  return (await json(`${IDP}/token?sub=${encodeURIComponent(sub)}&aud=kbl`)).id_token;
+}
+
 export async function felixToken() {
-  const idToken = (await json(`${IDP}/token?sub=agents-admin&aud=kbl`)).id_token;
+  const id = await idToken();
   const exchanged = await json(`${CONTROL_PLANE}/v1/tenants/${TENANT}/token/exchange`, {
     method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${idToken}` },
+    headers: { "content-type": "application/json", authorization: `Bearer ${id}` },
     body: JSON.stringify({ audience: "felix-broker" }),
   });
   return exchanged.felix_token;
 }
 
+// A broker that has just started may not hold its shards' leases yet and
+// refuses with "lease lapsed" until it does, so a call made right after
+// dev/up.sh is tried again for up to two minutes.
+const START_TRIES = 60;
+const START_PAUSE_MS = 2000;
+
 export function createRun(run, goal) {
   const created = spawnSync(TOOL, ["run", "create", run, "--goal", goal, "--budget-usd", "1"], { stdio: "inherit" });
   if (created.status !== 0) throw new Error(`could not create run ${run}`);
+}
+
+// A create that fails partway leaves the run's record behind and refuses its
+// id from then on, so each attempt takes a new id. Returns the id that worked.
+export async function createRunWhenReady(prefix, goal) {
+  return whenReady(`create a ${prefix} run`, async () => {
+    const run = newRunId(prefix);
+    createRun(run, goal);
+    return run;
+  });
+}
+
+// `call` again until it stops failing, for what a fresh stack answers before its leases are held.
+export async function whenReady(what, call) {
+  for (let tries = 1; ; tries++) {
+    try {
+      return await call();
+    } catch (e) {
+      if (tries === START_TRIES) throw new Error(`${what}: ${e.message}`);
+      await sleep(START_PAUSE_MS);
+    }
+  }
 }
 
 // The run's log as the records it holds, oldest first.

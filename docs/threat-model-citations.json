@@ -202,14 +202,23 @@
   "if delivery.is_some_and(|id| !recent.first_time(id)) {",
   ".is_none_or(|t| now.duration_since(t) >= app.min_gap)"
  ],
+ "mcp/src/credential.rs#exchange_url": [
+  "\"http\" => bail!(\"KBL_FELIX_CONTROL_PLANE must be https unless it is on this machine\"),"
+ ],
+ "mcp/src/credential.rs#http_client": [
+  ".redirect(reqwest::redirect::Policy::none())"
+ ],
+ "mcp/src/credential.rs#read_file": [
+  "if meta.permissions().mode() & 0o077 != 0 {"
+ ],
  "mcp/src/metrics.rs#tool_finished": [
   "let tool = if known {"
  ],
- "mcp/src/person.rs#connect": [
-  "if me[\"person\"].as_str().is_none() {"
- ],
  "mcp/src/person.rs#check": [
   "return Err(format!(\"{extra} is not a parameter of this tool\"));"
+ ],
+ "mcp/src/person.rs#connect": [
+  "if me[\"person\"].as_str().is_none() {"
  ],
  "mcp/src/server.rs#item_or_held": [
   "Some(i) => Ok(i),"
@@ -257,10 +266,6 @@
  "tracker/src/felix.rs#acks_are_durable": [
   "if durable && (quorum || copies == Some(1)) {"
  ],
- "tracker/src/http.rs#person": [
-  "fn person(&self) -> Result<Key, Denied> {",
-  "Err((StatusCode::FORBIDDEN, \"this call is for a person's token\"))"
- ],
  "tracker/src/http.rs#agent": [
   "fn agent(&self) -> Result<AgentName, Denied> {"
  ],
@@ -285,6 +290,10 @@
  ],
  "tracker/src/http.rs#observe": [
   ".map(|m| m.as_str().to_owned())"
+ ],
+ "tracker/src/http.rs#person": [
+  "fn person(&self) -> Result<Key, Denied> {",
+  "Err((StatusCode::FORBIDDEN, \"this call is for a person's token\"))"
  ],
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
