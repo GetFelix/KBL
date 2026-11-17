@@ -26,7 +26,7 @@ mod human_wait;
 #[cfg(test)]
 mod tests;
 
-pub use human_wait::{HumanWaitStats, KindStats, WaitKind};
+pub use human_wait::{HumanWaitStats, KindStats, QueueEntry, WaitKind};
 
 const DEFAULT_MAX_ITEMS: u32 = 12;
 const DEFAULT_MAX_DEPTH: u8 = 3;

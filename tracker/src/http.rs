@@ -154,6 +154,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/rules/read", post(rules_read::<B>))
         .route("/v1/work/flag", post(flag::<B>))
         .route("/v1/work/unflag", post(unflag::<B>))
+        .route("/v1/work/queue", get(queue::<B>))
         .route("/v1/work/items", get(items::<B>))
         .route("/v1/work/items/{item}", get(item::<B>))
         .route("/v1/work/items/{item}/history", get(history::<B>))
@@ -1268,6 +1269,13 @@ async fn time_to_human<B: Broker>(call: Call<B>, Query(q): Query<WindowQuery>) -
         .clamp(1, crate::tracker::reads::MAX_WINDOW_DAYS);
     match call.person() {
         Ok(_) => reply(call.tracker().time_to_human_action(days).await),
+        Err(d) => denied(d),
+    }
+}
+
+async fn queue<B: Broker>(call: Call<B>) -> Response {
+    match call.person() {
+        Ok(_) => reply(call.tracker().queue().await),
         Err(d) => denied(d),
     }
 }

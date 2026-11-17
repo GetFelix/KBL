@@ -247,3 +247,25 @@ fn tracking_a_record_does_not_scan_every_edge() {
         "{small:?} then {large:?} for 4x the records and edges"
     );
 }
+
+#[test]
+fn the_queue_lists_waits_oldest_first_then_by_tier() {
+    let mut l = held_root();
+    l.agent("w1", proposed("c1", None, "a", WorkKind::Fix)); // 4: at 40
+    l.agent("w1", proposed("c2", None, "b", WorkKind::Fix)); // 5: at 50
+    let ids = |l: &Log| {
+        let q = fold(&l.0).queue();
+        q.iter()
+            .map(|e| e.item.as_str().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let q = fold(&l.0).queue();
+    assert_eq!((q[0].item.as_str(), q[0].since_ms), ("c1", Some(40)));
+    assert_eq!(q[0].kind, WaitKind::Proposal);
+    assert_eq!(ids(&l), ["c1", "c2"]);
+    l.person(WorkRecord::Accepted {
+        item: id("c1"),
+        tier: None,
+    });
+    assert_eq!(ids(&l), ["c2"]);
+}
