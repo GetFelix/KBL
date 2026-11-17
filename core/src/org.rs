@@ -27,7 +27,15 @@ pub const ORG_TRACKER_CACHE: &str = "org.tracker";
 pub const ORG_FORMAT_V1: u32 = 1;
 
 /// The highest format this build reads and writes.
-pub const ORG_FORMAT: u32 = ORG_FORMAT_V1;
+/// Adds `format_raised`, `connection_set` and `budget_set`.
+pub const ORG_FORMAT_V2: u32 = 2;
+
+pub const ORG_FORMAT: u32 = ORG_FORMAT_V2;
+
+/// Bounds one `connection_set`, so no single record makes the org fold slow.
+pub const MAX_CONNECTION_SOURCES: usize = 1000;
+
+pub const MAX_CONNECTIONS_PER_TEAM: usize = 64;
 
 /// Most live agents one team may have. Revoking one frees a place, but its
 /// name stays taken, so a name in the audit trail names one agent.
@@ -235,6 +243,28 @@ pub enum OrgRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         max_pending: Option<u32>,
     },
+    /// Raises the org log's format. Stamped with the format it raises to, so
+    /// a reader that cannot read what follows stops at the raise itself.
+    FormatRaised { to: u32 },
+    /// The credential ingest uses for one upstream account, the worker group
+    /// that serves it, the budget pool it spends from, and which of the
+    /// team's sources it serves. Replaces the team's connection of that name.
+    ConnectionSet {
+        team: TeamName,
+        name: Key,
+        vendor: String,
+        group: Key,
+        pool: Key,
+        sources: Vec<String>,
+    },
+    /// What a budget pool may spend an hour in the vendor's unit, the part of
+    /// it kept back from polling, and the cap on wakes inside that part.
+    BudgetSet {
+        pool: Key,
+        per_hour: u64,
+        kept_back: u64,
+        wake_cap: u64,
+    },
 }
 
 impl OrgRecord {
@@ -250,6 +280,9 @@ impl OrgRecord {
             OrgRecord::SourceAdded { .. } => "source_added",
             OrgRecord::IngestAdded { .. } => "ingest_added",
             OrgRecord::GrantAdded { .. } => "grant_added",
+            OrgRecord::FormatRaised { .. } => "format_raised",
+            OrgRecord::ConnectionSet { .. } => "connection_set",
+            OrgRecord::BudgetSet { .. } => "budget_set",
         }
     }
 
@@ -266,6 +299,8 @@ impl OrgRecord {
             | OrgRecord::SourceAdded { .. }
             | OrgRecord::IngestAdded { .. }
             | OrgRecord::GrantAdded { .. } => ORG_FORMAT_V1,
+            OrgRecord::FormatRaised { to } => (*to).max(ORG_FORMAT_V2),
+            OrgRecord::ConnectionSet { .. } | OrgRecord::BudgetSet { .. } => ORG_FORMAT_V2,
         }
     }
 }
