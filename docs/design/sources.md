@@ -448,8 +448,11 @@ connection has exactly one worker.
   from polling, so a 30 minute interval does not let leases lapse.
 - **Sources are spread by lease.** The tracker assigns each source to a live worker of its group by rendezvous
   hashing, so a worker joining or leaving moves only its share of sources. The config answer lists what each
-  worker should take and release. A lease moves only after its holder releases it or it expires, so a source
-  never has two pollers.
+  worker is assigned and the leases it holds. A lease moves only after its holder releases it or it expires, so a
+  source never has two pollers: a holder whose share moved stops renewing it and lets it expire, and a stopping
+  worker releases all of its leases. Who is live is the tracker's memory of heartbeats, while the lease itself
+  only moves by a version-checked write, so trackers that disagree on who is live delay a handover but never
+  make two holders.
 - **Fenced by epoch.** A state write and every ingest record for a source carry the lease epoch, and the
   tracker refuses them from a worker that does not hold the current one. A worker that loses a lease stops
   at its next call, and the next holder starts from the last saved state. Across a handoff, `cache_put_if` on

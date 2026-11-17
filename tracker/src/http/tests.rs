@@ -55,13 +55,15 @@ struct Quiet {
     /// takes the lease and appends it.
     slow_read: Arc<StdMutex<Option<SlowRead>>>,
     /// Ingest source leases by source: value and version.
-    source_leases: Arc<StdMutex<std::collections::HashMap<String, (Vec<u8>, u64)>>>,
+    source_leases: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Another tracker writes this to a source's lease just before the next
     /// lease put, so that put's version check fails.
     race_lease_put: Arc<StdMutex<Option<Vec<u8>>>>,
 }
 
 type Records = Vec<(u64, Vec<u8>)>;
+/// A cache value and its version.
+type Versioned = (Vec<u8>, u64);
 
 /// How long a read takes, and the record another tracker appends meanwhile.
 type SlowRead = (Duration, Option<Vec<u8>>);

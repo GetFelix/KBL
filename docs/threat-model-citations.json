@@ -507,9 +507,9 @@
   "if logged.v > self.format {",
   "return Err(OrgRefusal::SourceServed);"
  ],
- "tracker/src/http/ingest.rs#config_answer": [
+ "tracker/src/http/ingest.rs#connection_for": [
   ".connection_of_group(team, group)",
-  ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor));"
+  ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor))"
  ],
  "tracker/src/http/ingest.rs#config": [
   "None => return busy(),"
@@ -542,5 +542,20 @@
  ],
  "ingest/src/config.rs#check_gitlab": [
   "fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {"
+ ],
+ "tracker/src/http/ingest/leases.rs#heartbeat": [
+  "super::connection_for(state, &team, &group, worker.source.as_deref())"
+ ],
+ "core/src/lease.rs#step": [
+  "Some(l) if l.free(now_ms) => Step::Take,"
+ ],
+ "core/src/lease.rs#next": [
+  "Step::Take => epoch + 1,"
+ ],
+ "tracker/src/http/ingest/leases.rs#MAX_MEMBERS": [
+  "pub(crate) const MAX_MEMBERS: usize = 256;"
+ ],
+ "ingest/src/lease.rs#Lessee::check": [
+  "Mode::Leased { renewed, .. } if !fresh(*renewed) => Err(fenced("
  ]
 }

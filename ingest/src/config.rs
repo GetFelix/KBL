@@ -49,6 +49,11 @@ pub(crate) struct TrackerConfig {
     pub(crate) url: String,
     /// The environment variable holding ingest's tracker token.
     pub(crate) token_env: String,
+    /// The worker group this worker serves. Set, the worker takes its sources
+    /// by lease once a connection names the group; unset, it polls every
+    /// configured repo as before.
+    #[serde(default)]
+    pub(crate) group: Option<String>,
 }
 
 /// How ingest signs in to Jira. The secret is read from the environment or a

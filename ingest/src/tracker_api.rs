@@ -151,6 +151,46 @@ impl Http {
     }
 }
 
+impl Http {
+    pub(crate) async fn put_json(&self, route: &'static str, body: &Value) -> Result<(u16, Value)> {
+        self.send(
+            route,
+            self.client.put(format!("{}{route}", self.base)).json(body),
+        )
+        .await
+    }
+
+    /// A config poll: status, body and `ETag`. The client's own timeout is
+    /// lifted past the hold.
+    pub(crate) async fn get_config(
+        &self,
+        group: &str,
+        instance: &str,
+        etag: Option<&str>,
+        wait_s: u64,
+    ) -> Result<(u16, Value, Option<String>)> {
+        let mut req = self
+            .client
+            .get(format!("{}/v1/ingest/config", self.base))
+            .query(&[("group", group), ("instance", instance)])
+            .query(&[("wait", wait_s)])
+            .timeout(std::time::Duration::from_secs(wait_s + 30))
+            .bearer_auth(&self.token);
+        if let Some(e) = etag {
+            req = req.header(reqwest::header::IF_NONE_MATCH, e);
+        }
+        let res = req.send().await.context("reach the tracker")?;
+        let status = res.status().as_u16();
+        let tag = res
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let body = res.json().await.unwrap_or(Value::Null);
+        Ok((status, body, tag))
+    }
+}
+
 impl Tracker for Http {
     async fn roots(&self) -> Result<Listed> {
         let (status, body) = self

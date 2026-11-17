@@ -92,7 +92,7 @@ is 13.
 | Org format | Adds | What waits for the raise |
 |---|---|---|
 | 1 | Every org record before org formats | Nothing |
-| 2 | `format_raised`, `connection_set` (a team's connection: vendor, worker group, budget pool and which of its sources it serves) and `budget_set` (a pool's calls per hour, the part kept back, the wake cap), and `GET /v1/ingest/config`, which answers a worker's connection and its pool's budget ([Sources](design/sources.md)) | Until the raise, `connection_set` and `budget_set` are refused with `format`, and every worker's config answers `connection: null`, so ingest stays file-managed |
+| 2 | `format_raised`, `connection_set` (a team's connection: vendor, worker group, budget pool and which of its sources it serves) and `budget_set` (a pool's calls per hour, the part kept back, the wake cap), and `GET /v1/ingest/config`, which answers a worker's connection and its pool's budget. Source leases are cache entries, not records, so they need no format ([Sources](design/sources.md)) | Until the raise, `connection_set` and `budget_set` are refused with `format`, and every worker's config answers `connection: null`, so ingest stays file-managed |
 
 The log has a format too. It starts at 1 and a `format_raised` record moves it
 up. Only a person can write one.

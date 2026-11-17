@@ -8,6 +8,7 @@ mod config;
 mod github;
 mod gitlab;
 mod jira;
+mod lease;
 mod metrics;
 mod rules;
 mod source;
@@ -134,23 +135,24 @@ async fn serve() -> Result<()> {
     }
     let token = std::env::var(&cfg.tracker.token_env)
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
-    let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
+    let tracker = tracker_api::Http::new(&cfg.tracker.url, token.clone())?;
+    let lease_api = Arc::new(tracker_api::Http::new(&cfg.tracker.url, token)?);
     match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {
         (Some(g), None, None, None) => {
             let github = github_source(g).await?;
-            drive(github, tracker, cfg, cli).await
+            drive(github, tracker, lease_api, cfg, cli).await
         }
         (None, Some(j), None, None) => {
             let jira = jira_source(j, &cfg).await?;
-            drive(jira, tracker, cfg, cli).await
+            drive(jira, tracker, lease_api, cfg, cli).await
         }
         (None, None, Some(a), None) => {
             let ado = ado_source(a, &cfg).await?;
-            drive(ado, tracker, cfg, cli).await
+            drive(ado, tracker, lease_api, cfg, cli).await
         }
         (None, None, None, Some(g)) => {
             let gitlab = gitlab_source(g, &cfg).await?;
-            drive(gitlab, tracker, cfg, cli).await
+            drive(gitlab, tracker, lease_api, cfg, cli).await
         }
         _ => unreachable!("the config checks for exactly one source"),
     }
@@ -317,13 +319,37 @@ async fn gitlab_source(
 async fn drive<S: Source>(
     source: S,
     tracker: tracker_api::Http,
+    lease_api: Arc<tracker_api::Http>,
     cfg: Config,
     cli: Cli,
 ) -> Result<()> {
     let repos = cfg.repos();
     let poll_every = Duration::from_secs(cfg.poll_seconds);
+    let lessee = match &cfg.tracker.group {
+        None => lease::Lessee::file_managed(source.name()),
+        Some(_) => lease::Lessee::waiting(source.name()),
+    };
+    let leasing = match cfg.tracker.group.clone() {
+        Some(group) => {
+            let instance = lease::instance()?;
+            tokio::spawn(lease::config_task(
+                lease_api.clone(),
+                lessee.clone(),
+                group.clone(),
+                instance.clone(),
+            ));
+            tokio::spawn(lease::heartbeat_task(
+                lease_api.clone(),
+                lessee.clone(),
+                group.clone(),
+                instance.clone(),
+            ));
+            Some((group, instance))
+        }
+        None => None,
+    };
     let ingest = Ingest::new(
-        source,
+        lease::Fenced::new(source, lessee.clone()),
         tracker,
         Settings {
             rules: cfg.rules,
@@ -357,16 +383,37 @@ async fn drive<S: Source>(
         });
     }
 
-    run(&ingest, &wake, poll_every, cli.once).await
+    let done = run(&ingest, &lessee, &wake, poll_every, cli.once).await;
+    // Released only once the poll loop has stopped, so the next holder never
+    // overlaps this one.
+    if let Some((group, instance)) = leasing {
+        use lease::LeaseApi as _;
+        if let Err(e) = lease_api.heartbeat(&group, &instance, true).await {
+            eprintln!("kbl-ingest: could not release the leases: {e:#}");
+        }
+    }
+    done
 }
 
 async fn run<S: Source, T: tracker_api::Tracker>(
     ingest: &Ingest<S, T>,
+    lessee: &lease::Lessee,
     wake: &webhook::Wake,
     every: Duration,
     once: bool,
 ) -> Result<()> {
     loop {
+        // Without a fresh lease the poll would make no vendor call anyway;
+        // skipping it also spares the tracker.
+        if !lessee.may_poll() {
+            let changed = lessee.changed.notified();
+            tokio::select! {
+                () = changed => {}
+                () = tokio::time::sleep(every) => {}
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+            }
+            continue;
+        }
         let reconcile = wake.reconcile.swap(false, Ordering::SeqCst);
         let polled = ingest.poll(reconcile).await;
         // A failed poll did not reconcile, so the next one still must.
