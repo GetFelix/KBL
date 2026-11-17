@@ -8,12 +8,15 @@
 //      digests must be equal, and so must the canonical state itself.
 //   4. A tracker started on the restored log serves it: the item that was
 //      waiting is handed out and finished, the finished one is not.
-//   5. A damaged backup is refused, and an import into a log that holds records is too.
+//   5. A damaged backup is refused, and an import into a log that holds other records is too.
+//   6. Team mode: the organization's log, a second team's log and an agent token
+//      minted in that team are backed up and restored the same way, and the
+//      restored tracker serves the team to the token it had before.
 //
 // This ends by recreating the stack, so it runs after the other checks.
 //   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-backup.mjs
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -55,7 +58,30 @@ function must(args, env) {
   if (!r.ok) throw new Error(`kbl-tool ${args.join(" ")}: ${r.err}`);
   return r.out;
 }
-const digest = (stateFile) => JSON.parse(must(["work", "digest", "--state", stateFile]));
+const digest = (stateFile, backup) =>
+  JSON.parse(must(["work", "digest", "--state", stateFile, ...(backup ? ["--backup", backup] : [])]));
+const orgDigest = (stateFile, backup) =>
+  JSON.parse(must(["org", "digest", "--state", stateFile, ...(backup ? ["--backup", backup] : [])]));
+const admin = { KBL_TRACKER_URL: TRACKER_URL, KBL_TRACKER_TOKEN: "tok-gab" };
+const orgEnv = { KBL_ORG_NAMESPACE: "kbl" };
+const ALPHA = { KBL_NAMESPACE: "alpha" };
+const alphaApi = async (token, path, body) => {
+  const response = await fetch(`${TRACKER_URL}/v1/teams/alpha/work/${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  return { status: response.status, body: await response.json().catch(() => ({})) };
+};
+// A team create waits for the org writer lease, which a new tracker may not hold yet.
+async function teamCreate(name) {
+  for (let tries = 0; ; tries++) {
+    const r = tool(["team", "create", name], admin);
+    if (r.ok) return r.out;
+    if (tries === 20) throw new Error(`team create ${name}: ${r.err}`);
+    await sleep(1000);
+  }
+}
 
 // Claims until `who` holds the item `match` names, clearing away what an earlier check left ready.
 async function take(who, match, args = {}) {
@@ -89,7 +115,8 @@ try {
   // 1. Fill the log.
   const felix = await felixToken();
   createRun(newRunId("backup"), "backup check");
-  let tracker = await startTracker(tokens, timing);
+  must(["org", "init", "--tracker-subject", "agents-admin"]);
+  let tracker = await startTracker(tokens, { ...timing, ...orgEnv });
   const run = newRunId("backupagents");
   createRun(run, "backup check agents");
   const agent = (name) =>
@@ -136,6 +163,24 @@ try {
   const waiting = id("waiting");
   await seed(waiting, "left for after the restore");
 
+  // A second team with an agent token and a record of its own.
+  await teamCreate("alpha");
+  const botToken = must(["agent", "add", "bot", "--team", "alpha"], admin).split("\n")[0];
+  check(botToken.length > 20, "the tracker minted alpha's agent token");
+  const alphaItem = id("alpha");
+  const posted = await fetch(`${TRACKER_URL}/v1/teams/alpha/work/records`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer tok-gab" },
+    body: JSON.stringify({ record: { kind: "imported", item: alphaItem, source: "check", upstream_id: alphaItem, title: "alpha's item" } }),
+  });
+  check(posted.ok, "a person records work in alpha");
+  const accepted = await fetch(`${TRACKER_URL}/v1/teams/alpha/work/records`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer tok-gab" },
+    body: JSON.stringify({ record: { kind: "accepted", item: alphaItem, tier: 1 } }),
+  });
+  check(accepted.ok, "alpha's item is accepted");
+
   w1.kill(); w2.kill(); w3.kill();
   tracker.kill();
   await tracker.exited;
@@ -146,19 +191,29 @@ try {
   }
 
   // 2. Back up.
-  const before = digest(join(dir, "before.json"));
+  const orgFile = join(dir, "org.backup");
+  const alphaFile = join(dir, "alpha.backup");
   must(["work", "export", file]);
+  must(["org", "export", orgFile]);
+  must(["work", "export", alphaFile], ALPHA);
+  // The digests cover what the files hold, not anything written since.
+  const before = digest(join(dir, "before.json"), file);
+  const orgBefore = orgDigest(join(dir, "org-before.json"), orgFile);
+  const alphaBefore = JSON.parse(must(["work", "digest", "--state", join(dir, "alpha-before.json"), "--backup", alphaFile], ALPHA));
   check(before.records > 20, `the backup holds ${before.records} records`);
+  check(orgBefore.records >= 3, `the org backup holds ${orgBefore.records} records`);
+  check((statSync(file).mode & 0o777) === 0o600, "a backup file is readable by its owner only");
   const original = workLog().map((r) => JSON.stringify(r));
 
   // 3. A fresh cluster, and the restore.
   const up = spawnSync("dev/up.sh", { stdio: "inherit" });
   if (up.status !== 0) throw new Error("dev/up.sh failed");
   await felixToken(); // The new tenant answers.
+  must(["org", "init", "--tracker-subject", "agents-admin"]);
   // A broker that has just started may not hold its shards' leases yet.
   for (let tries = 1; ; tries++) {
     try {
-      tracker = await startTracker(tokens, timing);
+      tracker = await startTracker(tokens, { ...timing, ...orgEnv });
       break;
     } catch (e) {
       if (tries === 6) throw e;
@@ -174,16 +229,33 @@ try {
   check(!tool(["work", "import", bad]).ok, "a damaged backup is refused");
   check(digest(join(dir, "empty.json")).records === 0, "the refused import wrote nothing");
 
+  // The org log goes in with the tracker stopped, then a tracker that reads it
+  // is given alpha's namespace and grants (the team already exists in the log).
+  must(["org", "import", orgFile]);
+  const orgAfter = orgDigest(join(dir, "org-after.json"));
+  check(orgAfter.sha256 === orgBefore.sha256, "the restored org log's digest equals the original's");
+  tracker = await startTracker(tokens, { ...timing, ...orgEnv });
+  check(/already exists/.test(await teamCreate("alpha")), "alpha is in the restored org log");
+  tracker.kill();
+  await tracker.exited;
+  must(["work", "import", alphaFile], ALPHA);
+  check(
+    JSON.parse(must(["work", "digest", "--state", join(dir, "alpha-after.json")], ALPHA)).sha256 === alphaBefore.sha256,
+    "the restored alpha log's digest equals the original's",
+  );
+
   must(["work", "import", file]);
   const after = digest(join(dir, "after.json"));
   check(after.records === before.records, "every record came back");
   check(workLog().map((r) => JSON.stringify(r)).join("\n") === original.join("\n"), "the restored log is byte for byte the original");
   check(after.sha256 === before.sha256, "the restored fold's digest equals the original's");
   check(readFileSync(join(dir, "after.json"), "utf8") === readFileSync(join(dir, "before.json"), "utf8"), "the canonical states are equal");
-  check(!tool(["work", "import", file]).ok, "a second import into the restored log is refused");
+  check(/already holds/.test(must(["work", "import", file])), "a second import of the same backup changes nothing");
+  check(digest(join(dir, "again.json")).sha256 === before.sha256, "and the log is as it was");
+  check(!tool(["work", "import", orgFile]).ok, "another log's backup is refused");
 
   // 4. The restored log serves.
-  tracker = await startTracker(tokens, timing);
+  tracker = await startTracker(tokens, { ...timing, ...orgEnv });
   const felix2 = await felixToken();
   createRun(newRunId("backupagain"), "backup check, restored");
   const run2 = newRunId("backupagain2");
@@ -194,6 +266,9 @@ try {
   await w4.tool("work_complete", { item: waiting });
   const done = workLog().filter((r) => r.item === mine && r.kind === "done");
   check(done.length === 1, "an item finished before the backup is not done again");
+  // Team mode: the token minted before the backup still works, and alpha's item is handed out.
+  const bot = await alphaApi(botToken, "next", { wait_seconds: 3 });
+  check(bot.status === 200 && bot.body.claimed && bot.body.item?.id === alphaItem, `alpha's restored token is handed alpha's item (${bot.status})`);
   void tracker;
 } finally {
   killAll();

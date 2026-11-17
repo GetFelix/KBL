@@ -7,8 +7,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
-    AckMode, Client, ClientConfig, StartPosition, quic_client_config, root_store_from_pem_file,
+    AckMode, Client, ClientConfig, CursorErrorReason, StartPosition, SubscribeCursorError,
+    quic_client_config, root_store_from_pem_file,
 };
 use serde_json::{Value, json};
 
@@ -232,18 +234,30 @@ impl Broker {
 
     /// Every record on `stream` with its offset, oldest first.
     pub(crate) async fn read_all(&self, stream: &str) -> Result<Vec<(u64, Vec<u8>)>> {
-        let mut payloads = Vec::new();
+        Ok(self.read_to_tip(stream).await?.0)
+    }
+
+    /// Every record on `stream`, and the offset after the committed log's end.
+    /// The tip can pass the last record: a Raft shard's blank entries hold no
+    /// record, and a refused conditional publish leaves one.
+    pub(crate) async fn read_to_tip(&self, stream: &str) -> Result<(Vec<(u64, Vec<u8>)>, u64)> {
+        let mut records = Vec::new();
         let mut from = 0;
         loop {
-            let page = self
+            let page = match self
                 .client
                 .read(&self.tenant, &self.namespace, stream, 0, from, None, 0)
                 .await
-                .with_context(|| format!("read {stream} from offset {from}"))?;
+            {
+                Ok(page) => page,
+                // Felix refuses an offset past its tail: `from` is the tip.
+                Err(e) if past_the_tail(&e) => return Ok((records, from)),
+                Err(e) => return Err(e.context(format!("read {stream} from offset {from}"))),
+            };
             if page.records.is_empty() {
-                return Ok(payloads);
+                return Ok((records, from.max(page.next_offset)));
             }
-            payloads.extend(
+            records.extend(
                 page.records
                     .into_iter()
                     .map(|r| (r.offset, r.payload.to_vec())),
@@ -254,6 +268,27 @@ impl Broker {
             );
             from = page.next_offset;
         }
+    }
+
+    /// Publishes `payload` only if it would land at `expected`.
+    pub(crate) async fn publish_if(
+        &self,
+        stream: &str,
+        payload: Vec<u8>,
+        expected: u64,
+    ) -> Result<ConditionalWrite> {
+        placed(|| {
+            self.client.publish_if(
+                &self.tenant,
+                &self.namespace,
+                stream,
+                None,
+                vec![payload.clone()],
+                expected,
+            )
+        })
+        .await
+        .with_context(|| format!("publish to {stream}"))
     }
 
     /// Publishes `payload` and returns the offset the broker gave it.
@@ -294,6 +329,11 @@ where
             done => return done,
         }
     }
+}
+
+fn past_the_tail(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<SubscribeCursorError>()
+        .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
 }
 
 fn is_not_ready(err: &anyhow::Error) -> bool {
