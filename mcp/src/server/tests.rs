@@ -135,3 +135,22 @@ fn every_write_tool_takes_a_request_key_and_sends_it_on() {
         json!({ "item": "a1" })
     );
 }
+
+#[test]
+fn the_tool_span_names_a_listed_tool_and_hides_an_unlisted_one() {
+    let capture = kbl_trace::capture();
+    let router = Server::tool_router();
+    for name in ["work_next", "secret-tool-9f3a"] {
+        let span = tool_span(router.has_route(name), name);
+        span.in_scope(|| {});
+        span.record("outcome", "ok");
+    }
+    let spans = capture.finished();
+    assert_eq!(spans.len(), 2, "{spans:#?}");
+    assert_eq!(spans[0].name, "mcp.tool work_next");
+    assert_eq!(spans[0].attributes["tool"], "work_next");
+    assert_eq!(spans[1].name, "mcp.tool unknown");
+    assert_eq!(spans[1].attributes["tool"], "unknown");
+    assert_eq!(spans[1].attributes["outcome"], "ok");
+    assert!(!format!("{spans:?}").contains("secret-tool"));
+}

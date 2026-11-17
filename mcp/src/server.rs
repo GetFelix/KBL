@@ -983,6 +983,18 @@ fn swap_artifacts(v: &mut Value, texts: &std::collections::HashMap<String, Strin
     }
 }
 
+/// The span for one tool call. Named like the metrics label: a name outside
+/// the tool list is `unknown`, so a caller cannot mint span names or values.
+fn tool_span(known: bool, tool: &str) -> tracing::Span {
+    let tool = if known { tool } else { "unknown" };
+    tracing::info_span!(
+        "mcp.tool",
+        otel.name = format!("mcp.tool {tool}"),
+        tool,
+        outcome = tracing::field::Empty,
+    )
+}
+
 #[tool_handler]
 impl ServerHandler for Server {
     async fn call_tool(
@@ -994,13 +1006,7 @@ impl ServerHandler for Server {
         let tool = request.name.to_string();
         let known = router.has_route(&tool);
         let started = std::time::Instant::now();
-        // Named like the metrics label: a name outside the tool list is `unknown`.
-        let span = tracing::info_span!(
-            "mcp.tool",
-            otel.name = format!("mcp.tool {}", if known { tool.as_str() } else { "unknown" }),
-            tool = if known { tool.as_str() } else { "unknown" },
-            outcome = tracing::field::Empty,
-        );
+        let span = tool_span(known, &tool);
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let result = router.call(tcc).instrument(span.clone()).await;
         crate::metrics::tool_finished(&tool, known, started.elapsed(), &result);
