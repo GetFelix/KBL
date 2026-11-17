@@ -64,6 +64,12 @@ struct Net {
     fail_publish_on: Option<String>,
     /// The next conditional publish to this stream lands, and its reply is lost.
     lose_publish_reply: Option<String>,
+    /// That lost write is also cut, as by a failover before a quorum held it.
+    cut_lost_write: bool,
+    /// The offset of the last write cut that way, until it is taken.
+    was_cut: Option<u64>,
+    /// Every record a conditional publish acknowledged, by stream.
+    acked: HashMap<String, Vec<(u64, Vec<u8>)>>,
     /// Publishes to the stream that still succeed, then every one fails.
     publish_budget: Option<(String, u32)>,
     fail_reads: bool,
@@ -97,6 +103,8 @@ struct Net {
     gate_lease: bool,
     /// The next this many lease puts land, but their replies are lost.
     lose_lease_reply: u32,
+    /// `work.events` is no longer acknowledged durably.
+    acks_weakened: bool,
     /// Reads of the lease key fail.
     fail_lease_get: bool,
     /// The entry runs out right after the next read of the lease key.
@@ -266,6 +274,38 @@ impl Fake {
         self.net.lock().unwrap().lose_publish_reply = Some(stream.to_owned());
     }
 
+    /// The next conditional publish to `stream` lands and a failover cuts it
+    /// before anyone is told or reads it: the only kind of record a durable
+    /// stream may lose.
+    pub(super) fn cut_next_lost_write(&self, stream: &str) {
+        let mut net = self.net.lock().unwrap();
+        net.lose_publish_reply = Some(stream.to_owned());
+        net.cut_lost_write = true;
+    }
+
+    /// The offset a lost write was cut from, if one was since the last call.
+    /// A cut not yet made is called off.
+    pub(super) fn take_cut(&self) -> Option<u64> {
+        let mut net = self.net.lock().unwrap();
+        if std::mem::take(&mut net.cut_lost_write) {
+            net.lose_publish_reply = None;
+        }
+        net.was_cut.take()
+    }
+
+    /// The first record a conditional publish acknowledged on `stream` that
+    /// the stream no longer holds as written.
+    pub(super) fn cut_acked(&self, stream: &str) -> Option<u64> {
+        let net = self.net.lock().unwrap();
+        let log = net
+            .streams
+            .get(stream)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let acked = net.acked.get(stream)?;
+        acked.iter().find(|r| !log.contains(r)).map(|(o, _)| *o)
+    }
+
     fn fail_publishes_to(&self, stream: Option<&str>) {
         self.net.lock().unwrap().fail_publish_on = stream.map(str::to_owned);
     }
@@ -302,6 +342,10 @@ impl Fake {
 
     fn lease_puts(&self) -> u32 {
         self.net.lock().unwrap().lease_puts
+    }
+
+    pub(super) fn weaken_acks(&self, weak: bool) {
+        self.net.lock().unwrap().acks_weakened = weak;
     }
 
     fn fail_lease_gets(&self, fail: bool) {
@@ -513,14 +557,19 @@ impl Broker for Fake {
             }
             return Ok(ConditionalWrite::Refused { tail });
         }
-        let offset = self.publish(stream, payload).await?;
-        let lost = {
-            let mut net = self.net.lock().unwrap();
-            net.lose_publish_reply.take_if(|s| s == stream).is_some()
-        };
-        if lost {
+        let offset = self.publish(stream, payload.clone()).await?;
+        let mut net = self.net.lock().unwrap();
+        if net.lose_publish_reply.take_if(|s| s == stream).is_some() {
+            if std::mem::take(&mut net.cut_lost_write)
+                && let Some(records) = net.streams.get_mut(stream)
+            {
+                records.retain(|(o, _)| *o != offset);
+                net.was_cut = Some(offset);
+            }
             anyhow::bail!("the reply was lost");
         }
+        let acked = net.acked.entry(stream.to_owned()).or_default();
+        acked.push((offset, payload));
         Ok(ConditionalWrite::Written { offset })
     }
 
@@ -715,6 +764,13 @@ impl Broker for Fake {
         let next = now.unwrap_or(0) + 1;
         net.cursors.insert(name.to_owned(), (value, next));
         Ok(Some(next))
+    }
+
+    async fn check_acks(&self) -> anyhow::Result<()> {
+        if self.net.lock().unwrap().acks_weakened {
+            anyhow::bail!("work.events is no longer durable");
+        }
+        Ok(())
     }
 
     async fn forget(&self, member: Option<&str>) {
@@ -1113,6 +1169,80 @@ async fn an_item_the_agent_released_is_handed_out_again() {
         .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w1").await), None);
     assert!(fake.calls().contains(&"ack work.ready.p2".to_owned()));
+}
+
+/// Another writer logs w1's release behind the tracker's back, as a failover
+/// can: the tracker's memory still shows w1 holding a1.
+async fn release_behind_the_trackers_back(fake: &Fake) {
+    let by = fake
+        .log()
+        .into_iter()
+        .find(|l| matches!(l.record, WorkRecord::Claimed { .. }))
+        .expect("a claim")
+        .by;
+    let released = WorkRecord::Released {
+        item: item("a1"),
+        attempt: 1,
+        reason: None,
+        cost_micros: 0,
+        usage: Vec::new(),
+        floor_micros: 0,
+    };
+    let logged = WorkLogged::new(0, by, Actor::Agent, released);
+    fake.publish(WORK_EVENTS, logged.encode()).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_claim_released_behind_the_trackers_back_is_not_resumed() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await;
+    release_behind_the_trackers_back(&fake).await;
+    let again = claim(&t, "w1").await;
+    // The ended claim is never handed back; the item may go out under a new one.
+    assert_ne!(again["resumed"], true);
+    if claimed_id(&again).is_some() {
+        assert_ne!(again["offset"], first["offset"]);
+    }
+}
+
+#[tokio::test]
+async fn a_claim_released_behind_the_trackers_back_is_not_extended() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    release_behind_the_trackers_back(&fake).await;
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_err());
+    // The retry rebuilds from the log and finds the claim gone.
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_claim_a_failover_cut_from_the_log_is_not_extended() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await;
+    let at = first["offset"].as_u64().unwrap();
+    // The new leader never had the claim: the log ends before it.
+    (fake
+        .net
+        .lock()
+        .unwrap()
+        .streams
+        .get_mut(WORK_EVENTS)
+        .unwrap())
+    .retain(|(o, _)| *o < at);
+    assert!(t.extend(&agent("w1"), &item("a1")).await.is_err());
+    assert!(matches!(
+        t.extend(&agent("w1"), &item("a1")).await,
+        Err(Error::Lost(_))
+    ));
 }
 
 #[tokio::test]

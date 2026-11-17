@@ -6,7 +6,7 @@ failure replays exactly.
 
 | Sweep | Where | Faults | Invariants |
 | --- | --- | --- | --- |
-| Claim path | `tracker/src/tracker/tests/sweep.rs` | the tracker dies after some of its writes and restarts from the log; a lost publish reply; another writer takes the offset, with a claim or release of its own (a failover; on half the seeds a refusal burns the offset, as on a Raft shard); a replaced tracker that keeps serving until it is fenced; Felix hands a ready record out again, acked or not; a ready lane that fails to poll; leases that run out | a claimed item is never already held; a claim is handed to one agent, and an attempt to a second only after the first hold ended; no attempt is done twice; the log folds from nothing; a dismissed root stays dismissed and unheld; an imported item stays; an accepted item ends done, closed or waiting for a person |
+| Claim path | `tracker/src/tracker/tests/sweep.rs` | the tracker dies after some of its writes and restarts from the log; a lost publish reply; a write a failover cuts before its reply (never an acknowledged record, which KBL requires Felix to keep: [work-tracker.md](work-tracker.md#what-felix-must-guarantee)), with another writer racing to take the freed offset; another writer takes the offset, with a claim or release of its own (a failover; on half the seeds a refusal burns the offset, as on a Raft shard); a replaced tracker that keeps serving until it is fenced; Felix hands a ready record out again, acked or not; a ready lane that fails to poll; leases that run out; agents extending what they believe they hold | no acknowledged record is cut (a check on the faults themselves); a claimed item is never already held; a claim is handed to one agent, and an attempt to a second only after the first hold ended; an extension is granted only while the log shows the agent holding the item; no attempt is done twice; the log folds from nothing; a dismissed root stays dismissed and unheld; an imported item stays; an accepted item ends done, closed or waiting for a person |
 | Ingest | `ingest/src/sync/tests/sweep.rs` | the process dies after some of its writes (appends and saves); a lost append reply; a stale save; the tracker unreachable; the saved state lost; GitHub failing; the same poll twice | an issue is imported once; a root a person dismissed is never reopened; once faults stop, every open issue is imported and admitted with its proposals, and a root is closed exactly when its issue is |
 
 ## Running it
@@ -24,14 +24,8 @@ it. The pull request job runs 400 seeds of each sweep. The nightly workflow
 
 ## Known failing seeds
 
-A bug the sweep finds on main is filed as an issue and pinned here until it is
-fixed, never silently. The claim sweep runs a pinned case and expects its
-failure: `PINNED_RESUMED` lists (seed, item) pairs that must be handed a
-resumed claim whose hold already ended. Every other check still runs on them.
-A pin that no longer shows its failure fails the sweep, so the fix removes the
-pin in the same change. Replaying one seed with `KBL_SWEEP_SEED` ignores the
-pins and fails on what it finds. The ingest sweep has no pins.
-
-| Issue | Where | Bug |
-| --- | --- | --- |
-| #311 | `PINNED_RESUMED` | A tracker that missed a failover's release resumes a claim whose hold already ended. The fold refuses the agent's completion. |
+Neither sweep has a known failing seed today. A bug the sweep finds on main is
+filed as an issue and pinned, never skipped silently: the change that pins it
+adds a list of the (seed, item) pairs that show the failure, and the sweep
+expects exactly those, so the fix has to remove the pin. Replaying one seed
+with `KBL_SWEEP_SEED` should ignore pins and fail on what it finds.

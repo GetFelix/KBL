@@ -1,0 +1,1 @@
+The tracker refuses to start unless `work.events` is acknowledged durably: a durable stream that is `Quorum`, or has one copy. Its claim checks trust that Felix never cuts a record it acknowledged, and the error names the settings it found. The dev stack's broker now fsyncs before it acks.

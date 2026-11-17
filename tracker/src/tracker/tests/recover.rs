@@ -198,3 +198,23 @@ async fn a_hold_felix_never_answers_for_is_freed_one_visibility_after_the_restar
         Err(Error::Lost(_))
     ));
 }
+
+/// The stream's settings can change after start. The next rebuild reads them
+/// again, and the tracker serves no work write until they are durable.
+#[tokio::test]
+async fn a_rebuild_on_a_stream_that_lost_its_durability_refuses_work() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    t.lease().refused();
+    fake.weaken_acks(true);
+    let err = t.extend(&agent("w1"), &item("a1")).await.unwrap_err();
+    assert!(
+        matches!(&err, Error::Unavailable(m) if m.contains("no longer durable")),
+        "{err:?}"
+    );
+    assert!(t.lease().stale, "the state must stay stale while refused");
+    fake.weaken_acks(false);
+    t.extend(&agent("w1"), &item("a1")).await.unwrap();
+}
