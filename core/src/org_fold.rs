@@ -14,8 +14,8 @@ use std::fmt;
 use crate::names::Key;
 use crate::org::{
     MAX_AGENTS_PER_TEAM, MAX_CONNECTION_SOURCES, MAX_CONNECTIONS_PER_TEAM, MAX_GRANT_AGENTS,
-    MAX_GRANTS_PER_TEAM, MAX_INGEST_PER_TEAM, MAX_LABEL_BYTES, MAX_ROLE_REPOS, ORG_FORMAT_V1,
-    OrgLogged, OrgRecord, Role, TeamName, TokenHash,
+    MAX_GRANTS_PER_TEAM, MAX_INGEST_PER_TEAM, MAX_LABEL_BYTES, MAX_ROLE_REPOS, ORG_FORMAT,
+    ORG_FORMAT_V1, OrgLogged, OrgRecord, Role, TeamName, TokenHash,
 };
 
 #[cfg(test)]
@@ -348,7 +348,9 @@ impl OrgState {
             return Err(OrgRefusal::Format);
         }
         if let OrgRecord::FormatRaised { to } = logged.record {
-            return if to > self.format && logged.v == to {
+            // Never past what this build reads: a raise above it would leave the log
+            // unreadable to every build that exists.
+            return if to > self.format && to <= ORG_FORMAT && logged.v == to {
                 Ok(Changed)
             } else {
                 Err(OrgRefusal::Format)
@@ -371,6 +373,12 @@ impl OrgState {
                 self.need_team(team)?;
                 if !label_ok(vendor) {
                     return Err(OrgRefusal::BadLabel);
+                }
+                // The vendor tie on an ingest token trusts this field, so it
+                // must name every source's own vendor.
+                let prefix = format!("{vendor}:");
+                if !sources.iter().all(|s| s.starts_with(&prefix)) {
+                    return Err(OrgRefusal::UnknownSource);
                 }
                 if sources.len() > MAX_CONNECTION_SOURCES {
                     return Err(OrgRefusal::TooMany);

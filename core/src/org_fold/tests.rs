@@ -523,6 +523,11 @@ fn format_2_records_wait_for_the_raise() {
         "the format never stays or goes down"
     );
     assert_eq!(s.apply(&log(conn)), Ok(Applied::Changed));
+    assert_eq!(
+        s.check(&at(3, OrgRecord::FormatRaised { to: 3 })),
+        Err(OrgRefusal::Format),
+        "a raise past this build would leave the log unreadable"
+    );
 }
 
 #[test]
@@ -589,4 +594,16 @@ fn a_budget_keeps_back_no_more_than_it_has() {
     assert_eq!(s.check(&log(budget(10, 5, 6))), Err(OrgRefusal::BadBudget));
     s.apply(&log(budget(4500, 900, 300))).unwrap();
     assert_eq!(s.budget(&key("gh-app")).unwrap().kept_back, 900);
+}
+
+#[test]
+fn a_connection_names_its_sources_own_vendor() {
+    let mut s = raised();
+    let mut jira = connection("a", "gh", "g1", &["github:o/one"]);
+    if let OrgRecord::ConnectionSet { vendor, .. } = &mut jira {
+        *vendor = "jira".into();
+    }
+    assert_eq!(s.check(&log(jira)), Err(OrgRefusal::UnknownSource));
+    s.apply(&log(connection("a", "gh", "g1", &["github:o/one"])))
+        .unwrap();
 }

@@ -52,6 +52,10 @@ struct App<B> {
     /// Config long polls held at once, across teams. Past it a poll answers
     /// at once instead of waiting, so held calls cannot pile up unbounded.
     polls: Arc<tokio::sync::Semaphore>,
+    /// Held polls per team, so one team cannot take every held slot.
+    team_polls: std::sync::Mutex<
+        std::collections::HashMap<kbl_core::org::TeamName, Arc<tokio::sync::Semaphore>>,
+    >,
 }
 
 /// The team named by a `/v1/teams/{team}/` path, set by [`in_team`] only.
@@ -62,6 +66,7 @@ pub(crate) fn router<B: Broker>(teams: Arc<Teams<B>>) -> Router {
     let app = Arc::new(App {
         teams,
         polls: Arc::new(tokio::sync::Semaphore::new(ingest::MAX_HELD_POLLS)),
+        team_polls: Default::default(),
     });
     // `route_layer` sees the matched route template, so the metrics label is
     // `/v1/work/items/{item}`, never an item id. The team-scoped catch-all is added

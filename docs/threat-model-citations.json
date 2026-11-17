@@ -508,7 +508,7 @@
   ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor));"
  ],
  "tracker/src/http/ingest.rs#config": [
-  "Some(_) if !wait.is_zero() => app.polls.clone().try_acquire_owned().ok(),"
+  "None => return busy(),"
  ],
  "tracker/src/http/org.rs#org_record": [
   "let (org, by) = match org_admin(&app, req.headers()) {"

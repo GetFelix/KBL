@@ -17,6 +17,7 @@ use kbl_core::org_fold::OrgState;
 use kbl_core::work::WorkRecord;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use super::{App, Call, Caller, StatusCode, denied, refused, reply};
 use crate::config::Worker;
@@ -33,6 +34,9 @@ pub(super) fn routes<B: Broker>() -> Router<Arc<App<B>>> {
 /// Config long polls held at once across the tracker. One per worker; well
 /// past the 200 workers the design is sized for.
 pub(super) const MAX_HELD_POLLS: usize = 1024;
+
+/// Held polls per team: a team's workers, with room to spare.
+pub(super) const MAX_HELD_POLLS_PER_TEAM: usize = 256;
 
 /// The longest a config poll is held, as `wait` asks.
 const MAX_WAIT: Duration = Duration::from_secs(60);
@@ -146,18 +150,24 @@ async fn config<B: Broker>(
         .map(str::to_owned);
     let wait = Duration::from_secs(q.wait).min(MAX_WAIT);
     let held = match seen {
-        Some(_) if !wait.is_zero() => app.polls.clone().try_acquire_owned().ok(),
+        Some(_) if !wait.is_zero() => match hold_slot(&app, &team) {
+            Some(slots) => Some(slots),
+            // Answering 304 at once would make every worker poll in a loop.
+            None => return busy(),
+        },
         _ => None,
     };
     let mut changes = org.watch();
     let deadline = tokio::time::Instant::now() + wait;
     loop {
         changes.borrow_and_update();
-        let (body, etag) = org.with_view(|state, _| {
+        let Some((body, etag)) = org.with_view(|state, _| {
             let body = config_answer(state, &team, &group, worker.source.as_deref());
             let etag = etag_of(&body);
             (body, etag)
-        });
+        }) else {
+            return super::org_unavailable();
+        };
         if seen.as_deref() != Some(etag.as_str()) {
             let mut res = Json(body).into_response();
             if let Ok(v) = HeaderValue::from_str(&etag) {
@@ -179,6 +189,34 @@ async fn config<B: Broker>(
     }
 }
 
+/// A held slot in the tracker and in the team, or none when either is full.
+fn hold_slot<B>(
+    app: &App<B>,
+    team: &TeamName,
+) -> Option<(OwnedSemaphorePermit, OwnedSemaphorePermit)> {
+    let per_team = app
+        .team_polls
+        .lock()
+        .expect("team polls lock")
+        .entry(team.clone())
+        .or_insert_with(|| Arc::new(Semaphore::new(MAX_HELD_POLLS_PER_TEAM)))
+        .clone();
+    let team_slot = per_team.try_acquire_owned().ok()?;
+    let slot = app.polls.clone().try_acquire_owned().ok()?;
+    Some((slot, team_slot))
+}
+
+fn busy() -> Response {
+    let mut res = refused(
+        StatusCode::TOO_MANY_REQUESTS,
+        "too many config polls are held; try again later",
+        "too_many_polls",
+    );
+    res.headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("30"));
+    res
+}
+
 /// The answer for `group` in `team`. A group no connection names gets
 /// `connection: null`, and its worker stays file-managed. A token tied to a
 /// vendor sees only a connection to that vendor.
@@ -189,15 +227,14 @@ fn config_answer(state: &OrgState, team: &TeamName, group: &Key, tied: Option<&s
     let Some((name, c)) = conn else {
         return json!({ "org_format": state.format(), "connection": null, "budget": null });
     };
+    // The pool's budget, not a share: the split per worker follows the
+    // leases each holds, so it comes with them.
     let budget = state.budget(&c.pool).map(|b| {
-        // The polling share of the pool, by this connection's part of its sources.
-        let polling = b.per_hour - b.kept_back;
-        let total = state.pool_sources(&c.pool).max(1) as u64;
         json!({
             "per_hour": b.per_hour,
             "kept_back": b.kept_back,
             "wake_cap": b.wake_cap,
-            "share_per_hour": polling.saturating_mul(c.sources.len() as u64) / total,
+            "pool_sources": state.pool_sources(&c.pool),
         })
     });
     json!({

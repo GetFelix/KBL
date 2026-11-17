@@ -1218,11 +1218,8 @@ async fn the_config_answers_the_groups_connection_and_budget_share() {
         json!(["github:o/one"]),
         "only its own team's"
     );
-    assert_eq!(
-        body["budget"]["share_per_hour"],
-        json!(1800),
-        "half the pool's sources"
-    );
+    assert_eq!(body["budget"]["per_hour"], json!(4500));
+    assert_eq!(body["budget"]["pool_sources"], json!(2));
     assert_eq!(body["org_format"], json!(2));
 }
 
@@ -1265,4 +1262,43 @@ async fn a_held_config_poll_answers_on_change_or_at_the_wait() {
     assert_eq!(status, StatusCode::OK);
     assert_ne!(next, etag);
     assert_eq!(body["connection"]["sources"], json!(["github:o/one"]));
+}
+
+#[tokio::test]
+async fn a_team_cannot_hold_every_config_poll() {
+    let o = connected().await;
+    let (_, _, etag) = config(&o, "group=g1", None).await;
+    // Fill the team's held slots with real polls.
+    let mut held = Vec::new();
+    for _ in 0..crate::http::ingest::MAX_HELD_POLLS_PER_TEAM {
+        let app = o.app.clone();
+        let etag = etag.clone();
+        held.push(tokio::spawn(async move {
+            let req = Request::get("/v1/ingest/config?group=g1&wait=5")
+                .header("authorization", "Bearer tok-i1")
+                .header("if-none-match", etag);
+            app.oneshot(req.body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }));
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let res = o
+        .app
+        .clone()
+        .oneshot(
+            Request::get("/v1/ingest/config?group=g1&wait=5")
+                .header("authorization", "Bearer tok-i1")
+                .header("if-none-match", &etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(res.headers()["retry-after"], "30");
+    for h in held {
+        h.abort();
+    }
 }

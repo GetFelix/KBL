@@ -226,10 +226,17 @@ impl<B: Broker> Org<B> {
     }
 
     /// Answers from the org as last folded, with the offset after its last
-    /// record. Reads the view, so it never waits behind a Felix write.
-    pub(crate) fn with_view<T>(&self, f: impl FnOnce(&OrgState, u64) -> T) -> T {
+    /// record. Reads the view, so it never waits behind a Felix write. None
+    /// while the lease does not back the view, as [`Self::who`].
+    pub(crate) fn with_view<T>(&self, f: impl FnOnce(&OrgState, u64) -> T) -> Option<T> {
         let view = self.view.read().expect("org view lock");
-        f(&view.state, *self.changed.borrow())
+        if !view
+            .held_until
+            .is_some_and(|t| t > Instant::now() + LEASE_SKEW)
+        {
+            return None;
+        }
+        Some(f(&view.state, *self.changed.borrow()))
     }
 
     /// Wakes when the org view moves past what the receiver has seen.
