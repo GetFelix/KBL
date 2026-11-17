@@ -7,7 +7,7 @@
 // that contains a token. See "Quick start" in README.md.
 //
 //   node dev/connect.mjs [agent1] [--out .mcp.json] [--mcp /path/to/kbl-mcp] [--fixed-token]
-import { existsSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -44,8 +44,10 @@ export async function connect(argv) {
   } else {
     // Rewriting this file is enough to hand a running kbl-mcp a new ID token.
     const idTokenFile = join(here, "state", `${name}.id-token`);
-    writeFileSync(idTokenFile, `${await idToken()}\n`, { mode: 0o600 });
-    chmodSync(idTokenFile, 0o600);
+    // A temp file renamed over the target: a rerun's mode only applies to a new file.
+    const tmpFile = `${idTokenFile}.${process.pid}.tmp`;
+    writeFileSync(tmpFile, `${await idToken()}\n`, { mode: 0o600 });
+    renameSync(tmpFile, idTokenFile);
     felix = { idTokenFile, controlPlane: process.env.KBL_FELIX_CONTROL_PLANE ?? "http://127.0.0.1:8443" };
   }
   const config = mcpConfig(

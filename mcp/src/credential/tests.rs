@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -239,8 +240,7 @@ async fn it_trades_the_id_token_for_a_felix_token_for_the_broker() {
 #[tokio::test]
 async fn a_token_is_reused_until_it_is_due_then_replaced() {
     let plane = control_plane(|n, _| {
-        // The first token is already due; later ones last.
-        let exp = if n == 0 { now() - 10 } else { now() + 3600 };
+        let exp = if n == 0 { now() + 3600 } else { now() + 20_000 };
         (
             200,
             json!({ "felix_token": felix_token(&format!("t{n}"), exp) }).to_string(),
@@ -248,9 +248,11 @@ async fn a_token_is_reused_until_it_is_due_then_replaced() {
     })
     .await;
     let dir = tmp();
-    let provider = renewing(&plane, dir.path());
+    let offset = Arc::new(AtomicI64::new(0));
+    let provider = on_clock(&plane, dir.path(), offset.clone(), TICK);
     assert!(provider.token().await.unwrap().ends_with("t0"));
-    // Due, so the next ask renews.
+    // The clock moves past two thirds of its life: due, so the next ask renews.
+    offset.store(3000 * 1000, Ordering::SeqCst);
     assert!(provider.token().await.unwrap().ends_with("t1"));
     // Fresh, so it is not asked for again.
     assert!(provider.token().await.unwrap().ends_with("t1"));
@@ -262,13 +264,15 @@ async fn a_rotated_id_token_file_is_read_again_on_renewal() {
     let plane = control_plane(|n, _| {
         (
             200,
-            json!({ "felix_token": felix_token(&format!("t{n}"), now() - 10) }).to_string(),
+            json!({ "felix_token": felix_token(&format!("t{n}"), now() + 3600) }).to_string(),
         )
     })
     .await;
     let dir = tmp();
-    let provider = renewing(&plane, dir.path());
+    let offset = Arc::new(AtomicI64::new(0));
+    let provider = on_clock(&plane, dir.path(), offset.clone(), TICK);
     provider.token().await.unwrap();
+    offset.store(3000 * 1000, Ordering::SeqCst);
     id_file(dir.path(), "rotated-id-token\n", 0o600);
     provider.token().await.unwrap();
     let seen = plane.seen.lock().unwrap();
@@ -278,7 +282,7 @@ async fn a_rotated_id_token_file_is_read_again_on_renewal() {
 
 #[tokio::test]
 async fn a_failed_renewal_keeps_the_current_token_until_it_expires() {
-    let exp = now() + 6;
+    let exp = now() + 60;
     let plane = control_plane(move |n, _| {
         if n == 0 {
             (
@@ -291,10 +295,11 @@ async fn a_failed_renewal_keeps_the_current_token_until_it_expires() {
     })
     .await;
     let dir = tmp();
-    let provider = renewing(&plane, dir.path());
+    let offset = Arc::new(AtomicI64::new(0));
+    let provider = on_clock(&plane, dir.path(), offset.clone(), TICK);
     let first = provider.token().await.unwrap();
     // Past two thirds of its life: due, and the control plane is down.
-    tokio::time::sleep(std::time::Duration::from_millis(4300)).await;
+    offset.store(45 * 1000, Ordering::SeqCst);
     assert_eq!(provider.token().await.unwrap(), first);
     assert!(plane.calls.load(Ordering::SeqCst) >= 2);
 }
@@ -503,4 +508,84 @@ async fn a_renewal_swaps_in_a_connection_that_opened_with_the_new_token() {
     let now_on = slot.read().unwrap().to_string();
     assert!(!now_on.ends_with("t0"), "still on the first token");
     assert!(plane.calls.load(Ordering::SeqCst) >= 3);
+}
+
+/// A renewer on a clock the test moves.
+fn on_clock(plane: &Plane, dir: &Path, offset: Arc<AtomicI64>, tick: Duration) -> Arc<Renewer> {
+    let file = id_file(dir, ID_TOKEN, 0o600);
+    let exchange = Exchange::new(&plane.base, "agents", IdSource::File(file)).unwrap();
+    let clock: Clock = Box::new(move || unix_now_ms() + offset.load(Ordering::SeqCst));
+    Arc::new(Renewer::new(exchange, None, clock, tick))
+}
+
+#[tokio::test]
+async fn a_token_issued_already_expired_is_not_traded_in_a_loop() {
+    let plane = control_plane(|n, _| {
+        (
+            200,
+            json!({ "felix_token": felix_token(&format!("t{n}"), now() - 60) }).to_string(),
+        )
+    })
+    .await;
+    let dir = tmp();
+    let renewer = on_clock(&plane, dir.path(), Arc::new(AtomicI64::new(0)), TICK);
+    let slot = Arc::new(std::sync::RwLock::new(Arc::new(String::new())));
+    let r = renewer.clone();
+    let task = tokio::spawn(reconnect_on_renewal(
+        renewer.clone(),
+        slot,
+        None,
+        move || {
+            let r = r.clone();
+            async move { Ok(r.current().await.unwrap()) }
+        },
+    ));
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    task.abort();
+    assert_eq!(plane.calls.load(Ordering::SeqCst), 1);
+    // Asking again inside the floor does not trade again either.
+    renewer.token().await.unwrap();
+    assert_eq!(plane.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn a_wall_clock_jump_past_expiry_renews_within_a_tick() {
+    let plane = control_plane(|n, _| {
+        (
+            200,
+            json!({ "felix_token": felix_token(&format!("t{n}"), now() + 3600) }).to_string(),
+        )
+    })
+    .await;
+    let dir = tmp();
+    let offset = Arc::new(AtomicI64::new(0));
+    let renewer = on_clock(
+        &plane,
+        dir.path(),
+        offset.clone(),
+        Duration::from_millis(100),
+    );
+    let first = renewer.token().await.unwrap();
+    let slot = Arc::new(std::sync::RwLock::new(Arc::new(first.clone())));
+    let r = renewer.clone();
+    let task = tokio::spawn(reconnect_on_renewal(
+        renewer.clone(),
+        slot.clone(),
+        Some(first),
+        move || {
+            let r = r.clone();
+            async move { Ok(r.current().await.unwrap()) }
+        },
+    ));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(plane.calls.load(Ordering::SeqCst), 1);
+    // The machine slept past the token's expiry.
+    offset.store(4000 * 1000, Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    task.abort();
+    assert!(
+        !slot.read().unwrap().ends_with("t0"),
+        "still on the first token"
+    );
+    assert_eq!(plane.calls.load(Ordering::SeqCst), 2);
 }

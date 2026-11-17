@@ -41,6 +41,12 @@ const BROKER_AUDIENCE: &str = "felix-broker";
 /// How long after a failed renewal the next one waits, so a down control plane
 /// is not asked once per stream open.
 const RETRY_AFTER: Duration = Duration::from_secs(5);
+/// The longest the renewal loop sleeps at once, so a wall clock that jumped
+/// (a laptop waking) is noticed within this long.
+const TICK: Duration = Duration::from_secs(30);
+
+/// Unix milliseconds. Injected so tests can move the wall clock.
+type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
 
 /// How `kbl-mcp` authenticates to the broker.
 pub(crate) enum Auth {
@@ -94,12 +100,15 @@ impl Auth {
                     .map(|v| v.parse::<u64>().map(Duration::from_millis))
                     .transpose()
                     .context("KBL_FELIX_TOKEN_MAX_AGE_MS is not a number")?;
-                Ok(Auth::Renewing(Arc::new(Renewer {
-                    exchange: Exchange::new(&base, tenant, source)?,
+                if max_age == Some(Duration::ZERO) {
+                    bail!("KBL_FELIX_TOKEN_MAX_AGE_MS must be above 0");
+                }
+                Ok(Auth::Renewing(Arc::new(Renewer::new(
+                    Exchange::new(&base, tenant, source)?,
                     max_age,
-                    held: Mutex::new(None),
-                    rejected: std::sync::Mutex::new(None),
-                })))
+                    Box::new(unix_now_ms),
+                    TICK,
+                ))))
             }
             (None, None) => bail!(
                 "set KBL_FELIX_TOKEN to the agent's Felix token, or KBL_FELIX_ID_TOKEN_FILE or KBL_FELIX_ID_TOKEN_COMMAND to renew it from an ID token"
@@ -117,31 +126,72 @@ pub(crate) struct Renewer {
     held: Mutex<Option<Held>>,
     /// A token the broker refused, until the next `token()` sees it.
     rejected: std::sync::Mutex<Option<String>>,
+    clock: Clock,
+    tick: Duration,
 }
 
 struct Held {
     token: String,
     /// Unix seconds, from the token's `exp`. `None` when it names none.
     expires_at: Option<i64>,
+    /// The monotonic deadline. It stops while the machine sleeps, so
+    /// `renew_wall` backs it up.
     renew_at: Instant,
+    /// The same deadline in unix milliseconds on the wall clock.
+    renew_wall: i64,
+}
+
+impl Held {
+    fn due(&self, wall_now: i64) -> bool {
+        Instant::now() >= self.renew_at || wall_now >= self.renew_wall
+    }
+
+    fn defer(&mut self, wall_now: i64, by: Duration) {
+        self.renew_at = Instant::now() + by;
+        self.renew_wall = wall_now + by.as_millis() as i64;
+    }
 }
 
 impl Renewer {
+    fn new(exchange: Exchange, max_age: Option<Duration>, clock: Clock, tick: Duration) -> Renewer {
+        Renewer {
+            exchange,
+            max_age,
+            held: Mutex::new(None),
+            rejected: std::sync::Mutex::new(None),
+            clock,
+            tick,
+        }
+    }
+
     fn held(&self, token: String) -> Held {
-        let now = Instant::now();
+        let wall_now = (self.clock)();
         let expires_at = read_exp(&token);
         // Two thirds of the way to expiry leaves the last third for retries.
-        let mut renew_at = expires_at
-            .map(|exp| now + Duration::from_secs((exp - unix_now()).max(0) as u64) * 2 / 3);
+        // The floor keeps a token that is already expired, or about to be,
+        // from being traded again at once.
+        let mut wait = expires_at.map(|exp| {
+            let left = Duration::from_millis((exp * 1000 - wall_now).max(0) as u64);
+            (left * 2 / 3).max(RETRY_AFTER)
+        });
         if let Some(max) = self.max_age {
-            renew_at = Some(renew_at.map_or(now + max, |at| at.min(now + max)));
+            wait = Some(wait.map_or(max, |w| w.min(max)));
         }
-        Held {
+        if expires_at.is_some_and(|exp| exp * 1000 <= wall_now) {
+            tracing::warn!(
+                "the Felix token was already expired when it was issued; check the clock and the token's lifetime"
+            );
+        }
+        // A token that names no expiry is kept until the broker refuses it.
+        let wait = wait.unwrap_or(Duration::from_secs(365 * 24 * 3600));
+        let mut held = Held {
             token,
             expires_at,
-            // A token that names no expiry is kept until the broker refuses it.
-            renew_at: renew_at.unwrap_or(now + Duration::from_secs(365 * 24 * 3600)),
-        }
+            renew_at: Instant::now(),
+            renew_wall: 0,
+        };
+        held.defer(wall_now, wait);
+        held
     }
 }
 
@@ -151,10 +201,15 @@ impl Renewer {
         self.held.lock().await.as_ref().map(|h| h.token.clone())
     }
 
-    /// How long until the token in hand is due for renewal.
+    /// How long until the token in hand is due for renewal, by whichever
+    /// clock says so first.
     async fn until_due(&self) -> Duration {
+        let wall_now = (self.clock)();
         self.held.lock().await.as_ref().map_or(Duration::ZERO, |h| {
-            h.renew_at.saturating_duration_since(Instant::now())
+            let wall = Duration::from_millis((h.renew_wall - wall_now).max(0) as u64);
+            h.renew_at
+                .saturating_duration_since(Instant::now())
+                .min(wall)
         })
     }
 }
@@ -175,14 +230,15 @@ pub(crate) async fn reconnect_on_renewal<C, F, Fut>(
     loop {
         // A renewal that a stream open made counts too.
         if renewer.current().await == connected_with {
-            tokio::time::sleep(renewer.until_due().await).await;
+            tokio::time::sleep(renewer.until_due().await.min(renewer.tick)).await;
             if let Err(e) = renewer.token().await {
                 tracing::warn!(error = %format!("{e:#}"), "could not renew the Felix token");
                 tokio::time::sleep(RETRY_AFTER).await;
                 continue;
             }
             if renewer.current().await == connected_with {
-                // The renewal failed and the token in hand is still good.
+                // Not due yet, or the renewal failed and the token in hand is
+                // still good.
                 continue;
             }
         }
@@ -207,14 +263,15 @@ impl TokenProvider for Renewer {
     fn token(&self) -> TokenFuture<'_> {
         Box::pin(async move {
             let mut held = self.held.lock().await;
+            let wall_now = (self.clock)();
             let refused = self.rejected.lock().expect("rejected lock").take();
             if let (Some(h), Some(refused)) = (held.as_mut(), refused)
                 && h.token == refused
             {
-                h.renew_at = Instant::now();
+                h.defer(wall_now, Duration::ZERO);
             }
             if let Some(h) = held.as_ref()
-                && Instant::now() < h.renew_at
+                && !h.due(wall_now)
             {
                 return Ok(h.token.clone());
             }
@@ -228,8 +285,8 @@ impl TokenProvider for Renewer {
                     // The Felix token in hand still works, so a control plane
                     // that is down or a credential that was revoked costs nothing
                     // until it runs out.
-                    Some(h) if h.expires_at.is_none_or(|exp| unix_now() < exp) => {
-                        h.renew_at = Instant::now() + RETRY_AFTER;
+                    Some(h) if h.expires_at.is_none_or(|exp| wall_now < exp * 1000) => {
+                        h.defer(wall_now, RETRY_AFTER);
                         tracing::warn!(error = %format!("{e:#}"), "could not renew the Felix token; using the current one");
                         Ok(h.token.clone())
                     }
@@ -260,10 +317,10 @@ fn read_exp(token: &str) -> Option<i64> {
     serde_json::from_slice::<Claims>(&bytes).ok().map(|c| c.exp)
 }
 
-fn unix_now() -> i64 {
+fn unix_now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 impl Exchange {
