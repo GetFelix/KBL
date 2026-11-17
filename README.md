@@ -283,6 +283,7 @@ base=https://github.com/GetFelix/KBL/releases/download/$tag
 curl -fLO "$base/kbl-$tag-$target.tar.gz" -O "$base/SHA256SUMS"
 grep "kbl-$tag-$target.tar.gz" SHA256SUMS | shasum -a 256 -c   # on Linux sha256sum -c also works
 gh attestation verify "kbl-$tag-$target.tar.gz" -R GetFelix/KBL
+gh attestation verify SHA256SUMS -R GetFelix/KBL   # the checksums are attested too
 tar -xzf "kbl-$tag-$target.tar.gz"
 kbl-$tag-$target/kbl-mcp --help
 install -m 755 kbl-$tag-$target/kbl-mcp kbl-$tag-$target/kbl-tool /usr/local/bin/   # or any directory on your PATH

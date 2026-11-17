@@ -1,9 +1,10 @@
 name: Release
 
 # A `v*` tag builds kbl-mcp and kbl-tool for every platform, attests each
-# archive and the checksums, and publishes them as a GitHub release. A manual run with dry_run builds and
-# uploads the archives as workflow artifacts and creates no release. Run on a
-# branch, it can never release: only a tag ref reaches the publish job.
+# archive and the checksums, and publishes them as a GitHub release. A manual
+# run with dry_run builds and uploads the archives as workflow artifacts and
+# creates no release. Run on a branch, it can never release: only a tag ref
+# reaches the publish job.
 on:
   push:
     tags:
