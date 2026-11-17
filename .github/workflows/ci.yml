@@ -24,6 +24,18 @@ jobs:
         with:
           node-version: 22
       - run: node scripts/lint.mjs
+      # The chart must lint and render with its minimal and full values, and
+      # refuse to render without the values it requires.
+      - name: Helm chart
+        run: |
+          for v in minimal full; do
+            helm lint deploy/helm/kbl -f deploy/helm/kbl/ci/$v.yaml
+            helm template kbl deploy/helm/kbl -f deploy/helm/kbl/ci/$v.yaml > /dev/null
+          done
+          helm template kbl deploy/helm/kbl -f deploy/helm/kbl/examples/values-production.yaml > /dev/null
+          if helm template kbl deploy/helm/kbl > /dev/null 2>&1; then
+            echo "the chart rendered without the values it requires"; exit 1
+          fi
       # Every route, tool and record kind has a row in docs/threat-model.md.
       - run: node scripts/check-threat-model.mjs
       # A changed stored fold result in wasm/golden needs a changelog fragment naming it.

@@ -1,0 +1,33 @@
+KBL {{ .Chart.AppVersion }} is installed as {{ include "kbl.fullname" . }}.
+
+Before the tracker serves anything, check Felix:
+
+  work.events must be acknowledged durably. The tracker creates it as a
+  durable stream with one copy, which is safe only if the brokers run with
+  FELIX_ACK_ON_COMMIT=true and FELIX_DURABLE_FSYNC_MODE=on_commit. For more
+  copies, create the stream yourself before the first start, with consistency
+  Quorum (or on Felix's Raft engine). The tracker refuses any other setting and
+  every call answers an error naming it. This chart does not install or
+  configure Felix; set these in Felix's own deployment.
+  See docs/work-tracker.md, "What Felix must guarantee".
+
+Tracker (one replica; do not scale it):
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "kbl.fullname" . }}-tracker
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "kbl.fullname" . }}-tracker {{ .Values.tracker.service.port }}
+  curl -fsS localhost:{{ .Values.tracker.service.port }}/healthz
+{{- if .Values.dashboard.enabled }}
+
+Dashboard:
+{{- if and .Values.ingress.enabled .Values.ingress.host }}
+  https://{{ .Values.ingress.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "kbl.fullname" . }}-dashboard {{ .Values.dashboard.service.port }}
+{{- end }}
+  The dashboard reads work.events through a felix-gateway you run; open it
+  with ?gateway=wss://<gateway>/ws&room=...&token=... (docs/deploy.md).
+{{- end }}
+{{- if not .Values.ingress.enabled }}
+
+The tracker serves plain HTTP with bearer tokens. Do not expose it except
+through TLS (set ingress.enabled with a TLS secret, or your own proxy).
+{{- end }}

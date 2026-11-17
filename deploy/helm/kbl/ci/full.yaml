@@ -1,0 +1,31 @@
+felix:
+  controlPlane: https://controlplane.felix.svc:8443
+  broker: broker.felix.svc:5000
+  brokerName: broker.felix.svc
+  ca: { existingConfigMap: felix-ca }
+  idTokenSecret: { name: kbl-id-token }
+tracker:
+  tokensSecret: { name: kbl-tracker-tokens }
+  snapshotEvery: "1000"
+  metrics: { enabled: true }
+ingest:
+  enabled: true
+  configSecret: { name: kbl-ingest-config }
+  secretEnv:
+    - { env: KBL_INGEST_TOKEN, secretName: kbl-ingest, key: tracker-token }
+  privateKey: { secretName: kbl-app-key }
+  metrics: { enabled: true }
+ingress:
+  enabled: true
+  className: nginx
+  host: kbl.example.com
+  trackerHost: kbl-api.example.com
+  tls: { secretName: kbl-tls }
+networkPolicy:
+  enabled: true
+  metricsFromNamespaceLabels: { kubernetes.io/metadata.name: monitoring }
+  egress:
+    enabled: true
+    felixCidrs: [10.0.0.0/16]
+    ingestCidrs: [0.0.0.0/0]
+imagePullSecrets: [{ name: regcred }]

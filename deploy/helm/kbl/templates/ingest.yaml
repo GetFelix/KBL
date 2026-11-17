@@ -1,0 +1,97 @@
+{{- if .Values.ingest.enabled }}
+{{- $cfg := required "ingest.configSecret.name is required when ingest is enabled" .Values.ingest.configSecret.name -}}
+{{- $name := printf "%s-ingest" (include "kbl.fullname" .) -}}
+{{- $image := include "kbl.image" (dict "root" . "name" "kbl-tracker") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingest
+spec:
+  # One poller: two would import the same issues twice.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "kbl.selector" (dict "root" . "component" "ingest") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "kbl.labels" . | nindent 8 }}
+        app.kubernetes.io/component: ingest
+      {{- with .Values.ingest.podAnnotations }}
+      annotations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "kbl.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.ingest.privateKey.secretName }}
+      initContainers:
+        {{- include "kbl.copySecretInit" (dict "root" . "name" "app-key" "image" $image "src" "/in/key/app.pem" "dest" "/run/kbl/app.pem" "srcVolume" "app-key" "srcDir" "/in/key") | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: ingest
+          image: {{ $image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [/usr/local/bin/kbl-ingest]
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            {{- include "kbl.containerSecurity" . | nindent 12 }}
+          env:
+            - { name: KBL_INGEST_CONFIG, value: /etc/kbl/ingest/{{ .Values.ingest.configSecret.key }} }
+            {{- if .Values.ingest.metrics.enabled }}
+            - { name: KBL_INGEST_METRICS_LISTEN, value: {{ printf "0.0.0.0:%v" .Values.ingest.metrics.port | quote }} }
+            - { name: KBL_INGEST_METRICS_ALLOW_REMOTE, value: "true" }
+            {{- end }}
+            {{- range .Values.ingest.secretEnv }}
+            - name: {{ .env | quote }}
+              valueFrom:
+                secretKeyRef: { name: {{ .secretName | quote }}, key: {{ .key | quote }} }
+            {{- end }}
+          {{- if .Values.ingest.metrics.enabled }}
+          ports:
+            - { name: metrics, containerPort: {{ .Values.ingest.metrics.port }} }
+          {{- end }}
+          resources: {{- toYaml .Values.ingest.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/kbl/ingest, readOnly: true }
+            - { name: run-kbl, mountPath: /run/kbl, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ $cfg | quote }}
+            # World-readable inside the pod: the config names credentials, it
+            # does not hold them.
+            defaultMode: 0444
+            items:
+              - { key: {{ .Values.ingest.configSecret.key | quote }}, path: {{ .Values.ingest.configSecret.key | quote }} }
+        - name: run-kbl
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        {{- with .Values.ingest.privateKey.secretName }}
+        - name: app-key
+          secret:
+            secretName: {{ . | quote }}
+            defaultMode: 0400
+            items:
+              - { key: {{ $.Values.ingest.privateKey.key | quote }}, path: app.pem }
+        {{- end }}
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+      {{- with .Values.ingest.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ingest.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ingest.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

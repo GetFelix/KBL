@@ -1,0 +1,142 @@
+{{- $tokens := required "tracker.tokensSecret.name is required: create a Secret holding the token file (docs/deploy.md)" .Values.tracker.tokensSecret.name -}}
+{{- $_ := required "felix.controlPlane is required" .Values.felix.controlPlane -}}
+{{- $_ := required "felix.broker is required" .Values.felix.broker -}}
+{{- if not (or .Values.felix.ca.existingConfigMap .Values.felix.ca.pem) }}{{ fail "felix.ca.existingConfigMap or felix.ca.pem is required" }}{{ end }}
+{{- if not (or .Values.felix.idp .Values.felix.idTokenSecret.name) }}{{ fail "set felix.idp or felix.idTokenSecret.name" }}{{ end }}
+{{- $name := printf "%s-tracker" (include "kbl.fullname" .) -}}
+{{- $image := include "kbl.image" (dict "root" . "name" "kbl-tracker") -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+spec:
+  # One writer. A second tracker would only wait on the writer lease.
+  replicas: 1
+  # Stop the old pod before starting the new one so two never contend.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {{- include "kbl.selector" (dict "root" . "component" "tracker") | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "kbl.labels" . | nindent 8 }}
+        app.kubernetes.io/component: tracker
+      annotations:
+        checksum/ca: {{ .Values.felix.ca.pem | default "" | sha256sum }}
+        {{- with .Values.tracker.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "kbl.fullname" . }}
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "kbl.copySecretInit" (dict "root" . "name" "token-file" "image" $image "src" "/in/tokens/tokens.json" "dest" "/run/kbl/tokens.json" "srcVolume" "tokens" "srcDir" "/in/tokens") | nindent 8 }}
+      containers:
+        - name: tracker
+          image: {{ $image }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # The image's entrypoint starts as root to copy the token file; the
+          # init step does that here, so run the binary directly.
+          command: [/usr/local/bin/kbl-tracker]
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            {{- include "kbl.containerSecurity" . | nindent 12 }}
+          env:
+            - { name: KBL_TRACKER_LISTEN, value: {{ printf "0.0.0.0:%v" .Values.tracker.service.port | quote }} }
+            # The pod serves plain HTTP; terminate TLS at the Ingress.
+            - { name: KBL_TRACKER_BEHIND_TLS_PROXY, value: "true" }
+            - { name: KBL_TRACKER_TOKENS_FILE, value: /run/kbl/tokens.json }
+            - { name: KBL_FELIX_CONTROL_PLANE, value: {{ .Values.felix.controlPlane | quote }} }
+            - { name: KBL_FELIX_BROKER, value: {{ .Values.felix.broker | quote }} }
+            {{- if .Values.felix.brokerName }}
+            - { name: KBL_FELIX_BROKER_NAME, value: {{ .Values.felix.brokerName | quote }} }
+            {{- end }}
+            - { name: KBL_FELIX_CA_FILE, value: /etc/kbl/ca/{{ .Values.felix.ca.key }} }
+            - { name: KBL_TENANT, value: {{ .Values.felix.tenant | quote }} }
+            - { name: KBL_NAMESPACE, value: {{ .Values.felix.namespace | quote }} }
+            {{- if .Values.felix.idp }}
+            - { name: KBL_IDP, value: {{ .Values.felix.idp | quote }} }
+            {{- end }}
+            {{- with .Values.felix.idTokenSecret.name }}
+            - name: KBL_ID_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ . | quote }}, key: {{ $.Values.felix.idTokenSecret.key | quote }} }
+            {{- end }}
+            - { name: KBL_TRACKER_SNAPSHOT_DIR, value: /var/lib/kbl/snapshots }
+            {{- with .Values.tracker.snapshotEvery }}
+            - { name: KBL_TRACKER_SNAPSHOT_EVERY, value: {{ . | quote }} }
+            {{- end }}
+            {{- if .Values.tracker.metrics.enabled }}
+            - { name: KBL_TRACKER_METRICS_LISTEN, value: {{ printf "0.0.0.0:%v" .Values.tracker.metrics.port | quote }} }
+            # Reachable by the scraper alone: see networkPolicy.metricsFromNamespaceLabels.
+            - { name: KBL_TRACKER_METRICS_ALLOW_REMOTE, value: "true" }
+            {{- end }}
+            {{- range $k, $v := .Values.tracker.env }}
+            - { name: {{ $k | quote }}, value: {{ $v | quote }} }
+            {{- end }}
+          ports:
+            - { name: http, containerPort: {{ .Values.tracker.service.port }} }
+            {{- if .Values.tracker.metrics.enabled }}
+            - { name: metrics, containerPort: {{ .Values.tracker.metrics.port }} }
+            {{- end }}
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          resources: {{- toYaml .Values.tracker.resources | nindent 12 }}
+          volumeMounts:
+            - { name: run-kbl, mountPath: /run/kbl, readOnly: true }
+            - { name: ca, mountPath: /etc/kbl/ca, readOnly: true }
+            - { name: snapshots, mountPath: /var/lib/kbl/snapshots }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tokens
+          secret:
+            secretName: {{ $tokens | quote }}
+            defaultMode: 0400
+            items:
+              - { key: {{ .Values.tracker.tokensSecret.key | quote }}, path: tokens.json }
+        - name: run-kbl
+          emptyDir: { medium: Memory, sizeLimit: 1Mi }
+        - name: ca
+          configMap:
+            name: {{ include "kbl.caConfigMap" . }}
+        - name: snapshots
+          emptyDir: { sizeLimit: {{ .Values.tracker.snapshotSizeLimit | quote }} }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+      {{- with .Values.tracker.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tracker.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tracker.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tracker
+spec:
+  selector: {{- include "kbl.selector" (dict "root" . "component" "tracker") | nindent 4 }}
+  ports:
+    - { name: http, port: {{ .Values.tracker.service.port }}, targetPort: http }

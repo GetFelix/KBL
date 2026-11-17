@@ -1,9 +1,11 @@
 name: Release
 
 # A `v*` tag builds kbl-mcp and kbl-tool for every platform, attests each
-# archive and the checksums, and publishes them as a GitHub release. A manual
-# run with dry_run builds and uploads the archives as workflow artifacts and
-# creates no release. Run on a branch, it can never release: only a tag ref
+# archive and the checksums, and publishes them as a GitHub release. It also
+# builds the tracker (with kbl-ingest) and dashboard images for amd64 and
+# arm64, pushes them to ghcr.io/getfelix and attests them. A manual run with
+# dry_run builds and uploads the archives as workflow artifacts, builds the
+# images without pushing them, and creates no release. Run on a branch, it can never release: only a tag ref
 # reaches the publish job.
 on:
   push:
@@ -201,3 +203,130 @@ jobs:
         run: |
           gh release create "$TAG" dist/* \
             --repo "$REPO" --verify-tag --title "$TAG" --generate-notes
+
+  # Each image is built natively per architecture, because compiling the
+  # tracker and the dashboard's wasm under emulation takes hours. Nothing is
+  # pushed here, so this job has no package permission and a dry run is the
+  # same code path as a release.
+  image-build:
+    name: image ${{ matrix.component }} ${{ matrix.arch }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [tracker, dashboard]
+        arch: [amd64, arm64]
+        include:
+          - { arch: amd64, os: ubuntu-24.04 }
+          - { arch: arm64, os: ubuntu-24.04-arm }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Image labels
+        id: meta
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          if [ "$IS_TAG" = true ]; then v="${REF_NAME#v}"; else v="dev-$(git rev-parse --short=12 HEAD)"; fi
+          {
+            echo "labels<<EOF"
+            echo "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"
+            echo "org.opencontainers.image.version=$v"
+            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.licenses=MIT"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build into the local engine
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.component }}/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: kbl-${{ matrix.component }}:check
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.component }}-${{ matrix.arch }}
+      - name: Check the image starts
+        run: |
+          if [ "${{ matrix.component }}" = tracker ]; then
+            docker run --rm --entrypoint kbl-tracker kbl-tracker:check --help > /dev/null
+            docker run --rm --entrypoint kbl-ingest kbl-tracker:check --help > /dev/null
+          else
+            docker run --rm --entrypoint ls kbl-dashboard:check /usr/share/nginx/html/index.html
+            test "$(docker run --rm --entrypoint id kbl-dashboard:check -u)" != 0
+          fi
+      - name: Write the image archive
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ${{ matrix.component }}/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=oci,dest=${{ runner.temp }}/image.tar
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.component }}-${{ matrix.arch }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-${{ matrix.component }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image.tar
+          if-no-files-found: error
+          retention-days: 1
+
+  # The only job that pushes. It joins the two architectures under one tag and
+  # attests the result by digest. Verify with:
+  #   gh attestation verify oci://ghcr.io/getfelix/kbl-tracker:<version> -R GetFelix/KBL
+  image-push:
+    name: push ${{ matrix.component }} image
+    needs: [image-build, publish]
+    if: >-
+      github.ref_type == 'tag' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [tracker, dashboard]
+    env:
+      IMAGE: ghcr.io/getfelix/kbl-${{ matrix.component }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: image-${{ matrix.component }}-*
+          path: images
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Push both architectures and the joined tag
+        id: push
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version="${REF_NAME#v}"
+          sudo apt-get install -y --no-install-recommends skopeo > /dev/null
+          for arch in amd64 arm64; do
+            skopeo copy "oci-archive:images/image-${{ matrix.component }}-$arch/image.tar" \
+              "docker://$IMAGE:$version-$arch"
+          done
+          docker buildx imagetools create -t "$IMAGE:$version" \
+            "$IMAGE:$version-amd64" "$IMAGE:$version-arm64"
+          digest=$(docker buildx imagetools inspect "$IMAGE:$version" --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

@@ -1,0 +1,10 @@
+{{- if and (not .Values.felix.ca.existingConfigMap) .Values.felix.ca.pem }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kbl.caConfigMap" . }}
+  labels: {{- include "kbl.labels" . | nindent 4 }}
+data:
+  {{ .Values.felix.ca.key }}: |
+    {{- .Values.felix.ca.pem | nindent 4 }}
+{{- end }}
