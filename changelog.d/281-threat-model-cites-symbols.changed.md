@@ -1,0 +1,1 @@
+The threat model cites code as `file#symbol` instead of `file:line`, and `docs/threat-model-citations.json` pins the lines each symbol must still hold. A merge that shifts lines no longer conflicts other pull requests; a renamed, removed or ambiguous symbol still fails the check. `--fix` is gone.

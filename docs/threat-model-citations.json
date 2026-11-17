@@ -1,211 +1,403 @@
 {
- "core/src/redact.rs:1057": "pub fn redact_record(record: &mut WorkRecord) {",
- "core/src/work_fold.rs:757": "if to <= log || rec.v != to {",
- "core/src/work_fold.rs:762": "if rec.v > log {",
- "core/src/work_fold.rs:1073": "if it.flagged && it.hold.is_none() {",
- "core/src/work_fold.rs:1288": "if t.work != WorkKind::Triage || t.parent.as_ref() != Some(item) {",
- "core/src/work_fold.rs:1466": "let charged = c.floor_micros.max(priced);",
- "core/src/work_fold.rs:1469": "it.cost_micros = it.cost_micros.saturating_add(total);",
- "core/src/work_fold.rs:1489": "fn reprice(&mut self, model: &str, unit: PriceUnit, price_micros: u64) {",
- "core/src/work_fold.rs:1536": "fn check_charge(&self, rec: &WorkLogged) -> Result<(), Reject> {",
- "core/src/work_fold.rs:1598": "if self.upstream.contains_key(&up) {",
- "core/src/work_fold.rs:1660": "self.item_mut(item)?.proposal = Some(Proposal {",
- "core/src/work_fold.rs:1684": "if rec.actor == Actor::Agent {",
- "core/src/work_fold.rs:1687": "if tier.is_some_and(|t| t >= TIERS) {",
- "core/src/work_fold.rs:1746": "if !matches!(it.closed, Some(Closure::Merged | Closure::Completed)) {",
- "core/src/work_fold.rs:1749": "it.release = Some(release.clone());",
- "core/src/work_fold.rs:1759": "if item == to || self.reaches(to, item) {",
- "core/src/work_fold.rs:1764": "if p.links >= MAX_LINKS {",
- "core/src/work_fold.rs:1772": "if rec.actor == Actor::Agent {",
- "core/src/work_fold.rs:1775": "self.item(item)?;",
- "core/src/work_fold.rs:1784": ".ok_or(Reject::NotHolder)?;",
- "core/src/work_fold.rs:1786": "if p.context_writes >= MAX_CONTEXT {",
- "core/src/work_fold.rs:1804": "if rec.actor != Actor::Agent {",
- "core/src/work_fold.rs:1815": "return Err(Reject::TooManyTries);",
- "core/src/work_fold.rs:1828": "if stage != Stage::Ready {",
- "core/src/work_fold.rs:1833": "if self.worked_on(&root, &rec.by) {",
- "core/src/work_fold.rs:1889": "self.acting_on(item, *attempt, rec)?;",
- "core/src/work_fold.rs:1897": "return Err(Reject::PrInUse);",
- "core/src/work_fold.rs:1901": "if p.progress >= MAX_PROGRESS {",
- "core/src/work_fold.rs:1920": "let it = self.acting_on(item, *attempt, rec)?;",
- "core/src/work_fold.rs:1925": "if self.open_children(item).iter().any(|c| {",
- "core/src/work_fold.rs:1934": "&& !self.verdict_given(item)",
- "core/src/work_fold.rs:1959": "WorkRecord::Released { item, attempt, .. } => {",
- "core/src/work_fold.rs:1969": "WorkRecord::GaveUp { item, attempt, .. } => {",
- "core/src/work_fold.rs:1986": "self.agent_holder(item, *attempt, rec)?;",
- "core/src/work_fold.rs:1989": "if p.questions >= MAX_QUESTIONS {",
- "core/src/work_fold.rs:2013": "let scope = self.may_answer(item, rec)?;",
- "core/src/work_fold.rs:2014": "if self.item(item)?.open_question != Some(*question) {",
- "core/src/work_fold.rs:2022": ".is_some_and(|a| a.options.contains(c));",
- "core/src/work_fold.rs:2030": "if p.answers >= MAX_ANSWERS {",
- "core/src/work_fold.rs:2049": "self.agent_holder(item, *attempt, rec)?;",
- "core/src/work_fold.rs:2053": "Self::check_evidence(offset, evidence)?;",
- "core/src/work_fold.rs:2058": "if c.test.len() > MAX_REVERT_TEST {",
- "core/src/work_fold.rs:2063": "if p.decisions.len() >= MAX_DECISIONS {",
- "core/src/work_fold.rs:2089": "self.agent_holder(item, *attempt, rec)?;",
- "core/src/work_fold.rs:2090": "let (spec, root) = self.final_review(item)?;",
- "core/src/work_fold.rs:2098": "if *verdict == MergeVerdict::Merge && self.open_fixes(&root) {",
- "core/src/work_fold.rs:2109": "self.agent_holder(item, *attempt, rec)?;",
- "core/src/work_fold.rs:2111": "if p.steps.len() >= MAX_STEPS {",
- "core/src/work_fold.rs:2122": "self.agent_holder(item, *attempt, rec)?;",
- "core/src/work_fold.rs:2124": "if !p.decisions.contains(decision) {",
- "core/src/work_fold.rs:2127": "if p.edits.len() >= MAX_EDITS {",
- "core/src/work_fold.rs:2133": "if rec.actor == Actor::Agent {",
- "core/src/work_fold.rs:2137": "Some(a) => self.path_mut(item, *a)?.human_inputs.push(offset),",
- "core/src/work_fold.rs:2180": "if it.redos >= limit {",
- "core/src/work_fold.rs:2192": "if rec.actor == Actor::Agent {",
- "core/src/work_fold.rs:2195": "self.item(item)?;",
- "core/src/work_fold.rs:2197": "if *why == CloseWhy::Merged && rec.actor == Actor::Tracker {",
- "core/src/work_fold.rs:2223": "if self.item(item)?.accepted {",
- "core/src/work_fold.rs:2245": "WorkRecord::Flagged { item, flagged } => {",
- "core/src/work_fold.rs:2256": "if it.flagged == *flagged || (*flagged && !it.accepted) {",
- "core/src/work_fold.rs:2262": "if rec.actor == Actor::Agent {",
- "core/src/work_fold.rs:2269": "if it.closed.is_none() {",
- "core/src/work_fold.rs:2276": "it.release = None;",
- "core/src/work_fold.rs:2299": "WorkRecord::PriceSet {",
- "core/src/work_fold.rs:2357": "if rec.actor != Actor::Person {",
- "core/src/work_fold.rs:2375": "if rec.actor != Actor::Person {",
- "core/src/work_fold.rs:2384": "if text.as_ref().is_some_and(|t| t.len() > MAX_RULES_TEXT) {",
- "core/src/work_fold.rs:2428": "if rec.actor != Actor::Person {",
- "core/src/work_fold.rs:2431": "if *tier >= TIERS {",
- "core/src/work_fold.rs:2441": "if rec.actor != Actor::Person {",
- "core/src/work_fold.rs:2449": "if it.accepted {",
- "core/src/work_fold.rs:2463": "if rec.actor != Actor::Tracker {",
- "core/src/work_fold.rs:2486": "if it.pr.as_deref() != Some(status.pr.as_str()) {",
- "core/src/work_fold.rs:2511": "if source.len() > MAX_PR_REF || repo.len() > MAX_PR_REF {",
- "core/src/work_fold.rs:2599": "if rec.actor != Actor::Tracker {",
- "core/src/work_fold.rs:2625": "if reviews >= MAX_REVIEWS_PER_ROOT {",
- "core/src/work_fold.rs:2634": "let spec = it.review.clone().ok_or(Reject::NotReview)?;",
- "core/src/work_fold.rs:2673": "self.agent_holder(review, attempt, rec)?;",
- "core/src/work_fold.rs:2678": "if file.len() > MAX_FINDING_FILE",
- "core/src/work_fold.rs:2684": "self.check_review_current(&root, &spec)?;",
- "core/src/work_fold.rs:2686": "if findings >= MAX_FINDINGS {",
- "core/src/work_fold.rs:2790": "if it.parent.is_some() {",
- "core/src/work_fold.rs:2793": "if it.closed.is_some() {",
- "core/src/work_fold.rs:2851": "(Actor::Agent, Some(p)) if work.is_live_child() => {",
- "core/src/work_fold.rs:2859": "if self.path_mut(p, attempt)?.posts >= MAX_POSTS {",
- "core/src/work_fold.rs:2863": "let refused = if depth > b.max_depth {",
- "core/src/work_fold.rs:2970": ".prerequisite_holder(item, attempt, triage, rec)?",
- "core/src/work_fold.rs:2989": "let unreleased = self.format() >= FORMAT_V5",
- "core/src/work_fold.rs:2994": "return Err(Reject::Closed);",
- "core/src/work_fold.rs:3000": "return Err(Reject::Cycle);",
- "core/src/work_fold.rs:3059": "if !it.accepted_by_person {",
- "core/src/work_fold.rs:3123": "if par.depth.saturating_add(1) > max {",
- "core/src/work_fold.rs:3132": "if rec.actor != Actor::Person {",
- "core/src/work_fold.rs:3138": "if title.len() > MAX_TITLE",
- "core/src/work_fold.rs:3221": ".filter(|t| t.work == WorkKind::Triage && t.parent.as_ref() == Some(target))",
- "core/src/work_fold.rs:3223": "let h = t.hold.as_ref().filter(|h| h.by == rec.by)?;",
- "core/src/work_fold.rs:3263": "if self.item(item)?.root != self.item(to)?.root {",
- "core/src/work_fold.rs:3266": "self.agent_scope(item, &rec.by, true)",
- "core/src/work_fold.rs:3280": ".filter(|q| q.work == WorkKind::Question)",
- "core/src/work_fold/human_wait.rs:15": "const KEPT_WAITS: usize = 20_000;",
- "ingest/src/github.rs:363": "if !self.own.iter().any(|o| o.eq_ignore_ascii_case(&author)) {",
- "ingest/src/github.rs:375": "let into_default = pull[\"base\"][\"repo\"][\"default_branch\"]",
- "ingest/src/github.rs:709": "fn review_state(reviews: &Value, author: &str, asked: bool) -> PrReview {",
- "ingest/src/github.rs:772": ".any(|o| o.eq_ignore_ascii_case(&format!(\"{app}[bot]\")))",
- "ingest/src/github.rs:796": "if own.iter().any(|o| o.eq_ignore_ascii_case(by)) {",
- "ingest/src/main.rs:83": "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),",
- "ingest/src/sync.rs:524": "if self.own.contains(&c.author.to_ascii_lowercase()) {",
- "ingest/src/sync.rs:594": "let ours = self.own.contains(&pull.author.to_ascii_lowercase());",
- "ingest/src/sync.rs:608": "let linked = match claimed {",
- "ingest/src/sync.rs:897": "if links.complete {",
- "ingest/src/sync.rs:1026": ".filter(|pr| self.may_write_to(&key, pr));",
- "ingest/src/sync.rs:1071": "let allowed = named && pr.repo.eq_ignore_ascii_case(&issue.repo);",
- "ingest/src/sync.rs:1097": "fn opening_rule(&self, repo: &str) -> Option<&Rule> {",
- "ingest/src/sync.rs:1504": "fn cut_title(s: &str) -> String {",
- "ingest/src/sync.rs:1513": "fn cut(s: &str) -> String {",
- "ingest/src/webhook.rs:84": "if app.secret.is_empty() || !same(&hex(&hmac_sha256(&app.secret, &body)), signed) {",
- "ingest/src/webhook.rs:92": "if delivery.is_some_and(|id| !recent.first_time(id)) {",
- "ingest/src/webhook.rs:106": ".is_none_or(|t| now.duration_since(t) >= app.min_gap)",
- "mcp/src/metrics.rs:17": "let tool = if known {",
- "mcp/src/server.rs:871": "Some(i) => Ok(i),",
- "mcp/src/tasks.rs:121": "post.title = redacted(post.title);",
- "mcp/src/tasks.rs:215": "Err(e @ TaskReadError::Newer { .. }) => {",
- "mcp/src/tasks.rs:284": "if attempt > MAX_ATTEMPTS {",
- "mcp/src/tasks.rs:342": "let artifact = self.store(redacted(result).into_bytes()).await?;",
- "mcp/src/tasks.rs:443": "reason: reason.map(redacted),",
- "mcp/src/tasks.rs:475": "reason: redacted(reason),",
- "mcp/src/tasks.rs:511": "let (content, stored) = Content::from_text(redacted(text));",
- "mcp/src/tasks.rs:528": "Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {",
- "mcp/src/tasks.rs:596": "error: redacted(format!(\"{error:#}\")),",
- "mcp/src/tasks.rs:637": "fn holding<'a>(held: &'a Option<Held>, task: &str) -> Result<&'a Held, String> {",
- "metrics/src/serve.rs:39": "allow_remote || addr.ip().to_canonical().is_loopback(),",
- "tracker/src/config.rs:93": "mode == 0o600 || mode == 0o400,",
- "tracker/src/config.rs:114": "anyhow::ensure!(!token.is_empty(), \"a token is empty\");",
- "tracker/src/config.rs:149": ".map(|(t, a)| (t.as_str(), Caller::Agent(a.clone())));",
- "tracker/src/http.rs:89": ".map(|m| m.as_str().to_owned())",
- "tracker/src/http.rs:188": "if !(rest.starts_with(\"work/\") || rest.starts_with(\"ingest/\")) {",
- "tracker/src/http.rs:264": "async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {",
- "tracker/src/http.rs:276": "let (team, caller) = match parts.extensions.get::<TeamPath>() {",
- "tracker/src/http.rs:324": "fn agent(&self) -> Result<AgentName, Denied> {",
- "tracker/src/http.rs:353": "fn person(&self) -> Result<Key, Denied> {",
- "tracker/src/http.rs:365": "async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {",
- "tracker/src/http.rs:458": "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {",
- "tracker/src/http.rs:1050": "if b.moves_to.is_some() {",
- "tracker/src/http.rs:1147": "kbl_core::redact::redact_record(&mut record);",
- "tracker/src/http.rs:1296": "match call.person() {",
- "tracker/src/http/ingest.rs:38": "fn worker(&self) -> Result<Key, super::Denied> {",
- "tracker/src/main.rs:144": "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),",
- "tracker/src/teams.rs:109": "pub(crate) fn admit(&self, waits: bool) -> Option<OwnedSemaphorePermit> {",
- "tracker/src/tracker.rs:330": ".find(|p| p.eq_ignore_ascii_case(pr));",
- "tracker/src/tracker.rs:339": "fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), Error> {",
- "tracker/src/tracker.rs:446": "if note.is_some_and(|n| Some(n) > it.red_since) {",
- "tracker/src/tracker.rs:624": "&& ended.actor == Actor::Agent",
- "tracker/src/tracker.rs:798": "let deadline = Instant::now() + wait.min(MAX_WAIT);",
- "tracker/src/tracker.rs:1434": "fn review_lanes(&self, reviews: &[String]) -> Result<Vec<u8>, Error> {",
- "tracker/src/tracker.rs:1469": "&& (self.lane_is_all_own(agent, tier).await",
- "tracker/src/tracker.rs:1509": "if tier >= TIERS && self.is_own_work(agent, &record).await {",
- "tracker/src/tracker.rs:1843": "let held = match holding(&core, delivery.as_ref(), agent, item) {",
- "tracker/src/tracker.rs:1856": ".append(&mut core, Actor::Agent, agent_key(agent), record(held))",
- "tracker/src/tracker.rs:2186": ".filter(|id| core.state.stage(id) == Some(Stage::Ready))",
- "tracker/src/tracker.rs:2276": "if let Some(why) = unavailable(&writer, self.lease_margin()) {",
- "tracker/src/tracker.rs:2299": "tools::check_sizes(&record)?;",
- "tracker/src/tracker.rs:2304": "kbl_core::redact::redact_record(&mut record);",
- "tracker/src/tracker.rs:2324": "if let Err(why) = core.state.try_apply(guess, &logged) {",
- "tracker/src/tracker.rs:2684": "return if &d.item == item {",
- "tracker/src/tracker.rs:2691": "Some(i) if holds(i, agent) => Ok(i.hold.as_ref().map_or(1, |h| h.attempt)),",
- "tracker/src/tracker/ingest.rs:21": "fn allowed(record: &WorkRecord) -> bool {",
- "tracker/src/tracker/ingest.rs:127": "&& text.len() > INLINE_LIMIT",
- "tracker/src/tracker/ingest.rs:141": "if !targets(&record)",
- "tracker/src/tracker/ingest.rs:147": "if let WorkRecord::Closed {",
- "tracker/src/tracker/ingest.rs:157": "if let WorkRecord::Shipped { item, .. } = &record {",
- "tracker/src/tracker/ingest.rs:174": "let ours = core.recall.ingest_edges.contains(&edge);",
- "tracker/src/tracker/ingest.rs:197": "TextRead::Text(old) if old == text => {",
- "tracker/src/tracker/ingest.rs:377": "let name = state_name(source)?;",
- "tracker/src/tracker/ingest.rs:398": "if bytes.len() > MAX_STATE_BYTES {",
- "tracker/src/tracker/ingest.rs:401": "match self.0.broker.cursor_put(&name, bytes, version).await {",
- "tracker/src/tracker/reads.rs:15": "pub(crate) const HISTORY_PAGE: usize = 500;",
- "tracker/src/tracker/request_keys.rs:69": "while window.len() > WINDOW {",
- "tracker/src/tracker/request_keys.rs:103": "let who = caller(actor, by);",
- "tracker/src/tracker/request_keys.rs:111": "if seen.sig != req.sig {",
- "tracker/src/tracker/request_keys.rs:141": "if !set.lock().expect(\"running lock\").insert(id.clone()) {",
- "tracker/src/tracker/tools.rs:45": "pub(crate) fn parse(s: &str) -> Result<Self, Error> {",
- "tracker/src/tracker/tools.rs:131": "held(&core, agent, parent)?;",
- "tracker/src/tracker/tools.rs:190": "field(\"title\", &title)?;",
- "tracker/src/tracker/tools.rs:219": ".filter(|i| i.work == WorkKind::Triage)",
- "tracker/src/tracker/tools.rs:266": "&& let Some(r) = replay(&core, agent, item, claim, \"prerequisite\", reply(created))",
- "tracker/src/tracker/tools.rs:289": "None => visible(&core, &allowed, item, &prerequisite),",
- "tracker/src/tracker/tools.rs:399": "if core.state.edges.contains(&(item.clone(), to.clone())) {",
- "tracker/src/tracker/tools.rs:435": "&& it.context_agents.get(&entry) != Some(&agent_key(agent))",
- "tracker/src/tracker/tools.rs:475": "if !holds(it, agent) && !parent_held {",
- "tracker/src/tracker/tools.rs:562": "if !holds(it, agent) {",
- "tracker/src/tracker/tools.rs:608": "field(name, v)?;",
- "tracker/src/tracker/tools.rs:641": "if d.options.len() > MAX_OPTIONS {",
- "tracker/src/tracker/tools.rs:748": "bounded(\"why\", &why, MAX_FIELD)?;",
- "tracker/src/tracker/tools.rs:761": ".and_then(|i| i.parent.clone())",
- "tracker/src/tracker/tools.rs:765": "if let Some(d) = &duplicate_of",
- "tracker/src/tracker/tools.rs:941": "kbl_core::redact::redact_record(&mut record);",
- "tracker/src/tracker/tools.rs:1027": "if let (false, Some((held, _))) = (logged, held) {",
- "tracker/src/tracker/tools.rs:1073": "fn held(core: &Core, agent: &AgentName, item: &ItemId) -> Result<u32, Error> {",
- "tracker/src/tracker/tools.rs:1096": "if options.len() > MAX_ASK_OPTIONS {",
- "tracker/src/tracker/tools.rs:1156": "if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {",
- "tracker/src/tracker/tools.rs:1208": "pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {",
- "tracker/src/tracker/tools.rs:1241": "WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {",
- "tracker/src/tracker/tools.rs:1242": "check_content(\"text\", text)",
- "tracker/src/tracker/tools.rs:1269": "kbl_core::work::MAX_RULES_TEXT",
- "tracker/src/tracker/tools.rs:1286": "WorkRecord::Step { output, .. } => check_content(\"output\", output),",
- "tracker/src/tracker/tools.rs:1287": "WorkRecord::Edit { hunk, .. } => check_content(\"hunk\", hunk),",
- "tracker/src/tracker/tools.rs:1306": "| WorkRecord::GaveUp { reason, .. } => field(\"reason\", reason),",
- "tracker/src/tracker/tools.rs:1324": "bounded(\"file\", file, MAX_FINDING_FILE)?;",
- "tracker/src/tracker/tools.rs:1328": "WorkRecord::ReviewVerdict { why, .. } => bounded(\"why\", why, MAX_VERDICT_WHY),"
+ "core/src/redact.rs#redact_record": [
+  "pub fn redact_record(record: &mut WorkRecord) {"
+ ],
+ "core/src/work_fold.rs#agent_may_link": [
+  "if self.item(item)?.root != self.item(to)?.root {",
+  "self.agent_scope(item, &rec.by, true)"
+ ],
+ "core/src/work_fold.rs#attach_upstream": [
+  "if !it.accepted_by_person {"
+ ],
+ "core/src/work_fold.rs#charge": [
+  "let charged = c.floor_micros.max(priced);",
+  "it.cost_micros = it.cost_micros.saturating_add(total);"
+ ],
+ "core/src/work_fold.rs#check_charge": [
+  "fn check_charge(&self, rec: &WorkLogged) -> Result<(), Reject> {"
+ ],
+ "core/src/work_fold.rs#check_new_review": [
+  "if rec.actor != Actor::Tracker {",
+  "if reviews >= MAX_REVIEWS_PER_ROOT {"
+ ],
+ "core/src/work_fold.rs#check_then": [
+  "if par.depth.saturating_add(1) > max {",
+  "if rec.actor != Actor::Person {",
+  "if title.len() > MAX_TITLE"
+ ],
+ "core/src/work_fold.rs#finding": [
+  "self.agent_holder(review, attempt, rec)?;",
+  "if file.len() > MAX_FINDING_FILE",
+  "self.check_review_current(&root, &spec)?;",
+  "if findings >= MAX_FINDINGS {"
+ ],
+ "core/src/work_fold.rs#format_gate": [
+  "if to <= log || rec.v != to {",
+  "if rec.v > log {"
+ ],
+ "core/src/work_fold.rs#may_answer": [
+  ".filter(|q| q.work == WorkKind::Question)"
+ ],
+ "core/src/work_fold.rs#may_triage": [
+  ".filter(|t| t.work == WorkKind::Triage && t.parent.as_ref() == Some(target))",
+  "let h = t.hold.as_ref().filter(|h| h.by == rec.by)?;"
+ ],
+ "core/src/work_fold.rs#needs_you": [
+  "if it.flagged && it.hold.is_none() {"
+ ],
+ "core/src/work_fold.rs#prerequisite": [
+  ".prerequisite_holder(item, attempt, triage, rec)?",
+  "let unreleased = self.format() >= FORMAT_V5",
+  "return Err(Reject::Closed);",
+  "return Err(Reject::Cycle);"
+ ],
+ "core/src/work_fold.rs#prerequisite_holder": [
+  "if t.work != WorkKind::Triage || t.parent.as_ref() != Some(item) {"
+ ],
+ "core/src/work_fold.rs#propose": [
+  "(Actor::Agent, Some(p)) if work.is_live_child() => {",
+  "if self.path_mut(p, attempt)?.posts >= MAX_POSTS {",
+  "let refused = if depth > b.max_depth {"
+ ],
+ "core/src/work_fold.rs#reprice": [
+  "fn reprice(&mut self, model: &str, unit: PriceUnit, price_micros: u64) {"
+ ],
+ "core/src/work_fold.rs#review_of": [
+  "let spec = it.review.clone().ok_or(Reject::NotReview)?;"
+ ],
+ "core/src/work_fold.rs#step_record": [
+  "if self.upstream.contains_key(&up) {",
+  "self.item_mut(item)?.proposal = Some(Proposal {",
+  "if rec.actor == Actor::Agent {",
+  "if tier.is_some_and(|t| t >= TIERS) {",
+  "if !matches!(it.closed, Some(Closure::Merged | Closure::Completed)) {",
+  "it.release = Some(release.clone());",
+  "if item == to || self.reaches(to, item) {",
+  "if p.links >= MAX_LINKS {",
+  "if rec.actor == Actor::Agent {",
+  "self.item(item)?;",
+  ".ok_or(Reject::NotHolder)?;",
+  "if p.context_writes >= MAX_CONTEXT {",
+  "if rec.actor != Actor::Agent {",
+  "return Err(Reject::TooManyTries);",
+  "if stage != Stage::Ready {",
+  "if self.worked_on(&root, &rec.by) {",
+  "self.acting_on(item, *attempt, rec)?;",
+  "return Err(Reject::PrInUse);",
+  "if p.progress >= MAX_PROGRESS {",
+  "let it = self.acting_on(item, *attempt, rec)?;",
+  "if self.open_children(item).iter().any(|c| {",
+  "&& !self.verdict_given(item)",
+  "WorkRecord::Released { item, attempt, .. } => {",
+  "WorkRecord::GaveUp { item, attempt, .. } => {",
+  "self.agent_holder(item, *attempt, rec)?;",
+  "if p.questions >= MAX_QUESTIONS {",
+  "let scope = self.may_answer(item, rec)?;",
+  "if self.item(item)?.open_question != Some(*question) {",
+  ".is_some_and(|a| a.options.contains(c));",
+  "if p.answers >= MAX_ANSWERS {",
+  "self.agent_holder(item, *attempt, rec)?;",
+  "Self::check_evidence(offset, evidence)?;",
+  "if c.test.len() > MAX_REVERT_TEST {",
+  "if p.decisions.len() >= MAX_DECISIONS {",
+  "self.agent_holder(item, *attempt, rec)?;",
+  "let (spec, root) = self.final_review(item)?;",
+  "if *verdict == MergeVerdict::Merge && self.open_fixes(&root) {",
+  "self.agent_holder(item, *attempt, rec)?;",
+  "if p.steps.len() >= MAX_STEPS {",
+  "self.agent_holder(item, *attempt, rec)?;",
+  "if !p.decisions.contains(decision) {",
+  "if p.edits.len() >= MAX_EDITS {",
+  "if rec.actor == Actor::Agent {",
+  "Some(a) => self.path_mut(item, *a)?.human_inputs.push(offset),",
+  "if it.redos >= limit {",
+  "if rec.actor == Actor::Agent {",
+  "self.item(item)?;",
+  "if *why == CloseWhy::Merged && rec.actor == Actor::Tracker {",
+  "if self.item(item)?.accepted {",
+  "WorkRecord::Flagged { item, flagged } => {",
+  "if it.flagged == *flagged || (*flagged && !it.accepted) {",
+  "if rec.actor == Actor::Agent {",
+  "if it.closed.is_none() {",
+  "it.release = None;",
+  "WorkRecord::PriceSet {",
+  "if rec.actor != Actor::Person {",
+  "if rec.actor != Actor::Person {",
+  "if text.as_ref().is_some_and(|t| t.len() > MAX_RULES_TEXT) {",
+  "if rec.actor != Actor::Person {",
+  "if *tier >= TIERS {",
+  "if rec.actor != Actor::Person {",
+  "if it.accepted {",
+  "if rec.actor != Actor::Tracker {",
+  "if it.pr.as_deref() != Some(status.pr.as_str()) {",
+  "if source.len() > MAX_PR_REF || repo.len() > MAX_PR_REF {"
+ ],
+ "core/src/work_fold.rs#upstream_sync": [
+  "if it.parent.is_some() {",
+  "if it.closed.is_some() {"
+ ],
+ "core/src/work_fold/human_wait.rs#KEPT_WAITS": [
+  "const KEPT_WAITS: usize = 20_000;"
+ ],
+ "ingest/src/github.rs#check_state": [
+  ".any(|o| o.eq_ignore_ascii_case(&format!(\"{app}[bot]\")))",
+  "if own.iter().any(|o| o.eq_ignore_ascii_case(by)) {"
+ ],
+ "ingest/src/github.rs#pull_request": [
+  "if !self.own.iter().any(|o| o.eq_ignore_ascii_case(&author)) {",
+  "let into_default = pull[\"base\"][\"repo\"][\"default_branch\"]"
+ ],
+ "ingest/src/github.rs#review_state": [
+  "fn review_state(reviews: &Value, author: &str, asked: bool) -> PrReview {"
+ ],
+ "ingest/src/main.rs#check_listen": [
+  "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
+ ],
+ "ingest/src/sync.rs#cut": [
+  "fn cut(s: &str) -> String {"
+ ],
+ "ingest/src/sync.rs#cut_title": [
+  "fn cut_title(s: &str) -> String {"
+ ],
+ "ingest/src/sync.rs#link": [
+  "if links.complete {"
+ ],
+ "ingest/src/sync.rs#may_write_to": [
+  "let allowed = named && pr.repo.eq_ignore_ascii_case(&issue.repo);"
+ ],
+ "ingest/src/sync.rs#on_comment": [
+  "if self.own.contains(&c.author.to_ascii_lowercase()) {"
+ ],
+ "ingest/src/sync.rs#opening_rule": [
+  "fn opening_rule(&self, repo: &str) -> Option<&Rule> {"
+ ],
+ "ingest/src/sync.rs#pull_requests": [
+  "let ours = self.own.contains(&pull.author.to_ascii_lowercase());",
+  "let linked = match claimed {"
+ ],
+ "ingest/src/sync.rs#write_back": [
+  ".filter(|pr| self.may_write_to(&key, pr));"
+ ],
+ "ingest/src/webhook.rs#hook": [
+  "if app.secret.is_empty() || !same(&hex(&hmac_sha256(&app.secret, &body)), signed) {",
+  "if delivery.is_some_and(|id| !recent.first_time(id)) {",
+  ".is_none_or(|t| now.duration_since(t) >= app.min_gap)"
+ ],
+ "mcp/src/metrics.rs#tool_finished": [
+  "let tool = if known {"
+ ],
+ "mcp/src/server.rs#item_or_held": [
+  "Some(i) => Ok(i),"
+ ],
+ "mcp/src/tasks.rs#artifact_text": [
+  "Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {"
+ ],
+ "mcp/src/tasks.rs#claim": [
+  "Err(e @ TaskReadError::Newer { .. }) => {",
+  "if attempt > MAX_ATTEMPTS {"
+ ],
+ "mcp/src/tasks.rs#complete": [
+  "let artifact = self.store(redacted(result).into_bytes()).await?;"
+ ],
+ "mcp/src/tasks.rs#content": [
+  "let (content, stored) = Content::from_text(redacted(text));"
+ ],
+ "mcp/src/tasks.rs#give_up": [
+  "reason: redacted(reason),"
+ ],
+ "mcp/src/tasks.rs#holding": [
+  "fn holding<'a>(held: &'a Option<Held>, task: &str) -> Result<&'a Held, String> {"
+ ],
+ "mcp/src/tasks.rs#post": [
+  "post.title = redacted(post.title);"
+ ],
+ "mcp/src/tasks.rs#refuse": [
+  "error: redacted(format!(\"{error:#}\")),"
+ ],
+ "mcp/src/tasks.rs#release": [
+  "reason: reason.map(redacted),"
+ ],
+ "metrics/src/serve.rs#check_listen": [
+  "allow_remote || addr.ip().to_canonical().is_loopback(),"
+ ],
+ "tracker/src/config.rs#entries": [
+  ".map(|(t, a)| (t.as_str(), Caller::Agent(a.clone())));"
+ ],
+ "tracker/src/config.rs#load": [
+  "mode == 0o600 || mode == 0o400,"
+ ],
+ "tracker/src/config.rs#parse": [
+  "anyhow::ensure!(!token.is_empty(), \"a token is empty\");"
+ ],
+ "tracker/src/http.rs#agent": [
+  "fn agent(&self) -> Result<AgentName, Denied> {"
+ ],
+ "tracker/src/http.rs#answer": [
+  "if b.moves_to.is_some() {"
+ ],
+ "tracker/src/http.rs#from_request_parts": [
+  "async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {",
+  "let (team, caller) = match parts.extensions.get::<TeamPath>() {"
+ ],
+ "tracker/src/http.rs#in_team": [
+  "if !(rest.starts_with(\"work/\") || rest.starts_with(\"ingest/\")) {"
+ ],
+ "tracker/src/http.rs#items": [
+  "match call.person() {"
+ ],
+ "tracker/src/http.rs#me": [
+  "async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {"
+ ],
+ "tracker/src/http.rs#note": [
+  "kbl_core::redact::redact_record(&mut record);"
+ ],
+ "tracker/src/http.rs#observe": [
+  ".map(|m| m.as_str().to_owned())"
+ ],
+ "tracker/src/http.rs#person": [
+  "fn person(&self) -> Result<Key, Denied> {"
+ ],
+ "tracker/src/http.rs#usage_of": [
+  "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
+ ],
+ "tracker/src/http/ingest.rs#worker": [
+  "fn worker(&self) -> Result<Key, super::Denied> {"
+ ],
+ "tracker/src/main.rs#check_listen": [
+  "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
+ ],
+ "tracker/src/teams.rs#admit": [
+  "pub(crate) fn admit(&self, waits: bool) -> Option<OwnedSemaphorePermit> {"
+ ],
+ "tracker/src/tracker.rs#append_expecting": [
+  "if let Some(why) = unavailable(&writer, self.lease_margin()) {",
+  "tools::check_sizes(&record)?;",
+  "kbl_core::redact::redact_record(&mut record);",
+  "if let Err(why) = core.state.try_apply(guess, &logged) {"
+ ],
+ "tracker/src/tracker.rs#canonical_pr": [
+  ".find(|p| p.eq_ignore_ascii_case(pr));"
+ ],
+ "tracker/src/tracker.rs#claim_loop": [
+  "let deadline = Instant::now() + wait.min(MAX_WAIT);"
+ ],
+ "tracker/src/tracker.rs#ended_by": [
+  "&& ended.actor == Actor::Agent"
+ ],
+ "tracker/src/tracker.rs#evidence_in_tree": [
+  "fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), Error> {"
+ ],
+ "tracker/src/tracker.rs#finish": [
+  "let held = match holding(&core, delivery.as_ref(), agent, item) {",
+  ".append(&mut core, Actor::Agent, agent_key(agent), record(held))"
+ ],
+ "tracker/src/tracker.rs#holding": [
+  "return if &d.item == item {",
+  "Some(i) if holds(i, agent) => Ok(i.hold.as_ref().map_or(1, |h| h.attempt)),"
+ ],
+ "tracker/src/tracker.rs#retry_has_note": [
+  "if note.is_some_and(|n| Some(n) > it.red_since) {"
+ ],
+ "tracker/src/tracker.rs#review_lanes": [
+  "fn review_lanes(&self, reviews: &[String]) -> Result<Vec<u8>, Error> {"
+ ],
+ "tracker/src/tracker.rs#sync_ready": [
+  ".filter(|id| core.state.stage(id) == Some(Stage::Ready))"
+ ],
+ "tracker/src/tracker.rs#try_claim": [
+  "&& (self.lane_is_all_own(agent, tier).await",
+  "if tier >= TIERS && self.is_own_work(agent, &record).await {"
+ ],
+ "tracker/src/tracker/ingest.rs#allowed": [
+  "fn allowed(record: &WorkRecord) -> bool {"
+ ],
+ "tracker/src/tracker/ingest.rs#ingest_record": [
+  "&& text.len() > INLINE_LIMIT",
+  "if !targets(&record)",
+  "if let WorkRecord::Closed {",
+  "if let WorkRecord::Shipped { item, .. } = &record {",
+  "let ours = core.recall.ingest_edges.contains(&edge);",
+  "TextRead::Text(old) if old == text => {"
+ ],
+ "tracker/src/tracker/ingest.rs#ingest_save": [
+  "if bytes.len() > MAX_STATE_BYTES {",
+  "match self.0.broker.cursor_put(&name, bytes, version).await {"
+ ],
+ "tracker/src/tracker/ingest.rs#ingest_state": [
+  "let name = state_name(source)?;"
+ ],
+ "tracker/src/tracker/reads.rs#HISTORY_PAGE": [
+  "pub(crate) const HISTORY_PAGE: usize = 500;"
+ ],
+ "tracker/src/tracker/request_keys.rs#keyed": [
+  "let who = caller(actor, by);",
+  "if seen.sig != req.sig {"
+ ],
+ "tracker/src/tracker/request_keys.rs#remember": [
+  "while window.len() > WINDOW {"
+ ],
+ "tracker/src/tracker/request_keys.rs#take": [
+  "if !set.lock().expect(\"running lock\").insert(id.clone()) {"
+ ],
+ "tracker/src/tracker/tools.rs#check_options": [
+  "if options.len() > MAX_ASK_OPTIONS {"
+ ],
+ "tracker/src/tracker/tools.rs#check_sizes": [
+  "pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {",
+  "WorkRecord::Context { text, .. } | WorkRecord::HumanInput { text, .. } => {",
+  "check_content(\"text\", text)",
+  "kbl_core::work::MAX_RULES_TEXT",
+  "WorkRecord::Step { output, .. } => check_content(\"output\", output),",
+  "WorkRecord::Edit { hunk, .. } => check_content(\"hunk\", hunk),",
+  "| WorkRecord::GaveUp { reason, .. } => field(\"reason\", reason),",
+  "bounded(\"file\", file, MAX_FINDING_FILE)?;",
+  "WorkRecord::ReviewVerdict { why, .. } => bounded(\"why\", why, MAX_VERDICT_WHY),"
+ ],
+ "tracker/src/tracker/tools.rs#context_add": [
+  "&& it.context_agents.get(&entry) != Some(&agent_key(agent))"
+ ],
+ "tracker/src/tracker/tools.rs#context_read": [
+  "if !holds(it, agent) && !parent_held {"
+ ],
+ "tracker/src/tracker/tools.rs#decide": [
+  "if d.options.len() > MAX_OPTIONS {"
+ ],
+ "tracker/src/tracker/tools.rs#held": [
+  "fn held(core: &Core, agent: &AgentName, item: &ItemId) -> Result<u32, Error> {"
+ ],
+ "tracker/src/tracker/tools.rs#link": [
+  "if core.state.edges.contains(&(item.clone(), to.clone())) {"
+ ],
+ "tracker/src/tracker/tools.rs#note_refusal": [
+  "if let (false, Some((held, _))) = (logged, held) {"
+ ],
+ "tracker/src/tracker/tools.rs#parse": [
+  "pub(crate) fn parse(s: &str) -> Result<Self, Error> {"
+ ],
+ "tracker/src/tracker/tools.rs#person_answer": [
+  "kbl_core::redact::redact_record(&mut record);"
+ ],
+ "tracker/src/tracker/tools.rs#post": [
+  "held(&core, agent, parent)?;"
+ ],
+ "tracker/src/tracker/tools.rs#prerequisite": [
+  "field(\"title\", &title)?;",
+  ".filter(|i| i.work == WorkKind::Triage)",
+  "&& let Some(r) = replay(&core, agent, item, claim, \"prerequisite\", reply(created))",
+  "None => visible(&core, &allowed, item, &prerequisite),"
+ ],
+ "tracker/src/tracker/tools.rs#progress": [
+  "field(name, v)?;"
+ ],
+ "tracker/src/tracker/tools.rs#rules_read": [
+  "if !holds(it, agent) {"
+ ],
+ "tracker/src/tracker/tools.rs#triage": [
+  "bounded(\"why\", &why, MAX_FIELD)?;",
+  ".and_then(|i| i.parent.clone())",
+  "if let Some(d) = &duplicate_of"
+ ],
+ "tracker/src/tracker/tools.rs#triage_lists": [
+  "if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {"
+ ]
 }

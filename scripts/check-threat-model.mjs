@@ -1,15 +1,15 @@
 // Fails when a route (per method), an MCP tool or a record kind has no row in
-// docs/threat-model.md, or when a `file:line` the doc cites no longer holds the line it was
-// pinned to. Routes and tools are found in every workspace crate's src. `--fix` moves a
-// citation whose line moved, and pins new citations; check what a new one points at first.
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+// docs/threat-model.md, or when a `file#symbol` the doc cites no longer resolves to exactly one
+// function, constant or type that still holds the lines pinned to it in
+// docs/threat-model-citations.json. Routes and tools are found in every workspace crate's src.
+// Citations name a symbol, not a line, so code that moves around them breaks nothing.
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const read = (f) => readFileSync(join(root, f), 'utf8');
 const all = (text, re) => [...text.matchAll(re)].map((m) => m[1]);
-const fix = process.argv.includes('--fix');
 
 const METHODS = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options', 'any'];
 
@@ -89,21 +89,45 @@ const missingRoutes = (routes, rows) =>
     return [...methods].map((m) => `${m} ${path}`).filter((n) => !rows.has(n));
   });
 
-// Where a pinned line is now: its old line if it still holds the text, else the one line that
-// does. A text that appears more than once is taken at `shift` lines from where it was, the
-// move of the nearest citation in the file that could be placed. `null` when neither holds.
-const relocate = (lines, line, text, shift = 0) => {
-  const holds = (n) => (lines[n - 1] ?? '').trim() === text;
-  if (holds(line)) return line;
-  const hits = lines.flatMap((l, i) => (l.trim() === text ? [i + 1] : []));
-  if (hits.length === 1) return hits[0];
-  return hits.length > 1 && shift && holds(line + shift) ? line + shift : null;
-};
+const DECL = /^(\s*)(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:unsafe\s+)?(?:const\s+)?(?:fn|const|static|struct|enum|trait|type)\s+(\w+)/;
+const indent = (l) => l.match(/^\s*/)[0].length;
 
-// The shift to try for an ambiguous citation: that of the nearest citation in the same file
-// that moved to one place.
-const nearestShift = (moves, line) =>
-  moves.reduce((best, m) => (!best || Math.abs(m.line - line) < Math.abs(best.line - line) ? m : best), null)?.shift ?? 0;
+// The lines of the one item a symbol names, or an error string. `name` is `fn_or_const` or
+// `Type::method`; a name declared more than once in the file must be written with its type.
+// An item runs to the first later line that closes at its own indent, or to its `;`.
+const resolve = (lines, symbol) => {
+  const parts = symbol.split('::');
+  if (parts.length > 2) return { error: `${symbol} has more than one \`::\`; name the type and the item only` };
+  const name = parts.pop();
+  let from = 0;
+  let to = lines.length;
+  if (parts.length) {
+    const heads = lines.flatMap((l, i) => (/^\s*impl\b/.test(l) && new RegExp(`\\b${parts[0]}\\b`).test(l.replace(/^\s*impl(<[^>]*>)?/, '').split(/\bfor\b/).pop() ?? '') ? [i] : []));
+    if (heads.length !== 1) return { error: `${symbol}: found ${heads.length} impl blocks for ${parts[0]}, need exactly one` };
+    from = heads[0] + 1;
+    to = lines.findIndex((l, i) => i > heads[0] && indent(l) === indent(lines[heads[0]]) && l.trimStart().startsWith('}'));
+    if (to < 0) return { error: `${symbol}: cannot find the end of the impl block` };
+  }
+  const hits = [];
+  for (let i = from; i < to; i++) {
+    const m = lines[i].match(DECL);
+    if (m && m[2] === name) hits.push(i);
+  }
+  if (hits.length === 0) return { error: `${symbol} is not declared in the file` };
+  if (hits.length > 1) return { error: `${symbol} is declared ${hits.length} times in the file; write it as Type::${name}` };
+  const start = hits[0];
+  // A constant or alias ends at its `;`; anything with a body, at the `}` on its own indent.
+  let end = start;
+  let opened = false;
+  for (; end < lines.length - 1; end++) {
+    const l = lines[end];
+    opened ||= l.includes('{');
+    if (!opened && /;\s*$/.test(l)) break;
+    if (opened && end > start && indent(l) === indent(lines[start]) && l.trimStart().startsWith('}')) break;
+    if (end === start && /\{\s*\}\s*;?\s*$/.test(l)) break;
+  }
+  return { body: lines.slice(start, end + 1).map((l) => l.trim()) };
+};
 
 // A line like `}` or `item,` matches anywhere and says nothing about the check: cite the line
 // that does the checking.
@@ -139,11 +163,11 @@ const telling = (text) => text.length >= 16 && /[a-z]{3}/i.test(text) && !text.s
   const paths = new Map([['/a', new Set(['POST'])], ['/b', new Set(['GET', 'PUT'])]]);
   want(missingRoutes(paths, new Set(['/a', '/b', 'GET /b'])), ['PUT /b'], 'missing route rows');
   want(missingRoutes(paths, new Set(['POST /a', 'GET /b', 'PUT /b'])), [], 'method rows');
-  const code = ['fn a() {', '    check();', '}'];
-  want([relocate(code, 2, 'check();'), relocate(['', ...code], 2, 'check();'), relocate(code, 2, 'gone();')], [2, 3, null], 'relocations');
-  want(relocate(['x();', 'x();'], 3, 'x();'), null, 'an ambiguous relocation');
-  want(relocate(['', 'x();', 'y();', 'x();'], 3, 'x();', 1), 4, 'a relocation by its neighbour\'s shift');
-  want(nearestShift([{ line: 10, shift: 1 }, { line: 50, shift: 3 }], 40), 3, 'the nearest shift');
+  const code = ['impl Core {', '    fn a() {', '        check();', '    }', '    pub(crate) fn b(', '        x: u8,', '    ) -> u8 {', '        other();', '    }', '}', 'impl Other {', '    fn a() {}', '}', 'const LIMIT: usize = 4;'];
+  want(resolve(code, 'Core::a').body, ['fn a() {', 'check();', '}'], 'a method by type');
+  want(resolve(code, 'b').body.includes('other();'), true, 'a multi-line signature');
+  want(resolve(code, 'LIMIT').body, ['const LIMIT: usize = 4;'], 'a constant');
+  want(['a', 'gone', 'Other::a', 'Core::gone'].map((n) => Boolean(resolve(code, n).error)), [true, true, false, true], 'ambiguous and missing symbols');
   want(['}', 'item,', '// A comment that is long', 'return Err(Reject::NotHeld);'].filter(telling), ['return Err(Reject::NotHeld);'], 'telling lines');
 }
 
@@ -201,62 +225,35 @@ for (const [heading, names] of Object.entries(named)) {
   count += names.length;
 }
 
-// Each cited line is pinned to its text in a file beside the doc, so a citation that drifts
-// fails here instead of pointing at the wrong code.
+// Each citation names a symbol; the lines pinned to it must still be in its body, so a rename,
+// a deletion or a check that moved out of the function fails here.
 const PINS = 'docs/threat-model-citations.json';
 const pins = existsSync(join(root, PINS)) ? JSON.parse(read(PINS)) : {};
-const used = {};
-const cites = [...new Set([...doc.matchAll(/`[\w./-]+\.(?:rs|toml|mjs):\d+`/g)].map((m) => m[0]))];
-const moved = {};
-const placed = [];
+const cites = [...new Set([...doc.matchAll(/`([\w./-]+\.(?:rs|toml|mjs))#(\w+(?:::\w+)?)`/g)].map((m) => m[0]))];
+for (const stale of doc.matchAll(/`[\w./-]+\.(?:rs|toml|mjs):\d+`/g)) failures.push(`${stale[0]} cites a line; cite \`file#symbol\` instead`);
 for (const cite of cites) {
-  const [, file, line] = cite.match(/`(.+):(\d+)`/);
-  const key = `${file}:${line}`;
+  const [, file, symbol] = cite.match(/`(.+)#(.+)`/);
+  const key = `${file}#${symbol}`;
   if (!existsSync(join(root, file))) {
     failures.push(`${key} is cited but the file does not exist`);
     continue;
   }
-  const text = pins[key];
-  if (text === undefined) {
-    const now = (read(file).split('\n')[Number(line) - 1] ?? '').trim();
-    if (!telling(now)) failures.push(`${key} is cited but that line (\`${now}\`) is not one that checks anything; cite the line that does`);
-    else if (fix) used[key] = now;
-    else failures.push(`${key} is a new citation; check it points at the right line, then pin it with node scripts/check-threat-model.mjs --fix`);
+  const found = resolve(read(file).split('\n'), symbol);
+  if (found.error) {
+    failures.push(`${key}: ${found.error}`);
     continue;
   }
-  if (!telling(text)) failures.push(`${key} is pinned to \`${text}\`, which is not a line that checks anything; cite the line that does`);
-  placed.push({ cite, file, line: Number(line), text });
-}
-// Unique texts first, so an ambiguous one can follow its neighbours' shift.
-const moves = {};
-for (const pass of [false, true]) {
-  for (const c of placed) {
-    if (c.done) continue;
-    const lines = read(c.file).split('\n');
-    const at = relocate(lines, c.line, c.text, pass ? nearestShift(moves[c.file] ?? [], c.line) : 0);
-    if (!at && !pass) continue;
-    c.done = true;
-    if (at === c.line) used[`${c.file}:${c.line}`] = c.text;
-    else if (at && fix) {
-      moved[c.cite] = `\`${c.file}:${at}\``;
-      used[`${c.file}:${at}`] = c.text;
-    } else if (at) failures.push(`${c.file}:${c.line} moved to line ${at}; run node scripts/check-threat-model.mjs --fix`);
-    else {
-      // Kept, so a later --fix cannot pin whatever line lands at this number.
-      used[`${c.file}:${c.line}`] = c.text;
-      failures.push(`${c.file}:${c.line} no longer holds \`${c.text}\`, and no single line of ${c.file} does; cite what the row means now`);
-    }
-    if (at && !pass) (moves[c.file] ??= []).push({ line: c.line, shift: at - c.line });
+  const texts = pins[key];
+  if (!Array.isArray(texts) || texts.length === 0) {
+    failures.push(`${key} is a new citation; add "${key}": ["<exact line it relies on>"] to ${PINS}`);
+    continue;
+  }
+  for (const text of texts) {
+    if (!telling(text)) failures.push(`${key} is pinned to \`${text}\`, which is not a line that checks anything; pin the line that does`);
+    else if (!found.body.includes(text)) failures.push(`${key} no longer holds \`${text}\`; cite what the row means now`);
   }
 }
-// One pass over the doc, so a citation moved onto another's old line is not moved twice.
-const fixed = doc.replace(/`[\w./-]+\.(?:rs|toml|mjs):\d+`/g, (c) => moved[c] ?? c);
-if (!fix) for (const key of Object.keys(pins)) if (!cites.includes(`\`${key}\``)) failures.push(`${PINS} pins ${key}, which the doc no longer cites; run --fix`);
-if (fix) {
-  writeFileSync(join(root, 'docs/threat-model.md'), fixed);
-  const sorted = Object.fromEntries(Object.entries(used).sort(([a], [b]) => a.localeCompare(b, 'en', { numeric: true })));
-  writeFileSync(join(root, PINS), `${JSON.stringify(sorted, null, 1)}\n`);
-}
+for (const key of Object.keys(pins)) if (!cites.includes(`\`${key}\``)) failures.push(`${PINS} pins ${key}, which the doc no longer cites; remove it`);
 
 if (failures.length) {
   console.error(failures.join('\n'));
