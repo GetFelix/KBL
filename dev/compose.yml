@@ -72,6 +72,9 @@ services:
       FELIX_QUIC_LISTENERS: "1"
       # Acknowledge after the write, so an ack carries the record's log offset.
       FELIX_ACK_ON_COMMIT: "true"
+      # With one copy, an acknowledged record must survive a power cut too
+      # (docs/work-tracker.md, "What Felix must guarantee").
+      FELIX_DURABLE_FSYNC_MODE: on_commit
       RUST_LOG: info
     ports:
       - "127.0.0.1:5000:5000/udp"
