@@ -172,7 +172,8 @@ impl Transport for Reqwest {
         let Auth::Entra(e) = &self.auth else {
             return Ok(res);
         };
-        if res.status != 401 && res.status != 203 {
+        // A redirect is the sign-in page, as in `Ado::call`.
+        if res.status != 401 && res.status != 203 && !(300..400).contains(&res.status) {
             return Ok(res);
         }
         // The cached token may have been revoked: sign in once more. A second

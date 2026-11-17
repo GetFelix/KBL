@@ -213,6 +213,14 @@ async fn ado_source(
     cfg: &Config,
 ) -> Result<ado::Ado<ado::transport::Reqwest>> {
     use ado::transport::{Auth, Entra, Secret};
+    let plain = std::iter::once(a.api.as_str())
+        .chain(a.entra.iter().map(|e| e.authority.as_str()))
+        .any(|u| !u.starts_with("https://"));
+    if plain {
+        eprintln!(
+            "kbl-ingest: warning: an Azure DevOps address is not https; the credential is sent in the clear"
+        );
+    }
     let auth = match (&a.pat_file, &a.pat_env, &a.entra) {
         (Some(f), _, None) => Auth::Pat(Secret::File(f.clone())),
         (None, Some(e), None) => Auth::Pat(Secret::Env(e.clone())),

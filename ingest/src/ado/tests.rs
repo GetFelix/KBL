@@ -182,6 +182,15 @@ fn listing(items: Vec<Value>, picked: Vec<u64>) -> Org {
                 .collect();
             return res(200, json!({ "value": found }));
         }
+        if let Some(n) = p
+            .rsplit_once("/_apis/wit/workitems/")
+            .and_then(|(_, n)| n.parse::<u64>().ok())
+        {
+            return match items.iter().find(|i| i["id"] == n) {
+                Some(i) => res(200, i.clone()),
+                None => res(404, Value::Null),
+            };
+        }
         if p.ends_with("/comments") && req.method == "GET" {
             return res(200, json!({ "comments": [] }));
         }
@@ -373,7 +382,8 @@ async fn predecessors_and_children_become_edges_and_foreign_projects_are_left_ou
         .unwrap();
     assert_eq!(links.blocked_by, [IssueRef::new("contoso/Platform", 3)]);
     assert_eq!(links.sub_issues, [IssueRef::new("contoso/Platform", 13)]);
-    assert!(links.complete);
+    // Item 77 is in a project no rule reads, so the listing is not whole.
+    assert!(!links.complete);
 }
 
 #[tokio::test]
@@ -1026,4 +1036,114 @@ mod signing {
         assert_eq!(got.body["auth"], "Bearer tok2");
         std::fs::remove_dir_all(dir).ok();
     }
+}
+
+#[tokio::test]
+async fn a_write_to_an_item_that_left_its_project_is_refused() {
+    let org = Org::new(|req| {
+        if req.method == "GET" {
+            return res(
+                200,
+                raw(12, |v| {
+                    v["fields"]["System.TeamProject"] = json!("Other Team")
+                }),
+            );
+        }
+        res(200, Value::Null)
+    });
+    let a = ado(&org);
+    let issue = IssueRef::new("contoso/Platform", 12);
+    for what in [
+        WriteBack::LinkPullRequest {
+            issue: issue.clone(),
+            pr: IssueRef::new("GetFelix/felix", 40),
+        },
+        WriteBack::Transition {
+            issue,
+            name: "Resolved".into(),
+        },
+    ] {
+        assert!(a.write_back(&what).await.is_err());
+    }
+    assert!(org.writes().is_empty());
+}
+
+#[tokio::test]
+async fn a_dependency_in_an_unserved_project_leaves_the_listing_incomplete() {
+    let org = Org::new(|req| {
+        if path(req).ends_with("/workitems/12") {
+            return res(
+                200,
+                raw(12, |v| {
+                    v["relations"] = json!([{
+                        "rel": "System.LinkTypes.Dependency-Reverse",
+                        "url": "https://dev.azure.com/contoso/_apis/wit/workItems/77"
+                    }]);
+                }),
+            );
+        }
+        res(
+            200,
+            json!({ "value": [{ "id": 77, "fields": { "System.TeamProject": "Elsewhere" } }] }),
+        )
+    });
+    let links = ado(&org)
+        .links(&IssueRef::new("contoso/Platform", 12))
+        .await
+        .unwrap();
+    assert!(links.blocked_by.is_empty() && !links.complete);
+}
+
+#[tokio::test]
+async fn a_redirected_service_principal_request_signs_in_again() {
+    use axum::routing::{get, post};
+    let n = Arc::new(Mutex::new(0u32));
+    let c = n.clone();
+    let app = axum::Router::new()
+        .route(
+            "/t/oauth2/v2.0/token",
+            post(move || {
+                let c = c.clone();
+                async move {
+                    let mut n = c.lock().unwrap();
+                    *n += 1;
+                    axum::Json(json!({ "access_token": format!("tok{n}"), "expires_in": 3600 }))
+                }
+            }),
+        )
+        .route(
+            "/who",
+            get(|h: axum::http::HeaderMap| async move {
+                if h["authorization"] == "Bearer tok1" {
+                    return (
+                        axum::http::StatusCode::FOUND,
+                        [("location", "https://login.example/")],
+                        String::new(),
+                    );
+                }
+                (
+                    axum::http::StatusCode::OK,
+                    [("location", "")],
+                    "{}".to_owned(),
+                )
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let dir = std::env::temp_dir().join(format!("kbl-ado-redir-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("secret");
+    std::fs::write(&file, "s").unwrap();
+    let t = transport::Reqwest::new(transport::Auth::Entra(transport::Entra::new(
+        "t",
+        "a",
+        transport::Secret::File(file),
+        &base,
+    )))
+    .unwrap();
+    let got = t.send(Req::get(format!("{base}/who"))).await.unwrap();
+    assert_eq!(got.status, 200);
+    assert_eq!(*n.lock().unwrap(), 2);
+    std::fs::remove_dir_all(dir).ok();
 }

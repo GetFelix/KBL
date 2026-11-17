@@ -408,6 +408,19 @@ impl<T: Transport> Ado<T> {
         )?)
     }
 
+    /// The item, read org-wide, only if it is still in the project `id` names:
+    /// an id alone resolves anywhere in the organization.
+    async fn read_here(&self, id: &IssueRef) -> Result<Option<Value>, SourceError> {
+        let Some(raw) = self.read_item(id).await? else {
+            return Ok(None);
+        };
+        if self.parse(&raw).is_some_and(|i| i.id == *id) {
+            Ok(Some(raw))
+        } else {
+            Err(anyhow!("{id} is no longer in a project this worker serves for that id").into())
+        }
+    }
+
     async fn read_item(&self, id: &IssueRef) -> Result<Option<Value>, SourceError> {
         let url = self.url(
             None,
@@ -769,10 +782,12 @@ impl<T: Transport> Source for Ado<T> {
         let refs = |ns: &[u64]| -> Vec<IssueRef> {
             ns.iter().filter_map(|n| known.get(n).cloned()).collect()
         };
+        // A dependency in a project no rule reads cannot be an edge, but
+        // saying the listing is whole would let its item look unblocked.
         Ok(Links {
             blocked_by: refs(&predecessors),
             sub_issues: refs(&children),
-            complete: true,
+            complete: wanted.iter().all(|n| known.contains_key(n)),
         })
     }
 
@@ -797,7 +812,7 @@ impl<T: Transport> Source for Ado<T> {
                     .issue_comments(issue)
                     .await?
                     .iter()
-                    .any(|c| c.body == *body && self.own.contains(&c.author))
+                    .any(|c| c.body == body.trim() && self.own.contains(&c.author))
                 {
                     return Ok(());
                 }
@@ -812,7 +827,7 @@ impl<T: Transport> Source for Ado<T> {
             }
             WriteBack::LinkPullRequest { issue, pr } => {
                 let link = format!("{}/{}/pull/{}", self.pr_base, pr.repo, pr.number);
-                let Some(raw) = self.read_item(issue).await? else {
+                let Some(raw) = self.read_here(issue).await? else {
                     return Ok(());
                 };
                 if raw["relations"]
@@ -836,7 +851,7 @@ impl<T: Transport> Source for Ado<T> {
                 self.post_write(patch_req(url, patch)).await
             }
             WriteBack::Transition { issue, name } => {
-                let Some(raw) = self.read_item(issue).await? else {
+                let Some(raw) = self.read_here(issue).await? else {
                     return Ok(());
                 };
                 let state = raw["fields"]["System.State"].as_str().unwrap_or_default();
