@@ -172,8 +172,8 @@ fn a_log_holds_hashes_never_tokens() {
 
 #[test]
 fn a_newer_format_is_refused_not_skipped() {
-    let newer = br#"{"v":2,"at_ms":1,"by":"ana","kind":"team_created","team":"web"}"#;
-    assert!(matches!(read(newer), Err(OrgReadError::Newer { v: 2 })));
+    let newer = br#"{"v":3,"at_ms":1,"by":"ana","kind":"team_created","team":"web"}"#;
+    assert!(matches!(read(newer), Err(OrgReadError::Newer { v: 3 })));
     let unknown = br#"{"at_ms":1,"by":"ana","kind":"mystery"}"#;
     assert!(matches!(read(unknown), Err(OrgReadError::Malformed(_))));
     let bad_hash = br#"{"at_ms":1,"by":"ana","kind":"agent_added","team":"web","agent":"w1","token_sha256":"abc"}"#;

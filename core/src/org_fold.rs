@@ -13,8 +13,9 @@ use std::fmt;
 
 use crate::names::Key;
 use crate::org::{
-    MAX_AGENTS_PER_TEAM, MAX_GRANT_AGENTS, MAX_GRANTS_PER_TEAM, MAX_INGEST_PER_TEAM,
-    MAX_LABEL_BYTES, MAX_ROLE_REPOS, OrgLogged, OrgRecord, Role, TeamName, TokenHash,
+    MAX_AGENTS_PER_TEAM, MAX_CONNECTION_SOURCES, MAX_CONNECTIONS_PER_TEAM, MAX_GRANT_AGENTS,
+    MAX_GRANTS_PER_TEAM, MAX_INGEST_PER_TEAM, MAX_LABEL_BYTES, MAX_ROLE_REPOS, ORG_FORMAT,
+    ORG_FORMAT_V1, OrgLogged, OrgRecord, Role, TeamName, TokenHash,
 };
 
 #[cfg(test)]
@@ -46,6 +47,12 @@ pub enum OrgRefusal {
     LastOrgAdmin,
     OwnGrant,
     TooMany,
+    /// Stamped above the log's format, below its kind's, or a raise that
+    /// does not go up.
+    Format,
+    /// A source another connection of the team already serves.
+    SourceServed,
+    BadBudget,
 }
 
 impl OrgRefusal {
@@ -65,6 +72,9 @@ impl OrgRefusal {
             OrgRefusal::LastOrgAdmin => "last_org_admin",
             OrgRefusal::OwnGrant => "own_grant",
             OrgRefusal::TooMany => "too_many",
+            OrgRefusal::Format => "format",
+            OrgRefusal::SourceServed => "source_served",
+            OrgRefusal::BadBudget => "bad_budget",
         }
     }
 }
@@ -126,8 +136,27 @@ pub struct Grant {
 }
 
 /// The org as the log built it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Connection {
+    pub vendor: String,
+    pub group: Key,
+    pub pool: Key,
+    pub sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub per_hour: u64,
+    pub kept_back: u64,
+    pub wake_cap: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrgState {
+    /// The log's format: 1 until a `format_raised`.
+    format: u32,
+    connections: BTreeMap<(TeamName, Key), Connection>,
+    budgets: BTreeMap<Key, Budget>,
     teams: BTreeMap<TeamName, Team>,
     people: BTreeMap<Key, Person>,
     org_admins: BTreeSet<Key>,
@@ -139,6 +168,24 @@ pub struct OrgState {
 }
 
 /// The state after every record of `log` that the check accepts.
+impl Default for OrgState {
+    fn default() -> Self {
+        Self {
+            format: ORG_FORMAT_V1,
+            connections: BTreeMap::new(),
+            budgets: BTreeMap::new(),
+            teams: BTreeMap::new(),
+            people: BTreeMap::new(),
+            org_admins: BTreeSet::new(),
+            members: BTreeMap::new(),
+            agents: BTreeMap::new(),
+            ingest: BTreeMap::new(),
+            sources: BTreeMap::new(),
+            grants: Vec::new(),
+        }
+    }
+}
+
 pub fn fold<'a>(log: impl IntoIterator<Item = &'a OrgLogged>) -> OrgState {
     let mut state = OrgState::default();
     for logged in log {
@@ -212,6 +259,32 @@ impl OrgState {
         &self.grants
     }
 
+    /// The log's format.
+    pub fn format(&self) -> u32 {
+        self.format
+    }
+
+    /// The team's connection that worker group `group` serves, by name.
+    pub fn connection_of_group(&self, team: &TeamName, group: &Key) -> Option<(&Key, &Connection)> {
+        self.connections
+            .iter()
+            .find(|((t, _), c)| t == team && c.group == *group)
+            .map(|((_, name), c)| (name, c))
+    }
+
+    /// How many sources every connection spending `pool` serves, across teams.
+    pub fn pool_sources(&self, pool: &Key) -> usize {
+        self.connections
+            .values()
+            .filter(|c| c.pool == *pool)
+            .map(|c| c.sources.len())
+            .sum()
+    }
+
+    pub fn budget(&self, pool: &Key) -> Option<Budget> {
+        self.budgets.get(pool).copied()
+    }
+
     /// Whose token `token` is. Revoked agents have none. Every table is
     /// compared whatever the answer, so the time taken says nothing about
     /// which entry matched.
@@ -271,7 +344,102 @@ impl OrgState {
     /// anything. Pure: the state is not touched.
     pub fn check(&self, logged: &OrgLogged) -> Result<Applied, OrgRefusal> {
         use Applied::{Changed, Unchanged};
+        if logged.v < logged.record.format() {
+            return Err(OrgRefusal::Format);
+        }
+        if let OrgRecord::FormatRaised { to } = logged.record {
+            // Never past what this build reads: a raise above it would leave the log
+            // unreadable to every build that exists.
+            return if to > self.format && to <= ORG_FORMAT && logged.v == to {
+                Ok(Changed)
+            } else {
+                Err(OrgRefusal::Format)
+            };
+        }
+        // Nothing lands that a build still allowed on the log cannot read.
+        if logged.v > self.format {
+            return Err(OrgRefusal::Format);
+        }
         match &logged.record {
+            OrgRecord::FormatRaised { .. } => Err(OrgRefusal::Format),
+            OrgRecord::ConnectionSet {
+                team,
+                name,
+                vendor,
+                group,
+                pool,
+                sources,
+            } => {
+                self.need_team(team)?;
+                if !label_ok(vendor) {
+                    return Err(OrgRefusal::BadLabel);
+                }
+                // The vendor tie on an ingest token trusts this field, so it
+                // must name every source's own vendor.
+                let prefix = format!("{vendor}:");
+                if !sources.iter().all(|s| s.starts_with(&prefix)) {
+                    return Err(OrgRefusal::UnknownSource);
+                }
+                if sources.len() > MAX_CONNECTION_SOURCES {
+                    return Err(OrgRefusal::TooMany);
+                }
+                let mut seen = BTreeSet::new();
+                if !sources.iter().all(|s| seen.insert(s)) || !self.owns_all(team, sources) {
+                    return Err(OrgRefusal::UnknownSource);
+                }
+                // One connection per source, so one group leases it.
+                let served_elsewhere = self.connections.iter().any(|((t, n), c)| {
+                    t == team && n != name && c.sources.iter().any(|s| seen.contains(s))
+                });
+                if served_elsewhere {
+                    return Err(OrgRefusal::SourceServed);
+                }
+                // One connection per group, so a worker's config names one.
+                if self
+                    .connections
+                    .iter()
+                    .any(|((t, n), c)| t == team && n != name && c.group == *group)
+                {
+                    return Err(OrgRefusal::NameTaken);
+                }
+                let key = (team.clone(), name.clone());
+                let next = Connection {
+                    vendor: vendor.clone(),
+                    group: group.clone(),
+                    pool: pool.clone(),
+                    sources: sources.clone(),
+                };
+                match self.connections.get(&key) {
+                    Some(c) if *c == next => Ok(Unchanged),
+                    Some(_) => Ok(Changed),
+                    None if self.connections.keys().filter(|(t, _)| t == team).count()
+                        >= MAX_CONNECTIONS_PER_TEAM =>
+                    {
+                        Err(OrgRefusal::TooMany)
+                    }
+                    None => Ok(Changed),
+                }
+            }
+            OrgRecord::BudgetSet {
+                pool,
+                per_hour,
+                kept_back,
+                wake_cap,
+            } => {
+                if *per_hour == 0 || kept_back > per_hour || wake_cap > kept_back {
+                    return Err(OrgRefusal::BadBudget);
+                }
+                let next = Budget {
+                    per_hour: *per_hour,
+                    kept_back: *kept_back,
+                    wake_cap: *wake_cap,
+                };
+                Ok(if self.budgets.get(pool) == Some(&next) {
+                    Unchanged
+                } else {
+                    Changed
+                })
+            }
             OrgRecord::TeamCreated { display_name, .. }
                 if display_name.as_deref().is_some_and(|n| !label_ok(n)) =>
             {
@@ -587,6 +755,40 @@ impl OrgState {
                 repos: repos.clone(),
                 max_pending: *max_pending,
             }),
+            OrgRecord::FormatRaised { to } => self.format = *to,
+            OrgRecord::ConnectionSet {
+                team,
+                name,
+                vendor,
+                group,
+                pool,
+                sources,
+            } => {
+                self.connections.insert(
+                    (team.clone(), name.clone()),
+                    Connection {
+                        vendor: vendor.clone(),
+                        group: group.clone(),
+                        pool: pool.clone(),
+                        sources: sources.clone(),
+                    },
+                );
+            }
+            OrgRecord::BudgetSet {
+                pool,
+                per_hour,
+                kept_back,
+                wake_cap,
+            } => {
+                self.budgets.insert(
+                    pool.clone(),
+                    Budget {
+                        per_hour: *per_hour,
+                        kept_back: *kept_back,
+                        wake_cap: *wake_cap,
+                    },
+                );
+            }
         }
         Ok(applied)
     }

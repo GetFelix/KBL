@@ -87,7 +87,12 @@ is 13.
 | 12 | `taken`, `reassigned` and `steered`: an item's assignee and a note to the agent holding it ([work tracker](work-tracker.md#assignees)). The fold keeps `assignee` on the item and holds an unheld item with a person assignee out of Ready, in Needs you as `taken`. An agent assignee is refused as `bad_assignee` | Until the raise, `POST /v1/work/take`, `/reassign` and `/steer` are refused with `format`. A reader below 12 stops at the raise itself, so it never lets an agent claim an item a person took |
 | 13 | No record or field: `reassigned` may name an agent, `{"agent": "w1"}`. The fold then refuses `claimed` by any other agent as `not_assignee`, and the tracker may write `reassigned` to nobody for an agent assignee that went away ([work tracker](work-tracker.md#assignees)) | Until the raise, an agent assignee is refused as `bad_assignee`, as before. A reader below 13 stops at the raise itself, so it never lets another agent claim an agent's item |
 
-`org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, also 1. It follows the same rules and has no `format_raised` yet, since nothing needs format 2.
+`org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, now 2. It follows the same rules. An org admin raises it with `POST /v1/org/records` and `{"record": {"kind": "format_raised", "to": 2}}`; a reader below the new format stops at the raise.
+
+| Org format | Adds | What waits for the raise |
+|---|---|---|
+| 1 | Every org record before org formats | Nothing |
+| 2 | `format_raised`, `connection_set` (a team's connection: vendor, worker group, budget pool and which of its sources it serves) and `budget_set` (a pool's calls per hour, the part kept back, the wake cap), and `GET /v1/ingest/config`, which answers a worker's connection and its pool's budget ([Sources](design/sources.md)) | Until the raise, `connection_set` and `budget_set` are refused with `format`, and every worker's config answers `connection: null`, so ingest stays file-managed |
 
 The log has a format too. It starts at 1 and a `format_raised` record moves it
 up. Only a person can write one.

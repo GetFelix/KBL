@@ -11,7 +11,7 @@ use kbl_core::codec::Codec;
 use kbl_core::names::Key;
 use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, TeamName, read};
 use kbl_core::org_fold::{Applied, OrgState, Principal};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
 
 use crate::felix::{Broker, ConditionalWrite, holder_token};
@@ -109,6 +109,9 @@ pub(crate) struct Org<B> {
     view: RwLock<View>,
     lease_ttl: Duration,
     holder: String,
+    /// The offset after the last record folded into the view, so a long poll
+    /// wakes when the org changes.
+    changed: watch::Sender<u64>,
 }
 
 impl<B: Broker> Org<B> {
@@ -136,6 +139,7 @@ impl<B: Broker> Org<B> {
             }),
             lease_ttl,
             holder: holder_token()?,
+            changed: watch::Sender::new(0),
         };
         // Read before taking the lease: a build that cannot read the org log
         // must not hold the lease and keep one that can from starting.
@@ -215,6 +219,29 @@ impl<B: Broker> Org<B> {
         let mut view = self.view.write().expect("org view lock");
         view.state = core.state.clone();
         view.held_until = Self::held_until(core);
+        drop(view);
+        let next = core.at.map_or(0, |a| a + 1);
+        self.changed
+            .send_if_modified(|at| std::mem::replace(at, next) != next);
+    }
+
+    /// Answers from the org as last folded, with the offset after its last
+    /// record. Reads the view, so it never waits behind a Felix write. None
+    /// while the lease does not back the view, as [`Self::who`].
+    pub(crate) fn with_view<T>(&self, f: impl FnOnce(&OrgState, u64) -> T) -> Option<T> {
+        let view = self.view.read().expect("org view lock");
+        if !view
+            .held_until
+            .is_some_and(|t| t > Instant::now() + LEASE_SKEW)
+        {
+            return None;
+        }
+        Some(f(&view.state, *self.changed.borrow()))
+    }
+
+    /// Wakes when the org view moves past what the receiver has seen.
+    pub(crate) fn watch(&self) -> watch::Receiver<u64> {
+        self.changed.subscribe()
     }
 
     fn publish_lease(&self, core: &Core) {
