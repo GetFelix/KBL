@@ -1199,11 +1199,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             ) else {
                 continue;
             };
+            // A GitLab request lives in the rule's own project, or the target.
             let allowed = rule
                 .target_repo
                 .iter()
                 .chain(rule.components.values())
-                .chain(rule.area_paths.values());
+                .chain(rule.area_paths.values())
+                .chain(rule.gitlab.then_some(&rule.repo));
             if t.moved_to.is_some()
                 || !t.in_scope
                 || !allowed

@@ -25,7 +25,7 @@ the end.
 |---|---|---|---|
 | Person | Someone using the dashboard or the REST API | A person token from the tracker's token file | Trusted. Every person token can do everything a person can ([#120](https://github.com/GetFelix/KBL/issues/120)) |
 | Agent | A model acting through `kbl-mcp` | An agent token for the tracker, and a Felix token for its run | Not trusted. Assume it follows any instruction it reads in an issue, a comment or a file |
-| Ingest | The `kbl-ingest` worker that mirrors GitHub, Azure DevOps or Jira | An ingest token, and a GitHub, Azure DevOps or Jira credential | Trusted code that carries untrusted text |
+| Ingest | The `kbl-ingest` worker that mirrors GitHub, GitLab, Azure DevOps or Jira | An ingest token, and a GitHub, GitLab, Azure DevOps or Jira credential | Trusted code that carries untrusted text |
 | Gateway reader | A browser reading through felix-gateway | A gateway session scoped to one run | Read only (`dev/scope.toml`) |
 | Webhook sender | Whoever posts to ingest's `/webhook` | The shared webhook secret | Not trusted without a valid signature |
 
@@ -47,7 +47,7 @@ Two more parties are outside KBL and can still steer it:
 | Merges | GitHub. KBL records them and never merges | An item closed as merged that was not, or a merge into the wrong branch |
 | Rules | `rules_set` records, shown in every claim reply | Instructions injected into every other agent |
 | Artifacts | The artifacts cache, keyed by content hash | Other bytes shown under a trusted id |
-| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), the Azure DevOps credential (a personal access token, or an Entra service principal's client secret and the access token it yields), Felix tokens | Any of them |
+| Credentials | The token file, the webhook secret, the GitHub credential (a token, or a GitHub App's private key, which ingest trades for short-lived installation tokens), the Jira credential (an API token or an OAuth access token), the Azure DevOps credential (a personal access token, or an Entra service principal's client secret and the access token it yields), the GitLab credential (a group or project access token), Felix tokens | Any of them |
 
 ## Trust boundaries
 
@@ -144,6 +144,34 @@ area path maps to no repository is imported but stays in Needs you
 203 with a sign-in page, not a 401; the adapter reads it, and a redirect, as a
 refusal so the project stalls and nothing is imported from the page
 (`ingest/src/ado.rs#call`).
+
+When ingest signs in to GitLab, the group or project access token (a bot user)
+is read from an environment variable or a file for each request
+(`ingest/src/ado/transport.rs#Secret`) and sent only as that request's
+`PRIVATE-TOKEN` header, marked sensitive
+(`ingest/src/gitlab/transport.rs#send`). It is not in the config, the saved
+state, any record, any error or any log line: an error carries a status and
+never GitLab's answer (`ingest/src/gitlab.rs#call`). Redirects are never
+followed, so a token cannot be carried to another host, and one is read as a
+refusal. The instance address comes from the config alone and must be https,
+or http on loopback; an address with a user name, password, query or fragment
+is refused at startup (`ingest/src/gitlab.rs#base_url`,
+`ingest/src/config.rs#check_gitlab`). A page of a listing is
+asked for by number, never by following a link the server sends, and no
+address or query is built from issue text, so an issue cannot steer a request
+(SSRF through the configured address is the operator's choice, and through
+item text is not possible). The token needs `read_api`, and `api` only when a
+rule writes back; the adapter refuses every write, including drafting a merge
+request, when no rule asks for one
+(`ingest/src/gitlab.rs#write_back`). Writes go only to a project a rule reads
+(`ingest/src/gitlab.rs#project_of`), only for an issue ingest imported
+(`ingest/src/sync.rs#announce`), and only as a comment, a `close` or `reopen`,
+or a draft title on a merge request our own login opened. GitLab sends no
+word of who merged beyond the merge request: a merge counts only into the
+project's default branch, and only when GitLab names a merger who is not one
+of our logins, so a merge whose merger or default branch cannot be read counts
+nothing (`ingest/src/gitlab.rs#pull_request`). A system note and an internal
+note are not imported as comments (`ingest/src/gitlab.rs#parse_note`).
 
 The token file must be mode 600 or 400 (`tracker/src/config.rs#load`), a token
 may be listed once (`tracker/src/config.rs#parse`), and the lookup takes the
@@ -335,10 +363,10 @@ request only when all of these hold, so the name alone steers nothing.
 | Attack | Check |
 |---|---|
 | Name a request in another repo | Only the issue's own repo, and only a repo an intake rule names (`ingest/src/sync.rs#may_write_to`) |
-| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs#linked_request`, `ingest/src/github.rs#pull_request`) |
+| Name a stranger's request | Only a request one of our own logins opened (`ingest/src/sync.rs#linked_request`, `ingest/src/github.rs#pull_request`, `ingest/src/gitlab.rs#pull_request`) |
 | Name an old merged request | Created after the item's first claim, and tied to the item by the branch `kbl/<item>` or a closing reference (`ingest/src/sync.rs#linked_request`) |
 | Name a request for a Jira root so the GitHub worker records its merge | The same author, age and default-branch checks, but the branch only (a closing reference names GitHub issues), in a repo one of the GitHub worker's own rules names (`ingest/src/sync.rs#foreign_pull_requests`). The worker writes `pr_status` and nothing more; the tracker refuses the rest of its records for a root of another source (`tracker/src/tracker/ingest.rs#ingest_record_in`), and a status for a request the item did not report as `wrong_pr` (`core/src/work_fold.rs#step_record`) |
-| Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs#pull_request`) |
+| Merge into a side branch, or merge its own work | A merge counts only into the default branch and not by one of our logins (`ingest/src/github.rs#pull_request`); on GitLab also a named merger (`ingest/src/gitlab.rs#pull_request`) |
 | Approve its own work | Reviews count only from owners, members and collaborators, never the author (`ingest/src/github.rs#review_state`) |
 | Post a green status itself | Statuses from our own logins are ignored; a failed or partial read is pending, never green (`ingest/src/github.rs#check_state`) |
 | Post a green check run with our own App's token | A check run by an App whose `<slug>[bot]` is one of our logins is ignored (`ingest/src/github.rs#check_state`) |

@@ -5,6 +5,7 @@
 mod ado;
 mod config;
 mod github;
+mod gitlab;
 mod jira;
 mod metrics;
 mod rules;
@@ -112,18 +113,22 @@ async fn serve() -> Result<()> {
     let token = std::env::var(&cfg.tracker.token_env)
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
     let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
-    match (&cfg.github, &cfg.jira, &cfg.ado) {
-        (Some(g), None, None) => {
+    match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {
+        (Some(g), None, None, None) => {
             let github = github_source(g).await?;
             drive(github, tracker, cfg, cli).await
         }
-        (None, Some(j), None) => {
+        (None, Some(j), None, None) => {
             let jira = jira_source(j, &cfg).await?;
             drive(jira, tracker, cfg, cli).await
         }
-        (None, None, Some(a)) => {
+        (None, None, Some(a), None) => {
             let ado = ado_source(a, &cfg).await?;
             drive(ado, tracker, cfg, cli).await
+        }
+        (None, None, None, Some(g)) => {
+            let gitlab = gitlab_source(g, &cfg).await?;
+            drive(gitlab, tracker, cfg, cli).await
         }
         _ => unreachable!("the config checks for exactly one source"),
     }
@@ -251,6 +256,28 @@ async fn ado_source(
     ado.add_own(ado.login().await);
     ado.require_own()?;
     Ok(ado)
+}
+
+async fn gitlab_source(
+    g: &config::GitlabConfig,
+    cfg: &Config,
+) -> Result<gitlab::Gitlab<gitlab::transport::Reqwest>> {
+    use ado::transport::Secret;
+    let secret = match (&g.token_file, &g.token_env) {
+        (Some(f), _) => Secret::File(f.clone()),
+        (None, Some(e)) => Secret::Env(e.clone()),
+        (None, None) => unreachable!("the config checks for a token"),
+    };
+    let mut gitlab = gitlab::Gitlab::new(
+        &g.api,
+        gitlab::transport::Reqwest::new(secret)?,
+        g.own_logins.clone(),
+        cfg.rules.clone(),
+        &g.projects,
+    )?;
+    gitlab.add_own(gitlab.login().await);
+    gitlab.require_own()?;
+    Ok(gitlab)
 }
 
 async fn drive<S: Source>(
