@@ -90,6 +90,19 @@ async fn serve() -> Result<()> {
         .with_context(|| format!("{} is not set", cfg.tracker.token_env))?;
     let tracker = tracker_api::Http::new(&cfg.tracker.url, token)?;
     // A token_file wins over an app, and an app over a token_env.
+    let sources = [
+        ("token_file", cfg.github.token_file.is_some()),
+        ("app", cfg.github.app.is_some()),
+        ("token_env", cfg.github.token_env.is_some()),
+    ];
+    let set: Vec<&str> = sources.iter().filter(|s| s.1).map(|s| s.0).collect();
+    if set.len() > 1 {
+        eprintln!(
+            "kbl-ingest: warning: several GitHub credentials are configured ({}); {} is used and the rest are ignored",
+            set.join(", "),
+            set[0]
+        );
+    }
     let gh_token = match (
         &cfg.github.token_file,
         &cfg.github.app,

@@ -115,8 +115,9 @@ impl Transport for Reqwest {
         let res = self.send_with(&req, &token).await?;
         if res.status == 401 {
             bail!(
-                "GitHub answered 401 to a freshly minted installation token; \
-                 check the App id, the private key and that the installation still exists"
+                "GitHub answered 401 to a freshly minted installation token for App {}; \
+                 check the App id, the private key and that the installation still exists",
+                app.id()
             );
         }
         Ok(res)

@@ -48,6 +48,8 @@ struct Fake {
     /// Bearer tokens `/ping` refuses.
     revoked: StdMutex<Vec<String>>,
     ping_always_401: std::sync::atomic::AtomicBool,
+    /// The installation GitHub knows now; 0 means 77, and any id mints.
+    current_installation: AtomicU64,
 }
 
 fn bearer(h: &HeaderMap) -> String {
@@ -59,8 +61,19 @@ fn bearer(h: &HeaderMap) -> String {
 }
 
 async fn serve(fake: Arc<Fake>) -> String {
-    async fn mint(State(f): State<Arc<Fake>>, h: HeaderMap) -> (StatusCode, axum::Json<Value>) {
+    async fn mint(
+        State(f): State<Arc<Fake>>,
+        axum::extract::Path(id): axum::extract::Path<u64>,
+        h: HeaderMap,
+    ) -> (StatusCode, axum::Json<Value>) {
         let n = f.mints.fetch_add(1, Ordering::SeqCst) + 1;
+        let current = f.current_installation.load(Ordering::SeqCst);
+        if current != 0 && id != current {
+            return (
+                StatusCode::NOT_FOUND,
+                axum::Json(json!({ "message": "Not Found" })),
+            );
+        }
         f.jwts.lock().unwrap().push(bearer(&h));
         let scripted = {
             let mut s = f.mint_script.lock().unwrap();
@@ -81,7 +94,8 @@ async fn serve(fake: Arc<Fake>) -> String {
     }
     async fn discover(State(f): State<Arc<Fake>>) -> axum::Json<Value> {
         f.discoveries.fetch_add(1, Ordering::SeqCst);
-        axum::Json(json!({ "id": 77 }))
+        let current = f.current_installation.load(Ordering::SeqCst);
+        axum::Json(json!({ "id": if current == 0 { 77 } else { current } }))
     }
     async fn ping(State(f): State<Arc<Fake>>, h: HeaderMap) -> (StatusCode, axum::Json<Value>) {
         f.pings.fetch_add(1, Ordering::SeqCst);
@@ -122,6 +136,12 @@ impl Rig {
         let dir = std::env::temp_dir().join(format!("kbl-app-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("key.pem"), &keys().pem).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.join("key.pem"), std::fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
         Self {
             api: serve(fake.clone()).await,
             fake,
@@ -264,7 +284,7 @@ async fn a_second_refusal_fails_clearly_after_one_refresh() {
             .unwrap_err()
     );
     assert!(
-        err.contains("401") && err.contains("freshly minted"),
+        err.contains("401") && err.contains("freshly minted") && err.contains("App 4242"),
         "{err}"
     );
     assert_eq!(rig.mints(), 2, "one refresh, not a loop");
@@ -345,4 +365,90 @@ async fn no_secret_reaches_a_log_or_an_error() {
             assert!(!text.contains(secret.as_str()), "{text} leaks a secret");
         }
     }
+}
+
+#[tokio::test]
+async fn a_reinstalled_app_is_found_again_once() {
+    let rig = Rig::new("reinstall").await;
+    rig.fake.current_installation.store(77, Ordering::SeqCst);
+    let auth = rig.auth(Installation::Repo("GetFelix/felix".into()));
+    auth.token().await.unwrap();
+    // Uninstalled and installed again: the old id now answers 404.
+    rig.fake.current_installation.store(88, Ordering::SeqCst);
+    rig.at(START + 3600 - 100);
+    auth.token().await.unwrap();
+    assert_eq!(rig.fake.discoveries.load(Ordering::SeqCst), 2);
+    assert_eq!(rig.mints(), 3, "the stale id, then the new one");
+}
+
+#[tokio::test]
+async fn a_still_refused_installation_fails_after_one_lookup() {
+    let rig = Rig::new("gone").await;
+    // The lookup keeps returning 77 but 77 never mints.
+    rig.fake.current_installation.store(77, Ordering::SeqCst);
+    let auth = rig.auth(Installation::Repo("GetFelix/felix".into()));
+    auth.token().await.unwrap();
+    rig.fake.mint_script.lock().unwrap().extend([404, 404]);
+    rig.at(START + 3600 - 100);
+    let err = format!("{:#}", auth.token().await.unwrap_err());
+    assert!(err.contains("404") && err.contains("App 4242"), "{err}");
+    assert_eq!(rig.fake.discoveries.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_fixed_installation_id_is_not_looked_up() {
+    let rig = Rig::new("fixed").await;
+    rig.fake.mint_script.lock().unwrap().push(404);
+    let auth = rig.auth(Installation::Id(9));
+    assert!(auth.token().await.is_err());
+    assert_eq!(rig.fake.discoveries.load(Ordering::SeqCst), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_key_file_others_can_read_is_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let rig = Rig::new("mode").await;
+    let key = rig.dir.join("key.pem");
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let cfg = AppConfig {
+        id: "1".into(),
+        installation: Installation::Id(1),
+        private_key_file: key.clone(),
+    };
+    let mk = || AppAuth::new(&cfg, &rig.api, system_clock(), Arc::new(|_| {}));
+    let err = format!("{:#}", mk().unwrap_err());
+    assert!(err.contains("mode 644") && err.contains("600"), "{err}");
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o400)).unwrap();
+    assert!(mk().is_ok());
+}
+
+#[tokio::test]
+async fn a_non_https_api_base_is_warned_about() {
+    let rig = Rig::new("http").await;
+    rig.auth(Installation::Id(9));
+    assert!(
+        rig.logs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|l| l.contains("not https")),
+        "{:?}",
+        rig.logs.lock().unwrap()
+    );
+}
+
+#[tokio::test]
+async fn a_clock_far_ahead_does_not_mint_on_every_call() {
+    let rig = Rig::new("ahead").await;
+    let auth = rig.auth(Installation::Id(9));
+    // Past the expiry already, as a fast clock would read.
+    rig.at(START + 7200);
+    let a = auth.token().await.unwrap();
+    rig.at(START + 7200 + 30);
+    assert_eq!(auth.token().await.unwrap(), a);
+    assert_eq!(rig.mints(), 1);
+    rig.at(START + 7200 + 61);
+    auth.token().await.unwrap();
+    assert_eq!(rig.mints(), 2);
 }

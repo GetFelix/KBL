@@ -25,6 +25,9 @@ const IAT_SKEW: u64 = 60;
 const JWT_LIFETIME: u64 = 9 * 60;
 /// A cached token is replaced once this little of its life is left.
 const REFRESH_BEFORE: u64 = 5 * 60;
+/// A token minted this recently is reused whatever its expiry says, so a
+/// local clock far ahead of GitHub's does not mint on every request.
+const REUSE_FOR: u64 = 60;
 
 /// Unix seconds. A function so tests move time.
 pub(crate) type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
@@ -46,6 +49,8 @@ pub(crate) fn stderr_log() -> Log {
 struct Cached {
     token: String,
     expires_at: u64,
+    /// Local clock reading at the mint.
+    minted_at: u64,
 }
 
 pub(crate) struct AppAuth {
@@ -71,6 +76,14 @@ impl fmt::Debug for AppAuth {
 
 impl AppAuth {
     pub(crate) fn new(cfg: &AppConfig, api: &str, clock: Clock, log: Log) -> Result<Self> {
+        // The key signs every mint, so like the tracker's token file it must
+        // be private to its owner; a looser file refuses the start.
+        check_key_mode(&cfg.private_key_file)?;
+        if !api.starts_with("https://") {
+            log(&format!(
+                "warning: the GitHub api base {api} is not https; the App JWT and installation tokens would cross the network in the clear"
+            ));
+        }
         let pem = std::fs::read_to_string(&cfg.private_key_file).with_context(|| {
             format!(
                 "read the GitHub App private key {}",
@@ -103,12 +116,18 @@ impl AppAuth {
         })
     }
 
+    /// The App id, for error messages. Not a secret.
+    pub(crate) fn id(&self) -> &str {
+        &self.app_id
+    }
+
     /// A token with more than the refresh margin left, minted if needed.
     pub(crate) async fn token(&self) -> Result<String> {
         let mut cache = self.cache.lock().await;
         let now = (self.clock)();
         if let Some(c) = cache.as_ref()
-            && c.expires_at > now + REFRESH_BEFORE
+            && (c.expires_at > now + REFRESH_BEFORE
+                || (c.minted_at..c.minted_at + REUSE_FOR).contains(&now))
         {
             return Ok(c.token.clone());
         }
@@ -129,12 +148,28 @@ impl AppAuth {
 
     async fn mint(&self, now: u64) -> Result<Cached> {
         let jwt = self.jwt(now)?;
-        let id = self.installation_id(&jwt).await?;
-        let url = format!("{}/app/installations/{id}/access_tokens", self.api);
-        let (status, body) = self.call("POST", &url, &jwt).await?;
+        // A looked-up installation id goes stale when the App is uninstalled
+        // and installed again, so a refused id is dropped and found once more.
+        let mut rediscovered = false;
+        let (id, status, body) = loop {
+            let id = self.installation_id(&jwt).await?;
+            let url = format!("{}/app/installations/{id}/access_tokens", self.api);
+            let (status, body) = self.call("POST", &url, &jwt).await?;
+            let stale = status == 404 || status == 401;
+            if stale && !rediscovered && !matches!(self.installation, Installation::Id(_)) {
+                rediscovered = true;
+                *self.installation_id.lock().await = None;
+                (self.log)(&format!(
+                    "GitHub answered {status} for installation {id}; looking the installation up again"
+                ));
+                continue;
+            }
+            break (id, status, body);
+        };
         if status != 201 && status != 200 {
             bail!(
-                "GitHub refused to mint an installation token for installation {id} ({status}): {}",
+                "GitHub refused to mint an installation token for App {} installation {id} ({status}): {}",
+                self.app_id,
                 message(&body)
             );
         }
@@ -152,7 +187,11 @@ impl AppAuth {
             "minted a GitHub installation token for installation {id}, {}s of life",
             expires_at.saturating_sub(now)
         ));
-        Ok(Cached { token, expires_at })
+        Ok(Cached {
+            token,
+            expires_at,
+            minted_at: now,
+        })
     }
 
     async fn installation_id(&self, jwt: &str) -> Result<u64> {
@@ -214,6 +253,26 @@ impl AppAuth {
         signing.push_str(&URL_SAFE_NO_PAD.encode(sig));
         Ok(signing)
     }
+}
+
+fn check_key_mode(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .with_context(|| format!("read the GitHub App private key {}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        anyhow::ensure!(
+            mode == 0o600 || mode == 0o400,
+            "the GitHub App private key {} has mode {mode:o}; set it to 600 or 400",
+            path.display()
+        );
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// GitHub's `message`, with any known secret shape cut out.
