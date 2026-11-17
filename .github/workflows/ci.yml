@@ -18,12 +18,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: node scripts/lint.mjs
       # Every route, tool and record kind has a row in docs/threat-model.md.
       - run: node scripts/check-threat-model.mjs
+      # A changed stored fold result in wasm/golden needs a changelog fragment naming it.
+      - run: node scripts/check-golden.mjs origin/${{ github.base_ref }}
+        if: github.event_name == 'pull_request'
       - run: node --test dev/lib/script.test.mjs dev/lib/agents.test.mjs
       # Malformed changelog fragments, and the assembler's own tests.
       - run: python3 scripts/changelog_assemble.py --check

@@ -2,7 +2,7 @@
 
 The tracker, ingest and `kbl-mcp` each serve Prometheus metrics. This page
 lists every metric and label, how to turn the endpoint on, and what it can
-and cannot show. Traces, an SLO page and alert runbooks are not here yet.
+and cannot show. SLOs, alert rules and runbooks are in [observability.md](observability.md).
 
 ## Turning it on
 

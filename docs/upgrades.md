@@ -209,6 +209,26 @@ tracker does not have yet.
   step then prints that line and skips this check; it never skips for a
   change that has not declared one.
 
+### Changing a golden on purpose
+
+`wasm/golden` holds a log from every format (`format_2` up to the current one),
+the logs written before formats existed, and the state the fold gave each. The
+core and the page fold every log and compare, so a fold change that alters an
+old log's result fails `cargo test` and the page's tests. A fold change should
+not do that (see "Rules for changing the fold"), so the usual fix is the code.
+
+When the new result is the intent, such as a new format's own log:
+
+1. Regenerate with `WRITE_GOLDEN=1 cargo test -p kbl-wasm --test golden` and
+   read the diff of every `.state.json`.
+2. Add a fragment under `changelog.d/` that names each changed file by its stem
+   (`format_3`) and says why the result moved.
+
+The `lint` job runs `node scripts/check-golden.mjs`, which fails a pull request
+that touches `wasm/golden` without such a fragment. A new `core/tests/work_*.jsonl`
+log must also be listed in `wasm/tests/golden.rs`, and every format needs its
+own log; a test fails otherwise.
+
 ## A run's own records
 
 A run has records of its own beside `work.events`: its run log, its tasks
