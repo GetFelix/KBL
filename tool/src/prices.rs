@@ -65,8 +65,8 @@ pub(crate) enum Step {
     Write,
     /// The same price is already in effect.
     Skip,
-    /// A different price is in effect.
-    Differs { in_effect: u64 },
+    /// A different price is in effect, which began at `since_ms`.
+    Differs { in_effect: u64, since_ms: u64 },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -167,11 +167,14 @@ pub(crate) fn plan(
             let current = in_effect_at(from.unwrap_or(now_ms))
                 .iter()
                 .find(|p| p.model == e.model && p.unit == e.unit)
-                .map(|p| p.price_micros);
+                .map(|p| (p.price_micros, p.since_ms));
             let step = match current {
                 None => Step::Write,
-                Some(p) if p == e.price_micros => Step::Skip,
-                Some(p) => Step::Differs { in_effect: p },
+                Some((p, _)) if p == e.price_micros => Step::Skip,
+                Some((p, since_ms)) => Step::Differs {
+                    in_effect: p,
+                    since_ms,
+                },
             };
             Ok(Planned {
                 model: e.model.clone(),
@@ -197,6 +200,15 @@ pub(crate) fn body(p: &Planned) -> Value {
     let mut b = json!({ "model": p.model, "unit": p.unit, "price_micros": p.price_micros, "as_of": p.as_of });
     if let Some(ms) = p.effective_from_ms {
         b["effective_from_ms"] = json!(ms);
+    }
+    // A write names the price that was read, or that there was none, so one set since is not overwritten unseen.
+    match p.step {
+        Step::Differs {
+            in_effect,
+            since_ms,
+        } => b["expected_price"] = json!({ "price_micros": in_effect, "since_ms": since_ms }),
+        Step::Write => b["expected_price"] = json!({ "none": true }),
+        Step::Skip => {}
     }
     b
 }
@@ -243,7 +255,7 @@ pub(crate) async fn import(target: crate::felix::Target, args: ImportArgs) -> Re
                 skipped += 1;
                 println!("  skip    {name}: already {}", p.price_micros);
             }
-            Step::Differs { in_effect } if !writes(p, args.update) => {
+            Step::Differs { in_effect, .. } if !writes(p, args.update) => {
                 differs += 1;
                 println!(
                     "  differs {name}: {in_effect} in effect, table has {} (--update writes it)",

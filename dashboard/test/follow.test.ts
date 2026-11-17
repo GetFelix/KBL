@@ -253,3 +253,69 @@ test('a read page that repeats records already applied does not apply them twice
   gw.close();
   await done;
 });
+
+// A refused publish_if on a Raft shard stores a blank: an offset readers and
+// subscribers never see, counted by skipped_before on the next event.
+const blank = (gw: FakeGateway) => {
+  gw.nonEvents.add(gw.log.length);
+  gw.publish(''); // the filler a blank holds in the fake's log
+};
+
+test('a blank in the history is read past', async () => {
+  const gw = gatewayWith(2);
+  blank(gw);
+  gw.publish(record(3));
+  const { seen, sink } = recorder();
+  const done = follow(gw, sink, { stream: 'events' });
+  await settle();
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1, 3]);
+  assert.deepEqual(gw.subscribedFrom, [4]);
+  gw.close();
+  assert.equal(await done, 4);
+});
+
+test('a log that ends in blanks subscribes past them and takes the next event', async () => {
+  const gw = gatewayWith(2);
+  blank(gw);
+  blank(gw);
+  const { seen, sink } = recorder();
+  const done = follow(gw, sink, { stream: 'events' });
+  await settle();
+  assert.deepEqual(gw.subscribedFrom, [4], 'the empty page points past the trailing blanks');
+  gw.publish(record(4));
+  await settle();
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1, 4]);
+  assert.deepEqual(gw.subscribedFrom, [4], 'no resubscribe');
+  gw.close();
+  await done;
+});
+
+test('a run of blanks in the live stream is not a drop', async () => {
+  const gw = gatewayWith(2);
+  const { seen, sink } = recorder();
+  const done = follow(gw, sink, { stream: 'events' });
+  await settle();
+  blank(gw);
+  blank(gw);
+  gw.publish(record(4));
+  await settle();
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1, 4]);
+  assert.deepEqual(gw.subscribedFrom, [2], 'no resubscribe');
+  gw.close();
+  await done;
+});
+
+test('a cursor that sits on a blank resubscribes, and start_offset is the cursor', async () => {
+  const gw = gatewayWith(2);
+  const { seen, sink } = recorder();
+  const done = follow(gw, sink, { stream: 'events' });
+  await settle();
+  blank(gw); // the cursor stays at 2: nothing was delivered for the blank
+  gw.onMessage({ type: 'error', code: 'subscription_ended', message: 'broker failover' });
+  gw.publish(record(3));
+  await settle();
+  assert.deepEqual(gw.subscribedFrom, [2, 2], 'subscribed again from the blank');
+  assert.deepEqual(seen.map((s) => s.offset), [0, 1, 3]);
+  gw.close();
+  await done;
+});

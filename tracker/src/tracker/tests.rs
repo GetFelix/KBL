@@ -23,13 +23,36 @@ impl Net {
                 .and_then(|v| v.iter().map(|(o, _)| o + 1).max())
                 .unwrap_or(0)
         };
-        last(&self.streams).max(last(&self.in_flight))
+        let blank = self
+            .blanks
+            .get(stream)
+            .and_then(|b| b.iter().next_back().map(|o| o + 1))
+            .unwrap_or(0);
+        last(&self.streams).max(last(&self.in_flight)).max(blank)
+    }
+
+    /// The offset after the last committed record or blank, which is where
+    /// Felix's empty read page points. Offsets in flight are not counted.
+    fn committed_end(&self, stream: &str) -> u64 {
+        let record = (self.streams.get(stream))
+            .and_then(|v| v.iter().map(|(o, _)| o + 1).max())
+            .unwrap_or(0);
+        let blank = (self.blanks.get(stream))
+            .and_then(|b| b.iter().next_back().map(|o| o + 1))
+            .unwrap_or(0);
+        record.max(blank)
     }
 }
 
 #[derive(Default)]
 struct Net {
     streams: HashMap<String, Vec<(u64, Vec<u8>)>>,
+    /// Offsets that hold no record: a Raft shard's blank entries. Readers
+    /// never see one; the stream's next offset and tip pass it.
+    blanks: HashMap<String, std::collections::BTreeSet<u64>>,
+    /// A refused conditional publish stores a blank at the offset it would
+    /// have taken, as on a Raft stream shard. Off, a refusal consumes none.
+    raft_blanks: bool,
     /// Records another writer was given offsets for that are not committed
     /// yet: Felix's tail counts them, reads do not show them.
     in_flight: HashMap<String, Vec<(u64, Vec<u8>)>>,
@@ -108,6 +131,20 @@ pub(super) struct Fake {
 impl Fake {
     pub(super) fn page_size(&self, size: usize) {
         self.net.lock().unwrap().page_size = Some(size);
+    }
+
+    /// Makes the stream behave like a Raft shard: a refused conditional
+    /// publish burns the offset it asked for (Felix docs/per-shard-raft.md,
+    /// "Conditional publishes").
+    pub(super) fn raft_blanks(&self) {
+        self.net.lock().unwrap().raft_blanks = true;
+    }
+
+    /// An offset that holds no record, as a new leader's term-start blank.
+    pub(super) fn blank(&self, stream: &str) {
+        let mut net = self.net.lock().unwrap();
+        let at = net.next_offset(stream);
+        net.blanks.entry(stream.to_owned()).or_default().insert(at);
     }
 
     fn reconnect(&self) -> Fake {
@@ -456,6 +493,16 @@ impl Broker for Fake {
         // offset, which counts offsets given out but not yet committed.
         let tail = self.net.lock().unwrap().next_offset(stream);
         if expected != tail {
+            let mut net = self.net.lock().unwrap();
+            if net.raft_blanks {
+                // The blank takes the offset the record would have; the tail
+                // the refusal names is the one after it.
+                net.blanks
+                    .entry(stream.to_owned())
+                    .or_default()
+                    .insert(tail);
+                return Ok(ConditionalWrite::Refused { tail: tail + 1 });
+            }
             return Ok(ConditionalWrite::Refused { tail });
         }
         let offset = self.publish(stream, payload).await?;
@@ -483,6 +530,15 @@ impl Broker for Fake {
             .get(stream)
             .map(|v| v.iter().filter(|(o, _)| *o >= from).cloned().collect())
             .unwrap_or_default())
+    }
+
+    async fn read_to_tip(&self, stream: &str, from: u64) -> anyhow::Result<crate::felix::ToTip> {
+        let records = self.read_from(stream, from).await?;
+        // Like Felix's empty page: the tip is where the committed log ends,
+        // which a trailing blank puts past the last record.
+        let end = self.net.lock().unwrap().committed_end(stream);
+        let tip = records.last().map_or(from, |(o, _)| o + 1).max(end);
+        Ok((records, tip))
     }
 
     async fn read_page(&self, stream: &str, from: u64) -> anyhow::Result<crate::felix::Page> {
@@ -3294,4 +3350,104 @@ async fn a_lagging_read_of_our_entry_is_refused_and_writes_nothing() {
     let err = t.person_record(key("gab"), imported("c1")).await;
     assert!(err.is_err(), "a fenced tracker wrote");
     assert_eq!(imports_of(&fake, "c1"), 0);
+}
+
+/// Another writer's record takes the offset this tracker asked for; on a Raft
+/// shard the refusal then burns the next one, and the log ends in a blank.
+async fn refused_into_a_trailing_blank(fake: &Fake, t: &Tracker<Fake>) {
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    assert!(matches!(
+        t.person_record(key("gab"), imported("c1")).await,
+        Err(Error::Unavailable(_))
+    ));
+}
+
+#[tokio::test]
+async fn a_raft_blank_at_the_end_of_the_log_does_not_refuse_the_next_write_again() {
+    let fake = Fake::default();
+    fake.raft_blanks();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    refused_into_a_trailing_blank(&fake, &t).await;
+    let blanks = || fake.net.lock().unwrap().blanks[WORK_EVENTS].len();
+    assert_eq!(blanks(), 1);
+    // The next call rebuilds; its tip is past the blank, so the write lands.
+    for _ in 0..3 {
+        if t.person_record(key("gab"), imported("c1")).await.is_ok() {
+            break;
+        }
+    }
+    assert_eq!(imports_of(&fake, "c1"), 1);
+    assert_eq!(blanks(), 1, "the retry burned another offset");
+    // And the ones after it, without a rebuild in between.
+    t.person_record(key("gab"), imported("d1")).await.unwrap();
+    assert_eq!(imports_of(&fake, "d1"), 1);
+    assert_eq!(blanks(), 1);
+}
+
+#[tokio::test]
+async fn a_restart_over_a_trailing_raft_blank_writes_past_it() {
+    let fake = Fake::default();
+    fake.raft_blanks();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    refused_into_a_trailing_blank(&fake, &t).await;
+    // A new tracker reads the log from scratch: record, record, blank.
+    let t2 = start(&fake).await;
+    t2.person_record(key("gab"), imported("c1")).await.unwrap();
+    assert_eq!(imports_of(&fake, "c1"), 1);
+    assert_eq!(fake.net.lock().unwrap().blanks[WORK_EVENTS].len(), 1);
+}
+
+#[tokio::test]
+async fn refusals_that_burn_offsets_in_a_row_each_settle_on_the_next_write() {
+    let fake = Fake::default();
+    fake.raft_blanks();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    for i in 0..3 {
+        // A leader change leaves a blank, and another writer lands a record.
+        fake.blank(WORK_EVENTS);
+        let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported(&format!("b{i}")));
+        fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+        let mut landed = false;
+        for _ in 0..4 {
+            if t.person_record(key("gab"), imported(&format!("c{i}")))
+                .await
+                .is_ok()
+            {
+                landed = true;
+                break;
+            }
+        }
+        assert!(landed, "write {i} never landed past the blank");
+    }
+    assert_eq!(imports_of(&fake, "c2"), 1);
+}
+
+#[tokio::test]
+async fn history_pages_over_a_run_of_blanks() {
+    let fake = Fake::default();
+    fake.raft_blanks();
+    let t = start(&fake).await;
+    seed(&t, "a1", 1).await;
+    // More blanks than a page holds, between the records.
+    for _ in 0..7 {
+        fake.blank(WORK_EVENTS);
+    }
+    let theirs = WorkLogged::new(0, key("gab"), Actor::Person, imported("b1"));
+    fake.publish(WORK_EVENTS, theirs.encode()).await.unwrap();
+    let _ = t.person_record(key("gab"), imported("a1")).await;
+    fake.page_size(2);
+    let h = t.history(&item("a1"), 0).await.unwrap();
+    let offsets: Vec<u64> = h["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["offset"].as_u64().unwrap())
+        .collect();
+    assert!(offsets.windows(2).all(|w| w[0] < w[1]), "{offsets:?}");
+    assert!(!offsets.is_empty());
+    assert_eq!(h["next"], serde_json::Value::Null);
 }

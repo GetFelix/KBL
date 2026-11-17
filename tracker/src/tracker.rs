@@ -363,6 +363,57 @@ fn evidence_in_tree(core: &Core, record: &WorkRecord, next: u64) -> Result<(), E
     Ok(())
 }
 
+/// What a person saw when they chose to set a price: the price it replaces, or
+/// that there was none.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum ExpectedPrice {
+    Seen { price_micros: u64, since_ms: u64 },
+    None,
+}
+
+/// Refuses a `price_set` whose expected price (or expected absence of one) is
+/// not what is in effect when the new price starts. Checked before the append, so the fold of an existing log
+/// does not change.
+fn price_is_expected(
+    core: &Core,
+    logged: &WorkLogged,
+    expected: ExpectedPrice,
+) -> Result<(), Error> {
+    let WorkRecord::PriceSet {
+        model,
+        unit,
+        effective_from_ms,
+        ..
+    } = &logged.record
+    else {
+        return Ok(());
+    };
+    let from = effective_from_ms.unwrap_or(logged.at_ms);
+    let in_effect = core
+        .state
+        .prices_in_effect(from)
+        .into_iter()
+        .find(|p| p.model == *model && p.unit == *unit);
+    let same = match (expected, in_effect) {
+        (ExpectedPrice::None, found) => found.is_none(),
+        (
+            ExpectedPrice::Seen {
+                price_micros,
+                since_ms,
+            },
+            Some(p),
+        ) => p.price_micros == price_micros && p.since_ms == since_ms,
+        (ExpectedPrice::Seen { .. }, None) => false,
+    };
+    if same {
+        Ok(())
+    } else {
+        Err(Error::Refused {
+            why: "price_changed".into(),
+        })
+    }
+}
+
 /// Refuses a redo of an item whose pull request has a failed check unless it
 /// names a note written since the check failed, so a failure is not rerun
 /// unread. Checked before the append, like evidence, so the fold of an
@@ -961,6 +1012,26 @@ impl<B: Broker> Tracker<B> {
         let offset = {
             let mut core = self.0.core.lock().await;
             self.append(&mut core, Actor::Person, person, record)
+                .await?
+        };
+        self.sync_ready().await;
+        Ok(json!({ "kind": kind, "offset": offset }))
+    }
+
+    /// `person_record` for a `price_set` that replaces the price a person read:
+    /// refused as `price_changed` when another price is in effect by now.
+    pub(crate) async fn person_price(
+        &self,
+        person: Key,
+        record: WorkRecord,
+        expected: ExpectedPrice,
+    ) -> Result<Value, Error> {
+        tools::check_sizes(&record)?;
+        self.begin().await?;
+        let kind = record.kind();
+        let offset = {
+            let mut core = self.0.core.lock().await;
+            self.append_expecting(&mut core, Actor::Person, person, record, Some(expected))
                 .await?
         };
         self.sync_ready().await;
@@ -2109,7 +2180,21 @@ impl<B: Broker> Tracker<B> {
         core: &mut Core,
         actor: Actor,
         by: Key,
+        record: WorkRecord,
+    ) -> Result<u64, Error> {
+        self.append_expecting(core, actor, by, record, None).await
+    }
+
+    /// `append`, refusing a `price_set` when `expected` is not the price in
+    /// effect for its model and unit. Checked under the same lock as the
+    /// write, so two posts that read the same price cannot both land.
+    async fn append_expecting(
+        &self,
+        core: &mut Core,
+        actor: Actor,
+        by: Key,
         mut record: WorkRecord,
+        expected: Option<ExpectedPrice>,
     ) -> Result<u64, Error> {
         {
             let writer = self.lease();
@@ -2155,6 +2240,9 @@ impl<B: Broker> Tracker<B> {
             evidence_in_tree(core, &logged.record, guess)?;
         }
         retry_has_note(core, &logged.record)?;
+        if let Some(expected) = expected {
+            price_is_expected(core, &logged, expected)?;
+        }
         let absent = edge_absent(&core.state, &logged.record);
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.

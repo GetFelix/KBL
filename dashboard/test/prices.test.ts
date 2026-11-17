@@ -37,13 +37,13 @@ test('the price age comes from the address, else 90 days', () => {
 });
 
 test('a price typed in dollars becomes micros, and a bad one says why', () => {
-  assert.deepEqual(priceRequest('m', 'input', '3'), { path: '/v1/work/prices', body: { model: 'm', unit: 'input', price_micros: 3_000_000 } });
-  assert.deepEqual(priceRequest('m', 'output', ' 0.25 '), { path: '/v1/work/prices', body: { model: 'm', unit: 'output', price_micros: 250_000 } });
+  assert.deepEqual(priceRequest('m', 'input', '3'), { path: '/v1/work/prices', body: { model: 'm', unit: 'input', price_micros: 3_000_000, expected_price: { none: true } } });
+  assert.deepEqual(priceRequest('m', 'output', ' 0.25 '), { path: '/v1/work/prices', body: { model: 'm', unit: 'output', price_micros: 250_000, expected_price: { none: true } } });
   for (const bad of ['', 'abc', '-1', '1.1234567']) assert.equal(typeof priceRequest('m', 'input', bad), 'string', bad);
 });
 
 test('a price of 0 is a price, as in the import; blank is not', () => {
-  assert.deepEqual(priceRequest('m', 'input', '0'), { path: '/v1/work/prices', body: { model: 'm', unit: 'input', price_micros: 0 } });
+  assert.deepEqual(priceRequest('m', 'input', '0'), { path: '/v1/work/prices', body: { model: 'm', unit: 'input', price_micros: 0, expected_price: { none: true } } });
   assert.equal(typeof priceRequest('m', 'input', ''), 'string');
 });
 
@@ -117,4 +117,11 @@ test('a confirm holds only while the replaced price is the same one', () => {
   assert.equal(samePrice(a, null), false);
   assert.equal(samePrice(a, entry('m', 'input', 2, 5)), false);
   assert.equal(samePrice(a, entry('m', 'input', 1, 6)), false);
+});
+
+test('a change names the price it replaces, so the tracker can refuse a stale one', () => {
+  const replaced = entry('m', 'input', 3_000_000, 1_000);
+  const body = (r: PriceEntry | null) => (priceRequest('m', 'input', '4', '', 5_000, r) as { body: Record<string, unknown> }).body;
+  assert.deepEqual(body(replaced).expected_price, { price_micros: 3_000_000, since_ms: 1_000 });
+  assert.deepEqual(body(null).expected_price, { none: true });
 });
