@@ -325,3 +325,54 @@ async fn an_aborted_poll_does_not_set_the_poll_cost() {
         Duration::from_secs(60)
     );
 }
+
+#[tokio::test]
+async fn a_mint_from_another_bucket_does_not_change_the_figures() {
+    let (t, script, budget, _) = rig(Vendor::Github, None);
+    script.on(
+        "GET",
+        "/x",
+        status(
+            200,
+            &[
+                ("x-ratelimit-limit", "5000"),
+                ("x-ratelimit-remaining", "4000"),
+                ("x-ratelimit-reset", "9999999999"),
+                ("x-ratelimit-resource", "core"),
+            ],
+        ),
+    );
+    get(&t).await.unwrap();
+    let before = budget.snapshot();
+    let mint = |resource: &[(&str, &str)]| {
+        let mut h = vec![
+            ("x-ratelimit-limit", "15000"),
+            ("x-ratelimit-remaining", "12"),
+            ("x-ratelimit-reset", "1"),
+        ];
+        h.extend_from_slice(resource);
+        status(201, &h)
+    };
+    for res in [
+        mint(&[("x-ratelimit-resource", "integration_manifest")]),
+        mint(&[]),
+    ] {
+        budget.metered(async { Ok(res) }).await.unwrap();
+    }
+    let after = budget.snapshot();
+    assert_eq!(after.vendor_hourly, before.vendor_hourly);
+    assert_eq!(after.vendor_remaining, Some(4000));
+    assert_eq!(after.vendor_reset_epoch, before.vendor_reset_epoch);
+    assert_eq!(after.hourly, before.hourly);
+    // Each mint was still charged once.
+    assert_eq!(after.tokens + 2, before.tokens);
+    // The tracked bucket is adopted, and a refusal's wait is honoured either way.
+    budget
+        .metered(async { Ok(mint(&[("x-ratelimit-resource", "core")])) })
+        .await
+        .unwrap();
+    assert_eq!(budget.snapshot().vendor_remaining, Some(12));
+    let refused = status(403, &[("retry-after", "90")]);
+    let e = budget.metered(async { Ok(refused) }).await.unwrap_err();
+    assert_eq!(waited(&e), Duration::from_secs(90));
+}
