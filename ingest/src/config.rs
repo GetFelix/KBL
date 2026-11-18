@@ -379,6 +379,11 @@ pub(crate) struct Rule {
     pub(crate) label_types: BTreeMap<String, String>,
     #[serde(default)]
     pub(crate) label_areas: BTreeMap<String, String>,
+    /// Label (tag) to something the work needs, such as `azure` or `gpu`. An
+    /// issue with several mapped labels needs all of them. The values must be
+    /// in the team's vocabulary's `needs`, or the tracker refuses the set.
+    #[serde(default)]
+    pub(crate) label_needs: BTreeMap<String, String>,
     /// The repository agents work in; the issue's own when unset.
     pub(crate) target_repo: Option<String>,
     /// Ingest opens an issue in `repo` for a prerequisite that targets it,

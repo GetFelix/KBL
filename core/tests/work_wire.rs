@@ -52,6 +52,7 @@ fn every_record() -> Vec<WorkRecord> {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         },
         WorkRecord::Accepted {
             item: item("r1"),
@@ -311,6 +312,7 @@ fn every_record() -> Vec<WorkRecord> {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         },
         WorkRecord::Question {
             item: item("r1"),
@@ -531,6 +533,7 @@ fn a_triage_answer_carries_dependencies_and_a_split_only_when_it_has_them() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     };
     let line = String::from_utf8(with.encode()).unwrap();
     assert!(

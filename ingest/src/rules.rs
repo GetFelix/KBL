@@ -134,6 +134,28 @@ impl Rule {
     }
 }
 
+impl Rule {
+    /// What the issue's labels say its work needs, each once, in the order
+    /// upstream lists the labels.
+    pub(crate) fn mapped_needs(&self, issue: &Issue) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for l in &issue.labels {
+            let hit = self
+                .label_needs
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(l))
+                .map(|(_, v)| v);
+            if let Some(v) = hit
+                && out.len() < kbl_core::work::MAX_NEEDS
+                && !out.iter().any(|o| o.eq_ignore_ascii_case(v))
+            {
+                out.push(v.clone());
+            }
+        }
+        out
+    }
+}
+
 fn default_tier_of(priority: &str) -> Option<u8> {
     match priority.to_ascii_lowercase().as_str() {
         "highest" | "blocker" | "critical" | "1" => Some(0),

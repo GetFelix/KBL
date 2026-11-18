@@ -23,7 +23,7 @@ use crate::work::{
     TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 use crate::work::{
-    ClassDim, DEFAULT_SIZES, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, Vocabulary,
+    ClassDim, DEFAULT_SIZES, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, MAX_NEEDS, Vocabulary,
     plain_class_value,
 };
 
@@ -401,7 +401,14 @@ pub struct Tag {
     pub by: ClassBy,
 }
 
-/// An item's type, area and size.
+/// What a root's work needs and who chose it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeedSet {
+    pub values: Vec<String>,
+    pub by: ClassBy,
+}
+
+/// An item's type, area and size, and what its work needs.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Class {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -410,11 +417,42 @@ pub struct Class {
     pub area: Option<Tag>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<Tag>,
+    /// What an agent must be able to do to take the root's work. Format 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<NeedSet>,
 }
 
 impl Class {
     pub fn is_empty(&self) -> bool {
-        self.item_type.is_none() && self.area.is_none() && self.size.is_none()
+        self.item_type.is_none()
+            && self.area.is_none()
+            && self.size.is_none()
+            && self.needs.is_none()
+    }
+
+    /// The needs in force, empty when none.
+    pub fn needs(&self) -> &[String] {
+        self.needs.as_ref().map_or(&[], |n| &n.values)
+    }
+
+    /// Sets the needs for `by`, with the same precedence as a class value. An
+    /// empty list from triage or a rule removes only what that actor set.
+    fn set_needs(&mut self, values: Vec<String>, by: ClassBy) {
+        let standing = self.needs.as_ref().map(|n| n.by);
+        if by != ClassBy::Person && standing == Some(ClassBy::Person) {
+            return;
+        }
+        if by == ClassBy::Rule && standing == Some(ClassBy::Triage) {
+            return;
+        }
+        if values.is_empty() {
+            // An empty list removes only what the same actor set.
+            if by == ClassBy::Person || standing == Some(by) {
+                self.needs = None;
+            }
+            return;
+        }
+        self.needs = Some(NeedSet { values, by });
     }
 
     /// Sets a value for `by`, unless a person chose the slot and `by` is not a person.
@@ -1356,6 +1394,31 @@ impl State {
             .ok_or(Reject::BadClass)
     }
 
+    /// `values` as the item's team spells them, each listed in its vocabulary's
+    /// `needs`, distinct and at most [`MAX_NEEDS`].
+    fn vocab_needs(&self, item: &ItemId, values: &[String]) -> Result<Vec<String>, Reject> {
+        self.item(item)?;
+        if values.len() > MAX_NEEDS {
+            return Err(Reject::BadClass);
+        }
+        let vocab = self.rules_for(item).and_then(|r| r.vocabulary);
+        let listed = vocab.as_ref().map_or(&[][..], |v| v.needs.as_slice());
+        let mut out: Vec<String> = Vec::new();
+        for v in values {
+            if !plain_class_value(v) {
+                return Err(Reject::BadClass);
+            }
+            let spelled = listed
+                .iter()
+                .find(|l| l.eq_ignore_ascii_case(v))
+                .ok_or(Reject::BadClass)?;
+            if !out.contains(spelled) {
+                out.push(spelled.clone());
+            }
+        }
+        Ok(out)
+    }
+
     /// An `edited` that sets upstream's facts (the tracker, for ingest) or a
     /// class value (a person; the tracker for a rule's mapping). The two do
     /// not mix with each other or with a title or tier edit, so each actor's
@@ -1366,9 +1429,14 @@ impl State {
         item: &ItemId,
         (own, labels, milestone): (bool, &Option<Vec<String>>, &Option<String>),
         class: [&Option<String>; 3],
+        needs: &Option<Vec<String>>,
     ) -> Result<(), Reject> {
         let upstream = labels.is_some() || milestone.is_some();
-        let classed = class.iter().any(|c| c.is_some());
+        let classed = class.iter().any(|c| c.is_some()) || needs.is_some();
+        // Needs are read from the root only, so another item's would be ignored.
+        if needs.is_some() && self.item(item)?.root != *item {
+            return Err(Reject::BadClass);
+        }
         if own || (upstream && classed) {
             return Err(Reject::BadClass);
         }
@@ -1413,6 +1481,10 @@ impl State {
                 set.push((dim, Some(self.vocab_value(item, dim, v)?)));
             }
         }
+        let needs = match needs {
+            Some(n) => Some(self.vocab_needs(item, n)?),
+            None => None,
+        };
         let it = self.item_mut(item)?;
         let before = it.class.clone();
         for (dim, v) in set {
@@ -1421,10 +1493,38 @@ impl State {
                 None => *it.class.slot(dim) = None,
             }
         }
+        if let Some(n) = needs {
+            // A person's empty list removes the needs whoever chose them.
+            if n.is_empty() && by == ClassBy::Person {
+                it.class.needs = None;
+            } else {
+                it.class.set_needs(n, by);
+            }
+        }
         if it.class == before {
             return Err(Reject::NoChange);
         }
         Ok(())
+    }
+
+    /// What an agent must be able to do to take `id`: its root's needs, for
+    /// the kinds of work that run in an environment (a fix, a test or a resume).
+    /// Triage, review and the rest read and judge, so any agent may take them.
+    pub fn needs_of(&self, id: &ItemId) -> &[String] {
+        let Some(it) = self.items.get(id) else {
+            return &[];
+        };
+        if !matches!(it.work, WorkKind::Fix | WorkKind::Test | WorkKind::Resume) {
+            return &[];
+        }
+        self.items.get(&it.root).map_or(&[], |r| r.class.needs())
+    }
+
+    /// Whether `capabilities` cover everything `id` needs, without regard to case.
+    pub fn can_take(&self, id: &ItemId, capabilities: &[String]) -> bool {
+        self.needs_of(id)
+            .iter()
+            .all(|n| capabilities.iter().any(|c| c.eq_ignore_ascii_case(n)))
     }
 
     /// Whether a block set on `id` still holds at `now_ms`. Every way an
@@ -2216,6 +2316,7 @@ impl State {
                 item_type,
                 area,
                 size,
+                needs,
             } => {
                 if *tier >= TIERS {
                     return Err(Reject::BadTier);
@@ -2233,6 +2334,13 @@ impl State {
                         chosen.push((dim, self.vocab_value(item, dim, v)?));
                     }
                 }
+                if needs.is_some() && self.item(item)?.root != *item {
+                    return Err(Reject::BadClass);
+                }
+                let chosen_needs = match needs {
+                    Some(n) => Some(self.vocab_needs(item, n)?),
+                    None => None,
+                };
                 if let Some((triage, attempt)) = held {
                     let same = self.item(item)?.proposal.as_ref().is_some_and(|p| {
                         p.tier == *tier
@@ -2263,6 +2371,9 @@ impl State {
                 it.changed_upstream = false;
                 for (dim, v) in chosen {
                     it.class.set(dim, v, ClassBy::Triage);
+                }
+                if let Some(n) = chosen_needs {
+                    it.class.set_needs(n, ClassBy::Triage);
                 }
                 // An unclear item reaches a person as a question, not as Ready work.
                 if unclear.is_some() && it.open_question.is_none() {
@@ -3064,6 +3175,29 @@ impl State {
                 }
                 it.block = None;
             }
+            WorkRecord::ResourceLifted { resource } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if resource.is_empty() || resource.len() > MAX_BLOCK_RESOURCE {
+                    return Err(Reject::BadBlock);
+                }
+                // Only a block still holding is lifted; a closed item keeps its record as it was.
+                let mut lifted = 0;
+                for it in self.items.values_mut() {
+                    let matches = it.closed.is_none()
+                        && it.block.as_ref().is_some_and(|b| {
+                            b.holds_at(rec.at_ms) && b.resource.as_deref() == Some(resource)
+                        });
+                    if matches {
+                        it.block = None;
+                        lifted += 1;
+                    }
+                }
+                if lifted == 0 {
+                    return Err(Reject::NoChange);
+                }
+            }
             WorkRecord::Parked { item, parked } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);
@@ -3479,6 +3613,7 @@ impl State {
                 item_type,
                 area,
                 size,
+                needs,
                 item,
                 title,
                 tier,
@@ -3489,14 +3624,21 @@ impl State {
                 || milestone.is_some()
                 || item_type.is_some()
                 || area.is_some()
-                || size.is_some() =>
+                || size.is_some()
+                || needs.is_some() =>
             {
                 let own = title.is_some()
                     || tier.is_some()
                     || depends_on.is_some()
                     || split.is_some()
                     || proposal.is_some();
-                self.edit_facts(rec, item, (own, labels, milestone), [item_type, area, size])?
+                self.edit_facts(
+                    rec,
+                    item,
+                    (own, labels, milestone),
+                    [item_type, area, size],
+                    needs,
+                )?
             }
             WorkRecord::Edited {
                 item,

@@ -499,6 +499,7 @@ record if the fold accepts it:
 | `POST /v1/work/snooze` `{item, until_ms}` | `snoozed`: My queue hides the item until `until_ms` |
 | `POST /v1/work/block` `{item, reason, until_ms?, resource?}` | `block_set`: no agent is handed the item until `until_ms` or until a person lifts it. Needs `until_ms`, `resource` or both. See [Blocking an item](#blocking-an-item) |
 | `POST /v1/work/lift-block` `{item}` | `block_cleared`: the item can be handed out again |
+| `POST /v1/work/lift-resource` `{resource}` | `resource_lifted`: every item whose block still holds and names `resource` can be handed out again, in one record. See [Blocking an item](#blocking-an-item) |
 | `POST /v1/work/park` `{item}` | `parked` with `parked: true`: My queue hides the item until it waits for a new reason |
 | `POST /v1/work/unpark` `{item}` | `parked` with `parked: false`: the item is in My queue again |
 | `POST /v1/work/unblock` `{item, to}` | `unblocked`: marks the dependency `to` resolved, so the item no longer waits on it |
@@ -744,8 +745,17 @@ curl -X POST "$TRACKER/v1/work/block" -H "authorization: Bearer $PERSON_TOKEN" \
   `block_item` and `lift_block`.
 - `block_set` and `block_cleared` are records of [format 16](upgrades.md#formats).
   Until a person raises the log to 16, both calls are refused with `format`.
-- Blocks are per item. Lifting every item on a resource at once, and
-  agents that say which resources they have, are not built yet.
+- Blocks are per item, and one call lifts them by resource.
+  `POST /v1/work/lift-resource` with `{"resource": "azure-vms"}` (the tool is
+  `lift_resource`) writes one `resource_lifted` record that ends every block
+  that still holds and names exactly that resource, and nothing else: a block
+  on another resource, a block with only a time, a block that already ended
+  and a closed item are left as they were. The name is compared as written,
+  so `Azure-VMs` is another resource. A call that would lift nothing is
+  refused with `no_change`, an empty or over-long name with `bad_block`, and
+  only a person may call it. It is a record of [format 20](upgrades.md#formats).
+  Agents that say which resources they have: see
+  [What the work needs](#what-the-work-needs-and-what-an-agent-can-do).
 
 #### Related items
 
@@ -819,7 +829,8 @@ KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
 | `add_note` | A note, review comment or priority change, as `human_input` |
 | `redo_from_decision` | `POST /v1/work/redo`: start a new attempt from a recorded decision; `note` is an `add_note` offset |
 | `retry_item`, `snooze_item`, `park_item`, `unpark_item`, `unblock_item` | The [card actions](#card-actions-on-my-queue) |
-| `block_item`, `lift_block` | [Block an item](#blocking-an-item) until a time or on a named resource, or lift the block |
+| `block_item`, `lift_block`, `lift_resource` | [Block an item](#blocking-an-item) until a time or on a named resource, lift one block, or lift every block on one resource |
+| `classify_item` | Set an item's type, area, size or needs: [Labels, milestone, type, area and size](#labels-milestone-type-area-and-size) |
 | `relate_items`, `unrelate_items` | Relate two items, or remove the relation: [Related items](#related-items) |
 | `request_review`, `request_changes`, `mark_merged`, `rate_summary` | The [review actions and summary marks](#review-actions-and-summary-marks) |
 | `take_item`, `reassign_item`, `steer_agent` | [Assignees](#assignees): take an item, assign it to a person (`to`) or to nobody (no `to`), or send a note to the agent holding it |
@@ -1923,11 +1934,11 @@ take without them:
 | `milestone` | Work whose root has this upstream milestone, in any letter case |
 | `labels` | Work whose root has at least one of these upstream labels, in any letter case, at most 32 |
 | `item_type`, `area`, `size` | Work whose root was classed this type, area or size, in any letter case |
+| `capabilities` | Work whose needs are all in this list, at most 32 plain words. Not a narrowing: see [What the work needs](#what-the-work-needs-and-what-an-agent-can-do) |
 
 An item assigned to the agent is filtered the same way, so a caller that asks
 for triage is not handed its assigned fix. An unknown kind or tier is refused
-with 400 before anything is tried. Items do not carry their upstream labels,
-so there is no label filter.
+with 400 before anything is tried.
 
 `work_peek` (`POST /v1/work/peek`, agent token) takes the same narrowing fields
 and `limit` (default 10, at most 50). It lists the next items the caller would
@@ -2320,7 +2331,49 @@ the same way whoever chose it. These fields are format 19.
 
 `work_next` and `work_peek` filter on all of them, read from the item's root, so a root's triage and augment items
 follow it. A filtered claim is made from the state, so the ready records of items it passes over are not polled, acked
-or nacked. A peek shows each item's milestone, labels, type, area and size.
+or nacked. A peek shows each item's milestone, labels, type, area, size and needs.
+
+### What the work needs, and what an agent can do
+
+Some work only runs somewhere: it needs Azure credit, a GPU, a network the
+others lack. A root can say so with a set of `needs`, and an agent says what it
+can do now with `capabilities` on the call. `work_next` and `work_peek` hand it
+only work whose needs are all in its capabilities.
+
+- **Needs** are words from a per-team list, `vocabulary.needs` in the standing
+  rules, next to the types and areas above (`{"vocabulary": {"needs":
+  ["azure", "gpu", "network"]}}`). A set holds at most 8, each from the list, in
+  any letter case, stored as the list spells it. A value outside the list
+  refuses the whole record as `bad_class`, and a team with no list accepts none.
+- **Who sets them.** Triage with `needs` on `work_triage` (an empty list drops
+  what triage set before), a person with `classify_item` and `needs` (an empty
+  list clears them), and an intake rule that maps labels: `label_needs` is a map
+  from label to need, and an issue needs every need its labels map to
+  ([ingest setup](ingest-setup.md#mapping-labels-and-milestones)). The fold
+  remembers who chose the set, with the precedence of the class values above:
+  triage replaces a rule's set, and nothing replaces a person's. Needs are one
+  set per root, not merged between actors.
+- **What they cover.** The root's needs apply to the work that runs in an
+  environment: its fix, test and resume items. Triage, augment, split, question
+  and review items need nothing, so any agent can triage or review work it
+  could not do.
+- **Capabilities** go on each `work_next` and `work_peek` call, not on the
+  agent's registration, so a session can say it has a GPU now and not later.
+  They are plain words compared without regard to case. With none declared, an
+  agent is handed only work that needs nothing, so adding a need to an item
+  never reaches an agent that did not ask for it. An item assigned to an agent
+  without the capability is not handed to it either.
+- **Skipped work spends nothing.** A call whose capabilities do not cover a
+  ready item claims from the state instead of polling the lane, so the passed-over
+  item's ready record is neither polled, acked nor nacked, and the answer is
+  the same after a restart. If a need is added after a record was polled, the
+  record is acked like a blocked item's and the item is published again when
+  the state next syncs.
+- **Format 20.** `needs` on `edited` and `triaged`, a `needs` list in a
+  vocabulary and `resource_lifted` are refused with `format` until a person
+  raises the log to 20 ([upgrades](upgrades.md#formats)). A reader below 20
+  stops at the first such record, so it never hands an item to an agent that
+  lacks what it needs.
 
 ### Intake rules
 

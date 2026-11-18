@@ -760,8 +760,10 @@ impl<B: Broker> Tracker<B> {
             item_type,
             area,
             size,
+            needs,
         } = answer;
         bounded("why", &why, MAX_FIELD)?;
+        check_needs(needs.as_deref())?;
         // Compared with the standing answer, which was stored redacted.
         let why = redact(&why).into_owned();
         triage_lists(&depends_on, &related, &split)?;
@@ -823,6 +825,7 @@ impl<B: Broker> Tracker<B> {
                 && (p.edited
                     || (&p.depends_on, &p.related, &p.split) == (&depends_on, &related, &split))
                 && same_class(&core, &target, [&item_type, &area, &size])
+                && same_needs(&core, &target, &needs)
             {
                 return Ok(
                     json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),
@@ -846,6 +849,7 @@ impl<B: Broker> Tracker<B> {
                 item_type,
                 area,
                 size,
+                needs,
             };
             let offset = self
                 .agent_append(&mut core, agent, item, "triage", record)
@@ -1197,6 +1201,29 @@ pub(crate) struct TriageAnswer {
     pub(crate) item_type: Option<String>,
     pub(crate) area: Option<String>,
     pub(crate) size: Option<String>,
+    /// What the work needs, from the vocabulary's `needs`.
+    pub(crate) needs: Option<Vec<String>>,
+}
+
+/// Whether the needs an answer repeats are the ones already standing on
+/// `target`, by triage or a person. Needs it leaves out are no change.
+fn same_needs(core: &Core, target: &ItemId, new: &Option<Vec<String>>) -> bool {
+    let Some(new) = new else { return true };
+    let Some(it) = core.state.items.get(target) else {
+        return false;
+    };
+    let stand = it.class.needs.as_ref();
+    match stand {
+        None => new.is_empty(),
+        Some(n) if n.by == kbl_core::work_fold::ClassBy::Person => true,
+        Some(n) => {
+            n.by == kbl_core::work_fold::ClassBy::Triage
+                && n.values.len() == new.len()
+                && new
+                    .iter()
+                    .all(|v| n.values.iter().any(|h| h.eq_ignore_ascii_case(v)))
+        }
+    }
 }
 
 /// Whether the values an answer repeats are the ones triage already set on
@@ -1321,9 +1348,11 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             split,
             labels,
             milestone,
+            needs,
             ..
         } => {
             upstream_facts(labels.as_ref(), milestone.as_deref())?;
+            check_needs(needs.as_deref())?;
             if let Some(title) = title {
                 field("title", title)?;
                 if title.is_empty() {
@@ -1337,6 +1366,7 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
                 split.as_deref().unwrap_or_default(),
             )
         }
+        WorkRecord::ResourceLifted { resource } => field("resource", resource),
         WorkRecord::Shipped { release, .. } => {
             field("release", release)?;
             if release.is_empty() {
@@ -1423,6 +1453,19 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests;
+
+/// A record's needs are checked against the vocabulary by the fold; here only
+/// their number and length, so a record that carries far more is not stored whole.
+pub(super) fn check_needs(needs: Option<&[String]>) -> Result<(), Error> {
+    use kbl_core::work::{MAX_CLASS_LEN, MAX_NEEDS};
+    let Some(needs) = needs else { return Ok(()) };
+    if needs.len() > MAX_NEEDS || needs.iter().any(|n| n.len() > MAX_CLASS_LEN) {
+        return Err(Error::Invalid(format!(
+            "at most {MAX_NEEDS} needs, each up to {MAX_CLASS_LEN} bytes"
+        )));
+    }
+    Ok(())
+}
 
 /// Upstream's labels and milestone are cut by the fold, but a record that
 /// carries far more than it keeps is refused here instead of stored whole.

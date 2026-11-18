@@ -827,6 +827,7 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     };
     l.agent("w2", triaged(3)); // 3: holds nothing
     l.agent("w1", claimed("t1", 1));
@@ -1341,6 +1342,7 @@ fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     });
     assert!(!fold(&l.0).items[&id("r1")].changed_upstream);
 
@@ -1810,6 +1812,7 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -1832,6 +1835,7 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -1848,6 +1852,7 @@ fn a_person_edits_a_proposal_before_accepting_it() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
             depends_on: None,
             split: None,
             proposal: None,
@@ -2530,6 +2535,7 @@ fn triage_posts_a_prerequisite_for_the_item_it_triages_and_keeps_its_claim() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         },
     );
     l.agent("w2", done("t1", 1, 0));
@@ -2768,6 +2774,7 @@ fn triaged_unclear(item: &str) -> WorkRecord {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     }
 }
 
@@ -3157,6 +3164,7 @@ mod card_actions;
 mod classes;
 mod human_wait;
 mod inbox;
+mod needs;
 mod related;
 mod review;
 mod review_actions;
@@ -3433,6 +3441,7 @@ fn triage_answers_are_counted_unless_they_repeat_the_one_on_record() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     };
     l.agent("w1", triaged(1, "a"));
     l.agent("w1", triaged(1, "a"));
@@ -3469,6 +3478,7 @@ fn a_changed_dependency_or_split_is_a_different_triage_answer() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     };
     l.tracker(imported("r0"));
     l.agent("w1", triaged(vec!["r0"], vec!["a"]));
@@ -3511,6 +3521,7 @@ fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         },
     );
     // Accepting again without a tier keeps the admitted tier too.
