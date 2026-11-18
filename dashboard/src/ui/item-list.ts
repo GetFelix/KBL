@@ -23,6 +23,8 @@ export interface ListHandlers extends StripHandlers, InboxHandlers {
   mark(id: string): void;
   clearSearch(): void;
   clearFilters(): void;
+  /** Folds a group away or opens it, by its `collapseKey`. */
+  toggleGroup(key: string): void;
 }
 
 const SKELETON_ROWS = 6;
@@ -55,7 +57,8 @@ export interface Drawn {
 }
 
 export function drawn(groups: readonly Group[]): Drawn {
-  return { order: groups.flatMap((g) => g.items.map((i) => i.id)), stage: new Map(groups.flatMap((g) => g.items.map((i) => [i.id, g.label] as const))) };
+  const drawnGroups = groups.filter((g) => !g.collapsed);
+  return { order: drawnGroups.flatMap((g) => g.items.map((i) => i.id)), stage: new Map(drawnGroups.flatMap((g) => g.items.map((i) => [i.id, g.label] as const))) };
 }
 
 /**
@@ -260,7 +263,7 @@ export function itemList(
       }
       // The inbox is one ordered list; the board has no column for it.
       if (s.layout === 'board' && s.view !== 'inbox') return showBoard(s, groups);
-      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? '', lead(i), strips(i.id)])]))}`;
+      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.label, !!g.collapsed, g.collapsed ? g.items.length : g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? '', lead(i), strips(i.id)])]))}`;
       // A field in a strip loses focus when its list is rebuilt; it gets it back once the strips are in.
       let typing: HTMLElement | null = null;
       if (key !== shown) {
@@ -272,20 +275,30 @@ export function itemList(
         const kept = new Map(rows);
         shown = key;
         rows.clear();
-        for (const g of groups) for (const i of g.items) {
+        // Which header had the focus, so folding or regrouping does not drop it to the page.
+        const focusedHeader = document.activeElement instanceof HTMLElement && el.contains(document.activeElement) ? document.activeElement.dataset.toggle : undefined;
+        for (const g of groups) if (!g.collapsed) for (const i of g.items) {
           const a = kept.get(i.id);
           if (a) rows.set(i.id, a);
         }
         el.replaceChildren(
           ...groups.map((g) => {
-            const headingId = `group-${g.stage}`;
-            return h('section', { class: 'group', 'aria-labelledby': headingId },
-              h('h2', { id: headingId, class: 'group-title' }, g.label, h('span', { class: 'count' }, String(g.items.length))),
-              h('ul', {}, ...g.items.map((item) => h('li', { class: s.view === 'inbox' ? 'row-item inbox-item' : 'row-item' }, markBox(item.id), row(item.id, item.title, waits.get(item.id) ?? ''), kids.has(item.id) && !s.childCards && s.view !== 'inbox' ? childStrip(item.id, summarize(kids.get(item.id)!), open.has(item.id), (id) => itemHref(id, s), on) : null))),
+            const headingId = `group-${g.stage.replace(/[^\w-]/g, '_')}`;
+            const count = h('span', { class: 'count' }, String(g.items.length));
+            // A grouped list folds: the header is a button, so Tab, Enter and Space already work.
+            const title = g.toggle
+              ? h('h2', { id: headingId, class: 'group-title' },
+                  h('button', { type: 'button', class: 'group-toggle', 'data-toggle': g.toggle, 'aria-expanded': String(!g.collapsed), 'aria-controls': g.collapsed ? undefined : `${headingId}-rows`, onclick: () => on.toggleGroup(g.toggle!) },
+                    h('span', { class: 'chevron', 'aria-hidden': 'true' }, g.collapsed ? '▸' : '▾'), h('span', { class: 'group-name' }, g.label), count))
+              : g.label ? h('h2', { id: headingId, class: 'group-title' }, g.label, count) : null;
+            return h('section', { class: 'group', 'aria-labelledby': g.label ? headingId : undefined, 'aria-label': g.label ? undefined : 'Work' },
+              title,
+              g.collapsed ? null : h('ul', { id: `${headingId}-rows` }, ...g.items.map((item) => h('li', { class: s.view === 'inbox' ? 'row-item inbox-item' : 'row-item' }, markBox(item.id), row(item.id, item.title, waits.get(item.id) ?? ''), kids.has(item.id) && !s.childCards && s.view !== 'inbox' ? childStrip(item.id, summarize(kids.get(item.id)!), open.has(item.id), (id) => itemHref(id, s), on) : null))),
             );
           }),
         );
         last = drawn(groups);
+        if (focusedHeader) Array.from(el.querySelectorAll<HTMLElement>('[data-toggle]')).find((b) => b.dataset.toggle === focusedHeader)?.focus({ preventScroll: true });
         // Moving a focused node blurs it; put the focus back without scrolling or re-selecting.
         restoreFocus(focusedId, before, last, rows, el, quietly, { select: on.select, announce, name: (id) => nameOf(s.items, id) });
         // A checkbox that had the focus keeps it, rather than handing it to its row.

@@ -2,7 +2,8 @@
 // filters hide in words, Clear filters, and Save view. Native selects, so every
 // screen reader and keyboard already knows how to use them.
 import { chordFor, displayChord } from '../keys.ts';
-import { inScope, shownRows } from '../list.ts';
+import { GROUP_KEYS, NO_GROUP, effectiveGroup } from '../group-by.ts';
+import { inScope, visible } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { activeCount, facets, summary, type Facet, type Layout } from '../views.ts';
 import { h, kbd } from './dom.ts';
@@ -11,6 +12,8 @@ export interface FilterHandlers {
   layout(layout: Layout): void;
   children(): void;
   filter(facet: Facet, value: string | null): void;
+  /** Picks what the list groups by. */
+  group(by: string): void;
   clearFilters(): void;
   saveView(): void;
 }
@@ -24,6 +27,8 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   const board = layoutButton('board', 'Board');
   const children = h('button', { type: 'button', class: 'button ghost', 'aria-pressed': 'false', onclick: on.children }, 'Child cards', kbd(displayChord(chordFor('children'), mac)));
   const selects = h('div', { class: 'filter-selects' });
+  const groupSelect = h('select', { id: 'group-by', 'data-group-by': '', onchange: (e) => on.group((e.target as HTMLSelectElement).value) });
+  const groupLabel = h('label', { class: 'filter group-by' }, h('span', { class: 'filter-label' }, 'Group by'), groupSelect);
   const clear = h('button', { type: 'button', class: 'button ghost', onclick: on.clearFilters, hidden: true }, 'Clear filters');
   const save = h('button', { type: 'button', class: 'button ghost', onclick: on.saveView }, 'Save view');
   // Polite, so a new filter is announced once it applies, without stealing focus. The
@@ -32,6 +37,7 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   const el = h('div', { class: 'filter-bar' },
     h('div', { class: 'segmented', role: 'group', 'aria-label': 'Layout' }, list, board, kbd(displayChord(chordFor('layout'), mac))),
     children,
+    groupLabel,
     h('div', { class: 'filters', role: 'group', 'aria-label': 'Filters' }, selects),
     summaryEl,
     clear,
@@ -75,6 +81,13 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     last = s;
     for (const b of [list, board]) b.setAttribute('aria-pressed', String(b.dataset.layout === s.layout));
     children.setAttribute('aria-pressed', String(!!s.childCards));
+    // The board's columns are its stages, so the choice waits for the list.
+    const onBoard = s.layout === 'board' && s.view !== 'inbox';
+    groupSelect.disabled = onBoard;
+    groupLabel.title = onBoard ? 'The board groups by stage. Switch to the list to group by something else.' : '';
+    if (groupSelect.options.length === 0) for (const [v, text] of [[NO_GROUP, 'None'], ...GROUP_KEYS.map((k) => [k.id, k.label])]) groupSelect.append(h('option', { value: v }, text));
+    const by = onBoard ? 'stage' : effectiveGroup(s.view, s.group);
+    if (groupSelect.value !== by && groupSelect !== document.activeElement) groupSelect.value = by;
     const scoped = inScope(s);
     const offered = facets(scoped, s.filters);
     const busy = document.activeElement;
@@ -97,7 +110,8 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     });
     const n = activeCount(s.filters);
     clear.hidden = n === 0;
-    const shownCount = shownRows(s).length;
+    // Counts what the filters leave, folded groups included.
+    const shownCount = visible(s).reduce((n, g) => n + g.items.length, 0);
     const parts = [s.query.trim() && `search “${s.query.trim()}”`, summary(s.filters)].filter(Boolean);
     const words = parts.length ? `Showing ${shownCount} of ${scoped.length}: ${parts.join(', ')}` : '';
     if (summaryEl.textContent !== words) summaryEl.textContent = words;
@@ -106,6 +120,8 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     el,
     /** The first filter, for the F key; null when nothing recorded a facet. */
     first: () => selects.querySelector('select'),
+    /** Group by, for the G key. */
+    focusGroup: () => groupSelect.focus(),
     /** Save view, where focus goes when the last saved view is deleted. */
     focusSave: () => save.focus(),
     render,

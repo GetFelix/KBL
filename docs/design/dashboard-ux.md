@@ -79,8 +79,17 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   its root's. Values with no items are never offered, and a facet nobody recorded is hidden. Each filter is a
   native `<select>`, which owns its own keys; `Esc` and `Mod` chords still work there. The bar says
   "Showing N of M" with the active filters in words, and no match inside filters offers Clear filters.
-- **Saved views.** View, layout, search and filters are the address (`view`, `layout`, `q`, `source`, `tier`,
-  `repo`), so a view is a link. The board was once `?view=board`; such a link or saved view still opens the board,
+- **Group by.** The list groups by stage, tier, repo, kind or assignee, or not at all, from the Group by select
+  above the work, `G`, or the palette (`Group by: Tier`). Each group is a heading with a button that folds it, its name
+  and its count, so `Tab` reaches it and `Enter` or `Space` folds it (`aria-expanded`). `J` and `K` walk only the rows
+  on the page: a folded group is skipped, and folding the group the selection is in moves it to the nearest row left,
+  as does a live update that lands the selected item in a folded group. Folds are kept per view and per grouping, in
+  the page only. Groups come from a table of keys (`src/group-by.ts`), so a new field is one entry. Stage is the
+  default; the Needs you view stays one list, oldest first, until a grouping is picked. The board is always stage
+  columns: swimlanes would need a second axis in its keyboard model (up, down, left, right across lanes and columns),
+  so the control is disabled there and says why.
+- **Saved views.** View, layout, search, filters and grouping are the address (`view`, `layout`, `q`, `source`, `tier`,
+  `repo`, `group`), so a view is a link. The board was once `?view=board`; such a link or saved view still opens the board,
   and the page rewrites it to `?layout=board` when it reads it. Save view stores it by name in local storage, per viewer, and puts it in the sidebar, where the
   current one is `aria-current` and names the page. Edit renames or deletes; a name already in use is refused
   next to the field rather than overwriting a view. Storage is read in `try`/`catch`: blocked or broken storage

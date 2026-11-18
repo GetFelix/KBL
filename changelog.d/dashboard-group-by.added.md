@@ -1,0 +1,1 @@
+The dashboard list can group by stage, tier, repo, kind or assignee, or not at all. Groups have a header button with a count and fold away; `J` and `K` skip folded groups. The grouping is in the address and in saved views, and the palette and `G` reach it. The board keeps its stage columns. No record or format change.

@@ -20,6 +20,9 @@ export type CommandId =
   | 'layout'
   | 'filter'
   | 'clearFilters'
+  | 'groupBy'
+  | 'collapseGroups'
+  | 'expandGroups'
   | 'saveView'
   | 'density'
   | 'children'
@@ -67,6 +70,9 @@ export const COMMANDS: readonly Command[] = [
   { id: 'view-blocked', label: 'Show blocked work', group: 'View', keys: [] },
   { id: 'layout', label: 'Switch list and board', group: 'View', keys: ['V'] },
   { id: 'filter', label: 'Filter items', group: 'View', keys: ['F'] },
+  { id: 'groupBy', label: 'Group by', group: 'View', keys: ['G'] },
+  { id: 'collapseGroups', label: 'Collapse all groups', group: 'View', keys: [] },
+  { id: 'expandGroups', label: 'Expand all groups', group: 'View', keys: [] },
   { id: 'clearFilters', label: 'Clear all filters', group: 'View', keys: [] },
   { id: 'saveView', label: 'Save this view', group: 'View', keys: [] },
   { id: 'children', label: 'Show child work as cards or under its root', group: 'View', keys: ['C'] },

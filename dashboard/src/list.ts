@@ -5,32 +5,19 @@ import { inboxFor, oldestFirst } from './inbox.ts';
 import { score } from './palette.ts';
 import type { ViewState } from './state.ts';
 import { applyFilters } from './views.ts';
+import { STAGES, stageLabel } from './stages.ts';
+import { collapseKey, effectiveGroup, groupItems, NO_GROUP } from './group-by.ts';
 
-/** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
-export const STAGES = [
-  ['needs_you', 'Needs you'],
-  ['triage', 'Triage'],
-  ['proposed', 'Proposed'],
-  ['in_review', 'In review'],
-  ['ready', 'Ready'],
-  ['blocked', 'Blocked'],
-  ['held', 'Working'],
-  ['done', 'Done'],
-  ['closed', 'Closed'],
-] as const;
+export { STAGES, stageLabel } from './stages.ts';
 
 export interface Group {
   stage: string;
   label: string;
   items: ItemRow[];
-}
-
-/** A stage the page does not know yet still shows, under its own name, after the known ones. */
-export function stageLabel(stage: string): string {
-  const known = STAGES.find(([s]) => s === stage);
-  if (known) return known[1];
-  const words = stage.replaceAll('_', ' ');
-  return words.charAt(0).toUpperCase() + words.slice(1);
+  /** Set on a group the list can fold away: the key its collapsed state is kept under. */
+  toggle?: string;
+  /** Folded away: the header and count show, its rows do not, and j and k walk past them. */
+  collapsed?: boolean;
 }
 
 /** A root's stage as the panel and cards name it: a ready root is ready to fix, once triage is accepted. */
@@ -77,9 +64,9 @@ export function nestedIds(shown: readonly ItemRow[]): Set<string> {
   return new Set(shown.filter((i) => i.parent && ids.has(i.parent) && i.stage !== 'needs_you').map((i) => i.id));
 }
 
-/** The rows in display order, which is the order j and k walk. */
+/** The rows in display order, which is the order j and k walk. A collapsed group has no rows on the page. */
 export function flatten(groups: readonly Group[]): ItemRow[] {
-  return groups.flatMap((g) => g.items);
+  return groups.flatMap((g) => (g.collapsed ? [] : g.items));
 }
 
 /** The id `step` rows away from `current`, clamped to the ends. No current selection starts at the first row. */
@@ -101,21 +88,34 @@ export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'> & { tra
   return s.items.filter((i) => blocked.has(i.id));
 }
 
-/** What the page shows: the items in the view, filtered, matching the search, grouped by stage. */
-export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting']; childCards?: boolean }): Group[] {
+type Shown = Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting']; childCards?: boolean; layout?: ViewState['layout']; group?: ViewState['group']; collapsed?: ViewState['collapsed'] };
+
+/**
+ * What the page shows: the items in the view, filtered, matching the search, grouped by
+ * the view's Group by (stage unless a person chose otherwise). The board is always stage
+ * columns. A collapsed group stays in the list with its items, marked `collapsed`.
+ */
+export function visible(s: Shown): Group[] {
   const rows = applyFilters(inScope(s), s.filters);
-  if (s.view === 'inbox') {
-    // One list, oldest first: the inbox is cleared from the top, not by stage.
-    const matching = group(rows, s.query).flatMap((g) => g.items);
-    return matching.length ? [{ stage: 'inbox', label: 'Waiting on you', items: oldestFirst(matching, s.waiting ?? new Map()) }] : [];
-  }
+  const board = s.layout === 'board' && s.view !== 'inbox';
+  const by = board ? 'stage' : effectiveGroup(s.view, s.group);
   const found = s.query.trim() ? rows.filter((i) => matches(i, s.query)) : rows;
-  const nested = s.childCards ? new Set<string>() : nestedIds(found);
-  return group(found, '', (i) => nested.has(i.id));
+  // The inbox is cleared from the top, oldest first, whatever it is grouped by.
+  const ordered = s.view === 'inbox' ? oldestFirst(found, s.waiting ?? new Map()) : found;
+  const nested = s.childCards || s.view === 'inbox' ? new Set<string>() : nestedIds(found);
+  const shown = ordered.filter((i) => !nested.has(i.id));
+  if (s.view === 'inbox' && by === NO_GROUP) return shown.length ? [{ stage: 'inbox', label: 'Waiting on you', items: shown }] : [];
+  if (by === NO_GROUP) return shown.length ? [{ stage: NO_GROUP, label: '', items: shown }] : [];
+  if (board) return group(shown);
+  const folded = new Set(s.collapsed ?? []);
+  return groupItems(shown, by).map((g) => {
+    const toggle = collapseKey(s.view, by, g.value);
+    return { stage: g.value === '' ? `no-${by}` : g.value, label: g.label, items: g.items, toggle, collapsed: folded.has(toggle) };
+  });
 }
 
 /** The rows the list shows, in the order j and k walk. */
-export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting']; childCards?: boolean }): ItemRow[] {
+export function shownRows(s: Shown): ItemRow[] {
   return flatten(visible(s));
 }
 
@@ -124,7 +124,7 @@ export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'que
  * its own, so the selection goes to the nearest root that does; an item the view does not
  * show at all keeps the selection on itself, as before.
  */
-export function selectionFor(s: Parameters<typeof shownRows>[0], id: string): string {
+export function selectionFor(s: Shown, id: string): string {
   const shown = new Set(shownRows(s).map((r) => r.id));
   const byId = new Map(s.items.map((i) => [i.id, i]));
   const seen = new Set<string>();
@@ -135,8 +135,8 @@ export function selectionFor(s: Parameters<typeof shownRows>[0], id: string): st
   return id;
 }
 
-/** The marked items the view shows now. A bulk action never reaches an item a search or filter hides. */
-export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting']; childCards?: boolean }): ItemRow[] {
+/** The marked items the view shows now. A bulk action never reaches an item a search, a filter or a collapsed group hides. */
+export function markedShown(s: Shown & Pick<ViewState, 'marked'>): ItemRow[] {
   const marked = new Set(s.marked);
   return shownRows(s).filter((i) => marked.has(i.id));
 }
@@ -174,4 +174,18 @@ export function neighbour(before: readonly string[], gone: string, shown: (id: s
   const at = before.indexOf(gone);
   if (at < 0) return undefined;
   return [...before.slice(at + 1), ...before.slice(0, at).reverse()].find(shown);
+}
+
+/**
+ * The selection after the groups change: a selected row that sits in a collapsed group has
+ * no row on the page, so the selection moves to the nearest row that does, else none. A
+ * selection the view never listed (an opened link) is left alone.
+ */
+export function settleSelection(s: Shown & { selected: string | null }): string | null {
+  if (!s.selected) return s.selected;
+  const groups = visible(s);
+  const all = groups.flatMap((g) => g.items.map((i) => i.id));
+  if (!all.includes(s.selected)) return s.selected;
+  const shown = new Set(flatten(groups).map((i) => i.id));
+  return shown.has(s.selected) ? s.selected : (neighbour(all, s.selected, (id) => shown.has(id)) ?? null);
 }

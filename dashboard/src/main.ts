@@ -296,6 +296,11 @@ const run = (id: CommandId): void => {
     }
     case 'clearFilters':
       return store.dispatch({ type: 'clearFilters' });
+    case 'groupBy':
+      return ui.filters.focusGroup();
+    case 'collapseGroups':
+    case 'expandGroups':
+      return store.dispatch({ type: 'collapseAll', collapsed: id === 'collapseGroups' });
     case 'saveView':
       return views.open(null, ui.suggestName(s));
     case 'density': {
@@ -359,6 +364,8 @@ const ui = shell(
     children: () => run('children'),
     toggle: (id) => store.dispatch({ type: 'expand', id }),
     filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }),
+    group: (group) => store.dispatch({ type: 'group', group }),
+    toggleGroup: (key) => store.dispatch({ type: 'collapse', key }),
     saveView: () => run('saveView'),
     openView: (search) => store.dispatch({ type: 'openView', search }),
     editView: (name) => views.open(name),
@@ -394,7 +401,7 @@ const ui = shell(
 );
 const palette = paletteView(
   store.get,
-  { run, openItem, filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }), openView: (search) => store.dispatch({ type: 'openView', search }) },
+  { run, openItem, filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }), group: (group) => store.dispatch({ type: 'group', group }), openView: (search) => store.dispatch({ type: 'openView', search }) },
   mac,
 );
 const help = helpView(mac);

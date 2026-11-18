@@ -6,6 +6,7 @@ import { inScope, stageLabel } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { FLAG_COMMANDS, logTakesAssignees, logTakesFlags } from '../writes.ts';
 import { facets, type Facet } from '../views.ts';
+import { effectiveGroup, GROUP_KEYS, NO_GROUP } from '../group-by.ts';
 import { modal } from './dialog.ts';
 import { h, kbd } from './dom.ts';
 
@@ -13,6 +14,7 @@ export interface PaletteHandlers {
   run(id: CommandId): void;
   openItem(id: string): void;
   filter(facet: Facet, value: string | null): void;
+  group(by: string): void;
   openView(search: string): void;
 }
 
@@ -30,6 +32,9 @@ export function entries(s: ViewState): Entry[] {
         section: 'Commands',
       })),
     ),
+    ...[[NO_GROUP, 'None'], ...GROUP_KEYS.map((k) => [k.id, k.label])]
+      .filter(([id]) => id !== effectiveGroup(s.view, s.group))
+      .map(([id, label]) => ({ key: `group:${id}`, label: `Group by: ${label}`, section: 'Commands' })),
     ...s.saved.map((v) => ({ key: `view:${v.search}`, label: `Open view: ${v.name}`, section: 'Commands' })),
     ...s.items.map((i) => ({ key: `item:${i.id}`, label: i.title, hint: `${i.id} · ${stageLabel(i.stage)}`, section: 'Items' })),
   ];
@@ -61,6 +66,7 @@ export function paletteView(getState: () => ViewState, on: PaletteHandlers, mac:
     const [kind, id] = [e.key.slice(0, e.key.indexOf(':')), e.key.slice(e.key.indexOf(':') + 1)];
     if (kind === 'cmd') on.run(id as CommandId);
     else if (kind === 'view') on.openView(id);
+    else if (kind === 'group') on.group(id);
     else if (kind === 'filter') {
       const facet = id.slice(0, id.indexOf(':')) as Facet;
       const value = id.slice(id.indexOf(':') + 1);
