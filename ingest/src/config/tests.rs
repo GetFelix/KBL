@@ -340,3 +340,27 @@ fn gitlab_write_back_is_a_comment_and_a_close_or_reopen() {
         assert!(gitlab(block, &rule(bad)).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn a_rule_may_skip_triage_only_when_it_admits() {
+    let rule = |extra: &str| format!(r#"[{{"name":"a","repo":"o/r",{extra}}}]"#);
+    let skip = parse(&rule(r#""mode":"admit","triage":"skip""#), GH).unwrap();
+    assert_eq!(skip.rules[0].triage, Triage::Skip);
+    let plain = parse(&rule(r#""mode":"admit""#), GH).unwrap();
+    assert_eq!(plain.rules[0].triage, Triage::Run);
+    let err = format!(
+        "{:#}",
+        parse(&rule(r#""mode":"propose","triage":"skip""#), GH).unwrap_err()
+    );
+    assert!(err.contains("triage"), "{err}");
+    assert!(parse(&rule(r#""mode":"admit","triage":"never""#), GH).is_err());
+}
+
+#[test]
+fn a_skip_rule_name_must_fit_the_record() {
+    let long = "n".repeat(121);
+    let rules = format!(r#"[{{"name":"{long}","repo":"o/r","mode":"admit","triage":"skip"}}]"#);
+    assert!(parse(&rules, GH).is_err());
+    let ok = format!(r#"[{{"name":"{long}","repo":"o/r","mode":"admit"}}]"#);
+    assert!(parse(&ok, GH).is_ok());
+}

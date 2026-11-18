@@ -159,6 +159,7 @@ fn a_parked_item_stays_out_until_unparked_or_it_waits_anew() {
     l.person(WorkRecord::Accepted {
         item: id("c1"),
         tier: None,
+        triage_skipped: None,
     });
     assert!(queue_ids(&l, 0).is_empty());
     for _ in 0..2 {

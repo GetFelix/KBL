@@ -192,6 +192,7 @@ impl Folder {
                         "split": p.split,
                     })),
                     "triage": triage,
+                    "triage_skipped": i.triage_skipped,
                 })
             })
             .collect();

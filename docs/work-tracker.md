@@ -980,7 +980,7 @@ ingest closed it.
 ```
 
 A rule's `repo`, `labels_all`, `labels_any`, `labels_excluded`, `milestone`,
-`assignee` and `type` are ANDed; `mode` is `admit` or `propose`; `cap` limits
+`assignee` and `type` are ANDed; `mode` is `admit` or `propose`; `triage` is `run` (the default) or `skip`, which with `admit` imports a root with no triage or augment item; `cap` limits
 open roots; `target_repo` names where agents work (default: the issue's repo).
 The first rule that matches takes the issue.
 
@@ -1048,7 +1048,7 @@ What it does with GitHub:
   refuses a second `imported` for it. A poll that stops before it saves finds
   its root again on the next poll and adds nothing.
 - **Admit** writes `imported`, context for the issue text and the rule,
-  `accepted` with the tier, and a triage and an augment item. **Propose**
+  `accepted` with the tier, and a triage and an augment item. With `"triage": "skip"` it writes the `accepted` (carrying the rule's name as `triage_skipped`) and no items, so the root is Ready to fix at once. **Propose**
   writes `imported` and the context, and leaves the root in Triage.
 - **Cap.** A match over its rule's cap is not imported and is looked at again
   on later polls, oldest first, as roots close.
@@ -2109,7 +2109,7 @@ Each source has one or more intake rules. A rule is the source's own filter
   item and one augment item; it suits a label a person applies on purpose,
   such as `agent-ok`. `propose` puts it in Triage as a proposal that becomes a
   root only when a person accepts it; it suits broad filters such as "the 0.8
-  milestone".
+  milestone". Add `"triage": "skip"` to an `admit` rule for issues that are already well specified, such as a curated milestone or an `agent-ok` label a person applied after writing the acceptance: the root skips triage and augment and an agent can fix it at once.
 - **A cap** on the open roots the rule may have at a time, so a broad filter
   cannot flood the queue. Matches over the cap wait upstream and are picked up
   as roots close.

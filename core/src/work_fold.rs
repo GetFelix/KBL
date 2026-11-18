@@ -47,6 +47,8 @@ const ATTEMPTS_ALLOWED: u32 = 2;
 /// Attempts that may be open on one item at once: the current one and the one compared with it.
 const OPEN_ATTEMPTS: usize = 2;
 const DEFAULT_TIER: u8 = 2;
+/// Longest rule name an `accepted` record carries as its triage-skipped reason.
+const MAX_RULE_NAME: usize = 120;
 /// What one attempt may write, per kind. A looping agent is refused at the cap
 /// instead of filling the stream.
 const MAX_DECISIONS: usize = 200;
@@ -616,6 +618,9 @@ pub struct Item {
     /// An earlier acceptance does not count, so a format 5 state is unchanged.
     #[serde(default, skip_serializing_if = "is_false")]
     pub accepted_by_person: bool,
+    /// The ingest rule that admitted this root with no triage item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage_skipped: Option<String>,
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
     pub hold: Option<Hold>,
@@ -1574,6 +1579,7 @@ impl State {
             left_scope_by_sync: false,
             accepted: false,
             accepted_by_person: false,
+            triage_skipped: None,
             tier: None,
             proposal: None,
             hold: None,
@@ -1891,9 +1897,27 @@ impl State {
                     });
                 }
             }
-            WorkRecord::Accepted { item, tier } => {
+            WorkRecord::Accepted {
+                item,
+                tier,
+                triage_skipped,
+            } => {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
+                }
+                if let Some(rule) = triage_skipped {
+                    // Only ingest, writing as the tracker, admits a root past
+                    // triage, and only an imported root that has no children.
+                    if rec.actor != Actor::Tracker {
+                        return Err(Reject::ActorNotAllowed);
+                    }
+                    if rule.len() > MAX_RULE_NAME {
+                        return Err(Reject::TooLong);
+                    }
+                    let it = self.item(item)?;
+                    if it.parent.is_some() || !it.children.is_empty() {
+                        return Err(Reject::NotARoot);
+                    }
                 }
                 if tier.is_some_and(|t| t >= TIERS) {
                     return Err(Reject::BadTier);
@@ -1906,6 +1930,7 @@ impl State {
                     .or(it.proposal.as_ref().map(|p| p.tier))
                     .or(Some(DEFAULT_TIER));
                 it.accepted = true;
+                it.triage_skipped.clone_from(triage_skipped);
                 it.accepted_by_person = rec.actor == Actor::Person && format >= FORMAT_V6;
                 // A proposal gets its root budget when a person accepts it, not before.
                 if it.parent.is_none() {
@@ -2791,6 +2816,7 @@ impl State {
                 it.release = None;
                 // Back to Triage: a person accepts it again.
                 it.accepted = false;
+                it.triage_skipped = None;
                 it.accepted_by_person = false;
                 self.track(item);
                 let it = self.item_mut(item)?;

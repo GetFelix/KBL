@@ -819,6 +819,7 @@ pub(super) async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
         WorkRecord::Accepted {
             item: item(id),
             tier: Some(tier),
+            triage_skipped: None,
         },
     )
     .await
@@ -1593,6 +1594,7 @@ async fn the_lease_must_outlast_a_write_before_the_tracker_writes() {
             WorkRecord::Accepted {
                 item: item("a1"),
                 tier: Some(1),
+                triage_skipped: None,
             },
         )
         .await,
@@ -1865,6 +1867,7 @@ async fn jira_and_github_roots(t: &Tracker<Fake>, pr: &str) {
     person(WorkRecord::Accepted {
         item: item("j1"),
         tier: Some(2),
+        triage_skipped: None,
     })
     .await
     .unwrap();
@@ -2181,6 +2184,7 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
         WorkRecord::Accepted {
             item: item("theirs"),
             tier: Some(0),
+            triage_skipped: None,
         },
         WorkRecord::Closed {
             item: item("theirs"),
@@ -2548,6 +2552,7 @@ pub(super) async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
         WorkRecord::Accepted {
             item: item(id),
             tier: Some(2),
+            triage_skipped: None,
         },
     )
     .await
@@ -2762,6 +2767,7 @@ async fn no_route_writes_an_oversized_string() {
         WorkRecord::Accepted {
             item: item("big"),
             tier: Some(2),
+            triage_skipped: None,
         },
     )
     .await
@@ -3945,4 +3951,31 @@ fn triage_and_augment_items_say_what_they_are_for() {
     assert!(purpose(WorkKind::Triage).is_some_and(|p| p.starts_with("Triage")));
     assert!(purpose(WorkKind::Augment).is_some_and(|p| p.starts_with("Augment")));
     assert!(purpose(WorkKind::Fix).is_none());
+}
+
+#[tokio::test]
+async fn ingest_skips_triage_only_on_a_root_of_its_own_source() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    jira_and_github_roots(&t, "GetFelix/felix#9").await;
+    let skip = |id: &str| WorkRecord::Accepted {
+        item: item(id),
+        tier: Some(1),
+        triage_skipped: Some("curated".into()),
+    };
+    // The Jira worker cannot mark the GitHub worker's root.
+    let err = t
+        .ingest_record_in(key("ingest"), Some("jira"), skip("g1"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Refused { why } if why == "not_imported"),
+        "{err:?}"
+    );
+    // A person's accept cannot carry it either.
+    t.person_record(key("gab"), skip("g1")).await.unwrap_err();
+    // The GitHub worker marks its own root.
+    t.ingest_record_in(key("ingest"), Some("github"), skip("g1"))
+        .await
+        .unwrap();
 }

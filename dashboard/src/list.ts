@@ -39,8 +39,14 @@ export function rootStageLabel(item: Pick<ItemRow, 'stage' | 'root'>): string {
 }
 
 /** The small chip text for a root's triage child, or null when it has none. */
-export function triageChip(item: Pick<ItemRow, 'triage' | 'root'>): string | null {
+export function triageChip(item: Pick<ItemRow, 'triage' | 'triage_skipped' | 'root'>): string | null {
+  if (item.root && item.triage_skipped) return 'Triage skipped';
   return item.root && item.triage ? `Triage: ${stageLabel(item.triage).toLowerCase()}` : null;
+}
+
+/** Why a root has no triage child, or null: the rule that admitted it past triage. */
+export function triageSkipReason(item: Pick<ItemRow, 'triage_skipped' | 'root'>): string | null {
+  return item.root && item.triage_skipped ? `triage skipped by rule ${item.triage_skipped}` : null;
 }
 
 /** Items matching `query` by id or title, grouped by stage in board order, empty groups left out. */
