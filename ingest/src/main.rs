@@ -171,15 +171,16 @@ async fn serve() -> Result<()> {
 }
 
 /// A token_file wins over an app, and an app over a token_env.
-pub(crate) fn github_token(gh: &config::GithubConfig) -> Result<Token> {
+pub(crate) fn github_token(
+    gh: &config::GithubConfig,
+    budget: &Arc<budget::Budget>,
+) -> Result<Token> {
     Ok(match (&gh.token_file, &gh.app, &gh.token_env) {
         (Some(f), _, _) => Token::File(f.clone()),
-        (None, Some(app), _) => Token::App(Box::new(AppAuth::new(
-            app,
-            &gh.api,
-            app::system_clock(),
-            app::stderr_log(),
-        )?)),
+        (None, Some(app), _) => Token::App(Box::new(
+            AppAuth::new(app, &gh.api, app::system_clock(), app::stderr_log())?
+                .with_budget(budget.clone()),
+        )),
         (None, None, Some(e)) => Token::Env(e.clone()),
         (None, None, None) => unreachable!("the config checks for a token"),
     })
@@ -209,7 +210,7 @@ async fn github_source(
     let mut github = Github::new(
         &gh.api,
         lease::gated(
-            budget::budgeted(Reqwest::new(github_token(gh)?)?, budget.clone()),
+            budget::budgeted(Reqwest::new(github_token(gh, budget)?)?, budget.clone()),
             lessee.clone(),
         ),
         gh.own_logins.clone(),
@@ -276,7 +277,10 @@ async fn jira_source(
     Ok(jira)
 }
 
-pub(crate) fn ado_auth(a: &config::AdoConfig) -> ado::transport::Auth {
+pub(crate) fn ado_auth(
+    a: &config::AdoConfig,
+    budget: &Arc<budget::Budget>,
+) -> ado::transport::Auth {
     use ado::transport::{Auth, Entra, Secret};
     match (&a.pat_file, &a.pat_env, &a.entra) {
         (Some(f), _, None) => Auth::Pat(Secret::File(f.clone())),
@@ -287,7 +291,10 @@ pub(crate) fn ado_auth(a: &config::AdoConfig) -> ado::transport::Auth {
                 (None, Some(v)) => Secret::Env(v.clone()),
                 (None, None) => unreachable!("the config checks the client secret"),
             };
-            Auth::Entra(Entra::new(&e.tenant_id, &e.client_id, secret, &e.authority))
+            Auth::Entra(
+                Entra::new(&e.tenant_id, &e.client_id, secret, &e.authority)
+                    .with_budget(budget.clone()),
+            )
         }
         _ => unreachable!("the config checks the sign-in"),
     }
@@ -318,7 +325,10 @@ async fn ado_source(
         &a.organization,
         &a.api,
         lease::gated(
-            budget::budgeted(ado::transport::Reqwest::new(ado_auth(a))?, budget.clone()),
+            budget::budgeted(
+                ado::transport::Reqwest::new(ado_auth(a, budget))?,
+                budget.clone(),
+            ),
             lessee.clone(),
         ),
         a.own_logins.clone(),

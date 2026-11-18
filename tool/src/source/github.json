@@ -7,6 +7,7 @@
       "name": {{label}},
       "repo": {{repo}},
       "mode": {{mode}},
+      "triage": {{triage}},
       "labels_all": [{{label}}],
       "default_tier": 2,
       "cap": {{cap}}

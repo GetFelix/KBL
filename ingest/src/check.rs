@@ -219,7 +219,7 @@ async fn report_for(path: &Path) -> Report {
         _ => None,
     };
     match (&cfg.github, &cfg.jira) {
-        (Some(g), None) => match crate::github_token(g).and_then(GithubHttp::new) {
+        (Some(g), None) => match crate::github_token(g, &budget).and_then(GithubHttp::new) {
             Ok(http) => {
                 let mut github = Github::new(
                     &g.api,
@@ -314,7 +314,7 @@ fn ado_guarded(
     a: &AdoConfig,
     budget: &Arc<Budget>,
 ) -> Result<Ado<ReadOnlyWiql<Budgeted<crate::ado::transport::Reqwest>>>> {
-    let http = crate::ado::transport::Reqwest::new(crate::ado_auth(a))?;
+    let http = crate::ado::transport::Reqwest::new(crate::ado_auth(a, budget))?;
     Ok(Ado::new(
         &a.organization,
         &a.api,
