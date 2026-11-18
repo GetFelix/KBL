@@ -17,8 +17,8 @@ pub(crate) struct Config {
     pub(crate) jira: Option<JiraConfig>,
     pub(crate) ado: Option<AdoConfig>,
     pub(crate) gitlab: Option<GitlabConfig>,
-    /// The least seconds between polls when no webhook wakes it. The worker
-    /// stretches the gap when the request budget needs it.
+    /// The least seconds between polls when no webhook wakes it, and never
+    /// below 60. The worker stretches the gap when the request budget needs it.
     #[serde(default = "default_poll")]
     pub(crate) poll_seconds: u64,
     /// Hours for one pass that re-reads every open imported issue, to notice
@@ -30,7 +30,8 @@ pub(crate) struct Config {
     #[serde(default)]
     reconcile_every: Option<u64>,
     /// Requests per hour this worker may spend. Unset, it is `budget_share`
-    /// of the limit the vendor reports.
+    /// of the limit the vendor reports. A worker that serves a connection
+    /// takes its share of the pool's budget from the tracker instead.
     #[serde(default)]
     pub(crate) budget_per_hour: Option<u64>,
     /// The part of the vendor's reported hourly limit this worker may spend,
@@ -52,9 +53,14 @@ fn default_reconcile_hours() -> u64 {
     24
 }
 
+/// Half the limit the vendor reports. GitHub counts per account, so a personal
+/// token shares it with the person's own tools; a bot account or App can go higher.
 fn default_budget_share() -> f64 {
     0.5
 }
+
+/// The least gap between interval polls, whatever `poll_seconds` says.
+const MIN_POLL_SECONDS: u64 = 60;
 
 fn default_release_compares() -> u32 {
     20
@@ -395,6 +401,11 @@ impl Config {
         std::time::Duration::from_secs(self.reconcile_hours * 3600)
     }
 
+    /// The least gap between interval polls: `poll_seconds`, but not under a minute.
+    pub(crate) fn poll_floor(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.poll_seconds.max(MIN_POLL_SECONDS))
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("read the config {}", path.display()))?;
@@ -405,6 +416,12 @@ impl Config {
         let mut cfg: Config = serde_json::from_str(text)?;
         ensure!(!cfg.rules.is_empty(), "there are no intake rules");
         ensure!(cfg.poll_seconds >= 1, "poll_seconds must be at least 1");
+        if cfg.poll_seconds < MIN_POLL_SECONDS {
+            eprintln!(
+                "kbl-ingest: warning: poll_seconds {} is below the {MIN_POLL_SECONDS}s floor; polling every {MIN_POLL_SECONDS}s (a webhook still wakes a poll sooner)",
+                cfg.poll_seconds
+            );
+        }
         if let Some(n) = cfg.reconcile_every {
             // Not mapped on its own: the old pass was every N polls, and the
             // poll gap now stretches with the budget, so no fixed hours match.

@@ -3,6 +3,7 @@
 //! its own token, and makes no model calls. See docs/work-tracker.md "Sources".
 
 mod ado;
+mod backoff;
 mod budget;
 mod check;
 mod config;
@@ -149,6 +150,7 @@ async fn serve() -> Result<()> {
         cfg.budget_per_hour,
         cfg.budget_share,
     );
+    lessee.attach(budget.clone());
     match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {
         (Some(g), None, None, None) => {
             let github = github_source(g, &lessee, &budget).await?;
@@ -386,7 +388,7 @@ async fn drive<S: Source>(
     cli: Cli,
 ) -> Result<()> {
     let repos = cfg.repos();
-    let poll_min = Duration::from_secs(cfg.poll_seconds);
+    let poll_min = cfg.poll_floor();
     let reconcile_period = cfg.reconcile_period();
     let leasing = match cfg.tracker.group.clone() {
         Some(group) => {
@@ -403,6 +405,7 @@ async fn drive<S: Source>(
                 group.clone(),
                 instance.clone(),
             ));
+            tokio::spawn(backoff::task(lease_api.clone(), budget.clone()));
             Some((group, instance, beating))
         }
         None => None,
@@ -461,10 +464,13 @@ async fn run<S: Source, T: tracker_api::Tracker>(
 ) -> Result<()> {
     let mut every = min_every;
     ingest.set_interval(every);
+    // The last sleep ended on a delivery, not the interval.
+    let mut woken = false;
     loop {
         // Without a fresh lease the poll would make no vendor call anyway;
         // skipping it also spares the tracker.
         if !lessee.may_poll() {
+            woken = false;
             let changed = lessee.changed.notified();
             tokio::select! {
                 () = changed => {}
@@ -475,6 +481,12 @@ async fn run<S: Source, T: tracker_api::Tracker>(
         }
         // The vendor's wait, or a bucket too low to afford a poll, holds the
         // poll back even when a webhook woke it.
+        if woken {
+            budget.begin_wake_poll();
+        } else {
+            budget.begin_poll();
+        }
+        woken = false;
         if !once && let Some(hold) = budget.poll_wait() {
             eprintln!(
                 "kbl-ingest: request budget low; next poll in {}s",
@@ -487,7 +499,6 @@ async fn run<S: Source, T: tracker_api::Tracker>(
             continue;
         }
         let reconcile = wake.reconcile.swap(false, Ordering::SeqCst);
-        budget.begin_poll();
         let polled = ingest.poll(reconcile).await;
         budget.end_poll(polled.is_ok());
         // A failed poll did not reconcile, so the next one still must.
@@ -526,10 +537,20 @@ async fn run<S: Source, T: tracker_api::Tracker>(
         if once {
             return Ok(());
         }
-        tokio::select! {
-            () = tokio::time::sleep(wait) => {}
-            () = wake.notify.notified() => {}
-            _ = tokio::signal::ctrl_c() => return Ok(()),
+        // A delivery cuts the wait short only while the wake share can pay
+        // for the poll; otherwise it waits out the interval like any other.
+        let deadline = tokio::time::Instant::now() + wait;
+        loop {
+            tokio::select! {
+                () = tokio::time::sleep_until(deadline) => break,
+                () = wake.notify.notified() => {
+                    if lessee.may_poll() && budget.wake_affordable() {
+                        woken = true;
+                        break;
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+            }
         }
     }
 }

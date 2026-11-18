@@ -59,6 +59,8 @@ struct Quiet {
     source_leases: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Ingest worker groups' members by group: value and version.
     group_members: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
+    /// Budget pools' shared backoffs by pool: value and version.
+    pool_backoffs: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Membership writes fail.
     fail_members_put: Arc<AtomicBool>,
     /// This many membership writes lose the version check, as when other
@@ -228,6 +230,24 @@ impl Broker for Quiet {
         }
         let next = now.unwrap_or(0) + 1;
         leases.insert(source.to_owned(), (value, next));
+        Ok(Some(next))
+    }
+    async fn pool_backoff_get(&self, pool: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        Ok(self.pool_backoffs.lock().unwrap().get(pool).cloned())
+    }
+    async fn pool_backoff_put(
+        &self,
+        pool: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut all = self.pool_backoffs.lock().unwrap();
+        let now = all.get(pool).map(|(_, v)| *v);
+        if now != expect {
+            return Ok(None);
+        }
+        let next = now.unwrap_or(0) + 1;
+        all.insert(pool.to_owned(), (value, next));
         Ok(Some(next))
     }
     async fn group_members_get(&self, group: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {

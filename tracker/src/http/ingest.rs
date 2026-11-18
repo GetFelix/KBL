@@ -30,6 +30,10 @@ pub(super) fn routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/ingest/state/{source}", get(load::<B>).put(save::<B>))
         .route("/v1/ingest/config", get(config::<B>))
         .route("/v1/ingest/leases", put(leases::heartbeat::<B>))
+        .route(
+            "/v1/ingest/backoff/{pool}",
+            get(backoff_get::<B>).put(backoff_put::<B>),
+        )
 }
 
 pub(super) mod leases;
@@ -53,6 +57,12 @@ struct ConfigQuery {
     /// answer adds what the worker is assigned and the leases it holds.
     #[serde(default)]
     instance: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BackoffBody {
+    /// Seconds the vendor asked the pool to wait, from now.
+    wait_s: u64,
 }
 
 #[derive(Deserialize)]
@@ -120,6 +130,91 @@ async fn save<B: Broker>(
                 .await,
         ),
         Err(d) => denied(d),
+    }
+}
+
+const POOL_OF_OTHER: super::Denied = (
+    StatusCode::FORBIDDEN,
+    "no connection of this team spends that budget pool",
+);
+
+/// The org and the pool, when one of the caller's team's connections spends it.
+fn pool_for<B: Broker>(
+    call: &Call<B>,
+    worker: &Worker,
+    pool: String,
+) -> Result<(Arc<crate::org::Org<B>>, Key), Box<Response>> {
+    let Ok(pool) = Key::new(pool) else {
+        return Err(Box::new(refused(
+            StatusCode::BAD_REQUEST,
+            "pool is a key",
+            "invalid",
+        )));
+    };
+    let Some(org) = call.teams.org().map(|o| o.org.clone()) else {
+        return Err(Box::new(refused(
+            StatusCode::NOT_FOUND,
+            "this tracker runs without teams: set KBL_ORG_NAMESPACE",
+            "teams_off",
+        )));
+    };
+    let team = call.team.name();
+    let spends = org
+        .with_view(|state, _| state.team_spends_pool(team, &pool, worker.source.as_deref()))
+        .ok_or_else(|| Box::new(super::org_unavailable()))?;
+    if spends {
+        Ok((org, pool))
+    } else {
+        Err(Box::new(denied(POOL_OF_OTHER)))
+    }
+}
+
+fn backoff_answer(res: Result<u64, crate::org::OrgError>) -> Response {
+    use crate::org::OrgError;
+    match res {
+        Ok(ms) => Json(json!({ "remaining_ms": ms })).into_response(),
+        Err(OrgError::Refused(why)) => refused(StatusCode::CONFLICT, why, why),
+        Err(OrgError::Unavailable(e)) => {
+            refused(StatusCode::SERVICE_UNAVAILABLE, &e, "org_unavailable")
+        }
+        Err(OrgError::Felix(_)) => refused(
+            StatusCode::BAD_GATEWAY,
+            "could not reach the cache",
+            "felix_unavailable",
+        ),
+    }
+}
+
+/// `GET /v1/ingest/backoff/{pool}`: how long the pool is held off, in
+/// milliseconds from now. Zero when it is not.
+async fn backoff_get<B: Broker>(call: Call<B>, Path(pool): Path<String>) -> Response {
+    let worker = match call.worker() {
+        Ok(w) => w,
+        Err(d) => return denied(d),
+    };
+    match pool_for(&call, &worker, pool) {
+        Ok((org, pool)) => backoff_answer(org.pool_backoff(&pool).await),
+        Err(res) => *res,
+    }
+}
+
+/// `PUT /v1/ingest/backoff/{pool}` `{wait_s}`: a worker the vendor told to
+/// wait holds the whole pool off. The later time wins, at most an hour.
+async fn backoff_put<B: Broker>(
+    call: Call<B>,
+    Path(pool): Path<String>,
+    Json(body): Json<BackoffBody>,
+) -> Response {
+    let worker = match call.worker() {
+        Ok(w) => w,
+        Err(d) => return denied(d),
+    };
+    match pool_for(&call, &worker, pool) {
+        Ok((org, pool)) => backoff_answer(
+            org.raise_pool_backoff(&pool, body.wait_s.saturating_mul(1000))
+                .await,
+        ),
+        Err(res) => *res,
     }
 }
 

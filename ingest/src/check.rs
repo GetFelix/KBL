@@ -14,7 +14,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
@@ -368,7 +367,7 @@ async fn budget_finding<S: Source, T: Tracker>(
     } else {
         0
     };
-    let every = Duration::from_secs(cfg.poll_seconds);
+    let every = cfg.poll_floor();
     let projected = projected_per_hour(listings, reads, roots, every, cfg.reconcile_period());
     let seen = match (snap.vendor_remaining, snap.vendor_hourly) {
         (Some(left), Some(limit)) => format!("the vendor reports {left} of {limit} requests left"),
@@ -383,7 +382,9 @@ async fn budget_finding<S: Source, T: Tracker>(
     let mut message = format!(
         "{seen}{reset}; this worker may spend {} an hour; the config is projected to spend about {projected:.0} an hour \
          ({listings} listing calls and {reads} pull request reads a poll every {}s, {roots} open issues re-read every {}h)",
-        snap.hourly, cfg.poll_seconds, cfg.reconcile_hours
+        snap.hourly,
+        every.as_secs(),
+        cfg.reconcile_hours
     );
     let level = if projected > usable {
         message.push_str(
