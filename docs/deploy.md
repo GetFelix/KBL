@@ -95,6 +95,13 @@ example), expose it over TLS, and open the dashboard with its address:
 `?gateway=wss://<gateway>/ws&room=...&token=<ID token>`. The dashboard's own
 nginx forwards `/v1` to the tracker.
 
+The page sends the ID token only to the gateway its own link named. A link with
+`?gateway=` and no token keeps the gateway the tab signed in with, and a gateway
+address must be `wss://` (`ws://` is accepted for localhost only). The gateway
+host is shown beside the connection status, so a person can see where the token
+goes. Every container in the chart has an `ephemeral-storage` request and limit
+in `values.yaml`.
+
 ## How the pods are locked down
 
 - Every container is non-root with `runAsNonRoot`, a read-only root file

@@ -11,19 +11,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::ArtifactId;
-use crate::names::{ItemId, Key};
+use crate::names::{AgentName, ItemId, Key};
 use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
-    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FindingVerdict, MAX_ASK_OPTION_LEN,
+    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FORMAT_V21, FindingVerdict, MAX_ASK_OPTION_LEN,
     MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE, MAX_CHECK_BYTES, MAX_FINDING_FILE,
     MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST, MAX_REVIEWER,
     MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
-    MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
-    PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec,
-    TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
+    MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MAX_WORKERS_PER_SUPERVISOR, MergeVerdict,
+    NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy,
+    ReviewPass, ReviewSpec, SUPERVISOR_GONE, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind,
+    WorkLogged, WorkRecord, valid_review_tier,
 };
 use crate::work::{
-    ClassDim, DEFAULT_SIZES, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, Vocabulary,
+    ClassDim, DEFAULT_SIZES, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, MAX_NEEDS, Vocabulary,
     plain_class_value,
 };
 
@@ -401,7 +402,14 @@ pub struct Tag {
     pub by: ClassBy,
 }
 
-/// An item's type, area and size.
+/// What a root's work needs and who chose it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NeedSet {
+    pub values: Vec<String>,
+    pub by: ClassBy,
+}
+
+/// An item's type, area and size, and what its work needs.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Class {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -410,11 +418,42 @@ pub struct Class {
     pub area: Option<Tag>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<Tag>,
+    /// What an agent must be able to do to take the root's work. Format 20.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<NeedSet>,
 }
 
 impl Class {
     pub fn is_empty(&self) -> bool {
-        self.item_type.is_none() && self.area.is_none() && self.size.is_none()
+        self.item_type.is_none()
+            && self.area.is_none()
+            && self.size.is_none()
+            && self.needs.is_none()
+    }
+
+    /// The needs in force, empty when none.
+    pub fn needs(&self) -> &[String] {
+        self.needs.as_ref().map_or(&[], |n| &n.values)
+    }
+
+    /// Sets the needs for `by`, with the same precedence as a class value. An
+    /// empty list from triage or a rule removes only what that actor set.
+    fn set_needs(&mut self, values: Vec<String>, by: ClassBy) {
+        let standing = self.needs.as_ref().map(|n| n.by);
+        if by != ClassBy::Person && standing == Some(ClassBy::Person) {
+            return;
+        }
+        if by == ClassBy::Rule && standing == Some(ClassBy::Triage) {
+            return;
+        }
+        if values.is_empty() {
+            // An empty list removes only what the same actor set.
+            if by == ClassBy::Person || standing == Some(by) {
+                self.needs = None;
+            }
+            return;
+        }
+        self.needs = Some(NeedSet { values, by });
     }
 
     /// Sets a value for `by`, unless a person chose the slot and `by` is not a person.
@@ -925,6 +964,29 @@ pub enum Reject {
     /// someone who may not set it, or an edit that mixes upstream facts with a
     /// person's own fields.
     BadClass,
+    /// A record names a worker that is not a live worker of its supervisor, a
+    /// worker wrote without its supervisor, or a supervisor is at its cap.
+    BadWorker,
+}
+
+/// A delegated worker: an agent name a supervisor's token registered, which
+/// acts with the supervisor's grants and is attributed to both.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Worker {
+    pub supervisor: Key,
+    pub token_sha256: String,
+    /// The supervisor's token hash when it started the worker: the worker
+    /// acts only while that token still names the supervisor.
+    pub supervisor_token_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vendor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub started_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -948,6 +1010,9 @@ pub struct State {
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub related: BTreeSet<(ItemId, ItemId)>,
     pub budgets: BTreeMap<ItemId, Budget>,
+    /// Delegated workers by name, stopped ones included: a name is never reused.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workers: BTreeMap<Key, Worker>,
     /// The latest rules record per scope.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RulesSet>,
@@ -1036,7 +1101,7 @@ impl Eq for Waiting {}
 /// be stamped at or below the log's format, so no record lands that a build
 /// still allowed on the log cannot read.
 fn format_gate(reads: u32, log: u32, rec: &WorkLogged) -> Result<Option<u32>, Reject> {
-    if rec.v > reads || rec.v < rec.record.format() {
+    if rec.v > reads || rec.v < rec.min_format() {
         return Err(Reject::Format);
     }
     if let WorkRecord::FormatRaised { to } = rec.record {
@@ -1356,6 +1421,31 @@ impl State {
             .ok_or(Reject::BadClass)
     }
 
+    /// `values` as the item's team spells them, each listed in its vocabulary's
+    /// `needs`, distinct and at most [`MAX_NEEDS`].
+    fn vocab_needs(&self, item: &ItemId, values: &[String]) -> Result<Vec<String>, Reject> {
+        self.item(item)?;
+        if values.len() > MAX_NEEDS {
+            return Err(Reject::BadClass);
+        }
+        let vocab = self.rules_for(item).and_then(|r| r.vocabulary);
+        let listed = vocab.as_ref().map_or(&[][..], |v| v.needs.as_slice());
+        let mut out: Vec<String> = Vec::new();
+        for v in values {
+            if !plain_class_value(v) {
+                return Err(Reject::BadClass);
+            }
+            let spelled = listed
+                .iter()
+                .find(|l| l.eq_ignore_ascii_case(v))
+                .ok_or(Reject::BadClass)?;
+            if !out.contains(spelled) {
+                out.push(spelled.clone());
+            }
+        }
+        Ok(out)
+    }
+
     /// An `edited` that sets upstream's facts (the tracker, for ingest) or a
     /// class value (a person; the tracker for a rule's mapping). The two do
     /// not mix with each other or with a title or tier edit, so each actor's
@@ -1366,9 +1456,14 @@ impl State {
         item: &ItemId,
         (own, labels, milestone): (bool, &Option<Vec<String>>, &Option<String>),
         class: [&Option<String>; 3],
+        needs: &Option<Vec<String>>,
     ) -> Result<(), Reject> {
         let upstream = labels.is_some() || milestone.is_some();
-        let classed = class.iter().any(|c| c.is_some());
+        let classed = class.iter().any(|c| c.is_some()) || needs.is_some();
+        // Needs are read from the root only, so another item's would be ignored.
+        if needs.is_some() && self.item(item)?.root != *item {
+            return Err(Reject::BadClass);
+        }
         if own || (upstream && classed) {
             return Err(Reject::BadClass);
         }
@@ -1413,6 +1508,10 @@ impl State {
                 set.push((dim, Some(self.vocab_value(item, dim, v)?)));
             }
         }
+        let needs = match needs {
+            Some(n) => Some(self.vocab_needs(item, n)?),
+            None => None,
+        };
         let it = self.item_mut(item)?;
         let before = it.class.clone();
         for (dim, v) in set {
@@ -1421,10 +1520,38 @@ impl State {
                 None => *it.class.slot(dim) = None,
             }
         }
+        if let Some(n) = needs {
+            // A person's empty list removes the needs whoever chose them.
+            if n.is_empty() && by == ClassBy::Person {
+                it.class.needs = None;
+            } else {
+                it.class.set_needs(n, by);
+            }
+        }
         if it.class == before {
             return Err(Reject::NoChange);
         }
         Ok(())
+    }
+
+    /// What an agent must be able to do to take `id`: its root's needs, for
+    /// the kinds of work that run in an environment (a fix, a test or a resume).
+    /// Triage, review and the rest read and judge, so any agent may take them.
+    pub fn needs_of(&self, id: &ItemId) -> &[String] {
+        let Some(it) = self.items.get(id) else {
+            return &[];
+        };
+        if !matches!(it.work, WorkKind::Fix | WorkKind::Test | WorkKind::Resume) {
+            return &[];
+        }
+        self.items.get(&it.root).map_or(&[], |r| r.class.needs())
+    }
+
+    /// Whether `capabilities` cover everything `id` needs, without regard to case.
+    pub fn can_take(&self, id: &ItemId, capabilities: &[String]) -> bool {
+        self.needs_of(id)
+            .iter()
+            .all(|n| capabilities.iter().any(|c| c.eq_ignore_ascii_case(n)))
     }
 
     /// Whether a block set on `id` still holds at `now_ms`. Every way an
@@ -2147,12 +2274,54 @@ impl State {
         Ok(())
     }
 
+    /// The live workers `supervisor` registered.
+    pub fn live_workers<'a>(
+        &'a self,
+        supervisor: &'a Key,
+    ) -> impl Iterator<Item = (&'a Key, &'a Worker)> {
+        self.workers
+            .iter()
+            .filter(move |(_, w)| &w.supervisor == supervisor && w.stopped_ms.is_none())
+    }
+
+    /// The live worker whose token hashes to `token_sha256`.
+    pub fn worker_by_token(&self, token_sha256: &str) -> Option<(&Key, &Worker)> {
+        self.workers
+            .iter()
+            .find(|(_, w)| w.stopped_ms.is_none() && w.token_sha256 == token_sha256)
+    }
+
+    /// A record a worker wrote names its live supervisor, and only a worker's
+    /// record names one, so every worker record is attributed to both.
+    fn check_worker(&self, rec: &WorkLogged) -> Result<(), Reject> {
+        let worker = self.workers.get(&rec.by);
+        match (&rec.sup, worker) {
+            // A name with a `-` is a worker's: no agent may write under one.
+            (None, None)
+                if rec.actor == Actor::Agent
+                    && self.format() >= FORMAT_V21
+                    && rec.by.as_str().contains('-') =>
+            {
+                Err(Reject::BadWorker)
+            }
+            (None, None) => Ok(()),
+            (None, Some(_)) if rec.actor != Actor::Agent => Ok(()),
+            (Some(sup), Some(w))
+                if rec.actor == Actor::Agent && &w.supervisor == sup && w.stopped_ms.is_none() =>
+            {
+                Ok(())
+            }
+            _ => Err(Reject::BadWorker),
+        }
+    }
+
     fn step_record(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
         if let Some(raised) = format_gate(FORMAT, self.format(), rec)? {
             self.format = Some(raised);
             return Ok(());
         }
         self.check_charge(rec)?;
+        self.check_worker(rec)?;
         match &rec.record {
             WorkRecord::Imported {
                 item,
@@ -2216,6 +2385,7 @@ impl State {
                 item_type,
                 area,
                 size,
+                needs,
             } => {
                 if *tier >= TIERS {
                     return Err(Reject::BadTier);
@@ -2233,6 +2403,13 @@ impl State {
                         chosen.push((dim, self.vocab_value(item, dim, v)?));
                     }
                 }
+                if needs.is_some() && self.item(item)?.root != *item {
+                    return Err(Reject::BadClass);
+                }
+                let chosen_needs = match needs {
+                    Some(n) => Some(self.vocab_needs(item, n)?),
+                    None => None,
+                };
                 if let Some((triage, attempt)) = held {
                     let same = self.item(item)?.proposal.as_ref().is_some_and(|p| {
                         p.tier == *tier
@@ -2263,6 +2440,9 @@ impl State {
                 it.changed_upstream = false;
                 for (dim, v) in chosen {
                     it.class.set(dim, v, ClassBy::Triage);
+                }
+                if let Some(n) = chosen_needs {
+                    it.class.set_needs(n, ClassBy::Triage);
                 }
                 // An unclear item reaches a person as a question, not as Ready work.
                 if unclear.is_some() && it.open_question.is_none() {
@@ -2645,10 +2825,21 @@ impl State {
                 let lapse = self.format() >= FORMAT_V14
                     && rec.actor == Actor::Tracker
                     && reason.as_deref() == Some("lapsed");
+                // The worker did not fail: its supervisor went away under it.
+                let refund = self.format() >= FORMAT_V21
+                    && rec.actor == Actor::Tracker
+                    && reason.as_deref() == Some(SUPERVISOR_GONE)
+                    && self
+                        .workers
+                        .get(&hold.by)
+                        .is_some_and(|w| w.stopped_ms.is_some());
                 let it = self.item_mut(item)?;
                 it.hold = None;
                 if lapse {
                     it.lapsed = Some(hold);
+                }
+                if refund && let Some(p) = it.paths.iter_mut().find(|p| p.attempt == *attempt) {
+                    p.tries = p.tries.saturating_sub(1);
                 }
                 self.charge(item, &root, rec);
             }
@@ -3063,6 +3254,29 @@ impl State {
                     return Err(Reject::NoChange);
                 }
                 it.block = None;
+            }
+            WorkRecord::ResourceLifted { resource } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if resource.is_empty() || resource.len() > MAX_BLOCK_RESOURCE {
+                    return Err(Reject::BadBlock);
+                }
+                // Only a block still holding is lifted; a closed item keeps its record as it was.
+                let mut lifted = 0;
+                for it in self.items.values_mut() {
+                    let matches = it.closed.is_none()
+                        && it.block.as_ref().is_some_and(|b| {
+                            b.holds_at(rec.at_ms) && b.resource.as_deref() == Some(resource)
+                        });
+                    if matches {
+                        it.block = None;
+                        lifted += 1;
+                    }
+                }
+                if lifted == 0 {
+                    return Err(Reject::NoChange);
+                }
             }
             WorkRecord::Parked { item, parked } => {
                 if rec.actor != Actor::Person {
@@ -3479,6 +3693,7 @@ impl State {
                 item_type,
                 area,
                 size,
+                needs,
                 item,
                 title,
                 tier,
@@ -3489,14 +3704,21 @@ impl State {
                 || milestone.is_some()
                 || item_type.is_some()
                 || area.is_some()
-                || size.is_some() =>
+                || size.is_some()
+                || needs.is_some() =>
             {
                 let own = title.is_some()
                     || tier.is_some()
                     || depends_on.is_some()
                     || split.is_some()
                     || proposal.is_some();
-                self.edit_facts(rec, item, (own, labels, milestone), [item_type, area, size])?
+                self.edit_facts(
+                    rec,
+                    item,
+                    (own, labels, milestone),
+                    [item_type, area, size],
+                    needs,
+                )?
             }
             WorkRecord::Edited {
                 item,
@@ -3659,6 +3881,71 @@ impl State {
                 }
             }
             // Handled by the format gate.
+            WorkRecord::WorkerStarted {
+                worker,
+                token_sha256,
+                supervisor_token_sha256,
+                vendor,
+                profile,
+                model,
+            } => {
+                if rec.actor != Actor::Agent || rec.sup.is_some() {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                // `<supervisor>-<suffix>`, split at the first `-`: no other
+                // supervisor's worker and no agent can ever have this name.
+                let named_for = AgentName::agent_or_worker(worker.as_str())
+                    .is_ok_and(|w| w.supervisor() == Some(rec.by.as_str()));
+                let hex = |h: &str| {
+                    h.len() == 64
+                        && h.bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                };
+                if !named_for || !hex(token_sha256) || !hex(supervisor_token_sha256) {
+                    return Err(Reject::BadWorker);
+                }
+                if self.workers.contains_key(worker)
+                    || self
+                        .workers
+                        .values()
+                        .any(|w| &w.token_sha256 == token_sha256)
+                {
+                    return Err(Reject::Duplicate);
+                }
+                if self.live_workers(&rec.by).count() >= MAX_WORKERS_PER_SUPERVISOR {
+                    return Err(Reject::BadWorker);
+                }
+                self.workers.insert(
+                    worker.clone(),
+                    Worker {
+                        supervisor: rec.by.clone(),
+                        token_sha256: token_sha256.clone(),
+                        supervisor_token_sha256: supervisor_token_sha256.clone(),
+                        vendor: vendor.clone(),
+                        profile: profile.clone(),
+                        model: model.clone(),
+                        started_ms: rec.at_ms,
+                        stopped_ms: None,
+                    },
+                );
+            }
+            WorkRecord::WorkerStopped { worker } => {
+                let Some(w) = self.workers.get_mut(worker) else {
+                    return Err(Reject::BadWorker);
+                };
+                // The tracker stops the workers of a supervisor that is gone.
+                let may = match rec.actor {
+                    Actor::Person | Actor::Tracker => true,
+                    Actor::Agent => rec.sup.is_none() && w.supervisor == rec.by,
+                };
+                if !may {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if w.stopped_ms.is_some() {
+                    return Err(Reject::BadWorker);
+                }
+                w.stopped_ms = Some(rec.at_ms);
+            }
             WorkRecord::FormatRaised { .. } | WorkRecord::Unknown => {}
         }
         Ok(())

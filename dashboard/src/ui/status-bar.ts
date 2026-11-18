@@ -11,30 +11,31 @@ export function statusBar(): { el: HTMLElement; render(s: ViewState): void } {
   const el = h('p', { class: 'status', role: 'status', 'aria-live': 'polite' });
   let last = '';
   let lastKind = '';
-  let latest = { text: '', tone: 'ok' as keyof typeof ICON };
+  let latest = { text: '', tone: 'ok' as keyof typeof ICON, host: '' };
   let pending: ReturnType<typeof setTimeout> | undefined;
-  const write = (text: string, tone: keyof typeof ICON) => {
+  const write = (text: string, tone: keyof typeof ICON, host = '') => {
     el.dataset.tone = tone;
     // The shape carries the tone too, so it does not rest on colour alone.
-    el.replaceChildren(h('span', { class: 'status-icon', 'aria-hidden': 'true' }, ICON[tone]), text);
+    el.replaceChildren(h('span', { class: 'status-icon', 'aria-hidden': 'true' }, ICON[tone]), text, ...(host ? [h('span', { class: 'status-host' }, ` · ${host}`)] : []));
   };
   return {
     el,
     render(s) {
       const { text, tone } = describe(s.connection, s.items.length);
-      if (text + tone === last) return;
-      last = text + tone;
-      latest = { text, tone };
+      const host = s.connection.kind === 'setup' ? '' : (s.gateway ?? '');
+      if (text + tone + host === last) return;
+      last = text + tone + host;
+      latest = { text, tone, host };
       if (s.connection.kind === lastKind && s.connection.kind === 'live' && el.dataset.tone === tone) {
         // Throttle: a timer already pending is kept, so a steady import still updates, and it writes the latest text.
         pending ??= setTimeout(() => {
           pending = undefined;
-          write(latest.text, latest.tone);
+          write(latest.text, latest.tone, latest.host);
         }, COUNT_SETTLE_MS);
       } else {
         clearTimeout(pending);
         pending = undefined;
-        write(text, tone);
+        write(text, tone, host);
       }
       lastKind = s.connection.kind;
     },

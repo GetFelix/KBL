@@ -16,7 +16,15 @@ async fn claim_late(t: &Tracker<Fake>, who: &str, polled: (u64, GroupRecord)) ->
     let mut ops = Vec::new();
     let mut core = t.0.core.lock().await;
     let taken = t
-        .claim_from(&mut core, &agent(who), 2, polled.1, polled.0, &mut ops)
+        .claim_from(
+            &mut core,
+            &agent(who),
+            2,
+            polled.1,
+            polled.0,
+            &Filter::default(),
+            &mut ops,
+        )
         .await
         .unwrap();
     assert!(ops.is_empty(), "the delivery is not w2's to settle");

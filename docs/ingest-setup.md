@@ -56,6 +56,12 @@ item's type and area from the first label upstream lists that the rule maps. The
 replace a mapped value. The tracker must be at format 19; until it is, the facts are written after the raise
 ([upgrades](upgrades.md)).
 
+`label_needs` maps a label to something the work needs, such as `"needs-gpu": "gpu"`. An issue needs every need its
+labels map to, and an agent is handed it only when it declares all of them
+([work tracker](work-tracker.md#what-the-work-needs-and-what-an-agent-can-do)). The needs must be in the vocabulary's
+`needs` list, or the tracker refuses the whole set and the item imports without it. Triage and a person replace a
+mapped set, and a label that is later removed upstream does not remove a need already set. This needs format 20.
+
 ### What admit and propose do
 
 With `admit`, a match is imported as a root and its children come with it: a triage item and an augment item are

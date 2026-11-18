@@ -3,6 +3,8 @@
 // when it closes and are never in the address, localStorage or the store. Storage can
 // be missing or throw; the page then works until it is reloaded.
 
+import { validGateway } from './gateway-url.ts';
+
 const GATEWAY = 'kbl.session.gateway';
 const PERSON = 'kbl.session.person';
 
@@ -35,7 +37,7 @@ export function saveGateway(s: GatewaySession) {
 export function loadGateway(): GatewaySession | null {
   try {
     const v = JSON.parse(read(GATEWAY) ?? 'null');
-    return v && typeof v.room === 'string' && typeof v.token === 'string' && (v.gateway === null || typeof v.gateway === 'string') ? v : null;
+    return v && typeof v.room === 'string' && typeof v.token === 'string' && (v.gateway === null || (typeof v.gateway === 'string' && validGateway(v.gateway) !== null)) ? v : null;
   } catch {
     return null;
   }

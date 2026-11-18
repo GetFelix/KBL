@@ -109,6 +109,32 @@ impl AgentName {
         }
     }
 
+    /// A delegated worker's name: its supervisor's name, `-`, and a suffix
+    /// that is itself a valid agent name. No agent name has a `-`, so a worker
+    /// can never be named like an agent, and the part before the `-` names
+    /// the one supervisor it can belong to.
+    pub fn worker(supervisor: &AgentName, suffix: &str) -> Result<Self, InvalidName> {
+        let s = format!("{supervisor}-{suffix}");
+        if Self::new(suffix).is_ok() && is_valid_key(&s) {
+            Ok(Self(s))
+        } else {
+            Err(InvalidName(s))
+        }
+    }
+
+    /// An agent's name or a delegated worker's.
+    pub fn agent_or_worker(s: &str) -> Result<Self, InvalidName> {
+        match s.split_once('-') {
+            None => Self::new(s),
+            Some((sup, suffix)) => Self::worker(&Self::new(sup)?, suffix),
+        }
+    }
+
+    /// The supervisor a worker's name belongs to; none for an agent.
+    pub fn supervisor(&self) -> Option<&str> {
+        self.0.split_once('-').map(|(sup, _)| sup)
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -293,6 +319,22 @@ mod tests {
         for bad in ["w1-b", "plan", "shared", "", "a.b"] {
             assert!(AgentName::new(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn a_worker_name_is_never_an_agent_name() {
+        let sup = AgentName::new("w1").unwrap();
+        let w = AgentName::worker(&sup, "a_2").unwrap();
+        assert_eq!(w.as_str(), "w1-a_2");
+        assert_eq!(w.supervisor(), Some("w1"));
+        assert!(AgentName::new(w.as_str()).is_err());
+        assert_eq!(AgentName::agent_or_worker("w1-a_2"), Ok(w));
+        assert_eq!(sup.supervisor(), None);
+        for bad in ["", "a-b", "plan", &"x".repeat(62)] {
+            assert!(AgentName::worker(&sup, bad).is_err(), "{bad}");
+        }
+        assert!(AgentName::agent_or_worker("w1-a-b").is_err());
+        assert!(AgentName::agent_or_worker("-a").is_err());
     }
 
     #[test]

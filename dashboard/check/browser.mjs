@@ -24,7 +24,8 @@ const fakeGateway = (log, mode, pageSize = 20) => `(() => {
   const log = ${JSON.stringify(log.map(encode))};
   const mode = ${JSON.stringify(mode)};
   window.WebSocket = class {
-    constructor() {
+    constructor(url) {
+      (window.__urls ||= []).push(url);
       window.__ws = this;
       setTimeout(() => (mode === 'down' ? this.onclose && this.onclose() : this.onopen && this.onopen()), 0);
     }
@@ -132,7 +133,7 @@ async function open(query, { mode = 'live', theme = 'dark', width = 1280, height
   await page.goto(`${server.origin}/index.html?theme=${theme}&${query}`);
   await page.eval(`document.fonts.ready.then(() => true)`);
 }
-const connected = 'room=kbl&token=t&gateway=ws://fake';
+const connected = 'room=kbl&token=t&gateway=ws://127.0.0.1:9/ws';
 const live = `document.querySelector('.status')?.textContent.includes('Live')`;
 const focused = (sel) => page.eval(`document.activeElement?.matches(${JSON.stringify(sel)}) ?? false`);
 async function shoot(name) {
@@ -156,7 +157,7 @@ try {
     await open(connected, { theme });
     await page.waitFor(live);
     const line = await status();
-    check(/^. ?Live, \d+ items$/.test(line), `${theme}: the fixture folds with nothing refused (${line})`);
+    check(/^. ?Live, \d+ items( · [\w.:\[\]-]+)?$/.test(line), `${theme}: the fixture folds with nothing refused (${line})`);
     const groups = await page.eval(`[...document.querySelectorAll('[id^=group-]')].map((g) => g.id.slice(6)).join(' ')`);
     check(['needs_you', 'held', 'in_review', 'ready', 'triage'].every((s) => groups.includes(s)), `${theme}: the fixture fills the stages (${groups})`);
     await axe(`list ${theme}`);
@@ -638,6 +639,20 @@ try {
   await page.waitFor(live);
   await press(page, 'Tab');
   check(await focused('.skip'), 'the first Tab reaches the skip link');
+
+  // A link that names a gateway but carries no token must not move the saved token to it.
+  await open(connected);
+  await page.waitFor(live);
+  check((await status()).includes('127.0.0.1:9'), `the status names the gateway host (saw "${await status()}")`);
+  await page.goto(`${server.origin}/index.html?gateway=wss://evil.example/ws&room=kbl`);
+  await page.waitFor(live);
+  const urls = await page.eval(`JSON.stringify(window.__urls)`);
+  console.log(`gateway-only link opened sockets: ${urls}`);
+  check(!urls.includes('evil.example'), 'a link with a gateway and no token keeps the saved gateway');
+  check(urls.includes('127.0.0.1:9'), 'the saved gateway is the one used');
+  await open('room=kbl&token=t&gateway=ws://evil.example/ws');
+  await page.waitFor(`document.querySelector('.status')?.textContent.includes('not allowed')`);
+  check(await page.eval(`!(window.__urls ?? []).length`), 'a gateway address that is not allowed opens no socket');
 
   await open('');
   check(await page.eval(`document.querySelector('.empty h2')?.textContent === 'Connect to a gateway'`), 'without a token the page says how to connect');

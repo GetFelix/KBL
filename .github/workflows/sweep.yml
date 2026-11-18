@@ -19,6 +19,6 @@ jobs:
     env:
       KBL_SWEEP_SEEDS: ${{ inputs.seeds || '5000' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: cargo test --locked -p kbl-tracker sweep
       - run: cargo test --locked -p kbl-ingest sweep

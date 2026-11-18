@@ -7,6 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use kbl_core::names::{AgentName, Key};
+use kbl_core::org::TokenHash;
 use kbl_core::work::Target;
 use serde::Deserialize;
 
@@ -233,6 +234,14 @@ impl Tokens {
 
     pub(crate) fn has_agent(&self, name: &str) -> bool {
         self.agents.iter().any(|(_, a)| a.as_str() == name)
+    }
+
+    /// The hash of the token the file gives the agent `name`.
+    pub(crate) fn agent_token(&self, name: &str) -> Option<TokenHash> {
+        self.agents
+            .iter()
+            .find(|(_, a)| a.as_str() == name)
+            .map(|(t, _)| TokenHash::of(t))
     }
 
     pub(crate) fn grants(&self) -> Grants {
