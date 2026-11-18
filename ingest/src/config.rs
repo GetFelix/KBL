@@ -25,6 +25,10 @@ pub(crate) struct Config {
     /// a transfer or a deletion, which no listing shows. Each poll reads its share.
     #[serde(default = "default_reconcile_hours")]
     pub(crate) reconcile_hours: u64,
+    /// The removed polls-between-passes setting. It is read only to refuse
+    /// the config with the replacement named.
+    #[serde(default)]
+    reconcile_every: Option<u64>,
     /// Requests per hour this worker may spend. Unset, it is `budget_share`
     /// of the limit the vendor reports.
     #[serde(default)]
@@ -401,6 +405,16 @@ impl Config {
         let mut cfg: Config = serde_json::from_str(text)?;
         ensure!(!cfg.rules.is_empty(), "there are no intake rules");
         ensure!(cfg.poll_seconds >= 1, "poll_seconds must be at least 1");
+        if let Some(n) = cfg.reconcile_every {
+            // Not mapped on its own: the old pass was every N polls, and the
+            // poll gap now stretches with the budget, so no fixed hours match.
+            let hours = (n.saturating_mul(cfg.poll_seconds)).div_ceil(3600).max(1);
+            anyhow::bail!(
+                "reconcile_every is no longer accepted; use reconcile_hours (hours for one pass over every open imported issue, default 24). \
+                 {n} polls of {}s is about reconcile_hours: {hours}",
+                cfg.poll_seconds
+            );
+        }
         ensure!(
             cfg.reconcile_hours >= 1,
             "reconcile_hours must be at least 1"

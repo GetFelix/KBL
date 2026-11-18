@@ -22,6 +22,20 @@ fn a_config_has_defaults_and_lists_the_repos_once() {
 }
 
 #[test]
+fn reconcile_every_is_refused_with_its_replacement() {
+    let err = Config::parse(&format!(
+        r#"{{"tracker":{{"url":"http://t","token_env":"T"}},"github":{GH},"poll_seconds":600,"reconcile_every":12,"rules":[{RULE}]}}"#
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("reconcile_hours"), "{err}");
+    assert!(
+        err.contains("12 polls of 600s is about reconcile_hours: 2"),
+        "{err}"
+    );
+}
+
+#[test]
 fn a_bad_config_is_refused_with_the_reason() {
     for (rules, gh, why) in [
         ("[]", GH, "no intake rules"),

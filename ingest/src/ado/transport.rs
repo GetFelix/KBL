@@ -3,12 +3,14 @@
 //! a log line.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use tokio::sync::Mutex;
 
+use crate::budget::Budget;
 use crate::github::{Req, Res, Transport};
 
 /// The Azure DevOps resource, as an Entra scope.
@@ -46,6 +48,7 @@ pub(crate) struct Entra {
     pub(crate) client_id: String,
     pub(crate) secret: Secret,
     pub(crate) authority: String,
+    budget: Option<Arc<Budget>>,
     cache: Mutex<Option<(String, Instant)>>,
 }
 
@@ -56,8 +59,15 @@ impl Entra {
             client_id: client_id.to_owned(),
             secret,
             authority: authority.trim_end_matches('/').to_owned(),
+            budget: None,
             cache: Mutex::new(None),
         }
+    }
+
+    /// Charges each sign-in to the vendor budget.
+    pub(crate) fn with_budget(mut self, budget: Arc<Budget>) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     async fn token(&self, client: &reqwest::Client) -> Result<String> {
@@ -69,20 +79,34 @@ impl Entra {
         }
         let secret = self.secret.read("Entra client secret")?;
         let url = format!("{}/{}/oauth2/v2.0/token", self.authority, self.tenant);
-        let res = client
-            .post(&url)
-            .form(&[
-                ("grant_type", "client_credentials"),
-                ("client_id", self.client_id.as_str()),
-                ("client_secret", secret.as_str()),
-                ("scope", ENTRA_SCOPE),
-            ])
-            .send()
-            .await
-            // The error text names the URL, which holds no secret.
-            .with_context(|| format!("reach the Entra token endpoint {url}"))?;
-        let status = res.status().as_u16();
-        let body: Value = res.json().await.unwrap_or(Value::Null);
+        let sign_in = async {
+            let res = client
+                .post(&url)
+                .form(&[
+                    ("grant_type", "client_credentials"),
+                    ("client_id", self.client_id.as_str()),
+                    ("client_secret", secret.as_str()),
+                    ("scope", ENTRA_SCOPE),
+                ])
+                .send()
+                .await
+                // The error text names the URL, which holds no secret.
+                .with_context(|| format!("reach the Entra token endpoint {url}"))?;
+            let headers = res
+                .headers()
+                .iter()
+                .filter_map(|(k, v)| Some((k.as_str().to_owned(), v.to_str().ok()?.to_owned())))
+                .collect();
+            Ok(Res {
+                status: res.status().as_u16(),
+                headers,
+                body: res.json().await.unwrap_or(Value::Null),
+            })
+        };
+        let Res { status, body, .. } = match &self.budget {
+            Some(b) => b.metered(sign_in).await?,
+            None => sign_in.await?,
+        };
         if status != 200 {
             // Only the error code: the description can carry ids and traces.
             let code = body["error"].as_str().unwrap_or("unknown");
