@@ -892,6 +892,8 @@ try {
     agent({ kind: 'question', item: 'inb-1', attempt: 1, text: { text: 'Retry forever or give up after five?' }, options: ['Forever', 'Five tries'], default: 'Five tries' });
     rec({ kind: 'imported', item: 'inb-2', source: 'github', title: 'Slow compaction on cold start', upstream_id: 'GetFelix/felix#9102' });
     rec({ kind: 'triaged', item: 'inb-2', tier: 2, why: 'Compaction waits on the index rebuild' });
+    // The earlier Sign out forgot the person token; a tab remembers it in sessionStorage.
+    await page.eval(`(() => { sessionStorage.setItem('kbl.session.person', 'person-token'); return true; })()`);
     await open(`${connected}&view=inbox`, { log });
     await page.waitFor(live);
     await page.waitFor(`document.querySelector('.account-who')?.textContent === 'Signed in as maintainer'`);
