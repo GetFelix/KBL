@@ -32,6 +32,8 @@ const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
 // The token never stays in the address bar, history or a shared link. This tab keeps the
 // session in sessionStorage so a reload does not lose it (see session.ts).
+// A new link is a new session: the earlier person sign-in does not carry over to it.
+if (q.get('token') && q.get('room')) forgetPerson();
 if (q.get('token') && q.get('room')) saveGateway({ gateway: q.get('gateway'), room: q.get('room')!, token: q.get('token')! });
 const linked = q.get('token') ? null : loadGateway();
 const token = q.get('token') ?? linked?.token ?? null;
@@ -118,6 +120,7 @@ async function send(kind: WriteKind, jobs: Job[]) {
       store.dispatch({ type: 'write', write: { ...w, status: o.status, reason: o.reason, why: o.status === 'refused' ? o.why : undefined, undo: undefined } });
       if (o.status === 'refused' && o.signedOut && t === tracker) {
         tracker = null;
+        forgetPerson();
         store.dispatch({ type: 'tracker', tracker: { kind: 'refused', reason: o.reason } });
       }
     }
