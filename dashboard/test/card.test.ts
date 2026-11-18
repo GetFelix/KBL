@@ -49,3 +49,11 @@ test('properties list tier, source and the pull request with its checks', () => 
   assert.deepEqual(properties({ ...root, tier: 2, pr: 'GetFelix/felix#2300', pr_phase: 'open', pr_checks: 'red' }), ['Tier 2', 'github', 'PR #2300, checks fail']);
   assert.deepEqual(properties({ id: 'a', title: 'a', stage: 'ready' }), []);
 });
+
+test('a screen reader name is the upstream reference, the id when there is none', async () => {
+  const { nameOf } = await import('../src/card.ts');
+  const items = [{ id: 'gh-1', title: 't', stage: 'ready', upstream: 'GetFelix/felix#1694' }, { id: 'loc-2', title: 't', stage: 'ready' }];
+  assert.equal(nameOf(items, 'gh-1'), 'felix#1694');
+  assert.equal(nameOf(items, 'loc-2'), 'loc-2');
+  assert.equal(nameOf(items, 'gone'), 'gone');
+});

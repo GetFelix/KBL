@@ -218,6 +218,8 @@ const closeItem = () => {
   // The open item may have no visible row (filtered out, or not in the log): keep the focus somewhere real.
   const rows = shownRows(before);
   if (before.open && rows.some((r) => r.id === before.open)) return ui.list.focusSelected();
+  // A nested child has no row; the selection is already on its visible root.
+  if (before.selected && rows.some((r) => r.id === before.selected)) return ui.list.focusSelected();
   const first = rows[0]?.id;
   if (first) {
     store.dispatch({ type: 'select', id: first });

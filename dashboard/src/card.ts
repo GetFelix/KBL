@@ -26,6 +26,12 @@ export function lead(i: ItemRow): string {
   return i.parent && i.work ? `${ref} ${i.work}` : ref;
 }
 
+/** What a screen reader hears for an item: the same lead as its card, the KBL id when it is not in `items`. */
+export function nameOf(items: readonly ItemRow[], id: string): string {
+  const item = items.find((i) => i.id === id);
+  return item ? lead(item) : id;
+}
+
 /** Time since `ms`, coarse on purpose: a card is read at a glance. */
 export function ago(ms: number, now: number): string {
   const s = Math.max(0, Math.round((now - ms) / 1000));

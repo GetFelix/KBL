@@ -217,6 +217,10 @@ has one entry per filter value and per saved view.
   `L` move inside the board. Below 720 px the columns stack. When a record moves the focused card to another
   column the focus goes with it; when one takes it out of the view, the next card in its column (else the nearest
   card, else the work list) takes the focus. Either is announced. The list does the same with its rows.
+  Opening a child from its root's chip selects the root, because a nested child has no row of its own,
+  so `j` and `k` carry on from where the root is. A child that needs a person keeps its own card and is
+  selected itself. Checkbox labels and the announcements above name an item by its upstream reference
+  (`felix#1694`), as its card heading does, and by the KBL id when it has none.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.

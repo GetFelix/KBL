@@ -1,7 +1,7 @@
 // The list view: items grouped by stage, one link per row, or the state that
 // explains why there are none. A Blocked row also says what it waits on. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
-import { childIndex, lead, properties, reasonLine, summarize, workingLine } from '../card.ts';
+import { childIndex, lead, nameOf, properties, reasonLine, summarize, workingLine } from '../card.ts';
 import { waitsOn } from '../fold.ts';
 import { inScope, neighbour, visible, type Group } from '../list.ts';
 import { flagText } from '../overlap.ts';
@@ -71,22 +71,23 @@ export function restoreFocus(
   nodes: ReadonlyMap<string, HTMLElement>,
   host: HTMLElement,
   quietly: (el: HTMLElement) => void,
-  on: { select(id: string | null): void; announce: Announce },
+  on: { select(id: string | null): void; announce: Announce; name?(id: string): string },
   orders: readonly (readonly string[])[] = [before.order],
 ) {
   if (!focusedId) return;
+  const name = on.name?.(focusedId) ?? focusedId;
   const back = nodes.get(focusedId);
   if (back) {
     quietly(back);
     const was = before.stage.get(focusedId);
     const is = now.stage.get(focusedId);
-    if (was && is && was !== is) on.announce(`${focusedId} moved to ${is}.`);
+    if (was && is && was !== is) on.announce(`${name} moved to ${is}.`);
     return;
   }
   const near = orders.map((o) => neighbour(o, focusedId, (id) => nodes.has(id))).find((id) => id !== undefined);
   const target = near ? nodes.get(near) : host.closest<HTMLElement>('main');
   if (target) quietly(target);
-  on.announce(`${focusedId} is no longer in this view.`);
+  on.announce(`${name} is no longer in this view.`);
   queueMicrotask(() => on.select(near ?? null));
 }
 
@@ -286,7 +287,7 @@ export function itemList(
         );
         last = drawn(groups);
         // Moving a focused node blurs it; put the focus back without scrolling or re-selecting.
-        restoreFocus(focusedId, before, last, rows, el, quietly, { select: on.select, announce });
+        restoreFocus(focusedId, before, last, rows, el, quietly, { select: on.select, announce, name: (id) => nameOf(s.items, id) });
         // A checkbox that had the focus keeps it, rather than handing it to its row.
         if (focusedMark?.isConnected) quietly(focusedMark);
         refocusChip(focusedChip, el);
@@ -316,6 +317,9 @@ export function itemList(
         if (a.getAttribute('href') !== href) a.setAttribute('href', href);
         a.toggleAttribute('data-selected', id === s.selected);
         a.toggleAttribute('data-marked', marked.has(id));
+        const box = marks.get(id);
+        const boxLabel = `Select ${nameOf(s.items, id)}`;
+        if (box && box.getAttribute('aria-label') !== boxLabel) box.setAttribute('aria-label', boxLabel);
         // Text, not colour alone, so it reads in both themes and to a screen reader as part of the link.
         const flag = a.querySelector<HTMLElement>('.row-flag')!;
         const text = flagText(s.overlaps.get(id));
