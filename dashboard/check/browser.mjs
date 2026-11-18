@@ -892,10 +892,12 @@ try {
     agent({ kind: 'question', item: 'inb-1', attempt: 1, text: { text: 'Retry forever or give up after five?' }, options: ['Forever', 'Five tries'], default: 'Five tries' });
     rec({ kind: 'imported', item: 'inb-2', source: 'github', title: 'Slow compaction on cold start', upstream_id: 'GetFelix/felix#9102' });
     rec({ kind: 'triaged', item: 'inb-2', tier: 2, why: 'Compaction waits on the index rebuild' });
-    // The earlier Sign out forgot the person token; a tab remembers it in sessionStorage.
-    await page.eval(`(() => { sessionStorage.setItem('kbl.session.person', 'person-token'); return true; })()`);
+    // Opening a view link forgets any person token (session.ts), so sign in through the dialog.
     await open(`${connected}&view=inbox`, { log });
     await page.waitFor(live);
+    await page.eval(`document.querySelector('.account-button').click(); true`);
+    await page.waitFor(`document.querySelector('.sign-in-dialog')?.open === true`);
+    await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
     await page.waitFor(`document.querySelector('.account-who')?.textContent === 'Signed in as maintainer'`);
     check((await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',')`)) === 'inb-1,inb-2', 'the inbox lists a question and a triage proposal, oldest first');
     check(await page.eval(`document.querySelector('.inbox-act[data-kind=question] .inbox-question').textContent === 'Retry forever or give up after five?' && [...document.querySelectorAll('.inbox-act[data-kind=question] .inbox-options button')].map((b) => b.textContent).join('|') === '1 Forever|2 Five tries (default)'`), 'a question shows what was asked and its numbered options, the default named');
