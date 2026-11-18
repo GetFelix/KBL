@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
-use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
+use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -70,13 +70,20 @@ pub(crate) fn mcp_config(
     })
 }
 
-/// Makes `dir` and any parents, the last one mode 700.
+/// Makes `dir` and any parents, and sets `dir` itself to mode 700 even if it
+/// was there already, since tokens are written in it.
 pub(crate) fn private_dir(dir: &Path) -> Result<()> {
     std::fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(dir)
-        .with_context(|| format!("create {}", dir.display()))
+        .with_context(|| format!("create {}", dir.display()))?;
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.is_dir() {
+        bail!("{} is not a directory", dir.display());
+    }
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("make {} private", dir.display()))
 }
 
 /// Writes `text` to a new file only this user can read. An existing file or

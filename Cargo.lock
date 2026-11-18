@@ -1261,6 +1261,7 @@ dependencies = [
  "kbl-core",
  "kbl-metrics",
  "kbl-trace",
+ "libc",
  "metrics",
  "reqwest 0.12.24",
  "rmcp",

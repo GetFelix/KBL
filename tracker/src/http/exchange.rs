@@ -19,7 +19,10 @@ struct Pending {
     until: Instant,
 }
 
-/// Codes by their hash, so a memory dump of the map holds no live code.
+/// Codes by their hash, so a code is never kept as sent. Each entry holds
+/// its worker's token until traded or out of time, in this process only: a
+/// tracker behind more than one replica must route the trade to the one
+/// that answered the start.
 #[derive(Default)]
 pub(super) struct Codes(Mutex<HashMap<String, Pending>>);
 

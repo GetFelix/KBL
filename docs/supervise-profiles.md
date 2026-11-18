@@ -51,6 +51,9 @@ command = [
 
 A separate `CODEX_HOME` also hides the saved login under `~/.codex`, so this example logs in with an API key.
 
+Keep `mcp_config_file` out of anything the worker commits or pushes: the file holds the worker's token until the
+worker stops. `.codex/` here sits beside the checkout, not inside it.
+
 ## GitHub Copilot CLI
 
 ```toml

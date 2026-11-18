@@ -19,6 +19,10 @@ struct Script {
     holds: BTreeMap<String, Value>,
     /// Workers an earlier process left live.
     left: Vec<String>,
+    /// Starts land but their answer is lost.
+    lose_start_reply: bool,
+    /// Stops are refused with this text.
+    refuse_stop: Option<&'static str>,
 }
 
 impl TrackerApi for Fake {
@@ -33,6 +37,9 @@ impl TrackerApi for Fake {
                 }
                 let name = body["worker"].as_str().unwrap().to_owned();
                 s.started.push(body.clone());
+                if s.lose_start_reply {
+                    return Err(CallError::Down("the answer was lost".into()));
+                }
                 if body["exchange"] == json!(true) {
                     Ok(json!({ "worker": name, "code": format!("kblc_{name}") }))
                 } else {
@@ -40,6 +47,9 @@ impl TrackerApi for Fake {
                 }
             }
             "/v1/work/workers/stop" => {
+                if let Some(why) = s.refuse_stop {
+                    return Err(CallError::Refused(why.into()));
+                }
                 s.stopped.push(body["worker"].as_str().unwrap().to_owned());
                 Ok(json!({ "kind": "worker_stopped" }))
             }
@@ -343,4 +353,54 @@ async fn the_state_dir_is_private() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o700);
+}
+
+#[tokio::test]
+async fn a_start_whose_answer_was_lost_is_stopped_the_next_round() {
+    let dir = scratch();
+    let fake = Fake::default();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.ready = ready(1);
+        s.lose_start_reply = true;
+    }
+    let sup = setup(&dir, "", "0", "5", &fake);
+    let reply = sup.start(1, json!({}), None, None).await.unwrap();
+    assert_eq!(reply["started"], json!([]));
+    fake.0.lock().unwrap().lose_start_reply = false;
+    sup.round().await;
+    let first = fake.0.lock().unwrap().stopped.first().cloned();
+    assert_eq!(first.as_deref(), Some("sup-w1"));
+    sup.stop(None, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_stop_refused_for_another_reason_is_kept_and_sent_again() {
+    let dir = scratch();
+    let fake = Fake::default();
+    fake.0.lock().unwrap().ready = ready(1);
+    let sup = setup(&dir, "", "0", "30", &fake);
+    sup.start(1, json!({}), None, None).await.unwrap();
+    fake.0.lock().unwrap().refuse_stop = Some("this call needs a valid token");
+    let reply = sup.stop(None, true).await.unwrap();
+    assert_eq!(reply["stop_pending"], json!(["sup-w1"]));
+    fake.0.lock().unwrap().refuse_stop = Some("refused: bad_worker");
+    sup.round().await;
+    assert!(sup.0.pool.lock().await.workers.is_empty());
+}
+
+#[tokio::test]
+async fn a_supervisor_name_too_long_for_worker_names_is_refused_at_start() {
+    let dir = scratch();
+    let config = Config::parse(&format!(
+        "state_dir = \"{}\"\n[profiles.f]\nkind = \"command\"\nvendor = \"f\"\ncommand = [\"x\"]\n",
+        dir.display()
+    ))
+    .unwrap();
+    let base = Base {
+        env: BTreeMap::new(),
+        tracker_url: String::new(),
+    };
+    let long = AgentName::new("a".repeat(60)).unwrap();
+    assert!(Supervisor::new(Fake::default(), long, config, base, Box::new(|_| None)).is_err());
 }

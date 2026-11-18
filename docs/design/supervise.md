@@ -105,11 +105,15 @@ hook_token_env = "CLOUD_HOOK_TOKEN"
 - Felix: an ID token source (`KBL_FELIX_ID_TOKEN_FILE` or `_COMMAND` with `KBL_FELIX_CONTROL_PLANE`) is passed by
   name. A fixed `KBL_FELIX_TOKEN` is copied into the worker's config only with `share_felix_token = true`.
 - Output goes to `<state_dir>/<worker>/out.log`, never to the supervisor's stdout, which belongs to MCP.
+- Each worker runs in a process group of its own, and a stop kills the group, so what the vendor's CLI started
+  (its `kbl-mcp` among them) ends with it. A stop is logged on the tracker first, so the token is dead before the
+  kill; a stop the tracker refuses for any reason but `bad_worker` (already stopped) is sent again each round.
 - `kind = "hook"` asks the tracker for a one-time code instead of a token and posts `{worker, code, tracker_url,
   vendor, profile, model, filter}` to the URL, with a bearer from `hook_token_env` if set. The hosted agent calls
   `POST /v1/work/workers/exchange {code}` once and gets the worker's token. A code works once and for 10 minutes,
-  and lives only in the tracker's memory: after a restart it is gone and the supervisor stops that worker. A hook
-  that does not answer 2xx stops the worker at once. A hook worker counts as live until it is stopped.
+  and lives only in the tracker's memory: after a restart it is gone, so that worker never connects and holds
+  nothing until it is stopped. A hook that does not answer 2xx stops the worker at once. A hook worker counts as
+  live until it is stopped, and never as idle.
 - A fake profile (`dev/fake-worker.mjs`, a scripted MCP client) runs the tests and CI without any vendor.
 
 Example profiles for Claude Code, Codex CLI and GitHub Copilot CLI are in [supervise-profiles.md](../supervise-profiles.md).
@@ -150,5 +154,6 @@ override the table for every launch of that pool. Each worker records vendor, pr
   `worker_cap`, and pauses after 3 workers in a row fail or exit within `min_run_seconds` (default 30) of starting,
   or 3 launches in a row fail; `supervise_start` resumes it. A worker that holds nothing yet counts against the
   ready items, so a slow starter does not make the top-up start a second worker for the same item.
-- On its first supervise call, a supervisor's `kbl-mcp` stops the live workers the tracker lists for it that it did
-  not start: an earlier process left them, and nothing else would stop them.
+- Every round, a supervisor's `kbl-mcp` stops the live workers the tracker lists for it that its pool does not
+  track: ones an earlier process left, or a start whose answer was lost. At most 8 workers start per round, so a
+  round, which holds the pool, stays short even when hooks are slow.

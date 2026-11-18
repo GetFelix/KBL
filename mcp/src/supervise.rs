@@ -28,14 +28,17 @@ use crate::work::{CallError, TrackerApi};
 /// The most workers one pool asks for, the fold's own cap. The tracker's
 /// caps are usually lower and are the ones that bind.
 pub(crate) const MAX_POOL: usize = 64;
+/// Worker names one supervisor name can give out, `-w1` to `-w99999`.
+const MAX_NAMES: u32 = 99_999;
 /// Workers in a row that fail or exit too soon before the top-up pauses.
 const PAUSE_AFTER: u32 = 3;
 /// How many ready items one look at the queue reads.
 const PEEK: u64 = 50;
 /// How long a hook may take to answer.
 const HOOK_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long a killed worker gets to exit before it is left to the OS.
-const KILL_WAIT: Duration = Duration::from_secs(5);
+/// Launches in one round, so a round (which holds the pool) stays short
+/// even when every hook takes its whole timeout.
+const LAUNCHES_PER_ROUND: usize = 8;
 
 /// What every worker's MCP config carries besides its own name and token:
 /// the run, the addresses, and Felix credentials by reference.
@@ -82,8 +85,6 @@ struct Pool {
     failed: Vec<Value>,
     /// Every worker name this supervisor has had, so none is asked for twice.
     used: BTreeSet<String>,
-    /// Whether workers an earlier process left have been stopped.
-    adopted: bool,
     last_error: Option<String>,
 }
 
@@ -116,6 +117,13 @@ impl<T: TrackerApi> Supervisor<T> {
         base: Base,
         env: EnvReader,
     ) -> Result<Self> {
+        // The longest name the pool can give a worker must still be a name.
+        AgentName::agent_or_worker(&format!("{}-w{MAX_NAMES}", me.as_str())).map_err(|_| {
+            anyhow::anyhow!(
+                "the agent name {} is too long to name workers after",
+                me.as_str()
+            )
+        })?;
         let kbl_mcp = match &config.kbl_mcp {
             Some(p) => render::absolute(p),
             None => std::env::current_exe().context("find this kbl-mcp binary")?,
@@ -293,12 +301,10 @@ impl<T: TrackerApi> Supervisor<T> {
     }
 
     /// Stops the live workers the tracker lists for this supervisor that this
-    /// process did not start: an earlier process left them with nobody to
-    /// stop them.
+    /// pool does not track: an earlier process left them, or a start whose
+    /// reply was lost made them. Runs every round, so neither holds a cap
+    /// slot for long.
     async fn adopt(&self, pool: &mut Pool) -> Result<()> {
-        if pool.adopted {
-            return Ok(());
-        }
         let listed = self.0.api.get("/v1/work/workers").await.map_err(text)?;
         for w in listed["workers"].as_array().into_iter().flatten() {
             let Some(name) = w["worker"].as_str() else {
@@ -313,7 +319,6 @@ impl<T: TrackerApi> Supervisor<T> {
                     .map_err(text)?;
             }
         }
-        pool.adopted = true;
         Ok(())
     }
 
@@ -385,7 +390,9 @@ impl<T: TrackerApi> Supervisor<T> {
         let peeked = self.peek(&pool.filter).await?;
         let ready = peeked["next"].as_array().cloned().unwrap_or_default();
         let idle = self.idle(pool).await?;
-        let room = (pool.target - live).min(ready.len().saturating_sub(idle));
+        let room = (pool.target - live)
+            .min(ready.len().saturating_sub(idle))
+            .min(LAUNCHES_PER_ROUND);
         let mut started = Vec::new();
         for item in ready.iter().skip(idle).take(room) {
             match self.launch(pool, &Fields::of_peeked(item)).await {
@@ -419,7 +426,10 @@ impl<T: TrackerApi> Supervisor<T> {
         Ok(pool
             .workers
             .iter()
-            .filter(|(n, r)| !r.stop_pending && !holding.contains(n.as_str()))
+            // A hook worker may never take anything this pool can see.
+            .filter(|(n, r)| {
+                r.kind == Kind::Command && !r.stop_pending && !holding.contains(n.as_str())
+            })
             .count())
     }
 
@@ -455,7 +465,9 @@ impl<T: TrackerApi> Supervisor<T> {
                 "profile {profile_name} fills {{model}} and this launch has none"
             )));
         }
-        let worker = self.next_name(pool);
+        let Some(worker) = self.next_name(pool) else {
+            return Err(Launch::Cap);
+        };
         let body = json!({
             "worker": worker,
             "vendor": profile.vendor,
@@ -466,6 +478,8 @@ impl<T: TrackerApi> Supervisor<T> {
         let reply = match self.0.api.call("/v1/work/workers", body).await {
             Ok(r) => r,
             Err(CallError::Refused(m)) if m.contains("worker_cap") => return Err(Launch::Cap),
+            // A start whose answer was lost may have landed; the next round's
+            // adopt stops it.
             Err(e) => return Err(Launch::Failed(text(e).to_string())),
         };
         let mut running = Running {
@@ -498,13 +512,12 @@ impl<T: TrackerApi> Supervisor<T> {
         Ok(worker)
     }
 
-    fn next_name(&self, pool: &mut Pool) -> String {
-        let name = (1..)
+    fn next_name(&self, pool: &mut Pool) -> Option<String> {
+        let name = (1..=MAX_NAMES)
             .map(|n| format!("{}-w{n}", self.0.me.as_str()))
-            .find(|n| !pool.used.contains(n))
-            .expect("an unused name");
+            .find(|n| !pool.used.contains(n))?;
         pool.used.insert(name.clone());
-        name
+        Some(name)
     }
 
     /// Writes the worker's MCP config and starts its command, with an empty
@@ -532,7 +545,9 @@ impl<T: TrackerApi> Supervisor<T> {
                     workdir: None,
                 };
                 let dir = render::absolute(Path::new(&render::fill(w, &["worker"], &vars)?));
-                render::private_dir(&dir)?;
+                if !dir.exists() {
+                    render::private_dir(&dir)?;
+                }
                 dir
             }
             None => own.clone(),
@@ -574,7 +589,7 @@ impl<T: TrackerApi> Supervisor<T> {
             .collect::<Result<Vec<_>>>()?;
         let log = std::fs::OpenOptions::new()
             .append(true)
-            .create(true)
+            .create_new(true)
             .mode(0o600)
             .open(own.join("out.log"))
             .context("open the worker's log")?;
@@ -584,6 +599,8 @@ impl<T: TrackerApi> Supervisor<T> {
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
+            // Its own group, so a stop ends what the vendor's CLI started too.
+            .process_group(0)
             .kill_on_drop(true);
         let passed = profile
             .pass_env
@@ -648,13 +665,14 @@ impl<T: TrackerApi> Supervisor<T> {
             .call("/v1/work/workers/stop", json!({ "worker": name }))
             .await
         {
-            // Refused means the tracker has it stopped already, or never had it.
-            Ok(_) | Err(CallError::Refused(_)) => true,
+            // `bad_worker`: the tracker has it stopped already, or never had it.
+            // Any other refusal (a revoked token) leaves the stop to retry.
+            Ok(_) => true,
+            Err(CallError::Refused(m)) => m.contains("bad_worker"),
             Err(_) => false,
         };
-        if let Some(mut child) = r.child.take() {
-            let _ = child.start_kill();
-            let _ = tokio::time::timeout(KILL_WAIT, child.wait()).await;
+        if let Some(child) = r.child.take() {
+            kill_group(child);
         }
         if let Some(f) = r.config_file.take() {
             let _ = std::fs::remove_file(f);
@@ -665,6 +683,21 @@ impl<T: TrackerApi> Supervisor<T> {
             r.stop_pending = true;
         }
     }
+}
+
+/// Kills the worker's whole process group, then reaps the child off the
+/// pool's lock.
+fn kill_group(mut child: Child) {
+    if let Some(pid) = child.id().and_then(|p| i32::try_from(p).ok()) {
+        // SAFETY: kill(2) on a group this process made; it touches no memory.
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.start_kill();
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
 }
 
 fn live(pool: &Pool) -> usize {
