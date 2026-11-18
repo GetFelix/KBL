@@ -106,7 +106,6 @@ fn keeps_stage(r: &WorkRecord) -> bool {
 impl Metrics {
     /// Notes `rec`, applied to `state` just now. `refused` is the fold's verdict on it.
     pub(crate) fn note(&mut self, state: &State, rec: &WorkLogged, refused: bool) {
-        self.latest_ms = self.latest_ms.max(rec.at_ms);
         if refused || matches!(rec.record, WorkRecord::Unknown) {
             return;
         }
@@ -116,6 +115,7 @@ impl Metrics {
         if !state.items.contains_key(item) {
             return;
         }
+        self.latest_ms = self.latest_ms.max(rec.at_ms);
         // The tracker's logged refusal can still move a stage (a budget refusal sends the root to
         // Needs you), but it is no work, so it adds to no count.
         if !matches!(rec.record, WorkRecord::Refused { .. }) {

@@ -414,8 +414,24 @@ fn a_clock_behind_the_records_keeps_the_latest_stays_and_says_so() {
     // The browser thinks it is a day before the item merged.
     let r = report(&f, 10 * DAY - DAY, 7);
     assert_eq!(r["clock_behind"], true);
+    assert_eq!(r["to_ms"], 7 * H + 10 * DAY);
     assert_eq!(r["throughput"]["done"], 1);
     assert_eq!(stage(&r, "in_review")["n"], 1);
     let ok = report(&f, 11 * DAY, 7);
     assert_eq!(ok["clock_behind"], false);
+}
+
+#[test]
+fn a_refusal_for_an_unknown_item_does_not_move_the_window() {
+    let mut f = setup();
+    merged_fix(&mut f, "r1", 1, 10 * DAY);
+    put(
+        &mut f,
+        400 * DAY,
+        T,
+        json!({ "kind": "refused", "item": "nope", "op": "claim", "reason": "limit" }),
+    );
+    let r = report(&f, 11 * DAY, 7);
+    assert_eq!(r["clock_behind"], false);
+    assert_eq!(r["throughput"]["done"], 1);
 }
