@@ -11,7 +11,7 @@ import { blocked, items, questionText, reviewLoad, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { activities, type Activities } from './activity.ts';
 import { handoffs } from './handoff.ts';
-import { stories } from './story.ts';
+import { redoPoint, stories } from './story.ts';
 import { priceAgeDays, priceRequest, spend, type PriceEntry, type PriceUnit } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
@@ -28,10 +28,10 @@ import { metricsView } from './ui/metrics-view.ts';
 import { spendView } from './ui/spend-view.ts';
 import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
-import { assignDialog, confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
+import { assignDialog, confirmDialog, redoDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { forgetGateway, forgetPerson, loadGateway, loadPerson, saveGateway, savePerson } from './session.ts';
 import { Tracker } from './tracker.ts';
-import { assigneePerson, assignTarget, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
+import { assigneePerson, assignTarget, redoBlock, redoStale, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -128,7 +128,16 @@ async function send(kind: WriteKind, jobs: Job[]) {
       continue;
     }
     const t = tracker;
-    const o = t ? await t.write(j.req) : { status: 'failed' as const, reason: 'Not signed in to the tracker.' };
+    let req = j.req;
+    let o: Awaited<ReturnType<Tracker['write']>> | null = null;
+    if (t && req.note) {
+      // The redo names the note by its offset, so the note must be on the log first.
+      const n = await t.write(req.note);
+      if (n.status !== 'ok') o = n;
+      else if (n.offset === null) o = { status: 'failed', reason: 'The note was written but the tracker did not say where, so the redo was not sent.' };
+      else req = { path: req.path, body: { ...req.body, note: n.offset } };
+    }
+    o ??= t ? await t.write(req) : { status: 'failed' as const, reason: 'Not signed in to the tracker.' };
     if (o.status === 'ok') store.dispatch({ type: 'write', write: { ...w, status: 'ok' } });
     else {
       store.dispatch({ type: 'write', write: { ...w, status: o.status, reason: o.reason, why: o.status === 'refused' ? o.why : undefined, undo: undefined } });
@@ -143,6 +152,11 @@ async function send(kind: WriteKind, jobs: Job[]) {
 
 const write = (ids: string[], args: WriteArgs) => {
   const s = store.get();
+  if (args.kind === 'redo') {
+    // The dialog may have been open while the item changed. Refuse here, before the note is written.
+    const why = redoStale(s.items.find((i) => i.id === ids[0]), s.stories.get(ids[0]), args);
+    if (why) return void send('redo', [{ item: ids[0], req: why }]);
+  }
   // Checked against the log as it is now: a confirm dialog may have been open while someone else acted.
   const jobs = jobsFor(ids, args, s.items, s.writes);
   if (!jobs.length) return;
@@ -212,6 +226,28 @@ const assignItem = (id: string) => {
   // The picker opens at once; the agents fill in when the tracker answers.
   const agents = tracker ? tracker.agents().then((a) => (Array.isArray(a) ? a : [])) : Promise.resolve([]);
   assignBox.open(item, s.tracker.person, names, agents);
+};
+
+/**
+ * Opens the redo dialog for `id`. `pick` is a decision the person chose; without one it is the
+ * last decision of the newest attempt. The dialog states why a redo is not possible rather than
+ * the command doing nothing.
+ */
+const redoItem = (id: string, pick?: number) => {
+  const s = store.get();
+  if (s.tracker.kind !== 'signed-in') return signInBox.open();
+  const item = s.items.find((i) => i.id === id);
+  if (!item) return;
+  const story = s.stories.get(id);
+  const d = redoPoint(story, pick);
+  if (typeof d === 'string') return redoBox.open(item, null, d);
+  redoBox.open(item, d, redoBlock(item, story, d.attempt));
+};
+
+/** The decision the keyboard is on in the story, if any. */
+const focusedDecision = (): number | undefined => {
+  const at = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('.story-decision')?.dataset.at;
+  return at === undefined ? undefined : Number(at);
 };
 
 const openItem = (id: string) => {
@@ -343,6 +379,12 @@ const run = (id: CommandId): void => {
       const ids = targets();
       return ids.length === 1 ? assignItem(ids[0]) : undefined;
     }
+    case 'redo': {
+      // A focused decision belongs to the open item, whatever is marked.
+      const pick = focusedDecision();
+      const ids = pick !== undefined && s.selected ? [s.selected] : targets();
+      return ids.length === 1 ? redoItem(ids[0], pick) : undefined;
+    }
     case 'undo':
       return undoLast();
     case 'signIn':
@@ -391,6 +433,7 @@ const ui = shell(
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
     take: (item) => write([item], { kind: 'take' }),
     assign: assignItem,
+    redo: (item, _attempt, at) => redoItem(item, at),
     steer: (item, attempt, text) => write([item], { kind: 'steer', attempt, text }),
     rate: (item, attempt, accurate) => write([item], { kind: 'rate', attempt, accurate }),
     answer: (item, question, text, chosen) => write([item], { kind: 'answer', question, text, chosen }),
@@ -487,8 +530,9 @@ const views = viewDialog({
 });
 const confirm = confirmDialog(write);
 const assignBox = assignDialog(write);
+const redoBox = redoDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, spendBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, redoBox.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -527,7 +571,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || redoBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;

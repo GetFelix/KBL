@@ -165,6 +165,32 @@ pub(super) const TOOLS: &[Tool] = &[
         params: &[ITEM],
     },
     Tool {
+        name: "redo_from_decision",
+        about: "Start a new attempt from a decision an earlier attempt recorded. It counts against the root's redos per item, and the tracker refuses it for a closed item, one an agent holds, an unknown decision, or when no redos are left. After a failed check it needs a note written since.",
+        route: Route::Post("/v1/work/redo"),
+        params: &[
+            ITEM,
+            Param {
+                name: "from_attempt",
+                kind: Kind::Number,
+                required: true,
+                about: "The attempt that recorded the decision.",
+            },
+            Param {
+                name: "at",
+                kind: Kind::Number,
+                required: true,
+                about: "The offset of the decision.",
+            },
+            Param {
+                name: "note",
+                kind: Kind::Number,
+                required: false,
+                about: "The offset of a note (add_note) that steers the new attempt.",
+            },
+        ],
+    },
+    Tool {
         name: "snooze_item",
         about: "Hide an item from the queue until a time.",
         route: Route::Post("/v1/work/snooze"),

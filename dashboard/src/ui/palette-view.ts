@@ -22,7 +22,7 @@ const MAX_ROWS = 50;
 
 export function entries(s: ViewState): Entry[] {
   return [
-    ...COMMANDS.filter((c) => c.id !== 'palette' && (!FLAG_COMMANDS.has(c.id) || logTakesFlags(s.items)) && (c.id !== 'assign' || (logTakesAssignees(s.items) && s.tracker.kind === 'signed-in'))).map((c) => ({ key: `cmd:${c.id}`, label: c.label, section: 'Commands' })),
+    ...COMMANDS.filter((c) => c.id !== 'palette' && (!FLAG_COMMANDS.has(c.id) || logTakesFlags(s.items)) && (c.id !== 'assign' || (logTakesAssignees(s.items) && s.tracker.kind === 'signed-in')) && (c.id !== 'redo' || s.tracker.kind === 'signed-in')).map((c) => ({ key: `cmd:${c.id}`, label: c.label, section: 'Commands' })),
     // One entry per recorded filter value, so "tier 1" or a repo name is a few keystrokes away.
     ...facets(inScope(s), s.filters).flatMap(({ facet, label, values }) =>
       values.map(([v, n]) => ({

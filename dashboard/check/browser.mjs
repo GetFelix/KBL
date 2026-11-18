@@ -56,6 +56,8 @@ const fakeGateway = (log, mode, pageSize = 20) => `(() => {
     '/v1/work/prices': (b) => ({ v: 8, kind: 'price_set', model: b.model, unit: b.unit, price_micros: b.price_micros, effective_from_ms: b.effective_from_ms }),
     '/v1/work/proposals/edit': (b) => ({ v: 17, kind: 'edited', item: b.item, depends_on: b.depends_on, split: b.split, proposal: b.proposal }),
     '/v1/work/tier': (b) => ({ kind: 'tier_changed', item: b.item, tier: b.tier }),
+    '/v1/work/note': (b) => ({ kind: 'human_input', item: b.item, input: b.input ?? 'note', text: b.text }),
+    '/v1/work/redo': (b) => ({ kind: 'forked_from', item: b.item, from_attempt: b.from_attempt, at: b.at, note: b.note }),
     '/v1/work/close': (b) => ({ kind: 'closed', item: b.item, why: b.why }),
     '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: b.text ?? { text: '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
   };
@@ -875,6 +877,44 @@ try {
   await page.eval(`document.querySelector('#panel-tier').value = '1'; document.querySelector('[data-focus=set-tier]').click(); true`);
   await page.waitFor(`document.querySelector('.activity-text').textContent.startsWith('Set the tier of tri-7.')`);
   check(await page.eval(`document.querySelector('.activity-text').textContent === 'Set the tier of tri-7. No undo for tri-7: it had no tier before, and no record removes a tier.' && document.querySelector('.activity button').hidden`), 'a first tier says it has no Undo');
+
+  // Redo from a decision: a button on the decision and a palette command open a confirm that names the
+  // decision and the redos left; the note is written first and the redo names it; the new attempt shows its fork point.
+  const agentRec = (r) => page.eval(`window.__push({ actor: 'agent', by: 'agent-1', at_ms: Date.now(), item: 'rd-1', attempt: 1, ...${JSON.stringify(r)} })`);
+  await page.eval(`window.__push({ kind: 'imported', item: 'rd-1', source: 'github', upstream_id: 'GetFelix/KBL#9100', title: 'Redo me', ${by} }); window.__push({ kind: 'accepted', item: 'rd-1', tier: 1, ${by} }); true`);
+  await agentRec({ kind: 'claimed', deadline_ms: Date.now() + 3_600_000 });
+  await agentRec({ kind: 'decision', phase: 'fix', so_far: 'reading', question: 'how', chosen: 'guard the read', why: 'tests', commit: 'c1', evidence: [] });
+  const redoDecision = await page.eval('window.__ws.liveAt - 1');
+  await agentRec({ v: 8, kind: 'done', usage: [{ unit: 'tokens', model: 'claude-opus-5-5', input: 1000 }] });
+  await page.waitFor(`!!document.querySelector('.row[data-id=rd-1]')`);
+  await page.eval(`document.querySelector('.row[data-id=rd-1]').click(); true`);
+  await page.waitFor(`!!document.querySelector('.panel .story-decision [data-focus="redo:${redoDecision}"]')`);
+  const redoBtn = await page.eval(`document.querySelector('[data-focus="redo:${redoDecision}"]').getAttribute('aria-label')`);
+  check(redoBtn === `Redo from decision ${redoDecision} on attempt 1`, `a decision offers Redo from here with an accessible name (saw "${redoBtn}")`);
+  await page.eval(`document.querySelector('[data-focus="redo:${redoDecision}"]').click(); true`);
+  const copy = await page.eval(`document.querySelector('.redo-dialog')?.textContent ?? ''`);
+  console.log(`saw redo dialog: ${copy}`);
+  check(copy.includes(`from decision ${redoDecision}`) && copy.includes('counts against the redos') && /\d+ left now/.test(copy), 'the redo confirm names the decision, the budget and what is left');
+  check(await focused('#redo-note'), 'the redo confirm puts focus in the optional note');
+  await axe('redo confirm');
+  await page.eval(`document.querySelector('#redo-note').value = 'use the lock instead'; document.querySelector('.redo-dialog form').requestSubmit(); true`);
+  await page.waitFor(`document.querySelector('.activity-text').textContent.startsWith('Started a redo of rd-1')`);
+  const redoCalls = await page.eval(`JSON.stringify(window.__tracker.calls.slice(-2).map((c) => [c.url, c.body]))`);
+  console.log(`saw redo calls: ${redoCalls}`);
+  check(await page.eval(`(() => { const [n, r] = window.__tracker.calls.slice(-2); return n.url === '/v1/work/note' && r.url === '/v1/work/redo' && r.body.note === window.__ws.liveAt - 2 && r.body.at === ${redoDecision} && r.body.from_attempt === 1; })()`), 'the note is written first and the redo names it, the decision and its attempt');
+  await agentRec({ kind: 'claimed', deadline_ms: Date.now() + 3_600_000, attempt: 2 });
+  await agentRec({ kind: 'decision', phase: 'fix', so_far: 'again', question: 'how', chosen: 'take the lock', why: 'redo note', commit: 'c2', evidence: [], attempt: 2 });
+  await page.waitFor(`!!document.querySelector('.story-forks li')`);
+  const fork = await page.eval(`document.querySelector('.story-forks li').textContent`);
+  console.log(`saw fork line: ${fork}`);
+  check(fork.startsWith(`Attempt 2 is a redo from decision ${redoDecision} on attempt 1.`), 'the new attempt is linked to its fork point in the panel');
+  await page.eval(`document.querySelector('.story-forks .story-ref').click(); true`);
+  check(await focused(`.story-decision[data-at="${redoDecision}"]`), 'the fork link moves the focus to the decision it branched from');
+  await press(page, 'r');
+  const blocked = await page.eval(`document.querySelector('.redo-dialog')?.open ? document.querySelector('.redo-dialog').textContent : ''`);
+  console.log(`saw redo while an agent holds the item: ${blocked}`);
+  check(blocked.includes('Cannot redo rd-1 now') && blocked.includes('An agent holds the item'), 'R while an agent holds the item says why it cannot redo instead of sending');
+  await page.eval(`document.querySelector('.redo-dialog').close(); true`);
 
   // Triage's own question: the form asks what triage could not settle.
   await page.eval(`window.__push({ kind: 'imported', item: 'tri-8', source: 'jira', upstream_id: 'FEL-8', title: 'Which repo', ${by} }); window.__push({ kind: 'triaged', item: 'tri-8', tier: 1, unclear: 'repo', why: 'which repo', ${by} }); true`);

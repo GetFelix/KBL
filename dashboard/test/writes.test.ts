@@ -3,7 +3,8 @@ import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
-import { acceptTier, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkSteer, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import type { DecisionLine } from '../src/story.ts';
+import { acceptTier, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkRedo, checkSteer, redoBlock, redoCopy, redoStale, redoNeedsNote, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
@@ -396,4 +397,66 @@ test('assigning asks to sign in only for an item that takes an assignee', () => 
   assert.equal(assignTarget([open, old], 'a', false), 'sign-in');
   assert.equal(assignTarget([open, old], 'b', false), null);
   assert.equal(assignTarget([open, old], 'nope', false), null);
+});
+
+test('a redo writes the note first, then names it, from the decision’s own attempt', () => {
+  const plain = request('a', { kind: 'redo', fromAttempt: 2, at: 31, note: '  ' });
+  assert.deepEqual(plain, { path: '/v1/work/redo', body: { item: 'a', from_attempt: 2, at: 31 } });
+  const noted = request('a', { kind: 'redo', fromAttempt: 2, at: 31, note: ' use the lock ' });
+  assert.deepEqual(noted.body, { item: 'a', from_attempt: 2, at: 31 });
+  assert.deepEqual(noted.note, { path: '/v1/work/note', body: { item: 'a', text: { text: 'use the lock' } } });
+  assert.equal(route(noted.path, 'ops'), '/v1/teams/ops/work/redo');
+});
+
+test('a redo is not offered past its limits', () => {
+  const story = { attempts: [{ attempt: 1, closed: false }, { attempt: 2, closed: true }] };
+  const open = item({ id: 'a', stage: 'needs_you', redos_left: 2 });
+  assert.equal(redoBlock(open, story, 1), null);
+  // Budget spent, item closed or done, an agent holding it, a redo waiting, an attempt the story lacks.
+  assert.match(redoBlock({ ...open, redos_left: 0 }, story, 1)!, /No redos/);
+  assert.match(redoBlock({ ...open, stage: 'closed' }, story, 1)!, /closed/);
+  assert.match(redoBlock({ ...open, stage: 'done' }, story, 1)!, /closed/);
+  assert.match(redoBlock({ ...open, stage: 'held', held_attempt: 1 }, story, 1)!, /holds/);
+  assert.match(redoBlock({ ...open, redo_pending: true }, story, 1)!, /already waits/);
+  assert.match(redoBlock(open, story, 9)!, /not in the story/);
+  assert.match(redoBlock(open, undefined, 1)!, /not in the story/);
+  // The fold allows two open attempts at once.
+  assert.match(redoBlock(open, { attempts: [{ attempt: 1, closed: false }, { attempt: 2, closed: false }] }, 1)!, /Two attempts/);
+});
+
+test('a red check needs a note on the redo, and a note stays under 4 KiB', () => {
+  assert.equal(redoNeedsNote({ pr_phase: 'open', pr_checks: 'red' }), true);
+  assert.equal(redoNeedsNote({ pr_phase: 'open', pr_checks: 'green' }), false);
+  assert.equal(redoNeedsNote({ pr_phase: 'merged', pr_checks: 'red' }), false);
+  assert.match(checkRedo('  ', true)!, /note/);
+  assert.equal(checkRedo('', false), null);
+  assert.match(checkRedo('x'.repeat(5000), false)!, /4 KiB/);
+});
+
+test('the redo dialog says what happens and how many redos remain', () => {
+  const d = { offset: 31, attempt: 2, chosen: 'take the lock' } as DecisionLine;
+  const c = redoCopy({ id: 'a', redos_left: 2 }, d);
+  assert.equal(c.title, 'Redo a from decision 31?');
+  assert.match(c.does, /branching from decision 31 on attempt 2/);
+  assert.match(c.budget, /2 left now, 1 after this one/);
+  assert.match(redoCopy({ id: 'a' }, d).budget, /counts against/);
+});
+
+test('the redo key and command exist', async () => {
+  const { commandFor, COMMANDS } = await import('../src/keys.ts');
+  assert.equal(commandFor({ key: 'r', metaKey: false, ctrlKey: false, altKey: false, inText: false }, false), 'redo');
+  assert.equal(commandFor({ key: 'r', metaKey: false, ctrlKey: false, altKey: false, inText: true }, false), undefined);
+  assert.ok(COMMANDS.some((c) => c.id === 'redo'));
+});
+
+test('a redo confirmed earlier is refused before its note is written when the item moved on', () => {
+  const story = { item: 'a', rev: 1, attempts: [{ attempt: 1, closed: false }], groups: [{ phase: 'fix', decisions: [{ offset: 5, attempt: 1 }] }] } as never;
+  const ok = item({ id: 'a', stage: 'needs_you', redos_left: 1 });
+  const a = { fromAttempt: 1, at: 5, note: 'x' };
+  assert.equal(redoStale(ok, story, a), null);
+  assert.match(redoStale({ ...ok, stage: 'held', held_attempt: 1 }, story, a)!, /Nothing was sent/);
+  assert.match(redoStale({ ...ok, redos_left: 0 }, story, a)!, /No redos/);
+  assert.match(redoStale(ok, story, { ...a, fromAttempt: 2 })!, /not in the story/);
+  assert.match(redoStale(ok, story, { ...a, at: 9 })!, /decision is not/);
+  assert.match(redoStale({ ...ok, pr_phase: 'open', pr_checks: 'red' }, story, { ...a, note: '' })!, /check failed/);
 });

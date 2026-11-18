@@ -227,6 +227,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/flag", post(flag::<B>))
         .route("/v1/work/unflag", post(unflag::<B>))
         .route("/v1/work/retry", post(retry::<B>))
+        .route("/v1/work/redo", post(redo::<B>))
         .route("/v1/work/snooze", post(snooze::<B>))
         .route("/v1/work/park", post(park::<B>))
         .route("/v1/work/unpark", post(unpark::<B>))
@@ -565,6 +566,15 @@ struct SteerBody {
     item: ItemId,
     attempt: u32,
     text: Content,
+}
+
+#[derive(Deserialize)]
+struct RedoBody {
+    item: ItemId,
+    from_attempt: u32,
+    at: u64,
+    #[serde(default)]
+    note: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1560,6 +1570,18 @@ async fn unflag<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Resp
 
 async fn retry<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
     as_person(&call, rk, WorkRecord::Retried { item: b.item }).await
+}
+
+/// A redo from a recorded decision. The fold checks the attempt, the decision,
+/// the redo budget and that the item is open; the tracker adds the note check.
+async fn redo<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<RedoBody>) -> Response {
+    let record = WorkRecord::ForkedFrom {
+        item: b.item,
+        from_attempt: b.from_attempt,
+        at: b.at,
+        note: b.note,
+    };
+    as_person(&call, rk, record).await
 }
 
 async fn snooze<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<SnoozeBody>) -> Response {

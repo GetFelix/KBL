@@ -495,6 +495,7 @@ record if the fold accepts it:
 | `POST /v1/work/flag` `{item}` | `flagged` with `flagged: true`: the item moves to Needs you and is not handed out. See [Flagging an item for a person](#flagging-an-item-for-a-person) |
 | `POST /v1/work/unflag` `{item}` | `flagged` with `flagged: false`: the item leaves Needs you, unless it waits there for another reason |
 | `POST /v1/work/retry` `{item}` | `retried`: an item that used its tries gets a fresh set. See [Card actions on My queue](#card-actions-on-my-queue) |
+| `POST /v1/work/redo` `{item, from_attempt, at, note?}` | `forked_from`: a new attempt branches from the decision at offset `at` on `from_attempt`. `note` is the offset of a `human_input` from `/v1/work/note` that steers it. The fold refuses a closed item, one an agent holds, one with a redo already waiting, an unknown attempt or decision, two open attempts, and a spent `redos_per_item`; a red check on the open pull request needs a note written since (`note_required`). See [Redo from here](decision-replay.md#redo-from-here) |
 | `POST /v1/work/snooze` `{item, until_ms}` | `snoozed`: My queue hides the item until `until_ms` |
 | `POST /v1/work/block` `{item, reason, until_ms?, resource?}` | `block_set`: no agent is handed the item until `until_ms` or until a person lifts it. Needs `until_ms`, `resource` or both. See [Blocking an item](#blocking-an-item) |
 | `POST /v1/work/lift-block` `{item}` | `block_cleared`: the item can be handed out again |
@@ -816,6 +817,7 @@ KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
 | `answer_question` | Answer the open question on an item with `chosen` or `text` |
 | `set_tier`, `flag_item`, `unflag_item` | Change an item's priority, or flag it |
 | `add_note` | A note, review comment or priority change, as `human_input` |
+| `redo_from_decision` | `POST /v1/work/redo`: start a new attempt from a recorded decision; `note` is an `add_note` offset |
 | `retry_item`, `snooze_item`, `park_item`, `unpark_item`, `unblock_item` | The [card actions](#card-actions-on-my-queue) |
 | `block_item`, `lift_block` | [Block an item](#blocking-an-item) until a time or on a named resource, or lift the block |
 | `relate_items`, `unrelate_items` | Relate two items, or remove the relation: [Related items](#related-items) |
