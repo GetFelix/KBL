@@ -99,6 +99,8 @@ async fn a_person_token_lists_every_tool() {
             "park_item",
             "unpark_item",
             "unblock_item",
+            "relate_items",
+            "unrelate_items",
             "request_review",
             "request_changes",
             "mark_merged",
@@ -128,7 +130,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 23] = [
+    let cases: [(&str, Value, &str, Value); 25] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -291,8 +293,8 @@ async fn each_tool_posts_to_its_route_with_its_body() {
 
 #[tokio::test]
 async fn every_table_entry_is_covered_by_a_case() {
-    // 21 writes above and the queue below: a new entry needs its case.
-    assert_eq!(TOOLS.len(), 22);
+    // 23 writes above and the queue below: a new entry needs its case.
+    assert_eq!(TOOLS.len(), 24);
 }
 
 #[tokio::test]
