@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kbl_core::content::Content;
 use kbl_core::names::ItemId;
-use kbl_core::work::{WorkLogged, WorkRecord};
+use kbl_core::work::{Actor, WorkLogged, WorkRecord};
 use kbl_core::work_fold::Reject;
 use serde_json::{Value, json};
 
@@ -39,15 +39,21 @@ struct Hand {
 
 /// Lines a unified diff hunk adds and removes, without its file headers.
 fn hunk_lines(hunk: &str) -> (u64, u64) {
-    hunk.lines().fold((0, 0), |(a, r), l| {
-        if l.starts_with('+') && !l.starts_with("+++") {
-            (a + 1, r)
-        } else if l.starts_with('-') && !l.starts_with("---") {
-            (a, r + 1)
-        } else {
-            (a, r)
+    // File headers come before the first `@@`; inside a hunk every `+` or `-` line is content.
+    let mut in_hunk = false;
+    let mut counts = (0, 0);
+    for l in hunk.lines() {
+        if l.starts_with("@@") {
+            in_hunk = true;
+        } else if in_hunk || !(l.starts_with("+++") || l.starts_with("---")) {
+            if l.starts_with('+') {
+                counts.0 += 1;
+            } else if l.starts_with('-') {
+                counts.1 += 1;
+            }
         }
-    })
+    }
+    counts
 }
 
 #[derive(Default)]
@@ -236,10 +242,13 @@ impl Activity {
             .entry(attempt)
             .or_default();
         match &rec.record {
-            WorkRecord::Progress {
-                note: Content::Text(t),
-                ..
-            } => h.summary = Some(t.clone()),
+            // Only the agent's own note is its summary; a person's note on the attempt is not.
+            WorkRecord::Progress { note, .. } if rec.actor == Actor::Agent => {
+                h.summary = match note {
+                    Content::Text(t) => Some(t.clone()),
+                    Content::Artifact(_) => None,
+                };
+            }
             WorkRecord::Step {
                 command, exit_code, ..
             } if *exit_code != 0 => {

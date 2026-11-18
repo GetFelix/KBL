@@ -268,3 +268,46 @@ fn a_refused_mark_is_not_the_standing_mark() {
     );
     assert_eq!(handoffs(&fold)["r1"]["accurate"], Value::Null);
 }
+
+/// Only the agent's own notes are its summary, the last one wins even when stored as an
+/// artifact, and a removed `-- x` line inside a hunk is a removal, not a header.
+#[test]
+fn the_summary_is_the_agents_last_note_and_hunk_lines_are_counted_inside_hunks() {
+    let mut fold = Folder::new();
+    start(&mut fold, None);
+    feed(
+        &mut fold,
+        ("w1", "agent"),
+        &[
+            json!({ "kind": "claimed", "item": "r1", "attempt": 1, "deadline_ms": 9_000_000_000_000u64 }),
+            json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "text": "starting" } }),
+            json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "artifact": "b-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" } }),
+            json!({ "kind": "decision", "item": "r1", "attempt": 1, "phase": "fix",
+                    "so_far": "s", "question": "q", "chosen": "c", "why": "w", "commit": "abc" }),
+        ],
+    );
+    let decision = fold.at();
+    feed(
+        &mut fold,
+        ("w1", "agent"),
+        &[
+            json!({ "kind": "edit", "item": "r1", "attempt": 1, "file": "q.sql",
+                    "hunk": { "text": "--- a/q.sql\n+++ b/q.sql\n@@ -1 +1 @@\n--- note\n+++ more\n" },
+                    "decision": decision as u64 }),
+            json!({ "kind": "done", "item": "r1", "attempt": 1 }),
+        ],
+    );
+    feed(
+        &mut fold,
+        ("gabriel", "person"),
+        &[
+            json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "text": "person note" } }),
+        ],
+    );
+    let h = &handoffs(&fold)["r1"];
+    assert_eq!(h["summary"], Value::Null);
+    assert_eq!(
+        (h["added"].clone(), h["removed"].clone()),
+        (json!(1), json!(1))
+    );
+}

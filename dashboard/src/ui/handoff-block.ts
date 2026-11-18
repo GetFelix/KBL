@@ -26,8 +26,8 @@ export function handoffBlock(item: ItemRow, ho: Handoff, marker: HandoffMarker, 
     ho.summary ? h('p', { class: 'handoff-summary' }, h('span', { class: 'story-label' }, 'Summary '), ho.summary) : h('p', { class: 'muted' }, 'No summary note recorded.'),
     h('ul', { class: 'handoff-facts' },
       h('li', {}, h('span', { class: 'story-label' }, 'Diff '), diffText(ho)),
-      item.pr ? h('li', {}, h('span', { class: 'story-label' }, 'Pull request '), url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, item.pr) : item.pr) : null,
-      checks ? h('li', { class: 'handoff-checks', 'data-checks': item.pr_checks ?? '' }, h('span', { class: 'story-label' }, 'Checks '), checks.replace(/^Checks /, '')) : null,
+      item.pr ? h('li', {}, h('span', { class: 'story-label' }, 'Item’s pull request '), url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, item.pr) : item.pr) : null,
+      checks ? h('li', { class: 'handoff-checks', 'data-checks': item.pr_checks ?? '' }, h('span', { class: 'story-label' }, 'Item’s checks '), checks.replace(/^Checks /, '')) : null,
       failed ? h('li', {}, h('span', { class: 'story-label' }, 'Steps '), failed) : null),
     ho.failed_steps.length > 0
       ? h('ul', { class: 'handoff-failed' }, ...ho.failed_steps.map((f) => h('li', {}, h('code', {}, f.command), h('span', { class: 'muted' }, ` exit ${f.exit_code}, step ${f.offset}`))))
