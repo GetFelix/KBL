@@ -1,10 +1,10 @@
 // Groups the fold's items for the list view. The stage itself comes from `core`
 // through the fold; this only orders and labels what the fold decided.
 import type { ItemRow } from './fold.ts';
+import { inboxFor, oldestFirst } from './inbox.ts';
 import { score } from './palette.ts';
 import type { ViewState } from './state.ts';
 import { applyFilters } from './views.ts';
-import { assigneePerson } from './writes.ts';
 
 /** Board order: what needs a person first, finished work last. Mirrors `Stage` in core/src/work_fold.rs. */
 export const STAGES = [
@@ -60,38 +60,33 @@ export function move(rows: readonly ItemRow[], current: string | null, step: num
   return rows[Math.max(0, Math.min(rows.length - 1, at + step))].id;
 }
 
-/**
- * What needs `viewer`: an item assigned to a person is only in that person's queue. Unassigned
- * items show for everyone. Signed out, assigned items show for no one, as the tracker's queue does.
- */
-export function myQueue(items: readonly ItemRow[], viewer: string | null): ItemRow[] {
-  return items.filter((i) => {
-    if (i.stage !== 'needs_you') return false;
-    const who = assigneePerson(i);
-    return who === null || who === viewer;
-  });
-}
+/** What waits on `viewer`, in the fold's order: see `inboxFor`. */
+export const myQueue = (items: readonly ItemRow[], viewer: string | null): ItemRow[] => inboxFor(items, viewer);
 
 /** The items the view covers, before filters and search: every item, or only the Blocked ones. */
-export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
+export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind'] }): ItemRow[] {
   if (s.view === 'all') return s.items;
-  if (s.view === 'inbox') return myQueue(s.items, s.tracker?.kind === 'signed-in' ? s.tracker.person : null);
+  if (s.view === 'inbox') return inboxFor(s.items, s.tracker?.kind === 'signed-in' ? s.tracker.person : null, s.kind ?? null);
   const blocked = new Set(s.blocked.map((b) => b.id));
   return s.items.filter((i) => blocked.has(i.id));
 }
 
 /** What the page shows: the items in the view, filtered, matching the search, grouped by stage. */
-export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker'] }): Group[] {
-  return group(applyFilters(inScope(s), s.filters), s.query);
+export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting'] }): Group[] {
+  const rows = applyFilters(inScope(s), s.filters);
+  if (s.view !== 'inbox') return group(rows, s.query);
+  // One list, oldest first: the inbox is cleared from the top, not by stage.
+  const matching = group(rows, s.query).flatMap((g) => g.items);
+  return matching.length ? [{ stage: 'inbox', label: 'Waiting on you', items: oldestFirst(matching, s.waiting ?? new Map()) }] : [];
 }
 
 /** The rows the list shows, in the order j and k walk. */
-export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
+export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting'] }): ItemRow[] {
   return flatten(visible(s));
 }
 
 /** The marked items the view shows now. A bulk action never reaches an item a search or filter hides. */
-export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
+export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting'] }): ItemRow[] {
   const marked = new Set(s.marked);
   return shownRows(s).filter((i) => marked.has(i.id));
 }

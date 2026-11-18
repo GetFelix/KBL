@@ -144,6 +144,12 @@ impl Folder {
                     "flagged": i.flagged,
                     "assignee": i.assignee,
                     "held_attempt": i.hold.as_ref().map(|h| h.attempt),
+                    "finding": i.finding,
+                    "proposal": i.proposal.as_ref().map(|p| json!({
+                        "why": p.why,
+                        "depends_on": p.depends_on,
+                        "split": p.split,
+                    })),
                 })
             })
             .collect();

@@ -49,6 +49,10 @@ export interface ItemRow {
   assignee?: { person: string } | { agent: string } | null;
   /** The attempt an agent holds, when the item is held. */
   held_attempt?: number | null;
+  /** The offset of the review finding this item came from, when a review made it. */
+  finding?: number | null;
+  /** What triage proposed besides the tier, for a person to accept or adjust. */
+  proposal?: { why: string; depends_on: string[]; split: string[] } | null;
   /** The log's format when the page read it, the same for every row. A log below 7 refuses flags. */
   format?: number;
 }

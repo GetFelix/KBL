@@ -848,6 +848,45 @@ try {
   check(hidden.length === 0, `keyboard: no Tab stop is an invisible element${hidden.length ? ` (${[...new Set(hidden)].join(', ')})` : ''}`);
   clean();
 
+  // The Needs-you inbox answers in place: a question by its option key, a triage proposal by Accept.
+  {
+    const log = fixtureLog();
+    let at = 1_900_000_000_000;
+    const rec = (r) => log.push({ actor: 'person', by: 'maintainer', at_ms: at++, ...r });
+    const agent = (r) => rec({ actor: 'agent', by: 'agent-1', ...r });
+    rec({ kind: 'imported', item: 'inb-1', source: 'github', title: 'Which retry policy?', upstream_id: 'GetFelix/felix#9101' });
+    rec({ kind: 'triaged', item: 'inb-1', tier: 1, why: 'seen' });
+    rec({ kind: 'accepted', item: 'inb-1', tier: 1 });
+    agent({ kind: 'claimed', item: 'inb-1', attempt: 1, deadline_ms: at + 3_600_000 });
+    agent({ kind: 'question', item: 'inb-1', attempt: 1, text: { text: 'Retry forever or give up after five?' }, options: ['Forever', 'Five tries'], default: 'Five tries' });
+    rec({ kind: 'imported', item: 'inb-2', source: 'github', title: 'Slow compaction on cold start', upstream_id: 'GetFelix/felix#9102' });
+    rec({ kind: 'triaged', item: 'inb-2', tier: 2, why: 'Compaction waits on the index rebuild' });
+    await open(`${connected}&view=inbox`, { log });
+    await page.waitFor(live);
+    await page.waitFor(`document.querySelector('.account-who')?.textContent === 'Signed in as maintainer'`);
+    check((await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',')`)) === 'inb-1,inb-2', 'the inbox lists a question and a triage proposal, oldest first');
+    check(await page.eval(`document.querySelector('.inbox-act[data-kind=question] .inbox-question').textContent === 'Retry forever or give up after five?' && [...document.querySelectorAll('.inbox-act[data-kind=question] .inbox-options button')].map((b) => b.textContent).join('|') === '1 Forever|2 Five tries (default)'`), 'a question shows what was asked and its numbered options, the default named');
+    check(await page.eval(`[...document.querySelectorAll('.kinds .kind')].map((b) => b.textContent).join('|') === 'Everything2|Questions1|Triage1|Review findings|Decisions'`), 'the sidebar counts each kind');
+    await axe('inbox actions');
+    await shoot('inbox-actions-dark');
+    await page.eval(`[...document.querySelectorAll('.kinds .kind')].find((b) => b.textContent.startsWith('Triage')).click(); true`);
+    check((await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',')`)) === 'inb-2', 'a kind narrows the inbox to that kind');
+    check(await page.eval(`document.querySelector('.kinds .kind[aria-pressed=true]').textContent.startsWith('Triage')`), 'the chosen kind is marked pressed');
+    await page.eval(`[...document.querySelectorAll('.kinds .kind')].find((b) => b.textContent.startsWith('Everything')).click(); true`);
+    await page.eval(`document.querySelector('.row[data-id=inb-1]').focus(); true`);
+    await press(page, '2');
+    await page.waitFor(`window.__tracker.calls.some((c) => c.url === '/v1/work/questions/answer')`);
+    check(await page.eval(`window.__tracker.calls.at(-1).body.chosen === 'Five tries' && window.__tracker.calls.at(-1).body.item === 'inb-1'`), 'one key answers a question with the numbered option, from the list');
+    await page.waitFor(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',') === 'inb-2'`);
+    check(true, 'the answered item leaves the inbox');
+    await page.eval(`document.querySelector('.inbox-act [data-focus=accept]').click(); true`);
+    await page.waitFor(`window.__tracker.calls.at(-1).url === '/v1/work/proposals/accept'`);
+    check(await page.eval(`window.__tracker.calls.at(-1).body.item === 'inb-2' && window.__tracker.calls.at(-1).body.tier === 2`), 'Accept in the list sends the shown tier without a confirm');
+    await page.waitFor(`document.querySelector('.empty h2')?.textContent === 'Nothing needs you'`);
+    check(true, 'the accepted proposal leaves the inbox');
+    clean();
+  }
+
   // Performance budget: a log of ITEMS items (check/budget.mjs). The fold time is the page's own, from the
   // wasm; the first useful paint is the first list row on screen. Numbers go in the log so a budget is set from them.
   await open(`${connected}`, { log: bigLog(ITEMS), pageSize: 500 });

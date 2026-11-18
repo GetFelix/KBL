@@ -9,8 +9,10 @@ import { activeCount } from '../views.ts';
 import { assigneePerson, needsLine } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
 import { h } from './dom.ts';
+import { inboxActions, type InboxHandlers } from './inbox-actions.ts';
+import { inboxKind, kindLabel } from '../inbox.ts';
 
-export interface ListHandlers {
+export interface ListHandlers extends InboxHandlers {
   open(id: string): void;
   /** Focus landed on a row: it becomes the selection, so keys act on what has focus. */
   select(id: string | null): void;
@@ -93,6 +95,17 @@ export function itemList(
   announce: Announce,
 ): { el: HTMLElement; render(s: ViewState): void; focusSelected(): void } {
   const el = h('div', { class: 'list' });
+  const inbox = inboxActions(on);
+  // A digit presses the numbered button of the row's strip, so a question is answered with one key.
+  el.addEventListener('keydown', (e) => {
+    if (!/^[1-9]$/.test(e.key) || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('input, textarea, select, button')) return;
+    const press = target.closest('.inbox-item')?.querySelector<HTMLElement>(`.inbox-act [data-key="${e.key}"]`);
+    if (!press) return;
+    e.preventDefault();
+    press.click();
+  });
   const rows = new Map<string, HTMLAnchorElement>();
   // One checkbox per row, beside its link (a control cannot sit inside a link), for bulk actions.
   // Out of the Tab order so Tab still moves row to row, as in Linear and GitHub; X marks from the keyboard.
@@ -205,6 +218,9 @@ export function itemList(
         );
       }
       if (s.items.length === 0) return show('empty', emptyState('No work yet', 'Items appear here as the tracker imports issues from its sources.'));
+      if (s.view === 'inbox' && s.kind && inScope(s).length === 0) {
+        return show(`nokind|${s.kind}`, emptyState(`No ${kindLabel(s.kind).toLowerCase()} waiting`, 'Pick another kind, or show all of Needs you.'));
+      }
       if (s.view === 'inbox' && inScope(s).length === 0) {
         return show('noinbox', emptyState('Nothing needs you', 'An item shows here when an agent asks a question, a check fails, or work runs out of budget or tries.'));
       }
@@ -213,7 +229,13 @@ export function itemList(
       }
       const groups = visible(s);
       const waits = new Map(s.blocked.map((b) => [b.id, `waits on ${waitsOn(b)}`]));
-      for (const i of s.items) if (i.needs) waits.set(i.id, needsLine(i));
+      for (const i of s.items) {
+        if (i.needs) waits.set(i.id, needsLine(i));
+        else if (s.view === 'inbox') {
+          const k = inboxKind(i);
+          if (k) waits.set(i.id, k === 'review' ? 'A review finding to accept' : 'Triage proposed this');
+        }
+      }
       if (groups.length === 0) {
         const filtered = activeCount(s.filters) > 0;
         const what = s.query ? `“${s.query}”` : 'these filters';
@@ -227,8 +249,11 @@ export function itemList(
       }
       if (s.layout === 'board') return showBoard(s, groups);
       const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? ''])]))}`;
+      // A field in a strip loses focus when its list is rebuilt; it gets it back once the strips are in.
+      let typing: HTMLElement | null = null;
       if (key !== shown) {
         const focusedId = focusedHere();
+        typing = document.activeElement instanceof HTMLElement && document.activeElement.closest('.inbox-act') && el.contains(document.activeElement) ? document.activeElement : null;
         const focusedMark = document.activeElement instanceof HTMLInputElement && marks.get(document.activeElement.dataset.mark ?? '') === document.activeElement ? document.activeElement : null;
         const before = last;
         const kept = new Map(rows);
@@ -243,7 +268,7 @@ export function itemList(
             const headingId = `group-${g.stage}`;
             return h('section', { class: 'group', 'aria-labelledby': headingId },
               h('h2', { id: headingId, class: 'group-title' }, g.label, h('span', { class: 'count' }, String(g.items.length))),
-              h('ul', {}, ...g.items.map((item) => h('li', { class: 'row-item' }, markBox(item.id), row(item.id, item.title, waits.get(item.id) ?? '')))),
+              h('ul', {}, ...g.items.map((item) => h('li', { class: s.view === 'inbox' ? 'row-item inbox-item' : 'row-item' }, markBox(item.id), row(item.id, item.title, waits.get(item.id) ?? '')))),
             );
           }),
         );
@@ -253,6 +278,22 @@ export function itemList(
         // A checkbox that had the focus keeps it, rather than handing it to its row.
         if (focusedMark?.isConnected) quietly(focusedMark);
         for (const id of marks.keys()) if (!rows.has(id)) marks.delete(id);
+      }
+      if (s.view === 'inbox') {
+        const byItem = new Map(s.items.map((i) => [i.id, i]));
+        for (const li of el.querySelectorAll<HTMLElement>('.inbox-item')) {
+          const item = byItem.get(li.querySelector<HTMLElement>('.row')?.dataset.id ?? '');
+          if (!item) continue;
+          const strip = inbox.strip(item, s);
+          const old = li.querySelector('.inbox-act');
+          if (old !== strip) {
+            const had = old?.contains(document.activeElement);
+            old ? old.replaceWith(strip) : li.append(strip);
+            if (had) strip.querySelector<HTMLElement>('[data-focus]')?.focus({ preventScroll: true });
+          }
+        }
+        inbox.keep(new Set(rows.keys()));
+        if (typing?.isConnected && document.activeElement !== typing) quietly(typing);
       }
       const marked = new Set(s.marked);
       for (const [id, box] of marks) if (box.checked !== marked.has(id)) box.checked = marked.has(id);

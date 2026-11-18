@@ -6,6 +6,7 @@
 import './ui/tokens.css';
 import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
+import { trackWaiting } from './inbox.ts';
 import { blocked, items, questionText, reviewLoad, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { stories } from './story.ts';
@@ -80,6 +81,8 @@ const initial: ViewState = {
   writes: NO_WRITES,
   tracker: { kind: 'signed-out' },
   questions: new Map(),
+  kind: null,
+  waiting: new Map(),
   theme: themeParam === 'light' || themeParam === 'dark' ? themeParam : matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark',
 };
 const store = createStore(initial);
@@ -357,6 +360,8 @@ const ui = shell(
     signOut,
     confirm: confirmKind,
     setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
+    acceptNow: (ids, tier) => write(ids, { kind: 'accept', tier }),
+    kind: (kind) => store.dispatch({ type: 'kind', kind }),
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
     take: (item) => write([item], { kind: 'take' }),
     assign: assignItem,
@@ -527,6 +532,10 @@ async function main() {
     spendJson: () => fold.spend_json(),
   };
   readSpend = () => spend(sink);
+  const snapshot = () => {
+    const rows = items(sink);
+    return { type: 'items' as const, items: rows, blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions), waiting: trackWaiting(store.get().waiting, rows, sink.at()) };
+  };
   // Redraw once per frame however many records arrive.
   let queued = false;
   const redraw = () => {
@@ -537,7 +546,7 @@ async function main() {
     const wait = store.get().connection.kind === 'live' ? 0 : 500;
     setTimeout(() => requestAnimationFrame(() => {
       queued = false;
-      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
+      store.dispatch(snapshot());
       if (spendBox.isOpen()) showSpend();
       if (readSpend) pricesBox.refresh(readSpend());
     }), wait);
@@ -563,7 +572,7 @@ async function main() {
         onLive: () => {
           delay = 1000;
           performance.mark('kbl-live', { detail: { foldMs } });
-          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
+          store.dispatch(snapshot());
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();
           if (readSpend) pricesBox.refresh(readSpend());
