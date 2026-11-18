@@ -1082,7 +1082,9 @@ pub fn redact_record(record: &mut WorkRecord) {
             }
         }
         WorkRecord::Released { reason, .. } => redact_opt(reason),
-        WorkRecord::GaveUp { reason, .. } => redact_in(reason),
+        WorkRecord::GaveUp { reason, .. } | WorkRecord::BlockSet { reason, .. } => {
+            redact_in(reason)
+        }
         WorkRecord::Question {
             text,
             options,
@@ -1173,6 +1175,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::Snoozed { .. }
         | WorkRecord::Parked { .. }
         | WorkRecord::Unblocked { .. }
+        | WorkRecord::BlockCleared { .. }
         | WorkRecord::ReviewRequested { .. }
         | WorkRecord::ChangesRequested { .. }
         | WorkRecord::MergeMarked { .. }

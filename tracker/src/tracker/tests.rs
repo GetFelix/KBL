@@ -2672,6 +2672,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 }
 
 mod assignee;
+mod blocks;
 mod metrics;
 mod races;
 mod recover;

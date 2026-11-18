@@ -98,8 +98,18 @@ export function prText(i: ItemRow): string | null {
   return state ? `PR #${n}, ${state}` : `PR #${n}`;
 }
 
-/** The small properties a card carries: tier, source, pull request. The assignee has its own chip. */
-export function properties(i: ItemRow): string[] {
+/** What a person blocked the item on, such as `Blocked on azure-vms until 21 Nov: no credit`. Null when it has no block that still holds. */
+export function blockText(i: Pick<ItemRow, 'block'>, now: number): string | null {
+  const b = i.block;
+  if (!b || (b.until_ms != null && b.until_ms <= now)) return null;
+  const on = b.resource ? ` on ${b.resource}` : '';
+  const until = b.until_ms != null ? ` until ${new Date(b.until_ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}` : '';
+  return `Blocked${on}${until}: ${b.reason}`;
+}
+
+/** The small properties a card carries: tier, source, pull request, and a block that still holds. The assignee has its own chip. */
+export function properties(i: ItemRow, now?: number): string[] {
   const tier = i.tier ?? i.proposed_tier;
-  return [tier != null ? `Tier ${tier}` : null, i.source ?? null, prText(i)].filter((x): x is string => !!x);
+  const block = now != null ? blockText(i, now) : null;
+  return [tier != null ? `Tier ${tier}` : null, i.source ?? null, prText(i), block].filter((x): x is string => !!x);
 }

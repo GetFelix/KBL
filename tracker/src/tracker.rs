@@ -1711,12 +1711,14 @@ impl<B: Broker> Tracker<B> {
             });
         }
         let key = agent_key(agent);
+        let now = now_ms();
         let mut mine: Vec<(u8, ItemId)> = core
             .state
             .items
             .iter()
             .filter(|(_, it)| it.assignee == Some(Assignee::Agent(key.clone())))
             .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
+            .filter(|(id, _)| !core.state.blocked_at(id, now))
             .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
             .filter(|(id, _)| !self.review_full(&core.state, id))
             .filter(|(_, it)| filter.matches(&core, it))
@@ -1779,6 +1781,11 @@ impl<B: Broker> Tracker<B> {
         tier: u8,
         item: ItemId,
     ) -> Result<Option<Delivery>, Error> {
+        // The one place every claim from the state passes, so a blocked item
+        // is skipped here whoever asked, with no record written or spent.
+        if core.state.blocked_at(&item, now_ms()) {
+            return Ok(None);
+        }
         let key = agent_key(agent);
         let attempt = core.state.items[&item].next_attempt();
         let claim = WorkRecord::Claimed {
@@ -2129,6 +2136,13 @@ impl<B: Broker> Tracker<B> {
                 ack(ops, record.offset);
                 return Ok(None);
             }
+        }
+        // Acked, not refused: the item is published again once the block ends,
+        // which a refusal would hold back until the log moves.
+        if core.state.blocked_at(&item, now_ms()) {
+            core.live.remove(&item);
+            ack(ops, record.offset);
+            return Ok(None);
         }
         if self.0.settings.crash_after_poll {
             std::process::exit(70);
@@ -2716,11 +2730,14 @@ impl<B: Broker> Tracker<B> {
             let mut core = self.0.core.lock().await;
             // The clock of a record runs only while its item is Ready: a long hold
             // does not make the record look old once the item is released.
+            // A blocked item is not published, and its clock restarts when the block ends.
+            let now = now_ms();
             let ready: Vec<ItemId> = core
                 .state
                 .items
                 .keys()
                 .filter(|id| core.state.stage(id) == Some(Stage::Ready))
+                .filter(|id| !core.state.blocked_at(id, now))
                 .cloned()
                 .collect();
             core.published.retain(|id, _| ready.iter().any(|r| r == id));
@@ -2735,7 +2752,7 @@ impl<B: Broker> Tracker<B> {
             core.state
                 .items
                 .iter()
-                .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
+                .filter(|(id, _)| ready.contains(id))
                 .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
                 // Handed to its assignee by `try_assigned`, never through a lane.
                 .filter(|(_, it)| !matches!(it.assignee, Some(Assignee::Agent(_))))

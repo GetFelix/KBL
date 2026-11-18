@@ -1,0 +1,9 @@
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix"}
+{"at_ms":1015,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"fix the docs build"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1025,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"v":16,"at_ms":1030,"by":"gabriel","actor":"person","kind":"format_raised","to":16}
+{"v":16,"at_ms":1040,"by":"gabriel","actor":"person","kind":"block_set","item":"r1","until_ms":3601040,"resource":"azure-vms","reason":"Azure credit is at zero"}
+{"v":16,"at_ms":1045,"by":"gabriel","actor":"person","kind":"block_set","item":"r2","resource":"azure-vms","reason":"waits on the perf box"}
+{"v":16,"at_ms":1050,"by":"gabriel","actor":"person","kind":"block_cleared","item":"r2"}
+{"at_ms":1060,"by":"w1","actor":"agent","kind":"claimed","item":"r2","attempt":1,"deadline_ms":1800000090000}
