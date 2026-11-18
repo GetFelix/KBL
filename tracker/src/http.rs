@@ -88,6 +88,7 @@ pub(crate) fn router_with<B: Broker>(
     let scoped = work.clone();
     let for_agents = app.clone();
     Router::new()
+        .route("/", get(index))
         .route("/healthz", get(|| async { "ok" }))
         .route("/v1/me", get(me::<B>))
         .route(
@@ -102,6 +103,16 @@ pub(crate) fn router_with<B: Broker>(
         )
         .with_state(app)
         .merge(work)
+}
+
+/// The unauthenticated landing answer: what this is and where its health check
+/// is. It carries no configuration, token or state.
+async fn index() -> Json<Value> {
+    Json(json!({
+        "service": "kbl-tracker",
+        "version": env!("CARGO_PKG_VERSION"),
+        "health": "/healthz",
+    }))
 }
 
 /// Counts the call and times it, by route template, method and status.

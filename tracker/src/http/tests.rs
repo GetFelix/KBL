@@ -13,6 +13,7 @@ use crate::teams::Team;
 
 mod metrics;
 mod org;
+mod root;
 mod traces;
 
 /// A Felix with no records that remembers which streams were published to, and

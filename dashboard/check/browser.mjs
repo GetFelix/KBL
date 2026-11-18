@@ -123,6 +123,9 @@ async function open(query, { mode = 'live', theme = 'dark', width = 1280, height
   if (script) await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: script });
   script = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeGateway(log ?? fixtureLog(), mode, pageSize) })).identifier;
   await page.setViewport(width, height, 1);
+  // The tab keeps its session across navigations (session.ts), so a page opened without a
+  // token starts from an empty session, as a new tab would.
+  if (!query.includes('token=')) await page.eval(`(() => { try { sessionStorage.clear(); } catch {} return true; })()`);
   await page.goto(`${server.origin}/index.html?theme=${theme}&${query}`);
   await page.eval(`document.fonts.ready.then(() => true)`);
 }
@@ -793,7 +796,7 @@ try {
   check(await page.eval(`document.querySelector('.account-who').textContent === 'Signed in as maintainer' && document.querySelector('.account-button').textContent === 'Sign out'`), 'the sidebar names who is signed in');
   await page.eval(`document.querySelector('.account-button').click(); true`);
   await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
-  check(await page.eval(`document.querySelector('.account-who').textContent === 'Not signed in to the tracker' && document.querySelector('.account-button').textContent === 'Sign in'`), 'Sign out forgets the token and the panel asks to sign in');
+  check(await page.eval(`document.querySelector('.account-who').textContent === 'Viewing (read-only)' && document.querySelector('.account-button').textContent === 'Sign in to act'`), 'Sign out forgets the token and the panel asks to sign in');
   await axe('signed out by hand');
   await page.eval(`document.querySelector('.account-button').click(); true`);
   check(await focused('#tracker-token'), 'Sign in from the sidebar asks for the token');

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Prints where the quick start stack is and the dashboard link, which carries a
-// fresh sign-in token. The link and the "me" token are for this machine only.
+// fresh gateway token, and the person token for actions. Both are for this machine only.
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,7 +14,9 @@ const gateway = encodeURIComponent("ws://127.0.0.1:8788/ws");
 
 console.log(`
 KBL is up. Everything listens on 127.0.0.1 only.
-  dashboard:  http://127.0.0.1:8081/?gateway=${gateway}&room=kbl&token=${id_token}
+  view link (read-only, works once; a reload in the same tab keeps it):
+    http://127.0.0.1:8081/?gateway=${gateway}&room=kbl&token=${id_token}
+  person token for actions (paste into "Sign in to act"):
+    ${me}
   tracker:    http://127.0.0.1:8790 (REST)
-  sign in to the dashboard's writes with this token: ${me}
 Stop it with dev/down.sh. Connect Claude Code with: node dev/connect.mjs`);

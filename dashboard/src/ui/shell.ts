@@ -94,7 +94,9 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   // Who the writes are made as, and the way to stop: one button, so the focus stays on it either way.
   const who = h('p', { class: 'account-who muted small' });
   let signedIn = false;
-  const account = h('button', { type: 'button', class: 'button ghost account-button', onclick: () => (setMenu(false), signedIn ? on.signOut() : on.signIn()) }, 'Sign in');
+  // The link reads the board; acting needs the person token, a separate sign-in.
+  const hint = h('p', { class: 'account-hint muted small' }, 'Your link only reads. Signing in with your person token lets you accept, reject, assign and close work.');
+  const account = h('button', { type: 'button', class: 'button ghost account-button', onclick: () => (setMenu(false), signedIn ? on.signOut() : on.signIn()) }, 'Sign in to act');
   const heading = h('h1', {}, 'All work');
   // Below 720 px the sidebar is a drawer behind this button, so Commands and
   // Shortcuts stay in the same place on every screen (WCAG 3.2.6).
@@ -162,7 +164,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     h('h2', { class: 'nav-title', id: 'saved-title' }, 'Saved views'),
     savedList,
     h('div', { class: 'sidebar-foot' },
-      h('div', { class: 'account' }, who, account),
+      h('div', { class: 'account' }, who, hint, account),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.spend()) }, 'Spend'),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.metrics()) }, 'Metrics'),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.palette()) }, 'Commands', kbd(displayChord(chordFor('palette'), mac))),
@@ -222,9 +224,10 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     render(s: ViewState) {
       renderSaved(s.saved);
       signedIn = s.tracker.kind === 'signed-in';
-      const whoText = s.tracker.kind === 'signed-in' ? `Signed in as ${s.tracker.person}` : s.tracker.kind === 'checking' ? 'Checking the token…' : 'Not signed in to the tracker';
+      const whoText = s.tracker.kind === 'signed-in' ? `Signed in as ${s.tracker.person}` : s.tracker.kind === 'checking' ? 'Checking the token…' : 'Viewing (read-only)';
       if (who.textContent !== whoText) who.textContent = whoText;
-      const label = signedIn ? 'Sign out' : 'Sign in';
+      const label = signedIn ? 'Sign out' : 'Sign in to act';
+      hint.hidden = signedIn || s.tracker.kind === 'checking';
       if (account.textContent !== label) account.textContent = label;
       const named = s.saved.find((v) => sameView(s, decodeView(v.search)));
       for (const n of nav) {

@@ -269,6 +269,9 @@
  "tracker/src/http.rs#agent": [
   "fn agent(&self) -> Result<AgentName, Denied> {"
  ],
+ "tracker/src/http.rs#index": [
+  "async fn index() -> Json<Value> {"
+ ],
  "tracker/src/http.rs#answer": [
   "if b.moves_to.is_some() {"
  ],

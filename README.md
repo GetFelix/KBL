@@ -65,8 +65,8 @@ Download `kbl-mcp`, `kbl-tool` and `kbl-ingest` from the same release ([Getting 
 The images exist only after the first tag. The tracker, dashboard and every `dev/*.mjs` script need only Node and the
 container engine, with no npm install.
 
-When it finishes it prints a dashboard link (the sign-in token is in it, so keep it to yourself), the tracker address and
-the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be free. Choose the engine with `CONTAINER_ENGINE=docker` or `podman`.
+When it finishes it prints a "view link" for the dashboard (read-only; its gateway token is in it, so keep it to yourself),
+the tracker address and a "person token for actions", which the dashboard's Sign in takes for its write actions. Ports 8081, 8788 and 8790 must be free. Choose the engine with `CONTAINER_ENGINE=docker` or `podman`.
 
 1. **Open the dashboard.** Open the printed link. Its queue is empty.
 2. **Add work.** Post an item to the tracker with the person token (the dashboard's Sign in takes the same token for its accept, reject, tier and close actions):
@@ -96,17 +96,33 @@ the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be f
    `node dev/connect.mjs agent1` again to write a new one, and the running `kbl-mcp` picks it up at its next renewal.
    `--fixed-token` writes a Felix token into the config as `KBL_FELIX_TOKEN` instead; that one is not renewed, so after
    24 hours run `connect.mjs` again and restart the host.
-The dashboard link works once: the page removes the token from the address, so a reload needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
+The view link works once: the page removes the token from the address and keeps the session in that tab only (sessionStorage, cleared on sign-out and when the tab closes). A reload keeps it; a new tab needs a new link from `node dev/open-dashboard.mjs`. `.mcp.json` holds tokens and is in `.gitignore`.
 4. **Bring in GitHub issues (optional).** Ingest turns the issues carrying one label in one repository into work. Build it, then point it at a repository and a token file (or export `GITHUB_TOKEN`). The token needs read access to that repository's issues:
    ```bash
    cargo build --release -p kbl-ingest
-   node dev/ingest.mjs --repo OWNER/NAME --token-file ~/.github-token --label agent-ok
+   node dev/ingest.mjs --repo OWNER/NAME --token-file ~/.github-token --labels agent-ok
    ```
    It first runs `kbl-ingest check`, which tests the token and lists what the first poll would import without writing
    anything, then keeps polling the local tracker until you press Ctrl-C. The issues appear in the dashboard's Ready
    column. Add `--check-only` to stop after the check, or `--once` for a single poll. The config it writes is
-   `dev/state/ingest.json`; [Setting up ingest](docs/ingest-setup.md) explains the rest.
+   `dev/state/ingest.json`. Narrow or change the filter with `--labels a,b` (all required), `--exclude-label x,y`,
+   `--milestone NAME`, `--cap N` (open roots at most) and `--mode propose` (matches wait in Triage until a person accepts
+   them; the default `admit` makes them work at once). `--keep-config` runs the existing file as it is, for a config you
+   edited by hand. [Setting up ingest](docs/ingest-setup.md) explains the rest.
 5. **Stop it** with `dev/down.sh`, which also deletes its data.
+
+### Troubleshooting
+
+- **See what is running.** `dev/ps.sh` lists the containers and their state; `dev/logs.sh [service]` prints their logs
+  (`FOLLOW=1 dev/logs.sh tracker` follows). Both use the engine `up.sh` chose.
+- **Is the tracker up?** `curl http://127.0.0.1:8790/` names the service and its version and points to `/healthz`.
+- **The dashboard says "Connect to a gateway" or "Sign in".** Run `node dev/open-dashboard.mjs` for a new view link.
+  A reload keeps the session in the same tab; a new tab, a closed tab or Sign out needs a new link.
+- **"Viewing (read-only)" and the board is full.** The view link only reads. "Sign in to act" takes the person token for
+  actions (printed with the link, or in `dev/state/tracker-tokens.json`).
+- **`kbl-mcp` or `kbl-ingest` not found.** The scripts look at the flag, `KBL_MCP` / `KBL_INGEST`, `target/release`,
+  `target/debug`, `~/.kbl/bin` and `dev/state/bin`, in that order. Build the binary or put it in one of them.
+- **A port is taken.** 8081, 8788 and 8790 must be free; `dev/down.sh` then `dev/quickstart.sh` starts clean.
 
 The tracker and the dashboard run as unprivileged users inside their containers, under both Docker and Podman. The
 tracker starts as root only long enough to read the token file the host owns, then drops to its own user.

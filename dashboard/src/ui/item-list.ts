@@ -175,7 +175,7 @@ export function itemList(
         return show('setup',
           emptyState(
             'Connect to a gateway',
-            h('span', {}, 'Open this page with ', code('?gateway=wss://…&room=…&token=…'), ' in the address. The dashboard README shows the scope the gateway needs.'),
+            h('span', {}, 'Sign in with a view link: run ', code('node dev/open-dashboard.mjs'), ' and open the link it prints, or paste a link that carries ', code('?gateway=…&room=…&token=…'), '. This tab remembers it across reloads. The dashboard README shows the scope the gateway needs.'),
           ),
         );
       }
