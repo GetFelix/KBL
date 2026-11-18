@@ -3,7 +3,7 @@ use felix_client::{CursorErrorReason, SubscribeCursorError};
 
 use serde_json::json;
 
-use super::{acks_are_durable, pages_to_tip, past_the_tail};
+use super::{acks_are_durable, pages_to_tip, past_the_tail, settle_with};
 
 fn refused(reason: CursorErrorReason) -> anyhow::Error {
     anyhow::Error::from(SubscribeCursorError {
@@ -98,4 +98,39 @@ fn a_missing_replication_factor_is_refused() {
     let mut quorum = stream.clone();
     quorum["consistency"] = json!("Quorum");
     assert!(acks_are_durable(&quorum).is_ok());
+}
+
+/// A broker that has not settled refuses the first calls; startup waits it out
+/// instead of exiting, and still reports an error that outlasts the wait.
+#[tokio::test]
+async fn startup_retries_until_the_broker_settles() {
+    use std::cell::Cell;
+    use std::time::Duration;
+    let tries = Cell::new(0);
+    let ms = Duration::from_millis(1);
+    let ok = settle_with(
+        "test",
+        || {
+            tries.set(tries.get() + 1);
+            let n = tries.get();
+            async move {
+                if n < 4 {
+                    anyhow::bail!("the lease lapsed")
+                }
+                Ok(n)
+            }
+        },
+        Duration::from_secs(30),
+        ms,
+    )
+    .await;
+    assert_eq!(ok.unwrap(), 4);
+    let never = settle_with(
+        "test",
+        || async { Err::<(), _>(anyhow::anyhow!("still down")) },
+        Duration::from_millis(20),
+        ms,
+    )
+    .await;
+    assert!(never.unwrap_err().to_string().contains("still down"));
 }

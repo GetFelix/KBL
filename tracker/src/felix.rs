@@ -359,19 +359,23 @@ pub(crate) async fn connect(target: Target, kind: Kind) -> Result<Felix> {
         seeds,
     });
 
-    let admin = session.exchange("felix-controlplane").await?;
-    let url = format!(
-        "{}/v1/tenants/{}/namespaces/{}/resources",
-        session.target.control_plane, session.target.tenant, session.target.namespace
-    );
-    send(
-        session
-            .http
-            .post(url)
-            .bearer_auth(&admin)
-            .json(&streams_batch(kind)),
-        "create the tracker's streams",
-    )
+    settle("create the tracker's streams", || async {
+        let admin = session.exchange("felix-controlplane").await?;
+        let url = format!(
+            "{}/v1/tenants/{}/namespaces/{}/resources",
+            session.target.control_plane, session.target.tenant, session.target.namespace
+        );
+        send(
+            session
+                .http
+                .post(url)
+                .bearer_auth(&admin)
+                .json(&streams_batch(kind)),
+            "create the tracker's streams",
+        )
+        .await
+        .map(drop)
+    })
     .await?;
     if kind == Kind::Team {
         work_events_acks(&session).await?;
@@ -389,7 +393,8 @@ pub(crate) async fn connect(target: Target, kind: Kind) -> Result<Felix> {
     };
     if kind == Kind::Team {
         for lane in 0..LANES {
-            felix.ensure_group(&ready_stream(lane)).await?;
+            let stream = ready_stream(lane);
+            settle("create the ready groups", || felix.ensure_group(&stream)).await?;
         }
     }
     Ok(felix)
@@ -923,6 +928,45 @@ impl Broker for Felix {
 
 /// What a broker says while a new stream's shard has no owner yet or is still opening.
 const NOT_READY: [&str; 2] = ["not assigned", "still opening"];
+
+/// How long startup keeps retrying while a fresh broker settles its leases.
+const SETTLE_WAIT: Duration = Duration::from_secs(120);
+
+/// Runs a startup call until it succeeds or `SETTLE_WAIT` passes, backing off
+/// between tries. A freshly started broker refuses reads until its shard lease
+/// settles, and exiting would only hand the retry to the container engine.
+/// Only idempotent calls go through here.
+async fn settle<T, F, Fut>(doing: &str, op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    settle_with(doing, op, SETTLE_WAIT, Duration::from_millis(250)).await
+}
+
+async fn settle_with<T, F, Fut>(
+    doing: &str,
+    mut op: F,
+    wait: Duration,
+    first_delay: Duration,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T>>,
+{
+    let deadline = Instant::now() + wait;
+    let mut delay = first_delay;
+    loop {
+        match op().await {
+            Err(err) if Instant::now() < deadline => {
+                eprintln!("kbl-tracker: {doing} failed, retrying in {delay:?}: {err:#}");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(Duration::from_secs(5));
+            }
+            done => return done,
+        }
+    }
+}
 
 /// Runs `op`, trying again while the broker says the shard is not ready. No
 /// other failure is retried: a second publish could land twice.

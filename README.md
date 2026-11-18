@@ -61,12 +61,21 @@ the stack can pull them instead of building:
 KBL_IMAGE_TAG=v0.1.0 dev/quickstart.sh
 ```
 
+With `KBL_IMAGE_TAG` set, the script never builds. It refuses a checkout whose version differs from the tag
+("check out v0.1.0, or unset KBL_IMAGE_TAG to build") and prints at the start whether it is pulling or building.
+
 Download `kbl-mcp`, `kbl-tool` and `kbl-ingest` from the same release ([Getting the binaries](#getting-the-binaries)).
 The images exist only after the first tag. The tracker, dashboard and every `dev/*.mjs` script need only Node and the
 container engine, with no npm install.
 
 When it finishes it prints a dashboard link (the sign-in token is in it, so keep it to yourself), the tracker address and
 the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be free. Choose the engine with `CONTAINER_ENGINE=docker` or `podman`.
+
+The script waits for the tracker's `/healthz` and for the dashboard to reach it before it prints the link, and prints the
+tracker log if that never happens. A fresh broker takes a few seconds to settle, and the tracker retries its setup calls
+for up to two minutes meanwhile, so a few `retrying` lines in its log are normal. If the dashboard answers "The tracker
+answered 502", check `docker compose -f dev/compose.yml --profile quickstart logs tracker` (or `podman compose`); the
+dashboard looks the tracker up again by name, so a restarted tracker needs no dashboard restart.
 
 1. **Open the dashboard.** Open the printed link. Its queue is empty.
 2. **Add work.** Post an item to the tracker with the person token (the dashboard's Sign in takes the same token for its accept, reject, tier and close actions):
