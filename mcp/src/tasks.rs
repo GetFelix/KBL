@@ -631,10 +631,11 @@ impl<B: Backend> Tasks<B> {
     }
 
     fn missed(&self, count: u32, error: &anyhow::Error) {
-        eprintln!("kbl-mcp: could not write to the run log: {error:#}");
+        let error = redacted(format!("{error:#}"));
+        eprintln!("kbl-mcp: could not write to the run log: {error}");
         let mut gap = self.0.unlogged.lock().expect("unlogged lock");
         let total = gap.as_ref().map_or(0, |(n, _)| *n) + count;
-        *gap = Some((total, redacted(format!("{error:#}"))));
+        *gap = Some((total, error));
     }
 }
 
