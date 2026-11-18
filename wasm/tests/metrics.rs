@@ -292,3 +292,33 @@ fn a_clock_that_steps_back_gives_no_negative_or_huge_stay() {
     assert_eq!(stage(&r, "triage")["p50_ms"], 0);
     assert_eq!(r["throughput"]["done"], 1);
 }
+
+#[test]
+fn closing_an_item_ends_the_blocked_stay_of_one_in_another_tree() {
+    let mut f = setup();
+    import(&mut f, 0, "a", 1);
+    import(&mut f, 0, "b", 2);
+    for id in ["a", "b"] {
+        put(
+            &mut f,
+            0,
+            P,
+            json!({ "kind": "accepted", "item": id, "tier": 1 }),
+        );
+    }
+    put(
+        &mut f,
+        0,
+        P,
+        json!({ "kind": "linked", "item": "b", "to": "a" }),
+    );
+    put(
+        &mut f,
+        5 * H,
+        P,
+        json!({ "kind": "closed", "item": "a", "why": "completed" }),
+    );
+    let r = report(&f, DAY, 7);
+    assert_eq!(stage(&r, "blocked")["n"], 1, "b left Blocked when a closed");
+    assert_eq!(stage(&r, "blocked")["p50_ms"], 5 * H);
+}

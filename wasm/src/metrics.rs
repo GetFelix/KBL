@@ -4,7 +4,7 @@
 //! A record the fold refused, and a `refused` record the tracker logged, count nowhere. The numbers
 //! are team figures: nothing here names an agent, a model's user or a person. See docs/metrics.md.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use kbl_core::names::ItemId;
 use kbl_core::work::{Actor, ReleaseWhy, WorkLogged, WorkRecord};
@@ -53,6 +53,8 @@ struct Facts {
 pub(crate) struct Metrics {
     facts: BTreeMap<ItemId, Facts>,
     visits: VecDeque<Visit>,
+    /// Items in Blocked now, which a record on any tree can free.
+    blocked: BTreeSet<ItemId>,
     /// When the newest dropped visit ended. Windows reaching back to it are partial.
     dropped_through_ms: Option<u64>,
 }
@@ -71,11 +73,27 @@ fn spread(mut v: Vec<u64>) -> Value {
     json!({ "n": v.len(), "p50_ms": pct(&v, 50), "p85_ms": pct(&v, 85) })
 }
 
+/// Records whose effect on stages stops at the item and its ancestors.
+fn own_stage_only(r: &WorkRecord) -> bool {
+    matches!(
+        r,
+        WorkRecord::Claimed { .. }
+            | WorkRecord::Released { .. }
+            | WorkRecord::GaveUp { .. }
+            | WorkRecord::Done { .. }
+            | WorkRecord::Progress { .. }
+            | WorkRecord::PrStatus { .. }
+            | WorkRecord::Snoozed { .. }
+            | WorkRecord::Parked { .. }
+            | WorkRecord::SummaryRated { .. }
+    )
+}
+
 /// Records that cannot move any item's stage.
 fn keeps_stage(r: &WorkRecord) -> bool {
     matches!(
         r,
-        WorkRecord::Progress { .. }
+        WorkRecord::Progress { pr: None, .. }
             | WorkRecord::Step { .. }
             | WorkRecord::Edit { .. }
             | WorkRecord::Decision { .. }
@@ -95,28 +113,45 @@ impl Metrics {
         if !state.items.contains_key(item) {
             return;
         }
-        let f = self.facts.entry(item.clone()).or_default();
-        if rec.actor == Actor::Person {
-            f.touches += 1;
-        }
-        match &rec.record {
-            WorkRecord::Released { why, .. } if why.is_none_or(|w| w == ReleaseWhy::Failed) => {
-                f.failed_attempts += 1;
+        // The tracker's logged refusal can still move a stage (a budget refusal sends the root to
+        // Needs you), but it is no work, so it adds to no count.
+        if !matches!(rec.record, WorkRecord::Refused { .. }) {
+            let f = self.facts.entry(item.clone()).or_default();
+            if rec.actor == Actor::Person {
+                f.touches += 1;
             }
-            WorkRecord::GaveUp { .. } => f.failed_attempts += 1,
-            WorkRecord::Reopened { .. } => f.reopened += 1,
-            _ => {}
+            match &rec.record {
+                WorkRecord::Released { why, .. } if why.is_none_or(|w| w == ReleaseWhy::Failed) => {
+                    f.failed_attempts += 1;
+                }
+                WorkRecord::GaveUp { .. } => f.failed_attempts += 1,
+                WorkRecord::Reopened { .. } => f.reopened += 1,
+                _ => {}
+            }
         }
         if keeps_stage(&rec.record) {
             return;
         }
-        // A close or a link moves its dependents too, so the whole tree is read again.
-        let mut stack = vec![state.items[item].root.clone()];
-        while let Some(id) = stack.pop() {
-            let Some(it) = state.items.get(&id) else {
-                continue;
-            };
-            stack.extend(it.children.iter().cloned());
+        let mut ids: Vec<ItemId> = Vec::new();
+        if own_stage_only(&rec.record) {
+            // The item and its ancestors, whose stage reads their children.
+            let mut at = Some(item.clone());
+            while let Some(id) = at {
+                at = state.items.get(&id).and_then(|i| i.parent.clone());
+                ids.push(id);
+            }
+        } else {
+            let mut stack = vec![state.items[item].root.clone()];
+            while let Some(id) = stack.pop() {
+                if let Some(it) = state.items.get(&id) {
+                    stack.extend(it.children.iter().cloned());
+                    ids.push(id);
+                }
+            }
+        }
+        // A link holds across trees, so a close in one can free a blocked item in another.
+        ids.extend(self.blocked.iter().cloned());
+        for id in ids {
             self.enter(&id, state.stage(&id), rec.at_ms);
         }
     }
@@ -145,9 +180,16 @@ impl Metrics {
                 }
             }
         }
+        if stage == Stage::Blocked {
+            self.blocked.insert(id.clone());
+        } else {
+            self.blocked.remove(id);
+        }
         let f = self.facts.get_mut(id).expect("inserted above");
-        f.now = Some((stage, at_ms));
-        f.done_ms = (stage == Stage::Done).then_some(at_ms);
+        // A record stamped before the stay began does not move its start back.
+        let since = f.now.map_or(at_ms, |(_, t)| t.max(at_ms));
+        f.now = Some((stage, since));
+        f.done_ms = (stage == Stage::Done).then_some(since);
     }
 
     /// The report over the `days` before `now_ms`: stage times by when each stay ended, and the
