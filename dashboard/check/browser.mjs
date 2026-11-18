@@ -276,7 +276,7 @@ try {
   await press(page, 'Enter');
   await page.waitFor(`location.search.includes('item=${card}')`);
   check(await focused('.panel'), 'Enter on a card opens the panel');
-  check(await page.eval(`[...document.querySelectorAll('.panel dt')].map((d) => d.textContent).join(',').startsWith('Stage')`), 'the panel shows the recorded fields');
+  check(await page.eval(`[...document.querySelectorAll('.panel dt')].map((d) => d.textContent).join(',').startsWith('Upstream,Stage')`), 'the panel shows the recorded fields');
   await shoot('board-panel-dark');
   await press(page, 'Escape');
   check(await page.eval(`document.activeElement?.dataset.id === ${JSON.stringify(card)}`), 'closing the panel gives focus back to the card');
@@ -314,7 +314,8 @@ try {
   check(await page.eval(`document.querySelector('.card[data-id=gh-2300] .card-lead').textContent === 'felix#2300'`), 'a card leads with the upstream reference, not the KBL id');
   check(await page.eval(`document.querySelector('[data-chip=gh-2300]')?.textContent.includes('1 sub-task, 1 done')`), 'the root carries a sub-task count and progress chip');
   check(await page.eval(`document.querySelector('[data-chip=gh-2300]').getAttribute('aria-expanded') === 'false'`), 'the chip starts closed');
-  await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
+  // A script click does not focus a button the way a real one does, so focus first.
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').focus(); document.querySelector('[data-chip=gh-2300]').click(); true`);
   await page.waitFor(`document.querySelector('[data-chip=gh-2300]')?.getAttribute('aria-expanded') === 'true'`);
   check(await page.eval(`document.querySelector('#children-gh-2300 .child-link').textContent.includes('Review the cache fix')`), 'the chip opens the children as links');
   check(await focused('[data-chip=gh-2300]'), 'the chip keeps the focus when it opens');
@@ -329,6 +330,9 @@ try {
   check(await page.eval(`!document.querySelector('.child-strip') && [...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).getAttribute('aria-pressed') === 'true'`), 'the toggle shows child work as cards and drops the strips');
   await axe('board child cards');
   await shoot('board-child-cards-dark');
+  // The choice is remembered per viewer, so turn it off or the list below shows child cards too.
+  await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).click(); true`);
+  await page.waitFor(`!document.querySelector('.card[data-id=rev-2300]')`);
   await open(connected);
   await page.waitFor(live);
   check(await page.eval(`!document.querySelector('.row[data-id=rev-2300]') && !!document.querySelector('.row[data-id=gh-2300] ~ .child-strip, li:has(.row[data-id=gh-2300]) .child-strip')`), 'the list nests children under their root too');
