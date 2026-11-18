@@ -381,6 +381,7 @@ const ui = shell(
     confirm: confirmKind,
     setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
     acceptNow: (ids, tier) => write(ids, { kind: 'accept', tier }),
+    advice: (item, proposal, depends_on, split) => write([item], { kind: 'advice', depends_on, split, proposal }),
     kind: (kind) => store.dispatch({ type: 'kind', kind }),
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
     take: (item) => write([item], { kind: 'take' }),

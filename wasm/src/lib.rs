@@ -132,6 +132,7 @@ impl Folder {
     /// `repo` are null unless recorded: `tier` by acceptance or a tier change,
     /// `proposed_tier` by triage, `source` and `repo` by the item's target, or its
     /// root's target or import. `needs` says why the item waits on a person;
+    /// `waiting_at` is the offset where it began waiting for that reason, or null.
     /// `question` is the offset of its open question, with that question's `options`
     /// and `default`, and `unclear` (`scope`, `repo` or `acceptance`) when it is
     /// triage's. `root` is true for an item with no parent. `accepted` and `flagged` say
@@ -189,6 +190,7 @@ impl Folder {
                     "repo": target.map(|t| &t.repo),
                     "needs": self.state.needs_you(&i.id),
                     "question": i.open_question,
+                    "waiting_at": i.waiting_since.map(|w| w.at),
                     "options": i.open_question.and(i.ask.as_ref()).map(|a| &a.options),
                     "default": i.open_question.and(i.ask.as_ref()).and_then(|a| a.default.as_ref()),
                     "unclear": i.open_question.and(i.ask.as_ref()).and_then(|a| a.unclear),
@@ -201,6 +203,7 @@ impl Folder {
                     "hold_deadline_ms": i.hold.as_ref().map(|h| h.deadline_ms),
                     "finding": i.finding,
                     "proposal": i.proposal.as_ref().map(|p| json!({
+                        "at": p.at,
                         "why": p.why,
                         "depends_on": p.depends_on,
                         "split": p.split,

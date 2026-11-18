@@ -481,7 +481,7 @@ record if the fold accepts it:
 | Call | Records |
 |---|---|
 | `POST /v1/work/proposals/accept` `{item, tier?}` | `accepted`. A proposal's tier comes from the edit, then this call, then triage |
-| `POST /v1/work/proposals/edit` `{item, title?, tier?}` | `edited`, for an item nobody has accepted yet |
+| `POST /v1/work/proposals/edit` `{item, title?, tier?, depends_on?, split?, proposal?}` | `edited`, for an item nobody has accepted yet. `depends_on` and `split` replace the lists in triage's answer for the item and need `proposal`, the offset of the answer the person read (`proposal.at` in the item's row); see [Adjusting triage's advice](#adjusting-triages-advice). Needs format 17 |
 | `POST /v1/work/proposals/reject` `{item}` | `rejected`, for an item nobody has accepted |
 | `POST /v1/work/questions/answer` `{item, text?, chosen?, moves_to?, question?, evidence?}` | `answer`. The question defaults to the open one. `moves_to` is `{source, repo, title}` |
 | `POST /v1/work/tier` `{item, tier}` | `tier_changed`. A ready item is published again on its new tier |
@@ -1805,6 +1805,25 @@ entries, a dependency must be another item the agent can see (the same rule as
 `duplicate_of`), and a split title is at most 256 bytes. Changing either list
 counts as a different answer toward the 4 an attempt may log.
 
+#### Adjusting triage's advice
+
+From format 17 a person edits the two lists before accepting, with
+`POST /v1/work/proposals/edit` and `depends_on` and `split`. The item is the
+root triage answered for, and the request must carry `proposal`, the offset of
+the answer the person read. The list a request leaves out stays; an empty list
+clears it. The edit is advice just like the answer: nothing is linked or created.
+
+The same bounds hold as for the agent: at most 8 entries a list, distinct
+dependencies, a split title of 1 to 256 bytes. The fold also refuses a
+dependency that is the item, its own triage item, or no item in the log
+(`bad_dependency`), and an edit with no `proposal`, or one that is not the
+standing answer's offset, as `stale_proposal`. That last check is what keeps an
+edit made against an answer triage has since replaced from landing on the new
+one. The record changes the standing answer in place, so its offset stays and a
+second edit may name it again. If triage then answers anew, its answer replaces
+the edited one whole, as any new answer does. Below format 17 the record is
+refused with `format`.
+
 **What triage does to a root's tier.** Ingest admits a root at the tier its
 rule gives, so a root in `admit` mode is accepted before anyone triages it.
 The tier in the triage answer is advice there too: it never changes the
@@ -2553,7 +2572,10 @@ leaves out items assigned to someone else:
 - a PR to review, or an approved one to merge.
 
 Items are ordered by how long they have waited, oldest first, with tier as the
-tie-break. The count is in the tab title, so it shows without opening the page.
+tie-break. The Needs you view of the dashboard sorts by the log offset at which
+the item began waiting for its present reason, which the fold records on the
+item (`waiting_since`), so the order is the same on every page load and after a
+restart; items that began waiting at the same record fall back to their id. The count is in the tab title, so it shows without opening the page.
 Snoozed and parked items drop out of the count, and come back when the snooze ends or the item waits for a new reason.
 
 Every card is keyboard first, and the keys mean what they mean in Linear,
