@@ -690,7 +690,15 @@ impl<T: Transport> Source for Ado<T> {
                 seen.iter()
                     .filter(|(t, _)| Some(t) == newest.as_ref())
                     .map(|(_, n)| *n)
+                    .chain(
+                        cursor
+                            .issues_after_id
+                            .filter(|_| newest == cursor.issues_since),
+                    )
                     .max()
+                    // Nothing in the page parsed or was new: step past what
+                    // it listed rather than read it again.
+                    .or_else(|| ids.last().copied().filter(|_| newest.is_some()))
             } else {
                 None
             };
