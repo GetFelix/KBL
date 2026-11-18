@@ -57,6 +57,8 @@ pub(crate) struct Metrics {
     blocked: BTreeSet<ItemId>,
     /// When the newest dropped visit ended. Windows reaching back to it are partial.
     dropped_through_ms: Option<u64>,
+    /// The newest record time seen, to tell a browser clock that lags the log.
+    latest_ms: u64,
 }
 
 /// Nearest-rank percentile of sorted `v`.
@@ -104,7 +106,8 @@ fn keeps_stage(r: &WorkRecord) -> bool {
 impl Metrics {
     /// Notes `rec`, applied to `state` just now. `refused` is the fold's verdict on it.
     pub(crate) fn note(&mut self, state: &State, rec: &WorkLogged, refused: bool) {
-        if refused || matches!(rec.record, WorkRecord::Refused { .. } | WorkRecord::Unknown) {
+        self.latest_ms = self.latest_ms.max(rec.at_ms);
+        if refused || matches!(rec.record, WorkRecord::Unknown) {
             return;
         }
         let Some(item) = rec.record.item() else {
@@ -195,7 +198,12 @@ impl Metrics {
     /// The report over the `days` before `now_ms`: stage times by when each stay ended, and the
     /// items that are done now by when they last became done. An item reopened since is not done,
     /// so a redo counts once.
+    ///
+    /// A clock behind the newest record would drop the latest stays from the window, so `now_ms`
+    /// is raised to that record and `clock_behind` says so.
     pub(crate) fn report(&self, state: &State, now_ms: u64, days: u32) -> Value {
+        let clock_behind = now_ms < self.latest_ms;
+        let now_ms = now_ms.max(self.latest_ms);
         let days = days.clamp(1, MAX_DAYS);
         let from = now_ms.saturating_sub(u64::from(days) * DAY_MS);
         let in_window = |t: u64| t > from && t <= now_ms;
@@ -262,6 +270,7 @@ impl Metrics {
             "days": days,
             "from_ms": from,
             "to_ms": now_ms,
+            "clock_behind": clock_behind,
             "partial": self.dropped_through_ms.is_some_and(|t| t > from),
             "stages": stages,
             "throughput": { "done": n, "per_day": per_day, "per_week": per_week },

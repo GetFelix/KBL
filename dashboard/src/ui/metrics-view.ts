@@ -45,6 +45,7 @@ export function metricsView(on: MetricsHandlers) {
     const peak = Math.max(1, ...x.throughput.perDay);
     const parts = [
       x.empty ? h('p', { class: 'muted', role: 'status' }, x.empty) : null,
+      x.clockBehind ? h('p', { class: 'metrics-warning small', role: 'status' }, x.clockBehind) : null,
       x.partial ? h('p', { class: 'metrics-warning small' }, x.partial) : null,
       section('metrics-stages', 'Time in each stage',
         h('p', { class: 'muted small' }, `How long items stayed in a stage before leaving it, for stays that ended in ${x.window}. p50 is the middle, p85 the slower end.`),
