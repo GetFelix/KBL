@@ -251,3 +251,28 @@ fn a_class_is_refused_below_format_19() {
     l.person(vocab(&["bug"], &[]));
     assert_eq!(last_rejection(&l), Some(Reject::Format));
 }
+
+#[test]
+fn a_vocabulary_keeps_the_scopes_text_and_a_text_keeps_the_vocabulary() {
+    let mut l = at_19();
+    let text = |t: &str| WorkRecord::RulesSet {
+        target: Target {
+            source: "github".into(),
+            repo: "GetFelix/felix".into(),
+        },
+        root: None,
+        text: Some(t.into()),
+        checks: None,
+        vocabulary: None,
+    };
+    l.person(text("use the lock"));
+    l.tracker(import("r1", &[], None));
+    let s = fold(&l.0);
+    let rules = s.rules_for(&id("r1")).unwrap();
+    assert_eq!(rules.text.as_deref(), Some("use the lock"));
+    assert!(rules.vocabulary.is_some());
+    l.person(vocab(&["bug"], &[]));
+    let rules = fold(&l.0).rules_for(&id("r1")).unwrap();
+    assert_eq!(rules.text.as_deref(), Some("use the lock"));
+    assert_eq!(rules.vocabulary.unwrap().types, ["bug"]);
+}

@@ -206,7 +206,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "classify_item",
-        about: "Set or override an item's type, area or size. The value must be in the team's vocabulary; an empty value clears yours. Triage and intake rules never replace what you set.",
+        about: "Set or override an item's type, area or size. The value must be in the team's vocabulary; an empty value clears it. Triage and intake rules never replace a value you set.",
         route: Route::Post("/v1/work/classify"),
         params: &[
             ITEM,

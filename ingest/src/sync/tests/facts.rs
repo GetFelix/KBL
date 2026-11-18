@@ -136,3 +136,20 @@ fn a_milestone_tier_outside_the_tiers_is_a_config_error() {
     .unwrap_err();
     assert!(err.to_string().contains("tier"), "{err}");
 }
+
+#[tokio::test]
+async fn a_value_outside_the_vocabulary_costs_only_itself() {
+    let rig = rig();
+    raise(&rig, 19);
+    vocabulary(&rig);
+    let mut rule = admit_rule();
+    rule["label_types"] = json!({ "perf": "perf" });
+    rule["label_areas"] = json!({ "ui": "dashboard" });
+    let ingest = rig.ingest(json!([rule]));
+    rig.list(vec![with_facts(812, &["agent-ok", "perf", "ui"], None)]);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    let it = &s.items[&rig.root(UP)];
+    assert_eq!(it.class.item_type.as_ref().unwrap().value, "perf");
+    assert!(it.class.area.is_none());
+}

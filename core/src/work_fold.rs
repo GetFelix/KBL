@@ -1400,7 +1400,7 @@ impl State {
             .zip(class)
         {
             let Some(v) = v else { continue };
-            // Empty clears a person's own choice, which lets triage's or a rule's show again.
+            // Empty removes the value whoever chose it; triage or a rule may set it again.
             if v.is_empty() && by == ClassBy::Person {
                 set.push((dim, None));
             } else {
@@ -3366,7 +3366,7 @@ impl State {
                         return Err(Reject::MissingField);
                     }
                 }
-                let set = RulesSet {
+                let mut set = RulesSet {
                     target: target.clone(),
                     root: root.clone(),
                     text: text.clone(),
@@ -3374,9 +3374,22 @@ impl State {
                     vocabulary: vocabulary.clone().filter(|v| !v.is_empty()),
                     version: offset,
                 };
-                let same = |r: &RulesSet| {
-                    r.root == set.root && (set.root.is_some() || r.target == set.target)
+                let (scope_root, scope_target) = (set.root.clone(), set.target.clone());
+                let same = move |r: &RulesSet| {
+                    r.root == scope_root && (scope_root.is_some() || r.target == scope_target)
                 };
+                // A record that sets only the vocabulary keeps the scope's text and
+                // checks, and one without a vocabulary keeps the standing one; an
+                // empty vocabulary clears it.
+                if let Some(old) = self.rules.iter().find(|r| same(r)) {
+                    if set.text.is_none() && set.checks.is_none() && vocabulary.is_some() {
+                        set.text.clone_from(&old.text);
+                        set.checks.clone_from(&old.checks);
+                    }
+                    if vocabulary.is_none() {
+                        set.vocabulary.clone_from(&old.vocabulary);
+                    }
+                }
                 // Empty text and no checks clears the scope and frees its slot.
                 let clears = set.text.as_deref() == Some("")
                     && set.checks.as_ref().is_none_or(Vec::is_empty)

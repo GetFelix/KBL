@@ -378,8 +378,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         }
         match appended {
             Appended::Written => {}
-            // Someone else's root has this id: it is imported, so leave it.
-            Appended::Refused(why) if why == "duplicate" => {}
+            // Someone else's root has this id: it is imported, so leave it. Its
+            // facts are not known to be ours, so reconcile writes them.
+            Appended::Refused(why) if why == "duplicate" => facts_written = false,
             Appended::Refused(why) => {
                 eprintln!("kbl-ingest: {key} was not imported: {why}");
                 return Ok(());
@@ -444,20 +445,26 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         if item_type.is_none() && area.is_none() {
             return Ok(());
         }
-        self.write(&WorkRecord::Edited {
-            item: item.clone(),
-            title: None,
-            tier: None,
-            labels: None,
-            milestone: None,
-            item_type,
-            area,
-            size: None,
-            depends_on: None,
-            proposal: None,
-            split: None,
-        })
-        .await?;
+        // One edit per dimension, so a value outside the vocabulary costs only itself.
+        for (item_type, area) in [(item_type, None), (None, area)] {
+            if item_type.is_none() && area.is_none() {
+                continue;
+            }
+            self.write(&WorkRecord::Edited {
+                item: item.clone(),
+                title: None,
+                tier: None,
+                labels: None,
+                milestone: None,
+                item_type,
+                area,
+                size: None,
+                depends_on: None,
+                proposal: None,
+                split: None,
+            })
+            .await?;
+        }
         Ok(())
     }
 

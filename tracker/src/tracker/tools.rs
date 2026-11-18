@@ -1188,7 +1188,10 @@ fn same_class(core: &Core, target: &ItemId, new: [&Option<String>; 3]) -> bool {
     new.iter().zip(have).all(|(n, h)| {
         n.as_ref().is_none_or(|n| {
             h.as_ref().is_some_and(|h| {
-                h.by == kbl_core::work_fold::ClassBy::Triage && h.value.eq_ignore_ascii_case(n)
+                // A person's value stands whatever the answer says, so a repeat is still a repeat.
+                h.by == kbl_core::work_fold::ClassBy::Person
+                    || (h.by == kbl_core::work_fold::ClassBy::Triage
+                        && h.value.eq_ignore_ascii_case(n))
             })
         })
     })

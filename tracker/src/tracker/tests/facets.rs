@@ -256,3 +256,50 @@ async fn a_facet_is_refused_below_format_19() {
         "{err:?}"
     );
 }
+
+#[tokio::test]
+async fn a_persons_class_does_not_make_the_agents_repeated_answer_a_new_one() {
+    let fake = Fake::default();
+    let t = at_19(&fake).await;
+    vocabulary(&t).await;
+    root(&t, "a1", None, &[]).await;
+    t.ingest_record(
+        key("ingest"),
+        WorkRecord::Proposed {
+            item: item("a1-t"),
+            parent: Some(item("a1")),
+            key: key("triage"),
+            work: kbl_core::work::WorkKind::Triage,
+            title: "Triage".into(),
+            review: None,
+        },
+    )
+    .await
+    .unwrap();
+    let only_triage = Filter::parse(&["triage".to_string()], &[], None, &[]).unwrap();
+    let reply = t
+        .next_filtered(&agent("w1"), Duration::ZERO, &[], &only_triage)
+        .await
+        .unwrap();
+    assert_eq!(claimed_id(&reply).as_deref(), Some("a1-t"));
+    let answer = || super::super::tools::TriageAnswer {
+        tier: 1,
+        why: "perf".into(),
+        duplicate_of: None,
+        unclear: None,
+        depends_on: vec![],
+        split: vec![],
+        item_type: Some("perf".into()),
+        area: None,
+        size: None,
+    };
+    t.triage(&agent("w1"), &item("a1-t"), answer())
+        .await
+        .unwrap();
+    classify(&t, "a1", "bug").await.unwrap();
+    let before = fake.kinds().len();
+    t.triage(&agent("w1"), &item("a1-t"), answer())
+        .await
+        .unwrap();
+    assert_eq!(fake.kinds().len(), before);
+}
