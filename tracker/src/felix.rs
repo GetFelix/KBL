@@ -958,7 +958,7 @@ where
     let mut delay = first_delay;
     loop {
         match op().await {
-            Err(err) if Instant::now() < deadline => {
+            Err(err) if Instant::now() < deadline && err.downcast_ref::<Refused>().is_none() => {
                 eprintln!("kbl-tracker: {doing} failed, retrying in {delay:?}: {err:#}");
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(Duration::from_secs(5));
@@ -1036,8 +1036,25 @@ async fn send(request: reqwest::RequestBuilder, doing: &str) -> Result<reqwest::
         return Ok(response);
     }
     let text = response.text().await.unwrap_or_default();
-    bail!("could not {doing}: {status}: {text}")
+    let message = format!("could not {doing}: {status}: {text}");
+    if status.is_client_error() {
+        return Err(anyhow::Error::new(Refused(message)));
+    }
+    bail!("{message}")
 }
+
+/// A request the control plane or IdP refused as wrong (a 4xx). Waiting does
+/// not change the answer, so startup does not retry it.
+#[derive(Debug)]
+struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
 
 fn string(body: &Value, field: &str) -> Result<String> {
     body[field]

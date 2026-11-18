@@ -3,7 +3,7 @@ use felix_client::{CursorErrorReason, SubscribeCursorError};
 
 use serde_json::json;
 
-use super::{acks_are_durable, pages_to_tip, past_the_tail, settle_with};
+use super::{Refused, acks_are_durable, pages_to_tip, past_the_tail, settle_with};
 
 fn refused(reason: CursorErrorReason) -> anyhow::Error {
     anyhow::Error::from(SubscribeCursorError {
@@ -133,4 +133,27 @@ async fn startup_retries_until_the_broker_settles() {
     )
     .await;
     assert!(never.unwrap_err().to_string().contains("still down"));
+}
+
+/// A 4xx answer will not change by waiting, so it fails at once.
+#[tokio::test]
+async fn startup_does_not_retry_a_refusal() {
+    use std::time::Duration;
+    let calls = std::cell::Cell::new(0);
+    let out = settle_with(
+        "test",
+        || {
+            calls.set(calls.get() + 1);
+            async {
+                Err::<(), _>(anyhow::Error::new(Refused(
+                    "404 namespace not found".into(),
+                )))
+            }
+        },
+        Duration::from_secs(30),
+        Duration::from_millis(1),
+    )
+    .await;
+    assert!(out.is_err());
+    assert_eq!(calls.get(), 1);
 }
