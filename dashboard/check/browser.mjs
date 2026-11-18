@@ -155,7 +155,7 @@ try {
     await open(connected, { theme });
     await page.waitFor(live);
     const line = await status();
-    check(/^. ?Live, \d+ items$/.test(line), `${theme}: the fixture folds with nothing refused (${line})`);
+    check(/^. ?Live, \d+ items( · [\w.:\[\]-]+)?$/.test(line), `${theme}: the fixture folds with nothing refused (${line})`);
     const groups = await page.eval(`[...document.querySelectorAll('[id^=group-]')].map((g) => g.id.slice(6)).join(' ')`);
     check(['needs_you', 'held', 'in_review', 'ready', 'triage'].every((s) => groups.includes(s)), `${theme}: the fixture fills the stages (${groups})`);
     await axe(`list ${theme}`);
