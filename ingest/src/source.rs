@@ -101,6 +101,10 @@ pub(crate) struct Cursor {
     /// every step the engine takes from a listing is idempotent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) issues_since: Option<String>,
+    /// Set when a listing hit its cap inside one instant: resume after this
+    /// id within `issues_since`, so a tie wider than the cap still advances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) issues_after_id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) comments_since: Option<String>,
     /// Validators of the last answer per request, so an unchanged listing

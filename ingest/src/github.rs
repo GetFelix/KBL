@@ -339,6 +339,7 @@ impl<T: Transport> Source for Github<T> {
                     issues_since,
                     comments_since,
                     etags,
+                    ..Cursor::default()
                 },
             );
         }

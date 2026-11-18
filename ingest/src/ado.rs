@@ -22,7 +22,10 @@ pub(crate) use crate::github::{Req, Res, Transport};
 
 /// Work items a listing reads in one poll. The listing is oldest change
 /// first, so the cursor resumes where it ended.
+#[cfg(not(test))]
 const LIST_CAP: usize = 2000;
+#[cfg(test)]
+const LIST_CAP: usize = 5;
 /// Work items one batch read asks for; the service allows 200.
 const BATCH: usize = 200;
 const COMMENT_PAGES: usize = 20;
@@ -491,6 +494,21 @@ fn wiql_date(updated: &str) -> Option<String> {
     (shaped && head.bytes().filter(u8::is_ascii_digit).count() == 14).then(|| format!("{head}Z"))
 }
 
+/// Like `wiql_date`, but keeps the fraction, for an equality on one instant.
+fn wiql_instant(updated: &str) -> String {
+    let head = updated.get(..19).unwrap_or_default();
+    let frac: String = updated
+        .get(19..)
+        .and_then(|r| r.strip_prefix('.'))
+        .map(|r| r.chars().take_while(char::is_ascii_digit).collect())
+        .unwrap_or_default();
+    if frac.is_empty() {
+        format!("{head}Z")
+    } else {
+        format!("{head}.{frac}Z")
+    }
+}
+
 /// A string literal in WIQL: single quotes, doubled inside.
 fn quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
@@ -581,6 +599,16 @@ impl<T: Transport> Source for Ado<T> {
             // The first poll reads open items only; later ones read every
             // change, which includes a close.
             let when = match cursor.issues_since.as_deref().and_then(wiql_date) {
+                // A listing that hit its cap inside one instant resumes after
+                // the last id seen there, or the same items would come back.
+                Some(_) if cursor.issues_after_id.is_some() => {
+                    let t = quote(&wiql_instant(cursor.issues_since.as_deref().unwrap_or("")));
+                    let id = cursor.issues_after_id.unwrap_or_default();
+                    format!(
+                        "([System.ChangedDate] > {t} OR \
+                         ([System.ChangedDate] = {t} AND [System.Id] > {id}))"
+                    )
+                }
                 Some(d) => format!("[System.ChangedDate] >= {}", quote(&d)),
                 None => {
                     let closed: Vec<String> = DONE
@@ -593,7 +621,7 @@ impl<T: Transport> Source for Ado<T> {
             };
             let wiql = format!(
                 "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = {} AND {when} \
-                 ORDER BY [System.ChangedDate] ASC",
+                 ORDER BY [System.ChangedDate] ASC, [System.Id] ASC",
                 quote(project)
             );
             let ids = match self.wiql(project, &wiql).await? {
@@ -629,8 +657,13 @@ impl<T: Transport> Source for Ado<T> {
                     issue.filter(|i| i.id.repo == *repo)
                 })
                 .collect();
-            issues.sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+            issues.sort_by(|a, b| (&a.updated_at, a.id.number).cmp(&(&b.updated_at, b.id.number)));
+            let capped = ids.len() >= LIST_CAP;
             let mut newest = cursor.issues_since.clone();
+            let seen: Vec<(String, u64)> = issues
+                .iter()
+                .map(|i| (i.updated_at.clone(), i.id.number))
+                .collect();
             for mut issue in issues {
                 issue.scopes = picked
                     .iter()
@@ -653,10 +686,27 @@ impl<T: Transport> Source for Ado<T> {
                 }
                 changes.issues.push(issue);
             }
+            let after_id = if capped {
+                seen.iter()
+                    .filter(|(t, _)| Some(t) == newest.as_ref())
+                    .map(|(_, n)| *n)
+                    .chain(
+                        cursor
+                            .issues_after_id
+                            .filter(|_| newest == cursor.issues_since),
+                    )
+                    .max()
+                    // Nothing in the page parsed or was new: step past what
+                    // it listed rather than read it again.
+                    .or_else(|| ids.last().copied().filter(|_| newest.is_some()))
+            } else {
+                None
+            };
             changes.cursors.insert(
                 repo.clone(),
                 Cursor {
                     issues_since: newest,
+                    issues_after_id: after_id,
                     ..Cursor::default()
                 },
             );
@@ -882,11 +932,13 @@ impl<T: Transport> Source for Ado<T> {
                 let res = self.call(patch_req(url, patch)).await?;
                 match res.status {
                     200..=299 => Ok(()),
-                    // The process does not allow the state from here: nothing to do.
-                    400 => {
+                    // The process does not allow the state from here: retrying
+                    // cannot help, so it is reported once and dropped.
+                    400 if is_rule_error(&res.body) => {
                         eprintln!("kbl-ingest: {issue} cannot take the state {name:?} now");
                         Ok(())
                     }
+                    // Any other refusal may pass, so the engine retries it.
                     s => Err(anyhow!("Azure DevOps answered {s} to a state change").into()),
                 }
             }
@@ -913,6 +965,15 @@ impl<T: Transport> Source for Ado<T> {
     ) -> Result<IssueRef, SourceError> {
         Err(anyhow!("the Azure DevOps source does not open work items").into())
     }
+}
+
+/// A 400 that names a process rule or an invalid transition, as opposed to
+/// a malformed or throttled request.
+fn is_rule_error(body: &Value) -> bool {
+    let text = |k: &str| body[k].as_str().unwrap_or_default();
+    text("typeKey").contains("RuleValidation")
+        || text("message").contains("TF401320")
+        || text("message").contains("Rule Error")
 }
 
 fn patch_req(url: String, body: Value) -> Req {
