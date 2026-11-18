@@ -86,9 +86,10 @@ pub(crate) struct State {
     pub(crate) items: BTreeMap<String, Tracked>,
     /// Matches left out because their rule was at its cap, oldest first.
     pub(crate) waiting: BTreeSet<String>,
-    /// Polls since the last reconcile.
-    #[serde(default)]
-    pub(crate) polls: u32,
+    /// The last issue the spread reconcile re-read, so the next poll goes on
+    /// after it. Missing starts at the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reconcile_after: Option<String>,
     /// Merged roots a link waits on, by upstream id, until one ships.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) awaiting: BTreeMap<String, Awaiting>,

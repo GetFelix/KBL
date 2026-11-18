@@ -422,7 +422,7 @@ fn engine(site: &Site, tracker: &Fake, extra: Value) -> Ingest<Jira<Site>, Fake>
         Settings {
             rules: cfg.rules,
             repos,
-            reconcile_every: 1000,
+            reconcile_period: None,
             release_compares: 20,
         },
     )
@@ -714,7 +714,7 @@ async fn cross(pr: &str, head: impl FnOnce(&kbl_core::names::ItemId) -> String) 
         Settings {
             rules: cfg.rules,
             repos,
-            reconcile_every: 1000,
+            reconcile_period: None,
             release_compares: 5,
         },
     );

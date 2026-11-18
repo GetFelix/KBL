@@ -185,6 +185,12 @@ impl Folder {
                     "assignee": i.assignee,
                     "held_attempt": i.hold.as_ref().map(|h| h.attempt),
                     "hold_deadline_ms": i.hold.as_ref().map(|h| h.deadline_ms),
+                    "finding": i.finding,
+                    "proposal": i.proposal.as_ref().map(|p| json!({
+                        "why": p.why,
+                        "depends_on": p.depends_on,
+                        "split": p.split,
+                    })),
                     "triage": triage,
                 })
             })

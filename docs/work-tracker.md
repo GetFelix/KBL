@@ -928,7 +928,9 @@ To set ingest up for the first time, start with [Setting up ingest](ingest-setup
 `kbl-ingest` is a separate binary. It never writes to Felix: it reads
 GitHub, then writes through the three `ingest` calls above under its own token,
 and it makes no model calls. `kbl-ingest --config ingest.json` polls every
-`poll_seconds` (default 60); `--once` polls once. `--webhook-listen` adds an
+`poll_seconds` (default 300, a minimum: the gap stretches when the request
+budget needs it; see [Request budget](ingest-setup.md#request-budget));
+`--once` polls once. `--webhook-listen` adds an
 endpoint whose only effect is to wake the poll (a `check_suite`,
 `pull_request` or `pull_request_review` event makes the next poll read the
 pull request states at once): it checks `X-Hub-Signature-256`
@@ -1054,8 +1056,11 @@ What it does with GitHub:
   Comments by ingest's own logins are skipped, and an edited comment replaces
   its entry. Comments made while an issue waited over its rule's cap are read
   from the issue when it is admitted.
-- **Transfers and deletions** show in no listing, so every `reconcile_every`
-  polls (default 20) each open imported issue is fetched. A redirect is a move
+- **Transfers and deletions** show in no listing, so each open imported issue
+  is fetched once every `reconcile_hours` (default 24). Each poll fetches its
+  share, about `poll_seconds / (reconcile_hours * 3600)` of them, in key order
+  after the last one read, and a webhook that names a transfer or deletion
+  fetches everything at once. A redirect is a move
   (`context` entry `moved`, new id, same item); a missing issue is dropped.
 - **Dropped with an open pull request.** After `closed` (dropped), the worker
   makes the pull request in the item's `pr` a draft and comments on it, once.
@@ -2128,7 +2133,7 @@ matches two rules belongs to the first one listed.
 | Closed as completed or fixed, or closed with no reason (issues closed before GitHub kept one) | `closed` with reason completed: the item is done and its dependents unblock |
 | Closed as not planned, duplicate or won't fix | `closed` with reason dropped: open children and attempts are cancelled, dependents go to Needs you ("dependency dropped"), and an agent's open pull request becomes a draft with a comment |
 | Reopened | Back to Triage as the same root, with its history and its remaining budget |
-| Moved or transferred | The same item (the tracker still shows the original id), with a `moved` context entry naming the new one. Later closes and reopens under the new id apply to the item, across ingest restarts too, when a rule names the new repo. Otherwise a close arrives at the next `reconcile_every` check and a reopen is not seen |
+| Moved or transferred | The same item (the tracker still shows the original id), with a `moved` context entry naming the new one. Later closes and reopens under the new id apply to the item, across ingest restarts too, when a rule names the new repo. Otherwise a close arrives when its turn in the `reconcile_hours` pass comes and a reopen is not seen |
 
 Ingest skips upstream events written by KBL's own credential, so its
 comments, pull request links and state changes do not come back as edits.

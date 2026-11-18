@@ -253,6 +253,18 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .story-rating .button[aria-pressed="true"] { border-color: var(--text); font-weight: 600; }
 .story-edit summary { padding: var(--space-2) 0; cursor: pointer; }
 
+/* Needs-you inbox: the kinds in the sidebar and the strip under each row. */
+.kinds { margin: var(--space-1) 0 var(--space-3) var(--space-3); }
+.kinds .kind { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: var(--target-min); padding: 0 var(--space-2); border: 0; border-radius: var(--radius-md); background: none; color: var(--text); font: inherit; cursor: pointer; }
+.kinds .kind:hover { background: var(--hover); }
+.kinds .kind[aria-pressed='true'] { background: var(--accent-soft); }
+.inbox-item { flex-wrap: wrap; }
+.inbox-act { flex-basis: 100%; padding: var(--space-2) var(--space-2) var(--space-3) calc(var(--target-min) + var(--space-2)); border-bottom: 1px solid var(--line); }
+.inbox-act[aria-busy] button { cursor: progress; }
+.inbox-question { margin: 0 0 var(--space-2); white-space: pre-wrap; }
+.inbox-options, .inbox-row, .inbox-answer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+.inbox-answer .field { flex: 1; min-width: 12rem; }
+.inbox-act kbd { margin-right: var(--space-1); }
 /* Nested child work, the working badge and card properties. */
 .card-lead { color: var(--text); }
 .card-working { font-size: var(--text-sm); color: var(--text); border-left: 3px solid var(--accent); padding-left: var(--space-2); overflow-wrap: anywhere; }

@@ -12,7 +12,10 @@ const GH: &str = r#"{"token_env":"G"}"#;
 #[test]
 fn a_config_has_defaults_and_lists_the_repos_once() {
     let c = parse(&format!("[{RULE},{}]", RULE.replace("\"a\"", "\"b\"")), GH).unwrap();
-    assert_eq!(c.poll_seconds, 60);
+    assert_eq!(c.poll_seconds, 300);
+    assert_eq!(c.reconcile_hours, 24);
+    assert_eq!(c.budget_share, 0.5);
+    assert_eq!(c.budget_per_hour, None);
     assert_eq!(c.github.as_ref().unwrap().api, "https://api.github.com");
     assert_eq!(c.rules[0].default_tier, 2);
     assert_eq!(c.repos(), ["GetFelix/felix"]);

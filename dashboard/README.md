@@ -128,7 +128,16 @@ bulk bar acts on the marked items the view shows, one call per item, then clears
 too. An accept starts from the item's tier, or the tier triage proposed, and sends the tier the confirm shows (none
 if it showed none); a bulk accept keeps each item's own tier unless you pick one. A confirm checks each item again when you send
 it, so an item someone else changed meanwhile is refused unsent, with the reason. The Needs you view
-(`?view=inbox`) lists what waits on a person and why. Flag and Unflag sit in the panel's actions and the bulk bar,
+(`?view=inbox`) is an inbox: one list of everything that waits on a person, oldest first. It holds agent and triage
+questions, triage proposals and review findings to accept, and items stuck for another reason (a dropped dependency,
+a failed check, no budget left). Each row opens a strip under it so the common answer is one action from the list:
+a question shows its text and numbered options (the agent's default is named), and a digit key sends that option while the
+row has focus, or type an answer and press Enter; a proposal shows triage's reasons, what it waits on and how it would
+split, with a tier field and Accept (`1`) and Reject (`2`, which asks first); a stuck item offers Unflag and Close.
+The sidebar lists the kinds under Needs you with a count each, and picking one narrows the list. Accept from the list
+sends the tier shown with no confirm; adjusting what a proposal waits on or splits into still happens in the panel.
+How long an item has waited is the log offset it began waiting at, which the page works out as it reads; a question
+uses its own offset. Flag and Unflag sit in the panel's actions and the bulk bar,
 and as palette commands (`Flag the selected items for a person`, `Unflag the selected items`) for the marked
 items, else the selected one. They have no confirm and no key, because each takes the other back. A refusal such as
 `no_change` (it was already so) shows in the activity line with the tracker's words. Undo (`Cmd+Z` on a Mac, `Ctrl+Z` elsewhere) still
