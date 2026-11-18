@@ -55,6 +55,10 @@ export interface ViewState {
   layout: Layout;
   filters: Filters;
   density: Density;
+  /** Child work (triage, augment, review) shows as cards of its own instead of under its root. */
+  childCards?: boolean;
+  /** Roots whose children are listed open under the card. */
+  expanded?: string[];
   /** This viewer's saved views, from local storage. */
   saved: SavedView[];
   /** Items picked for a bulk action, in the order they were picked. */
@@ -84,6 +88,9 @@ export type Action =
   | { type: 'filter'; facet: Facet; value: string | null }
   | { type: 'clearFilters' }
   | { type: 'density'; density: Density }
+  | { type: 'childCards'; on: boolean }
+  /** Opens or closes the child list under one root. */
+  | { type: 'expand'; id: string }
   | { type: 'saved'; saved: SavedView[] }
   /** Opens a saved view: its scope, layout, search and filters replace the current ones. */
   | { type: 'openView'; search: string };
@@ -131,6 +138,12 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, filters: {} };
     case 'density':
       return { ...s, density: a.density };
+    case 'childCards':
+      return { ...s, childCards: a.on };
+    case 'expand': {
+      const open = s.expanded ?? [];
+      return { ...s, expanded: open.includes(a.id) ? open.filter((x) => x !== a.id) : [...open, a.id] };
+    }
     case 'saved':
       return { ...s, saved: a.saved };
     case 'openView':

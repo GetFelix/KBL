@@ -199,7 +199,7 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .activity[data-tone='error'] { border-color: var(--danger); }
 .activity[data-tone='error'] .activity-text { color: var(--danger); }
 .activity[data-tone='ok'] { border-color: var(--ok); }
-.row-item { display: flex; align-items: center; gap: var(--space-2); }
+.row-item { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .row-item .row { flex: 1; min-width: 0; }
 .mark { width: var(--target-min); height: var(--target-min); margin: 0; accent-color: var(--accent); flex: none; }
 .row[data-marked], .card[data-marked] { box-shadow: inset 3px 0 0 var(--accent); }
@@ -248,3 +248,16 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .story-rating { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-1) 0; }
 .story-rating .button[aria-pressed="true"] { border-color: var(--text); font-weight: 600; }
 .story-edit summary { padding: var(--space-2) 0; cursor: pointer; }
+
+/* Nested child work, the working badge and card properties. */
+.card-lead { color: var(--text); }
+.card-working { font-size: var(--text-sm); color: var(--text); border-left: 3px solid var(--accent); padding-left: var(--space-2); overflow-wrap: anywhere; }
+.card-props { font-size: var(--text-xs); }
+.child-strip { margin-top: calc(var(--space-1) * -1); padding: 0 var(--space-2) var(--space-1); flex-basis: 100%; }
+.row-item .child-strip { padding-left: calc(var(--target-min) + var(--space-3)); margin-top: 0; }
+.chip { min-height: var(--target-min); padding: 0 var(--space-2); border: 1px solid var(--line-strong); border-radius: 999px; background: var(--raised); color: var(--text); font: inherit; font-size: var(--text-xs); cursor: pointer; display: inline-flex; align-items: center; gap: var(--space-1); }
+.chip:hover { background: var(--hover); }
+.child-list { list-style: none; margin: var(--space-1) 0 0; padding: 0 0 0 var(--space-3); border-left: 1px solid var(--line-strong); }
+.child-link { display: block; padding: var(--space-1) 0; color: var(--text); font-size: var(--text-sm); text-decoration: none; overflow-wrap: anywhere; }
+.child-link:hover { text-decoration: underline; }
+.filter-bar [aria-pressed='true'].button { background: var(--accent-soft); }

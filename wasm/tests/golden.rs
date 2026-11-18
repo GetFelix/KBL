@@ -442,4 +442,8 @@ fn items_carry_their_assignee_and_held_attempt() {
         .find(|i| i["id"] == "r1")
         .unwrap();
     assert_eq!(r1["held_attempt"], 1);
+    assert!(r1["holder"].is_string());
+    assert!(r1["active_ms"].as_u64().is_some());
+    assert_eq!(r1["work"], "fix");
+    assert!(r1["parent"].is_null());
 }

@@ -49,6 +49,19 @@ export interface ItemRow {
   assignee?: { person: string } | { agent: string } | null;
   /** The attempt an agent holds, when the item is held. */
   held_attempt?: number | null;
+  /** The agent that holds it and when it last wrote, in the tracker's clock (ms). */
+  holder?: string | null;
+  active_ms?: number | null;
+  /** The item this one is a child of, and what kind of work it is (`fix`, `triage`, `augment`, `review`, ...). */
+  parent?: string | null;
+  work?: string | null;
+  /** The upstream id of the item's root, such as `GetFelix/felix#1694`. */
+  upstream?: string | null;
+  /** The pull request it reports, and what upstream shows of it. */
+  pr?: string | null;
+  pr_phase?: string | null;
+  pr_checks?: string | null;
+  failing_check?: string | null;
   /** The log's format when the page read it, the same for every row. A log below 7 refuses flags. */
   format?: number;
 }

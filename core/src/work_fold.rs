@@ -408,6 +408,9 @@ pub struct Hold {
     pub by: Key,
     pub attempt: u32,
     pub deadline_ms: u64,
+    /// When the holder last wrote a record on this attempt, in the tracker's clock.
+    #[serde(default)]
+    pub active_ms: u64,
 }
 
 /// What triage work proposed.
@@ -868,8 +871,9 @@ pub fn fold<'a>(log: impl IntoIterator<Item = &'a (u64, WorkLogged)>) -> State {
 impl State {
     /// Applies one record; a rejected one is noted in `rejections`.
     pub fn apply(&mut self, offset: u64, rec: &WorkLogged) {
-        if let Err(why) = self.step(offset, rec) {
-            self.rejections.push(Rejection { offset, why });
+        match self.step(offset, rec) {
+            Ok(()) => self.touch_hold(rec),
+            Err(why) => self.rejections.push(Rejection { offset, why }),
         }
         self.at = Some(offset);
     }
@@ -882,7 +886,10 @@ impl State {
         let result = self.step(offset, rec);
         let flagged = self.probing.take().unwrap_or_default();
         match result {
-            Ok(()) => self.at = Some(offset),
+            Ok(()) => {
+                self.at = Some(offset);
+                self.touch_hold(rec);
+            }
             Err(_) => {
                 for root in flagged {
                     if let Some(r) = self.items.get_mut(&root) {
@@ -892,6 +899,21 @@ impl State {
             }
         }
         result
+    }
+
+    /// Notes that the holder wrote, so a card can say how long an agent has been quiet.
+    fn touch_hold(&mut self, rec: &WorkLogged) {
+        if rec.actor != Actor::Agent {
+            return;
+        }
+        let held = self
+            .items
+            .values_mut()
+            .filter_map(|i| i.hold.as_mut())
+            .find(|h| h.by == rec.by);
+        if let Some(h) = held {
+            h.active_ms = h.active_ms.max(rec.at_ms);
+        }
     }
 
     /// The open item `agent` holds, with the attempt, if any.
@@ -2027,6 +2049,7 @@ impl State {
                     by: rec.by.clone(),
                     attempt: *attempt,
                     deadline_ms: *deadline_ms,
+                    active_ms: rec.at_ms,
                 });
             }
             WorkRecord::Progress {

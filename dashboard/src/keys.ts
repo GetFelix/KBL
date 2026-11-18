@@ -22,6 +22,7 @@ export type CommandId =
   | 'clearFilters'
   | 'saveView'
   | 'density'
+  | 'children'
   | 'theme'
   | 'view-all'
   | 'view-inbox'
@@ -68,6 +69,7 @@ export const COMMANDS: readonly Command[] = [
   { id: 'filter', label: 'Filter items', group: 'View', keys: ['F'] },
   { id: 'clearFilters', label: 'Clear all filters', group: 'View', keys: [] },
   { id: 'saveView', label: 'Save this view', group: 'View', keys: [] },
+  { id: 'children', label: 'Show child work as cards or under its root', group: 'View', keys: ['C'] },
   { id: 'density', label: 'Switch comfortable and compact density', group: 'View', keys: [] },
   { id: 'theme', label: 'Switch light and dark theme', group: 'View', keys: [] },
   { id: 'mark', label: 'Select or unselect the item', group: 'Actions', keys: ['X'] },

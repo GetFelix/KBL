@@ -53,6 +53,14 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   the side panel and in the address (`?item=`), so a link opens the same view. Opening moves focus into the
   panel and `Esc` puts it back on the row. Rows are kept per item and only redrawn when the list changes, so a
   live record never takes the focus off the row you are on.
+- **Cards and nesting.** A card leads with the upstream reference (`felix#1694`); the KBL id is in the panel
+  header, and the panel links the upstream issue when the source is GitHub and the id names its repository
+  (a card is itself a link, so it cannot hold one). Child work (triage, augment, review, splits) is nested under
+  its root: the root carries a sub-task chip (`3 sub-tasks, 1 done`) that opens the children as links, and `C`
+  or the Child cards button shows them as cards instead. A child that needs a person always stays a card. The
+  Working column is the fold's Held stage: its cards name the agent, the attempt and when it last wrote
+  (`active_ms`, the time of the holder's last record). A card says what holds it back: the item it waits on, the
+  failed check, or the person decision. Properties are tier, source and the pull request with its checks.
 - **Views.** The sidebar lists All work and Blocked, and the palette has a command for each. The view is in the
   address (`?view=blocked`). A sidebar link opens its view plain (no filters or search, as a list); the palette's
   Show commands change only the view, so Blocked composes with filters, search, the board and saved views. The

@@ -3582,3 +3582,22 @@ fn an_ado_roots_target_still_drives_rules_but_is_not_shown_as_a_repo() {
     );
     assert_eq!(s.repo_of(&id("ado")), None);
 }
+
+#[test]
+fn a_hold_notes_when_its_holder_last_wrote_and_nobody_else_moves_it() {
+    let mut l = held_root();
+    let held = |l: &Log| fold(&l.0).items[&id("r1")].hold.clone().unwrap().active_ms;
+    let at_claim = held(&l);
+    let ctx = |e: &str| WorkRecord::Context {
+        item: id("r1"),
+        entry: key(e),
+        text: text("a note"),
+    };
+    l.agent("w1", ctx("one"));
+    let after_write = held(&l);
+    assert!(after_write > at_claim);
+    // A rejected write by another agent and a person's note leave it alone.
+    l.agent("w2", ctx("stranger"));
+    l.person(ctx("mine"));
+    assert_eq!(held(&l), after_write);
+}
