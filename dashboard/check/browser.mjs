@@ -589,6 +589,34 @@ try {
   check(await page.eval(`document.activeElement?.dataset.focus?.startsWith('ref:') === true && !!document.querySelector('.panel .story')`), 'a rebuild with a quote in a recorded command keeps the panel and the focus');
   await axe('story panel');
 
+  // Item detail: the Now line, the live timeline and the attempts. Times are relative and live, and
+  // a fold a person opened stays open when a record redraws the panel.
+  const text = (sel) => page.eval(`document.querySelector(${JSON.stringify(sel)})?.textContent ?? ''`);
+  check(/^agent-1 is working on this, attempt 1, last activity /.test(await text('.panel .now-text')), `the panel says who works on the item (${await text('.panel .now-text')})`);
+  const newest = await text('.panel .tl-entry:first-child .tl-head strong');
+  check(newest === 'Edited core/src/cache.rs', `the timeline lists the newest record first (saw "${newest}")`);
+  check(await page.eval(`!!document.querySelector('.panel .tl-entry time[datetime]')`), 'each timeline entry has a machine-readable time');
+  await shoot('panel-now');
+  await page.eval(`document.querySelector('.panel .tl-output summary').click()`);
+  await page.eval(`document.querySelector('.panel .tl-output summary').focus()`);
+  await rec({ kind: 'progress', note: { text: 'moved the fill before the read' } });
+  await page.waitFor(`document.querySelector('.panel .tl-entry:first-child .tl-head strong')?.textContent === 'Progress note'`);
+  check(await page.eval(`document.querySelector('.panel .tl-output')?.open === true`), 'a live record keeps an opened output open');
+  check(await page.eval(`document.activeElement?.dataset.focus?.startsWith('out:') === true`), 'a live record keeps the focus on the output toggle');
+  await shoot('panel-timeline');
+  await axe('panel timeline');
+  // From format 8 a report carries usage and the fold prices it; a reported cost is refused. A record
+  // that needs format 8 must say so with `v`, or the fold refuses it as Format.
+  await rec({ v: 8, kind: 'done', usage: [{ unit: 'tokens', model: 'claude-opus-5-5', input: 10_000 }] });
+  await page.waitFor(`document.querySelector('.panel .attempt')?.textContent.includes('Finished')`);
+  check((await text('.panel .attempt')).includes('cost $0.15'), `an attempt shows what it cost (${await text('.panel .attempt')})`);
+  check((await text('.panel .attempt')).includes('moved the fill before the read'), `an attempt shows the summary it handed off (saw "${await text('.panel .attempt')}")`);
+  check(/^Finished, in review/.test(await text('.panel .now-text')), `the Now line follows the item once the attempt finishes (saw "${await text('.panel .now-text')}")`);
+  await page.eval(`document.querySelector('.panel .attempt [data-focus="replay:1"]').click()`);
+  check(await focused('.story-decision[data-attempt="1"]'), 'the replay link moves the focus to the attempt\'s first decision');
+  await shoot('panel-history');
+  await axe('panel history');
+
   // A fresh page: after a blur, Chrome starts Tab from where focus was, not the top.
   await open(connected);
   await page.waitFor(live);
