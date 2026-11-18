@@ -373,9 +373,9 @@ try {
   // Filters: a select per recorded facet, a summary, Clear filters, and palette commands.
   await open(connected);
   await page.waitFor(live);
-  const offered = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.dataset.facet).join(' ')`);
+  const offered = await page.eval(`[...document.querySelectorAll('.filters .filter select')].map((s) => s.dataset.facet).join(' ')`);
   check(offered === 'source tier repo', `filters offer the recorded facets (${offered})`);
-  const shownValues = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.selectedOptions[0]?.textContent ?? '').join(',')`);
+  const shownValues = await page.eval(`[...document.querySelectorAll('.filters .filter select')].map((s) => s.selectedOptions[0]?.textContent ?? '').join(',')`);
   check(shownValues === 'Any,Any,Any', `every filter with no value shows Any, not a blank (${shownValues})`);
   await press(page, 'f');
   check(await focused('#filter-source'), 'F focuses the first filter');
