@@ -302,11 +302,11 @@ try {
   await page.waitFor(`!document.querySelector('.card[data-id=gh-3001]')`);
   await page.waitFor(`document.querySelector('.card[data-selected]')?.dataset.id === 'gh-2219'`);
   check(await focused('.card[data-id=gh-2219]'), 'a focused card re-triaged out of the filter hands the focus to its column, and the selection follows');
-  check((await announced()) === 'gh-3001 is no longer in this view.', `the card leaving is announced (${await announced()})`);
+  check((await announced()) === 'felix#3001 is no longer in this view.', `the card leaving is announced (${await announced()})`);
   await page.eval(`window.__push({ kind: 'claimed', item: 'gh-2219', attempt: 1, deadline_ms: 1900000000000, actor: 'agent', by: 'agent-1', at_ms: 1800000000001 })`);
   await page.waitFor(`!!document.querySelector('#column-held + ul .card[data-id=gh-2219]')`);
   check(await focused('.card[data-id=gh-2219]'), 'a card a record moves to another column keeps the focus');
-  check((await announced()) === 'gh-2219 moved to Working.', `the move is announced (${await announced()})`);
+  check((await announced()) === 'felix#2219 moved to Working.', `the move is announced (${await announced()})`);
 
   // Child work nests under its root, cards lead with the upstream reference, and the Working column says who holds what.
   await open(`${connected}&layout=board`);
