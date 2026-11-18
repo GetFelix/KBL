@@ -294,6 +294,7 @@ async fn a_label_removed_while_an_agent_holds_the_item_stops_it_after_the_attemp
             item: item.clone(),
             attempt: 1,
             reason: None,
+            why: None,
             cost_micros: 0,
             usage: Vec::new(),
             floor_micros: 0,
@@ -3268,4 +3269,87 @@ fn lag_is_not_tracked_for_a_first_sync_or_a_forced_reconcile() {
         !tracks_lag(true, &cursors),
         "a forced reconcile reads it all"
     );
+}
+
+fn milestone_rule() -> Value {
+    json!({
+        "name": "v08", "repo": "GetFelix/felix", "milestone": "v0.8.0", "mode": "admit"
+    })
+}
+
+/// The `since` the last issue listing carried, if any.
+fn last_since(rig: &Rig) -> Option<String> {
+    let url = rig
+        .gh
+        .sent()
+        .into_iter()
+        .rev()
+        .find(|r| r.url.contains("/repos/GetFelix/felix/issues?"))
+        .unwrap()
+        .url;
+    url.split("since=")
+        .nth(1)
+        .map(|s| s.split('&').next().unwrap().to_owned())
+}
+
+#[tokio::test]
+async fn a_changed_rule_reads_its_repo_in_full_once() {
+    let rig = rig();
+    rig.list(vec![issue(1, |v| labels(v, &["bug"]))]);
+    let a = rig.ingest(json!([admit_rule()]));
+    a.poll(false).await.unwrap();
+    a.poll(false).await.unwrap();
+    assert!(last_since(&rig).is_some(), "the cursor is in use");
+
+    // Rule B matches an issue older than the cursor.
+    rig.list(vec![issue(2, |v| {
+        v["milestone"] = json!({"title": "v0.8.0"})
+    })]);
+    let b = rig.ingest(json!([milestone_rule()]));
+    b.poll(false).await.unwrap();
+    assert_eq!(last_since(&rig), None, "a changed rule reads in full");
+    assert_eq!(rig.tracker.count("imported"), 1);
+
+    // Then the cursor is back for the next poll.
+    b.poll(false).await.unwrap();
+    assert!(last_since(&rig).is_some());
+    assert_eq!(rig.tracker.count("imported"), 1);
+}
+
+#[tokio::test]
+async fn an_unchanged_rule_keeps_its_cursor_and_state_without_digests_reads_as_unchanged() {
+    let rig = rig();
+    rig.list(vec![issue(1, |_| {})]);
+    // Another rule on the same repo is added later; the first keeps working.
+    let a = rig.ingest(json!([admit_rule()]));
+    a.poll(false).await.unwrap();
+    // A change to something that is not the selector is not a new read.
+    let mut tuned = admit_rule();
+    tuned["cap"] = json!(5);
+    rig.ingest(json!([tuned])).poll(false).await.unwrap();
+    assert!(last_since(&rig).is_some());
+
+    // State from before digests existed: drop them, the cursor stays.
+    let mut saved = serde_json::to_value(rig.tracker.saved_state()).unwrap();
+    saved.as_object_mut().unwrap().remove("selectors");
+    rig.tracker.seed_saved(saved);
+    rig.ingest(json!([milestone_rule()]))
+        .poll(false)
+        .await
+        .unwrap();
+    assert!(last_since(&rig).is_some(), "an upgrade re-reads nothing");
+}
+
+#[tokio::test]
+async fn a_rule_added_for_a_repo_reads_it_in_full() {
+    let rig = rig();
+    rig.list(vec![issue(1, |_| {})]);
+    rig.ingest(json!([admit_rule()])).poll(false).await.unwrap();
+    rig.ingest(json!([admit_rule()])).poll(false).await.unwrap();
+    assert!(last_since(&rig).is_some());
+    rig.ingest(json!([admit_rule(), milestone_rule()]))
+        .poll(false)
+        .await
+        .unwrap();
+    assert_eq!(last_since(&rig), None);
 }

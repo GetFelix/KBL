@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, visible } from '../src/list.ts';
+import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, rootStageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -123,4 +123,12 @@ test('child work nests under its root unless it needs a person or the toggle sho
   assert.deepEqual(shownRows({ ...base, childCards: true }).map((i) => i.id).sort(), ['orphan', 'r', 'r-q', 'r-t']);
   // A search that matches only the child shows it, since its root is not shown.
   assert.deepEqual(shownRows({ ...base, query: 'triage' }).map((i) => i.id), ['r-t']);
+});
+
+test('a root names its stage and its triage child', () => {
+  assert.equal(rootStageLabel({ stage: 'ready', root: true }), 'Ready to fix');
+  assert.equal(rootStageLabel({ stage: 'ready', root: false }), 'Ready');
+  assert.equal(triageChip({ root: true, triage: 'done' }), 'Triage: done');
+  assert.equal(triageChip({ root: true, triage: null }), null);
+  assert.equal(triageChip({ root: false, triage: 'done' }), null);
 });

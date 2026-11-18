@@ -31,11 +31,23 @@ pass `--force`. Options you may want:
 | Flag | Default | What it sets |
 |---|---|---|
 | `--label` | `agent-ok` | The label that marks an issue for agents. It also names the rule. Jira uses it for the default `--jql`. |
-| `--mode` | `admit` | `admit` makes a match a root at once; `propose` puts it in Triage until a person accepts it. |
+| `--mode` | `admit` | `admit` imports a match as a root and queues its triage and augment work; `propose` puts it in Triage and queues nothing until a person accepts it. See below. |
 | `--cap` | `5` | The most open roots the rule may have. Matches over it wait upstream. |
 | `--tracker-url` | `http://127.0.0.1:8790` | Where the tracker is. |
 | `--token-env` | `GITHUB_TOKEN`, `JIRA_API_TOKEN` | The variable that will hold the source token. |
 | `--jql` | `labels = "<label>"` | Jira only: the filter, combined with the project. |
+
+### What admit and propose do
+
+With `admit`, a match is imported as a root and its children come with it: a triage item and an augment item are
+queued first, so agents are handed that work before any fix. The root becomes ready to fix once a person accepts the
+triage. That is why a freshly admitted root shows `has_children: true` and agents seem to be doing something other
+than the fix. The dashboard shows the root's stage (Triage, Ready to fix, Held, Needs you) and a chip for its triage
+child.
+
+With `propose`, the match waits in Triage for a person before anything is queued.
+
+A rule cannot skip triage today; both modes go through it.
 
 The file is plain JSON, which has no comments, so the fields are explained in
 [the reference](work-tracker.md#running-the-ingest-worker). The starter holds
@@ -209,3 +221,7 @@ machine until you press Ctrl-C. Without `--token-file` it reads `GITHUB_TOKEN`.
 | `the token lacks the api scope` | A GitLab rule comments, transitions or opens prerequisites. Give the token `api`, not only `read_api`. |
 | `the credential may not edit work items` | An Azure DevOps rule writes back. Grant the credential Work Items (Read & write) on the project. |
 | `the source answered 400 listing its issues` | For Jira, the project's JQL is one Jira rejects. Run it in Jira's issue search. |
+
+## Changing a rule
+
+Edit the rules and restart ingest. A rule that is new, or whose selector changed (repo or project, labels, milestone, assignee, type, JQL or saved query), makes its repo or project read in full on the next poll, so issues that already match the new rule and are older than the saved cursor are imported (up to the rule's cap). Rules you did not touch keep their cursor. Rules edited in the same restart that first runs this version are recorded as they are and not re-read; restart once on the old rules first, or clear the saved state. Changing only options such as `cap`, `mode` or `comment` re-reads nothing.

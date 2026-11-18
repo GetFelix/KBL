@@ -74,6 +74,7 @@ fn a_failure_starts_a_wait_of_its_own() {
             item: id("r1"),
             attempt: 1,
             reason: None,
+            why: None,
             cost_micros: 0,
             usage: Vec::new(),
             floor_micros: 0,

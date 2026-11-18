@@ -39,6 +39,8 @@ export interface ItemRow {
   default?: string | null;
   /** What triage could not settle (`scope`, `repo`, `acceptance`) when the open question is triage's. */
   unclear?: string | null;
+  /** The stage of a root's triage child, or null when it has none. */
+  triage?: string | null;
   /** True for an item with no parent. */
   root?: boolean;
   /** A person accepted it. Only an accepted item can be flagged. */

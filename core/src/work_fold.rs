@@ -14,13 +14,13 @@ use crate::artifact::ArtifactId;
 use crate::names::{ItemId, Key};
 use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
-    FORMAT_V6, FORMAT_V8, FORMAT_V13, FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS,
-    MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF,
-    MAX_REVERT_TEST, MAX_REVIEWER, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES,
-    MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict,
-    NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReviewPass,
-    ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord,
-    valid_review_tier,
+    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FindingVerdict, MAX_ASK_OPTION_LEN,
+    MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS,
+    MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWER, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS,
+    MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY,
+    MergeVerdict, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit,
+    RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS,
+    WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
 mod human_wait;
@@ -619,6 +619,10 @@ pub struct Item {
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
     pub hold: Option<Hold>,
+    /// From format 14: the hold the tracker ended as lapsed. Its agent may
+    /// still ask or release as a wait until anyone claims the item again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lapsed: Option<Hold>,
     pub closed: Option<Closure>,
     /// The close was written by upstream sync (the tracker's role) and not by
     /// a person. Derived from the log, so it survives a lost ingest state.
@@ -1454,6 +1458,50 @@ impl State {
         self.acting_on(id, attempt, rec).map(|_| ())
     }
 
+    /// From format 14, whether `rec` is from the agent whose hold on `attempt`
+    /// lapsed, with nobody holding the item since. Such an agent may still ask
+    /// or release as a wait, once: either ends the late window.
+    fn late_writer(&self, id: &ItemId, attempt: u32, rec: &WorkLogged) -> Result<bool, Reject> {
+        let it = self.item(id)?;
+        Ok(self.format() >= FORMAT_V14
+            && rec.actor == Actor::Agent
+            && it.hold.is_none()
+            && it.closed.is_none()
+            && it.open_question.is_none()
+            && it.pending_fork.is_none()
+            && it
+                .lapsed
+                .as_ref()
+                .is_some_and(|h| h.by == rec.by && h.attempt == attempt)
+            && it
+                .paths
+                .last()
+                .is_some_and(|p| p.attempt == attempt && !p.done && !p.closed))
+    }
+
+    /// Ends a hold (or a late window) as a wait: charged like a release, and
+    /// the claim it ended is given back. Only failures use up a try.
+    fn park_wait(
+        &mut self,
+        id: &ItemId,
+        attempt: u32,
+        rec: &WorkLogged,
+        held: bool,
+    ) -> Result<(), Reject> {
+        if held {
+            self.acting_on(id, attempt, rec)?;
+        }
+        let root = self.item(id)?.root.clone();
+        self.charge(id, &root, rec);
+        let it = self.item_mut(id)?;
+        it.hold = None;
+        it.lapsed = None;
+        if let Some(p) = it.paths.iter_mut().find(|p| p.attempt == attempt) {
+            p.tries = p.tries.saturating_sub(1);
+        }
+        Ok(())
+    }
+
     fn check_evidence(offset: u64, evidence: &[Evidence]) -> Result<(), Reject> {
         // Only work.events offsets can be compared with this record's own.
         if evidence
@@ -1535,6 +1583,7 @@ impl State {
             redos: 0,
             over_budget: false,
             open_question: None,
+            lapsed: None,
             ask: None,
             branch: None,
             pr: None,
@@ -2045,6 +2094,7 @@ impl State {
                 {
                     it.workers.push(rec.by.clone());
                 }
+                it.lapsed = None;
                 it.hold = Some(Hold {
                     by: rec.by.clone(),
                     attempt: *attempt,
@@ -2131,14 +2181,39 @@ impl State {
                 self.track(item);
                 self.charge(item, &root, rec);
             }
-            WorkRecord::Released { item, attempt, .. } => {
-                let it = self.acting_on(item, *attempt, rec)?;
-                if it.hold.is_none() {
-                    return Err(Reject::NotHeld);
+            WorkRecord::Released {
+                item,
+                attempt,
+                reason,
+                why,
+                ..
+            } => {
+                let waits = why.is_some_and(ReleaseWhy::waits);
+                if waits && self.late_writer(item, *attempt, rec)? {
+                    self.park_wait(item, *attempt, rec, false)?;
+                    let it = self.item_mut(item)?;
+                    it.flagged = true;
+                    return Ok(());
                 }
+                let it = self.acting_on(item, *attempt, rec)?;
+                let Some(hold) = it.hold.clone() else {
+                    return Err(Reject::NotHeld);
+                };
                 let root = it.root.clone();
+                if waits {
+                    self.park_wait(item, *attempt, rec, true)?;
+                    // Not handed straight out again: a person moves it back to Ready.
+                    self.item_mut(item)?.flagged = true;
+                    return Ok(());
+                }
+                let lapse = self.format() >= FORMAT_V14
+                    && rec.actor == Actor::Tracker
+                    && reason.as_deref() == Some("lapsed");
                 let it = self.item_mut(item)?;
                 it.hold = None;
+                if lapse {
+                    it.lapsed = Some(hold);
+                }
                 self.charge(item, &root, rec);
             }
             WorkRecord::GaveUp { item, attempt, .. } => {
@@ -2158,15 +2233,23 @@ impl State {
                 default,
                 ..
             } => {
-                self.agent_holder(item, *attempt, rec)?;
+                let late = self.late_writer(item, *attempt, rec)?;
+                if !late {
+                    self.agent_holder(item, *attempt, rec)?;
+                }
                 Self::check_options(options, default.as_deref())?;
                 let p = self.path_mut(item, *attempt)?;
                 if p.questions >= MAX_QUESTIONS {
                     return Err(Reject::LimitReached);
                 }
                 p.questions += 1;
-                let root = self.item(item)?.root.clone();
-                self.charge(item, &root, rec);
+                if self.format() >= FORMAT_V14 {
+                    // The item waits in Needs you, so the agent is free for other work.
+                    self.park_wait(item, *attempt, rec, !late)?;
+                } else {
+                    let root = self.item(item)?.root.clone();
+                    self.charge(item, &root, rec);
+                }
                 let it = self.item_mut(item)?;
                 it.open_question = Some(offset);
                 it.ask = Some(Ask {
@@ -2207,9 +2290,25 @@ impl State {
                     }
                     p.answers += 1;
                 }
+                let v14 = self.format() >= FORMAT_V14;
                 let it = self.item_mut(item)?;
                 it.open_question = None;
                 let ask = it.ask.take();
+                // The asker let go when it asked, so the next claim reads the
+                // answer from the item itself.
+                if v14 && ask.as_ref().is_some_and(|a| a.unclear.is_none()) {
+                    for (name, at) in [("question", *question), ("answer", offset)] {
+                        if let Ok(entry) = Key::new(name) {
+                            // Who wrote the entry decides who may rewrite it.
+                            if rec.actor == Actor::Agent && name == "answer" {
+                                it.context_agents.insert(entry.clone(), rec.by.clone());
+                            } else {
+                                it.context_agents.remove(&entry);
+                            }
+                            it.context.insert(entry, at);
+                        }
+                    }
+                }
                 self.follow_answer(offset, item, *question, ask, then.as_ref());
             }
             WorkRecord::Decision {

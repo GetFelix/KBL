@@ -6,6 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use kbl_core::names::ItemId;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::config::Rule;
 
 use crate::source::{Closed, Cursor};
 
@@ -68,6 +71,12 @@ pub(crate) struct State {
     /// first poll gives it to every repo and drops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) cursor: Option<Cursor>,
+    /// A digest of each rule's selector, by rule name, as of the last poll.
+    /// A rule that is new or whose digest changed makes its repo read in full
+    /// once, since the cursor only covers what the old rule asked for. State
+    /// saved before this existed has none, which reads as unchanged.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) selectors: BTreeMap<String, String>,
     /// Repos last reported as unreadable, with the status, so the report is
     /// written when it changes and not on every poll.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -106,6 +115,25 @@ pub(crate) struct Awaiting {
 }
 
 impl State {
+    /// Drops the cursor of every repo with a rule that is new or selects
+    /// something else than it did, so the next poll reads that repo in full.
+    /// Unchanged rules keep their cursors.
+    pub(crate) fn reset_changed(&mut self, rules: &[Rule]) {
+        let upgrading = self.selectors.is_empty();
+        let now: BTreeMap<String, String> = rules
+            .iter()
+            .map(|r| (r.name.clone(), selector_digest(r)))
+            .collect();
+        if !upgrading {
+            for r in rules {
+                if self.selectors.get(&r.name) != now.get(&r.name) {
+                    self.cursors.remove(&r.repo);
+                }
+            }
+        }
+        self.selectors = now;
+    }
+
     /// Moves the old shared cursor into one cursor per repo in `repos` that has none.
     pub(crate) fn migrate(&mut self, repos: &[String]) {
         if let Some(old) = self.cursor.take() {
@@ -116,6 +144,26 @@ impl State {
             }
         }
     }
+}
+
+/// What a rule selects, hashed: the fields that decide which issues it
+/// admits, not how it treats them.
+fn selector_digest(r: &Rule) -> String {
+    let sel = serde_json::json!([
+        r.repo.to_ascii_lowercase(),
+        r.labels_all,
+        r.labels_any,
+        r.labels_excluded,
+        r.milestone,
+        r.assignee,
+        r.issue_type,
+        r.jql,
+        r.ado_query,
+    ]);
+    Sha256::digest(sel.to_string().as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn is_false(b: &bool) -> bool {

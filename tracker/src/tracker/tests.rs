@@ -1006,7 +1006,7 @@ async fn below_format_8_a_claim_is_charged_the_floor_and_usage_is_dropped() {
     let t = start_with(&fake, floor(500)).await;
     seed(&t, "a1", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     claim(&t, "w1").await;
@@ -1158,6 +1158,7 @@ async fn an_item_the_agent_released_is_handed_out_again() {
         &item("a1"),
         None,
         Some("stuck".into()),
+        None,
         Vec::new(),
     )
     .await
@@ -1165,7 +1166,7 @@ async fn an_item_the_agent_released_is_handed_out_again() {
     assert!(fake.calls().contains(&"nack work.ready.p2".to_owned()));
     assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
     // The second release uses the item's second try; the item then waits for a person.
-    t.release(&agent("w2"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w2"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w1").await), None);
@@ -1185,6 +1186,7 @@ async fn release_behind_the_trackers_back(fake: &Fake) {
         item: item("a1"),
         attempt: 1,
         reason: None,
+        why: None,
         cost_micros: 0,
         usage: Vec::new(),
         floor_micros: 0,
@@ -1460,6 +1462,7 @@ async fn a_stale_holders_late_calls_cannot_settle_the_next_holders_delivery() {
             item: item("a1"),
             attempt: 1,
             reason: None,
+            why: None,
             cost_micros: 0,
             usage: Vec::new(),
             floor_micros: 0,
@@ -1481,7 +1484,7 @@ async fn a_stale_holders_late_calls_cannot_settle_the_next_holders_delivery() {
         Err(Error::Lost(_))
     ));
     assert!(matches!(
-        t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+        t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
             .await,
         Err(Error::Lost(_))
     ));
@@ -2667,6 +2670,7 @@ mod review_limit;
 mod sweep;
 mod texts;
 mod traces;
+mod waits;
 
 #[tokio::test(start_paused = true)]
 async fn a_dead_lettered_ready_record_is_published_again() {
@@ -2769,6 +2773,7 @@ async fn no_route_writes_an_oversized_string() {
             &item("big"),
             None,
             Some(big.clone()),
+            None,
             Vec::new(),
         )
         .await
@@ -2785,6 +2790,7 @@ async fn no_route_writes_an_oversized_string() {
         &item("big"),
         None,
         Some("short".into()),
+        None,
         Vec::new(),
     )
     .await
@@ -2872,7 +2878,7 @@ async fn an_agent_cannot_replace_a_context_entry_it_did_not_write() {
     t.context_add(&agent("w1"), &item("a1"), key("w1-note"), text("x"))
         .await
         .unwrap();
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     claim(&t, "w2").await;
@@ -2894,7 +2900,7 @@ async fn a_long_hold_does_not_make_the_record_look_old_after_a_release() {
         pass(&t, VIS / 2).await;
         t.extend(&agent("w1"), &item("a1")).await.unwrap();
     }
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(fake.ready_count("work.ready.p2"), 1);
@@ -2910,7 +2916,7 @@ async fn a_record_adopted_after_a_restart_is_published_again_once_dead_lettered(
     // The new tracker takes back w1's delivery and so adopts its record.
     let t = start(&fake).await;
     t.extend(&agent("w1"), &item("a1")).await.unwrap();
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     fake.dead_letter("work.ready.p2", 0);
@@ -3932,4 +3938,11 @@ async fn the_fold_to_an_offset_is_the_state_the_tracker_held_then() {
         assert_eq!(kbl_core::work_fold::fold_to(&log, n), want, "at {n}");
         assert_eq!(snaps.fold_to(&log, n), want, "from snapshots, at {n}");
     }
+}
+
+#[test]
+fn triage_and_augment_items_say_what_they_are_for() {
+    assert!(purpose(WorkKind::Triage).is_some_and(|p| p.starts_with("Triage")));
+    assert!(purpose(WorkKind::Augment).is_some_and(|p| p.starts_with("Augment")));
+    assert!(purpose(WorkKind::Fix).is_none());
 }

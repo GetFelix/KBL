@@ -103,6 +103,10 @@ fn logs() -> Vec<(&'static str, String)> {
             std::fs::read_to_string(format!("{core}/work_format_13.jsonl")).unwrap(),
         ),
         (
+            "format_14",
+            std::fs::read_to_string(format!("{core}/work_format_14.jsonl")).unwrap(),
+        ),
+        (
             "pre_review",
             std::fs::read_to_string(format!("{core}/work_pre_review.jsonl")).unwrap(),
         ),
@@ -446,4 +450,27 @@ fn items_carry_their_assignee_and_held_attempt() {
     assert!(r1["active_ms"].as_u64().is_some());
     assert_eq!(r1["work"], "fix");
     assert!(r1["parent"].is_null());
+}
+
+#[test]
+fn a_root_row_carries_the_stage_of_its_triage_child() {
+    let mut f = Folder::new();
+    for (i, l) in include_str!("../../core/tests/work_format_5.jsonl")
+        .lines()
+        .enumerate()
+    {
+        f.apply(i as f64, l.as_bytes());
+    }
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let find = |id: &str| {
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert!(!find("r2")["triage"].is_null());
+    assert!(find("t2")["triage"].is_null());
 }
