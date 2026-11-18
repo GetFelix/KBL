@@ -91,7 +91,9 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   screen reader is not interrupted by a ticking time) and the actions; below them Linked work, Activity and
   Attempts. Activity lists the newest record first, shows 30 and offers the rest, and folds a step's output
   tail; a fold a person opened and the focus stay put when a record redraws the panel. The data is
-  `activity_json` in the wasm fold, read for the open item and its children only. Screenshots in CI:
+  `activity_json` in the wasm fold, read for the open item and its children only. Each event carries `refused`
+  (the fold's reason) when the same accept or refuse verdict that left the state alone refused it; the panel lists
+  such a record as refused and reads nothing else from it. Times are focusable and show their absolute value on focus. Screenshots in CI:
   `panel-now`, `panel-timeline`, `panel-history`.
 - **Panel.** One labelled field per entry in `FIELDS` in `src/ui/item-panel.ts` (stage, the recorded facets,
   Waits on, Same files); a new detail is one module under `src/ui/`. "Same files" lists the open items that declare the same paths, with the suggested link, and their

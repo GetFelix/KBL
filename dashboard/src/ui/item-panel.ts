@@ -120,7 +120,7 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
       if (item) {
         actions.render(item, s);
         now.render(item, s, events);
-      }
+      } else now.clear();
       if (key === shown) return;
       shown = key;
       el.hidden = s.open === null;
@@ -129,6 +129,7 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
       const active = document.activeElement;
       const hadFocus = el.contains(active);
       const focusKey = active instanceof HTMLElement ? active.dataset.focus : undefined;
+      const fallbackKey = active instanceof HTMLElement ? active.dataset.focusFallback : undefined;
       const close = h('button', { type: 'button', class: 'button ghost', 'data-focus': 'close', 'aria-label': 'Close the item', onclick: on.closeItem }, 'Close');
       el.replaceChildren(
         h('header', { class: 'panel-head' }, h('span', { class: 'row-id' }, s.open), close),
@@ -154,7 +155,8 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
       );
       if (hadFocus) {
         const same = focusKey ? byFocus(el, focusKey) : null;
-        (same ?? el).focus({ preventScroll: true });
+        const near = fallbackKey ? byFocus(el, fallbackKey) : null;
+        (same ?? near ?? el).focus({ preventScroll: true });
       }
     },
     focus() {

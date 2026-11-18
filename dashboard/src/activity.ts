@@ -30,6 +30,13 @@ export interface ActivityEvent {
   deadline_ms?: number;
   steered?: boolean;
   to?: { person: string } | { agent: string } | null;
+  /** Why the fold refused the record (`bad_usage`, ...). A refused record changed nothing. */
+  refused?: string;
+}
+
+/** The events the fold took. Everything the panel counts, sums or states as fact reads these. */
+export function accepted(events: readonly ActivityEvent[]): ActivityEvent[] {
+  return events.filter((e) => !e.refused);
 }
 
 export type Activities = ReadonlyMap<string, readonly ActivityEvent[]>;
@@ -50,7 +57,7 @@ export function since(ms: number, now: number): string {
 
 /** The newest event of an attempt that the agent itself wrote. */
 function lastWrite(events: readonly ActivityEvent[], attempt: number): ActivityEvent | undefined {
-  return [...events].reverse().find((e) => e.attempt === attempt && !['note', 'rated', 'attempt_closed'].includes(e.kind));
+  return accepted(events).reverse().find((e) => e.attempt === attempt && !['note', 'rated', 'attempt_closed'].includes(e.kind));
 }
 
 export interface NowLine {
@@ -72,7 +79,8 @@ export function waitsText(item: ItemRow, blocked: readonly BlockedRow[]): string
  * why it is not moving and who must act. `now` is the page clock; the fold's times are the tracker's.
  */
 export function nowLine(item: ItemRow, blocked: readonly BlockedRow[], events: readonly ActivityEvent[], now: number): NowLine {
-  if (item.holder && item.held_attempt) {
+  // Before format 14 a question leaves the hold in place, so a held item can wait on a person.
+  if (item.holder && item.held_attempt && item.stage !== 'needs_you') {
     const last = item.active_ms ?? lastWrite(events, item.held_attempt)?.at_ms ?? null;
     const quiet = last === null ? 'no activity recorded yet' : `last activity ${since(last, now)}`;
     // Renewals are not recorded, so a passed claim-time deadline says nothing about a live agent.
@@ -114,9 +122,21 @@ export interface TimelineEntry {
   /** A step's command output tail, shown folded. */
   output: string | null;
   failed: boolean;
+  /** Why the fold refused the record, or null. A refused entry changed nothing. */
+  refused: string | null;
   /** The attempt the entry belongs to, to jump to its story. */
   attempt: number | null;
 }
+
+/** Plain words for the refusals a person is likely to meet; any other shows its code. */
+const REFUSED: Record<string, string> = {
+  bad_usage: 'the usage it reported is not allowed',
+  not_holder: 'the writer does not hold the item',
+  wrong_attempt: 'it names an attempt that is not the held one',
+  actor_not_allowed: 'the writer may not do this',
+  closed: 'the item is closed',
+  not_ready: 'the item is not ready for it',
+};
 
 const WHY: Record<string, string> = { failed: 'it failed', waits_on_person: 'it waits on a person', waits_on_outside: 'it waits on something outside' };
 
@@ -148,13 +168,15 @@ function describe(e: ActivityEvent): Pick<TimelineEntry, 'title' | 'detail' | 'o
 
 /** The item's events newest first, as the timeline shows them. */
 export function timeline(events: readonly ActivityEvent[]): TimelineEntry[] {
-  return [...events].reverse().map((e) => ({
-    offset: e.offset,
-    at_ms: e.at_ms,
-    who: e.attempt != null ? `${e.by}, attempt ${e.attempt}` : e.by,
-    attempt: e.attempt ?? null,
-    ...describe(e),
-  }));
+  return [...events].reverse().map((e) => {
+    const d = describe(e);
+    const who = e.attempt != null ? `${e.by}, attempt ${e.attempt}` : e.by;
+    if (e.refused) {
+      const why = REFUSED[e.refused] ?? e.refused.replaceAll('_', ' ');
+      return { offset: e.offset, at_ms: e.at_ms, who, attempt: e.attempt ?? null, title: `Refused: ${d.title}`, detail: [`Refused, ${why}. It changed nothing`, d.detail].filter(Boolean).join('. '), output: null, failed: true, refused: e.refused };
+    }
+    return { offset: e.offset, at_ms: e.at_ms, who, attempt: e.attempt ?? null, ...d, refused: null };
+  });
 }
 
 export interface AttemptHistory {
@@ -173,9 +195,9 @@ export interface AttemptHistory {
 }
 
 /** One row per attempt, oldest first. A held attempt shows as working. */
-export function history(events: readonly ActivityEvent[], item: Pick<ItemRow, 'holder' | 'held_attempt'>): AttemptHistory[] {
+export function history(events: readonly ActivityEvent[], item: Pick<ItemRow, 'holder' | 'held_attempt' | 'stage'>): AttemptHistory[] {
   const by = new Map<number, AttemptHistory>();
-  for (const e of events) {
+  for (const e of accepted(events)) {
     if (e.attempt == null) continue;
     let a = by.get(e.attempt);
     if (!a) {
@@ -194,7 +216,11 @@ export function history(events: readonly ActivityEvent[], item: Pick<ItemRow, 'h
     else if (e.kind === 'rated') a.accurate = e.accurate ?? null;
   }
   const held = item.holder ? item.held_attempt : null;
-  return [...by.values()].map((a) => (a.attempt === held && a.outcome === 'Waiting on a person' ? { ...a, outcome: 'Working' } : a)).sort((x, y) => x.attempt - y.attempt);
+  // A hold that outlives a question still waits on the person while the item is in Needs you.
+  const waiting = item.stage === 'needs_you';
+  const heldNow = (a: AttemptHistory): AttemptHistory =>
+    a.attempt !== held ? a : waiting && a.outcome === 'Working' ? { ...a, outcome: 'Waiting on a person' } : !waiting && a.outcome === 'Waiting on a person' ? { ...a, outcome: 'Working' } : a;
+  return [...by.values()].map(heldNow).sort((x, y) => x.attempt - y.attempt);
 }
 
 /** Micro-dollars as `$1.25`, or `under $0.01` for a charge that rounds to nothing. */
@@ -214,7 +240,7 @@ export interface Linked {
 /** The work linked to `item`. `answers` is each child's latest recorded answer or progress text. */
 export function linked(item: ItemRow, items: readonly ItemRow[], blocked: readonly BlockedRow[], acts: Activities): Linked {
   const answerOf = (id: string): string | null => {
-    const ev = acts.get(id) ?? [];
+    const ev = accepted(acts.get(id) ?? []);
     const a = [...ev].reverse().find((e) => e.kind === 'answer' && (e.chosen || e.text));
     return a ? (a.chosen ?? a.text ?? null) : null;
   };

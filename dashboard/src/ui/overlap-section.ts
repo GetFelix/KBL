@@ -13,7 +13,7 @@ function overlapSection(
 ): Node | null {
   if (!card || card.notes.length === 0) return null;
   const more = moreNotesText(card);
-  return h('div', { class: 'overlaps' },
+  return h('section', { class: 'overlaps', 'aria-label': 'Shared files' },
     h('ul', { class: 'overlap-notes' },
       ...card.notes.map((note) => {
         const extra = moreFilesText(note);

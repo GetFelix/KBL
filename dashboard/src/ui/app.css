@@ -296,3 +296,7 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .attempt { border-left: 3px solid var(--line-strong); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-3); }
 .attempt p, .linked li { margin: var(--space-1) 0; }
 .linked-answer { margin: var(--space-1) 0 0; }
+
+/* The absolute time appears beside the relative one on keyboard focus, as it does on hover. */
+.abs-time { cursor: help; }
+.abs-time:focus::after { content: ' (' attr(data-abs) ')'; color: var(--text-muted, inherit); }

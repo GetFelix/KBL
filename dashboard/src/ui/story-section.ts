@@ -116,21 +116,21 @@ function storySection(story: Story, rater: Rater): Node {
   root = h('div', { class: 'story' },
     h('p', { class: 'muted' }, `${decisionCount(story)} recorded ${decisionCount(story) === 1 ? 'decision' : 'decisions'} across ${story.attempts.length} ${story.attempts.length === 1 ? 'attempt' : 'attempts'}. Flags come from fixed rules over what was recorded; a step nobody recorded is invisible to them.`),
     flagList(loose, 'story', t),
-    ...story.groups.map((g) => h('section', { class: 'story-phase', 'data-phase': g.phase },
+    ...story.groups.map((g) => h('section', { class: 'story-phase', 'data-phase': g.phase, 'aria-label': PHASE_LABEL[g.phase] },
       h('h3', {}, PHASE_LABEL[g.phase]),
       h('ol', { class: 'story-decisions' }, ...g.decisions.map((d) => decisionLine(d, story, t))))),
     story.attempts.some((a) => a.done)
-      ? h('section', { class: 'story-ratings' },
+      ? h('section', { class: 'story-ratings', 'aria-label': 'Summary accuracy' },
           h('h3', {}, 'Is the summary accurate?'),
           h('ul', {}, ...story.attempts.map((a) => ratingLine(a, rater))))
       : null,
     steps.length > 0
-      ? h('section', { class: 'story-steps' },
+      ? h('section', { class: 'story-steps', 'aria-label': 'Cited steps' },
           h('h3', {}, 'Cited steps'),
           h('ul', {}, ...steps.map(stepLine)))
       : null,
     story.people.length > 0
-      ? h('section', { class: 'story-people' },
+      ? h('section', { class: 'story-people', 'aria-label': 'People' },
           h('h3', {}, 'People'),
           h('ul', {}, ...story.people.map((p) => h('li', { 'data-at': String(p.offset), tabindex: '-1' },
             h('span', { class: 'muted' }, `${p.by} (${p.input.replace('_', ' ')}${p.attempt === null ? '' : `, attempt ${p.attempt}`}, record ${p.offset}) `),

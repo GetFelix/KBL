@@ -72,7 +72,14 @@ impl Folder {
                 let cost_before = spent(&self.state);
                 self.state.apply(offset, &rec);
                 let charged = spent(&self.state).saturating_sub(cost_before);
-                self.activity.note(offset, &rec, charged);
+                // `apply` notes a refusal in `rejections` at this offset; the panel reads the same verdict.
+                let refused = self
+                    .state
+                    .rejections
+                    .last()
+                    .filter(|r| r.offset == offset)
+                    .map(|r| r.why);
+                self.activity.note(offset, &rec, charged, refused);
                 self.keep_files(offset, &rec, before);
                 if accepted(&self.state, offset, &rec)
                     && let Some(k) = Kept::of(&rec)
@@ -303,7 +310,9 @@ impl Folder {
     /// `exit_code` and the tail of `output`), `edit`, `decision`, `question`, `answer`,
     /// `note`, `done`, `released`, `gave_up`, `attempt_closed`, `rated`, `accepted`, `tier`,
     /// `taken`, `reassigned`, `closed` and `reopened`. `cost_micros` is what the fold charged
-    /// the item for that record. Read from records already applied; nothing is added to the log.
+    /// the item for that record. A record the fold refused carries `refused` (the reason, such
+    /// as `bad_usage`): it changed nothing, so the page shows it as refused and counts it nowhere.
+    /// Read from records already applied; nothing is added to the log.
     pub fn activity_json(&self, item: &str) -> String {
         match ItemId::new(item) {
             Ok(id) => self.activity.json(&id),

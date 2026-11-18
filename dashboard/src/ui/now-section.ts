@@ -9,6 +9,8 @@ export interface NowSection {
   el: HTMLElement;
   /** Rewrites the sentence from the clock without touching anything else. */
   tick(): void;
+  /** Forgets the item, so the clock never rewrites the sentence of one that is no longer open. */
+  clear(): void;
   render(item: ItemRow, s: ViewState, events: readonly ActivityEvent[]): void;
 }
 
@@ -19,6 +21,7 @@ export function nowSection(): NowSection {
   return {
     el,
     tick: () => last?.(),
+    clear: () => { last = null; },
     render(item, s, events) {
       last = () => {
         const line = nowLine(item, s.blocked, events, Date.now());

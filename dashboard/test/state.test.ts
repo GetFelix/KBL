@@ -103,3 +103,10 @@ test('child cards and open children are separate viewer choices', () => {
   assert.deepEqual(open.expanded, ['r1']);
   assert.deepEqual(reduce(open, { type: 'expand', id: 'r1' }).expanded, []);
 });
+
+test('switching items drops the previous item\'s activity until the next read', () => {
+  const act = new Map([['r1', [{ offset: 1, at_ms: 0, by: 'w', kind: 'claimed' }]]]);
+  const open = { ...base, open: 'r1', activity: act };
+  assert.equal(reduce(open, { type: 'open', id: 'r2' }).activity, undefined);
+  assert.equal(reduce(open, { type: 'open', id: 'r1' }).activity, act);
+});
