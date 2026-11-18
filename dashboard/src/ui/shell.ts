@@ -2,6 +2,7 @@
 // and the side panel. Landmarks (nav, main, aside) let a screen reader jump between them.
 import { chordFor, displayChord } from '../keys.ts';
 import { decodeView, encodeView, sameView, summary, type SavedView, type ViewSpec } from '../views.ts';
+import { INBOX_KINDS, inboxFor, kindCounts, type InboxKind } from '../inbox.ts';
 import { inScope } from '../list.ts';
 import { reviewFull, toAddress, type View, type ViewState } from '../state.ts';
 import { boardView } from './board-view.ts';
@@ -15,6 +16,8 @@ import { statusBar } from './status-bar.ts';
 
 export interface ShellHandlers extends ListHandlers, FilterHandlers, WriteHandlers {
   query(text: string): void;
+  /** Shows one kind of Needs-you item, or every kind with null. */
+  kind(kind: InboxKind | null): void;
   /** Opens a saved view by its query string. */
   openView(search: string): void;
   editView(name: string): void;
@@ -90,6 +93,15 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     }, label, count);
     return { view, label, a, count };
   });
+  // The kinds under Needs you, with a count each. Buttons, not links: they filter the view, they do not leave it.
+  const kindButtons = new Map<InboxKind | 'all', { button: HTMLButtonElement; count: HTMLElement }>();
+  const kindList = h('ul', { class: 'nav kinds', 'aria-label': 'Needs you by kind', hidden: true },
+    ...([['all', 'Everything'], ...INBOX_KINDS] as const).map(([k, label]) => {
+      const count = h('span', { class: 'count muted' });
+      const button = h('button', { type: 'button', class: 'kind', 'aria-pressed': 'false', onclick: () => on.kind(k === 'all' ? null : k) }, label, count);
+      kindButtons.set(k, { button, count });
+      return h('li', {}, button);
+    }));
   const savedList = h('ul', { class: 'nav saved', 'aria-label': 'Saved views' });
   // Who the writes are made as, and the way to stop: one button, so the focus stays on it either way.
   const who = h('p', { class: 'account-who muted small' });
@@ -161,6 +173,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
   sidebar.append(
     h('div', { class: 'brand' }, mark(), 'KBL'),
     h('ul', { class: 'nav' }, ...nav.map((n) => h('li', {}, n.a))),
+    kindList,
     h('h2', { class: 'nav-title', id: 'saved-title' }, 'Saved views'),
     savedList,
     h('div', { class: 'sidebar-foot' },
@@ -231,11 +244,22 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       if (account.textContent !== label) account.textContent = label;
       const named = s.saved.find((v) => sameView(s, decodeView(v.search)));
       for (const n of nav) {
-        const total = inScope({ ...s, view: n.view }).length;
+        const total = inScope({ ...s, view: n.view, kind: null }).length;
         n.count.textContent = total ? String(total) : '';
         n.a.setAttribute('href', toAddress(location.search, { ...plain(n.view), open: null }) || '?');
         if (!named && sameView(s, plain(n.view))) n.a.setAttribute('aria-current', 'page');
         else n.a.removeAttribute('aria-current');
+      }
+      const here = s.view === 'inbox';
+      kindList.hidden = !here;
+      if (here) {
+        const counts = kindCounts(inboxFor(s.items, s.tracker.kind === 'signed-in' ? s.tracker.person : null));
+        for (const [k, { button, count }] of kindButtons) {
+          const n = k === 'all' ? Object.values(counts).reduce((a, b) => a + b, 0) : counts[k];
+          const text = n ? String(n) : '';
+          if (count.textContent !== text) count.textContent = text;
+          button.setAttribute('aria-pressed', String((k === 'all' ? null : k) === s.kind));
+        }
       }
       const title = named?.name ?? VIEWS.find(([v]) => v === s.view)?.[1] ?? 'All work';
       if (heading.textContent !== title) heading.textContent = title;

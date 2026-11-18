@@ -4,6 +4,7 @@
 import type { BlockedRow, ItemRow, ReviewLoad } from './fold.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
+import type { InboxKind, Waiting } from './inbox.ts';
 import type { Stories } from './story.ts';
 import { putWrite, type Write, type Writes } from './writes.ts';
 
@@ -67,13 +68,18 @@ export interface ViewState {
   tracker: TrackerState;
   /** The text of each open question by its offset, read from the record as it was folded. */
   questions: ReadonlyMap<number, string>;
+  /** The kind of inbox item shown in Needs you, or null for every kind. Not part of the address. */
+  kind: InboxKind | null;
+  /** When each item began waiting on a person, as a log offset. */
+  waiting: ReadonlyMap<string, Waiting>;
 }
 
 export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; stories?: Stories; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string> }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; stories?: Stories; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string>; waiting?: ReadonlyMap<string, Waiting> }
+  | { type: 'kind'; kind: InboxKind | null }
   /** Marks or unmarks one item for a bulk action. */
   | { type: 'mark'; id: string }
   | { type: 'marks'; ids: string[] }
@@ -110,6 +116,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
         stories: a.stories ?? s.stories,
         reviewLoad: a.reviewLoad ?? s.reviewLoad,
         questions: a.questions ?? s.questions,
+        waiting: a.waiting ?? s.waiting,
         marked: s.marked.filter((id) => a.items.some((i) => i.id === id)),
       };
     case 'mark':
@@ -122,6 +129,8 @@ export function reduce(s: ViewState, a: Action): ViewState {
       return { ...s, tracker: a.tracker };
     case 'view':
       return { ...s, view: a.view };
+    case 'kind':
+      return { ...s, kind: a.kind };
     case 'query':
       return { ...s, query: a.query };
     case 'select':
@@ -147,7 +156,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'saved':
       return { ...s, saved: a.saved };
     case 'openView':
-      return { ...s, ...decodeView(a.search) };
+      return { ...s, ...decodeView(a.search), kind: null };
   }
 }
 

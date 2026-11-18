@@ -474,3 +474,32 @@ fn a_root_row_carries_the_stage_of_its_triage_child() {
     assert!(!find("r2")["triage"].is_null());
     assert!(find("t2")["triage"].is_null());
 }
+
+#[test]
+fn items_carry_the_proposal_a_person_can_accept() {
+    let mut f = Folder::new();
+    let recs = [
+        r#"{"at_ms":1,"by":"gabriel","actor":"person","kind":"imported","item":"p1","source":"github","upstream_id":"o/r#1","title":"t"}"#,
+        r#"{"at_ms":2,"by":"gabriel","actor":"person","kind":"imported","item":"p0","source":"github","upstream_id":"o/r#2","title":"u"}"#,
+        r#"{"at_ms":3,"by":"gabriel","actor":"person","kind":"triaged","item":"p1","tier":2,"why":"needs p0 first","depends_on":["p0"],"split":["api","docs"]}"#,
+    ];
+    for (i, r) in recs.iter().enumerate() {
+        assert!(f.apply(i as f64, r.as_bytes()), "{i}");
+    }
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let find = |id: &str| {
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        find("p1")["proposal"],
+        serde_json::json!({"why": "needs p0 first", "depends_on": ["p0"], "split": ["api", "docs"]})
+    );
+    assert!(find("p0")["proposal"].is_null());
+    assert!(find("p1")["finding"].is_null());
+}
