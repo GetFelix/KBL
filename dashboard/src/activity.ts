@@ -79,7 +79,8 @@ export function waitsText(item: ItemRow, blocked: readonly BlockedRow[]): string
  * why it is not moving and who must act. `now` is the page clock; the fold's times are the tracker's.
  */
 export function nowLine(item: ItemRow, blocked: readonly BlockedRow[], events: readonly ActivityEvent[], now: number): NowLine {
-  // Before format 14 a question leaves the hold in place, so a held item can wait on a person.
+  // A hold can outlive the reason to wait on a person (a question before format 14, a blown budget):
+  // while the item is in Needs you, nobody is working it.
   if (item.holder && item.held_attempt && item.stage !== 'needs_you') {
     const last = item.active_ms ?? lastWrite(events, item.held_attempt)?.at_ms ?? null;
     const quiet = last === null ? 'no activity recorded yet' : `last activity ${since(last, now)}`;
@@ -173,7 +174,7 @@ export function timeline(events: readonly ActivityEvent[]): TimelineEntry[] {
     const who = e.attempt != null ? `${e.by}, attempt ${e.attempt}` : e.by;
     if (e.refused) {
       const why = REFUSED[e.refused] ?? e.refused.replaceAll('_', ' ');
-      return { offset: e.offset, at_ms: e.at_ms, who, attempt: e.attempt ?? null, title: `Refused: ${d.title}`, detail: [`Refused, ${why}. It changed nothing`, d.detail].filter(Boolean).join('. '), output: null, failed: true, refused: e.refused };
+      return { offset: e.offset, at_ms: e.at_ms, who, attempt: e.attempt ?? null, title: `Refused: ${d.title}`, detail: [`Refused, ${why}. It did not take effect`, d.detail].filter(Boolean).join('. '), output: null, failed: true, refused: e.refused };
     }
     return { offset: e.offset, at_ms: e.at_ms, who, attempt: e.attempt ?? null, ...d, refused: null };
   });

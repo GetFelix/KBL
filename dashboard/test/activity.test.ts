@@ -94,7 +94,7 @@ test('a refused record is shown as refused and counts for nothing', () => {
   assert.equal(t[4].refused, null);
   assert.equal(t[3].refused, 'bad_usage');
   assert.equal(t[3].title, 'Refused: Finished the attempt');
-  assert.match(t[3].detail ?? '', /changed nothing/);
+  assert.match(t[3].detail ?? '', /did not take effect/);
   assert.equal(t[3].failed, true);
   const n = nowLine({ ...held, active_ms: null }, [], events, NOW);
   assert.match(n.text, /last activity 10 min ago/, 'a refused write is not activity');

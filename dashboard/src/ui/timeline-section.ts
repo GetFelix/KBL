@@ -49,7 +49,7 @@ export function timelineSection(): TimelineSection {
             h('strong', {}, e.title),
             h('span', { class: 'muted' }, ` ${e.who} `),
             timeEl(e.at_ms),
-            e.refused ? h('span', { class: 'tl-flag' }, ' refused, changed nothing') : e.failed ? h('span', { class: 'tl-flag' }, ' failed') : null),
+            e.refused ? h('span', { class: 'tl-flag' }, ' refused') : e.failed ? h('span', { class: 'tl-flag' }, ' failed') : null),
           e.detail ? h('p', { class: 'tl-detail' }, e.detail) : null,
           out
             ? h('details', {
