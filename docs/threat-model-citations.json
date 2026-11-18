@@ -199,6 +199,9 @@
  "ingest/src/budget.rs#Budget::hourly": [
   "p.per_hour as f64 * i.held.min(p.pool_sources) as f64 / p.pool_sources as f64"
  ],
+ "ingest/src/budget.rs#Budget::set_leases": [
+  "i.beat_sources = Some(n);"
+ ],
  "ingest/src/budget.rs#Budget::read_floor": [
   "let wake = if i.waking { Self::wake_part(i) } else { 0.0 };"
  ],

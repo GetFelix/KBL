@@ -371,3 +371,27 @@ async fn two_hundred_workers_joining_at_once_all_get_in() {
         .collect();
     assert!(refused.is_empty(), "{} refused: {refused:?}", refused.len());
 }
+
+#[tokio::test]
+async fn a_heartbeat_answers_how_many_sources_the_pool_serves_now() {
+    let (o, app, _) = leased().await;
+    let (_, body) = beat_raw(&app, "g1", "a", false, &[]).await;
+    assert_eq!(body["pool_sources"], json!(SOURCES.len()));
+    let mut more = SOURCES.to_vec();
+    more.push("github:o/g");
+    let rec = OrgRecord::SourceAdded {
+        team: name("default"),
+        source: "github:o/g".into(),
+    };
+    o.teams
+        .org()
+        .unwrap()
+        .org
+        .append(Key::new("ops").unwrap(), rec)
+        .await
+        .unwrap();
+    let (status, _) = org_record(&o, "tok-ops", connection("default", "g1", &more)).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, body) = beat_raw(&app, "g1", "a", false, &[]).await;
+    assert_eq!(body["pool_sources"], json!(SOURCES.len() + 1));
+}
