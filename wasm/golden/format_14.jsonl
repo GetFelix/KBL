@@ -1,0 +1,15 @@
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"v":14,"at_ms":1030,"by":"gabriel","actor":"person","kind":"format_raised","to":14}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"question","item":"r1","attempt":1,"text":{"text":"which region has credit?"}}
+{"at_ms":1060,"by":"w2","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1070,"by":"gabriel","actor":"person","kind":"answer","item":"r1","question":4,"text":{"text":"eastus"}}
+{"at_ms":1080,"by":"w2","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"v":14,"at_ms":1090,"by":"w2","actor":"agent","kind":"released","item":"r1","attempt":1,"reason":"out of credit","why":"waits_on_outside"}
+{"at_ms":1100,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"v":7,"at_ms":1110,"by":"gabriel","actor":"person","kind":"flagged","item":"r1","flagged":false}
+{"at_ms":1120,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1130,"by":"kbl-tracker","actor":"tracker","kind":"released","item":"r1","attempt":1,"reason":"lapsed"}
+{"v":14,"at_ms":1140,"by":"w1","actor":"agent","kind":"released","item":"r1","attempt":1,"reason":"needs a login","why":"waits_on_person"}
+{"v":14,"at_ms":1150,"by":"w2","actor":"agent","kind":"released","item":"r1","attempt":1,"reason":"late","why":"waits_on_person"}

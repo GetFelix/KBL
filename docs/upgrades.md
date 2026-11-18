@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 13.
+is 14.
 
 ### Formats
 
@@ -85,6 +85,7 @@ is 13.
 | 10 | `retried`, `snoozed`, `parked` and `unblocked`: the card actions a person takes on My queue ([work tracker](work-tracker.md#card-actions-on-my-queue)). The fold hides a snoozed or parked item from My queue while the wait they hid continues | Until the raise, `POST /v1/work/retry`, `/snooze`, `/park`, `/unpark` and `/unblock` are refused with `format`. A reader below 10 stops at the raise itself, so it never folds a card action as an unknown kind |
 | 11 | `review_requested`, `changes_requested`, `merge_marked` and `summary_rated`: a person's moves on a pull request and on the agent's summary ([work tracker](work-tracker.md#review-actions-and-summary-marks)). The fold keeps the ask and the send-back on the item, closes a merged request's item as merged, and keeps the latest mark per attempt | Until the raise, `POST /v1/work/request-review`, `/request-changes`, `/mark-merged` and `/rate-summary` are refused with `format`. A reader below 11 stops at the raise itself, so it never folds one as an unknown kind |
 | 12 | `taken`, `reassigned` and `steered`: an item's assignee and a note to the agent holding it ([work tracker](work-tracker.md#assignees)). The fold keeps `assignee` on the item and holds an unheld item with a person assignee out of Ready, in Needs you as `taken`. An agent assignee is refused as `bad_assignee` | Until the raise, `POST /v1/work/take`, `/reassign` and `/steer` are refused with `format`. A reader below 12 stops at the raise itself, so it never lets an agent claim an item a person took |
+| 14 | A question ends the asker's hold at no cost to its tries, and a plain answer sends the item itself back to Ready with `question` and `answer` in its context. `released` may carry `why`: `waits_on_person` or `waits_on_outside` uses no try and moves the item into Needs you (`flagged`) until a person moves it out. An agent whose claim lapsed may still ask, or release as a wait, once, until anyone claims the item again ([work tracker](work-tracker.md#questions-and-waits-free-the-agent)) | Until the raise, a question keeps the hold and an answer starts a resume item, as before; a `released` with a wait is refused with `format`. A reader below 14 stops at the raise |
 | 13 | No record or field: `reassigned` may name an agent, `{"agent": "w1"}`. The fold then refuses `claimed` by any other agent as `not_assignee`, and the tracker may write `reassigned` to nobody for an agent assignee that went away ([work tracker](work-tracker.md#assignees)) | Until the raise, an agent assignee is refused as `bad_assignee`, as before. A reader below 13 stops at the raise itself, so it never lets another agent claim an agent's item |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, now 2. It follows the same rules. An org admin raises it with `POST /v1/org/records` and `{"record": {"kind": "format_raised", "to": 2}}`; a reader below the new format stops at the raise.

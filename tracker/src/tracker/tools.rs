@@ -13,10 +13,10 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::redact::redact;
 use kbl_core::work::{
-    Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FindingVerdict, MAX_ASK_OPTION_LEN,
-    MAX_ASK_OPTIONS, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST, MAX_SCENARIO,
-    MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, Phase, RefusalReason, RevertCheck, Severity,
-    Target, Then, Unclear, Usage, WorkKind, WorkRecord,
+    Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FORMAT_V14, FindingVerdict,
+    MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST,
+    MAX_SCENARIO, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, Phase, RefusalReason,
+    RevertCheck, Severity, Target, Then, Unclear, Usage, WorkKind, WorkRecord,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
@@ -350,7 +350,7 @@ impl<B: Broker> Tracker<B> {
             "prerequisite": prerequisite, "created": created
         });
         let result = self
-            .finish(agent, item, claim, "prerequisite", record, reply)
+            .finish(agent, item, claim, "prerequisite", false, record, reply)
             .await;
         if let Err(Error::Refused { why }) = &result {
             let mut core = self.0.core.lock().await;
@@ -580,7 +580,7 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
         check_options(&options, default.as_deref())?;
-        self.held_write(agent, item, "ask", |attempt| WorkRecord::Question {
+        let record = |attempt| WorkRecord::Question {
             item: item.clone(),
             attempt,
             text,
@@ -589,8 +589,27 @@ impl<B: Broker> Tracker<B> {
             cost_micros: 0,
             usage,
             floor_micros: self.floor(),
-        })
-        .await
+        };
+        let frees = self.0.core.lock().await.state.format() >= FORMAT_V14;
+        if !frees {
+            let mut reply = self.held_write(agent, item, "ask", record).await?;
+            reply["claim"] = "held".into();
+            return Ok(reply);
+        }
+        // The question ends the hold, so the delivery is settled like a release's.
+        let mut reply = self
+            .finish(
+                agent,
+                item,
+                None,
+                "question",
+                true,
+                record,
+                json!({ "item": item, "status": "waiting" }),
+            )
+            .await?;
+        reply["claim"] = "ended".into();
+        Ok(reply)
     }
 
     /// Records a plan, a branch or a PR on the item the agent holds.
@@ -904,7 +923,7 @@ impl<B: Broker> Tracker<B> {
         reply: Reply,
     ) -> Result<Value, Error> {
         self.begin().await?;
-        let (question, default) = {
+        let (question, default, resume) = {
             let core = self.0.core.lock().await;
             let it = core.state.items.get(item);
             let question = question
@@ -916,7 +935,10 @@ impl<B: Broker> Tracker<B> {
                 .filter(|i| i.open_question == Some(question))
                 .and_then(|i| i.ask.as_ref())
                 .and_then(|a| a.default.clone());
-            (question, default)
+            // From format 14 the asker let go when it asked: the item itself
+            // goes back to Ready with the answer, instead of a resume item.
+            let resume = core.state.format() < FORMAT_V14 || it.is_none_or(|i| i.hold.is_some());
+            (question, default, resume)
         };
         // Answering without choosing or typing takes the question's default.
         let chosen = reply.chosen.or_else(|| {
@@ -926,8 +948,8 @@ impl<B: Broker> Tracker<B> {
         });
         check_answered(&text, chosen.as_deref())?;
         let then = match reply.moves_to {
-            Some((target, title)) => Then::Prerequisite { target, title },
-            None => Then::Resume,
+            Some((target, title)) => Some(Then::Prerequisite { target, title }),
+            None => resume.then_some(Then::Resume),
         };
         let mut record = WorkRecord::Answer {
             item: item.clone(),
@@ -935,7 +957,7 @@ impl<B: Broker> Tracker<B> {
             text,
             evidence,
             chosen,
-            then: Some(then),
+            then,
         };
         // People paste tokens too. `chosen` is cut the same way the options were.
         kbl_core::redact::redact_record(&mut record);

@@ -42,6 +42,7 @@ fn released(attempt: u32) -> WorkRecord {
         item: id("r1"),
         attempt,
         reason: None,
+        why: None,
         cost_micros: 0,
         usage: Vec::new(),
         floor_micros: 0,

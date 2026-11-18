@@ -146,7 +146,7 @@ async fn an_agent_cannot_post_under_an_item_it_does_not_hold() {
     );
     assert_eq!(fake.log().len(), before);
     // And after the item is handed back, even its old holder cannot.
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(why(post(&t, "w1", "a1", "one", "split").await), "not_held");
@@ -277,7 +277,7 @@ async fn a_child_too_deep_is_refused() {
         let c = post(&t, "w1", parent.as_str(), "d", "split").await.unwrap();
         let child = id_of(&c);
         // The agent holds only one item; the person walks it down.
-        t.release(&agent("w1"), &parent, None, None, Vec::new())
+        t.release(&agent("w1"), &parent, None, None, None, Vec::new())
             .await
             .unwrap();
         claim_item(&t, "w1", &child).await;
@@ -298,7 +298,7 @@ async fn claim_item(t: &crate::tracker::Tracker<Fake>, w: &str, want: &ItemId) {
             return;
         }
         if let Some(other) = got {
-            t.release(&agent(w), &item(&other), None, None, Vec::new())
+            t.release(&agent(w), &item(&other), None, None, None, Vec::new())
                 .await
                 .unwrap();
         }
@@ -2229,7 +2229,7 @@ async fn a_new_holders_identical_answer_is_recorded_under_its_own_hold() {
         }
     };
     answer("w1").await;
-    t.release(&agent("w1"), &item("a1-t"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1-t"), None, None, None, Vec::new())
         .await
         .unwrap();
     claim_item(&t, "w2", &item("a1-t")).await;
@@ -2250,7 +2250,7 @@ async fn triage_after_the_hold_is_gone_is_not_held() {
     let fake = Fake::default();
     let t = start(&fake).await;
     held_triage(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1-t"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1-t"), None, None, None, Vec::new())
         .await
         .unwrap();
     let before = fake.log().len();
