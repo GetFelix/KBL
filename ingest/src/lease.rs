@@ -164,9 +164,9 @@ impl Lessee {
         }
     }
 
-    fn share_changed(&self, serving: u64) {
+    fn share_changed(&self, serving: u64, pool_sources: Option<u64>) {
         if let Some(b) = self.budget.get() {
-            b.set_held(serving);
+            b.set_leases(serving, pool_sources);
         }
     }
 
@@ -212,7 +212,7 @@ impl Lessee {
             *mode = next;
             let serving = Self::serving(&mode);
             drop(mode);
-            self.share_changed(serving);
+            self.share_changed(serving, None);
             let outside = self.outside();
             if !outside.is_empty() {
                 eprintln!(
@@ -243,7 +243,18 @@ impl Lessee {
 
     /// A successful heartbeat sent at `sent` answered `leases`. Anything not in
     /// it is no longer held, so the fence stops it at once.
+    #[cfg(test)]
     pub(crate) fn renewed(&self, sent: (Instant, u64), leases: BTreeMap<String, Held>) {
+        self.renewed_in(sent, leases, None);
+    }
+
+    /// As [`Self::renewed`], with the pool's source count the same answer gave.
+    pub(crate) fn renewed_in(
+        &self,
+        sent: (Instant, u64),
+        leases: BTreeMap<String, Held>,
+        pool_sources: Option<u64>,
+    ) {
         let mut mode = self.mode.lock().expect("lessee lock");
         if let Mode::Leased {
             sources,
@@ -262,7 +273,7 @@ impl Lessee {
         }
         let serving = Self::serving(&mode);
         drop(mode);
-        self.share_changed(serving);
+        self.share_changed(serving, pool_sources);
         self.changed.notify_waiters();
     }
 
@@ -482,6 +493,10 @@ impl<T: Transport> Transport for Gate<T> {
     }
 }
 
+/// A heartbeat's answer: the leases held after it, by source, and the pool's
+/// source count read in the same answer, when the tracker gave one.
+pub(crate) type Beat = (BTreeMap<String, Held>, Option<u64>);
+
 /// The tracker calls the two lease tasks make.
 pub(crate) trait LeaseApi: Send + Sync {
     /// `PUT /v1/ingest/leases`, reporting the sources `held` now: the leases
@@ -492,7 +507,7 @@ pub(crate) trait LeaseApi: Send + Sync {
         instance: &str,
         leave: bool,
         held: &[String],
-    ) -> impl Future<Output = Result<BTreeMap<String, Held>>> + Send;
+    ) -> impl Future<Output = Result<Beat>> + Send;
 
     /// `GET /v1/ingest/config`: the answer and its `ETag`, or none when it did
     /// not change. `Ok(Some((Value::Null, _)))` means the tracker has no
@@ -520,7 +535,7 @@ pub(crate) async fn heartbeat_once<A: LeaseApi>(
     let held = lessee.held();
     let sent = lessee.sending();
     match api.heartbeat(group, instance, false, &held).await {
-        Ok(leases) => lessee.renewed(sent, leases),
+        Ok((leases, pool)) => lessee.renewed_in(sent, leases, pool),
         Err(e) => eprintln!("kbl-ingest: lease heartbeat failed: {e:#}"),
     }
 }
@@ -616,13 +631,13 @@ impl LeaseApi for crate::tracker_api::Http {
         instance: &str,
         leave: bool,
         held: &[String],
-    ) -> Result<BTreeMap<String, Held>> {
+    ) -> Result<Beat> {
         let body = json!({ "group": group, "instance": instance, "leave": leave, "held": held });
         let (status, body) = self.put_json("/v1/ingest/leases", &body).await?;
         if status != 200 {
             bail!("the tracker answered {status} to the lease heartbeat: {body}");
         }
-        Ok(body["leases"]
+        let leases = body["leases"]
             .as_array()
             .into_iter()
             .flatten()
@@ -633,7 +648,8 @@ impl LeaseApi for crate::tracker_api::Http {
                 };
                 Some((l["source"].as_str()?.to_owned(), held))
             })
-            .collect())
+            .collect();
+        Ok((leases, body["pool_sources"].as_u64()))
     }
 
     async fn config(

@@ -258,13 +258,7 @@ impl Trackers {
 }
 
 impl LeaseApi for Trackers {
-    async fn heartbeat(
-        &self,
-        _: &str,
-        me: &str,
-        leave: bool,
-        _: &[String],
-    ) -> Result<BTreeMap<String, Held>> {
+    async fn heartbeat(&self, _: &str, me: &str, leave: bool, _: &[String]) -> Result<Beat> {
         tokio::time::sleep(self.slow).await;
         if self.cut.lock().unwrap().iter().any(|c| c == me) {
             bail!("partitioned");
@@ -284,7 +278,7 @@ impl LeaseApi for Trackers {
                 };
                 leases.insert("github:o/a".to_owned(), released);
             }
-            return Ok(got);
+            return Ok((got, None));
         }
         let assigned = self.owner.lock().unwrap().is_none_or(|o| o == me);
         if !assigned {
@@ -299,7 +293,7 @@ impl LeaseApi for Trackers {
                     },
                 );
             }
-            return Ok(got);
+            return Ok((got, None));
         }
         let step = rules::step(current.as_ref(), me, true, now);
         if let Some(next) = rules::next(current.as_ref(), me, step, now) {
@@ -312,7 +306,7 @@ impl LeaseApi for Trackers {
             );
             leases.insert("github:o/a".to_owned(), next);
         }
-        Ok(got)
+        Ok((got, None))
     }
 
     async fn config(
@@ -702,14 +696,15 @@ async fn the_heartbeat_reply_carries_until_ms_to_the_worker() {
             axum::Json(json!({ "leases": [
                 { "source": "github:o/a", "epoch": 3 },
                 { "source": "github:o/b", "epoch": 4, "until_ms": 7500 },
-            ] }))
+            ], "pool_sources": 5 }))
         }),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let api = crate::tracker_api::Http::new(&base, "tok".into()).unwrap();
-    let got = api.heartbeat("g1", "i1", false, &[]).await.unwrap();
+    let (got, pool) = api.heartbeat("g1", "i1", false, &[]).await.unwrap();
+    assert_eq!(pool, Some(5));
     assert_eq!(
         got,
         BTreeMap::from([
@@ -752,4 +747,61 @@ async fn the_budget_share_follows_the_leases_held_and_not_the_ones_handed_over()
     // A config with no connection leaves the worker on its file's budget.
     l.configure_budget(&json!({ "connection": null, "budget": null }));
     assert_eq!(budget.pool(), None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_heartbeat_refreshes_the_pools_source_count_with_the_leases() {
+    use crate::budget::{Budget, Vendor};
+    let l = leased(&["github:o/a", "github:o/b"]);
+    let budget = Budget::new(Vendor::Github, None, 0.9);
+    l.attach(budget.clone());
+    l.configure_budget(&json!({
+        "connection": { "pool": "gh", "sources": ["github:o/a", "github:o/b"] },
+        "budget": { "per_hour": 4000, "kept_back": 800, "wake_cap": 200, "pool_sources": 2 },
+    }));
+    // A source was added elsewhere in the pool; this worker's config is stale.
+    l.renewed_in(
+        l.sending(),
+        held(&[("github:o/a", 1), ("github:o/b", 1)]),
+        Some(4),
+    );
+    assert_eq!(budget.snapshot().hourly, 2000, "2 of the 4 sources now");
+}
+
+/// Two workers split a pool when a source is added mid-hour. One has heard
+/// the new count and the other still has the old one: the shares must not
+/// add up to more than the pool once each has heartbeated.
+#[tokio::test(start_paused = true)]
+async fn a_source_added_mid_hour_does_not_push_two_workers_past_the_pool() {
+    use crate::budget::{Budget, Vendor};
+    let cfg = |n: u64| {
+        json!({
+            "connection": { "pool": "gh", "sources": [] },
+            "budget": { "per_hour": 4000, "kept_back": 800, "wake_cap": 200, "pool_sources": n },
+        })
+    };
+    let all = [
+        "github:o/a",
+        "github:o/b",
+        "github:o/c",
+        "github:o/d",
+        "github:o/e",
+    ];
+    let worker = |held_now: &[&'static str], config_count: u64| {
+        let l = leased(&all);
+        let b = Budget::new(Vendor::Github, None, 0.9);
+        l.attach(b.clone());
+        l.configure_budget(&cfg(config_count));
+        let leases: Vec<(&'static str, u64)> = held_now.iter().map(|s| (*s, 1)).collect();
+        (l, b, leases)
+    };
+    // Four sources become four sources plus one: 2 and 2 become 3 and 2.
+    // Worker one's config is stale at 4; worker two's is current at 5.
+    let (l1, b1, h1) = worker(&["github:o/a", "github:o/b", "github:o/c"], 4);
+    let (l2, b2, h2) = worker(&["github:o/d", "github:o/e"], 5);
+    // The tracker's heartbeat answers carry the live count of 5.
+    l1.renewed_in(l1.sending(), held(&h1), Some(5));
+    l2.renewed_in(l2.sending(), held(&h2), Some(5));
+    let total = b1.snapshot().hourly + b2.snapshot().hourly;
+    assert!(total <= 4000, "spent {total} of a 4000 pool");
 }

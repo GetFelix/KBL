@@ -318,8 +318,19 @@ impl Budget {
     }
 
     /// How many sources this worker serves now.
+    #[cfg(test)]
     pub(crate) fn set_held(&self, held: u64) {
-        self.inner.lock().expect("lock").held = held;
+        self.set_leases(held, None);
+    }
+
+    /// Sets `held` with the pool's source count the same heartbeat answered
+    /// with, so a share never pairs fresh leases with a stale count.
+    pub(crate) fn set_leases(&self, held: u64, pool_sources: Option<u64>) {
+        let mut i = self.inner.lock().expect("lock");
+        i.held = held;
+        if let (Some(n), Some(share)) = (pool_sources, i.share.as_mut()) {
+            share.pool_sources = n.max(1);
+        }
     }
 
     pub(crate) fn pool(&self) -> Option<String> {
