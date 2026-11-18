@@ -659,10 +659,13 @@ try {
   await shoot('phone-dark');
   await press(page, 'End');
   await press(page, 'Enter');
-  const phoneSaw = await page.eval(`(() => { const a = document.activeElement; const r = document.querySelector('.panel').getBoundingClientRect(); return JSON.stringify({ active: a ? a.tagName + '.' + a.className + (a.dataset.focus ? '[' + a.dataset.focus + ']' : '') : null, top: Math.round(r.top), height: Math.round(r.height), inner: innerHeight }); })()`);
+  const panelState = `JSON.stringify((() => { const a = document.activeElement; const r = document.querySelector('.panel').getBoundingClientRect(); return { panel: !!a?.matches('.panel'), active: a ? a.tagName + '.' + a.className : null, top: Math.round(r.top), height: Math.round(r.height), inner: innerHeight, scrollY: Math.round(scrollY) }; })())`;
+  const phoneNow = JSON.parse(await page.eval(panelState));
+  await new Promise((ok) => setTimeout(ok, 300));
+  const phoneLater = JSON.parse(await page.eval(panelState));
   check(
-    (await focused('.panel')) && (await page.eval(`(() => { const r = document.querySelector('.panel').getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; })()`)),
-    `on a phone, opening an item moves focus to the panel and scrolls it into view (${phoneSaw})`,
+    phoneNow.panel && phoneNow.top >= 0 && phoneNow.top < phoneNow.inner,
+    `on a phone, opening an item moves focus to the panel and scrolls it into view (${JSON.stringify({ now: phoneNow, later: phoneLater })})`,
   );
   await press(page, 'Escape');
   check(await page.eval(`getComputedStyle(document.querySelector('.menu-button')).display !== 'none' && getComputedStyle(document.querySelector('#sidebar')).display === 'none'`), 'on a phone the sidebar is behind a Menu button');
