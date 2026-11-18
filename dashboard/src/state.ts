@@ -117,7 +117,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'items':
       // `open` stays even when the log has no such item: the panel says so rather than the link silently doing nothing.
       // A mark on an item the log no longer has would act on nothing.
-      return {
+      const next: ViewState = {
         ...s,
         items: a.items,
         blocked: a.blocked,
@@ -130,6 +130,8 @@ export function reduce(s: ViewState, a: Action): ViewState {
         waiting: a.waiting ?? s.waiting,
         marked: s.marked.filter((id) => a.items.some((i) => i.id === id)),
       };
+      // A link straight to a nested child seeds the selection before the items arrive.
+      return next.selected && next.selected === next.open ? { ...next, selected: selectionFor(next, next.selected) } : next;
     case 'activity':
       return { ...s, activity: a.activity };
     case 'mark':

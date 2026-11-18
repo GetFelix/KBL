@@ -133,3 +133,9 @@ test('opening a nested child selects its visible root, not the hidden child', ()
   // An item the view does not show keeps the selection on itself.
   assert.equal(reduce({ ...s, query: 'nomatch' }, { type: 'open', id: 'kid' }).selected, 'kid');
 });
+
+test('items arriving after a deep link to a nested child move the selection to its root', () => {
+  const items = [{ id: 'root', title: 'root', stage: 'ready' }, { id: 'kid', title: 'kid', stage: 'ready', parent: 'root' }];
+  const s = reduce({ ...base, open: 'kid', selected: 'kid' }, { type: 'items', items, blocked: [], overlaps: new Map() });
+  assert.equal(s.selected, 'root');
+});
