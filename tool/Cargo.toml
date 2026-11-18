@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 kbl-core = { path = "../core" }
+kbl-wasm = { path = "../wasm" }
 anyhow = "=1.0.100"
 clap = { version = "=4.5.51", features = ["derive", "env"] }
 felix-client = "=0.7.2"

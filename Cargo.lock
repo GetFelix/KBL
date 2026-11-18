@@ -1292,6 +1292,7 @@ dependencies = [
  "clap",
  "felix-client",
  "kbl-core",
+ "kbl-wasm",
  "reqwest 0.12.24",
  "serde",
  "serde_json",

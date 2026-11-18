@@ -6,6 +6,7 @@
 
 mod agents;
 mod backup;
+mod experiment;
 mod felix;
 mod prices;
 mod run;
@@ -129,6 +130,8 @@ enum WorkCommand {
     Import(backup::ImportArgs),
     /// Fold `work.events` and print the fold's digest, to compare two logs.
     Digest(backup::DigestArgs),
+    /// Print the Metrics tab's numbers for a window as JSON or CSV. Read-only.
+    Metrics(experiment::MetricsArgs),
 }
 
 #[derive(Subcommand)]
@@ -187,6 +190,7 @@ async fn serve() -> Result<()> {
         Command::Work(WorkCommand::Import(args)) => {
             backup::import(backup::Log::Work, target, args).await
         }
+        Command::Work(WorkCommand::Metrics(args)) => experiment::metrics(target, args).await,
         Command::Work(WorkCommand::Digest(args)) => {
             backup::digest(backup::Log::Work, target, args).await
         }
