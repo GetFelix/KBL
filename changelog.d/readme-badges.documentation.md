@@ -1,1 +1,0 @@
-Status badges in the README.

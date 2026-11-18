@@ -1,1 +1,0 @@
-The dashboard's side panel shows an item's story: its recorded decisions in order across attempts, grouped understand, reproduce, cause, fix and verify, with the edits and cited steps behind each and deterministic flags where a claim and the recorded steps disagree. The fold behind it is `kbl_core::story`.

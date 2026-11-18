@@ -1,1 +1,0 @@
-`kbl_core::work_fold::fold_to` folds `work.events` to any offset, skipping the blank offsets a Raft shard leaves, and `Snapshots` keeps a checked copy of the state every 2,000 records so a late offset folds quickly. A snapshot is checked by a hash chained over every record it covers; one that does not match the log is skipped and rebuilt.

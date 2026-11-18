@@ -1,1 +1,0 @@
-A `v*` tag now builds `kbl-mcp` and `kbl-tool` for Linux (x86_64, aarch64), macOS (aarch64, x86_64) and Windows (x86_64) and publishes them with `SHA256SUMS` as a GitHub release. The release workflow also runs by hand as a dry run that keeps the archives and creates no release ([getting the binaries](README.md#getting-the-binaries)).

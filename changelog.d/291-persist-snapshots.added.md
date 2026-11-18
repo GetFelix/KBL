@@ -1,1 +1,0 @@
-The tracker can keep fold snapshots on disk (`KBL_TRACKER_SNAPSHOT_DIR`) and start from the newest one that matches `work.events`, folding only the records since. A damaged, stale or other-revision file is removed and an older one tried, then a full fold. A snapshot now also keeps each pending proposal's agent and root, which a restored state had lost, and the fold revision is 3.
