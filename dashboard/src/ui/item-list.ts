@@ -294,7 +294,7 @@ export function itemList(
       }
       if (s.view === 'inbox') {
         const byItem = new Map(s.items.map((i) => [i.id, i]));
-        for (const li of el.querySelectorAll<HTMLElement>('.inbox-item')) {
+        for (const li of Array.from(el.querySelectorAll<HTMLElement>('.inbox-item'))) {
           const item = byItem.get(li.querySelector<HTMLElement>('.row')?.dataset.id ?? '');
           if (!item) continue;
           const strip = inbox.strip(item, s);

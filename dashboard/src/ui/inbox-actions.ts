@@ -104,7 +104,7 @@ export function inboxActions(on: InboxHandlers) {
       const busy = pending(s.writes, item.id);
       if (busy) kept.el.setAttribute('aria-busy', 'true');
       else kept.el.removeAttribute('aria-busy');
-      for (const b of kept.el.querySelectorAll('button')) {
+      for (const b of Array.from(kept.el.querySelectorAll('button'))) {
         if (busy) b.setAttribute('aria-disabled', 'true');
         else b.removeAttribute('aria-disabled');
       }
