@@ -53,9 +53,10 @@ fn default_reconcile_hours() -> u64 {
     24
 }
 
-/// 90% of the limit the vendor reports, which leaves it some room.
+/// Half the limit the vendor reports. GitHub counts per account, so a personal
+/// token shares it with the person's own tools; a bot account or App can go higher.
 fn default_budget_share() -> f64 {
-    0.9
+    0.5
 }
 
 /// The least gap between interval polls, whatever `poll_seconds` says.

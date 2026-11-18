@@ -359,8 +359,9 @@ At 500 repos and 20,000 open issues that is about 60,000 calls an hour for the l
 re-reads, far past any of these limits. Every worker then hits the limit at once and none of them knows the
 others did.
 
-- **A budget per pool.** Each budget pool has a budget in the vendor's unit, by default 90% of the vendor's
-  documented limit, set by an org admin (`budget_set`) or, for file-managed workers, in `ingest.json`. A fifth
+- **A budget per pool.** Each budget pool has a budget in the vendor's unit, by default half of the vendor's
+  documented limit (GitHub counts it per account, so a personal token shares it with its owner's own tools;
+  a bot account or App can go to 90%), set by an org admin (`budget_set`) or, for file-managed workers, in `ingest.json`. A fifth
   of it is kept back for write-backs, checks, token mints and webhook wakes, so polling cannot starve them.
   Wakes spend from their own sub-bucket inside the kept-back share, capped at a third of it by default, and
   are served last: write-backs, checks and token mints take the kept-back share first, so a flood of
