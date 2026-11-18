@@ -453,6 +453,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             item_type,
             area,
             size: None,
+            depends_on: None,
+            proposal: None,
+            split: None,
         })
         .await?;
         Ok(())
@@ -558,6 +561,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             item_type: None,
             area: None,
             size: None,
+            depends_on: None,
+            proposal: None,
+            split: None,
         };
         // The tracker already holding these values is as good as a write.
         let written = match self.tracker.append(&edit).await? {

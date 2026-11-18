@@ -87,6 +87,11 @@ pub const FORMAT_V15: u32 = 15;
 /// item back until a time or on a named outside resource.
 pub const FORMAT_V16: u32 = 16;
 
+/// The format from which a person's `edited` may carry `depends_on`, `split`
+/// and the `proposal` offset it was read at, so a person adjusts triage's
+/// advice. Readers below 17 would ignore them and apply a blind edit.
+pub const FORMAT_V17: u32 = 17;
+
 /// The format that added upstream labels and milestone on an item, and
 /// triage's classification (type, area, size) with its vocabulary.
 pub const FORMAT_V19: u32 = 19;
@@ -1048,11 +1053,14 @@ pub enum WorkRecord {
     AttemptClosed { item: ItemId, attempt: u32 },
     /// A person moves an item to another tier.
     TierChanged { item: ItemId, tier: u8 },
-    /// A person edits a proposal before accepting it. From format 19 it also
-    /// carries a person's classification of any open item (empty clears a
-    /// value), and, written by the tracker for ingest, upstream's labels and
-    /// milestone as they are now (an empty milestone clears it) or a class a
-    /// rule mapped.
+    /// A person edits a proposal before accepting it. From format 17 it may
+    /// replace the dependencies and split titles in triage's answer;
+    /// `proposal` is then the offset of the answer the person read, and the
+    /// edit is refused if triage has answered again since. From format 19 it
+    /// also carries a person's classification of any open item (empty clears
+    /// a value), and, written by the tracker for ingest, upstream's labels
+    /// and milestone as they are now (an empty milestone clears it) or a class
+    /// a rule mapped.
     Edited {
         item: ItemId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1069,6 +1077,12 @@ pub enum WorkRecord {
         area: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depends_on: Option<Vec<ItemId>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        split: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proposal: Option<u64>,
     },
     /// Sets a root's budget outright. Only a person may; this is how it is raised.
     BudgetSet {
@@ -1397,19 +1411,29 @@ impl WorkRecord {
             } => FORMAT_V1,
             WorkRecord::Triaged { .. } => FORMAT_V19,
             WorkRecord::Edited {
-                labels: None,
-                milestone: None,
-                item_type: None,
-                area: None,
-                size: None,
-                ..
-            } => FORMAT_V1,
-            WorkRecord::Edited { .. } => FORMAT_V19,
+                labels: Some(_), ..
+            }
+            | WorkRecord::Edited {
+                milestone: Some(_), ..
+            }
+            | WorkRecord::Edited {
+                item_type: Some(_), ..
+            }
+            | WorkRecord::Edited { area: Some(_), .. }
+            | WorkRecord::Edited { size: Some(_), .. } => FORMAT_V19,
             WorkRecord::RulesSet {
                 vocabulary: Some(_),
                 ..
             } => FORMAT_V19,
             WorkRecord::BlockSet { .. } | WorkRecord::BlockCleared { .. } => FORMAT_V16,
+            WorkRecord::Edited {
+                depends_on: Some(_),
+                ..
+            }
+            | WorkRecord::Edited { split: Some(_), .. }
+            | WorkRecord::Edited {
+                proposal: Some(_), ..
+            } => FORMAT_V17,
             WorkRecord::Claimed { direct: true, .. } => FORMAT_V15,
             WorkRecord::Released { why: Some(w), .. } if w.waits() => FORMAT_V14,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,
@@ -1452,6 +1476,7 @@ impl WorkRecord {
             | WorkRecord::Reopened { .. }
             | WorkRecord::AttemptClosed { .. }
             | WorkRecord::TierChanged { .. }
+            | WorkRecord::Edited { .. }
             | WorkRecord::BudgetSet { .. }
             | WorkRecord::PrStatus { .. }
             | WorkRecord::SourceStalled { .. }

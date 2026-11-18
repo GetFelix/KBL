@@ -262,7 +262,7 @@ in `check_sizes` (`tracker/src/tracker/tools.rs#check_sizes`).
 |---|---|---|
 | `/v1/work/records` | Any kind a person may write. A kind the tracker does not know is refused | The fold refuses the kinds a person may not write: see [Records on work.events](#records-on-workevents). The strings are held to 4 KiB when the record is appended, including progress `branch` and `pr`, `triaged.why`, `imported` fields and a rules target (`tracker/src/tracker.rs#sync_ready`) |
 | `/v1/work/proposals/accept` | `accepted` | Tier 0 to 3 (`core/src/work_fold.rs#step_record`) |
-| `/v1/work/proposals/edit` | `edited` | Only before acceptance (`core/src/work_fold.rs#step_record`) |
+| `/v1/work/proposals/edit` | `edited` | Only before acceptance (`core/src/work_fold.rs#step_record`). `depends_on` and `split` need format 17 and the `proposal` offset of the standing answer, so an edit cannot land on an answer triage replaced; dependencies must be distinct existing items other than the item and its triage item (`core/src/work_fold.rs#step_record`). Lists are bounded as for triage (`tracker/src/tracker/tools.rs#triage_lists`) |
 | `/v1/work/proposals/reject` | `rejected` | Only a proposal never accepted (`core/src/work_fold.rs#step_record`) |
 | `/v1/work/questions/answer` | `answer` | Only the open question; a `moves_to` target and title are bounded (`core/src/work_fold.rs#check_then`). Evidence as for an agent's answer. Known secret shapes redacted from the text, choice and title (`tracker/src/tracker/tools.rs#person_answer`) |
 | `/v1/work/tier` | `tier_changed` | Tier 0 to 3, item open (`core/src/work_fold.rs#step_record`) |

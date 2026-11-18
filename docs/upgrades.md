@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 16.
+is 17.
 
 ### Formats
 
@@ -88,6 +88,7 @@ is 16.
 | 14 | A question ends the asker's hold at no cost to its tries, and a plain answer sends the item itself back to Ready with `question` and `answer` in its context. `released` may carry `why`: `waits_on_person` or `waits_on_outside` uses no try and moves the item into Needs you (`flagged`) until a person moves it out. An agent whose claim lapsed may still ask, or release as a wait, once, until anyone claims the item again ([work tracker](work-tracker.md#questions-and-waits-free-the-agent)) | Until the raise, a question keeps the hold and an answer starts a resume item, as before; a `released` with a wait is refused with `format`. A reader below 14 stops at the raise |
 | 15 | `claimed` with `direct: true`: the tracker handed the item over from its state, with no ready record behind it, for a filtered claim or one among several roots ([work tracker](work-tracker.md#assignees)). A restart reads the flag to keep such a hold | Until the raise, a filtered `work_next` is refused with `needs_format_15`, a lane with several roots is polled in its own order with no fairness across roots, and only an item assigned to its claimer is claimed directly. A reader below 15 stops at the first flagged claim |
 | 16 | `block_set` and `block_cleared`: a person holds an item back from every claim until a time or on a named resource, with a reason, and lifts it ([work tracker](work-tracker.md#blocking-an-item)). The fold refuses a claim on an item whose block still holds as `blocked`; a time ends a block with no record, judged at the claim's own time | Until the raise, `POST /v1/work/block` and `/lift-block` are refused with `format`. A reader below 16 stops at the first block record, so it never hands out a blocked item |
+| 17 | `edited` carrying `depends_on`, `split` or the `proposal` offset: a person adjusts the dependencies and split titles in triage's answer for an item nobody has accepted ([work tracker](work-tracker.md#adjusting-triages-advice)). The edit names the answer it read and is refused as `stale_proposal` once triage has answered again. A plain title or tier edit stays format 1 | Until the raise, an edit with any of those fields is refused with `format`, and the dashboard hides the editor. A reader below 17 stops at the first such edit, so it never applies one without the check on the answer |
 | 13 | No record or field: `reassigned` may name an agent, `{"agent": "w1"}`. The fold then refuses `claimed` by any other agent as `not_assignee`, and the tracker may write `reassigned` to nobody for an agent assignee that went away ([work tracker](work-tracker.md#assignees)) | Until the raise, an agent assignee is refused as `bad_assignee`, as before. A reader below 13 stops at the raise itself, so it never lets another agent claim an agent's item |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, now 2. It follows the same rules. An org admin raises it with `POST /v1/org/records` and `{"record": {"kind": "format_raised", "to": 2}}`; a reader below the new format stops at the raise.

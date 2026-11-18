@@ -1805,6 +1805,9 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item_type: None,
         area: None,
         size: None,
+        depends_on: None,
+        split: None,
+        proposal: None,
     });
     let s = fold(&l.0);
     assert_eq!(s.items[&id("p")].title, "the real title");
@@ -1824,6 +1827,9 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item_type: None,
         area: None,
         size: None,
+        depends_on: None,
+        split: None,
+        proposal: None,
     });
     assert_eq!(last_rejection(&l), Some(Reject::NotAProposal));
     l.agent(
@@ -1837,6 +1843,9 @@ fn a_person_edits_a_proposal_before_accepting_it() {
             item_type: None,
             area: None,
             size: None,
+            depends_on: None,
+            split: None,
+            proposal: None,
         },
     );
     assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
@@ -3139,6 +3148,7 @@ mod assignee;
 mod blocks;
 mod card_actions;
 mod human_wait;
+mod inbox;
 mod review;
 mod review_actions;
 mod snapshots;
