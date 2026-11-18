@@ -2724,7 +2724,9 @@ The third tab is for the team and the flow. It has no per-person number, and
 none will be added: ranked individuals turn a measure into a target. Bot
 approvals are never counted as review.
 
-- Time in each stage, p50 and p85.
+- Time in each stage, p50 and p85. The dashboard shows it, with throughput,
+  rework, cost per done item and the supervision numbers, from the fold alone;
+  see [Flow metrics](flow-metrics.md).
 - Time waiting on a human, per merged fix.
 - Time to the first human action on My queue and on In review. The tracker
   serves it today, see [Time to first human action](#time-to-first-human-action);

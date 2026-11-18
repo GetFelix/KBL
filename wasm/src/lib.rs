@@ -5,6 +5,7 @@
 //! tracker runs, so the two cannot disagree about an item's stage.
 
 mod activity;
+mod metrics;
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -42,6 +43,8 @@ pub struct Folder {
     stories: RefCell<BTreeMap<ItemId, (u64, Option<String>)>>,
     /// What happened on each item, for the panel's timeline and history.
     activity: activity::Activity,
+    /// Flow, rework, cost and supervision, read from the accepted records.
+    metrics: metrics::Metrics,
 }
 
 #[wasm_bindgen]
@@ -80,6 +83,7 @@ impl Folder {
                     .filter(|r| r.offset == offset)
                     .map(|r| r.why);
                 self.activity.note(offset, &rec, charged, refused);
+                self.metrics.note(&self.state, &rec, refused.is_some());
                 self.keep_files(offset, &rec, before);
                 if accepted(&self.state, offset, &rec)
                     && let Some(k) = Kept::of(&rec)
@@ -330,6 +334,17 @@ impl Folder {
     /// Only records the fold accepted count.
     pub fn handoffs_json(&self) -> String {
         self.activity.handoffs_json()
+    }
+
+    /// The Metrics dialog's numbers over the `days` before `now_ms`: `stages` (`{stage, n,
+    /// p50_ms, p85_ms}` by when each stay ended), `throughput`, `rework`, `cost` and
+    /// `supervision`, over the items that are done now by when they last became done.
+    /// `partial` says the log kept too few stage times to cover the window. Derived from
+    /// accepted records only; see docs/metrics.md.
+    pub fn metrics_json(&self, now_ms: f64, days: u32) -> String {
+        self.metrics
+            .report(&self.state, now_ms as u64, days)
+            .to_string()
     }
 
     /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.

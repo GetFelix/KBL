@@ -201,6 +201,9 @@ try {
     await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Metrics').click()`);
     check(await page.eval(`document.querySelector('dialog.metrics').open && document.querySelector('#metrics-trust').textContent === 'Trust in summaries'`), `${theme}: the Metrics button opens the trust card`);
     check(await page.eval(`/Sign in/.test(document.querySelector('.metrics-card').textContent)`), `${theme}: signed out, metrics asks to sign in`);
+    const flowText = await page.eval(`document.querySelector('.metrics-flow').innerText.replace(/\\s+/g, ' ').trim()`);
+    console.log(`${theme}: metrics flow section reads: ${flowText.slice(0, 400)}`);
+    check(/Time in each stage|still loading/.test(flowText), `${theme}: metrics shows its flow numbers or says the log is loading`);
     await axe(`metrics ${theme}`);
     await press(page, 'Escape');
   }

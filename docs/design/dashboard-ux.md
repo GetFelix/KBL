@@ -144,6 +144,11 @@ page does and checks a message gets through, and CI runs the page itself in Chro
 - **Needs you.** A sidebar view (`?view=inbox`) of the items waiting on a person, each saying why from the
   fold's `needs` ("An agent asked a question", "A check failed"). The panel shows the same as a field, and an
   open question's text, options and default come from the question record.
+- **Metrics.** A dialog of small tables, as in GitHub Insights and Linear: one section per question (time in
+  each stage, throughput, rework, cost, supervision), a window picker shared by all of them, and units in the
+  cells (`3h 20m`, `$0.50`, `1.7 per done item`). Throughput is a bar strip with one text summary as its name
+  and a weekly table beside it, so the numbers are never only in colour. An empty window says nothing
+  finished and shows a dash, never a zero average. Nothing is per person. Definitions: [flow-metrics.md](../flow-metrics.md).
 - **Tokens.** `src/ui/tokens.css` holds every colour, space, type size and radius, for dark and light.
   Accent is KBL amber `#C86A1E` per [brand/story.md](../brand/story.md), with Inter and JetBrains Mono. Views
   use tokens only.

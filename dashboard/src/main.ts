@@ -22,6 +22,7 @@ import { deleteView, parseSaved, renameView, saveView, type SavedView } from './
 import { helpView } from './ui/help-view.ts';
 import { paletteView } from './ui/palette-view.ts';
 import { shell } from './ui/shell.ts';
+import { metrics } from './metrics.ts';
 import { metricsView } from './ui/metrics-view.ts';
 import { spendView } from './ui/spend-view.ts';
 import { pricesView } from './ui/prices-view.ts';
@@ -407,6 +408,7 @@ const palette = paletteView(
 const help = helpView(mac);
 // Set once the fold exists; Spend does nothing before then.
 let readSpend: (() => ReturnType<typeof spend>) | null = null;
+let readMetrics: ((days: number) => ReturnType<typeof metrics>) | null = null;
 const setPrice = async (model: string, unit: PriceUnit, dollarsText: string, from = '', replaced: PriceEntry | null = null): Promise<string | null> => {
   const req = priceRequest(model, unit, dollarsText, from, Date.now(), replaced);
   if (typeof req === 'string') return req;
@@ -423,6 +425,7 @@ const spendBox = spendView({
   priceAgeDays: priceAgeDays(q.get('price_age_days')),
 });
 const metricsBox = metricsView({
+  report: (days) => (store.get().connection.kind === 'live' && readMetrics ? readMetrics(days) : null),
   signedIn: () => tracker !== null,
   load: async (days) => {
     const t = tracker;
@@ -569,8 +572,10 @@ async function main() {
     handoffsJson: () => fold.handoffs_json(),
     reviewLoadJson: () => fold.review_load_json(),
     spendJson: () => fold.spend_json(),
+    metricsJson: (nowMs, days) => fold.metrics_json(nowMs, days),
   };
   readSpend = () => spend(sink);
+  readMetrics = (days) => metrics(sink, Date.now(), days);
   readActivity = () => openActivity(sink);
   const snapshot = () => {
     const rows = items(sink);
