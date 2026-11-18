@@ -448,6 +448,23 @@ backoff keeps an idle session cheap. A launcher killed with SIGKILL leaves a pri
 directory; the next launcher removes it. Ctrl-C stops every host and the launcher. The launcher ends by itself when every session has found
 the queue empty. `node dev/check-agents.mjs` runs three sessions with a scripted stand-in for the host.
 
+### Supervising a pool of workers
+
+One agent can run a pool of worker agents of any vendor through its own `kbl-mcp`. Point `KBL_SUPERVISE_CONFIG` at a
+TOML file of launch profiles (example profiles for Claude Code, Codex CLI and GitHub Copilot CLI are in
+[docs/supervise-profiles.md](docs/supervise-profiles.md)), and the agent gets three more tools:
+
+| Tool | Does |
+|---|---|
+| `supervise_start {count, filter, profile?, model?}` | Keeps `count` workers on the work the filter matches, each with its own worker token, held to the filter. The profile and model come from the config's fit table unless given |
+| `supervise_stop {worker}` or `{all: true}` | Stops one worker, or every worker and the top-up |
+| `supervise_status` | Workers and what each holds, who finished or failed since the last look, ready counts by kind and tier, and the top-up state |
+
+`kbl-mcp` makes no model calls: it runs the configured command, without a shell, or calls the configured hook, and
+picks a profile by a fixed table. A timer tops the pool up while ready work matches. `node dev/check-supervise.mjs`
+runs a pool of scripted workers (`dev/fake-worker.mjs`) against the dev stack. See
+[docs/design/supervise.md](docs/design/supervise.md).
+
 ### Scripted agents
 
 A scripted planner and workers make the same tool calls a model would, so a run needs no model key. A seed decides the

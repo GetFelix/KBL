@@ -14,6 +14,7 @@ mod keepalive;
 mod metrics;
 mod person;
 mod server;
+mod supervise;
 mod tasks;
 mod work;
 
@@ -128,6 +129,13 @@ async fn serve() -> Result<()> {
     };
     let run = RunId::new(run).context("--run")?;
     let agent = AgentName::new(agent).context("--agent")?;
+    let felix_settings = FelixSettings {
+        tenant: cli.tenant.clone(),
+        namespace: cli.namespace.clone(),
+        broker: cli.broker.clone(),
+        broker_ca: cli.broker_ca.clone(),
+        broker_name: cli.broker_name.clone(),
+    };
     let felix = felix::connect(Target {
         tenant: cli.tenant,
         namespace: cli.namespace,
@@ -144,7 +152,7 @@ async fn serve() -> Result<()> {
     );
 
     // Environment only, like the Felix token.
-    let tracker = match (cli.tracker, std::env::var("KBL_TRACKER_TOKEN").ok()) {
+    let tracker = match (cli.tracker.clone(), std::env::var("KBL_TRACKER_TOKEN").ok()) {
         (Some(url), Some(token)) => {
             Some(work::Http::new(&url, token).context("set up the tracker client")?)
         }
@@ -152,16 +160,114 @@ async fn serve() -> Result<()> {
         _ => None,
     };
 
+    let pinned = match std::env::var("KBL_WORK_FILTER") {
+        Ok(f) if !f.is_empty() => {
+            let v: serde_json::Value = serde_json::from_str(&f).context("KBL_WORK_FILTER")?;
+            anyhow::ensure!(v.is_object(), "KBL_WORK_FILTER must be a JSON object");
+            v
+        }
+        _ => serde_json::json!({}),
+    };
+    let supervise = match std::env::var("KBL_SUPERVISE_CONFIG") {
+        Ok(path) if !path.is_empty() => {
+            let (Some(api), Some(url)) = (tracker.clone(), cli.tracker.clone()) else {
+                anyhow::bail!("KBL_SUPERVISE_CONFIG needs KBL_TRACKER_URL and KBL_TRACKER_TOKEN");
+            };
+            let config = supervise::Config::load(std::path::Path::new(&path))?;
+            let base = worker_base(&felix_settings, &run, &url, config.share_felix_token)?;
+            let sup = supervise::Supervisor::new(
+                api,
+                agent.clone(),
+                config,
+                base,
+                Box::new(|name| std::env::var(name).ok()),
+            )?;
+            sup.spawn_top_up();
+            Some(sup)
+        }
+        _ => None,
+    };
+
     let timing = server::Timing {
         visibility: cli.claim_visibility_ms.map(Duration::from_millis),
         extend_every: cli.extend_every_ms.map(Duration::from_millis),
     };
-    let service = Server::new(run, agent, felix, tracker, timing)
+    let service = Server::new(run, agent, felix, tracker, timing, pinned, supervise)
         .serve(stdio())
         .await
         .context("start the MCP server")?;
     service.waiting().await?;
     Ok(())
+}
+
+/// The Felix settings a worker's `kbl-mcp` is started with.
+struct FelixSettings {
+    tenant: String,
+    namespace: String,
+    broker: String,
+    broker_ca: PathBuf,
+    broker_name: String,
+}
+
+/// What every worker's MCP config sets besides its name, token and filter.
+/// Felix credentials go by reference (an ID token file or command); a fixed
+/// Felix token is copied only when the config says to share it.
+fn worker_base(
+    f: &FelixSettings,
+    run: &RunId,
+    tracker_url: &str,
+    share_felix_token: bool,
+) -> Result<supervise::Base> {
+    let get = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let abs = |p: &str| {
+        let p = PathBuf::from(p);
+        if p.is_absolute() {
+            p
+        } else {
+            std::env::current_dir().map_or(p.clone(), |d| d.join(&p))
+        }
+    };
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("KBL_RUN".to_owned(), run.as_str().to_owned());
+    env.insert("KBL_TENANT".to_owned(), f.tenant.clone());
+    env.insert("KBL_NAMESPACE".to_owned(), f.namespace.clone());
+    env.insert("KBL_FELIX_BROKER".to_owned(), f.broker.clone());
+    env.insert(
+        "KBL_FELIX_CA_FILE".to_owned(),
+        abs(&f.broker_ca.to_string_lossy())
+            .to_string_lossy()
+            .into_owned(),
+    );
+    env.insert("KBL_FELIX_BROKER_NAME".to_owned(), f.broker_name.clone());
+    env.insert("KBL_TRACKER_URL".to_owned(), tracker_url.to_owned());
+    for name in [
+        "KBL_FELIX_ID_TOKEN_COMMAND",
+        "KBL_FELIX_CONTROL_PLANE",
+        "KBL_FELIX_TOKEN_MAX_AGE_MS",
+        "KBL_CLAIM_VISIBILITY_MS",
+        "KBL_EXTEND_EVERY_MS",
+    ] {
+        if let Some(v) = get(name) {
+            env.insert(name.to_owned(), v);
+        }
+    }
+    if let Some(file) = get("KBL_FELIX_ID_TOKEN_FILE") {
+        env.insert(
+            "KBL_FELIX_ID_TOKEN_FILE".to_owned(),
+            abs(&file).to_string_lossy().into_owned(),
+        );
+    }
+    if let Some(token) = get("KBL_FELIX_TOKEN") {
+        anyhow::ensure!(
+            share_felix_token,
+            "this kbl-mcp has a fixed KBL_FELIX_TOKEN: set share_felix_token = true in the supervise config to give workers a copy, or renew from an ID token"
+        );
+        env.insert("KBL_FELIX_TOKEN".to_owned(), token);
+    }
+    Ok(supervise::Base {
+        env,
+        tracker_url: tracker_url.to_owned(),
+    })
 }
 
 /// The person server. Its token is `KBL_PERSON_TOKEN`, a name the agent server

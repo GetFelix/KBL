@@ -49,6 +49,7 @@ operations as MCP tools in `kbl-mcp` for agents:
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
 | `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on`, `related` and `split`, or `unclear`. Work the item needs from another repo is posted first, with `work_post`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
+| `supervise_start`, `supervise_stop`, `supervise_status` | Run a pool of worker agents from launch profiles, top it up on a timer, and show it. Only with `KBL_SUPERVISE_CONFIG`; see [supervise](design/supervise.md) |
 
 Every `kbl-mcp` work tool, claiming included, calls the tracker over REST
 with the agent's own token. The tracker checks the token, does the Felix work
@@ -492,6 +493,7 @@ record if the fold accepts it:
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
 | `POST /v1/work/workers` `{worker, vendor?, profile?, model?}` (agent token) | `worker_started`. Registers a worker named `<your name>-<suffix>` that acts for you, and returns its token once. Capped by `KBL_MAX_WORKERS` per supervisor (default 8) and `KBL_MAX_TEAM_WORKERS` per team (default 32), refused with `worker_cap` past them. [Format 21](upgrades.md#formats); see [supervise](design/supervise.md) |
 | `POST /v1/work/workers/stop` `{worker}` (agent or person token) | `worker_stopped`. The worker's token stops working; its hold goes back when its claim runs out. When a supervisor is revoked, removed or given another token, the tracker stops its workers and releases their holds at no cost to the items' tries |
+| `POST /v1/work/workers/exchange` `{code}` (no token) | Trades the one-time code a start with `exchange: true` answered, instead of a token, for the worker's token. A code works once and for 10 minutes and is kept in memory only, so a tracker restart loses it. For hosted workers started through a hook; see [supervise](design/supervise.md) |
 | `GET /v1/work/workers` (agent or person token) | Your workers, or every worker for a person: supervisor, vendor, profile, model, what each holds, and when it stopped |
 | `POST /v1/work/prices` `{model, unit, price_micros, effective_from_ms?, expected_price?}` | `price_set`: the price of one unit of a model from now, or from a later time. See [Cost and spend](#cost-and-spend) |
 | `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` (`text` is a string) | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |

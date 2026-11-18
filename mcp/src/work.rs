@@ -138,6 +138,8 @@ struct Inner<T> {
     held: Mutex<Option<Held>>,
     visibility: Duration,
     extend_every: Duration,
+    /// Narrowing a supervisor set for this worker, laid over what the agent asks.
+    pinned: Value,
 }
 
 pub(crate) struct Work<T>(Arc<Inner<T>>);
@@ -159,7 +161,18 @@ impl<T: TrackerApi> Work<T> {
             held: Mutex::new(None),
             visibility: visibility.unwrap_or(VISIBILITY),
             extend_every: extend_every.unwrap_or(EXTEND_EVERY),
+            pinned: json!({}),
         }))
+    }
+
+    /// Lays `filter` over the narrowing of every `work_next` and `work_peek`,
+    /// so a worker stays on the work its supervisor started it for whatever
+    /// the agent asks.
+    pub(crate) fn pinned(mut self, filter: Value) -> Self {
+        Arc::get_mut(&mut self.0)
+            .expect("pinned before the work tools are shared")
+            .pinned = filter;
+        self
     }
 
     #[cfg(test)]
@@ -203,8 +216,10 @@ impl<T: TrackerApi> Work<T> {
         if !review_tiers.is_empty() {
             body["review_tiers"] = json!(review_tiers);
         }
-        if let (Some(into), Some(from)) = (body.as_object_mut(), filter.as_object()) {
-            into.extend(from.iter().map(|(k, v)| (k.clone(), v.clone())));
+        for from in [&filter, &self.0.pinned] {
+            if let (Some(into), Some(from)) = (body.as_object_mut(), from.as_object()) {
+                into.extend(from.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
         }
         let reply = self
             .0
@@ -252,8 +267,10 @@ impl<T: TrackerApi> Work<T> {
         if !review_tiers.is_empty() {
             body["review_tiers"] = json!(review_tiers);
         }
-        if let (Some(into), Some(from)) = (body.as_object_mut(), filter.as_object()) {
-            into.extend(from.iter().map(|(k, v)| (k.clone(), v.clone())));
+        for from in [&filter, &self.0.pinned] {
+            if let (Some(into), Some(from)) = (body.as_object_mut(), from.as_object()) {
+                into.extend(from.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
         }
         let reply = self
             .0

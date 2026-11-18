@@ -40,6 +40,34 @@ async fn a_supervisor_starts_a_worker_whose_token_acts_until_stopped() {
 }
 
 #[tokio::test]
+async fn a_hook_worker_trades_its_code_for_its_token_once() {
+    let app = app_21().await;
+    let start = json!({ "worker": "w1-h", "exchange": true });
+    let (status, reply) = call(&app, "/v1/work/workers", Some("tok-w1"), start).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    assert!(
+        reply.get("token").is_none(),
+        "the token stays in the tracker: {reply}"
+    );
+    let code = reply["code"].as_str().unwrap().to_owned();
+    let trade = json!({ "code": code });
+    let (status, got) = call(&app, "/v1/work/workers/exchange", None, trade.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{got}");
+    assert_eq!(got["worker"], "w1-h");
+    let tok = got["token"].as_str().unwrap().to_owned();
+    let (status, _) = call(
+        &app,
+        "/v1/work/next",
+        Some(&tok),
+        json!({ "wait_seconds": 0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = call(&app, "/v1/work/workers/exchange", None, trade).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a code works once");
+}
+
+#[tokio::test]
 async fn a_worker_name_belongs_to_its_supervisor_and_to_no_other_agent() {
     let app = app_21().await;
     // `w1_dup` is an agent; `w1_dup-a` is a worker of that agent, never of `w1`.

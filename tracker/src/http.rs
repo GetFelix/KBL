@@ -45,6 +45,7 @@ use crate::tracker::{
 };
 
 mod agents;
+mod exchange;
 pub(crate) mod ingest;
 mod org;
 
@@ -62,6 +63,8 @@ struct App<B> {
     >,
     /// Live ingest workers per group and the source leases they hold.
     leases: Arc<ingest::leases::Groups>,
+    /// Worker tokens waiting behind a hook's one-time code.
+    codes: exchange::Codes,
 }
 
 /// The team named by a `/v1/teams/{team}/` path, set by [`in_team`] only.
@@ -81,6 +84,7 @@ pub(crate) fn router_with<B: Broker>(
         polls: Arc::new(tokio::sync::Semaphore::new(ingest::MAX_HELD_POLLS)),
         team_polls: Default::default(),
         leases,
+        codes: Default::default(),
     });
     // `route_layer` sees the matched route template, so the metrics label is
     // `/v1/work/items/{item}`, never an item id. The team-scoped catch-all is added
@@ -99,6 +103,7 @@ pub(crate) fn router_with<B: Broker>(
             get(org::list_teams::<B>).post(org::create_team::<B>),
         )
         .route("/v1/org/records", post(org::org_record::<B>))
+        .route("/v1/work/workers/exchange", post(worker_exchange::<B>))
         .route_layer(from_fn_with_state(app.clone(), observe::<B>))
         .route(
             "/v1/teams/{team}/{*rest}",
@@ -979,6 +984,15 @@ struct WorkerStartBody {
     profile: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    /// Answer a one-time code instead of the token, for a hook to pass on.
+    #[serde(default)]
+    exchange: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerExchangeBody {
+    code: String,
 }
 
 #[derive(Deserialize)]
@@ -988,7 +1002,11 @@ struct WorkerStopBody {
 }
 
 /// A supervisor's agent token registers a worker and gets its token back once.
-async fn worker_start<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStartBody>) -> Response {
+async fn worker_start<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    call: Call<B>,
+    Keyed(b, rk): Keyed<WorkerStartBody>,
+) -> Response {
     let sup = match call.agent() {
         Ok(a) => a,
         Err(d) => return denied(d),
@@ -1009,10 +1027,55 @@ async fn worker_start<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStartB
         model: b.model,
     };
     let token = call.token.clone();
-    reply(
-        call.keyed(rk, call.tracker().start_worker(&sup, &token, new))
-            .await,
-    )
+    let started = call
+        .keyed(rk, call.tracker().start_worker(&sup, &token, new))
+        .await;
+    if !b.exchange {
+        return reply(started);
+    }
+    // The token stays here; the hook only ever sees the code.
+    let mut started = match started {
+        Ok(v) => v,
+        Err(e) => return reply(Err(e)),
+    };
+    let token = match started.as_object_mut().and_then(|o| o.remove("token")) {
+        Some(Value::String(t)) => t,
+        _ => return reply(Ok(started)),
+    };
+    // A replay would put a second code on a token whose first code may be
+    // out already, so it gets none.
+    if started["replayed"] == json!(true) {
+        return reply(Err(Error::Refused {
+            why: "replayed_exchange".into(),
+        }));
+    }
+    let worker = started["worker"].as_str().unwrap_or_default().to_owned();
+    match app.codes.issue(&worker, token, std::time::Instant::now()) {
+        Some(code) => {
+            started["code"] = json!(code);
+            started["code_ttl_s"] = json!(exchange::CODE_TTL.as_secs());
+            reply(Ok(started))
+        }
+        None => reply(Err(Error::Unavailable(
+            "too many worker codes are waiting; try again later".into(),
+        ))),
+    }
+}
+
+/// A hosted worker trades its one-time code for its token. The code is the
+/// credential, so this route takes no bearer.
+async fn worker_exchange<B: Broker>(
+    State(app): State<Arc<App<B>>>,
+    Json(b): Json<WorkerExchangeBody>,
+) -> Response {
+    match app.codes.redeem(&b.code, std::time::Instant::now()) {
+        Some((worker, token)) => Json(json!({ "worker": worker, "token": token })).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such code, or it was used or ran out" })),
+        )
+            .into_response(),
+    }
 }
 
 /// A supervisor stops one of its workers; a person may stop any.

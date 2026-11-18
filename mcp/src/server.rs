@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tracing::Instrument as _;
 
 use crate::felix::Felix;
+use crate::supervise::Supervisor;
 use crate::tasks::{Post, Tasks};
 use crate::work::{Http, Work};
 
@@ -24,6 +25,8 @@ pub(crate) struct Server {
     tasks: Tasks<Felix>,
     /// None when no tracker is configured.
     work: Option<Work<Http>>,
+    /// None unless `KBL_SUPERVISE_CONFIG` is set.
+    supervise: Option<Supervisor<Http>>,
 }
 
 /// Claim timing, when the defaults (90 s claim, extended every 30 s) are overridden.
@@ -39,6 +42,8 @@ impl Server {
         felix: Felix,
         tracker: Option<Http>,
         timing: Timing,
+        pinned: Value,
+        supervise: Option<Supervisor<Http>>,
     ) -> Self {
         let tasks = Tasks::new(
             felix.clone(),
@@ -47,13 +52,15 @@ impl Server {
             timing.visibility,
             timing.extend_every,
         );
-        let work = tracker.map(|api| Work::new(api, timing.visibility, timing.extend_every));
+        let work = tracker
+            .map(|api| Work::new(api, timing.visibility, timing.extend_every).pinned(pinned));
         Self {
             run,
             agent,
             felix,
             tasks,
             work,
+            supervise,
         }
     }
 }
@@ -269,6 +276,34 @@ struct WorkPeekArgs {
     exclude_roots: Option<Vec<String>>,
     #[serde(flatten)]
     facets: Facets,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct SuperviseStartArgs {
+    /// How many workers the pool keeps, 1 to 64. The tracker's caps may allow fewer.
+    count: usize,
+    /// Only start workers for, and only let them take, work of these kinds.
+    kinds: Option<Vec<String>>,
+    /// Only work in these priority tiers, 0 the highest.
+    tiers: Option<Vec<u8>>,
+    /// Only work that lands in this repo, as `owner/name`.
+    repo: Option<String>,
+    /// Ids of roots whose work is left out.
+    exclude_roots: Option<Vec<String>>,
+    #[serde(flatten)]
+    facets: Facets,
+    /// A launch profile from the supervise config for every worker, instead of the fit table.
+    profile: Option<String>,
+    /// A model for every worker, instead of the fit table's or the profile's.
+    model: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct SuperviseStopArgs {
+    /// The worker to stop, such as `sup-w3`.
+    worker: Option<String>,
+    /// Stop every worker and turn the top-up off.
+    all: Option<bool>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -596,6 +631,49 @@ impl Server {
                 a.filter(),
             )
             .await
+    }
+
+    #[tool(
+        description = "Start a pool of worker agents, each its own KBL agent with its own token, that take work with work_next. count is the pool size: workers are started now, one per ready item that matches the filter (kinds, tiers, repo, exclude_roots, milestone, labels, item_type, area, size, capabilities), up to count, and a timer keeps the pool full while ready work matches. Each worker is held to the filter. The profile and model of each come from the supervise config's fit table unless profile or model is given. Calling again changes the pool and resumes a paused top-up."
+    )]
+    async fn supervise_start(
+        &self,
+        Parameters(a): Parameters<SuperviseStartArgs>,
+    ) -> Result<String, String> {
+        let filter = filter_json(&a.kinds, &a.tiers, &a.repo, &a.exclude_roots, &a.facets);
+        let reply = self
+            .supervise()?
+            .start(a.count, filter, a.profile, a.model)
+            .await
+            .map_err(|e| format!("{e:#}"))?;
+        Ok(reply.to_string())
+    }
+
+    #[tool(
+        description = "Stop one worker (worker), which lowers the pool by one, or every worker (all: true), which also turns the top-up off. The worker's token stops working first, then its process is ended. The item it held goes back when its claim runs out."
+    )]
+    async fn supervise_stop(
+        &self,
+        Parameters(a): Parameters<SuperviseStopArgs>,
+    ) -> Result<String, String> {
+        let reply = self
+            .supervise()?
+            .stop(a.worker, a.all.unwrap_or(false))
+            .await
+            .map_err(|e| format!("{e:#}"))?;
+        Ok(reply.to_string())
+    }
+
+    #[tool(
+        description = "Show the pool: each worker with its vendor, profile, model and what it holds; the workers that finished or failed since the last call; the queue's shape (ready counts by kind and tier); and whether the top-up is on, off or paused, and why."
+    )]
+    async fn supervise_status(&self) -> Result<String, String> {
+        let reply = self
+            .supervise()?
+            .status()
+            .await
+            .map_err(|e| format!("{e:#}"))?;
+        Ok(reply.to_string())
     }
 
     #[tool(
@@ -1023,6 +1101,13 @@ impl Server {
             texts.insert(id, text);
         }
         swap_artifacts(value, &texts);
+    }
+
+    fn supervise(&self) -> Result<&Supervisor<Http>, String> {
+        self.supervise.as_ref().ok_or_else(|| {
+            "the supervise tools are not set up: start kbl-mcp with KBL_SUPERVISE_CONFIG and a tracker"
+                .to_owned()
+        })
     }
 
     fn work(&self) -> Result<&Work<Http>, String> {
