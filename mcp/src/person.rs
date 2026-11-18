@@ -77,6 +77,14 @@ impl<T: TrackerApi> Person<T> {
     async fn call(&self, tool: &Tool, args: Map<String, Value>) -> Result<String, String> {
         let keyed = matches!(tool.route, Route::Post(_));
         let body = check(tool.params, args, keyed)?;
+        // An edit of nothing would still append a record.
+        if tool.name == "edit_proposal"
+            && !["title", "tier", "depends_on", "split"]
+                .iter()
+                .any(|k| body.contains_key(*k))
+        {
+            return Err("give at least one of title, tier, depends_on or split".into());
+        }
         let reply = match tool.route {
             Route::Post(path) => self.api.call(&self.path(path), Value::Object(body)).await,
             Route::Get(path) => {
@@ -149,6 +157,10 @@ fn convert(p: &Param, v: Value) -> Result<Value, String> {
             Some(_) => Err(format!("{} is longer than {INLINE_LIMIT} bytes", p.name)),
             None => Err(wrong("a string")),
         },
+        Kind::Texts => match v.as_array() {
+            Some(a) if a.iter().all(Value::is_string) => Ok(v),
+            _ => Err(wrong("a list of strings")),
+        },
         Kind::Assignee => match v.as_str().map(|s| s.strip_prefix("agent:")) {
             Some(Some(agent)) if !agent.is_empty() => Ok(json!({ "agent": agent })),
             Some(None) if v.as_str().is_some_and(|n| !n.is_empty()) => Ok(json!({ "person": v })),
@@ -166,6 +178,7 @@ fn describe(tool: &Tool) -> McpTool {
             Kind::Number => json!({ "type": "integer", "minimum": 0 }),
             Kind::Bool => json!({ "type": "boolean" }),
             Kind::Words(w) => json!({ "type": "string", "enum": w }),
+            Kind::Texts => json!({ "type": "array", "items": { "type": "string" } }),
         };
         s["description"] = p.about.into();
         props.insert(p.name.to_owned(), s);
