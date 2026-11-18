@@ -3203,6 +3203,19 @@ fn restarted(item: &ItemId) -> Error {
     ))
 }
 
+/// One line telling an agent what a triage or augment item is for.
+fn purpose(work: WorkKind) -> Option<&'static str> {
+    match work {
+        WorkKind::Triage => Some(
+            "Triage: propose a tier, dependencies and any split for the imported item it sits under. A person accepts it before anyone fixes the root.",
+        ),
+        WorkKind::Augment => Some(
+            "Augment: add the missing context the root needs (reproduction, links, acceptance) so the fix can start.",
+        ),
+        _ => None,
+    }
+}
+
 fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
     let state = &core.state;
     let item = state.items.get(&delivery.item);
@@ -3236,6 +3249,7 @@ fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
             "review": item.and_then(|i| i.review.as_ref()),
             "finding": item.and_then(|i| i.finding),
             "context": item.map(|i| i.context.keys().collect::<Vec<_>>()),
+            "purpose": item.and_then(|i| purpose(i.work)),
         },
         "deadline_ms": item.and_then(|i| i.hold.as_ref()).map(|h| h.deadline_ms),
         // Read-only for the agent: only a person's `rules_set` changes it.

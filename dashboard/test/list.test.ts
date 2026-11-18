@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, visible } from '../src/list.ts';
+import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, rootStageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -109,4 +109,12 @@ test('a selected id the view no longer shows starts j and k from the ends', () =
   assert.deepEqual(shown.map((i) => i.id), ['a']);
   assert.equal(move(shown, 'b', 1), 'a');
   assert.equal(move(shown, 'b', -1), 'a');
+});
+
+test('a root names its stage and its triage child', () => {
+  assert.equal(rootStageLabel({ stage: 'ready', root: true }), 'Ready to fix');
+  assert.equal(rootStageLabel({ stage: 'ready', root: false }), 'Ready');
+  assert.equal(triageChip({ root: true, triage: 'done' }), 'Triage: done');
+  assert.equal(triageChip({ root: true, triage: null }), null);
+  assert.equal(triageChip({ root: false, triage: 'done' }), null);
 });

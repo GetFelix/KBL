@@ -106,9 +106,12 @@ The view link works once: the page removes the token from the address and keeps 
    anything, then keeps polling the local tracker until you press Ctrl-C. The issues appear in the dashboard's Ready
    column. Add `--check-only` to stop after the check, or `--once` for a single poll. The config it writes is
    `dev/state/ingest.json`. Narrow or change the filter with `--labels a,b` (all required), `--exclude-label x,y`,
-   `--milestone NAME`, `--cap N` (open roots at most) and `--mode propose` (matches wait in Triage until a person accepts
-   them; the default `admit` makes them work at once). `--keep-config` runs the existing file as it is, for a config you
-   edited by hand. [Setting up ingest](docs/ingest-setup.md) explains the rest.
+   `--milestone NAME`, `--cap N` (open roots at most) and `--mode propose` (see below). `--keep-config` runs the existing file as it is, for a config you
+   edited by hand.
+
+   What the mode means: `admit` imports each match as a root and queues its triage and augment work first, so agents
+   are handed that before any fix, and the root becomes ready to fix once a person accepts the triage. `propose` waits
+   for a person before anything is queued. There is no option to skip triage yet. [Setting up ingest](docs/ingest-setup.md) explains the rest.
 5. **Stop it** with `dev/down.sh`, which also deletes its data.
 
 ### Troubleshooting
