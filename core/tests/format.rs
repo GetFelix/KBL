@@ -6,7 +6,7 @@ use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
     FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, FORMAT_V15,
-    FORMAT_V18, ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V16, FORMAT_V18, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1206,7 +1206,6 @@ const FORMAT_15_LOG: &str = include_str!("work_format_15.jsonl");
 #[test]
 fn the_fifteenth_format_is_fifteen_and_stamps_only_direct_claims() {
     assert_eq!(FORMAT_V15, 15);
-    const { assert!(FORMAT >= FORMAT_V15) };
     let log = entries(FORMAT_15_LOG);
     for (_, r) in &log {
         assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
@@ -1238,6 +1237,59 @@ fn a_direct_claim_is_refused_below_format_15_and_stops_an_older_reader() {
         .expect("a direct claim");
     assert!(
         direct.1.v > FORMAT_V14,
+        "an older reader sees v above its own"
+    );
+}
+
+/// A log at the sixteenth format: a person blocks an item and lifts a block.
+/// Its folded state is pinned in `wasm/golden/format_16.state.json`.
+const FORMAT_16_LOG: &str = include_str!("work_format_16.jsonl");
+
+#[test]
+fn the_sixteenth_format_is_sixteen_and_stamps_both_block_records() {
+    assert_eq!(FORMAT_V16, 16);
+    const { assert!(FORMAT >= FORMAT_V16) };
+    let log = entries(FORMAT_16_LOG);
+    for (_, r) in &log {
+        assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
+    }
+    let blocks = log
+        .iter()
+        .filter(|(_, r)| matches!(r.record.kind(), "block_set" | "block_cleared"))
+        .count();
+    assert_eq!(blocks, 3);
+}
+
+/// Below 16 the fold refuses a block, and a reader that reads only 15 stops at it.
+#[test]
+fn a_block_is_refused_below_format_16_and_stops_an_older_reader() {
+    let log = entries(FORMAT_16_LOG);
+    let mut s = State::default();
+    let refused: Vec<u64> = log
+        .iter()
+        .filter(|(o, r)| s.try_apply(*o, r).is_err())
+        .map(|(o, _)| *o)
+        .collect();
+    assert!(refused.is_empty(), "{refused:?}");
+    // The same records on a log raised only to 15 are refused.
+    let mut below = State::default();
+    for (o, r) in log.iter().take(4) {
+        below.try_apply(*o, r).unwrap();
+    }
+    let raise15 = WorkLogged::new(
+        1030,
+        kbl_core::names::Key::new("gabriel").unwrap(),
+        Actor::Person,
+        WorkRecord::FormatRaised { to: 15 },
+    );
+    below.try_apply(4, &raise15).unwrap();
+    let block = log
+        .iter()
+        .find(|(_, r)| r.record.kind() == "block_set")
+        .unwrap();
+    assert_eq!(below.try_apply(5, &block.1), Err(Reject::Format));
+    assert!(
+        block.1.v > FORMAT_V15,
         "an older reader sees v above its own"
     );
 }

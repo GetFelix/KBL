@@ -3103,6 +3103,7 @@ fn chained_answers_stop_at_the_depth_cap() {
 }
 
 mod assignee;
+mod blocks;
 mod card_actions;
 mod human_wait;
 mod related;

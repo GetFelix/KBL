@@ -53,6 +53,8 @@ export interface ItemRow {
   accepted?: boolean;
   /** A person flagged it for a person, whatever else it waits on. */
   flagged?: boolean;
+  /** What a person blocked it on, or null. A block with `until_ms` in the past no longer holds. */
+  block?: { at_ms: number; by: string; until_ms?: number | null; resource?: string | null; reason: string } | null;
   /** Who the item is assigned to, or absent. An agent assignee is not accepted yet. */
   assignee?: { person: string } | { agent: string } | null;
   /** The attempt an agent holds, when the item is held. */

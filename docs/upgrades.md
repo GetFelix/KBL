@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 15.
+is 16.
 
 ### Formats
 
@@ -87,6 +87,7 @@ is 15.
 | 12 | `taken`, `reassigned` and `steered`: an item's assignee and a note to the agent holding it ([work tracker](work-tracker.md#assignees)). The fold keeps `assignee` on the item and holds an unheld item with a person assignee out of Ready, in Needs you as `taken`. An agent assignee is refused as `bad_assignee` | Until the raise, `POST /v1/work/take`, `/reassign` and `/steer` are refused with `format`. A reader below 12 stops at the raise itself, so it never lets an agent claim an item a person took |
 | 14 | A question ends the asker's hold at no cost to its tries, and a plain answer sends the item itself back to Ready with `question` and `answer` in its context. `released` may carry `why`: `waits_on_person` or `waits_on_outside` uses no try and moves the item into Needs you (`flagged`) until a person moves it out. An agent whose claim lapsed may still ask, or release as a wait, once, until anyone claims the item again ([work tracker](work-tracker.md#questions-and-waits-free-the-agent)) | Until the raise, a question keeps the hold and an answer starts a resume item, as before; a `released` with a wait is refused with `format`. A reader below 14 stops at the raise |
 | 15 | `claimed` with `direct: true`: the tracker handed the item over from its state, with no ready record behind it, for a filtered claim or one among several roots ([work tracker](work-tracker.md#assignees)). A restart reads the flag to keep such a hold | Until the raise, a filtered `work_next` is refused with `needs_format_15`, a lane with several roots is polled in its own order with no fairness across roots, and only an item assigned to its claimer is claimed directly. A reader below 15 stops at the first flagged claim |
+| 16 | `block_set` and `block_cleared`: a person holds an item back from every claim until a time or on a named resource, with a reason, and lifts it ([work tracker](work-tracker.md#blocking-an-item)). The fold refuses a claim on an item whose block still holds as `blocked`; a time ends a block with no record, judged at the claim's own time | Until the raise, `POST /v1/work/block` and `/lift-block` are refused with `format`. A reader below 16 stops at the first block record, so it never hands out a blocked item |
 | 13 | No record or field: `reassigned` may name an agent, `{"agent": "w1"}`. The fold then refuses `claimed` by any other agent as `not_assignee`, and the tracker may write `reassigned` to nobody for an agent assignee that went away ([work tracker](work-tracker.md#assignees)) | Until the raise, an agent assignee is refused as `bad_assignee`, as before. A reader below 13 stops at the raise itself, so it never lets another agent claim an agent's item |
 | 18 | `related` and `unrelated`, and `related` on a triage answer: a soft link between two items that never holds either back ([work tracker](work-tracker.md#related-items)). The fold keeps the relation both ways and shows it on both items. Only a person writes `related` or `unrelated`; an agent proposes one through its triage answer | Until the raise, `POST /v1/work/relate` and `/unrelate` are refused with `format`, and `work_triage` with `related` is refused with `needs_format_18`; a triage answer without it is unchanged. A reader below 18 stops at the first relation |
 
@@ -197,6 +198,8 @@ tracker does not have yet.
   summary mark, with a `review_requested` before the raise and each refusal.
   `core/tests/work_format_12.jsonl` does the same for the assignee records, with
   a `taken` before the raise and each refusal.
+  `core/tests/work_format_16.jsonl` sets and lifts a block, and `format.rs`
+  checks that a log raised only to 15 refuses it.
 - **A run's own records.** `core/tests/run_format.rs` checks that every run
   log kind (the frozen `core/tests/run_log_format_1.jsonl`) and a task of the
   first format are written byte for byte as before formats, and that a newer one is refused, not skipped. `kbl-mcp`'s tests

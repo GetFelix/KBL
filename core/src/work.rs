@@ -83,6 +83,10 @@ pub const FORMAT_V14: u32 = 14;
 /// the item's ready record. Readers below 15 stop at the first such claim.
 pub const FORMAT_V15: u32 = 15;
 
+/// The format that added `block_set` and `block_cleared`: a person holds an
+/// item back until a time or on a named outside resource.
+pub const FORMAT_V16: u32 = 16;
+
 /// The format from which an item may be related to another: a soft link that
 /// never holds either one back (`related`, `unrelated`, and `related` on a
 /// triage answer). Readers below 18 stop at the first such record.
@@ -93,6 +97,12 @@ pub const FORMAT: u32 = FORMAT_V18;
 
 /// Most items one item may be related to.
 pub const MAX_RELATED: usize = 20;
+
+/// Longest reason a `block_set` carries.
+pub const MAX_BLOCK_REASON: usize = 300;
+
+/// Longest resource name a `block_set` carries.
+pub const MAX_BLOCK_RESOURCE: usize = 64;
 
 /// Longest reviewer name a `review_requested` carries.
 pub const MAX_REVIEWER: usize = 100;
@@ -929,6 +939,19 @@ pub enum WorkRecord {
     /// A person marks what an item waits on as resolved: the link is dropped
     /// and the item no longer waits on `to`. Format 10.
     Unblocked { item: ItemId, to: ItemId },
+    /// A person holds an open item back from every claim until `until_ms`
+    /// passes or a person lifts it, whichever is first. With `resource` and no
+    /// time it lasts until lifted. A holder keeps its claim. Format 16.
+    BlockSet {
+        item: ItemId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
+        reason: String,
+    },
+    /// A person lifts an item's block before its time. Format 16.
+    BlockCleared { item: ItemId },
     /// A person asks `reviewer` to review the item's open pull request. It
     /// records the ask; upstream's own review state stays in `pr_status`.
     /// Format 11.
@@ -1082,6 +1105,8 @@ impl WorkRecord {
             WorkRecord::Snoozed { .. } => "snoozed",
             WorkRecord::Parked { .. } => "parked",
             WorkRecord::Unblocked { .. } => "unblocked",
+            WorkRecord::BlockSet { .. } => "block_set",
+            WorkRecord::BlockCleared { .. } => "block_cleared",
             WorkRecord::ReviewRequested { .. } => "review_requested",
             WorkRecord::ChangesRequested { .. } => "changes_requested",
             WorkRecord::MergeMarked { .. } => "merge_marked",
@@ -1144,6 +1169,8 @@ impl WorkRecord {
             | WorkRecord::Snoozed { item, .. }
             | WorkRecord::Parked { item, .. }
             | WorkRecord::Unblocked { item, .. }
+            | WorkRecord::BlockSet { item, .. }
+            | WorkRecord::BlockCleared { item }
             | WorkRecord::ReviewRequested { item, .. }
             | WorkRecord::ChangesRequested { item }
             | WorkRecord::MergeMarked { item }
@@ -1289,6 +1316,7 @@ impl WorkRecord {
             | WorkRecord::Steered { .. } => FORMAT_V12,
             WorkRecord::Related { .. } | WorkRecord::Unrelated { .. } => FORMAT_V18,
             WorkRecord::Triaged { related, .. } if !related.is_empty() => FORMAT_V18,
+            WorkRecord::BlockSet { .. } | WorkRecord::BlockCleared { .. } => FORMAT_V16,
             WorkRecord::Claimed { direct: true, .. } => FORMAT_V15,
             WorkRecord::Released { why: Some(w), .. } if w.waits() => FORMAT_V14,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,

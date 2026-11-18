@@ -3,7 +3,7 @@
 import type { BlockedRow, ItemRow } from './fold.ts';
 import { stageLabel } from './list.ts';
 import { assigneePerson, needsLine } from './writes.ts';
-import { prText } from './card.ts';
+import { blockText, prText } from './card.ts';
 
 export interface ActivityEvent {
   offset: number;
@@ -98,6 +98,8 @@ export function nowLine(item: ItemRow, blocked: readonly BlockedRow[], events: r
     case 'blocked':
       return { text: `Blocked${waits ? `, ${waits}` : ''}.`, tone: 'warn' };
     case 'ready': {
+      const held = blockText(item, now);
+      if (held) return { text: `${held}. No agent will take it until then.`, tone: 'warn' };
       const who = assigneePerson(item);
       return { text: who ? `Assigned to ${who}; no agent will take it.` : 'Ready. No agent has claimed it yet.', tone: 'plain' };
     }

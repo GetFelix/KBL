@@ -119,10 +119,12 @@ impl<B: Broker> Tracker<B> {
     ) -> Vec<Candidate> {
         let key = agent_key(agent);
         let now = Instant::now();
+        let at_ms = now_ms();
         core.state
             .items
             .iter()
             .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
+            .filter(|(id, _)| !core.state.blocked_at(id, at_ms))
             .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
             .filter(|(_, it)| !matches!(it.assignee, Some(Assignee::Agent(_))))
             .filter(|(id, _)| !self.review_full(&core.state, id))
@@ -238,6 +240,7 @@ impl<B: Broker> Tracker<B> {
             .iter()
             .filter(|(_, it)| it.assignee == Some(Assignee::Agent(key.clone())))
             .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
+            .filter(|(id, _)| !core.state.blocked_at(id, now_ms()))
             .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
             .filter(|(id, _)| !self.review_full(&core.state, id))
             .filter(|(_, it)| filter.matches(&core, it))

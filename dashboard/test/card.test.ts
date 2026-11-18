@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ago, chipText, childIndex, lead, properties, reasonLine, relatedLine, summarize, upstreamRef, upstreamUrl, workingLine } from '../src/card.ts';
+import { ago, blockText, chipText, childIndex, lead, properties, reasonLine, relatedLine, summarize, upstreamRef, upstreamUrl, workingLine } from '../src/card.ts';
 import type { ItemRow } from '../src/fold.ts';
 
 const root: ItemRow = { id: 'g0378517ddd9edf0f', title: 'Reads miss', stage: 'ready', upstream: 'GetFelix/felix#1694', source: 'github', root: true };
@@ -48,6 +48,18 @@ test('a card says what it waits on: an edge, a failed check, or a person', () =>
 test('properties list tier, source and the pull request with its checks', () => {
   assert.deepEqual(properties({ ...root, tier: 2, pr: 'GetFelix/felix#2300', pr_phase: 'open', pr_checks: 'red' }), ['Tier 2', 'github', 'PR #2300, checks fail']);
   assert.deepEqual(properties({ id: 'a', title: 'a', stage: 'ready' }), []);
+});
+
+test('a block shows its resource, its end and its reason until it ends', () => {
+  const now = Date.parse('2026-11-18T12:00:00Z');
+  const until = Date.parse('2026-11-21T12:00:00Z');
+  const row = { ...root, block: { at_ms: now, by: 'gab', until_ms: until, resource: 'azure-vms', reason: 'no credit' } };
+  assert.match(blockText(row, now) ?? '', /^Blocked on azure-vms until .+: no credit$/);
+  assert.equal(blockText({ block: { at_ms: now, by: 'gab', resource: 'gpu', reason: 'busy' } }, now), 'Blocked on gpu: busy');
+  assert.equal(blockText(row, until), null);
+  assert.equal(blockText(root, now), null);
+  assert.equal(properties(row, now).at(-1), blockText(row, now));
+  assert.ok(!properties(row).some((x) => x.startsWith('Blocked')));
 });
 
 test('a screen reader name is the upstream reference, the id when there is none', async () => {

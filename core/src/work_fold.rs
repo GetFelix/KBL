@@ -15,12 +15,12 @@ use crate::names::{ItemId, Key};
 use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
     FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FindingVerdict, MAX_ASK_OPTION_LEN,
-    MAX_ASK_OPTIONS, MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS,
-    MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST, MAX_REVIEWER, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS,
-    MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY,
-    MergeVerdict, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit,
-    RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS,
-    WorkKind, WorkLogged, WorkRecord, valid_review_tier,
+    MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE, MAX_CHECK_BYTES, MAX_FINDING_FILE,
+    MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST, MAX_REVIEWER,
+    MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
+    MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
+    PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec,
+    TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 
 mod human_wait;
@@ -373,6 +373,28 @@ pub struct Snooze {
     pub kind: Option<WaitKind>,
 }
 
+/// What holds an item back from every claim, as a person set it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Block {
+    pub at_ms: u64,
+    pub by: Key,
+    /// The block ends at this time. None: it lasts until a person lifts it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until_ms: Option<u64>,
+    /// The outside resource the item waits on, such as `azure-vms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    pub reason: String,
+}
+
+impl Block {
+    /// Whether the block still holds the item at `now_ms`. A time that has
+    /// passed ends it with no record: the fold is asked at claim time.
+    pub fn holds_at(&self, now_ms: u64) -> bool {
+        self.until_ms.is_none_or(|u| now_ms < u)
+    }
+}
+
 /// A person's ask that someone review the pull request an item reports.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewAsk {
@@ -403,6 +425,8 @@ pub struct ChangesAsk {
 
 /// Longest a snooze may run, so a typo cannot hide an item for good.
 pub const MAX_SNOOZE_MS: u64 = 30 * 86_400_000;
+/// Furthest out a block may end, so a typo in the date cannot park an item for years.
+pub const MAX_BLOCK_MS: u64 = 366 * 86_400_000;
 
 /// Who holds an item.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -598,6 +622,11 @@ pub struct Item {
     /// The reason the item waited when it was parked, as for `Snooze::kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_kind: Option<WaitKind>,
+    /// A person held it back from every claim. Past its time it no longer
+    /// holds, so read it with [`Block::holds_at`] or [`State::blocked_at`].
+    /// Cleared by `block_cleared` or a reopen.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<Block>,
     /// A person asked someone to review the open pull request. Cleared once
     /// upstream shows a review, the request is no longer open, or it changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -770,6 +799,11 @@ pub enum Reject {
     BadAssignee,
     /// A claim by an agent other than the item's agent assignee.
     NotAssignee,
+    /// A claim on an item a person blocked and whose block still holds.
+    Blocked,
+    /// A block with neither a time nor a resource, a time that is past or too
+    /// far out, an empty or too long reason, or a resource that is not plain.
+    BadBlock,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1172,6 +1206,16 @@ impl State {
             }
             None => self.accepted_stage(id, it),
         })
+    }
+
+    /// Whether a block set on `id` still holds at `now_ms`. Every way an
+    /// agent is handed an item asks this, and the fold refuses a claim on a
+    /// blocked item as well, so no path can hand it out.
+    pub fn blocked_at(&self, id: &ItemId, now_ms: u64) -> bool {
+        self.items
+            .get(id)
+            .and_then(|i| i.block.as_ref())
+            .is_some_and(|b| b.holds_at(now_ms))
     }
 
     /// The stage of an open, accepted item that nobody holds and that does
@@ -1637,6 +1681,7 @@ impl State {
             snoozed: None,
             parked_at_ms: None,
             parked_kind: None,
+            block: None,
             review_ask: None,
             changes_ask: None,
             merge_marked: None,
@@ -2159,6 +2204,10 @@ impl State {
                 // A retry follows a release, lapse or give-up, which leave the item Ready.
                 if stage != Stage::Ready {
                     return Err(Reject::NotReady);
+                }
+                // Judged at the claim's own time, so a replay agrees with the tracker.
+                if self.blocked_at(item, rec.at_ms) {
+                    return Err(Reject::Blocked);
                 }
                 // Only Ready fills the hold, so this keeps one holder per attempt.
                 if let Some(Assignee::Agent(a)) = &self.items[item].assignee
@@ -2692,6 +2741,68 @@ impl State {
                     kind,
                 });
             }
+            WorkRecord::BlockSet {
+                item,
+                until_ms,
+                resource,
+                reason,
+            } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if self.item(item)?.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                let plain = |r: &String| {
+                    !r.is_empty()
+                        && r.len() <= MAX_BLOCK_RESOURCE
+                        && r.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                };
+                let bad_time =
+                    until_ms.is_some_and(|u| u <= rec.at_ms || u - rec.at_ms > MAX_BLOCK_MS);
+                if (until_ms.is_none() && resource.is_none())
+                    || bad_time
+                    || reason.trim().is_empty()
+                    || reason.len() > MAX_BLOCK_REASON
+                    || resource.as_ref().is_some_and(|r| !plain(r))
+                {
+                    return Err(Reject::BadBlock);
+                }
+                // A block that still holds and says the same is no change; one that
+                // ended is set again.
+                let block = Block {
+                    at_ms: rec.at_ms,
+                    by: rec.by.clone(),
+                    until_ms: *until_ms,
+                    resource: resource.clone(),
+                    reason: reason.clone(),
+                };
+                let it = self.item_mut(item)?;
+                if it.block.as_ref().is_some_and(|b| {
+                    b.holds_at(rec.at_ms)
+                        && b.until_ms == block.until_ms
+                        && b.resource == block.resource
+                        && b.reason == block.reason
+                }) {
+                    return Err(Reject::NoChange);
+                }
+                it.block = Some(block);
+            }
+            WorkRecord::BlockCleared { item } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item_mut(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // Lifting a block that already ended is refused too: it did nothing.
+                if !it.block.as_ref().is_some_and(|b| b.holds_at(rec.at_ms)) {
+                    return Err(Reject::NoChange);
+                }
+                it.block = None;
+            }
             WorkRecord::Parked { item, parked } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);
@@ -2923,6 +3034,7 @@ impl State {
                 it.snoozed = None;
                 it.parked_at_ms = None;
                 it.parked_kind = None;
+                it.block = None;
                 it.review_ask = None;
                 it.changes_ask = None;
                 it.merge_marked = None;

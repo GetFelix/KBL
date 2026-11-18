@@ -116,7 +116,7 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
           };
           set('.card-lead', lead(item));
           set('.card-working', workingLine(item, now) ?? '');
-          set('.card-props', properties(item).join(' · '));
+          set('.card-props', properties(item, now).join(' · '));
           set('.card-related', relatedLine(item, s.items) ?? '');
         }
         paintTriage(a, item);

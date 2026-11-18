@@ -133,7 +133,9 @@ impl Folder {
     /// triage's. `root` is true for an item with no parent. `accepted` and `flagged` say
     /// whether a person accepted it and whether one flagged it for a person.
     /// `triage` is the stage of a root's triage child, or null.
-    /// `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
+    /// `block` is what a person blocked it on (`until_ms`, `resource`, `reason`, `at_ms`),
+    /// or null; one with an `until_ms` in the past no longer holds, which the page checks
+    /// against its own clock. `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
     /// the attempt an agent holds, or null; `holder` and `active_ms` name that
     /// agent and when it last wrote. `parent`, `work`, `upstream` (the root's
     /// `owner/repo#number`), `pr`, `pr_phase`, `pr_checks` and `failing_check`
@@ -189,6 +191,7 @@ impl Folder {
                     "root": i.parent.is_none(),
                     "accepted": i.accepted,
                     "flagged": i.flagged,
+                    "block": i.block,
                     "assignee": i.assignee,
                     "held_attempt": i.hold.as_ref().map(|h| h.attempt),
                     "hold_deadline_ms": i.hold.as_ref().map(|h| h.deadline_ms),
