@@ -15,6 +15,8 @@ person turns a measure into a target.
   nowhere. A `refused` record the tracker logs is not work either.
 - **Window.** The last 7, 30 or 90 days. A stage stay belongs to the window where it
   ended. A done item belongs to the window where it last became done.
+  The window ends now, or at the newest record when the browser clock is behind it; the
+  dialog then says the clock is behind.
 - **Done.** Merged, or finished work that needs no merge. An item reopened since is
   not done, so a redo or reopen counts the item once, when it is done again.
 - **Done items.** The per-item figures below average over every item done in the
