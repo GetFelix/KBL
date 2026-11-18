@@ -243,11 +243,18 @@ impl Broker for Quiet {
         if self.fail_members_put.load(Ordering::SeqCst) {
             anyhow::bail!("the cache is unreachable");
         }
-        let lost = self
-            .lose_members_puts
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1));
-        if lost.is_ok() {
-            return Ok(None);
+        // Lose this write while the injected count lasts.
+        let mut left = self.lose_members_puts.load(Ordering::SeqCst);
+        while left > 0 {
+            match self.lose_members_puts.compare_exchange(
+                left,
+                left - 1,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Ok(None),
+                Err(now) => left = now,
+            }
         }
         let mut all = self.group_members.lock().unwrap();
         let now = all.get(group).map(|(_, v)| *v);
