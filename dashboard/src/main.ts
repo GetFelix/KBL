@@ -24,14 +24,20 @@ import { spendView } from './ui/spend-view.ts';
 import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { assignDialog, confirmDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
+import { forgetGateway, forgetPerson, loadGateway, loadPerson, saveGateway, savePerson } from './session.ts';
 import { Tracker } from './tracker.ts';
 import { assigneePerson, assignTarget, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
-const token = q.get('token');
-// Keep the token in memory only: out of the address bar, history and any shared link.
-if (token) {
+// The token never stays in the address bar, history or a shared link. This tab keeps the
+// session in sessionStorage so a reload does not lose it (see session.ts).
+if (q.get('token') && q.get('room')) saveGateway({ gateway: q.get('gateway'), room: q.get('room')!, token: q.get('token')! });
+const linked = q.get('token') ? null : loadGateway();
+const token = q.get('token') ?? linked?.token ?? null;
+const roomName = q.get('room') ?? linked?.room ?? null;
+const gatewayUrl = q.get('gateway') ?? linked?.gateway ?? null;
+if (q.get('token')) {
   q.delete('token');
   history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}${location.hash}`);
 }
@@ -57,7 +63,7 @@ const store_ = (key: string, value: string) => {
 const themeParam = q.get('theme');
 const address = fromAddress(location.search);
 const initial: ViewState = {
-  connection: q.get('room') && token ? { kind: 'loading', what: 'history' } : { kind: 'setup' },
+  connection: roomName && token ? { kind: 'loading', what: 'history' } : { kind: 'setup' },
   synced: false,
   items: [],
   blocked: [],
@@ -138,10 +144,10 @@ const undoLast = () => {
   void send('undo', done.map((w) => ({ item: w.item, req: undoRequest(w.undo!, s.items) })));
 };
 
-const signIn = async (token: string): Promise<string | null> => {
+const signIn = async (personToken: string): Promise<string | null> => {
   const before = store.get().tracker;
   store.dispatch({ type: 'tracker', tracker: { kind: 'checking' } });
-  const t = new Tracker((url, init) => fetch(url, init), token, team);
+  const t = new Tracker((url, init) => fetch(url, init), personToken, team);
   const me = await t.me();
   if ('person' in me) {
     const reason =
@@ -155,18 +161,21 @@ const signIn = async (token: string): Promise<string | null> => {
       return reason;
     }
     tracker = t;
+    savePerson(personToken);
     store.dispatch({ type: 'tracker', tracker: { kind: 'signed-in', person: me.person, reviewLimit: me.limits[team ?? me.teams[0] ?? ''] ?? 0 } });
     return null;
   }
   const reason = me.status === 'refused' ? `${me.reason} (${me.why})` : me.status === 'failed' ? me.reason : 'The tracker answered without a person.';
-  // A bad second token leaves a working sign-in as it was.
+  // A refused token is not kept for the next reload; a bad second token leaves a working sign-in as it was.
+  if (me.status === 'refused') forgetPerson();
   store.dispatch({ type: 'tracker', tracker: tracker && before.kind === 'signed-in' ? before : { kind: 'refused', reason } });
   return reason;
 };
 
-// Drops the token from memory. A write still in flight finishes; the next one is not sent.
+// Drops the token from memory and from this tab's storage. A write still in flight finishes; the next one is not sent.
 const signOut = () => {
   tracker = null;
+  forgetPerson();
   store.dispatch({ type: 'tracker', tracker: { kind: 'signed-out' } });
 };
 
@@ -486,8 +495,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function main() {
-  const url = q.get('gateway') ?? 'ws://127.0.0.1:8787/ws';
-  const room = q.get('room');
+  const url = gatewayUrl ?? 'ws://127.0.0.1:8787/ws';
+  const room = roomName;
   if (!room || !token) return;
   await init();
   const fold = new Folder();
@@ -561,6 +570,8 @@ async function main() {
       const msg = (e as Error).message;
       // A rejected or expired token, or a refused request, will not pass on a retry.
       if (e instanceof FollowError || (e instanceof GatewayError && e.fatal)) {
+        // The saved session is no use to a reload either; the next one asks for a new link.
+        forgetGateway();
         store.dispatch({ type: 'connection', connection: { kind: 'stopped', reason: msg, advice: adviceFor(e.code) } });
         return;
       }
@@ -571,4 +582,7 @@ async function main() {
   }
 }
 
+// A reload in this tab signs back in with the person token it kept.
+const savedPerson = loadPerson();
+if (savedPerson) void signIn(savedPerson);
 void main();

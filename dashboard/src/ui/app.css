@@ -27,6 +27,7 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-2); }
 .account { display: flex; flex-direction: column; gap: var(--space-1); padding-bottom: var(--space-2); border-bottom: 1px solid var(--line); }
 .account-who { margin: 0; overflow-wrap: anywhere; }
+.account-hint { margin: 0; }
 
 .main { display: flex; flex-direction: column; min-width: 0; }
 .topbar { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 1; }

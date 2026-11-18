@@ -8,15 +8,28 @@
 //
 // A session that exits without saying the queue is empty is started again.
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 
 // What a session prints, on a line of its own, when work_next says nothing is ready.
 export const EMPTY_MARKER = "KBL_QUEUE_EMPTY";
+
+// An explicit path wins, then KBL_MCP, then the first binary found in the
+// build output, ~/.kbl/bin or dev/state/bin. With none found the build path is
+// returned, so a missing binary fails where it is launched, naming KBL_MCP.
+function findMcp(given) {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const found = [given, process.env.KBL_MCP, "target/debug/kbl-mcp", "target/release/kbl-mcp", join(homedir(), ".kbl/bin/kbl-mcp"), join(here, "state/bin/kbl-mcp")]
+    .filter(Boolean)
+    .map((p) => resolve(p))
+    .find(existsSync);
+  return found ?? resolve(given ?? "target/debug/kbl-mcp");
+}
 
 export const LOOP_PROMPT = `Use the kbl tools to take work, and keep going until there is none.
 1. Call work_next. If it says nothing is ready, print ${EMPTY_MARKER} on a line of its own and stop.
@@ -97,7 +110,7 @@ function readOptions(argv) {
     agents: names.map((name) => ({ name, ...agents[name] })),
     caFile: values["ca-file"] && resolve(values["ca-file"]),
     trackerUrl: values["tracker-url"] ?? process.env.KBL_TRACKER_URL,
-    mcp: resolve(values.mcp ?? "target/debug/kbl-mcp"),
+    mcp: findMcp(values.mcp),
     host: values.host,
     hostArgs: values["host-arg"] ?? [],
     restartMs: Number(values["restart-delay"]) * 1000,
@@ -300,6 +313,11 @@ export async function runAgents(argv, log = console.log) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const mcp = findMcp(undefined);
+  if (!process.argv.includes("--mcp") && !existsSync(mcp)) {
+    console.error("kbl-mcp not found: set KBL_MCP or pass --mcp <path>, put it in ~/.kbl/bin or dev/state/bin, or run `cargo build -p kbl-mcp`");
+    process.exit(1);
+  }
   runAgents(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (e) => {
