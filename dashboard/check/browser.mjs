@@ -899,7 +899,10 @@ try {
     await page.waitFor(`document.querySelector('.sign-in-dialog')?.open === true`);
     await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
     await page.waitFor(`document.querySelector('.account-who')?.textContent === 'Signed in as maintainer'`);
-    check((await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',')`)) === 'inb-1,inb-2', 'the inbox lists a question and a triage proposal, oldest first');
+    const inboxRows = await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',')`);
+    const inboxKinds = await page.eval(`[...document.querySelectorAll('.kinds .kind')].map((b) => b.textContent).join('|')`);
+    const inboxQuestion = await page.eval(`[document.querySelector('.inbox-act[data-kind=question] .inbox-question')?.textContent, [...document.querySelectorAll('.inbox-act[data-kind=question] .inbox-options button')].map((b) => b.textContent).join('|')].join(' / ')`);
+    check(inboxRows === 'inb-1,inb-2', `the inbox lists a question and a triage proposal, oldest first (${inboxRows}; kinds ${inboxKinds}; question ${inboxQuestion})`);
     check(await page.eval(`document.querySelector('.inbox-act[data-kind=question] .inbox-question').textContent === 'Retry forever or give up after five?' && [...document.querySelectorAll('.inbox-act[data-kind=question] .inbox-options button')].map((b) => b.textContent).join('|') === '1 Forever|2 Five tries (default)'`), 'a question shows what was asked and its numbered options, the default named');
     check(await page.eval(`[...document.querySelectorAll('.kinds .kind')].map((b) => b.textContent).join('|') === 'Everything2|Questions1|Triage1|Review findings|Decisions'`), 'the sidebar counts each kind');
     await axe('inbox actions');
