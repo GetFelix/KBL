@@ -10,6 +10,7 @@ fn refused(reason: CursorErrorReason) -> anyhow::Error {
         reason,
         requested: 9,
         available: 4,
+        trim_headers: None,
     })
 }
 

@@ -9,7 +9,7 @@ use crate::credential::{self, Auth};
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use felix_client::{
-    AckMode, BrokerError, CacheCondition, Client, ClientConfig, ErrorCode, GroupMember,
+    AckMode, BrokerError, CacheCondition, ClientConfig, Connection, ErrorCode, GroupMember,
     GroupPollOptions, GroupRecord, quic_client_config, root_store_from_pem_file,
 };
 
@@ -31,13 +31,13 @@ pub(crate) struct Target {
 pub(crate) struct Felix {
     // Opened at startup so a bad token or a down broker stops the server
     // before the host lists any tools. Replaced after each token renewal.
-    client: Arc<RwLock<Arc<Client>>>,
+    client: Arc<RwLock<Arc<Connection>>>,
     pub(crate) tenant: String,
     pub(crate) namespace: String,
 }
 
 impl Felix {
-    fn client(&self) -> Arc<Client> {
+    fn client(&self) -> Arc<Connection> {
         Arc::clone(&self.client.read().expect("client lock"))
     }
 }
@@ -75,7 +75,7 @@ pub(crate) async fn connect(target: Target) -> Result<Felix> {
         async move {
             tokio::time::timeout(
                 CONNECT_TIMEOUT,
-                Client::connect_any(&seeds, &broker_name, config),
+                Connection::connect_any(&seeds, &broker_name, config),
             )
             .await
             .context("the broker did not answer in time")?

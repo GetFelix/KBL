@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
-    AckMode, BrokerError, CacheCondition, Client, ClientConfig, CursorErrorReason, ErrorCode,
+    AckMode, BrokerError, CacheCondition, ClientConfig, Connection, CursorErrorReason, ErrorCode,
     GroupMember, GroupPollOptions, GroupRecord, StartPosition, SubscribeCursorError,
     quic_client_config, root_store_from_pem_file,
 };
@@ -252,7 +252,7 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
 
 /// A connection to the broker and when it was last used.
 struct Conn {
-    client: Arc<Client>,
+    client: Arc<Connection>,
     last_used: Instant,
 }
 
@@ -302,7 +302,7 @@ impl Session {
     }
 
     /// A new connection with a freshly exchanged token.
-    async fn open(&self) -> Result<Arc<Client>> {
+    async fn open(&self) -> Result<Arc<Connection>> {
         let token = self.exchange("felix-broker").await?;
         let roots = root_store_from_pem_file(&self.target.broker_ca).with_context(|| {
             format!(
@@ -318,7 +318,7 @@ impl Session {
         config.ack_on_commit = true;
         let client = tokio::time::timeout(
             REQUEST_TIMEOUT,
-            Client::connect_any(&self.seeds, &self.target.broker_name, config),
+            Connection::connect_any(&self.seeds, &self.target.broker_name, config),
         )
         .await
         .context("the broker did not answer in time")?
@@ -530,7 +530,7 @@ impl Felix {
     }
 
     /// The log connection, opened if there is none.
-    async fn main(&self) -> Result<Arc<Client>> {
+    async fn main(&self) -> Result<Arc<Connection>> {
         let mut main = self.main.lock().await;
         if let Some(c) = main.as_mut() {
             c.last_used = Instant::now();
@@ -545,7 +545,7 @@ impl Felix {
     }
 
     /// The connection for `member`, opened on first use.
-    async fn member(&self, member: &str) -> Result<Arc<Client>> {
+    async fn member(&self, member: &str) -> Result<Arc<Connection>> {
         let mut members = self.members.lock().await;
         if let Some(c) = members.get_mut(member) {
             c.last_used = Instant::now();
