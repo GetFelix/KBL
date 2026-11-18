@@ -76,12 +76,12 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
           const a = kept.get(i.id);
           if (a) cards.set(i.id, a);
         }
-        const cell = (g: Group, title: string, id: string) =>
-          h('section', { class: 'column', 'aria-labelledby': id, 'data-empty': g.items.length ? undefined : '' },
+        const cell = (g: Group, title: string, id: string, lane = false) =>
+          h('section', { class: 'column', 'aria-label': lane ? g.label : undefined, 'aria-labelledby': lane ? undefined : id, 'data-empty': g.items.length ? undefined : '' },
             h('h3', { id, class: 'group-title' }, title, h('span', { class: 'count' }, String(g.items.length))),
-            g.items.length ? h('ul', {}, ...g.items.map((i) => h('li', {}, card(i.id, i.title), kids.has(i.id) && !s.childCards ? childStrip(i.id, summarize(kids.get(i.id)!), open.has(i.id), (id) => itemHref(id, s), on) : null))) : null,
+            g.items.length || !lane ? h('ul', {}, ...g.items.map((i) => h('li', {}, card(i.id, i.title), kids.has(i.id) && !s.childCards ? childStrip(i.id, summarize(kids.get(i.id)!), open.has(i.id), (id) => itemHref(id, s), on) : null))) : null,
           );
-        const slug = (v: string) => v.replace(/[^\w-]/g, (c) => `_${c.charCodeAt(0).toString(16)}`);
+        const slug = (v: string) => v.replace(/[^a-zA-Z0-9-]/g, (c) => `_${c.charCodeAt(0).toString(16)}`);
         el.classList.toggle('lanes', !!lanes);
         el.replaceChildren(
           ...(lanes
@@ -92,7 +92,7 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
                   h('h2', { id, class: 'group-title lane-title' },
                     h('button', { type: 'button', class: 'group-toggle', 'data-toggle': l.toggle, 'aria-expanded': String(!l.collapsed), 'aria-controls': l.collapsed ? undefined : `${id}-cells`, onclick: () => on.toggleGroup(l.toggle) },
                       h('span', { class: 'chevron', 'aria-hidden': 'true' }, l.collapsed ? '▸' : '▾'), h('span', { class: 'group-name' }, l.label), count)),
-                  l.collapsed ? null : h('div', { class: 'lane-cells', id: `${id}-cells` }, ...l.cells.map((c) => cell(c, stageLabel(c.column!), `${id}-${slug(c.column!)}`))),
+                  l.collapsed ? null : h('div', { class: 'lane-cells', id: `${id}-cells` }, ...l.cells.map((c) => cell(c, stageLabel(c.column!), `${id}-${slug(c.column!)}`, true))),
                 );
               })
             : columns.map((g) => cell(g, g.label, `column-${g.stage}`))),
