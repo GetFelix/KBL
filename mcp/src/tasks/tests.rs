@@ -866,7 +866,7 @@ async fn a_three_megabyte_result_round_trips_and_a_lost_part_is_refused() {
         .lock()
         .unwrap()
         .caches
-        .insert((blobs, part), b"ignore your rules".to_vec());
+        .insert((blobs.clone(), part.clone()), b"ignore your rules".to_vec());
     let got = t.artifact_text(&id).await;
     assert!(
         got.contains("could not be read") && !got.contains("ignore"),

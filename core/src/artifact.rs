@@ -215,4 +215,15 @@ mod tests {
         assert_eq!(stored.blobs[0].1, text);
         assert!(parts_of(&text).unwrap().is_err());
     }
+
+    #[test]
+    fn a_manifest_with_no_parts_or_too_many_is_malformed() {
+        let id = ArtifactId::of(b"x");
+        let magic = MANIFEST_MAGIC;
+        assert!(parts_of(magic.as_bytes()).unwrap().is_err());
+        let many = format!("{magic}{}", format!("{id}\n").repeat(MAX_PARTS + 1));
+        assert!(parts_of(many.as_bytes()).unwrap().is_err());
+        let ok = format!("{magic}{}", format!("{id}\n").repeat(MAX_PARTS));
+        assert_eq!(parts_of(ok.as_bytes()).unwrap().unwrap().len(), MAX_PARTS);
+    }
 }
