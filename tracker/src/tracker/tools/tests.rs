@@ -269,6 +269,130 @@ async fn the_budget_stops_posts_and_sends_the_root_to_needs_you() {
     assert!(post(&t, "w1", "a1", "two", "split").await.is_ok());
 }
 
+/// Eight agents, each holding an item under one root, post as fast as they
+/// can against a budget of five more items. Exactly five land.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn eight_agents_racing_a_small_root_budget_never_pass_it() {
+    let (fake, t) = held().await;
+    // w2..w8 each take one child of a1, so all eight hold items under one root.
+    for n in 2..=8 {
+        post(&t, "w1", "a1", &format!("c{n}"), "split")
+            .await
+            .unwrap();
+    }
+    let mut held_by = vec![("w1".to_owned(), "a1".to_owned())];
+    for n in 2..=8 {
+        let w = format!("w{n}");
+        let got = claimed_id(&claim(&t, &w).await).expect("a child to claim");
+        held_by.push((w, got));
+    }
+    let root_items = |fake: &Fake| count(fake, "proposed");
+    let before = root_items(&fake);
+    const BUDGET: u32 = 5;
+    t.person_record(
+        key("gab"),
+        WorkRecord::BudgetSet {
+            root: item("a1"),
+            items_left: BUDGET,
+            max_depth: 3,
+            cost_left_micros: 1_000_000,
+            redos_per_item: 3,
+        },
+    )
+    .await
+    .unwrap();
+
+    let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(held_by.len()));
+    let mut racers = Vec::new();
+    for (w, held) in held_by {
+        let (t, barrier) = (t.clone(), barrier.clone());
+        racers.push(tokio::spawn(async move {
+            barrier.wait().await;
+            let mut landed = 0;
+            let mut refused = 0;
+            for n in 0..4 {
+                match post(&t, &w, &held, &format!("{w}-g{n}"), "split").await {
+                    Ok(_) => landed += 1,
+                    Err(Error::Refused { why }) if why == "over_budget" => refused += 1,
+                    Err(e) => panic!("{w}: unexpected {e}"),
+                }
+                tokio::task::yield_now().await;
+            }
+            (landed, refused)
+        }));
+    }
+    let (mut landed, mut refused) = (0, 0);
+    for r in racers {
+        let (l, f) = r.await.unwrap();
+        landed += l;
+        refused += f;
+    }
+    assert_eq!(landed + refused, 32);
+    assert_eq!(landed, BUDGET, "the budget is spent exactly, never passed");
+    assert_eq!(root_items(&fake) - before, BUDGET as usize);
+    assert_eq!(
+        t.0.core.lock().await.state.budgets[&item("a1")].items_left,
+        0
+    );
+    // The root is flagged once, not once per refused post.
+    assert_eq!(count(&fake, "refused"), 1);
+}
+
+/// An agent that gives up twice has used its attempts: the item waits in
+/// Needs you with the reasons on record, no agent can take it, and a
+/// person's retry puts it back in Ready.
+#[tokio::test]
+async fn an_agent_giving_up_past_the_attempt_cap_puts_the_item_in_needs_you() {
+    let (_fake, t) = held().await;
+    let give_up = |why: &str| {
+        let t = t.clone();
+        let why = why.to_owned();
+        async move {
+            t.give_up(&agent("w1"), &item("a1"), None, why, Vec::new())
+                .await
+        }
+    };
+    let stage = |t: &Tracker<Fake>| {
+        let t = t.clone();
+        async move {
+            let core = t.0.core.lock().await;
+            (
+                core.state.stage(&item("a1")),
+                core.state.needs_you(&item("a1")),
+            )
+        }
+    };
+
+    give_up("cannot reproduce the failure").await.unwrap();
+    // One attempt left: the item is claimable again.
+    assert_eq!(stage(&t).await, (Some(Stage::Ready), None));
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+
+    give_up("still cannot reproduce it").await.unwrap();
+    assert_eq!(
+        stage(&t).await,
+        (Some(Stage::NeedsYou), Some(NeedsYou::TriesUsed))
+    );
+    assert_eq!(claimed_id(&claim(&t, "w2").await), None);
+    // A person reads why from the item's record.
+    let history = t.history(&item("a1"), 0).await.unwrap().to_string();
+    assert!(
+        history.contains("cannot reproduce the failure"),
+        "{history}"
+    );
+    assert!(history.contains("still cannot reproduce it"), "{history}");
+
+    // Retry is a format 10 record.
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 10 })
+        .await
+        .unwrap();
+    t.person_record(key("gab"), WorkRecord::Retried { item: item("a1") })
+        .await
+        .unwrap();
+    assert_eq!(stage(&t).await, (Some(Stage::Ready), None));
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
+
 #[tokio::test]
 async fn a_child_too_deep_is_refused() {
     let (_fake, t) = held().await;
@@ -1018,6 +1142,7 @@ async fn people_accept_edit_reject_move_close_and_unlink() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
             depends_on: None,
             split: None,
             proposal: None,
@@ -1288,6 +1413,7 @@ async fn an_edited_title_is_bounded_and_not_empty() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -1897,6 +2023,7 @@ async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         },
     )
     .await
@@ -2147,6 +2274,7 @@ async fn an_agent_answers_the_triage_item_it_holds() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         }
     );
     // A retry of the same answer writes nothing.
@@ -2432,6 +2560,7 @@ async fn a_triage_answer_can_carry_dependencies_and_a_split() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         }
     );
     // The same answer again is a retry; changing only the split is a new answer.
@@ -2600,6 +2729,7 @@ async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
                 item_type: None,
                 area: None,
                 size: None,
+                needs: None,
             },
         )
         .await
@@ -2660,6 +2790,7 @@ async fn a_person_adjusts_triage_s_advice_only_at_format_17_and_on_the_answer_th
         labels: None,
         milestone: None,
         size: None,
+        needs: None,
     };
     let before = fake.log().len();
     // The log is below 17: refused, nothing written.
@@ -2751,6 +2882,7 @@ fn ans(
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     }
 }
 

@@ -42,6 +42,8 @@ mod request_keys;
 pub(crate) mod selection;
 mod snapshots;
 mod texts;
+mod workers;
+pub(crate) use workers::NewWorker;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
 const LOOP_AFTER_CLAIM: &str = "Work this item to done, then call work_complete. If you need a person, ask with work_ask (see `questions`). Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
@@ -113,6 +115,10 @@ pub(crate) struct Settings {
     pub(crate) snapshot_every: u64,
     /// How long an agent assignee may make no call before the tracker drops it.
     pub(crate) assignee_away: Duration,
+    /// Live workers one supervisor may have.
+    pub(crate) max_workers: usize,
+    /// Live workers the whole team may have.
+    pub(crate) max_team_workers: usize,
 }
 
 #[cfg(test)]
@@ -753,6 +759,7 @@ struct Inner<B> {
     /// When each agent last called, and when this tracker started, for
     /// telling an agent assignee that went away.
     seen: StdMutex<(Instant, HashMap<String, Instant>)>,
+    workers: StdMutex<workers::WorkerTokens>,
 }
 
 pub(crate) struct Tracker<B>(Arc<Inner<B>>);
@@ -786,6 +793,7 @@ impl<B: Broker> Tracker<B> {
             retrying: AtomicBool::new(false),
             running: StdMutex::default(),
             seen: StdMutex::new((Instant::now(), HashMap::new())),
+            workers: StdMutex::default(),
         }));
         // Read once before taking the lease: a build that cannot read the log
         // must not hold the lease and keep a build that can from starting.
@@ -795,6 +803,7 @@ impl<B: Broker> Tracker<B> {
         {
             let mut core = tracker.0.core.lock().await;
             core.state = state;
+            tracker.refresh_workers(&core.state);
             core.recall = recall;
             core.tail = tail;
             core.snap = snap;
@@ -809,7 +818,7 @@ impl<B: Broker> Tracker<B> {
                 .values()
                 .filter(|i| i.closed.is_none())
                 .filter_map(|i| i.hold.as_ref())
-                .filter_map(|h| AgentName::new(h.by.as_str()).ok())
+                .filter_map(|h| AgentName::agent_or_worker(h.by.as_str()).ok())
                 .collect()
         };
         for agent in holders {
@@ -1282,6 +1291,8 @@ impl<B: Broker> Tracker<B> {
             released.push(item);
         }
         drop(core);
+        let sup = Key::new(agent.as_str()).expect("an agent name is a key");
+        released.extend(self.stop_workers(|w| w.supervisor == sup).await?);
         self.sync_ready().await;
         Ok(released)
     }
@@ -1598,11 +1609,12 @@ impl<B: Broker> Tracker<B> {
         review: &[u8],
         filter: &Filter,
     ) -> Result<Option<Delivery>, Error> {
-        let (pool, direct_ok) = {
+        let (pool, direct_ok, skips) = {
             let core = self.0.core.lock().await;
             (
                 self.candidates(&core, agent, review, filter),
                 core.state.format() >= FORMAT_V15,
+                filter.skips_for_needs(&core),
             )
         };
         for tier in (0..TIERS).chain(review.iter().copied()) {
@@ -1612,7 +1624,9 @@ impl<B: Broker> Tracker<B> {
             // that was passed over.
             // Below format 15 a direct claim on an unassigned item is not
             // restart-safe, so the lane's own order is used.
-            if direct_ok && (!filter.is_empty() || Self::several_roots(&pool, tier)) {
+            // Work this caller lacks a capability for is passed over without polling
+            // its record, so a lane that holds some is claimed from the state too.
+            if direct_ok && (!filter.is_empty() || skips || Self::several_roots(&pool, tier)) {
                 let ordered = {
                     let core = self.0.core.lock().await;
                     let lane: Vec<_> = pool.iter().filter(|c| c.lane == tier).cloned().collect();
@@ -1682,7 +1696,7 @@ impl<B: Broker> Tracker<B> {
                 let mut ops = Vec::new();
                 let taken = {
                     let mut core = self.0.core.lock().await;
-                    self.claim_from(&mut core, agent, tier, record, polled_at, &mut ops)
+                    self.claim_from(&mut core, agent, tier, record, polled_at, filter, &mut ops)
                         .await
                 };
                 self.run(ops).await.ok();
@@ -2030,6 +2044,7 @@ impl<B: Broker> Tracker<B> {
 
     /// Turns one delivery into a claim, or settles it when it no longer
     /// describes claimable work.
+    #[allow(clippy::too_many_arguments)]
     async fn claim_from(
         &self,
         core: &mut Core,
@@ -2037,6 +2052,7 @@ impl<B: Broker> Tracker<B> {
         tier: u8,
         record: GroupRecord,
         polled_at: u64,
+        filter: &Filter,
         ops: &mut Vec<Op>,
     ) -> Result<Option<Delivery>, Error> {
         let stream = ready_stream(tier);
@@ -2143,6 +2159,13 @@ impl<B: Broker> Tracker<B> {
         // Acked, not refused: the item is published again once the block ends,
         // which a refusal would hold back until the log moves.
         if core.state.blocked_at(&item, now_ms()) {
+            core.live.remove(&item);
+            ack(ops, record.offset);
+            return Ok(None);
+        }
+        // Needs set after the candidates were read: the caller cannot take it, so the
+        // record goes back as it does for a block, and the next call claims from the state.
+        if !core.state.can_take(&item, &filter.capabilities) {
             core.live.remove(&item);
             ack(ops, record.offset);
             return Ok(None);
@@ -2603,7 +2626,7 @@ impl<B: Broker> Tracker<B> {
                 core.recovering.retain(|_, r| now < r.until);
                 core.recovering
                     .keys()
-                    .filter_map(|a| AgentName::new(a.as_str()).ok())
+                    .filter_map(|a| AgentName::agent_or_worker(a.as_str()).ok())
                     .collect()
             };
             let mut tries = tokio::task::JoinSet::new();
@@ -2867,7 +2890,11 @@ impl<B: Broker> Tracker<B> {
         let req = (actor != Actor::Tracker)
             .then(request_keys::current)
             .flatten();
-        let logged = WorkLogged::new(now_ms(), by, actor, record).with_request(req);
+        // From the state, never the payload: a worker's every record names its supervisor.
+        let sup = Self::supervisor_of(&core.state, actor, &by);
+        let logged = WorkLogged::new(now_ms(), by, actor, record)
+            .with_request(req)
+            .with_supervisor(sup);
         // The tracker is the only writer, so the next offset is the one after the
         // last applied, or the read tip when a generation start moved it.
         let guess = core.state.at.map_or(0, |a| a + 1).max(core.tail);
@@ -2897,6 +2924,11 @@ impl<B: Broker> Tracker<B> {
         }
         // Not held across the write below.
         drop(apply_span);
+        // A stop takes the token away before the write, landed or not: a stop
+        // that did not land comes back with the rebuild.
+        if matches!(logged.record, WorkRecord::WorkerStopped { .. }) {
+            self.refresh_workers(&core.state);
+        }
         // Conditional on the tail: if another tracker took the lease and wrote,
         // Felix refuses this, whatever this tracker's clock says.
         // A caller that drops this future mid-write (a client that hung up)
@@ -2923,6 +2955,9 @@ impl<B: Broker> Tracker<B> {
                 core.recall
                     .remember(offset, &logged, &core.state, &self.0.me, absent, false);
                 self.note_landed(core, offset, &logged);
+                if matches!(logged.record, WorkRecord::WorkerStarted { .. }) {
+                    self.refresh_workers(&core.state);
+                }
                 if logged.req.is_some() {
                     request_keys::landed();
                 }
@@ -3070,6 +3105,7 @@ impl<B: Broker> Tracker<B> {
             .record(rebuilt_at.elapsed().as_secs_f64());
         let mut core = self.0.core.lock().await;
         core.state = state;
+        self.refresh_workers(&core.state);
         core.recall = recall;
         core.snap = snap;
         // Assigned, not raised: a shard failover can lower the tip.

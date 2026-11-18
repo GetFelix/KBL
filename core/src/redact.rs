@@ -1048,8 +1048,8 @@ fn redact_content(c: &mut Content) {
 /// and an offset); sources, upstream ids and targets, which name where an
 /// item comes from; a review's tier and `pr`, a pull request reference and
 /// a refusal's `op`, which only the tracker writes; upstream labels and
-/// milestone, which are filter keys, and class values, which a vocabulary
-/// limits to plain words. A progress record's
+/// milestone, which are filter keys, class values and needs, which a vocabulary
+/// limits to plain words, and a lifted resource, a name a block already limits. A progress record's
 /// `pr` and `branch` are keys too (the fold matches a pull request by
 /// `pr`), so only URL userinfo is cut from them: `acme/xoxb-slackbot-tools#7`
 /// is a repo, not a token.
@@ -1180,6 +1180,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::Parked { .. }
         | WorkRecord::Unblocked { .. }
         | WorkRecord::BlockCleared { .. }
+        | WorkRecord::ResourceLifted { .. }
         | WorkRecord::ReviewRequested { .. }
         | WorkRecord::ChangesRequested { .. }
         | WorkRecord::MergeMarked { .. }
@@ -1194,6 +1195,8 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::FormatRaised { .. }
         | WorkRecord::Refused { .. }
+        | WorkRecord::WorkerStarted { .. }
+        | WorkRecord::WorkerStopped { .. }
         | WorkRecord::Unknown => {}
     }
 }

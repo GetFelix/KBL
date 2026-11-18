@@ -15,6 +15,7 @@ mod metrics;
 mod org;
 mod root;
 mod traces;
+mod workers;
 
 /// A Felix with no records that remembers which streams were published to, and
 /// whose writer lease can be taken away.
@@ -305,6 +306,8 @@ fn quiet_settings() -> crate::tracker::Settings {
         snapshot_dir: None,
         snapshot_every: 0,
         assignee_away: Duration::from_secs(600),
+        max_workers: 2,
+        max_team_workers: 3,
     }
 }
 
@@ -325,6 +328,8 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             snapshot_dir: None,
             snapshot_every: 0,
             assignee_away: Duration::from_secs(600),
+            max_workers: 2,
+            max_team_workers: 3,
         },
     )
     .await
@@ -523,6 +528,46 @@ async fn classifying_a_child_item_is_refused_as_not_a_root() {
     let body = json!({ "item": "a1", "item_type": "bug" });
     let (_, reply) = call(&app, "/v1/work/classify", Some("tok-gab"), body).await;
     assert_ne!(reply["why"].as_str(), Some("not_a_root"));
+}
+
+#[tokio::test]
+async fn capabilities_are_read_and_bounded_and_lifting_a_resource_is_for_a_person() {
+    let app = app().await;
+    for path in ["/v1/work/next", "/v1/work/peek"] {
+        let (status, _) = call(
+            &app,
+            path,
+            Some("tok-w1"),
+            json!({ "capabilities": ["gpu", "azure"] }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        let (status, _) = call(
+            &app,
+            path,
+            Some("tok-w1"),
+            json!({ "capabilities": ["has space"] }),
+        )
+        .await;
+        assert!(status.is_client_error(), "{path}: {status}");
+        let many: Vec<String> = (0..40).map(|i| format!("c{i}")).collect();
+        let (status, _) = call(&app, path, Some("tok-w1"), json!({ "capabilities": many })).await;
+        assert!(status.is_client_error(), "{path}: {status}");
+    }
+    let body = json!({ "resource": "azure-vms" });
+    assert_eq!(
+        call(&app, "/v1/work/lift-resource", Some("tok-w1"), body.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    // The test log is below format 20, which has no such record.
+    assert_eq!(
+        call(&app, "/v1/work/lift-resource", Some("tok-gab"), body)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
 }
 
 #[tokio::test]

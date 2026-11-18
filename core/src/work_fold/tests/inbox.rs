@@ -15,6 +15,7 @@ fn triaged(item: &str, tier: u8) -> WorkRecord {
         area: None,
         item_type: None,
         size: None,
+        needs: None,
     }
 }
 
@@ -31,6 +32,7 @@ fn edit(item: &str, deps: Option<&[&str]>, split: Option<&[&str]>, at: Option<u6
         labels: None,
         milestone: None,
         size: None,
+        needs: None,
     }
 }
 

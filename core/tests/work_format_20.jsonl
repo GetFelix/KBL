@@ -1,0 +1,15 @@
+{"v":20,"at_ms":1000,"by":"gabriel","actor":"person","kind":"format_raised","to":20}
+{"v":20,"at_ms":1005,"by":"gabriel","actor":"person","kind":"rules_set","target":{"source":"github","repo":"GetFelix/felix"},"vocabulary":{"needs":["azure","gpu","network"]}}
+{"at_ms":1010,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix"}
+{"at_ms":1015,"by":"ingest","actor":"tracker","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"fix the docs build"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1025,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"v":20,"at_ms":1030,"by":"ingest","actor":"tracker","kind":"edited","item":"r1","needs":["network"]}
+{"v":20,"at_ms":1035,"by":"gabriel","actor":"person","kind":"triaged","item":"r1","tier":1,"why":"a benchmark run","needs":["GPU"]}
+{"v":20,"at_ms":1040,"by":"gabriel","actor":"person","kind":"edited","item":"r1","needs":["azure","gpu"]}
+{"v":20,"at_ms":1045,"by":"gabriel","actor":"person","kind":"triaged","item":"r1","tier":1,"why":"a benchmark run","needs":["network"]}
+{"v":16,"at_ms":1050,"by":"gabriel","actor":"person","kind":"block_set","item":"r1","resource":"azure-vms","reason":"credit is at zero"}
+{"v":16,"at_ms":1055,"by":"gabriel","actor":"person","kind":"block_set","item":"r2","resource":"azure-vms","reason":"credit is at zero"}
+{"v":16,"at_ms":1060,"by":"gabriel","actor":"person","kind":"block_set","item":"r2","until_ms":9000000,"reason":"waiting on the release"}
+{"v":20,"at_ms":1065,"by":"gabriel","actor":"person","kind":"resource_lifted","resource":"azure-vms"}
+{"v":20,"at_ms":1070,"by":"gabriel","actor":"person","kind":"triaged","item":"r2","tier":1,"why":"docs","needs":["tpu"]}

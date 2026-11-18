@@ -6,7 +6,8 @@ use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
     FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, FORMAT_V15,
-    FORMAT_V16, FORMAT_V17, FORMAT_V18, FORMAT_V19, ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V16, FORMAT_V17, FORMAT_V18, FORMAT_V19, FORMAT_V20, ReadError, WorkLogged, WorkRecord,
+    read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1439,7 +1440,6 @@ const FORMAT_19_LOG: &str = include_str!("work_format_19.jsonl");
 #[test]
 fn the_nineteenth_format_is_nineteen_and_stamps_each_use_of_a_new_field() {
     assert_eq!(FORMAT_V19, 19);
-    assert_eq!(FORMAT, FORMAT_V19);
     let log = entries(FORMAT_19_LOG);
     for (_, r) in &log {
         assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
@@ -1496,4 +1496,101 @@ fn a_new_field_is_refused_below_format_19() {
             r.record.kind()
         );
     }
+}
+
+/// A log at the twentieth format: a vocabulary's needs, needs set by a rule,
+/// triage and a person, blocks on a resource and the one record that lifts
+/// them. Its folded state is pinned in `wasm/golden/format_20.state.json`.
+const FORMAT_20_LOG: &str = include_str!("work_format_20.jsonl");
+
+#[test]
+fn the_twentieth_format_is_twenty_and_stamps_each_use_of_a_new_field() {
+    assert_eq!(FORMAT_V20, 20);
+    for (_, r) in &entries(FORMAT_20_LOG) {
+        assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
+    }
+}
+
+#[test]
+fn the_twentieth_format_log_folds_with_needs_and_a_resource_lift() {
+    let s = fold(&entries(FORMAT_20_LOG));
+    // The last record names a need outside the vocabulary.
+    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
+    assert_eq!(s.rejections[0].offset, 14);
+    assert_eq!(s.rejections[0].why, Reject::BadClass);
+    let item = |x: &str| &s.items[&kbl_core::names::ItemId::new(x).unwrap()];
+    // A person's needs outlast triage's later answer.
+    let n = item("r1").class.needs.as_ref().unwrap();
+    assert_eq!(n.values, ["azure", "gpu"]);
+    assert_eq!(n.by, kbl_core::work_fold::ClassBy::Person);
+    assert!(item("r2").class.needs.is_none());
+    // The lift ended both blocks on the resource and left the one with only a time.
+    assert!(item("r1").block.is_none());
+    let b = item("r2").block.as_ref().unwrap();
+    assert!(b.resource.is_none() && b.until_ms == Some(9_000_000));
+}
+
+/// Below 20 the fold refuses each new field, and an older reader stops at the first one.
+#[test]
+fn a_new_field_is_refused_below_format_20() {
+    let log = entries(FORMAT_20_LOG);
+    for (i, (_, r)) in log.iter().enumerate().skip(1) {
+        if r.v < FORMAT_V20 {
+            continue;
+        }
+        let mut below = State::default();
+        let raise = WorkLogged::new(
+            1,
+            kbl_core::names::Key::new("gabriel").unwrap(),
+            Actor::Person,
+            WorkRecord::FormatRaised { to: 19 },
+        );
+        below.try_apply(0, &raise).unwrap();
+        for (o, prior) in log[1..i].iter().filter(|(_, p)| p.v < FORMAT_V20) {
+            let _ = below.try_apply(*o, prior);
+        }
+        assert_eq!(
+            below.try_apply(i as u64, r),
+            Err(Reject::Format),
+            "{}",
+            r.record.kind()
+        );
+    }
+}
+
+/// A log at format 21: a supervisor registers a worker, the worker claims and
+/// reports for it, and a record after the stop is refused. Its folded state is
+/// pinned in `wasm/golden/format_21.state.json`.
+const FORMAT_21_LOG: &str = include_str!("work_format_21.jsonl");
+
+#[test]
+fn the_twenty_first_format_stamps_workers_and_their_records() {
+    assert_eq!(kbl_core::work::FORMAT_V21, 21);
+    assert_eq!(FORMAT, kbl_core::work::FORMAT_V21);
+    for (_, r) in &entries(FORMAT_21_LOG) {
+        assert_eq!(
+            r.min_format(),
+            r.v.max(r.min_format()),
+            "{}",
+            r.record.kind()
+        );
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    let s = fold(&entries(FORMAT_21_LOG));
+    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
+    assert_eq!(s.rejections[0].offset, 7);
+    assert_eq!(s.rejections[0].why, Reject::BadWorker);
+    let w = &s.workers[&kbl_core::names::Key::new("sup-w1").unwrap()];
+    assert_eq!(w.supervisor.as_str(), "sup");
+    assert!(w.stopped_ms.is_some());
+}
+
+#[test]
+fn a_reader_of_format_20_stops_at_the_raise_to_21() {
+    let log = entries(FORMAT_21_LOG);
+    let raise = &log[0].1;
+    assert_eq!(raise.v, 21);
+    // A worker record carries format 21 even when its kind is older.
+    assert_eq!(log[4].1.record.format(), 1);
+    assert_eq!(log[4].1.min_format(), 21);
 }

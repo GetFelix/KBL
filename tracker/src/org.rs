@@ -9,7 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Result;
 use kbl_core::codec::Codec;
 use kbl_core::names::Key;
-use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, TeamName, read};
+use kbl_core::org::{ORG_EVENTS, OrgLogged, OrgReadError, OrgRecord, TeamName, TokenHash, read};
 use kbl_core::org_fold::{Applied, OrgState, Principal};
 use tokio::sync::{Mutex, watch};
 use tokio::time::Instant;
@@ -187,6 +187,27 @@ impl<B: Broker> Org<B> {
     pub(crate) fn is_member(&self, team: &TeamName, person: &Key) -> bool {
         let view = self.view.read().expect("org view lock");
         view.state.role_in(team, person).is_some()
+    }
+
+    /// The token hash of `agent` in `team` while it is not revoked. Refused
+    /// while the lease does not back the fold, so silence is never read as gone.
+    pub(crate) fn agent_token(
+        &self,
+        team: &TeamName,
+        agent: &Key,
+    ) -> Result<Option<TokenHash>, OrgUnavailable> {
+        let view = self.view.read().expect("org view lock");
+        if !view
+            .held_until
+            .is_some_and(|t| t > Instant::now() + LEASE_SKEW)
+        {
+            return Err(OrgUnavailable);
+        }
+        Ok(view
+            .state
+            .agent(team, agent)
+            .filter(|a| !a.revoked)
+            .map(|a| a.token.clone()))
     }
 
     /// Whether `agent` is an agent of `team` that is not revoked, by the last fold.
