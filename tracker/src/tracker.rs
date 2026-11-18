@@ -23,7 +23,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
     Actor, Assignee, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason,
-    TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream,
+    ReleaseWhy, TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream,
     valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
@@ -42,7 +42,11 @@ mod snapshots;
 mod texts;
 
 /// The work loop, in the reply to a claim. A host with no prompt of its own reads it there.
-const LOOP_AFTER_CLAIM: &str = "Work this item to done, or to a question for a person, then call work_complete. Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
+const LOOP_AFTER_CLAIM: &str = "Work this item to done, then call work_complete. If you need a person, ask with work_ask (see `questions`). Call work_next again. Stop when work_next says nothing is ready, or when you are asked to stop.";
+
+/// On every `work_next` reply. A host's own chat prompt never reaches Needs
+/// you, and a session run without a terminal would wait on it forever.
+pub(crate) const ASK_IN_KBL: &str = "Ask a person only with work_ask, never in your host's chat or its question prompt. A work_ask question reaches the tracker's Needs you and frees you; a chat question reaches nobody.";
 
 /// The reply to `work_next` while the agent's own stale claim is being released.
 const LOOP_RETRY: &str = "Call work_next again in a few seconds. If it keeps saying this, stop.";
@@ -849,7 +853,10 @@ impl<B: Broker> Tracker<B> {
             .increment(1);
         metrics::histogram!("kbl_tracker_claim_seconds", "team" => team, "outcome" => outcome)
             .record(started.elapsed().as_secs_f64());
-        out
+        out.map(|mut v| {
+            v["questions"] = ASK_IN_KBL.into();
+            v
+        })
     }
 
     async fn claim_loop(
@@ -1024,6 +1031,7 @@ impl<B: Broker> Tracker<B> {
             item,
             which,
             "done",
+            false,
             |attempt| WorkRecord::Done {
                 item: item.clone(),
                 attempt,
@@ -1043,17 +1051,22 @@ impl<B: Broker> Tracker<B> {
         item: &ItemId,
         which: Option<Which>,
         reason: Option<String>,
+        why: Option<ReleaseWhy>,
         usage: Vec<Usage>,
     ) -> Result<Value, Error> {
+        // Only a wait may be written after the claim lapsed: it is a note, not a failure.
+        let late = why.is_some_and(ReleaseWhy::waits);
         self.finish(
             agent,
             item,
             which,
             "released",
+            late,
             |attempt| WorkRecord::Released {
                 item: item.clone(),
                 attempt,
                 reason,
+                why,
                 cost_micros: 0,
                 usage,
                 floor_micros: self.floor(),
@@ -1077,6 +1090,7 @@ impl<B: Broker> Tracker<B> {
             item,
             which,
             "gave_up",
+            false,
             |attempt| WorkRecord::GaveUp {
                 item: item.clone(),
                 attempt,
@@ -1174,6 +1188,7 @@ impl<B: Broker> Tracker<B> {
                 item: item.clone(),
                 attempt,
                 reason: Some("lapsed".into()),
+                why: None,
                 // Letting a claim lapse must not be a way to work for free.
                 cost_micros: 0,
                 usage: Vec::new(),
@@ -1222,6 +1237,7 @@ impl<B: Broker> Tracker<B> {
                 item: item.clone(),
                 attempt,
                 reason: Some("revoked".into()),
+                why: None,
                 cost_micros: 0,
                 usage: Vec::new(),
                 floor_micros: self.floor(),
@@ -1967,6 +1983,7 @@ impl<B: Broker> Tracker<B> {
                     item: item.clone(),
                     attempt: hold.attempt,
                     reason: Some("lapsed".into()),
+                    why: None,
                     cost_micros: 0,
                     usage: Vec::new(),
                     floor_micros: self.floor(),
@@ -2074,26 +2091,39 @@ impl<B: Broker> Tracker<B> {
             .await;
     }
 
-    /// Shared tail of complete, release and give_up: write the record the fold
-    /// accepts, then settle the delivery. With `attempt`, a call whose claim
+    /// Shared tail of complete, release, give_up and ask: write the record the
+    /// fold accepts, then settle the delivery. With `late`, an agent whose claim
+    /// lapsed may still write it; the fold accepts that once, while nobody has
+    /// claimed since. With `attempt`, a call whose claim
     /// already ended answers with the record that ended it, if this agent wrote
     /// it for that attempt as `kind`: the retry of a call whose answer was lost.
+    #[allow(clippy::too_many_arguments)]
     async fn finish(
         &self,
         agent: &AgentName,
         item: &ItemId,
         which: Option<Which>,
         kind: &'static str,
+        late: bool,
         record: impl FnOnce(u32) -> WorkRecord,
-        reply: Value,
+        mut reply: Value,
     ) -> Result<Value, Error> {
         self.begin().await?;
         let slot = self.slot(agent);
         let mut delivery = slot.lock().await;
         if self.reconcile(agent, &mut delivery).await.as_ref() == Some(item) {
-            let core = self.0.core.lock().await;
+            let mut core = self.0.core.lock().await;
             self.recall_current()?;
-            return replay(&core, agent, item, which, kind, reply).ok_or_else(|| lapsed(item));
+            if let Some(r) = replay(&core, agent, item, which, kind, reply.clone()) {
+                return Ok(r);
+            }
+            return match lapsed_attempt(&core, agent, item).filter(|_| late) {
+                Some(attempt) => {
+                    self.late(&mut core, agent, item, record(attempt), reply)
+                        .await
+                }
+                None => Err(lapsed(item)),
+            };
         }
         let mut ops = Vec::new();
         let mut marked = false;
@@ -2108,18 +2138,33 @@ impl<B: Broker> Tracker<B> {
                 Ok(held) => held,
                 Err(e) => {
                     self.recall_current()?;
-                    return replay(&core, agent, item, which, kind, reply).ok_or(e);
+                    if let Some(r) = replay(&core, agent, item, which, kind, reply.clone()) {
+                        return Ok(r);
+                    }
+                    return match lapsed_attempt(&core, agent, item).filter(|_| late) {
+                        Some(attempt) => {
+                            self.late(&mut core, agent, item, record(attempt), reply)
+                                .await
+                        }
+                        None => Err(e),
+                    };
                 }
             };
             core.published.remove(item);
             offset = self
                 .append(&mut core, Actor::Agent, agent_key(agent), record(held))
                 .await?;
+            // Below format 14 a question keeps the hold, and its delivery with it.
+            let goes_on = core.state.items.get(item).is_some_and(|i| holds(i, agent));
+            if kind == "question" {
+                reply["claim"] = if goes_on { "held" } else { "ended" }.into();
+            }
             let ready = core.state.stage(item) == Some(Stage::Ready);
-            if !ready {
+            if !ready && !goes_on {
                 core.live.remove(item);
             }
-            if let Some(d) = delivery.take()
+            if !goes_on
+                && let Some(d) = delivery.take()
                 && core.owner.get(item).is_some_and(|o| o.id == d.id)
             {
                 core.owner.remove(item);
@@ -2135,15 +2180,41 @@ impl<B: Broker> Tracker<B> {
             .err()
             .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"));
         self.sync_ready().await;
-        let mut reply = reply;
         reply["offset"] = offset.into();
         let counter = match kind {
-            "done" => "kbl_tracker_completions_total",
-            "released" => "kbl_tracker_releases_total",
-            _ => "kbl_tracker_give_ups_total",
+            "done" => Some("kbl_tracker_completions_total"),
+            "released" => Some("kbl_tracker_releases_total"),
+            "question" => None,
+            _ => Some("kbl_tracker_give_ups_total"),
         };
-        metrics::counter!(counter, "team" => self.0.settings.team.clone()).increment(1);
+        if let Some(counter) = counter {
+            metrics::counter!(counter, "team" => self.0.settings.team.clone()).increment(1);
+        }
         Ok(with_warning(reply, warning))
+    }
+
+    /// Writes the record of an agent whose claim lapsed. Its delivery went with
+    /// the lapse, so there is nothing to settle; an item it parks leaves Ready.
+    async fn late(
+        &self,
+        core: &mut Core,
+        agent: &AgentName,
+        item: &ItemId,
+        record: WorkRecord,
+        mut reply: Value,
+    ) -> Result<Value, Error> {
+        let offset = self
+            .append(core, Actor::Agent, agent_key(agent), record)
+            .await?;
+        if core.state.stage(item) != Some(Stage::Ready) {
+            core.live.remove(item);
+        }
+        reply["offset"] = offset.into();
+        reply["late"] = true.into();
+        if reply.get("status").is_some_and(|s| s == "waiting") {
+            reply["claim"] = "ended".into();
+        }
+        Ok(reply)
     }
 
     /// Called under `core` before a replay. A write whose reply was lost leaves
@@ -3191,6 +3262,17 @@ fn replay(
     Some(reply)
 }
 
+/// The attempt whose hold on `item` lapsed from `agent`, if nobody claimed since.
+fn lapsed_attempt(core: &Core, agent: &AgentName, item: &ItemId) -> Option<u32> {
+    core.state
+        .items
+        .get(item)
+        .filter(|i| i.hold.is_none())
+        .and_then(|i| i.lapsed.as_ref())
+        .filter(|h| h.by.as_str() == agent.as_str())
+        .map(|h| h.attempt)
+}
+
 fn lapsed(item: &ItemId) -> Error {
     Error::Lost(format!(
         "your claim on {item} lapsed and may have gone to another agent. Stop working on it; use work_next for new work"
@@ -3201,6 +3283,19 @@ fn restarted(item: &ItemId) -> Error {
     Error::Lost(format!(
         "the tracker has no delivery for your claim on {item}, so it cannot extend it. It will be released; use work_next for new work"
     ))
+}
+
+/// One line telling an agent what a triage or augment item is for.
+fn purpose(work: WorkKind) -> Option<&'static str> {
+    match work {
+        WorkKind::Triage => Some(
+            "Triage: propose a tier, dependencies and any split for the imported item it sits under. A person accepts it before anyone fixes the root.",
+        ),
+        WorkKind::Augment => Some(
+            "Augment: add the missing context the root needs (reproduction, links, acceptance) so the fix can start.",
+        ),
+        _ => None,
+    }
 }
 
 fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
@@ -3236,6 +3331,7 @@ fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
             "review": item.and_then(|i| i.review.as_ref()),
             "finding": item.and_then(|i| i.finding),
             "context": item.map(|i| i.context.keys().collect::<Vec<_>>()),
+            "purpose": item.and_then(|i| purpose(i.work)),
         },
         "deadline_ms": item.and_then(|i| i.hold.as_ref()).map(|h| h.deadline_ms),
         // Read-only for the agent: only a person's `rules_set` changes it.

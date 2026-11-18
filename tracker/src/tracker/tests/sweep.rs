@@ -5,7 +5,8 @@
 //! `KBL_SWEEP_SEEDS=n` runs seeds 0..n (default 40), `KBL_SWEEP_SEED=s` replays
 //! one seed. A failure names the seed. See docs/fault-sweep.md.
 
-use kbl_core::work::{Assignee, CloseWhy};
+use kbl_core::content::Content;
+use kbl_core::work::{Assignee, CloseWhy, ReleaseWhy};
 use kbl_core::work_fold::{Closure, Stage, State};
 
 use super::*;
@@ -178,6 +179,14 @@ impl Model {
         for id in &self.imported {
             assert!(state.items.contains_key(&item(id)), "{id} was lost");
         }
+        // A question frees its asker, so nobody holds an item it waits on.
+        for it in state.items.values() {
+            assert!(
+                it.open_question.is_none() || it.hold.is_none(),
+                "{} is held with an open question",
+                it.id
+            );
+        }
     }
 }
 
@@ -247,13 +256,24 @@ async fn finish_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, who: &'sta
         return;
     };
     let a = agent(who);
-    let sent = match rng.below(3) {
+    let sent = match rng.below(4) {
         0 => {
             let r = t.complete(&a, &item(&id), None, Vec::new()).await;
             r.map(|_| true)
         }
         1 => t
-            .release(&a, &item(&id), None, None, Vec::new())
+            .release(&a, &item(&id), None, None, None, Vec::new())
+            .await
+            .map(|_| false),
+        2 => t
+            .release(
+                &a,
+                &item(&id),
+                None,
+                Some("no credit".into()),
+                Some(ReleaseWhy::WaitsOnOutside),
+                Vec::new(),
+            )
             .await
             .map(|_| false),
         _ => t
@@ -267,6 +287,50 @@ async fn finish_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, who: &'sta
             m.done.insert(id);
         }
     }
+}
+
+/// An agent asks a person about what it believes it holds, which frees it.
+async fn ask_step(t: &Tracker<Fake>, m: &mut Model, who: &'static str) {
+    let Some(id) = m.beliefs.get(who).cloned() else {
+        return;
+    };
+    let q = Content::Text("which region?".into());
+    if t.ask(&agent(who), &item(&id), None, q, vec![], None, Vec::new())
+        .await
+        .is_ok()
+    {
+        m.beliefs.remove(who);
+    }
+}
+
+/// A person answers an open question, which hands the item out again; a
+/// person also moves a parked wait back to Ready.
+async fn answer_step(t: &Tracker<Fake>, fake: &Fake, rng: &mut Rng) {
+    let state = replay(fake).state;
+    let open: Vec<_> = state
+        .items
+        .values()
+        .filter(|i| i.open_question.is_some() || i.flagged)
+        .map(|i| (i.id.clone(), i.open_question))
+        .collect();
+    if open.is_empty() {
+        return;
+    }
+    let (id, question) = open[rng.below(open.len())].clone();
+    let _ = match question {
+        Some(q) => {
+            let a = Content::Text("eastus".into());
+            t.person_answer(key("gab"), &id, Some(q), a, vec![], Reply::default())
+                .await
+        }
+        None => {
+            let unflag = WorkRecord::Flagged {
+                item: id,
+                flagged: false,
+            };
+            t.person_record(key("gab"), unflag).await
+        }
+    };
 }
 
 /// An agent extends what it believes it holds. A tracker that missed the
@@ -374,6 +438,7 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
                     item: id.clone(),
                     attempt: h.attempt,
                     reason: None,
+                    why: None,
                     cost_micros: 0,
                     usage: Vec::new(),
                     floor_micros: 0,
@@ -532,12 +597,14 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     let who = AGENTS[rng.below(AGENTS.len())];
     let serving = t.serving(rng.below(100) < 40);
-    match rng.below(12) {
+    match rng.below(14) {
         0..=1 => seed_item(serving, m).await,
         2..=5 => claim_step(serving, fake, m, who).await,
         6..=8 => finish_step(serving, m, rng, who).await,
         9 => extend_step(serving, fake, m, who).await,
         10 => assign_step(serving, m, rng).await,
+        11 => ask_step(serving, m, who).await,
+        12 => answer_step(serving, fake, rng).await,
         _ => dismiss_step(serving, m, rng).await,
     }
     fake.fail_polls(None);
@@ -637,9 +704,9 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             cur: start(&fake).await,
             old: None,
         };
-        // Format 13, so items can be assigned to agents.
+        // Format 14, so items can be assigned to agents and a question frees the asker.
         t.cur
-            .person_record(key("gab"), WorkRecord::FormatRaised { to: 13 })
+            .person_record(key("gab"), WorkRecord::FormatRaised { to: 14 })
             .await
             .unwrap();
         let mut m = Model::default();

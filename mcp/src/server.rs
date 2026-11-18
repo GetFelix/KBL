@@ -187,6 +187,8 @@ struct WorkReleaseArgs {
     item: String,
     /// Why you are handing it back.
     reason: Option<String>,
+    /// `failed` (default), `waits_on_person` or `waits_on_outside`. Only a failure uses a try.
+    why: Option<String>,
     /// What each model used during this attempt, one entry per model. The tracker prices it
     /// and charges at least its cost floor.
     usage: Option<Vec<UsageArg>>,
@@ -477,7 +479,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. You can hold one item at a time. Keep taking items: call work_next again after each one, and stop when it says nothing is ready or you are asked to stop."
+        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. Ask a person only with work_ask, never in your host's chat or its question prompt: nobody watching the tracker sees those. You can hold one item at a time. Keep taking items: call work_next again after each one, and stop when it says nothing is ready or you are asked to stop."
     )]
     async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
         self.work()?
@@ -612,14 +614,17 @@ impl Server {
     }
 
     #[tool(
-        description = "Hand the item you hold back so another agent can take it now. It uses one of the item's two tries."
+        description = "Hand the item you hold back. Say why with `why`: `failed` (the default) uses one of the item's two tries and another agent can take it now; `waits_on_person` or `waits_on_outside` (credit, an outage) uses no try and parks the item in Needs you until a person moves it back. Use a wait only for a real wait. If your claim lapsed while you waited, you can still send a wait once. For a question, use work_ask, never your host's chat."
     )]
     async fn work_release(
         &self,
         Parameters(a): Parameters<WorkReleaseArgs>,
     ) -> Result<String, String> {
+        if let Some(w) = &a.why {
+            check_one_of("why", w, &["failed", "waits_on_person", "waits_on_outside"])?;
+        }
         self.work()?
-            .release(&a.item, a.reason, charge(a.usage, a.cost_micros))
+            .release(&a.item, a.reason, a.why, charge(a.usage, a.cost_micros))
             .await
     }
 
@@ -811,15 +816,17 @@ impl Server {
     }
 
     #[tool(
-        description = "Ask a person a question you cannot settle yourself. Offer options when the answer is a choice; they can always type something else. The item waits in Needs you until they answer, then a resume item carrying the question, the answer and your last so_far is open for any agent to claim. Answers with the question's offset."
+        description = "Ask a person a question you cannot settle yourself. This is the only way to ask: never ask in your host's chat or its question prompt, which nobody watching the tracker sees. Offer options when the answer is a choice; they can always type something else. Asking ends your claim without using a try, so call work_next for other work. The item waits in Needs you until they answer, then goes back to Ready with the question and the answer in its context. If your claim lapsed while you worked, you can still ask once. Answers with the question's offset."
     )]
     async fn work_ask(&self, Parameters(a): Parameters<WorkAskArgs>) -> Result<String, String> {
         let item = self.item_or_held(a.item).await?;
         let text = self.content(a.question).await?;
+        // The question ends the claim, so the keep-alive stops with it.
         let reply = self
             .work()?
-            .tool(
+            .finish_tool(
                 "/v1/work/ask",
+                &item,
                 with_key(
                     json!({
                         "item": item,
@@ -833,7 +840,7 @@ impl Server {
                 ),
             )
             .await?;
-        Ok(reply.to_string())
+        Ok(reply)
     }
 
     #[tool(

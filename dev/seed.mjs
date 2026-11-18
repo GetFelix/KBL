@@ -39,11 +39,12 @@ const { issuer } = await request("GET", `${IDP}/.well-known/openid-configuration
 // Felix keys RBAC on sha256(issuer|subject), not on the subject itself.
 const principal = (subject) => createHash("sha256").update(`${issuer}|${subject}`).digest("hex");
 
-async function exchange(subject, body) {
+async function exchangeFull(subject, body) {
   const { id_token } = await request("GET", `${IDP}/token?sub=${subject}&aud=${AUDIENCE}`);
   const url = `${CONTROL_PLANE}/v1/tenants/${TENANT}/token/exchange`;
-  return (await request("POST", url, { token: id_token, body })).felix_token;
+  return request("POST", url, { token: id_token, body });
 }
+const exchange = async (subject, body) => (await exchangeFull(subject, body)).felix_token;
 
 console.log(`bootstrap tenant ${TENANT}`);
 await request("POST", `${BOOTSTRAP}/internal/bootstrap/tenants/${TENANT}/initialize`, {
@@ -77,8 +78,10 @@ await request("POST", `${CONTROL_PLANE}/v1/tenants/${TENANT}/namespaces`, {
 // The broker runs as uid 65532 and writes its certificate here too.
 await mkdir(STATE, { recursive: true });
 await chmod(STATE, 0o777).catch(() => {});
-const broker = await exchange("agents-broker", { audience: "felix-controlplane" });
-await writeFile(`${STATE}/node.token`, broker, { mode: 0o644 });
+const broker = await exchangeFull("agents-broker", { audience: "felix-controlplane" });
+await writeFile(`${STATE}/node.token`, broker.felix_token, { mode: 0o644 });
+// The broker renews its own token from this, whatever the stack's token life.
+await writeFile(`${STATE}/node.refresh-token`, broker.refresh_token, { mode: 0o644 });
 console.log(`wrote node.token to ${STATE}`);
 
 // dev/up.sh waits for this before it calls the stack ready.

@@ -11,7 +11,7 @@ use kbl_core::content::Content;
 use kbl_core::names::ItemId;
 use kbl_core::overlap::{FILES_ENTRY, files_offset, overlaps};
 use kbl_core::story::{Kept, accepted, has_story, story};
-use kbl_core::work::{ReadError, WorkLogged, WorkRecord, read};
+use kbl_core::work::{ReadError, WorkKind, WorkLogged, WorkRecord, read};
 use kbl_core::work_fold::{Stage, State};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
@@ -112,7 +112,7 @@ impl Folder {
     /// and `default`, and `unclear` (`scope`, `repo` or `acceptance`) when it is
     /// triage's. `root` is true for an item with no parent. `accepted` and `flagged` say
     /// whether a person accepted it and whether one flagged it for a person.
-    /// `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
+    /// `triage` is the stage of a root's triage child, or null. `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
     /// the attempt an agent holds, or null.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
@@ -126,6 +126,13 @@ impl Folder {
                 let source = target
                     .map(|t| t.source.as_str())
                     .or_else(|| imported.get(&i.root).copied());
+                // The state of a root's triage child, so a card can show why a root is not fixable yet.
+                let triage = i
+                    .children
+                    .iter()
+                    .filter_map(|c| self.state.items.get(c))
+                    .find(|c| c.work == WorkKind::Triage)
+                    .map(|c| self.state.stage(&c.id));
                 json!({
                     "id": i.id,
                     "title": i.title,
@@ -144,6 +151,7 @@ impl Folder {
                     "flagged": i.flagged,
                     "assignee": i.assignee,
                     "held_attempt": i.hold.as_ref().map(|h| h.attempt),
+                    "triage": triage,
                 })
             })
             .collect();

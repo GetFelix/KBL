@@ -91,6 +91,7 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("r1"),
             attempt: 1,
             reason: Some("claim lapsed".into()),
+            why: None,
             cost_micros: 30_000,
             usage: Vec::new(),
             floor_micros: 0,

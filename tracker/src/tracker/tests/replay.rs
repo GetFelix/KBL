@@ -37,7 +37,7 @@ async fn end(
     let (w, a1) = (agent(who), item("a1"));
     match how {
         "done" => t.complete(&w, &a1, attempt, Vec::new()).await,
-        "released" => t.release(&w, &a1, attempt, None, Vec::new()).await,
+        "released" => t.release(&w, &a1, attempt, None, None, Vec::new()).await,
         "gave_up" => {
             t.give_up(&w, &a1, attempt, "stuck".into(), Vec::new())
                 .await

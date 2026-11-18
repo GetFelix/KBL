@@ -563,6 +563,7 @@ fn spend_sums_claim_costs_per_root_reviewer_tier_and_repo() {
             item: id("v2"),
             attempt: 1,
             reason: None,
+            why: None,
             cost_micros: 300,
             usage: Vec::new(),
             floor_micros: 0,
