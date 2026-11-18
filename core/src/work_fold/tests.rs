@@ -815,6 +815,7 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
         duplicate_of: None,
         unclear: None,
         depends_on: Vec::new(),
+        related: Vec::new(),
         split: Vec::new(),
     };
     l.agent("w2", triaged(3)); // 3: holds nothing
@@ -1325,6 +1326,7 @@ fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
         duplicate_of: None,
         unclear: None,
         depends_on: Vec::new(),
+        related: Vec::new(),
         split: Vec::new(),
     });
     assert!(!fold(&l.0).items[&id("r1")].changed_upstream);
@@ -2486,6 +2488,7 @@ fn triage_posts_a_prerequisite_for_the_item_it_triages_and_keeps_its_claim() {
             duplicate_of: None,
             unclear: None,
             depends_on: Vec::new(),
+            related: Vec::new(),
             split: Vec::new(),
         },
     );
@@ -2720,6 +2723,7 @@ fn triaged_unclear(item: &str) -> WorkRecord {
         duplicate_of: None,
         unclear: Some(Unclear::Repo),
         depends_on: Vec::new(),
+        related: Vec::new(),
         split: Vec::new(),
     }
 }
@@ -3101,6 +3105,7 @@ fn chained_answers_stop_at_the_depth_cap() {
 mod assignee;
 mod card_actions;
 mod human_wait;
+mod related;
 mod review;
 mod review_actions;
 mod snapshots;
@@ -3371,6 +3376,7 @@ fn triage_answers_are_counted_unless_they_repeat_the_one_on_record() {
         duplicate_of: None,
         unclear: None,
         depends_on: Vec::new(),
+        related: Vec::new(),
         split: Vec::new(),
     };
     l.agent("w1", triaged(1, "a"));
@@ -3403,6 +3409,7 @@ fn a_changed_dependency_or_split_is_a_different_triage_answer() {
         duplicate_of: None,
         unclear: None,
         depends_on: depends_on.into_iter().map(id).collect(),
+        related: Vec::new(),
         split: split.into_iter().map(String::from).collect(),
     };
     l.tracker(imported("r0"));
@@ -3441,6 +3448,7 @@ fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
             duplicate_of: None,
             unclear: None,
             depends_on: Vec::new(),
+            related: Vec::new(),
             split: Vec::new(),
         },
     );

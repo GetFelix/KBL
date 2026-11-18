@@ -47,7 +47,7 @@ operations as MCP tools in `kbl-mcp` for agents:
 | `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you and, from format 14, frees the agent, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
 | `work_complete` / `work_release` | Finishes the item or hands it back, with the `usage` each model used (see [Cost and spend](#cost-and-spend)). `work_release` takes `why`: `failed` (the default), `waits_on_person` or `waits_on_outside`; see [Questions and waits free the agent](#questions-and-waits-free-the-agent) |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
-| `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on` and `split`, or `unclear`. Work the item needs from another repo is posted first, with `work_post`. See [Kinds of work](#kinds-of-work) |
+| `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on`, `related` and `split`, or `unclear`. Work the item needs from another repo is posted first, with `work_post`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
 
 Every `kbl-mcp` work tool, claiming included, calls the tracker over REST
@@ -487,6 +487,7 @@ record if the fold accepts it:
 | `POST /v1/work/note` `{item, text, attempt?, input?}` (`text` is `{"text": ...}`) | `human_input`: a note, a review comment, an answer or a priority change, with the person who wrote it. `input` is `note` (the default), `review_comment`, `answer` or `priority_change`; it only labels the note, and a tier changes through `/v1/work/tier`. `attempt` ties it to one attempt; without it the note is on the item. A redo names one of these as its note. Known secret shapes in `text` are replaced with `[redacted]` |
 | `POST /v1/work/close` `{item, why?}` | `closed`, with `merged`, `completed`, `dismissed` or `upstream` (default `dismissed`). Open descendants are cancelled |
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
+| `POST /v1/work/relate` `{item, to}` / `POST /v1/work/unrelate` `{item, to}` | `related` / `unrelated`: a soft link between two items that holds neither back, shown on both. [Format 18](upgrades.md#formats); below it, refused with `format`. See [Related items](#related-items) |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
 | `POST /v1/work/prices` `{model, unit, price_micros, effective_from_ms?, expected_price?}` | `price_set`: the price of one unit of a model from now, or from a later time. See [Cost and spend](#cost-and-spend) |
 | `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` (`text` is a string) | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |
@@ -703,7 +704,31 @@ on the log.
 - `flagged` is a record of [format 7](upgrades.md#formats). Until a person
   raises the log to 7, both calls are refused with `format`.
 
-#### Card actions on My queue
+#### Related items
+
+A relation links two items without ordering them. Unlike a dependency
+(`linked`), it never holds either item back: both stay claimable whatever
+state the other is in, and no stage, claim or `work_next` choice reads it.
+Use it for "schedule these together", such as two items that should run on the
+same machines.
+
+- A person writes it with `POST /v1/work/relate` or the `relate_items` tool
+  (`{item, to}`), and removes it with `/v1/work/unrelate` or `unrelate_items`.
+  It goes both ways, so relating `a` to `b` is the same as relating `b` to `a`.
+- It is shown on both cards as `Related: felix#376` and in the item panel under
+  Related. The item read (`GET /v1/work/items/{item}`) lists `related`.
+- An agent cannot write one. It proposes a relation by naming `related` in its
+  `work_triage` answer, and a person decides, as for `depends_on`.
+- An item has at most 20 relations (`limit_reached`), an item cannot be related
+  to itself (`cycle`), and a loop of relations is fine because nothing follows
+  them.
+- It needs the log raised to [format 18](upgrades.md#formats).
+
+`work_next` does not prefer an item related to the one an agent just held:
+that would need a rule for when the preference gives way to tier order, and it
+is left out until there is one.
+
+## Card actions on My queue
 
 These are the person's moves on a card in [My queue](#my-queue). Each is one
 record, written with a person's token for the team the token belongs to, and
@@ -750,6 +775,7 @@ KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
 | `set_tier`, `flag_item`, `unflag_item` | Change an item's priority, or flag it |
 | `add_note` | A note, review comment or priority change, as `human_input` |
 | `retry_item`, `snooze_item`, `park_item`, `unpark_item`, `unblock_item` | The [card actions](#card-actions-on-my-queue) |
+| `relate_items`, `unrelate_items` | Relate two items, or remove the relation: [Related items](#related-items) |
 | `request_review`, `request_changes`, `mark_merged`, `rate_summary` | The [review actions and summary marks](#review-actions-and-summary-marks) |
 | `take_item`, `reassign_item`, `steer_agent` | [Assignees](#assignees): take an item, assign it to a person (`to`) or to nobody (no `to`), or send a note to the agent holding it |
 
@@ -1728,7 +1754,7 @@ the operator's job.
 | Kind | Claimed by | The answer comes back as |
 |---|---|---|
 | `fix` | A coding agent | Progress records, a branch, a PR |
-| `triage` | Any agent | A proposal written with `work_triage`: a tier with one line of why, a possible duplicate, `depends_on` (items it should wait on), `split` (titles it should be cut into), or `unclear`. A person accepts, edits or rejects it, and decides about the dependencies and the split |
+| `triage` | Any agent | A proposal written with `work_triage`: a tier with one line of why, a possible duplicate, `depends_on` (items it must wait on), `related` (items to schedule with, which block nothing), `split` (titles it should be cut into), or `unclear`. A person accepts, edits or rejects it, and decides about the dependencies and the split |
 | `augment` | Any agent | Context records on the item: repro steps, related code, logs, linked issues, affected areas |
 | `split` | The agent holding the item | Live child items, within the budget below |
 | `question` | Any agent | An answer record that cites stream and offset |
@@ -1751,16 +1777,19 @@ answer sent twice by the same agent is written once. The agent then completes th
   "why": "data loss on restart, no workaround",
   "duplicate_of": "gh-792",
   "depends_on": ["gh-801"],
+  "related": ["gh-790"],
   "split": ["fix the reader", "fix the writer"]
 }
 ```
 
-`depends_on` and `split` are advice. They are recorded with the proposal, and the
+`depends_on`, `related` and `split` are advice. They are recorded with the proposal, and the
 tracker links nothing and creates no item from them. A person who agrees links
 the dependencies (`linked`) and posts the pieces. Each list holds at most 8
 entries, a dependency must be another item the agent can see (the same rule as
 `duplicate_of`), and a split title is at most 256 bytes. Changing either list
 counts as a different answer toward the 4 an attempt may log.
+
+**Which to use.** Name `depends_on` only when the item cannot start until the other is done: once a person links it, the item stays Blocked until then. Name `related` when the two merely belong together, for example because both should run on the same machines or be worked by the same agent: nothing waits. A `related` entry cannot also be in `depends_on`. Naming `related` needs the log raised to [format 18](upgrades.md#formats); below it the call is refused with `needs_format_18` and writes nothing.
 
 **What triage does to a root's tier.** Ingest admits a root at the tier its
 rule gives, so a root in `admit` mode is accepted before anyone triages it.

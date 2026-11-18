@@ -191,8 +191,8 @@ it under "Felix gaps", and each one has an issue labelled
 
 Bugs come in as roots from GitHub, Azure DevOps or Jira, and from people. An ingest worker writes each upstream
 id once and posts one triage item and one augment item for it. The agent that claims the triage item answers
-it with `work_triage` (a tier and why, a duplicate, dependencies, a split, or what is unclear), and a person accepts or edits that
-proposal; the dependencies and split are advice a person acts on. Work the item needs from another repo is
+it with `work_triage` (a tier and why, a duplicate, dependencies, related items, a split, or what is unclear), and a person accepts or edits that
+proposal; the dependencies, related items and split are advice a person acts on. A related item is scheduled alongside and never blocks; only a dependency does. Work the item needs from another repo is
 different: the triaging agent posts it as a prerequisite, and the item waits on it before anyone builds. A dependency can sit in any repo or source,
 and the board names where each blocker lives (its repo, else its source) when it differs from the row's repo. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.

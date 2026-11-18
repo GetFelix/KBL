@@ -217,6 +217,8 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/tier", post(tier::<B>))
         .route("/v1/work/close", post(close::<B>))
         .route("/v1/work/unlink", post(unlink::<B>))
+        .route("/v1/work/relate", post(relate::<B>))
+        .route("/v1/work/unrelate", post(unrelate::<B>))
         .route("/v1/work/budget", post(budget::<B>))
         .route("/v1/work/prices", post(price::<B>))
         .route("/v1/work/rules", post(rules::<B>))
@@ -1142,6 +1144,8 @@ struct TriageBody {
     #[serde(default)]
     depends_on: Vec<ItemId>,
     #[serde(default)]
+    related: Vec<ItemId>,
+    #[serde(default)]
     split: Vec<String>,
 }
 
@@ -1159,6 +1163,7 @@ async fn triage<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<TriageBody>) -> Re
                         duplicate_of: b.duplicate_of,
                         unclear: b.unclear,
                         depends_on: b.depends_on,
+                        related: b.related,
                         split: b.split,
                     },
                 ),
@@ -1385,6 +1390,22 @@ async fn close<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<CloseBody>) -> Resp
 
 async fn unlink<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<LinkBody>) -> Response {
     let record = WorkRecord::Unlinked {
+        item: b.item,
+        to: b.to,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn relate<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<LinkBody>) -> Response {
+    let record = WorkRecord::Related {
+        item: b.item,
+        to: b.to,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn unrelate<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<LinkBody>) -> Response {
+    let record = WorkRecord::Unrelated {
         item: b.item,
         to: b.to,
     };

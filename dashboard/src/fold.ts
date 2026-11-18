@@ -60,7 +60,9 @@ export interface ItemRow {
   /** The offset of the review finding this item came from, when a review made it. */
   finding?: number | null;
   /** What triage proposed besides the tier, for a person to accept or adjust. */
-  proposal?: { why: string; depends_on: string[]; split: string[] } | null;
+  proposal?: { why: string; depends_on: string[]; related?: string[]; split: string[] } | null;
+  /** Items related to this one, both ways. A relation holds nothing back: it is shown, never a block. */
+  related?: string[];
   /** The agent that holds it and when it last wrote, in the tracker's clock (ms). */
   holder?: string | null;
   active_ms?: number | null;

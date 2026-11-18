@@ -114,6 +114,8 @@ struct WorkTriageArgs {
     unclear: Option<String>,
     /// Ids of items this one should wait on. A person decides whether to link them.
     depends_on: Option<Vec<String>>,
+    /// Ids of items to schedule with this one, for example because they should run on the same machines. Unlike `depends_on`, a related item is never blocked and blocks nothing. A person decides whether to relate them.
+    related: Option<Vec<String>>,
     /// Titles this item should be split into, if it is too big for one change. A person decides; nothing is created.
     split: Option<Vec<String>>,
     /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
@@ -590,7 +592,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Answer the triage item you hold: propose a tier for the item it triages and say why in one line. Name `duplicate_of` if it repeats another item, `depends_on` for items it should wait on, and `split` for the titles it should be cut into. If you cannot settle it, set `unclear` to `scope`, `repo` or `acceptance` and it goes to a person as a question. This is a proposal; a person accepts or edits it. Complete the triage item after."
+        description = "Answer the triage item you hold: propose a tier for the item it triages and say why in one line. Name `duplicate_of` if it repeats another item, `depends_on` only for items that must be done first (the item stays Blocked until they are), `related` for items that merely belong together or should be scheduled alike (nothing is blocked), and `split` for the titles it should be cut into. If you cannot settle it, set `unclear` to `scope`, `repo` or `acceptance` and it goes to a person as a question. This is a proposal; a person accepts or edits it. Complete the triage item after."
     )]
     async fn work_triage(
         &self,
@@ -612,6 +614,7 @@ impl Server {
                         "duplicate_of": a.duplicate_of,
                         "unclear": a.unclear,
                         "depends_on": a.depends_on.unwrap_or_default(),
+                        "related": a.related.unwrap_or_default(),
                         "split": a.split.unwrap_or_default(),
                     }),
                     a.request_key.clone(),

@@ -205,6 +205,34 @@ pub(super) const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
+        name: "relate_items",
+        about: "Relate two items so they are scheduled together, for example because they should run on the same machines. A relation never holds either item back: both stay claimable. Use a dependency when one must be done first.",
+        route: Route::Post("/v1/work/relate"),
+        params: &[
+            ITEM,
+            Param {
+                name: "to",
+                kind: Kind::Text,
+                required: true,
+                about: "The id of the item to relate it to. The relation goes both ways.",
+            },
+        ],
+    },
+    Tool {
+        name: "unrelate_items",
+        about: "Remove a relation between two items.",
+        route: Route::Post("/v1/work/unrelate"),
+        params: &[
+            ITEM,
+            Param {
+                name: "to",
+                kind: Kind::Text,
+                required: true,
+                about: "The id of the item it is related to.",
+            },
+        ],
+    },
+    Tool {
         name: "request_review",
         about: "Record that the item's open pull request was put to a reviewer. The tracker contacts no one.",
         route: Route::Post("/v1/work/request-review"),

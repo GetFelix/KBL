@@ -96,6 +96,15 @@ export function reasonLine(i: ItemRow, waits: string | undefined): string {
   return needsLine(i);
 }
 
+/** The items this one is related to, as `Related: felix#376, felix#1505`; null when it has none. A relation never blocks, so this is not a reason line. */
+export function relatedLine(i: Pick<ItemRow, 'related'>, items: readonly ItemRow[], shown = 3): string | null {
+  const ids = i.related ?? [];
+  if (!ids.length) return null;
+  const names = ids.slice(0, shown).map((id) => nameOf(items, id));
+  const more = ids.length > shown ? ` and ${ids.length - shown} more` : '';
+  return `Related: ${names.join(', ')}${more}`;
+}
+
 /** The pull request as `PR #2300` with what upstream shows: merged, closed, or the checks. */
 export function prText(i: ItemRow): string | null {
   if (!i.pr) return null;

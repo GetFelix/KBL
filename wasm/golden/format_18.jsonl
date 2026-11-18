@@ -1,0 +1,18 @@
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1505","title":"run the perf matrix"}
+{"at_ms":1015,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#376","title":"run the soak test"}
+{"at_ms":1018,"by":"gabriel","actor":"person","kind":"imported","item":"r3","source":"github","upstream_id":"GetFelix/felix#377","title":"rebuild the box image"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1025,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"at_ms":1028,"by":"gabriel","actor":"person","kind":"accepted","item":"r3","tier":1}
+{"at_ms":1030,"by":"tracker","actor":"tracker","kind":"proposed","item":"t3","parent":"r3","key":"triage","work":"triage","title":"triage: rebuild the box image"}
+{"at_ms":1035,"by":"w2","actor":"agent","kind":"claimed","item":"t3","attempt":1,"deadline_ms":1800000090000}
+{"v":18,"at_ms":1040,"by":"w2","actor":"agent","kind":"triaged","item":"r3","tier":1,"why":"same boxes as the matrix","related":["r1"]}
+{"v":18,"at_ms":1045,"by":"gabriel","actor":"person","kind":"related","item":"r1","to":"r2"}
+{"v":18,"at_ms":1050,"by":"gabriel","actor":"person","kind":"format_raised","to":18}
+{"v":18,"at_ms":1055,"by":"w2","actor":"agent","kind":"triaged","item":"r3","tier":1,"why":"same boxes as the matrix","related":["r1"]}
+{"v":18,"at_ms":1060,"by":"w2","actor":"agent","kind":"related","item":"r1","to":"r3"}
+{"v":18,"at_ms":1065,"by":"gabriel","actor":"person","kind":"related","item":"r1","to":"r2"}
+{"v":18,"at_ms":1070,"by":"gabriel","actor":"person","kind":"related","item":"r3","to":"r1"}
+{"v":18,"at_ms":1075,"by":"gabriel","actor":"person","kind":"related","item":"r2","to":"r2"}
+{"at_ms":1080,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"v":18,"at_ms":1085,"by":"gabriel","actor":"person","kind":"unrelated","item":"r3","to":"r1"}

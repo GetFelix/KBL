@@ -83,8 +83,16 @@ pub const FORMAT_V14: u32 = 14;
 /// the item's ready record. Readers below 15 stop at the first such claim.
 pub const FORMAT_V15: u32 = 15;
 
+/// The format from which an item may be related to another: a soft link that
+/// never holds either one back (`related`, `unrelated`, and `related` on a
+/// triage answer). Readers below 18 stop at the first such record.
+pub const FORMAT_V18: u32 = 18;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V15;
+pub const FORMAT: u32 = FORMAT_V18;
+
+/// Most items one item may be related to.
+pub const MAX_RELATED: usize = 20;
 
 /// Longest reviewer name a `review_requested` carries.
 pub const MAX_REVIEWER: usize = 100;
@@ -648,6 +656,10 @@ pub enum WorkRecord {
         /// Items this one should wait on, as advice: a person links them.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         depends_on: Vec<ItemId>,
+        /// Items to schedule with this one, as advice: a person relates them.
+        /// Unlike `depends_on`, a relation never holds either item back.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        related: Vec<ItemId>,
         /// Titles this one should be split into, as advice: nothing is created.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         split: Vec<String>,
@@ -700,6 +712,11 @@ pub enum WorkRecord {
     Linked { item: ItemId, to: ItemId },
     /// A person removes the edge, for example after a dependency was dropped.
     Unlinked { item: ItemId, to: ItemId },
+    /// A person relates two items so they are scheduled together. The relation
+    /// is symmetric and never blocks claiming, unlike `Linked`.
+    Related { item: ItemId, to: ItemId },
+    /// A person removes a relation.
+    Unrelated { item: ItemId, to: ItemId },
     /// A context entry; the same `entry` again replaces it.
     Context {
         item: ItemId,
@@ -1038,6 +1055,8 @@ impl WorkRecord {
             WorkRecord::Shipped { .. } => "shipped",
             WorkRecord::Linked { .. } => "linked",
             WorkRecord::Unlinked { .. } => "unlinked",
+            WorkRecord::Related { .. } => "related",
+            WorkRecord::Unrelated { .. } => "unrelated",
             WorkRecord::Context { .. } => "context",
             WorkRecord::Claimed { .. } => "claimed",
             WorkRecord::Progress { .. } => "progress",
@@ -1098,6 +1117,8 @@ impl WorkRecord {
             | WorkRecord::Shipped { item, .. }
             | WorkRecord::Linked { item, .. }
             | WorkRecord::Unlinked { item, .. }
+            | WorkRecord::Related { item, .. }
+            | WorkRecord::Unrelated { item, .. }
             | WorkRecord::Context { item, .. }
             | WorkRecord::Claimed { item, .. }
             | WorkRecord::Progress { item, .. }
@@ -1266,6 +1287,8 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::Related { .. } | WorkRecord::Unrelated { .. } => FORMAT_V18,
+            WorkRecord::Triaged { related, .. } if !related.is_empty() => FORMAT_V18,
             WorkRecord::Claimed { direct: true, .. } => FORMAT_V15,
             WorkRecord::Released { why: Some(w), .. } if w.waits() => FORMAT_V14,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,

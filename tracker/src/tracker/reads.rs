@@ -127,6 +127,7 @@ impl<B: Broker> Tracker<B> {
             "stage": s.stage(id),
             "needs": s.needs_you(id),
             "waits_on": waits_on,
+            "related": s.related_to(id).collect::<Vec<_>>(),
             "at": s.at,
         }))
     }
@@ -195,7 +196,10 @@ impl<B: Broker> Tracker<B> {
 fn about(record: &WorkRecord, id: &ItemId) -> bool {
     record.item() == Some(id)
         || match record {
-            WorkRecord::Linked { to, .. } | WorkRecord::Unlinked { to, .. } => to == id,
+            WorkRecord::Linked { to, .. }
+            | WorkRecord::Unlinked { to, .. }
+            | WorkRecord::Related { to, .. }
+            | WorkRecord::Unrelated { to, .. } => to == id,
             WorkRecord::Prerequisite {
                 prerequisite,
                 triage,

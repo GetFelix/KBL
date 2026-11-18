@@ -916,6 +916,8 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
         ),
         ("/v1/work/close", json!({ "item": "a1" })),
         ("/v1/work/unlink", json!({ "item": "a1", "to": "a2" })),
+        ("/v1/work/relate", json!({ "item": "a1", "to": "a2" })),
+        ("/v1/work/unrelate", json!({ "item": "a1", "to": "a2" })),
         ("/v1/work/flag", json!({ "item": "a1" })),
         ("/v1/work/unflag", json!({ "item": "a1" })),
         ("/v1/work/retry", json!({ "item": "a1" })),
@@ -1375,6 +1377,41 @@ async fn only_a_person_sets_a_price_once_the_log_is_at_format_8() {
         (StatusCode::OK, Some("price_set")),
         "{reply}"
     );
+}
+
+#[tokio::test]
+async fn a_person_relates_two_items_from_format_18_and_the_panel_shows_both() {
+    let app = kept().await;
+    for item in ["a1", "a2"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+    }
+    let both = json!({ "item": "a1", "to": "a2" });
+    let (status, r) = call(&app, "/v1/work/relate", Some("tok-gab"), both.clone()).await;
+    assert_eq!(
+        (status, r["why"].as_str()),
+        (StatusCode::CONFLICT, Some("format")),
+        "{r}"
+    );
+    raise_to(&app, 18).await;
+    let (status, r) = call(&app, "/v1/work/relate", Some("tok-gab"), both.clone()).await;
+    assert_eq!(
+        (status, r["kind"].as_str()),
+        (StatusCode::OK, Some("related")),
+        "{r}"
+    );
+    for (id, other) in [("a1", "a2"), ("a2", "a1")] {
+        let (_, panel) = get_json(&app, &format!("/v1/work/items/{id}"), Some("tok-gab")).await;
+        assert_eq!(panel["related"], json!([other]), "{panel}");
+        assert_eq!(panel["waits_on"], json!([]), "{panel}");
+    }
+    let (status, r) = call(&app, "/v1/work/unrelate", Some("tok-gab"), both).await;
+    assert_eq!(
+        (status, r["kind"].as_str()),
+        (StatusCode::OK, Some("unrelated")),
+        "{r}"
+    );
+    let (_, panel) = get_json(&app, "/v1/work/items/a1", Some("tok-gab")).await;
+    assert_eq!(panel["related"], json!([]), "{panel}");
 }
 
 fn now_plus(ms: u64) -> u64 {

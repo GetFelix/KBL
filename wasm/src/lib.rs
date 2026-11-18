@@ -196,8 +196,10 @@ impl Folder {
                     "proposal": i.proposal.as_ref().map(|p| json!({
                         "why": p.why,
                         "depends_on": p.depends_on,
+                        "related": p.related,
                         "split": p.split,
                     })),
+                    "related": self.state.related_to(&i.id).collect::<Vec<_>>(),
                     "triage": triage,
                     "triage_skipped": i.triage_skipped,
                 })

@@ -6,7 +6,7 @@ use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
     FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, FORMAT_V15,
-    ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V18, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1206,7 +1206,7 @@ const FORMAT_15_LOG: &str = include_str!("work_format_15.jsonl");
 #[test]
 fn the_fifteenth_format_is_fifteen_and_stamps_only_direct_claims() {
     assert_eq!(FORMAT_V15, 15);
-    assert_eq!(FORMAT, FORMAT_V15);
+    const { assert!(FORMAT >= FORMAT_V15) };
     let log = entries(FORMAT_15_LOG);
     for (_, r) in &log {
         assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
@@ -1240,4 +1240,75 @@ fn a_direct_claim_is_refused_below_format_15_and_stops_an_older_reader() {
         direct.1.v > FORMAT_V14,
         "an older reader sees v above its own"
     );
+}
+
+/// A log at the eighteenth format: a soft relation between items. Its folded
+/// state is pinned in `wasm/golden/format_18.state.json`.
+const FORMAT_18_LOG: &str = include_str!("work_format_18.jsonl");
+
+#[test]
+fn the_eighteenth_format_stamps_relations_and_a_triage_answer_that_names_them() {
+    assert_eq!(FORMAT_V18, 18);
+    assert_eq!(FORMAT, FORMAT_V18);
+    for (_, r) in &entries(FORMAT_18_LOG) {
+        if matches!(r.record.kind(), "related" | "unrelated") {
+            assert_eq!(r.record.format(), FORMAT_V18, "{}", r.record.kind());
+        }
+    }
+    let plain: WorkRecord =
+        serde_json::from_str(r#"{"kind":"triaged","item":"r1","tier":1,"why":"w"}"#).unwrap();
+    assert_eq!(
+        plain.format(),
+        FORMAT_V1,
+        "a triage answer with no relation stays at its old format"
+    );
+}
+
+/// A relation, and a triage answer that names one, are refused below 18; from
+/// 18 only a person relates, never to itself, and a relation holds nothing back.
+#[test]
+fn relations_are_refused_below_format_18_and_from_an_agent() {
+    let log = entries(FORMAT_18_LOG);
+    let mut s = State::default();
+    let refused: Vec<(u64, Reject)> = log
+        .iter()
+        .filter_map(|(o, r)| s.try_apply(*o, r).err().map(|e| (*o, e)))
+        .collect();
+    assert_eq!(
+        refused,
+        vec![
+            (8, Reject::Format),
+            (9, Reject::Format),
+            (12, Reject::ActorNotAllowed),
+            (15, Reject::Cycle),
+        ]
+    );
+    let id = |x: &str| kbl_core::names::ItemId::new(x).unwrap();
+    assert_eq!(s.related_to(&id("r1")).collect::<Vec<_>>(), [&id("r2")]);
+    assert_eq!(s.related_to(&id("r2")).collect::<Vec<_>>(), [&id("r1")]);
+    assert_eq!(
+        s.related_to(&id("r3")).count(),
+        0,
+        "unrelated removes both directions"
+    );
+    assert_eq!(
+        s.items[&id("r3")].proposal.as_ref().unwrap().related,
+        [id("r1")]
+    );
+    assert!(s.edges.is_empty(), "a relation is not a dependency");
+    assert_eq!(
+        s.stage(&id("r1")),
+        Some(Stage::Held),
+        "r1 was claimed while related to open r2"
+    );
+}
+
+/// A reader below 18 stops at the first relation.
+#[test]
+fn a_reader_below_18_stops_at_a_relation() {
+    let first = entries(FORMAT_18_LOG)
+        .into_iter()
+        .find(|(_, r)| r.record.kind() == "related")
+        .unwrap();
+    assert!(first.1.v > 17);
 }

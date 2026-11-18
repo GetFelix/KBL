@@ -42,7 +42,8 @@ export function linkedSection(item: ItemRow, s: ViewState, acts: Activities, on:
   const pr = prLink(item);
   const row = s.blocked.find((b) => b.id === item.id);
   const waits = row ? blockerLines(row) : [];
-  if (!pr && l.children.length + waits.length + l.blocks.length === 0) return null;
+  const related = item.related ?? [];
+  if (!pr && l.children.length + waits.length + l.blocks.length + related.length === 0) return null;
   const group = (title: string, ...lis: HTMLElement[]) => (lis.length ? [h('h4', {}, title), h('ul', { class: title === 'Waits on' ? 'blockers' : 'linked' }, ...lis)] : []);
   return h('section', { class: 'linked-work', 'aria-labelledby': 'linked-title' },
     h('h3', { id: 'linked-title', class: 'section-title' }, 'Linked work'),
@@ -52,5 +53,7 @@ export function linkedSection(item: ItemRow, s: ViewState, acts: Activities, on:
       c.answer ? h('p', { class: 'linked-answer' }, h('span', { class: 'story-label' }, 'Answer '), c.answer) : null))),
     // The same list the Blocked view shows, with where each blocker lives.
     h('div', { class: 'blockers-box' }, ...group('Waits on', ...waits.map((b) => h('li', {}, itemLink(b.id, s, on, 'blocker'), b.title ? h('span', {}, ` ${b.title}`) : null, blockerNote(b) ? h('span', { class: 'muted' }, ` ${blockerNote(b)}`) : null)))),
+    // Not a hold: a related item is neither waited on nor blocked by this one.
+    ...group('Related', ...related.map((id) => h('li', {}, itemLink(id, s, on), ` ${s.items.find((x) => x.id === id)?.title ?? ''}`))),
     ...group('Blocks', ...l.blocks.map((b) => h('li', {}, itemLink(b.id, s, on), ` ${b.title}`))));
 }

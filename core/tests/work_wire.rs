@@ -45,6 +45,7 @@ fn every_record() -> Vec<WorkRecord> {
             duplicate_of: Some(item("r0")),
             unclear: None,
             depends_on: Vec::new(),
+            related: Vec::new(),
             split: Vec::new(),
         },
         WorkRecord::Accepted {
@@ -298,6 +299,7 @@ fn every_record() -> Vec<WorkRecord> {
             duplicate_of: None,
             unclear: Some(Unclear::Repo),
             depends_on: Vec::new(),
+            related: Vec::new(),
             split: Vec::new(),
         },
         WorkRecord::Question {
@@ -512,6 +514,7 @@ fn a_triage_answer_carries_dependencies_and_a_split_only_when_it_has_them() {
         duplicate_of: None,
         unclear: None,
         depends_on: vec![item("r0")],
+        related: Vec::new(),
         split: vec!["reader".into(), "writer".into()],
     };
     let line = String::from_utf8(with.encode()).unwrap();
