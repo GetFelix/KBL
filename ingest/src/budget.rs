@@ -307,9 +307,10 @@ impl Budget {
 
     /// Runs a request that does not go through [`Budgeted`], such as a token
     /// mint, under the same gate: it waits out a vendor's hold, is charged
-    /// once, and its refusals are honoured. Its remaining and limit figures are adopted
-    /// only when it reports the bucket normal calls do. It draws on the reserve,
-    /// since nothing else can go out without the token it fetches.
+    /// once, and its refusals are honoured. Its remaining and limit figures
+    /// are adopted only when it reports the bucket normal calls do. It draws
+    /// on the reserve, since nothing else can go out without the token it
+    /// fetches.
     pub(crate) async fn metered<F>(&self, send: F) -> Result<Res>
     where
         F: std::future::Future<Output = Result<Res>>,

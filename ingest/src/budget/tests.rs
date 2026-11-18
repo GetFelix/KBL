@@ -376,3 +376,17 @@ async fn a_mint_from_another_bucket_does_not_change_the_figures() {
     let e = budget.metered(async { Ok(refused) }).await.unwrap_err();
     assert_eq!(waited(&e), Duration::from_secs(90));
 }
+
+#[tokio::test]
+async fn a_mint_before_any_normal_call_adopts_nothing() {
+    let (_, _, budget, _) = rig(Vendor::Github, None);
+    let res = status(
+        201,
+        &[
+            ("x-ratelimit-remaining", "12"),
+            ("x-ratelimit-resource", "core"),
+        ],
+    );
+    budget.metered(async { Ok(res) }).await.unwrap();
+    assert_eq!(budget.snapshot().vendor_remaining, None);
+}
