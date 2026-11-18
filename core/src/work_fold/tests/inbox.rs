@@ -86,7 +86,10 @@ fn a_person_adjusts_triage_s_dependencies_and_split() {
     let p = s.items[&id("r1")].proposal.clone().unwrap();
     assert!(p.depends_on.is_empty());
     assert_eq!(p.split, ["a", "b"]);
-    assert_eq!(p.at, at, "the same answer, so a second edit may name it again");
+    assert_eq!(
+        p.at, at,
+        "the same answer, so a second edit may name it again"
+    );
     l.person(edit("r1", Some(&["r9"]), None, Some(at)));
     let p = fold(&l.0).items[&id("r1")].proposal.clone().unwrap();
     assert_eq!(p.depends_on, [id("r9")]);
@@ -102,7 +105,10 @@ fn an_edit_of_advice_is_refused_unless_it_names_the_answer_it_read() {
     let newer = l.person(triaged("r1", 2));
     l.person(edit("r1", None, Some(&["x"]), Some(at)));
     assert_eq!(last_rejection(&l), Some(Reject::StaleProposal));
-    assert_eq!(fold(&l.0).items[&id("r1")].proposal.as_ref().unwrap().at, newer);
+    assert_eq!(
+        fold(&l.0).items[&id("r1")].proposal.as_ref().unwrap().at,
+        newer
+    );
     // An item with no answer has nothing to edit.
     let mut l = Log::default();
     l.tracker(imported("r1"));
@@ -124,7 +130,11 @@ fn dependencies_that_repeat_or_name_nothing_real_are_refused() {
     l.person(edit("r1", Some(&[child.as_str()]), None, Some(at)));
     assert_eq!(last_rejection(&l), Some(Reject::BadDependency));
     assert_eq!(
-        fold(&l.0).items[&id("r1")].proposal.as_ref().unwrap().depends_on,
+        fold(&l.0).items[&id("r1")]
+            .proposal
+            .as_ref()
+            .unwrap()
+            .depends_on,
         [id("r9")]
     );
 }

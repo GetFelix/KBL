@@ -2556,7 +2556,10 @@ async fn a_person_adjusts_triage_s_advice_only_at_format_17_and_on_the_answer_th
         .unwrap();
     let core = t.0.core.lock().await;
     let p = core.state.items[&item("a1")].proposal.clone().unwrap();
-    assert_eq!((p.depends_on, p.split), (vec![item("a2")], vec!["x".to_owned()]));
+    assert_eq!(
+        (p.depends_on, p.split),
+        (vec![item("a2")], vec!["x".to_owned()])
+    );
 }
 
 #[tokio::test]

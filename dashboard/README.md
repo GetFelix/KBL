@@ -158,9 +158,13 @@ a question shows its text and numbered options (the agent's default is named), a
 row has focus, or type an answer and press Enter; a proposal shows triage's reasons, what it waits on and how it would
 split, with a tier field and Accept (`1`) and Reject (`2`, which asks first); a stuck item offers Unflag and Close.
 The sidebar lists the kinds under Needs you with a count each, and picking one narrows the list. Accept from the list
-sends the tier shown with no confirm; adjusting what a proposal waits on or splits into still happens in the panel.
-How long an item has waited is the log offset it began waiting at, which the page works out as it reads; a question
-uses its own offset. Flag and Unflag sit in the panel's actions and the bulk bar,
+sends the tier shown with no confirm. On a log at format 17 a proposal also has Adjust advice (`3`): two fields, what
+it waits on (item ids) and the titles to split it into (one per line), saved with Enter or Cmd/Ctrl+Enter and closed
+with Escape. What was typed survives live records. The edit names the answer it read, so an answer triage wrote since
+is never overwritten; the row then shows the new answer to adjust again.
+How long an item has waited is the log offset at which the fold saw it begin waiting for its present reason
+(`waiting_at` on the item row), so the order is the same after a reload. A log whose fold lacks it falls back to
+the offset the page saw when it first read the item. Flag and Unflag sit in the panel's actions and the bulk bar,
 and as palette commands (`Flag the selected items for a person`, `Unflag the selected items`) for the marked
 items, else the selected one. They have no confirm and no key, because each takes the other back. A refusal such as
 `no_change` (it was already so) shows in the activity line with the tracker's words. Undo (`Cmd+Z` on a Mac, `Ctrl+Z` elsewhere) still

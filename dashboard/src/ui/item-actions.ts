@@ -59,6 +59,7 @@ const PENDING: Record<WriteKind, string> = {
   take: 'Taking…',
   reassign: 'Assigning…',
   steer: 'Sending the note…',
+  advice: 'Adjusting the advice…',
   undo: 'Undoing…',
 };
 

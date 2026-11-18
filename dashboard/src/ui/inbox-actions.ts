@@ -5,9 +5,10 @@
 import type { ItemRow } from '../fold.ts';
 import { inboxKind } from '../inbox.ts';
 import type { ViewState } from '../state.ts';
+import { adviceChanged, adviceText, canAdvise, checkAdvice, parseDeps, parseSplit } from '../advice.ts';
 import { handoffKey } from '../handoff.ts';
 import { CAN, canRate, checkAnswer, pending, shownTier, UNCLEAR } from '../writes.ts';
-import { h } from './dom.ts';
+import { byFocus, h } from './dom.ts';
 import { handoffBlock } from './handoff-block.ts';
 import { tierSelect } from './item-actions.ts';
 
@@ -18,6 +19,8 @@ export interface InboxHandlers {
   acceptNow(ids: string[], tier: number | null): void;
   confirm(kind: 'accept' | 'reject' | 'close', ids: string[]): void;
   flag(ids: string[], flagged: boolean): void;
+  /** Replaces triage's dependencies and split on the answer at offset `proposal`. */
+  advice(item: string, proposal: number, depends_on: string[], split: string[]): void;
   /** Marks the summary of `attempt` accurate or not. */
   rate(item: string, attempt: number, accurate: boolean): void;
 }
@@ -30,10 +33,79 @@ const questionText = (item: ItemRow, s: Pick<ViewState, 'questions'>): string =>
 const keyed = (n: number, label: string, cls: string, onclick: () => void, extra: Record<string, string> = {}) =>
   h('button', { type: 'button', class: `button small ${cls}`, 'data-key': String(n), 'aria-keyshortcuts': String(n), onclick, ...extra }, h('kbd', {}, String(n)), ` ${label}`);
 
+/** What a person has typed into an advice editor, kept across a rebuild of the strip. `base` is the advice it was opened on. */
+interface Draft {
+  base: string;
+  open: boolean;
+  deps: string;
+  split: string;
+}
+
+const adviceBase = (i: ItemRow): string => `${i.proposal?.at}|${i.proposal?.depends_on.join(',')}|${i.proposal?.split.join('\n')}`;
+
 export function inboxActions(on: InboxHandlers) {
   const strips = new Map<string, { sig: string; el: HTMLElement }>();
+  const drafts = new Map<string, Draft>();
   // Handlers read the newest state, not the one the strip was built from.
   let latest!: ViewState;
+
+  /** Adjusting triage's dependencies and split: key 3 opens it, Enter saves, Escape closes. */
+  const adviceEditor = (item: ItemRow, at: number, guard: (run: () => void) => () => void) => {
+    const id = item.id;
+    const base = adviceBase(item);
+    let draft = drafts.get(id);
+    // Triage answered again, or the edit landed: the draft was written against advice that is gone.
+    if (!draft || draft.base !== base) {
+      const t = adviceText(item.proposal!);
+      draft = { base, open: false, ...t };
+      drafts.set(id, draft);
+    }
+    const d = draft;
+    const err = h('p', { class: 'field-error', id: `inbox-advice-error-${id}`, role: 'alert' });
+    const deps = h('input', { type: 'text', class: 'field', id: `inbox-deps-${id}`, 'data-focus': 'advice-deps', autocomplete: 'off', 'aria-describedby': `inbox-advice-error-${id}` });
+    const split = h('textarea', { class: 'field textarea', id: `inbox-split-${id}`, 'data-focus': 'advice-split', rows: '3', 'aria-describedby': `inbox-advice-error-${id}` });
+    deps.value = d.deps;
+    split.value = d.split;
+    deps.addEventListener('input', () => { d.deps = deps.value; });
+    split.addEventListener('input', () => { d.split = split.value; });
+    const toggle = keyed(3, 'Adjust advice…', '', () => setOpen(!d.open), { 'data-focus': 'advice-open', 'aria-expanded': String(d.open), 'aria-controls': `inbox-advice-${id}` });
+    const form = h('form', { class: 'inbox-advice', id: `inbox-advice-${id}`, 'aria-label': 'Adjust triage’s advice' },
+      h('label', { for: `inbox-deps-${id}`, class: 'inline-label' }, 'Waits on (item ids)'),
+      deps,
+      h('label', { for: `inbox-split-${id}`, class: 'inline-label' }, 'Split into (one title per line)'),
+      split,
+      h('button', { type: 'submit', class: 'button small primary', 'data-focus': 'advice-save' }, 'Save'),
+      h('button', { type: 'button', class: 'button small', 'data-focus': 'advice-cancel', onclick: () => setOpen(false) }, 'Cancel'),
+      err);
+    form.hidden = !d.open;
+    function setOpen(open: boolean) {
+      d.open = open;
+      form.hidden = !open;
+      toggle.setAttribute('aria-expanded', String(open));
+      err.textContent = '';
+      if (open) deps.focus();
+      else toggle.focus();
+    }
+    form.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+      } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        form.requestSubmit();
+      }
+    });
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const next = { deps: parseDeps(deps.value), split: parseSplit(split.value) };
+      const problem = checkAdvice(item, next.deps, next.split, latest.items) ?? (adviceChanged(item.proposal!, next.deps, next.split) ? null : 'Nothing changed.');
+      err.textContent = problem ?? '';
+      if (problem) return;
+      guard(() => on.advice(id, at, next.deps, next.split))();
+    });
+    return { toggle, form };
+  };
 
   const build = (item: ItemRow, s: ViewState, signedIn: boolean): HTMLElement => {
     const id = item.id;
@@ -79,11 +151,14 @@ export function inboxActions(on: InboxHandlers) {
       if (p?.split.length) body.push(h('p', { class: 'muted small' }, `Split into ${p.split.join(', ')}`));
       const tier = tierSelect(`inbox-tier-${id}`, shownTier(item));
       tier.setAttribute('data-focus', 'tier');
+      const editor = p && canAdvise(item) ? adviceEditor(item, p.at!, guard) : null;
       body.push(h('div', { class: 'inbox-row' },
         h('label', { for: `inbox-tier-${id}`, class: 'inline-label' }, 'Tier'),
         tier,
         keyed(1, 'Accept', 'primary', guard(() => on.acceptNow([id], tier.value === '' ? null : Number(tier.value))), { 'data-focus': 'accept' }),
-        keyed(2, 'Reject…', 'danger', guard(() => on.confirm('reject', [id])), { 'data-focus': 'reject' })));
+        keyed(2, 'Reject…', 'danger', guard(() => on.confirm('reject', [id])), { 'data-focus': 'reject' }),
+        editor?.toggle ?? null));
+      if (editor) body.push(editor.form);
     } else {
       const actions: HTMLElement[] = [];
       if (CAN.unflag(item)) actions.push(keyed(actions.length + 1, 'Unflag', 'primary', guard(() => on.flag([id], false)), { 'data-focus': 'unflag' }));
@@ -101,7 +176,7 @@ export function inboxActions(on: InboxHandlers) {
     strip(item: ItemRow, s: ViewState): HTMLElement {
       latest = s;
       const signedIn = s.tracker.kind === 'signed-in';
-      const sig = [signedIn, item.needs, item.stage, item.question, (item.options ?? []).join('\u0000'), item.default, item.proposed_tier, item.tier, item.flagged, item.proposal?.why, item.format, handoffKey(item, s.handoffs?.get(item.id))].join('|');
+      const sig = [signedIn, item.needs, item.stage, item.question, (item.options ?? []).join('\u0000'), item.default, item.proposed_tier, item.tier, item.flagged, item.proposal?.why, canAdvise(item) ? adviceBase(item) : '', item.format, handoffKey(item, s.handoffs?.get(item.id))].join('|');
       let kept = strips.get(item.id);
       if (!kept || kept.sig !== sig) {
         kept = { sig, el: build(item, s, signedIn) };
@@ -118,7 +193,7 @@ export function inboxActions(on: InboxHandlers) {
     },
     /** Forgets strips of items no longer shown. */
     keep(ids: ReadonlySet<string>) {
-      for (const id of strips.keys()) if (!ids.has(id)) strips.delete(id);
+      for (const id of strips.keys()) if (!ids.has(id)) { strips.delete(id); drafts.delete(id); }
     },
   };
 }

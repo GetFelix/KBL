@@ -11,7 +11,7 @@ import { assigneePerson } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
 import { childStrip, focusedStrip, refocusChip, stripKey, type StripHandlers } from './child-strip.ts';
 import { paintTriage } from './triage-chip.ts';
-import { h } from './dom.ts';
+import { byFocus, h } from './dom.ts';
 import { inboxActions, type InboxHandlers } from './inbox-actions.ts';
 import { inboxKind, kindLabel } from '../inbox.ts';
 
@@ -302,8 +302,10 @@ export function itemList(
           const old = li.querySelector('.inbox-act');
           if (old !== strip) {
             const had = old?.contains(document.activeElement);
+            const focused = had ? (document.activeElement as HTMLElement).dataset.focus : undefined;
             old ? old.replaceWith(strip) : li.append(strip);
-            if (had) strip.querySelector<HTMLElement>('[data-focus]')?.focus({ preventScroll: true });
+            // The same control gets the focus back, so typing in an editor survives a live record.
+            if (had) ((focused ? byFocus(strip, focused) : null) ?? strip.querySelector<HTMLElement>('[data-focus]'))?.focus({ preventScroll: true });
           }
         }
         inbox.keep(new Set(rows.keys()));

@@ -748,6 +748,52 @@ async fn a_person_moves_an_item_into_needs_you_and_out_once_the_log_is_at_format
 }
 
 #[tokio::test]
+async fn a_person_blocks_an_item_on_a_resource_and_lifts_it_once_the_log_is_at_format_16() {
+    let app = kept().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    call(
+        &app,
+        "/v1/work/proposals/accept",
+        Some("tok-gab"),
+        json!({ "item": "a1" }),
+    )
+    .await;
+    let block = json!({ "item": "a1", "resource": "azure-vms", "reason": "no credit" });
+
+    let (status, reply) = call(&app, "/v1/work/block", Some("tok-gab"), block.clone()).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("format"))
+    );
+    raise_to(&app, 16).await;
+    let (status, reply) = call(&app, "/v1/work/block", Some("tok-gab"), block.clone()).await;
+    assert_eq!(
+        (status, reply["kind"].as_str()),
+        (StatusCode::OK, Some("block_set")),
+        "{reply}"
+    );
+    let (_, one) = get_json(&app, "/v1/work/items/a1", Some("tok-gab")).await;
+    assert_eq!(one["item"]["block"]["resource"], "azure-vms", "{one}");
+    // Neither a time nor a resource is a bad block, and an agent cannot set one.
+    let none = json!({ "item": "a1", "reason": "x" });
+    let (status, reply) = call(&app, "/v1/work/block", Some("tok-gab"), none).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("bad_block"))
+    );
+    let (status, _) = call(&app, "/v1/work/block", Some("tok-w1"), block).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let lift = json!({ "item": "a1" });
+    let (status, _) = call(&app, "/v1/work/lift-block", Some("tok-gab"), lift.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, reply) = call(&app, "/v1/work/lift-block", Some("tok-gab"), lift).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("no_change"))
+    );
+}
+
+#[tokio::test]
 async fn a_lost_claim_is_a_conflict_with_a_reason() {
     let app = app().await;
     let (status, reply) = call(
@@ -920,6 +966,11 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
         ("/v1/work/unflag", json!({ "item": "a1" })),
         ("/v1/work/retry", json!({ "item": "a1" })),
         ("/v1/work/snooze", json!({ "item": "a1", "until_ms": 1 })),
+        (
+            "/v1/work/block",
+            json!({ "item": "a1", "resource": "azure-vms", "reason": "x" }),
+        ),
+        ("/v1/work/lift-block", json!({ "item": "a1" })),
         ("/v1/work/park", json!({ "item": "a1" })),
         ("/v1/work/unpark", json!({ "item": "a1" })),
         ("/v1/work/unblock", json!({ "item": "a1", "to": "a2" })),
@@ -2272,9 +2323,7 @@ async fn a_proposal_edit_carries_advice_only_at_format_17_and_for_the_answer_rea
     let (status, answer) = call(&app, "/v1/work/records", Some("tok-gab"), triaged).await;
     assert_eq!(status, StatusCode::OK, "{answer}");
     let at = answer["offset"].as_u64().unwrap();
-    let edit = |proposal: u64| {
-        json!({ "item": "a1", "depends_on": [], "split": ["x", "y"], "proposal": proposal })
-    };
+    let edit = |proposal: u64| json!({ "item": "a1", "depends_on": [], "split": ["x", "y"], "proposal": proposal });
     let (status, reply) = call(&app, "/v1/work/proposals/edit", Some("tok-gab"), edit(at)).await;
     assert_eq!(
         (status, reply["why"].as_str()),
@@ -2290,12 +2339,23 @@ async fn a_proposal_edit_carries_advice_only_at_format_17_and_for_the_answer_rea
     .await;
     assert_eq!(status, StatusCode::OK, "{reply}");
     raise_to(&app, 17).await;
-    let (status, reply) = call(&app, "/v1/work/proposals/edit", Some("tok-gab"), edit(at + 1)).await;
+    let (status, reply) = call(
+        &app,
+        "/v1/work/proposals/edit",
+        Some("tok-gab"),
+        edit(at + 1),
+    )
+    .await;
     assert_ne!(status, StatusCode::OK, "{reply}");
     let (status, reply) = call(&app, "/v1/work/proposals/edit", Some("tok-gab"), edit(at)).await;
     assert_eq!(status, StatusCode::OK, "{reply}");
     let (_, history) = get_json(&app, "/v1/work/items/a1/history", Some("tok-gab")).await;
-    let last = history["records"].as_array().unwrap().last().unwrap().clone();
+    let last = history["records"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
     assert_eq!(last["record"]["kind"], "edited", "{history}");
     assert_eq!(last["record"]["split"], json!(["x", "y"]));
     // A person's advice has triage's bounds.

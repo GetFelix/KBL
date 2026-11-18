@@ -28,12 +28,14 @@ impl<B: Broker> Tracker<B> {
         self.begin().await?;
         let core = self.0.core.lock().await;
         let s = &core.state;
+        let now = super::now_ms();
         let items: Vec<Value> = s
             .items
             .values()
             .filter(|i| stage.is_none() || s.stage(&i.id) == stage)
             .map(|i| {
                 json!({
+                    "block": i.block.as_ref().filter(|b| b.holds_at(now)),
                     "item": i.id,
                     "title": i.title,
                     "work": i.work,

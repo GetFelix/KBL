@@ -67,9 +67,12 @@ export function trackWaiting(prev: ReadonlyMap<string, Waiting>, items: readonly
   return next;
 }
 
-/** Oldest first; ties and items never seen waiting fall back to the id, so the order never flickers. */
+/**
+ * Oldest first. The fold's `waiting_at` is exact and the same after a reload; the page's own
+ * `waiting` only covers a log whose fold does not record it. Ties fall back to the id, so the order never flickers.
+ */
 export function oldestFirst(rows: readonly ItemRow[], waiting: ReadonlyMap<string, Waiting>): ItemRow[] {
-  const at = (i: ItemRow) => i.question ?? waiting.get(i.id)?.at ?? Number.MAX_SAFE_INTEGER;
+  const at = (i: ItemRow) => i.waiting_at ?? i.question ?? waiting.get(i.id)?.at ?? Number.MAX_SAFE_INTEGER;
   return [...rows].sort((a, b) => at(a) - at(b) || a.id.localeCompare(b.id));
 }
 

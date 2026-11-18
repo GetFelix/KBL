@@ -313,6 +313,8 @@ impl State {
             rec.record,
             WorkRecord::Snoozed { .. }
                 | WorkRecord::Parked { .. }
+                | WorkRecord::BlockSet { .. }
+                | WorkRecord::BlockCleared { .. }
                 | WorkRecord::SummaryRated { .. }
         );
         if rec.actor == Actor::Person
