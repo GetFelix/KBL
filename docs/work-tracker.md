@@ -495,6 +495,8 @@ record if the fold accepts it:
 | `POST /v1/work/unflag` `{item}` | `flagged` with `flagged: false`: the item leaves Needs you, unless it waits there for another reason |
 | `POST /v1/work/retry` `{item}` | `retried`: an item that used its tries gets a fresh set. See [Card actions on My queue](#card-actions-on-my-queue) |
 | `POST /v1/work/snooze` `{item, until_ms}` | `snoozed`: My queue hides the item until `until_ms` |
+| `POST /v1/work/block` `{item, reason, until_ms?, resource?}` | `block_set`: no agent is handed the item until `until_ms` or until a person lifts it. Needs `until_ms`, `resource` or both. See [Blocking an item](#blocking-an-item) |
+| `POST /v1/work/lift-block` `{item}` | `block_cleared`: the item can be handed out again |
 | `POST /v1/work/park` `{item}` | `parked` with `parked: true`: My queue hides the item until it waits for a new reason |
 | `POST /v1/work/unpark` `{item}` | `parked` with `parked: false`: the item is in My queue again |
 | `POST /v1/work/unblock` `{item, to}` | `unblocked`: marks the dependency `to` resolved, so the item no longer waits on it |
@@ -704,6 +706,45 @@ on the log.
 - `flagged` is a record of [format 7](upgrades.md#formats). Until a person
   raises the log to 7, both calls are refused with `format`.
 
+#### Blocking an item
+
+An item can wait on something no agent can fix: an outside resource that is
+unavailable (Azure credit at zero until a date), a person who is away, a
+release freeze. `POST /v1/work/block` holds it back from every agent:
+
+```bash
+curl -X POST "$TRACKER/v1/work/block" -H "authorization: Bearer $PERSON_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"item": "a1", "resource": "azure-vms", "until_ms": 1795305600000, "reason": "Azure credit is $0 until 11/21"}'
+```
+
+- `reason` is required and shown on the card and in the item panel.
+  `resource` names what it waits on, such as `azure-vms` (letters, digits,
+  `-`, `_` and `.`, up to 64). `until_ms` is when the block ends by itself:
+  after the record and at most a year out. Give a time, a resource or both.
+  With a resource and no time the block lasts until a person calls
+  `POST /v1/work/lift-block`.
+- `work_next` and `work_peek` skip a blocked item on every path: the lane, a
+  filtered call, a call among several roots, and an item assigned to the
+  caller. Nothing is written for it. The item keeps its stage (Ready) and its
+  place; the board shows the block on the card.
+- A time ends a block with no record and no background job. Whoever hands out
+  work checks the clock, and the fold refuses a claim made before the time,
+  so a restart gives the same answer.
+- If an agent holds the item, the agent keeps it. Once the attempt is
+  released it waits for the block like any other item.
+- Setting a block that is already set, or lifting one that has ended or was
+  never set, is refused with `no_change`. A block with no time and no
+  resource, a time in the past or over a year out, an empty or over-long
+  reason, or a resource name that is not plain is refused with `bad_block`.
+  A closed item is refused with `closed`. Reopening an item drops its block.
+- Only a person sets or lifts a block, with a person token. The tools are
+  `block_item` and `lift_block`.
+- `block_set` and `block_cleared` are records of [format 16](upgrades.md#formats).
+  Until a person raises the log to 16, both calls are refused with `format`.
+- Blocks are per item. Lifting every item on a resource at once, and
+  agents that say which resources they have, are not built yet.
+
 #### Card actions on My queue
 
 These are the person's moves on a card in [My queue](#my-queue). Each is one
@@ -751,6 +792,7 @@ KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
 | `set_tier`, `flag_item`, `unflag_item` | Change an item's priority, or flag it |
 | `add_note` | A note, review comment or priority change, as `human_input` |
 | `retry_item`, `snooze_item`, `park_item`, `unpark_item`, `unblock_item` | The [card actions](#card-actions-on-my-queue) |
+| `block_item`, `lift_block` | [Block an item](#blocking-an-item) until a time or on a named resource, or lift the block |
 | `request_review`, `request_changes`, `mark_merged`, `rate_summary` | The [review actions and summary marks](#review-actions-and-summary-marks) |
 | `take_item`, `reassign_item`, `steer_agent` | [Assignees](#assignees): take an item, assign it to a person (`to`) or to nobody (no `to`), or send a note to the agent holding it |
 
