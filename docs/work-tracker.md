@@ -326,6 +326,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it (and whether that close was a merge) or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
+| `GET`, `PUT /v1/ingest/backoff/{pool}` | ingest | A budget pool's shared backoff, kept in the org's cache. `PUT {"wait_s": 120}` holds every worker of the pool off for that long (the later time wins, at most an hour); both answer `{"remaining_ms"}`. Refused with 403 unless one of the caller's team's connections spends the pool |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin", "review_limit": 3}]}` |
 
 A call that ends a claim (`complete`, `release`, `give_up`, and a
@@ -480,7 +481,7 @@ record if the fold accepts it:
 | Call | Records |
 |---|---|
 | `POST /v1/work/proposals/accept` `{item, tier?}` | `accepted`. A proposal's tier comes from the edit, then this call, then triage |
-| `POST /v1/work/proposals/edit` `{item, title?, tier?}` | `edited`, for an item nobody has accepted yet |
+| `POST /v1/work/proposals/edit` `{item, title?, tier?, depends_on?, split?, proposal?}` | `edited`, for an item nobody has accepted yet. `depends_on` and `split` replace the lists in triage's answer for the item and need `proposal`, the offset of the answer the person read (`proposal.at` in the item's row); see [Adjusting triage's advice](#adjusting-triages-advice). Needs format 17 |
 | `POST /v1/work/proposals/reject` `{item}` | `rejected`, for an item nobody has accepted |
 | `POST /v1/work/questions/answer` `{item, text?, chosen?, moves_to?, question?, evidence?}` | `answer`. The question defaults to the open one. `moves_to` is `{source, repo, title}` |
 | `POST /v1/work/tier` `{item, tier}` | `tier_changed`. A ready item is published again on its new tier |
@@ -1002,7 +1003,7 @@ To set ingest up for the first time, start with [Setting up ingest](ingest-setup
 `kbl-ingest` is a separate binary. It never writes to Felix: it reads
 GitHub, then writes through the three `ingest` calls above under its own token,
 and it makes no model calls. `kbl-ingest --config ingest.json` polls every
-`poll_seconds` (default 300, a minimum: the gap stretches when the request
+`poll_seconds` (default 300, a minimum of 60: the gap stretches when the request
 budget needs it; see [Request budget](ingest-setup.md#request-budget));
 `--once` polls once. `--webhook-listen` adds an
 endpoint whose only effect is to wake the poll (a `check_suite`,
@@ -1833,6 +1834,25 @@ counts as a different answer toward the 4 an attempt may log.
 
 **Which to use.** Name `depends_on` only when the item cannot start until the other is done: once a person links it, the item stays Blocked until then. Name `related` when the two merely belong together, for example because both should run on the same machines or be worked by the same agent: nothing waits. A `related` entry cannot also be in `depends_on`. Naming `related` needs the log raised to [format 18](upgrades.md#formats); below it the call is refused with `needs_format_18` and writes nothing.
 
+#### Adjusting triage's advice
+
+From format 17 a person edits the two lists before accepting, with
+`POST /v1/work/proposals/edit` and `depends_on` and `split`. The item is the
+root triage answered for, and the request must carry `proposal`, the offset of
+the answer the person read. The list a request leaves out stays; an empty list
+clears it. The edit is advice just like the answer: nothing is linked or created.
+
+The same bounds hold as for the agent: at most 8 entries a list, distinct
+dependencies, a split title of 1 to 256 bytes. The fold also refuses a
+dependency that is the item, its own triage item, or no item in the log
+(`bad_dependency`), and an edit with no `proposal`, or one that is not the
+standing answer's offset, as `stale_proposal`. That last check is what keeps an
+edit made against an answer triage has since replaced from landing on the new
+one. The record changes the standing answer in place, so its offset stays and a
+second edit may name it again. If triage then answers anew, its answer replaces
+the edited one whole, as any new answer does. Below format 17 the record is
+refused with `format`.
+
 **What triage does to a root's tier.** Ingest admits a root at the tier its
 rule gives, so a root in `admit` mode is accepted before anyone triages it.
 The tier in the triage answer is advice there too: it never changes the
@@ -2581,7 +2601,10 @@ leaves out items assigned to someone else:
 - a PR to review, or an approved one to merge.
 
 Items are ordered by how long they have waited, oldest first, with tier as the
-tie-break. The count is in the tab title, so it shows without opening the page.
+tie-break. The Needs you view of the dashboard sorts by the log offset at which
+the item began waiting for its present reason, which the fold records on the
+item (`waiting_since`), so the order is the same on every page load and after a
+restart; items that began waiting at the same record fall back to their id. The count is in the tab title, so it shows without opening the page.
 Snoozed and parked items drop out of the count, and come back when the snooze ends or the item waits for a new reason.
 
 Every card is keyboard first, and the keys mean what they mean in Linear,

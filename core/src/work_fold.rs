@@ -26,6 +26,7 @@ use crate::work::{
 mod human_wait;
 mod snapshots;
 mod trust;
+mod waiting_since;
 
 pub use snapshots::{
     Anchor, FOLD_REV, Lineage, SNAPSHOT_EVERY, Saved, Snapshot, Snapshots, fold_to,
@@ -36,6 +37,7 @@ mod tests;
 
 pub use human_wait::{HumanWaitStats, KindStats, QueueEntry, WaitKind};
 pub use trust::{MIN_SAMPLE, TrustStats};
+pub use waiting_since::WaitingSince;
 
 const DEFAULT_MAX_ITEMS: u32 = 12;
 const DEFAULT_MAX_DEPTH: u8 = 3;
@@ -453,6 +455,9 @@ pub struct Proposal {
     pub related: Vec<ItemId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub split: Vec<String>,
+    /// A person adjusted the advice, so an agent's repeat of its own answer is a retry, not a new one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
     pub at: u64,
     /// Who wrote it, so a retry by the same writer can be told from a new holder's answer.
     /// Left out of the state's wire form; a replay of the log sets it again.
@@ -622,6 +627,10 @@ pub struct Item {
     /// The reason the item waited when it was parked, as for `Snooze::kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parked_kind: Option<WaitKind>,
+    /// When the item began waiting in the inbox for its present reason. Items
+    /// from a snapshot taken before this field have none until the reason changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_since: Option<WaitingSince>,
     /// A person held it back from every claim. Past its time it no longer
     /// holds, so read it with [`Block::holds_at`] or [`State::blocked_at`].
     /// Cleared by `block_cleared` or a reopen.
@@ -799,6 +808,11 @@ pub enum Reject {
     BadAssignee,
     /// A claim by an agent other than the item's agent assignee.
     NotAssignee,
+    /// An edit of a proposal's advice that names no proposal, or one that was
+    /// not read, or whose answer triage has replaced since.
+    StaleProposal,
+    /// Dependencies that repeat, name the item or its triage child, or name no item.
+    BadDependency,
     /// A claim on an item a person blocked and whose block still holds.
     Blocked,
     /// A block with neither a time nor a resource, a time that is past or too
@@ -1681,6 +1695,7 @@ impl State {
             snoozed: None,
             parked_at_ms: None,
             parked_kind: None,
+            waiting_since: None,
             block: None,
             review_ask: None,
             changes_ask: None,
@@ -1900,8 +1915,15 @@ impl State {
     }
 
     fn step(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
-        self.step_record(offset, rec)?;
+        if let Err(e) = self.step_record(offset, rec) {
+            // A probe rolls its flags back, so only a real fold records the wait they began.
+            if self.probing.is_none() {
+                self.track_waiting_since_refused(offset, rec);
+            }
+            return Err(e);
+        }
         self.track_human_wait(rec);
+        self.track_waiting_since(offset, rec);
         Ok(())
     }
 
@@ -1994,6 +2016,7 @@ impl State {
                     depends_on: depends_on.clone(),
                     related: related.clone(),
                     split: split.clone(),
+                    edited: false,
                     at: offset,
                     by: Some(rec.by.clone()),
                 });
@@ -3193,7 +3216,14 @@ impl State {
                 }
                 it.tier = Some(*tier);
             }
-            WorkRecord::Edited { item, title, tier } => {
+            WorkRecord::Edited {
+                item,
+                title,
+                tier,
+                depends_on,
+                split,
+                proposal,
+            } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);
                 }
@@ -3208,11 +3238,38 @@ impl State {
                 if it.closed.is_some() {
                     return Err(Reject::Closed);
                 }
+                if depends_on.is_some() || split.is_some() {
+                    // The edit must name the answer it read, so it cannot land on a newer one.
+                    if proposal.is_none() || it.proposal.as_ref().map(|p| p.at) != *proposal {
+                        return Err(Reject::StaleProposal);
+                    }
+                    if let Some(deps) = depends_on {
+                        let distinct: BTreeSet<_> = deps.iter().collect();
+                        if distinct.len() != deps.len()
+                            || deps.iter().any(|d| d == item || it.children.contains(d))
+                        {
+                            return Err(Reject::BadDependency);
+                        }
+                        if deps.iter().any(|d| !self.items.contains_key(d)) {
+                            return Err(Reject::BadDependency);
+                        }
+                    }
+                }
+                let it = self.item_mut(item)?;
                 if let Some(t) = title {
                     it.title = t.clone();
                 }
                 if tier.is_some() {
                     it.tier = *tier;
+                }
+                if let Some(p) = it.proposal.as_mut().filter(|_| proposal.is_some()) {
+                    if let Some(deps) = depends_on {
+                        p.depends_on.clone_from(deps);
+                    }
+                    if let Some(titles) = split {
+                        p.split.clone_from(titles);
+                    }
+                    p.edited = true;
                 }
             }
             WorkRecord::Refused { item, reason, .. } => {

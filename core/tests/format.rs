@@ -6,7 +6,7 @@ use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
     FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, FORMAT_V15,
-    FORMAT_V16, FORMAT_V18, ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V16, FORMAT_V17, FORMAT_V18, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1290,6 +1290,64 @@ fn a_block_is_refused_below_format_16_and_stops_an_older_reader() {
     assert_eq!(below.try_apply(5, &block.1), Err(Reject::Format));
     assert!(
         block.1.v > FORMAT_V15,
+        "an older reader sees v above its own"
+    );
+}
+
+/// A log at the seventeenth format: a person adjusts triage's dependencies and
+/// split. Its folded state is pinned in `wasm/golden/format_17.state.json`.
+const FORMAT_17_LOG: &str = include_str!("work_format_17.jsonl");
+
+#[test]
+fn the_seventeenth_format_is_seventeen_and_stamps_only_an_edit_of_advice() {
+    assert_eq!(FORMAT_V17, 17);
+    const { assert!(FORMAT >= FORMAT_V17) };
+    let log = entries(FORMAT_17_LOG);
+    for (_, r) in &log {
+        assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
+    }
+    let edit = log
+        .iter()
+        .find(|(_, r)| r.record.kind() == "edited")
+        .expect("an edit of advice");
+    assert_eq!(edit.1.v, FORMAT_V17);
+    assert_eq!(edit.1.record.format(), FORMAT_V17);
+}
+
+/// Below 17 the fold refuses the edit, and a reader that reads only 16 stops at it.
+#[test]
+fn an_edit_of_advice_is_refused_below_format_17_and_stops_an_older_reader() {
+    let log = entries(FORMAT_17_LOG);
+    let mut s = State::default();
+    let refused: Vec<u64> = log
+        .iter()
+        .filter(|(o, r)| s.try_apply(*o, r).is_err())
+        .map(|(o, _)| *o)
+        .collect();
+    assert!(refused.is_empty(), "{refused:?}");
+    assert_eq!(
+        s.items[&kbl_core::names::ItemId::new("r1").unwrap()]
+            .proposal
+            .as_ref()
+            .unwrap()
+            .split,
+        ["matrix"]
+    );
+    let mut below = State::default();
+    for (o, r) in log.iter().take(2) {
+        below.try_apply(*o, r).unwrap();
+    }
+    let raise16 = WorkLogged::new(
+        1020,
+        kbl_core::names::Key::new("gabriel").unwrap(),
+        Actor::Person,
+        WorkRecord::FormatRaised { to: 16 },
+    );
+    below.try_apply(2, &raise16).unwrap();
+    below.try_apply(3, &log[3].1).unwrap();
+    assert_eq!(below.try_apply(4, &log[4].1), Err(Reject::Format));
+    assert!(
+        log[4].1.v > FORMAT_V16,
         "an older reader sees v above its own"
     );
 }

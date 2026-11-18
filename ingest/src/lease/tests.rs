@@ -730,3 +730,26 @@ async fn the_heartbeat_reply_carries_until_ms_to_the_worker() {
         ])
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn the_budget_share_follows_the_leases_held_and_not_the_ones_handed_over() {
+    use crate::budget::{Budget, Vendor};
+    let l = leased(&["github:o/a", "github:o/b", "github:o/c", "github:o/d"]);
+    let budget = Budget::new(Vendor::Github, None, 0.9);
+    l.attach(budget.clone());
+    l.configure_budget(&json!({
+        "connection": { "pool": "gh", "sources": ["github:o/a"] },
+        "budget": { "per_hour": 4000, "kept_back": 800, "wake_cap": 200, "pool_sources": 8 },
+    }));
+    assert_eq!(budget.pool().as_deref(), Some("gh"));
+    l.renewed(l.sending(), held(&[("github:o/a", 1), ("github:o/b", 1)]));
+    assert_eq!(budget.snapshot().hourly, 1000, "2 of 8 sources of 4000");
+    // A source moved to another worker, which this one holds until it lapses.
+    let mut leases = held(&[("github:o/a", 1), ("github:o/b", 1)]);
+    leases.get_mut("github:o/b").unwrap().until = Some(Duration::from_secs(20));
+    l.renewed(l.sending(), leases);
+    assert_eq!(budget.snapshot().hourly, 500, "only what it keeps");
+    // A config with no connection leaves the worker on its file's budget.
+    l.configure_budget(&json!({ "connection": null, "budget": null }));
+    assert_eq!(budget.pool(), None);
+}

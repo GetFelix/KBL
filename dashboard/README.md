@@ -158,9 +158,13 @@ a question shows its text and numbered options (the agent's default is named), a
 row has focus, or type an answer and press Enter; a proposal shows triage's reasons, what it waits on and how it would
 split, with a tier field and Accept (`1`) and Reject (`2`, which asks first); a stuck item offers Unflag and Close.
 The sidebar lists the kinds under Needs you with a count each, and picking one narrows the list. Accept from the list
-sends the tier shown with no confirm; adjusting what a proposal waits on or splits into still happens in the panel.
-How long an item has waited is the log offset it began waiting at, which the page works out as it reads; a question
-uses its own offset. Flag and Unflag sit in the panel's actions and the bulk bar,
+sends the tier shown with no confirm. On a log at format 17 a proposal also has Adjust advice (`3`): two fields, what
+it waits on (item ids) and the titles to split it into (one per line), saved with Enter or Cmd/Ctrl+Enter and closed
+with Escape. What was typed survives live records. The edit names the answer it read, so an answer triage wrote since
+is never overwritten; the row then shows the new answer to adjust again.
+How long an item has waited is the log offset at which the fold saw it begin waiting for its present reason
+(`waiting_at` on the item row), so the order is the same after a reload. A log whose fold lacks it falls back to
+the offset the page saw when it first read the item. Flag and Unflag sit in the panel's actions and the bulk bar,
 and as palette commands (`Flag the selected items for a person`, `Unflag the selected items`) for the marked
 items, else the selected one. They have no confirm and no key, because each takes the other back. A refusal such as
 `no_change` (it was already so) shows in the activity line with the tracker's words. Undo (`Cmd+Z` on a Mac, `Ctrl+Z` elsewhere) still
@@ -200,6 +204,7 @@ in the status line.
 | `V` | Switch list and board |
 | `C` | Show child work as cards, or nested under its root |
 | `F` | Go to the filters |
+| `G` | Go to Group by |
 | `Home` / `End` | First and last item; on the board, of the current column |
 | `Enter` | Open the selected item in the panel |
 | `Esc` | Close the panel or dialog, clear the search, or clear the selection |
@@ -224,10 +229,15 @@ has one entry per filter value and per saved view.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
-- **The address.** `view=blocked`, `view=inbox`, `layout=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
+- **Group by.** The list groups by stage (the default), tier, repo, kind or assignee, or not at all. Each group has a
+  header button with its name and count; Enter or Space folds it, and `J` and `K` skip folded groups. Folds are kept per
+  view and per grouping while the page is open. The palette has a `Group by: …` entry per key and Collapse or Expand
+  all groups. The board is always stage columns, so the control is disabled there. Needs you stays one list, oldest
+  first, until a grouping is picked.
+- **The address.** `view=blocked`, `view=inbox`, `layout=board`, `group=`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
   address, so a link opens the same view. An older `view=board` link still opens the board and is rewritten to
   `layout=board`.
-- **Saved views.** Save view names the current view, layout, search and filters and puts it in the sidebar; Edit
+- **Saved views.** Save view names the current view, layout, search, filters and grouping and puts it in the sidebar; Edit
   renames or deletes it, and a name another view has is refused. After a rename the focus is back on that view's
   Edit; after a delete, on the next saved view or Save view. Saved views and the density are kept in this
   browser's local storage, per viewer, and the page works without them when storage is blocked. Each change
@@ -244,7 +254,7 @@ has one entry per filter value and per saved view.
 - `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?layout=`, `?item=`, `?q=`, filters).
 - `src/writes.ts`: what each item allows, the request for each write, how the tracker's answer reads, undo,
   and the write list. `src/tracker.ts`: the REST client. Both pure, tested in `test/writes.test.ts`.
-- `src/views.ts`: filters, the view in the address, and saved views.
+- `src/views.ts`: filters, the view in the address, and saved views. `src/group-by.ts`: the table of Group by keys.
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.
 - `src/ui/`: the views (shell, filter bar, list, board, panel, palette, shortcuts, saved-view dialog, status line), `tokens.css` for colour, space and

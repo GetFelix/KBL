@@ -842,6 +842,12 @@ struct EditProposalBody {
     item: ItemId,
     title: Option<String>,
     tier: Option<u8>,
+    /// Replaces triage's dependencies. Needs `proposal` and format 17.
+    depends_on: Option<Vec<ItemId>>,
+    /// Replaces triage's split titles. Needs `proposal` and format 17.
+    split: Option<Vec<String>>,
+    /// The offset of triage's answer the person read, as the item's `proposal.at`.
+    proposal: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1336,6 +1342,9 @@ async fn edit_proposal<B: Broker>(
         item: b.item,
         title: b.title,
         tier: b.tier,
+        depends_on: b.depends_on,
+        split: b.split,
+        proposal: b.proposal,
     };
     as_person(&call, rk, record).await
 }

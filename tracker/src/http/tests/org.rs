@@ -1327,3 +1327,58 @@ async fn a_person_lists_the_teams_agents_to_assign_without_the_revoked() {
     let (status, _) = get_json(&o.app, "/v1/teams/default/work/agents", Some("tok-w1")).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+async fn backoff_put(o: &OrgApp, pool: &str, token: &str, wait_s: u64) -> (StatusCode, Value) {
+    send(
+        &o.app,
+        Request::put(format!("/v1/ingest/backoff/{pool}")),
+        Some(token),
+        json!({ "wait_s": wait_s }),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_pool_backoff_holds_the_later_time_for_at_most_an_hour() {
+    let o = connected().await;
+    org_record(
+        &o,
+        "tok-ops",
+        connection("default", "g1", &["github:o/one"]),
+    )
+    .await;
+    let remaining = |b: &Value| b["remaining_ms"].as_u64().unwrap();
+    let (status, none) = get_json(&o.app, "/v1/ingest/backoff/gh-app", Some("tok-i1")).await;
+    assert_eq!((status, remaining(&none)), (StatusCode::OK, 0));
+    let (status, long) = backoff_put(&o, "gh-app", "tok-i1", 600).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(remaining(&long) > 590_000);
+    // A shorter wait does not shorten it.
+    let (_, short) = backoff_put(&o, "gh-app", "tok-i1", 5).await;
+    assert!(remaining(&short) > 590_000, "the later time wins");
+    let (_, read) = get_json(&o.app, "/v1/ingest/backoff/gh-app", Some("tok-i1")).await;
+    assert!(remaining(&read) > 590_000, "another worker reads it");
+    let (_, capped) = backoff_put(&o, "gh-app", "tok-i1", 86_400).await;
+    assert!(remaining(&capped) <= 3_600_000 && remaining(&capped) > 3_590_000);
+}
+
+#[tokio::test]
+async fn a_pool_backoff_is_for_an_ingest_token_of_a_team_that_spends_the_pool() {
+    let o = connected().await;
+    org_record(
+        &o,
+        "tok-ops",
+        connection("default", "g1", &["github:o/one"]),
+    )
+    .await;
+    let (status, _) = backoff_put(&o, "gh-app", "tok-w1", 60).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "an agent token");
+    let (status, _) = backoff_put(&o, "other-pool", "tok-i1", 60).await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a pool the team does not spend"
+    );
+    let (status, _) = get_json(&o.app, "/v1/ingest/backoff/other-pool", Some("tok-i1")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}

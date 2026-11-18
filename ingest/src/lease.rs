@@ -91,6 +91,9 @@ pub(crate) struct Lessee {
     /// the connection does not name.
     repos: Vec<String>,
     mode: Mutex<Mode>,
+    /// Told how many sources this worker serves, so its share of the pool's
+    /// budget follows its leases.
+    budget: std::sync::OnceLock<Arc<crate::budget::Budget>>,
     wall: Wall,
     /// Wakes the poll loop, the heartbeat and requests in flight when the
     /// mode changes.
@@ -115,6 +118,7 @@ impl Lessee {
             vendor,
             repos: Vec::new(),
             mode: Mutex::new(mode),
+            budget: std::sync::OnceLock::new(),
             wall,
             changed: Notify::new(),
         })
@@ -143,6 +147,36 @@ impl Lessee {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+
+    /// Ties the worker's request budget to its leases.
+    pub(crate) fn attach(&self, budget: Arc<crate::budget::Budget>) {
+        let _ = self.budget.set(budget);
+    }
+
+    /// Sources this worker serves, not counting ones handed to another
+    /// worker that it still holds while their lease runs out. Counting those
+    /// would let two workers spend one source's share at once.
+    fn serving(mode: &Mode) -> u64 {
+        match mode {
+            Mode::Leased { held, .. } => held.values().filter(|h| h.until.is_none()).count() as u64,
+            _ => 0,
+        }
+    }
+
+    fn share_changed(&self, serving: u64) {
+        if let Some(b) = self.budget.get() {
+            b.set_held(serving);
+        }
+    }
+
+    /// Takes the config answer's pool and its budget. A worker with no
+    /// connection or no pool budget keeps the budget its file sets.
+    pub(crate) fn configure_budget(&self, answer: &Value) {
+        let Some(b) = self.budget.get() else { return };
+        let pool = answer["connection"]["pool"].as_str().map(str::to_owned);
+        let share = crate::budget::PoolShare::from_config(&answer["budget"]);
+        b.set_pool(pool, share);
     }
 
     /// Takes the config answer's `connection`: null means file-managed.
@@ -176,7 +210,9 @@ impl Lessee {
         };
         if *mode != next {
             *mode = next;
+            let serving = Self::serving(&mode);
             drop(mode);
+            self.share_changed(serving);
             let outside = self.outside();
             if !outside.is_empty() {
                 eprintln!(
@@ -224,7 +260,9 @@ impl Lessee {
                 wall_ms: sent.1,
             });
         }
+        let serving = Self::serving(&mode);
         drop(mode);
+        self.share_changed(serving);
         self.changed.notify_waiters();
     }
 
@@ -549,6 +587,7 @@ pub(crate) async fn config_task<A: LeaseApi>(
         {
             Ok(Some((body, tag))) => {
                 lessee.configure(&body["connection"]);
+                lessee.configure_budget(&body);
                 etag = Some(tag);
             }
             Ok(None) => {}

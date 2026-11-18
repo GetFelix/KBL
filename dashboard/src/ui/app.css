@@ -52,6 +52,11 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .list { padding: var(--space-3) var(--space-5) var(--space-6); }
 .group-title { display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--text-sm); font-weight: var(--weight-bold); color: var(--muted); margin: var(--space-4) 0 var(--space-1); padding: 0 var(--space-2); }
 .count { font-weight: var(--weight-medium); }
+.group-toggle { display: inline-flex; gap: var(--space-2); align-items: baseline; font: inherit; color: inherit; background: none; border: 0; padding: var(--space-1) var(--space-2); margin: 0 calc(var(--space-2) * -1); border-radius: var(--radius-sm, 4px); cursor: pointer; }
+.group-toggle:hover { background: var(--hover, rgb(127 127 127 / 0.12)); }
+.group-toggle:focus-visible { outline: 2px solid var(--focus, currentColor); outline-offset: 1px; }
+.chevron { width: 1em; }
+.filter.group-by[title] { cursor: help; }
 .list ul { list-style: none; margin: 0; padding: 0; }
 .row { display: flex; gap: var(--space-4); align-items: center; min-height: max(var(--row-height), var(--target-min)); padding: 0 var(--space-2); border-bottom: 1px solid var(--line); color: var(--text); text-decoration: none; }
 .row:hover { background: var(--hover); }
@@ -263,8 +268,10 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .inbox-act { flex-basis: 100%; padding: var(--space-2) var(--space-2) var(--space-3) calc(var(--target-min) + var(--space-2)); border-bottom: 1px solid var(--line); }
 .inbox-act[aria-busy] button { cursor: progress; }
 .inbox-question { margin: 0 0 var(--space-2); white-space: pre-wrap; }
-.inbox-options, .inbox-row, .inbox-answer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
+.inbox-options, .inbox-row, .inbox-answer, .inbox-advice { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
 .inbox-answer .field { flex: 1; min-width: 12rem; }
+.inbox-advice[hidden] { display: none; }
+.inbox-advice .field { flex: 1 1 100%; }
 .inbox-act kbd { margin-right: var(--space-1); }
 /* Nested child work, the working badge and card properties. */
 .card-lead { color: var(--text); }

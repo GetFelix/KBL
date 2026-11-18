@@ -14,7 +14,7 @@ fn a_config_has_defaults_and_lists_the_repos_once() {
     let c = parse(&format!("[{RULE},{}]", RULE.replace("\"a\"", "\"b\"")), GH).unwrap();
     assert_eq!(c.poll_seconds, 300);
     assert_eq!(c.reconcile_hours, 24);
-    assert_eq!(c.budget_share, 0.5);
+    assert_eq!(c.budget_share, 0.5, "half the vendor's limit");
     assert_eq!(c.budget_per_hour, None);
     assert_eq!(c.github.as_ref().unwrap().api, "https://api.github.com");
     assert_eq!(c.rules[0].default_tier, 2);
@@ -378,4 +378,19 @@ fn a_skip_rule_name_must_fit_the_record() {
     assert!(parse(&rules, GH).is_err());
     let ok = format!(r#"[{{"name":"{long}","repo":"o/r","mode":"admit"}}]"#);
     assert!(parse(&ok, GH).is_ok());
+}
+
+#[test]
+fn a_poll_gap_under_a_minute_is_raised_to_the_floor() {
+    let with = |secs: u64| {
+        Config::parse(&format!(
+            r#"{{"tracker":{{"url":"http://t","token_env":"T"}},"github":{GH},"poll_seconds":{secs},"rules":[{RULE}]}}"#
+        ))
+        .unwrap()
+        .poll_floor()
+    };
+    assert_eq!(with(1).as_secs(), 60);
+    assert_eq!(with(59).as_secs(), 60);
+    assert_eq!(with(60).as_secs(), 60);
+    assert_eq!(with(300).as_secs(), 300);
 }

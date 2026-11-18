@@ -160,6 +160,27 @@ impl Http {
         .await
     }
 
+    /// `PUT /v1/ingest/backoff/{pool}`: holds the pool off for `wait_s`.
+    pub(crate) async fn pool_backoff_put(&self, pool: &str, wait_s: u64) -> Result<(u16, Value)> {
+        self.send(
+            "/v1/ingest/backoff/{pool}",
+            self.client
+                .put(format!("{}/v1/ingest/backoff/{pool}", self.base))
+                .json(&json!({ "wait_s": wait_s })),
+        )
+        .await
+    }
+
+    /// `GET /v1/ingest/backoff/{pool}`: what is left of the pool's backoff.
+    pub(crate) async fn pool_backoff_get(&self, pool: &str) -> Result<(u16, Value)> {
+        self.send(
+            "/v1/ingest/backoff/{pool}",
+            self.client
+                .get(format!("{}/v1/ingest/backoff/{pool}", self.base)),
+        )
+        .await
+    }
+
     /// A config poll: status, body and `ETag`. The client's own timeout is
     /// lifted past the hold.
     pub(crate) async fn get_config(

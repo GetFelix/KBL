@@ -16,6 +16,8 @@ use tokio::time::Instant;
 
 use crate::felix::{Broker, ConditionalWrite, holder_token};
 
+mod backoff;
+
 /// How long the org lease may stay lost before the process exits. Past it,
 /// revocations would stop taking effect.
 pub(crate) const ORG_LEASE_GRACE: Duration = Duration::from_secs(60);

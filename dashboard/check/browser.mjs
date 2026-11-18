@@ -53,6 +53,7 @@ const fakeGateway = (log, mode, pageSize = 20) => `(() => {
     '/v1/work/proposals/accept': (b) => ({ kind: 'accepted', item: b.item, tier: b.tier }),
     '/v1/work/proposals/reject': (b) => ({ kind: 'rejected', item: b.item }),
     '/v1/work/prices': (b) => ({ v: 8, kind: 'price_set', model: b.model, unit: b.unit, price_micros: b.price_micros, effective_from_ms: b.effective_from_ms }),
+    '/v1/work/proposals/edit': (b) => ({ v: 17, kind: 'edited', item: b.item, depends_on: b.depends_on, split: b.split, proposal: b.proposal }),
     '/v1/work/tier': (b) => ({ kind: 'tier_changed', item: b.item, tier: b.tier }),
     '/v1/work/close': (b) => ({ kind: 'closed', item: b.item, why: b.why }),
     '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: b.text ?? { text: '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
@@ -373,9 +374,9 @@ try {
   // Filters: a select per recorded facet, a summary, Clear filters, and palette commands.
   await open(connected);
   await page.waitFor(live);
-  const offered = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.dataset.facet).join(' ')`);
+  const offered = await page.eval(`[...document.querySelectorAll('.filters .filter select')].map((s) => s.dataset.facet).join(' ')`);
   check(offered === 'source tier repo', `filters offer the recorded facets (${offered})`);
-  const shownValues = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.selectedOptions[0]?.textContent ?? '').join(',')`);
+  const shownValues = await page.eval(`[...document.querySelectorAll('.filters .filter select')].map((s) => s.selectedOptions[0]?.textContent ?? '').join(',')`);
   check(shownValues === 'Any,Any,Any', `every filter with no value shows Any, not a blank (${shownValues})`);
   await press(page, 'f');
   check(await focused('#filter-source'), 'F focuses the first filter');
@@ -921,6 +922,46 @@ try {
   check(hidden.length === 0, `keyboard: no Tab stop is an invisible element${hidden.length ? ` (${[...new Set(hidden)].join(', ')})` : ''}`);
   clean();
 
+  // Group by: headers are buttons, folding hides rows and j/k skip them, the choice is in the address.
+  {
+    const seen = (js) => page.eval(js);
+    await open(`${connected}&group=tier`);
+    await page.waitFor(live);
+    const names = await seen(`[...document.querySelectorAll('.list .group-toggle')].map((b) => b.querySelector('.group-name').textContent + ' ' + b.querySelector('.count').textContent).join(' | ')`);
+    console.log(`     group by tier: ${names}`);
+    check(await seen(`document.querySelector('#group-by').value === 'tier' && document.querySelectorAll('.list .group-toggle').length > 1`), 'group by: ?group=tier groups the list by tier and the toolbar shows it');
+    check(await seen(`[...document.querySelectorAll('.list .group-toggle')].every((b) => b.getAttribute('aria-expanded') === 'true' && /^(Tier \\d+|No tier)$/.test(b.querySelector('.group-name').textContent))`), 'group by: each header is a button, open, named for its tier');
+    const rowsBefore = await seen(`document.querySelectorAll('.list .row').length`);
+    const firstCount = Number(await seen(`document.querySelector('.list .group-toggle .count').textContent`));
+    await seen(`document.querySelector('.list .group-toggle').focus(); document.querySelector('.list .group-toggle').click(); true`);
+    const rowsAfter = await seen(`document.querySelectorAll('.list .row').length`);
+    console.log(`     folded the first group: ${rowsBefore} rows -> ${rowsAfter}, count ${firstCount}`);
+    check(rowsAfter === rowsBefore - firstCount, 'group by: folding a group hides its rows and keeps its count');
+    check(await seen(`document.querySelector('.list .group-toggle').getAttribute('aria-expanded') === 'false'`), 'group by: a folded header says aria-expanded false');
+    check(await focused('.list .group-toggle'), 'group by: the header keeps the focus after folding');
+    let stray = 0;
+    for (let n = 0; n < rowsAfter + 1; n++) {
+      await press(page, 'j');
+      if (!(await seen(`(() => { const r = document.querySelector('.list .row[data-selected]'); return !!r && r.closest('section').querySelector('.group-toggle').getAttribute('aria-expanded') === 'true'; })()`))) stray++;
+    }
+    check(stray === 0, `group by: j never selects a row in a folded group (${stray} strays over ${rowsAfter + 1} presses)`);
+    await seen(`document.querySelector('.list .row[data-selected]').focus(); true`);
+    await seen(`(() => { const s = document.querySelector('#group-by'); s.value = 'repo'; s.dispatchEvent(new Event('change')); return true; })()`);
+    check(await seen(`document.activeElement?.classList.contains('row') && document.activeElement.hasAttribute('data-selected')`), 'group by: regrouping keeps the focus on the same row');
+    await page.waitFor(`location.search.includes('group=repo')`);
+    check(await seen(`[...document.querySelectorAll('.list .group-name')].some((n) => n.textContent === 'GetFelix/felix')`), 'group by: picking repo regroups the list and writes group=repo to the address');
+    await seen(`(() => { const s = document.querySelector('#group-by'); s.value = 'none'; s.dispatchEvent(new Event('change')); return true; })()`);
+    check(await seen(`document.querySelectorAll('.list .group-toggle').length === 0 && document.querySelectorAll('.list .row').length > 0`), 'group by: None is one list with no headers');
+    await open(`${connected}&group=assignee`);
+    await page.waitFor(live);
+    check(await seen(`document.querySelector('#group-by').value === 'assignee'`), 'group by: a link restores the grouping');
+    await open(`${connected}&layout=board&group=tier`);
+    await page.waitFor(live);
+    check(await seen(`document.querySelector('#group-by').disabled && document.querySelectorAll('.column').length > 1`), 'group by: the board keeps its stage columns and the control says so');
+    await axe('group by');
+    clean();
+  }
+
   // The Needs-you inbox answers in place: a question by its option key, a triage proposal by Accept.
   {
     const log = fixtureLog();
@@ -965,6 +1006,50 @@ try {
     check(await page.eval(`window.__tracker.calls.at(-1).body.item === 'inb-2' && window.__tracker.calls.at(-1).body.tier === 2`), 'Accept in the list sends the shown tier without a confirm');
     await page.waitFor(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',') === 'gh-2204'`);
     check(true, 'the accepted proposal leaves the inbox');
+    clean();
+  }
+
+  // Adjusting triage's advice in the inbox row: opened and saved from the keyboard, the draft and the focus
+  // surviving a live record, and the list in the order the items began waiting.
+  {
+    const log = fixtureLog();
+    let at = 1_900_100_000_000;
+    const rec = (r) => log.push({ actor: 'person', by: 'maintainer', at_ms: at++, ...r });
+    rec({ v: 17, kind: 'format_raised', to: 17 });
+    for (const [id, n] of [['adv-1', 1], ['adv-2', 2], ['adv-3', 3]]) rec({ kind: 'imported', item: id, source: 'github', title: `Advice ${n}`, upstream_id: `GetFelix/felix#920${n}` });
+    // adv-3 is triaged first, so it has waited longest although its id sorts last.
+    rec({ kind: 'triaged', item: 'adv-3', tier: 2, why: 'third', depends_on: ['adv-2'], split: ['half', 'other half'] });
+    rec({ kind: 'triaged', item: 'adv-1', tier: 1, why: 'first', depends_on: [], split: [] });
+    await open(`${connected}&view=inbox`, { log });
+    await page.waitFor(live);
+    await page.eval(`document.querySelector('.account-button').click(); true`);
+    await page.waitFor(`document.querySelector('.sign-in-dialog')?.open === true`);
+    await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
+    await page.waitFor(`document.querySelector('.account-who')?.textContent === 'Signed in as maintainer'`);
+    const order = await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).filter((id) => id.startsWith('adv-')).join(',')`);
+    check(order === 'adv-3,adv-1', `the inbox lists proposals in the order triage answered (saw ${order})`);
+    const rowOf = (id) => `.inbox-item:has(.row[data-id=${id}])`;
+    await page.eval(`document.querySelector('.row[data-id=adv-1]').focus(); true`);
+    await press(page, '3');
+    check(await page.eval(`!document.querySelector('${rowOf('adv-1')} .inbox-advice').hidden && document.activeElement.dataset.focus === 'advice-deps'`), 'key 3 opens the advice editor and focuses the dependencies field');
+    check(await page.eval(`document.querySelector('${rowOf('adv-3')} .inbox-advice').hidden`), 'the editor of another row stays closed (scoped to its own row)');
+    await page.eval(`(() => { const d = document.activeElement; d.value = 'adv-2'; d.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    // A live record about another item rebuilds the list; the open editor, its text and the focus stay.
+    await page.eval(`window.__push({ actor: 'person', by: 'maintainer', at_ms: Date.now(), kind: 'triaged', item: 'adv-2', tier: 2, why: 'late' }); true`);
+    await page.waitFor(`[...document.querySelectorAll('.row')].some((r) => r.dataset.id === 'adv-2')`);
+    const kept = await page.eval(`JSON.stringify([document.activeElement.dataset.focus, document.activeElement.value, !document.querySelector('${rowOf('adv-1')} .inbox-advice').hidden])`);
+    check(kept === '["advice-deps","adv-2",true]', `a live record keeps the open editor, its text and the focus (saw ${kept})`);
+    await page.eval(`document.querySelector('${rowOf('adv-1')} [data-focus=advice-split]').focus(); true`);
+    await page.eval(`(() => { const t = document.activeElement; t.value = 'part one\\npart two'; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    await axe('advice editor open');
+    await press(page, 'Enter', MOD);
+    await page.waitFor(`window.__tracker.calls.at(-1).url === '/v1/work/proposals/edit'`);
+    const sent = await page.eval(`JSON.stringify(window.__tracker.calls.at(-1).body)`);
+    const body = JSON.parse(sent);
+    check(body.item === 'adv-1' && body.depends_on.join() === 'adv-2' && body.split.join('|') === 'part one|part two' && typeof body.proposal === 'number', `Ctrl or Cmd+Enter saves the advice for the answer that was read (sent ${sent})`);
+    await page.waitFor(`document.querySelector('${rowOf('adv-1')} .inbox-act')?.textContent.includes('Waits on adv-2')`);
+    const after = await page.eval(`JSON.stringify([document.querySelector('${rowOf('adv-1')} .inbox-act').textContent.includes('Split into part one, part two'), document.querySelector('${rowOf('adv-1')} .inbox-advice').hidden])`);
+    check(after === '[true,true]', `the row shows the adjusted advice and the editor closes (saw ${after})`);
     clean();
   }
 

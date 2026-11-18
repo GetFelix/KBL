@@ -1,6 +1,7 @@
 // Filters, the view in the address, and saved views. Filters only offer values the
 // log recorded, so a facet nobody recorded has nothing to pick and is not shown.
 import type { ItemRow } from './fold.ts';
+import { defaultGroup, isGroupBy } from './group-by.ts';
 
 export const FACETS = [
   ['source', 'Source'],
@@ -24,6 +25,8 @@ export interface ViewSpec {
   layout: Layout;
   query: string;
   filters: Filters;
+  /** What the list groups by; absent is the view's default (see `defaultGroup`). */
+  group?: string;
 }
 
 export interface SavedView {
@@ -83,7 +86,7 @@ export function setFilter(f: Filters, facet: Facet, value: string | null): Filte
   return next;
 }
 
-const PARAMS = { view: 'view', layout: 'layout', query: 'q' } as const;
+const PARAMS = { view: 'view', layout: 'layout', query: 'q', group: 'group' } as const;
 
 /**
  * Reads the view from a query string. Unknown values read as all work in a list. The board
@@ -99,7 +102,11 @@ export function decodeView(search: string): ViewSpec {
   }
   const view = q.get(PARAMS.view);
   const board = q.get(PARAMS.layout) === 'board' || view === 'board';
-  return { view: view === 'blocked' || view === 'inbox' ? view : 'all', layout: board ? 'board' : 'list', query: q.get(PARAMS.query) ?? '', filters };
+  const spec: ViewSpec = { view: view === 'blocked' || view === 'inbox' ? view : 'all', layout: board ? 'board' : 'list', query: q.get(PARAMS.query) ?? '', filters };
+  const group = q.get(PARAMS.group);
+  // A group this build does not know reads as the default, and the next write drops it.
+  if (isGroupBy(group)) spec.group = group;
+  return spec;
 }
 
 /** Writes the view into `search`, keeping every other parameter. Defaults are left out, so a plain view has a plain address. */
@@ -109,6 +116,8 @@ export function encodeView(search: string, v: ViewSpec): string {
   set(PARAMS.view, v.view === 'all' ? undefined : v.view);
   set(PARAMS.layout, v.layout === 'board' ? 'board' : undefined);
   set(PARAMS.query, v.query);
+  // The default for the view is left out, so a plain view has a plain address.
+  set(PARAMS.group, isGroupBy(v.group) && v.group !== defaultGroup(v.view) ? v.group : undefined);
   for (const [k] of FACETS) set(k, v.filters[k]);
   return q.toString();
 }

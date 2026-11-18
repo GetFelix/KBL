@@ -115,6 +115,10 @@ fn logs() -> Vec<(&'static str, String)> {
             std::fs::read_to_string(format!("{core}/work_format_16.jsonl")).unwrap(),
         ),
         (
+            "format_17",
+            std::fs::read_to_string(format!("{core}/work_format_17.jsonl")).unwrap(),
+        ),
+        (
             "format_18",
             std::fs::read_to_string(format!("{core}/work_format_18.jsonl")).unwrap(),
         ),
@@ -510,8 +514,11 @@ fn items_carry_the_proposal_a_person_can_accept() {
     };
     assert_eq!(
         find("p1")["proposal"],
-        serde_json::json!({"why": "needs p0 first", "depends_on": ["p0"], "related": [], "split": ["api", "docs"]})
+        serde_json::json!({"at": 2, "why": "needs p0 first", "depends_on": ["p0"], "related": [], "split": ["api", "docs"]})
     );
+    // It began waiting at the triage record, which the inbox sorts by.
+    assert_eq!(find("p1")["waiting_at"], 2);
+    assert!(find("p0")["waiting_at"].is_null());
     assert!(find("p0")["proposal"].is_null());
     assert!(find("p1")["finding"].is_null());
 }

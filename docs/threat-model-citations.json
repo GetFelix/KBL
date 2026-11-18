@@ -12,6 +12,9 @@
   "if logged.v > self.format {",
   "return Err(OrgRefusal::SourceServed);"
  ],
+ "core/src/org_fold.rs#team_spends_pool": [
+  ".any(|((t, _), c)| t == team && c.pool == *pool && tied.is_none_or(|v| v == c.vendor))"
+ ],
  "core/src/redact.rs#redact_record": [
   "pub fn redact_record(record: &mut WorkRecord) {"
  ],
@@ -193,6 +196,12 @@
  "ingest/src/ado/transport.rs#token": [
   "bail!(\"Entra answered {status} ({code}) to the client credentials sign-in\");"
  ],
+ "ingest/src/budget.rs#Budget::hourly": [
+  "p.per_hour as f64 * i.held.min(p.pool_sources) as f64 / p.pool_sources as f64"
+ ],
+ "ingest/src/budget.rs#Budget::read_floor": [
+  "let wake = if i.waking { Self::wake_part(i) } else { 0.0 };"
+ ],
  "ingest/src/check.rs#ReadOnly::send": [
   "if req.method != \"GET\" {"
  ],
@@ -257,6 +266,9 @@
  ],
  "ingest/src/lease.rs#Lessee::open_for": [
   ".ok_or(\"another worker holds this source's lease\")?;"
+ ],
+ "ingest/src/lease.rs#Lessee::serving": [
+  "Mode::Leased { held, .. } => held.values().filter(|h| h.until.is_none()).count() as u64,"
  ],
  "ingest/src/lease.rs#leave": [
   "beating.abort();"
@@ -426,6 +438,9 @@
  "tracker/src/http/ingest.rs#load": [
   "Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),"
  ],
+ "tracker/src/http/ingest.rs#pool_for": [
+  "Err(Box::new(denied(POOL_OF_OTHER)))"
+ ],
  "tracker/src/http/ingest.rs#worker": [
   "fn worker(&self) -> Result<Worker, super::Denied> {"
  ],
@@ -447,6 +462,13 @@
  ],
  "tracker/src/main.rs#check_listen": [
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
+ ],
+ "tracker/src/org/backoff.rs#MAX_BACKOFF_MS": [
+  "pub(crate) const MAX_BACKOFF_MS: u64 = 3_600_000;"
+ ],
+ "tracker/src/org/backoff.rs#raise_pool_backoff": [
+  "let target = now_ms().saturating_add(wait_ms.min(MAX_BACKOFF_MS));",
+  "if held >= target {"
  ],
  "tracker/src/teams.rs#admit": [
   "pub(crate) fn admit(&self, waits: bool) -> Option<OwnedSemaphorePermit> {"

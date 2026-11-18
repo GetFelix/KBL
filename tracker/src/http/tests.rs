@@ -59,6 +59,8 @@ struct Quiet {
     source_leases: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Ingest worker groups' members by group: value and version.
     group_members: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
+    /// Budget pools' shared backoffs by pool: value and version.
+    pool_backoffs: Arc<StdMutex<std::collections::HashMap<String, Versioned>>>,
     /// Membership writes fail.
     fail_members_put: Arc<AtomicBool>,
     /// This many membership writes lose the version check, as when other
@@ -228,6 +230,24 @@ impl Broker for Quiet {
         }
         let next = now.unwrap_or(0) + 1;
         leases.insert(source.to_owned(), (value, next));
+        Ok(Some(next))
+    }
+    async fn pool_backoff_get(&self, pool: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
+        Ok(self.pool_backoffs.lock().unwrap().get(pool).cloned())
+    }
+    async fn pool_backoff_put(
+        &self,
+        pool: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> anyhow::Result<Option<u64>> {
+        let mut all = self.pool_backoffs.lock().unwrap();
+        let now = all.get(pool).map(|(_, v)| *v);
+        if now != expect {
+            return Ok(None);
+        }
+        let next = now.unwrap_or(0) + 1;
+        all.insert(pool.to_owned(), (value, next));
         Ok(Some(next))
     }
     async fn group_members_get(&self, group: &str) -> anyhow::Result<Option<(Vec<u8>, u64)>> {
@@ -2347,4 +2367,62 @@ async fn a_steer_over_the_inline_limit_is_refused_on_both_routes() {
         assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {r}");
     }
     assert_eq!(two.a.published().len(), written);
+}
+
+#[tokio::test]
+async fn a_proposal_edit_carries_advice_only_at_format_17_and_for_the_answer_read() {
+    let app = kept().await;
+    for item in ["a1", "a2"] {
+        call(&app, "/v1/work/records", Some("tok-gab"), imported(item)).await;
+    }
+    let triaged = json!({ "record": { "kind": "triaged", "item": "a1", "tier": 1, "why": "w",
+        "depends_on": ["a2"], "split": ["one"] } });
+    let (status, answer) = call(&app, "/v1/work/records", Some("tok-gab"), triaged).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let at = answer["offset"].as_u64().unwrap();
+    let edit = |proposal: u64| json!({ "item": "a1", "depends_on": [], "split": ["x", "y"], "proposal": proposal });
+    let (status, reply) = call(&app, "/v1/work/proposals/edit", Some("tok-gab"), edit(at)).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("format"))
+    );
+    // A plain tier edit needs no format.
+    let (status, reply) = call(
+        &app,
+        "/v1/work/proposals/edit",
+        Some("tok-gab"),
+        json!({ "item": "a1", "tier": 0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    raise_to(&app, 17).await;
+    let (status, reply) = call(
+        &app,
+        "/v1/work/proposals/edit",
+        Some("tok-gab"),
+        edit(at + 1),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK, "{reply}");
+    let (status, reply) = call(&app, "/v1/work/proposals/edit", Some("tok-gab"), edit(at)).await;
+    assert_eq!(status, StatusCode::OK, "{reply}");
+    let (_, history) = get_json(&app, "/v1/work/items/a1/history", Some("tok-gab")).await;
+    let last = history["records"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
+    assert_eq!(last["record"]["kind"], "edited", "{history}");
+    assert_eq!(last["record"]["split"], json!(["x", "y"]));
+    // A person's advice has triage's bounds.
+    let many: Vec<String> = (0..9).map(|n| n.to_string()).collect();
+    let (status, _) = call(
+        &app,
+        "/v1/work/proposals/edit",
+        Some("tok-gab"),
+        json!({ "item": "a1", "split": many, "proposal": at }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

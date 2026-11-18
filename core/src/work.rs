@@ -87,6 +87,11 @@ pub const FORMAT_V15: u32 = 15;
 /// item back until a time or on a named outside resource.
 pub const FORMAT_V16: u32 = 16;
 
+/// The format from which a person's `edited` may carry `depends_on`, `split`
+/// and the `proposal` offset it was read at, so a person adjusts triage's
+/// advice. Readers below 17 would ignore them and apply a blind edit.
+pub const FORMAT_V17: u32 = 17;
+
 /// The format from which an item may be related to another: a soft link that
 /// never holds either one back (`related`, `unrelated`, and `related` on a
 /// triage answer). Readers below 18 stop at the first such record.
@@ -989,13 +994,22 @@ pub enum WorkRecord {
     AttemptClosed { item: ItemId, attempt: u32 },
     /// A person moves an item to another tier.
     TierChanged { item: ItemId, tier: u8 },
-    /// A person edits a proposal before accepting it.
+    /// A person edits a proposal before accepting it. From format 17 it may
+    /// replace the dependencies and split titles in triage's answer for the
+    /// item; `proposal` is then the offset of the answer the person read, and
+    /// the edit is refused if triage has answered again since.
     Edited {
         item: ItemId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tier: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        depends_on: Option<Vec<ItemId>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        split: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        proposal: Option<u64>,
     },
     /// Sets a root's budget outright. Only a person may; this is how it is raised.
     BudgetSet {
@@ -1317,6 +1331,14 @@ impl WorkRecord {
             WorkRecord::Related { .. } | WorkRecord::Unrelated { .. } => FORMAT_V18,
             WorkRecord::Triaged { related, .. } if !related.is_empty() => FORMAT_V18,
             WorkRecord::BlockSet { .. } | WorkRecord::BlockCleared { .. } => FORMAT_V16,
+            WorkRecord::Edited {
+                depends_on: Some(_),
+                ..
+            }
+            | WorkRecord::Edited { split: Some(_), .. }
+            | WorkRecord::Edited {
+                proposal: Some(_), ..
+            } => FORMAT_V17,
             WorkRecord::Claimed { direct: true, .. } => FORMAT_V15,
             WorkRecord::Released { why: Some(w), .. } if w.waits() => FORMAT_V14,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,

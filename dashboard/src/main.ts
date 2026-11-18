@@ -296,6 +296,11 @@ const run = (id: CommandId): void => {
     }
     case 'clearFilters':
       return store.dispatch({ type: 'clearFilters' });
+    case 'groupBy':
+      return ui.filters.focusGroup();
+    case 'collapseGroups':
+    case 'expandGroups':
+      return store.dispatch({ type: 'collapseAll', collapsed: id === 'collapseGroups' });
     case 'saveView':
       return views.open(null, ui.suggestName(s));
     case 'density': {
@@ -359,6 +364,8 @@ const ui = shell(
     children: () => run('children'),
     toggle: (id) => store.dispatch({ type: 'expand', id }),
     filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }),
+    group: (group) => store.dispatch({ type: 'group', group }),
+    toggleGroup: (key) => store.dispatch({ type: 'collapse', key }),
     saveView: () => run('saveView'),
     openView: (search) => store.dispatch({ type: 'openView', search }),
     editView: (name) => views.open(name),
@@ -373,6 +380,7 @@ const ui = shell(
     confirm: confirmKind,
     setTier: (ids, tier) => write(ids, { kind: 'tier', tier }),
     acceptNow: (ids, tier) => write(ids, { kind: 'accept', tier }),
+    advice: (item, proposal, depends_on, split) => write([item], { kind: 'advice', depends_on, split, proposal }),
     kind: (kind) => store.dispatch({ type: 'kind', kind }),
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
     take: (item) => write([item], { kind: 'take' }),
@@ -394,7 +402,7 @@ const ui = shell(
 );
 const palette = paletteView(
   store.get,
-  { run, openItem, filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }), openView: (search) => store.dispatch({ type: 'openView', search }) },
+  { run, openItem, filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }), group: (group) => store.dispatch({ type: 'group', group }), openView: (search) => store.dispatch({ type: 'openView', search }) },
   mac,
 );
 const help = helpView(mac);
