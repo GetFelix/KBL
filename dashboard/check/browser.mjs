@@ -659,9 +659,10 @@ try {
   await shoot('phone-dark');
   await press(page, 'End');
   await press(page, 'Enter');
+  const phoneSaw = await page.eval(`(() => { const a = document.activeElement; const r = document.querySelector('.panel').getBoundingClientRect(); return JSON.stringify({ active: a ? a.tagName + '.' + a.className + (a.dataset.focus ? '[' + a.dataset.focus + ']' : '') : null, top: Math.round(r.top), height: Math.round(r.height), inner: innerHeight }); })()`);
   check(
     (await focused('.panel')) && (await page.eval(`(() => { const r = document.querySelector('.panel').getBoundingClientRect(); return r.top >= 0 && r.top < innerHeight; })()`)),
-    'on a phone, opening an item moves focus to the panel and scrolls it into view',
+    `on a phone, opening an item moves focus to the panel and scrolls it into view (${phoneSaw})`,
   );
   await press(page, 'Escape');
   check(await page.eval(`getComputedStyle(document.querySelector('.menu-button')).display !== 'none' && getComputedStyle(document.querySelector('#sidebar')).display === 'none'`), 'on a phone the sidebar is behind a Menu button');
