@@ -224,3 +224,35 @@ async fn a_terminal_call_for_an_item_not_held_sends_no_attempt() {
     let sent = &fake.bodies("/v1/work/complete")[0];
     assert!(sent.get("attempt").is_none() && sent.get("claim").is_none());
 }
+
+#[tokio::test(start_paused = true)]
+async fn work_next_sends_its_filters_and_peek_claims_nothing() {
+    let fake = Fake::default();
+    let w = work(&fake);
+    let peeked = w
+        .peek(
+            Some(5),
+            Vec::new(),
+            json!({ "kinds": ["triage"], "tiers": [0] }),
+        )
+        .await
+        .unwrap();
+    assert!(!peeked.is_empty());
+    assert_eq!(
+        fake.bodies("/v1/work/peek"),
+        [json!({ "limit": 5, "kinds": ["triage"], "tiers": [0] })]
+    );
+    // A peek holds nothing, so work_next is still free to claim.
+    assert_eq!(fake.calls("/v1/work/extend"), 0);
+    w.next_filtered(
+        None,
+        Vec::new(),
+        json!({ "repo": "o/r", "exclude_roots": ["x1"] }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fake.bodies("/v1/work/next"),
+        [json!({ "repo": "o/r", "exclude_roots": ["x1"] })]
+    );
+}

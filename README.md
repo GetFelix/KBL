@@ -199,7 +199,7 @@ dependency is done: the tracker folds `work.events` and publishes it to a ready 
 
 Each agent runs `kbl-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
 tracker for the highest-priority ready item: the tracker claims it from the ready streams' consumer group as a
-member named after the agent and logs the claim in the same step. `kbl-mcp` extends the claim every 30
+member named after the agent and logs the claim in the same step. Roots take turns in a tier, `work_next` can be narrowed by kind, tier, repo or excluded roots, and `work_peek` lists what it would hand out next without claiming. `kbl-mcp` extends the claim every 30
 seconds while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead agent stops
 extending, so its claim lapses and the item goes to another agent. An item has one holder at a time: a release
 that lands while the item is being handed on does not cost the next agent its claim. An agent adds children only under an item it holds (`split`, `augment`,

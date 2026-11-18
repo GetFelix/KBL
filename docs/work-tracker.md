@@ -36,7 +36,8 @@ operations as MCP tools in `kbl-mcp` for agents:
 
 | Tool | Does |
 |---|---|
-| `work_next` | Claims the highest-priority ready item the agent can take. The reply carries the [standing rules](#standing-rules) in effect and a `loop` line telling the host to call `work_next` again after each item and to stop when nothing is ready. With `review_tiers` it also takes [reviews](#review-as-work) of those tiers |
+| `work_next` | Claims the highest-priority ready item the agent can take, roots taking turns, optionally narrowed by kind, tier, repo or excluded roots. The reply carries the [standing rules](#standing-rules) in effect and a `loop` line telling the host to call `work_next` again after each item and to stop when nothing is ready. With `review_tiers` it also takes [reviews](#review-as-work) of those tiers |
+| `work_peek` | Lists the next items `work_next` would hand out, in order, with their kind, tier and root. Claims nothing. Both take `kinds`, `tiers`, `repo` and `exclude_roots`; see [Choosing what to take](#choosing-what-to-take) |
 | `work_extend` | Keeps the claim while the agent works (sent by `kbl-mcp` every 30 seconds) |
 | `work_context` | Reads or adds context on an item |
 | `work_link` | Adds a dependency between items in one tree |
@@ -1767,6 +1768,55 @@ the proposal's tier, as before.
 Triage and augmentation are claimed, extended, completed and given up like
 any other work. A dead agent's triage goes back to the queue. Nothing waits on
 the tracker to think, because the tracker does not.
+
+### Choosing what to take
+
+`work_next` takes the highest-priority ready item, and the roots in a tier
+take turns. After an item of one root is handed out, the next claim in that
+tier prefers another root's ready item, the root served longest ago first, so
+an agent that keeps calling `work_next` is not given the children of the same
+two roots every time. Within a root the item that has been ready longest goes
+first. The turns are kept in the tracker's memory, so a restart starts them
+over. Work that a person's answer made ready (a resume item, or an item with
+the question and its answer in its context) queues behind other roots' ready
+work in its tier, and goes first in turn once it has waited one visibility
+period, so an answer is never left unread.
+
+A caller can narrow the call, and none of these let it take what it could not
+take without them:
+
+| Field | Takes only |
+|---|---|
+| `kinds` | Work of these kinds: `triage`, `augment`, `fix`, `split`, `question`, `test`, `resume` or `review` (a review also needs `review_tiers`) |
+| `tiers` | Work in these priority tiers, 0 the highest |
+| `repo` | Work that lands in this repo, as `owner/name`, in any letter case |
+| `exclude_roots` | Work outside these roots, at most 64 |
+
+An item assigned to the agent is filtered the same way, so a caller that asks
+for triage is not handed its assigned fix. An unknown kind or tier is refused
+with 400 before anything is tried. Items do not carry their upstream labels,
+so there is no label filter.
+
+`work_peek` (`POST /v1/work/peek`, agent token) takes the same narrowing fields
+and `limit` (default 10, at most 50). It lists the next items the caller would
+be handed, in order: `item`, `title`, `work`, `tier`, `root`, `repo`, and
+`assigned_to_you` for the items it would take first. It claims nothing, holds
+nothing, and touches no ready record. Its order is the one a claim follows
+unless work arrives or changes before the claim.
+
+**How this stays safe with the ready lanes.** Felix hands a lane's records
+out in offset order and counts every handout as an attempt, so the tracker
+cannot look at a record and put it back for a caller that did not want it.
+When a call has a filter, or a lane has ready items from more than one root,
+the tracker chooses the item from its state and claims it directly, as it
+does for an assigned item (see [Assignees](#assignees)): no ready record is
+polled, acked or nacked, so an item the caller filtered out or that waited its
+turn spends none of Felix's handouts. The claimed item's own record stays in
+its lane and is acked as stale when it is next polled. The `claimed` record is
+written conditionally on the tail and the fold refuses a claim of a held item,
+so two agents still never hold one item. A lane with one root ready and no
+filter is polled as before. A direct claim has no Felix delivery, so the sweep
+lapses it when it is not extended, as described under assignees.
 
 ## The Felix mapping
 

@@ -425,6 +425,39 @@ async fn an_agent_token_claims_and_a_person_token_does_not() {
 }
 
 #[tokio::test]
+async fn filters_and_the_peek_are_for_an_agent_token_and_bad_filters_are_refused() {
+    let app = app().await;
+    let filtered =
+        json!({ "wait_seconds": 0, "kinds": ["fix"], "tiers": [2], "exclude_roots": ["x"] });
+    let (status, reply) = call(&app, "/v1/work/next", Some("tok-w1"), filtered).await;
+    assert_eq!(
+        (status, reply["claimed"].as_bool()),
+        (StatusCode::OK, Some(false))
+    );
+    let (status, reply) = call(&app, "/v1/work/peek", Some("tok-w1"), json!({ "limit": 3 })).await;
+    assert_eq!(
+        (status, reply["next"].as_array().map(Vec::len)),
+        (StatusCode::OK, Some(0))
+    );
+    assert_eq!(
+        call(&app, "/v1/work/peek", Some("tok-gab"), json!({}))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        call(&app, "/v1/work/peek", None, json!({})).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    for bad in [json!({ "kinds": ["nonsense"] }), json!({ "tiers": [9] })] {
+        for path in ["/v1/work/next", "/v1/work/peek"] {
+            let (status, _) = call(&app, path, Some("tok-w1"), bad.clone()).await;
+            assert!(status.is_client_error(), "{path} {bad}: {status}");
+        }
+    }
+}
+
+#[tokio::test]
 async fn only_a_person_token_appends_records() {
     let app = app().await;
     let record = json!({ "record": { "kind": "imported", "item": "a1", "source": "gh", "upstream_id": "1", "title": "t" } });

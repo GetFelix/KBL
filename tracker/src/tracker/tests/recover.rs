@@ -22,11 +22,13 @@ fn tries_of(fake: &Fake, offset: u64) -> u32 {
 async fn restarts_do_not_spend_the_attempts_of_ready_records() {
     let fake = Fake::default();
     let mut t = start(&fake).await;
-    for id in ["a1", "a2", "a3", "b1", "b2"] {
+    // One root ready at a time, so each claim polls the lane and is a Felix handout.
+    for (who, id) in [("w1", "a1"), ("w2", "a2"), ("w3", "a3")] {
         seed(&t, id, 2).await;
-    }
-    for who in ["w1", "w2", "w3"] {
         claim(&t, who).await;
+    }
+    for id in ["b1", "b2"] {
+        seed(&t, id, 2).await;
     }
     let restarts = 3;
     for _ in 0..restarts {

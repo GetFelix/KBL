@@ -216,7 +216,38 @@ async fn seed_item(t: &Tracker<Fake>, m: &mut Model) {
 }
 
 async fn claim_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, who: &'static str) {
-    let Ok(reply) = t.next(&agent(who), Duration::ZERO).await else {
+    claim_with(t, fake, m, who, &Filter::default()).await;
+}
+
+/// A claim that names kinds or tiers: it may find nothing, and what it finds is
+/// still a claim the log accepts.
+async fn filtered_claim_step(
+    t: &Tracker<Fake>,
+    fake: &Fake,
+    m: &mut Model,
+    rng: &mut Rng,
+    who: &'static str,
+) {
+    let filter = match rng.below(3) {
+        0 => Filter::parse(&["fix".into()], &[], None, &[]),
+        1 => Filter::parse(&[], &[0, 1], None, &[]),
+        _ => Filter::parse(&["triage".into()], &[], None, &[]),
+    }
+    .unwrap();
+    claim_with(t, fake, m, who, &filter).await;
+}
+
+async fn claim_with(
+    t: &Tracker<Fake>,
+    fake: &Fake,
+    m: &mut Model,
+    who: &'static str,
+    filter: &Filter,
+) {
+    let Ok(reply) = t
+        .next_filtered(&agent(who), Duration::ZERO, &[], filter)
+        .await
+    else {
         return;
     };
     let Some(id) = claimed_id(&reply) else {
@@ -597,9 +628,10 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     let who = AGENTS[rng.below(AGENTS.len())];
     let serving = t.serving(rng.below(100) < 40);
-    match rng.below(14) {
+    match rng.below(15) {
         0..=1 => seed_item(serving, m).await,
         2..=5 => claim_step(serving, fake, m, who).await,
+        14 => filtered_claim_step(serving, fake, m, rng, who).await,
         6..=8 => finish_step(serving, m, rng, who).await,
         9 => extend_step(serving, fake, m, who).await,
         10 => assign_step(serving, m, rng).await,
