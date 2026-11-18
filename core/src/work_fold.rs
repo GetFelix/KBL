@@ -1900,7 +1900,10 @@ impl State {
 
     fn step(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
         if let Err(e) = self.step_record(offset, rec) {
-            self.track_waiting_since_refused(offset, rec);
+            // A probe rolls its flags back, so only a real fold records the wait they began.
+            if self.probing.is_none() {
+                self.track_waiting_since_refused(offset, rec);
+            }
             return Err(e);
         }
         self.track_human_wait(rec);
