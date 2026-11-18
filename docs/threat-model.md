@@ -467,6 +467,8 @@ the call is made (`mcp/src/person.rs#check`).
 | `take_item` | `POST /v1/work/take` | Person only (`tracker/src/http.rs#person`) |
 | `reassign_item` | `POST /v1/work/reassign` | Person only, and `to` a person or a live agent of the team (`tracker/src/http.rs#as_person`) |
 | `steer_agent` | `POST /v1/work/steer` | Person only (`tracker/src/http.rs#person`) |
+| `close_item` | `POST /v1/work/close` | Person only, `why` limited to `dismissed` or `completed` as in the dashboard (`tracker/src/http.rs#as_person`) |
+| `edit_proposal` | `POST /v1/work/proposals/edit` | Person only; a dependency or split edit is checked against the proposal offset by the fold (`tracker/src/http.rs#as_person`) |
 
 `my_queue` returns raw item text to the host model. Tool names and routes are static, so that text cannot change which calls exist, but hosts should treat it as untrusted.
 

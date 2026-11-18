@@ -17,6 +17,8 @@ pub(super) enum Kind {
     Content,
     /// A person's name, sent as `{"person": ...}`, or `agent:<name>`, sent as `{"agent": ...}`.
     Assignee,
+    /// A list of strings, sent as an array.
+    Texts,
 }
 
 pub(super) struct Param {
@@ -347,6 +349,58 @@ pub(super) const TOOLS: &[Tool] = &[
                 kind: Kind::Content,
                 required: true,
                 about: "The note.",
+            },
+        ],
+    },
+    Tool {
+        name: "close_item",
+        about: "Close an item without an agent finishing it. Its open children are cancelled. `dismissed` drops it, `completed` says it was done outside KBL.",
+        route: Route::Post("/v1/work/close"),
+        params: &[
+            ITEM,
+            Param {
+                name: "why",
+                kind: Kind::Words(&["dismissed", "completed"]),
+                required: true,
+                about: "`dismissed` or `completed`.",
+            },
+        ],
+    },
+    Tool {
+        name: "edit_proposal",
+        about: "Edit a proposal before you accept it: its title or tier, or replace the dependencies and split triage proposed. Dependencies and split need `proposal`, the offset of triage's answer you read, so an edit cannot overwrite a newer answer.",
+        route: Route::Post("/v1/work/proposals/edit"),
+        params: &[
+            ITEM,
+            Param {
+                name: "title",
+                kind: Kind::Text,
+                required: false,
+                about: "The new title.",
+            },
+            Param {
+                name: "tier",
+                kind: Kind::Number,
+                required: false,
+                about: "0 (most urgent) to 3.",
+            },
+            Param {
+                name: "depends_on",
+                kind: Kind::Texts,
+                required: false,
+                about: "Item ids that replace the proposed dependencies. An empty list clears them.",
+            },
+            Param {
+                name: "split",
+                kind: Kind::Texts,
+                required: false,
+                about: "Titles that replace the proposed split. An empty list clears it.",
+            },
+            Param {
+                name: "proposal",
+                kind: Kind::Number,
+                required: false,
+                about: "The offset of triage's answer you read. Needed with `depends_on` or `split`.",
             },
         ],
     },

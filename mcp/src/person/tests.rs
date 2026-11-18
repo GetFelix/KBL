@@ -108,6 +108,8 @@ async fn a_person_token_lists_every_tool() {
             "take_item",
             "reassign_item",
             "steer_agent",
+            "close_item",
+            "edit_proposal",
         ]
     );
     assert!(p.tools().iter().all(|t| t.description.is_some()));
@@ -130,7 +132,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 25] = [
+    let cases: [(&str, Value, &str, Value); 27] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -281,6 +283,18 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             "/v1/work/steer",
             json!({ "item": "a1", "attempt": 2, "text": { "text": "use the writer lock" } }),
         ),
+        (
+            "close_item",
+            json!({ "item": "a1", "why": "completed" }),
+            "/v1/work/close",
+            json!({ "item": "a1", "why": "completed" }),
+        ),
+        (
+            "edit_proposal",
+            json!({ "item": "a1", "title": "t", "tier": 1, "depends_on": ["b2"], "split": ["x", "y"], "proposal": 7 }),
+            "/v1/work/proposals/edit",
+            json!({ "item": "a1", "title": "t", "tier": 1, "depends_on": ["b2"], "split": ["x", "y"], "proposal": 7 }),
+        ),
     ];
     for (tool, args, path, body) in cases {
         let fake = Fake::person();
@@ -293,8 +307,8 @@ async fn each_tool_posts_to_its_route_with_its_body() {
 
 #[tokio::test]
 async fn every_table_entry_is_covered_by_a_case() {
-    // 23 writes above and the queue below: a new entry needs its case.
-    assert_eq!(TOOLS.len(), 24);
+    // 25 writes above and the queue below: a new entry needs its case.
+    assert_eq!(TOOLS.len(), 26);
 }
 
 #[tokio::test]
@@ -367,6 +381,17 @@ async fn a_bad_call_never_reaches_the_tracker() {
             "steer_agent",
             json!({ "item": "a1", "text": "x" }),
             "attempt is needed",
+        ),
+        (
+            "close_item",
+            json!({ "item": "a1", "why": "merged" }),
+            "why must be one of",
+        ),
+        ("close_item", json!({ "item": "a1" }), "why is needed"),
+        (
+            "edit_proposal",
+            json!({ "item": "a1", "split": ["x", 2] }),
+            "split must be a list of strings",
         ),
         (
             "add_note",
