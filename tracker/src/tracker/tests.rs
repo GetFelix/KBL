@@ -843,6 +843,8 @@ pub(super) fn settings() -> Settings {
         snapshot_dir: None,
         snapshot_every: 0,
         assignee_away: Duration::from_secs(600),
+        max_workers: 2,
+        max_team_workers: 3,
     }
 }
 
@@ -2709,6 +2711,7 @@ mod sweep;
 mod texts;
 mod traces;
 mod waits;
+mod workers;
 
 #[tokio::test(start_paused = true)]
 async fn a_dead_lettered_ready_record_is_published_again() {

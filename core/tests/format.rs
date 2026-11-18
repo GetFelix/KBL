@@ -1507,7 +1507,12 @@ fn the_twenty_first_format_stamps_workers_and_their_records() {
     assert_eq!(kbl_core::work::FORMAT_V21, 21);
     assert_eq!(FORMAT, kbl_core::work::FORMAT_V21);
     for (_, r) in &entries(FORMAT_21_LOG) {
-        assert_eq!(r.min_format(), r.v.max(r.min_format()), "{}", r.record.kind());
+        assert_eq!(
+            r.min_format(),
+            r.v.max(r.min_format()),
+            "{}",
+            r.record.kind()
+        );
         assert!(r.v >= r.min_format(), "{}", r.record.kind());
     }
     let s = fold(&entries(FORMAT_21_LOG));

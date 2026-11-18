@@ -371,7 +371,7 @@ impl<B: Broker> Tracker<B> {
             .0
             .settings
             .grants
-            .get(agent.as_str())
+            .get(Self::grant_name(&core.state, agent))
             .into_iter()
             .flatten()
             .collect();

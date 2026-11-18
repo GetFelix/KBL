@@ -15,6 +15,7 @@ mod metrics;
 mod org;
 mod root;
 mod traces;
+mod workers;
 
 /// A Felix with no records that remembers which streams were published to, and
 /// whose writer lease can be taken away.
@@ -305,6 +306,8 @@ fn quiet_settings() -> crate::tracker::Settings {
         snapshot_dir: None,
         snapshot_every: 0,
         assignee_away: Duration::from_secs(600),
+        max_workers: 2,
+        max_team_workers: 3,
     }
 }
 
@@ -325,6 +328,8 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             snapshot_dir: None,
             snapshot_every: 0,
             assignee_away: Duration::from_secs(600),
+            max_workers: 2,
+            max_team_workers: 3,
         },
     )
     .await

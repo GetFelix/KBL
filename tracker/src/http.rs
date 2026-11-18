@@ -37,6 +37,7 @@ use crate::felix::Broker;
 use crate::org::OrgUnavailable;
 use crate::teams::{Team, Teams};
 use crate::tracker::ExpectedPrice;
+use crate::tracker::NewWorker;
 use crate::tracker::selection::{Facets, Filter};
 use crate::tracker::{
     Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
@@ -220,6 +221,11 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/relate", post(relate::<B>))
         .route("/v1/work/unrelate", post(unrelate::<B>))
         .route("/v1/work/budget", post(budget::<B>))
+        .route(
+            "/v1/work/workers",
+            post(worker_start::<B>).get(worker_list::<B>),
+        )
+        .route("/v1/work/workers/stop", post(worker_stop::<B>))
         .route("/v1/work/prices", post(price::<B>))
         .route("/v1/work/rules", post(rules::<B>))
         .route("/v1/work/classify", post(classify::<B>))
@@ -944,6 +950,96 @@ async fn next<B: Broker>(call: Call<B>, Json(body): Json<NextBody>) -> Response 
             .next_filtered(&agent, wait, &body.review_tiers, &filter)
             .await,
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerStartBody {
+    worker: String,
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerStopBody {
+    worker: Key,
+}
+
+/// A supervisor's agent token registers a worker and gets its token back once.
+async fn worker_start<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStartBody>) -> Response {
+    let sup = match call.agent() {
+        Ok(a) => a,
+        Err(d) => return denied(d),
+    };
+    let named_for = b
+        .worker
+        .strip_prefix(sup.as_str())
+        .and_then(|rest| rest.strip_prefix('_'))
+        .is_some_and(|rest| !rest.is_empty());
+    let worker = match AgentName::new(b.worker.as_str()) {
+        Ok(w) if named_for => w,
+        _ => {
+            return reply(Err(Error::Invalid(format!(
+                "a worker's name is `{sup}_` and a suffix of letters, digits and _"
+            ))));
+        }
+    };
+    let key = Key::new(worker.as_str()).expect("an agent name is a key");
+    if call.teams.is_team_agent(&call.team, &key) {
+        return refused(
+            StatusCode::CONFLICT,
+            "an agent of that name is in this team",
+            "duplicate",
+        );
+    }
+    let new = NewWorker {
+        worker,
+        vendor: b.vendor,
+        profile: b.profile,
+        model: b.model,
+    };
+    reply(call.keyed(rk, call.tracker().start_worker(&sup, new)).await)
+}
+
+/// A supervisor stops one of its workers; a person may stop any.
+async fn worker_stop<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStopBody>) -> Response {
+    let (actor, by) = match &call.caller {
+        Caller::Agent(a) => (
+            Actor::Agent,
+            Key::new(a.as_str()).expect("an agent name is a key"),
+        ),
+        Caller::Person(p) => (Actor::Person, p.clone()),
+        Caller::Ingest(_) => {
+            return denied((
+                StatusCode::FORBIDDEN,
+                "this call is for an agent or a person",
+            ));
+        }
+    };
+    reply(
+        call.keyed(rk, call.tracker().stop_worker(actor, by, b.worker))
+            .await,
+    )
+}
+
+/// An agent sees the workers it started; a person sees every worker.
+async fn worker_list<B: Broker>(call: Call<B>) -> Response {
+    let sup = match &call.caller {
+        Caller::Agent(a) => Some(Key::new(a.as_str()).expect("an agent name is a key")),
+        Caller::Person(_) => None,
+        Caller::Ingest(_) => {
+            return denied((
+                StatusCode::FORBIDDEN,
+                "this call is for an agent or a person",
+            ));
+        }
+    };
+    reply(Ok(call.tracker().workers(sup.as_ref()).await))
 }
 
 async fn peek<B: Broker>(call: Call<B>, Json(body): Json<PeekBody>) -> Response {

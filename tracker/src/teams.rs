@@ -273,6 +273,19 @@ impl<B: Broker> Teams<B> {
             Some(Err(e)) if found.is_empty() => return Err(e),
             _ => {}
         }
+        // A delegated worker's token is on its team's work.events. It works only
+        // while its supervisor is still an agent of that team.
+        for team in self.all() {
+            let Some(tracker) = team.tracker() else {
+                continue;
+            };
+            if let Some((worker, sup)) = tracker.worker_by_token(token)
+                && let Ok(sup) = Key::new(sup.as_str())
+                && self.is_team_agent(&team, &sup)
+            {
+                found.push((team.clone(), Caller::Agent(worker)));
+            }
+        }
         Ok(found)
     }
 
