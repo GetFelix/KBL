@@ -178,7 +178,7 @@ only speak for the agent that wrote it.
 | `model_started` | `kbl-run` | Task id, the reservation taken |
 | `model_call` | `kbl-run` | Prompt and response artifacts, tokens, cost |
 | `budget_exhausted`, `refund_unconfirmed` | `kbl-run` | The reservation that went over its limit and was added back; a refund that could not be confirmed |
-| `refused` | `kbl-mcp` | The operation, the resource, Felix's error. A record that is not a task is dead-lettered and logged here under its group offset as the key. After run log writes fail, the next write that lands is a `refused` with op `run_log` counting the records that are missing (the count is in memory, so a failed last write of a process is never reported) |
+| `refused` | `kbl-mcp` | The operation, the resource, Felix's error. A record that is not a task is dead-lettered and logged here under its group offset as the key. A Felix error reading an artifact is logged here too, with op `cache_get` and the artifact id as the key. After run log writes fail, the next write that lands is a `refused` with op `run_log` counting the records that are missing (the count is in memory, so a failed last write of a process is never reported) |
 
 `core` (`core/src/record.rs`) holds the exact fields. Each line on the log is a JSON object with the writer's time (`at_ms`) and name (`by`) beside the record, whose `kind` is one of the names
 above. A kind this version does not know decodes as `unknown` and a fold skips it. Money is in millionths of a dollar, times are milliseconds since the Unix epoch on the writer's clock, and

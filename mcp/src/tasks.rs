@@ -528,6 +528,10 @@ impl<B: Backend> Tasks<B> {
             Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {
                 String::from_utf8_lossy(&bytes).into_owned()
             }
+            Err(e) => {
+                self.refuse("cache_get", &blobs, Some(id), &e).await;
+                unreadable()
+            }
             _ => unreadable(),
         }
     }
