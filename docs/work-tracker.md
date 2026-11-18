@@ -834,6 +834,37 @@ KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
 | `relate_items`, `unrelate_items` | Relate two items, or remove the relation: [Related items](#related-items) |
 | `request_review`, `request_changes`, `mark_merged`, `rate_summary` | The [review actions and summary marks](#review-actions-and-summary-marks) |
 | `take_item`, `reassign_item`, `steer_agent` | [Assignees](#assignees): take an item, assign it to a person (`to`) or to nobody (no `to`), or send a note to the agent holding it |
+| `close_item` | Close an item as `dismissed` or `completed` |
+| `edit_proposal` | Edit a proposal's title or tier, or replace triage's `depends_on` and `split` (these need `proposal`, the offset of the answer you read) |
+
+Every action the dashboard offers on a card is a REST route and a person tool.
+Each takes a person's token only; an agent's token gets `403`.
+
+| Action | REST route | Person tool | Dashboard |
+|---|---|---|---|
+| My queue | `GET /v1/work/queue` | `my_queue` | Needs you |
+| Accept | `POST /v1/work/proposals/accept` | `accept_proposal` | yes |
+| Reject | `POST /v1/work/proposals/reject` | `reject_proposal` | yes |
+| Edit a proposal (title, tier, dependencies, split) | `POST /v1/work/proposals/edit` | `edit_proposal` | dependencies and split |
+| Answer a question | `POST /v1/work/questions/answer` | `answer_question` | yes |
+| Set tier | `POST /v1/work/tier` | `set_tier` | yes |
+| Flag, unflag | `POST /v1/work/flag`, `/unflag` | `flag_item`, `unflag_item` | yes |
+| Note, review comment, priority change | `POST /v1/work/note` | `add_note` | no |
+| Steer an agent | `POST /v1/work/steer` | `steer_agent` | yes |
+| Rate a summary | `POST /v1/work/rate-summary` | `rate_summary` | yes |
+| Take, reassign | `POST /v1/work/take`, `/reassign` | `take_item`, `reassign_item` | yes |
+| Retry | `POST /v1/work/retry` | `retry_item` | no |
+| Snooze | `POST /v1/work/snooze` | `snooze_item` | no |
+| Park, unpark | `POST /v1/work/park`, `/unpark` | `park_item`, `unpark_item` | no |
+| Block, lift | `POST /v1/work/block`, `/lift-block` | `block_item`, `lift_block` | no |
+| Unblock a dependency | `POST /v1/work/unblock` | `unblock_item` | no |
+| Relate, unrelate | `POST /v1/work/relate`, `/unrelate` | `relate_items`, `unrelate_items` | no |
+| Request review, request changes, mark merged | `POST /v1/work/request-review`, `/request-changes`, `/mark-merged` | `request_review`, `request_changes`, `mark_merged` | no |
+| Close | `POST /v1/work/close` | `close_item` | yes |
+
+A column of `no` is an action the dashboard does not show yet; it is
+reachable by REST and MCP. Not in the table: `POST /v1/work/unlink`, a dependency edit with no tool (use `unblock_item`), reopening a root, which only
+upstream sync writes, and the org-level writes (budgets, prices, rules).
 
 Every write takes an optional `request_key`, as the REST calls do. A tool
 refuses a parameter it does not list before it calls the tracker.
