@@ -294,6 +294,7 @@ async fn a_label_removed_while_an_agent_holds_the_item_stops_it_after_the_attemp
             item: item.clone(),
             attempt: 1,
             reason: None,
+            why: None,
             cost_micros: 0,
             usage: Vec::new(),
             floor_micros: 0,

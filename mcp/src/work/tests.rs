@@ -207,7 +207,7 @@ async fn terminal_calls_send_the_claims_attempt_so_a_retry_can_be_replayed() {
     for path in ["/v1/work/release", "/v1/work/post"] {
         w.next(None).await.unwrap();
         if path == "/v1/work/release" {
-            w.release("a1", None, json!({})).await.unwrap();
+            w.release("a1", None, None, json!({})).await.unwrap();
         } else {
             w.finish_post("a1", json!({ "item": "a1" })).await.unwrap();
         }

@@ -259,6 +259,7 @@ fn reported_costs_before_the_raise_stand_beside_priced_usage() {
             item: id("r1"),
             attempt: 1,
             reason: None,
+            why: None,
             cost_micros: 700,
             usage: Vec::new(),
             floor_micros: 0,

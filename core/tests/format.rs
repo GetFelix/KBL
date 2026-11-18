@@ -5,8 +5,8 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
-    FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, ReadError, WorkLogged,
-    WorkRecord, read,
+    FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, ReadError,
+    WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1125,7 +1125,6 @@ const FORMAT_13_LOG: &str = include_str!("work_format_13.jsonl");
 #[test]
 fn the_thirteenth_format_is_thirteen_and_adds_no_record() {
     assert_eq!(FORMAT_V13, 13);
-    assert_eq!(FORMAT, FORMAT_V13);
     for (_, r) in entries(FORMAT_13_LOG) {
         assert!(r.v <= FORMAT_V12 || r.record.kind() == "format_raised");
         assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
@@ -1157,5 +1156,45 @@ fn an_agent_assignee_routes_the_claim_once_the_log_is_at_format_13() {
             why(9, Reject::NotReady),
             why(11, Reject::NotAssignee),
         ]
+    );
+}
+
+/// A log at the fourteenth format: a question and waits that end the hold
+/// without using a try, and a note from an agent whose claim lapsed. Its
+/// folded state is pinned in `wasm/golden/format_14.state.json`.
+const FORMAT_14_LOG: &str = include_str!("work_format_14.jsonl");
+
+/// Format 14 stamps only a release that waits.
+#[test]
+fn the_fourteenth_format_is_fourteen_and_stamps_only_waits() {
+    assert_eq!(FORMAT_V14, 14);
+    assert_eq!(FORMAT, FORMAT_V14);
+    for (_, r) in entries(FORMAT_14_LOG) {
+        assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
+    }
+}
+
+/// The question frees w1 and blocks w2 until the answer; the wait parks the
+/// item until a person unflags it; w1's late note lands, w2's is refused.
+#[test]
+fn a_question_or_a_wait_frees_the_agent_at_format_14() {
+    let log = entries(FORMAT_14_LOG);
+    let mut s = kbl_core::work_fold::State::default();
+    let mut refused = Vec::new();
+    for (offset, r) in &log {
+        if s.try_apply(*offset, r).is_err() {
+            refused.push(*offset);
+        }
+    }
+    // w2's claim on the open question, w1's claim on the parked item, w2's late note.
+    assert_eq!(refused, vec![5, 9, 14]);
+    let r1 = &s.items[&kbl_core::names::ItemId::new("r1").unwrap()];
+    assert!(r1.hold.is_none());
+    assert_eq!(r1.paths[0].tries, 0, "no failure used a try");
+    assert!(r1.flagged);
+    // Read below 14, the stamped releases stop the reader.
+    assert!(
+        log.iter()
+            .any(|(_, r)| r.v == FORMAT_V14 && r.record.kind() == "released")
     );
 }

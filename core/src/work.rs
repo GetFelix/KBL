@@ -73,8 +73,13 @@ pub const FORMAT_V12: u32 = 12;
 /// `claimed` from any other agent. Readers below 13 stop at the raise.
 pub const FORMAT_V13: u32 = 13;
 
+/// The format from which a question ends the asker's hold, a `released` may
+/// say the item waits on a person or an outside resource (`why`), and an agent
+/// whose claim lapsed may still ask or release with such a `why`.
+pub const FORMAT_V14: u32 = 14;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V13;
+pub const FORMAT: u32 = FORMAT_V14;
 
 /// Longest reviewer name a `review_requested` carries.
 pub const MAX_REVIEWER: usize = 100;
@@ -583,6 +588,24 @@ pub enum Assignee {
     Agent(Key),
 }
 
+/// Why an agent hands an item back. Only a failure uses up a try.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseWhy {
+    Failed,
+    /// The item needs a person: an answer, access, a decision.
+    WaitsOnPerson,
+    /// The item needs something outside KBL: credit, an outage to end.
+    WaitsOnOutside,
+}
+
+impl ReleaseWhy {
+    /// Whether the release is a wait, which parks the item instead of failing a try.
+    pub fn waits(self) -> bool {
+        self != ReleaseWhy::Failed
+    }
+}
+
 /// What a record says happened. `kind` is the variant name in snake case.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -705,6 +728,9 @@ pub enum WorkRecord {
         attempt: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
+        /// Why the item went back. Left out means a failure. Format 14.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        why: Option<ReleaseWhy>,
         #[serde(default)]
         cost_micros: u64,
         /// What each model used. From format 8 cost is derived from it.
@@ -1225,6 +1251,7 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::Released { why: Some(w), .. } if w.waits() => FORMAT_V14,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,
             WorkRecord::PriceSet { .. } => FORMAT_V8,
             r if r
