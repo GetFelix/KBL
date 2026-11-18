@@ -217,6 +217,42 @@ async fn the_jwt_carries_the_claims_and_verifies_with_the_public_key() {
         .expect("the signature verifies");
 }
 
+fn budget() -> Arc<crate::budget::Budget> {
+    crate::budget::Budget::new(crate::budget::Vendor::Github, Some(1000), 1.0)
+}
+
+#[tokio::test]
+async fn a_mint_and_an_installation_lookup_are_charged_to_the_budget() {
+    let rig = Rig::new("budget").await;
+    let b = budget();
+    let by_id = rig.auth(Installation::Id(9)).with_budget(b.clone());
+    by_id.token().await.unwrap();
+    by_id.token().await.unwrap();
+    // One mint; the second call came from the cache and cost nothing.
+    assert_eq!(b.snapshot().tokens, 999);
+    let b = budget();
+    let by_repo = rig
+        .auth(Installation::Repo("o/r".into()))
+        .with_budget(b.clone());
+    by_repo.token().await.unwrap();
+    assert_eq!(b.snapshot().tokens, 998);
+}
+
+#[tokio::test]
+async fn a_mint_waits_out_a_hold_on_the_budget() {
+    let rig = Rig::new("held").await;
+    let b = budget();
+    rig.fake.mint_script.lock().unwrap().push(429);
+    let auth = rig.auth(Installation::Id(9)).with_budget(b);
+    let err = auth.token().await.unwrap_err();
+    assert!(err.downcast_ref::<crate::budget::Limited>().is_some());
+    assert_eq!(rig.mints(), 1);
+    // The vendor said to wait, so no second mint goes out.
+    let err = auth.token().await.unwrap_err();
+    assert!(err.downcast_ref::<crate::budget::Limited>().is_some());
+    assert_eq!(rig.mints(), 1);
+}
+
 #[tokio::test]
 async fn a_token_is_minted_once_and_reused() {
     let rig = Rig::new("reuse").await;
