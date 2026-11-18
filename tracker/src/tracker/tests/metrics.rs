@@ -23,7 +23,6 @@ async fn claims_releases_give_ups_and_completions_are_counted_per_team() {
     let fake = Fake::default();
     let t = start_with(&fake, team_settings("t-claims")).await;
     seed(&t, "a1", 2).await;
-    seed(&t, "a2", 2).await;
     claim(&t, "w1").await;
     t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
@@ -32,6 +31,7 @@ async fn claims_releases_give_ups_and_completions_are_counted_per_team() {
     t.give_up(&agent("w1"), &item("a1"), None, "stuck".into(), Vec::new())
         .await
         .unwrap();
+    seed(&t, "a2", 2).await;
     let second = claim(&t, "w1").await;
     assert_eq!(second["claimed"], true);
     let held = item(second["item"]["id"].as_str().unwrap());

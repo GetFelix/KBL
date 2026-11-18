@@ -791,6 +791,7 @@ async fn reported(
             item: item.clone(),
             attempt: 1,
             deadline_ms: 90_000,
+            direct: false,
         },
     );
     let branch = branch.map_or_else(|| pr_branch(&item), str::to_owned);
@@ -906,6 +907,7 @@ async fn a_request_in_another_project_is_not_read_for_the_item() {
             item: item.clone(),
             attempt: 1,
             deadline_ms: 90_000,
+            direct: false,
         },
     );
     tracker.agent(

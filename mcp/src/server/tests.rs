@@ -24,6 +24,7 @@ fn lists_the_run_info_tool_with_a_description() {
             "work_finding",
             "work_link",
             "work_next",
+            "work_peek",
             "work_post",
             "work_progress",
             "work_release",

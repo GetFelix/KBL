@@ -168,10 +168,22 @@ impl<T: TrackerApi> Work<T> {
     }
 
     /// Like `next`, and the agent also takes reviews of the tiers it names.
+    #[cfg(test)]
     pub(crate) async fn next_for(
         &self,
         wait: Option<Duration>,
         review_tiers: Vec<String>,
+    ) -> Result<String, String> {
+        self.next_filtered(wait, review_tiers, json!({})).await
+    }
+
+    /// Like `next_for`, and `filter` holds the narrowing fields (`kinds`,
+    /// `tiers`, `repo`, `exclude_roots`) the tracker reads.
+    pub(crate) async fn next_filtered(
+        &self,
+        wait: Option<Duration>,
+        review_tiers: Vec<String>,
+        filter: Value,
     ) -> Result<String, String> {
         let mut held = self.0.held.lock().await;
         if let Some(lost) = lost(&mut held) {
@@ -190,6 +202,9 @@ impl<T: TrackerApi> Work<T> {
         };
         if !review_tiers.is_empty() {
             body["review_tiers"] = json!(review_tiers);
+        }
+        if let (Some(into), Some(from)) = (body.as_object_mut(), filter.as_object()) {
+            into.extend(from.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         let reply = self
             .0
@@ -220,6 +235,32 @@ impl<T: TrackerApi> Work<T> {
                 health,
             });
         }
+        Ok(reply.to_string())
+    }
+
+    /// The next items `work_next` would hand out, in order. Nothing is claimed.
+    pub(crate) async fn peek(
+        &self,
+        limit: Option<u64>,
+        review_tiers: Vec<String>,
+        filter: Value,
+    ) -> Result<String, String> {
+        let mut body = json!({});
+        if let Some(n) = limit {
+            body["limit"] = json!(n);
+        }
+        if !review_tiers.is_empty() {
+            body["review_tiers"] = json!(review_tiers);
+        }
+        if let (Some(into), Some(from)) = (body.as_object_mut(), filter.as_object()) {
+            into.extend(from.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        let reply = self
+            .0
+            .api
+            .call("/v1/work/peek", body)
+            .await
+            .map_err(message)?;
         Ok(reply.to_string())
     }
 

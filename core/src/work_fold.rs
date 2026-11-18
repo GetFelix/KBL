@@ -2036,6 +2036,7 @@ impl State {
                 item,
                 attempt,
                 deadline_ms,
+                ..
             } => {
                 if rec.actor != Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
