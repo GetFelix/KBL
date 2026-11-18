@@ -23,6 +23,9 @@ export interface Fold {
   spendJson(): string;
 }
 
+/** A class value and who chose it. */
+export type Tag = { value: string; by: 'rule' | 'triage' | 'person' };
+
 export interface ItemRow {
   id: string;
   title: string;
@@ -53,6 +56,11 @@ export interface ItemRow {
   accepted?: boolean;
   /** A person flagged it for a person, whatever else it waits on. */
   flagged?: boolean;
+  /** Upstream's labels and milestone, set at import and kept in step by reconcile. */
+  labels?: string[] | null;
+  milestone?: string | null;
+  /** Type, area and size, with who chose each: a rule, triage or a person. */
+  class?: { item_type?: Tag; area?: Tag; size?: Tag } | null;
   /** What a person blocked it on, or null. A block with `until_ms` in the past no longer holds. */
   block?: { at_ms: number; by: string; until_ms?: number | null; resource?: string | null; reason: string } | null;
   /** Who the item is assigned to, or absent. An agent assignee is not accepted yet. */

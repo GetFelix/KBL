@@ -127,6 +127,25 @@ test('part B adds a key with one table entry: the table carries everything a key
   assert.deepEqual(groupItems(items, 'nope'), []);
 });
 
+test('milestone, label, type, area and size group by what the log recorded', () => {
+  const rows = groupItems(
+    [
+      item('a', { milestone: '0.9', labels: ['perf', 'Docs'], class: { item_type: { value: 'bug', by: 'triage' }, size: { value: 'L', by: 'person' } } }),
+      item('b', { milestone: '0.10', labels: ['perf'], class: { item_type: { value: 'bug', by: 'rule' }, area: { value: 'storage', by: 'triage' }, size: { value: 'S', by: 'triage' } } }),
+      item('c'),
+    ],
+    'milestone',
+  );
+  assert.deepEqual(rows.map((g) => [g.label, g.items.map((i) => i.id).join('')]), [['0.9', 'a'], ['0.10', 'b'], ['No milestone', 'c']]);
+  const by = (key: string) => groupItems([item('a', { labels: ['perf', 'Docs'], class: { item_type: { value: 'bug', by: 'person' }, size: { value: 'L', by: 'person' } } }), item('b', { class: { size: { value: 'S', by: 'rule' }, area: { value: 'storage', by: 'rule' } } }), item('c')], key).map((g) => [g.label, g.items.map((i) => i.id).join('')]);
+  // An item with several labels sits under its first one alphabetically.
+  assert.deepEqual(by('label'), [['Docs', 'a'], ['No label', 'bc']]);
+  assert.deepEqual(by('type'), [['bug', 'a'], ['No type', 'bc']]);
+  assert.deepEqual(by('area'), [['storage', 'b'], ['No area', 'ac']]);
+  // Sizes run small to large, not alphabetically.
+  assert.deepEqual(by('size'), [['S', 'b'], ['L', 'a'], ['No size', 'c']]);
+});
+
 test('a layout, view or saved-view change moves a selection off a folded row', () => {
   const s = { ...base, group: 'tier', collapsed: [collapseKey('all', 'tier', '2')], layout: 'board' as const, selected: 'a' };
   assert.equal(reduce(s, { type: 'layout', layout: 'list' }).selected, 'd');

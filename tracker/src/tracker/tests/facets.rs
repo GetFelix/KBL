@@ -3,8 +3,8 @@
 
 use kbl_core::work::{Vocabulary, WorkRecord};
 
-use crate::tracker::selection::Facets;
 use super::*;
+use crate::tracker::selection::Facets;
 
 async fn at_19(fake: &Fake) -> Tracker<Fake> {
     let t = start(fake).await;
@@ -219,10 +219,11 @@ async fn upstream_facts_are_written_by_ingest_and_not_by_a_person() {
         split: None,
         proposal: None,
     };
-    assert!(t
-        .person_record(key("gab"), edit(vec!["x"], "0.9"))
-        .await
-        .is_err());
+    assert!(
+        t.person_record(key("gab"), edit(vec!["x"], "0.9"))
+            .await
+            .is_err()
+    );
     t.ingest_record(key("ingest"), edit(vec!["docs"], "0.9"))
         .await
         .unwrap();

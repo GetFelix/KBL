@@ -498,7 +498,9 @@ async fn facet_filters_are_read_and_bounded_and_classifying_is_for_a_person() {
     );
     // The test log is below format 19, which cannot take a class.
     assert_eq!(
-        call(&app, "/v1/work/classify", Some("tok-gab"), body).await.0,
+        call(&app, "/v1/work/classify", Some("tok-gab"), body)
+            .await
+            .0,
         StatusCode::CONFLICT
     );
 }
