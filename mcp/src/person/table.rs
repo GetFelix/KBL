@@ -167,6 +167,32 @@ pub(super) const TOOLS: &[Tool] = &[
         params: &[ITEM],
     },
     Tool {
+        name: "redo_from_decision",
+        about: "Start a new attempt from a decision an earlier attempt recorded. It counts against the root's redos per item, and the tracker refuses it for a closed item, one an agent holds, an unknown decision, or when no redos are left. After a failed check it needs a note written since.",
+        route: Route::Post("/v1/work/redo"),
+        params: &[
+            ITEM,
+            Param {
+                name: "from_attempt",
+                kind: Kind::Number,
+                required: true,
+                about: "The attempt that recorded the decision.",
+            },
+            Param {
+                name: "at",
+                kind: Kind::Number,
+                required: true,
+                about: "The offset of the decision.",
+            },
+            Param {
+                name: "note",
+                kind: Kind::Number,
+                required: false,
+                about: "The offset of a note (add_note) that steers the new attempt.",
+            },
+        ],
+    },
+    Tool {
         name: "snooze_item",
         about: "Hide an item from the queue until a time.",
         route: Route::Post("/v1/work/snooze"),
@@ -203,6 +229,32 @@ pub(super) const TOOLS: &[Tool] = &[
                 kind: Kind::Text,
                 required: false,
                 about: "What it waits on, such as `azure-vms`: letters, digits, `-`, `_` and `.`. Give this or `until_ms`, or both.",
+            },
+        ],
+    },
+    Tool {
+        name: "classify_item",
+        about: "Set or override an item's type, area or size. The value must be in the team's vocabulary; an empty value clears it. Triage and intake rules never replace a value you set.",
+        route: Route::Post("/v1/work/classify"),
+        params: &[
+            ITEM,
+            Param {
+                name: "item_type",
+                kind: Kind::Text,
+                required: false,
+                about: "The type, such as `bug` or `feature`.",
+            },
+            Param {
+                name: "area",
+                kind: Kind::Text,
+                required: false,
+                about: "The code area.",
+            },
+            Param {
+                name: "size",
+                kind: Kind::Text,
+                required: false,
+                about: "The expected size, `S`, `M` or `L` unless the vocabulary lists others.",
             },
         ],
     },

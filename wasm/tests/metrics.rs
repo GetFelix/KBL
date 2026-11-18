@@ -322,3 +322,116 @@ fn closing_an_item_ends_the_blocked_stay_of_one_in_another_tree() {
     assert_eq!(stage(&r, "blocked")["n"], 1, "b left Blocked when a closed");
     assert_eq!(stage(&r, "blocked")["p50_ms"], 5 * H);
 }
+
+#[test]
+fn a_budget_refusal_ends_the_stay_it_sends_the_root_out_of() {
+    let mut f = setup();
+    import(&mut f, 0, "r1", 1);
+    put(
+        &mut f,
+        H,
+        P,
+        json!({ "kind": "accepted", "item": "r1", "tier": 1 }),
+    );
+    put(
+        &mut f,
+        H,
+        A,
+        json!({ "kind": "claimed", "item": "r1", "attempt": 1, "deadline_ms": 9_000_000_000_000u64 }),
+    );
+    // The refusal is no work, but it puts the root in Needs you.
+    put(
+        &mut f,
+        3 * H,
+        T,
+        json!({ "kind": "refused", "item": "r1", "op": "claim", "reason": "budget" }),
+    );
+    put(
+        &mut f,
+        5 * H,
+        P,
+        json!({ "kind": "closed", "item": "r1", "why": "completed" }),
+    );
+    let r = report(&f, DAY, 7);
+    assert_eq!(stage(&r, "held")["n"], 1);
+    assert_eq!(stage(&r, "held")["p50_ms"], 2 * H);
+    assert_eq!(stage(&r, "needs_you")["n"], 1);
+    assert_eq!(stage(&r, "needs_you")["p50_ms"], 2 * H);
+}
+
+#[test]
+fn a_progress_record_that_changes_the_request_ends_the_failed_checks_stay() {
+    let mut f = setup();
+    import(&mut f, 0, "r1", 1);
+    put(
+        &mut f,
+        H,
+        P,
+        json!({ "kind": "accepted", "item": "r1", "tier": 1 }),
+    );
+    put(
+        &mut f,
+        H,
+        A,
+        json!({ "kind": "claimed", "item": "r1", "attempt": 1, "deadline_ms": 9_000_000_000_000u64 }),
+    );
+    put(
+        &mut f,
+        H,
+        A,
+        json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "text": "pushed" }, "pr": "GetFelix/felix#1" }),
+    );
+    put(
+        &mut f,
+        2 * H,
+        A,
+        json!({ "kind": "done", "item": "r1", "attempt": 1 }),
+    );
+    put(
+        &mut f,
+        3 * H,
+        T,
+        json!({ "kind": "pr_status", "item": "r1", "status": { "pr": "GetFelix/felix#1",
+                "phase": "open", "review": "unreviewed", "checks": "red",
+                "failing": { "name": "ci", "url": "https://x/1" } } }),
+    );
+    // A person points the item at another request, which starts without a status.
+    put(
+        &mut f,
+        5 * H,
+        P,
+        json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "text": "new pr" }, "pr": "GetFelix/felix#2" }),
+    );
+    let r = report(&f, DAY, 7);
+    assert_eq!(stage(&r, "needs_you")["n"], 1);
+    assert_eq!(stage(&r, "needs_you")["p50_ms"], 2 * H);
+}
+
+#[test]
+fn a_clock_behind_the_records_keeps_the_latest_stays_and_says_so() {
+    let mut f = setup();
+    merged_fix(&mut f, "r1", 1, 10 * DAY);
+    // The browser thinks it is a day before the item merged.
+    let r = report(&f, 10 * DAY - DAY, 7);
+    assert_eq!(r["clock_behind"], true);
+    assert_eq!(r["to_ms"], 7 * H + 10 * DAY);
+    assert_eq!(r["throughput"]["done"], 1);
+    assert_eq!(stage(&r, "in_review")["n"], 1);
+    let ok = report(&f, 11 * DAY, 7);
+    assert_eq!(ok["clock_behind"], false);
+}
+
+#[test]
+fn a_refusal_for_an_unknown_item_does_not_move_the_window() {
+    let mut f = setup();
+    merged_fix(&mut f, "r1", 1, 10 * DAY);
+    put(
+        &mut f,
+        400 * DAY,
+        T,
+        json!({ "kind": "refused", "item": "nope", "op": "claim", "reason": "limit" }),
+    );
+    let r = report(&f, 11 * DAY, 7);
+    assert_eq!(r["clock_behind"], false);
+    assert_eq!(r["throughput"]["done"], 1);
+}

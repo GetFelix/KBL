@@ -37,6 +37,8 @@ fn reviewed() -> Log {
         source: "github".into(),
         upstream_id: PR.into(),
         title: "bug".into(),
+        labels: vec![],
+        milestone: None,
     });
     l.person(WorkRecord::Accepted {
         item: id("r1"),
@@ -575,6 +577,8 @@ fn spend_sums_claim_costs_per_root_reviewer_tier_and_repo() {
         source: "github".into(),
         upstream_id: "GetFelix/felix-gateway#3".into(),
         title: "gap".into(),
+        labels: vec![],
+        milestone: None,
     });
     l.person(WorkRecord::Accepted {
         item: id("r2"),
@@ -614,6 +618,8 @@ fn spend_of_a_root_without_a_repo_counts_in_totals_but_not_by_repo() {
         source: "github".into(),
         upstream_id: "no-repo-id".into(),
         title: "bug".into(),
+        labels: vec![],
+        milestone: None,
     });
     l.person(WorkRecord::Accepted {
         item: id("r1"),

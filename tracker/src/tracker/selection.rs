@@ -9,6 +9,7 @@
 
 use kbl_core::work::{Assignee, WorkKind};
 use kbl_core::work_fold::{Item, Stage};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::*;
@@ -25,14 +26,77 @@ pub(crate) struct Filter {
     /// The repo the work lands in, as `owner/name`, without regard to case.
     pub(crate) repo: Option<String>,
     pub(crate) exclude_roots: Vec<ItemId>,
+    /// Upstream facts and triage's class, read from the item's root.
+    pub(crate) facets: Facets,
 }
 
+/// The narrowing on a root's upstream milestone and labels and its
+/// classification. Text matches without regard to case; `labels` matches a
+/// root that has any one of them.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub(crate) struct Facets {
+    #[serde(default)]
+    pub(crate) milestone: Option<String>,
+    #[serde(default)]
+    pub(crate) labels: Vec<String>,
+    #[serde(default)]
+    pub(crate) item_type: Option<String>,
+    #[serde(default)]
+    pub(crate) area: Option<String>,
+    #[serde(default)]
+    pub(crate) size: Option<String>,
+}
+
+impl Facets {
+    fn is_empty(&self) -> bool {
+        self.milestone.is_none()
+            && self.labels.is_empty()
+            && self.item_type.is_none()
+            && self.area.is_none()
+            && self.size.is_none()
+    }
+
+    fn matches(&self, root: &Item) -> bool {
+        let same = |want: &Option<String>, have: Option<&str>| {
+            want.as_ref()
+                .is_none_or(|w| have.is_some_and(|h| h.eq_ignore_ascii_case(w)))
+        };
+        fn tag(t: &Option<kbl_core::work_fold::Tag>) -> Option<&str> {
+            t.as_ref().map(|t| t.value.as_str())
+        }
+        same(&self.milestone, root.milestone.as_deref())
+            && (self.labels.is_empty()
+                || root
+                    .labels
+                    .iter()
+                    .any(|l| self.labels.iter().any(|w| l.eq_ignore_ascii_case(w))))
+            && same(&self.item_type, tag(&root.class.item_type))
+            && same(&self.area, tag(&root.class.area))
+            && same(&self.size, tag(&root.class.size))
+    }
+}
+
+/// Most labels a caller may filter on.
+const MAX_FILTER_LABELS: usize = 32;
+
 impl Filter {
+    /// Adds the facet narrowing. The values are free text, so only their count is checked.
+    pub(crate) fn with_facets(mut self, facets: Facets) -> Result<Self, Error> {
+        if facets.labels.len() > MAX_FILTER_LABELS {
+            return Err(Error::Invalid(format!(
+                "filter on at most {MAX_FILTER_LABELS} labels"
+            )));
+        }
+        self.facets = facets;
+        Ok(self)
+    }
+
     pub(crate) fn is_empty(&self) -> bool {
         self.kinds.is_empty()
             && self.tiers.is_empty()
             && self.repo.is_none()
             && self.exclude_roots.is_empty()
+            && self.facets.is_empty()
     }
 
     /// Reads the wire form, naming the first value that means nothing.
@@ -67,6 +131,7 @@ impl Filter {
             tiers: tiers.to_vec(),
             repo: repo.map(str::to_owned),
             exclude_roots: exclude_roots.to_vec(),
+            facets: Facets::default(),
         })
     }
 
@@ -77,6 +142,12 @@ impl Filter {
                     .tiers
                     .contains(&it.tier.unwrap_or(DEFAULT_TIER).min(TIERS - 1)))
             && !self.exclude_roots.contains(&it.root)
+            && (self.facets.is_empty()
+                || core
+                    .state
+                    .items
+                    .get(&it.root)
+                    .is_some_and(|r| self.facets.matches(r)))
             && self.repo.as_ref().is_none_or(|want| {
                 core.state
                     .repo_of(&it.id)
@@ -261,6 +332,7 @@ impl<B: Broker> Tracker<B> {
             .enumerate()
             .filter_map(|(n, (id, assigned))| {
                 let it = core.state.items.get(&id)?;
+                let root = core.state.items.get(&it.root);
                 Some(json!({
                     "position": n + 1,
                     "item": id,
@@ -270,6 +342,11 @@ impl<B: Broker> Tracker<B> {
                     "root": it.root,
                     "repo": core.state.repo_of(&id).map(|t| &t.repo),
                     "assigned_to_you": assigned,
+                    "milestone": root.and_then(|r| r.milestone.as_ref()),
+                    "labels": root.map(|r| &r.labels),
+                    "type": root.and_then(|r| r.class.item_type.as_ref()).map(|t| &t.value),
+                    "area": root.and_then(|r| r.class.area.as_ref()).map(|t| &t.value),
+                    "size": root.and_then(|r| r.class.size.as_ref()).map(|t| &t.value),
                 }))
             })
             .collect();

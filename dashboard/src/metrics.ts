@@ -15,6 +15,8 @@ export interface MetricsReport {
   days: number;
   /** The log kept too few stage times to cover the whole window. */
   partial: boolean;
+  /** The browser clock was behind the newest record, so the window ends at that record. */
+  clock_behind: boolean;
   stages: StageTime[];
   throughput: { done: number; per_day: number[]; per_week: number[] };
   rework: { done: number; redos: number; reopened: number; failed_attempts: number; redos_per_done: number | null; reopened_per_done: number | null; failed_attempts_per_done: number | null };
@@ -73,6 +75,7 @@ export interface MetricsText {
   /** Said when nothing finished in the window, so every table is empty. */
   empty: string | null;
   partial: string | null;
+  clockBehind: string | null;
   stages: Row[];
   throughput: { summary: string; weeks: Row[]; perDay: number[]; dayLabel: string };
   rework: Row[];
@@ -92,6 +95,7 @@ export function metricsText(r: MetricsReport): MetricsText {
     window,
     empty: done === 0 ? `No items finished in ${window}, so the per-item figures below are empty.` : null,
     partial: r.partial ? 'The log kept too few stage times to reach the start of this window, so the oldest are missing.' : null,
+    clockBehind: r.clock_behind ? 'This device\'s clock is behind the newest records, so the window ends at the latest of them. Check the date and time on this device.' : null,
     stages: r.stages.map((s) => ({ label: STAGE_NAMES[s.stage] ?? s.stage, cells: [s.n.toLocaleString('en-US'), duration(s.p50_ms), duration(s.p85_ms)] })),
     throughput: {
       summary: `${plural(done, 'item', 'items')} done in ${window}`,

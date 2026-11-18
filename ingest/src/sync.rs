@@ -349,16 +349,38 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             return Ok(());
         }
         let item = item_id(&key);
-        let imported = WorkRecord::Imported {
+        let labels = kbl_core::work_fold::clean_labels(&issue.labels);
+        let milestone = issue
+            .milestone
+            .as_deref()
+            .and_then(kbl_core::work_fold::clean_milestone);
+        let mut imported = WorkRecord::Imported {
             item: item.clone(),
             source: self.source.name().to_owned(),
             upstream_id: key.clone(),
             title: cut_title(&issue.title),
+            labels: labels.clone(),
+            milestone: milestone.clone(),
         };
-        match self.tracker.append(&imported).await? {
+        let mut appended = self.tracker.append(&imported).await?;
+        // A log not yet raised to format 19 refuses the facts. The root is
+        // imported without them, and the next poll writes them as an edit.
+        let mut facts_written = true;
+        if matches!(&appended, Appended::Refused(why) if why == "format")
+            && let WorkRecord::Imported {
+                labels, milestone, ..
+            } = &mut imported
+        {
+            labels.clear();
+            *milestone = None;
+            facts_written = false;
+            appended = self.tracker.append(&imported).await?;
+        }
+        match appended {
             Appended::Written => {}
-            // Someone else's root has this id: it is imported, so leave it.
-            Appended::Refused(why) if why == "duplicate" => {}
+            // Someone else's root has this id: it is imported, so leave it. Its
+            // facts are not known to be ours, so reconcile writes them.
+            Appended::Refused(why) if why == "duplicate" => facts_written = false,
             Appended::Refused(why) => {
                 eprintln!("kbl-ingest: {key} was not imported: {why}");
                 return Ok(());
@@ -370,6 +392,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         if rule.mode == Mode::Admit {
             self.admit(&item, &rule, issue, true).await?;
         }
+        self.map_class(&item, &rule, issue).await?;
         p.roots.insert(
             key.clone(),
             Root {
@@ -395,15 +418,53 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 awaits_release: false,
             },
         );
-        p.state
-            .items
-            .insert(key.clone(), tracked(&item, &rule, issue));
+        let mut t = tracked(&item, &rule, issue);
+        if !facts_written {
+            t.labels.clear();
+            t.milestone = None;
+        }
+        p.state.items.insert(key.clone(), t);
         self.park_unmapped(p, &rule, issue).await?;
         if was_waiting {
             self.import_comments(p, issue).await?;
         }
         p.state.waiting.remove(&key);
         p.touched.push(key);
+        Ok(())
+    }
+
+    /// Writes the type and area the rule's label maps give. The tracker
+    /// refuses a value outside the team's vocabulary, which is logged and left.
+    async fn map_class(
+        &self,
+        item: &ItemId,
+        rule: &Rule,
+        issue: &Issue,
+    ) -> Result<(), SourceError> {
+        let (item_type, area) = rule.mapped_class(issue);
+        if item_type.is_none() && area.is_none() {
+            return Ok(());
+        }
+        // One edit per dimension, so a value outside the vocabulary costs only itself.
+        for (item_type, area) in [(item_type, None), (None, area)] {
+            if item_type.is_none() && area.is_none() {
+                continue;
+            }
+            self.write(&WorkRecord::Edited {
+                item: item.clone(),
+                title: None,
+                tier: None,
+                labels: None,
+                milestone: None,
+                item_type,
+                area,
+                size: None,
+                depends_on: None,
+                proposal: None,
+                split: None,
+            })
+            .await?;
+        }
         Ok(())
     }
 
@@ -473,6 +534,59 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 review: None,
             })
             .await?;
+        }
+        Ok(())
+    }
+
+    /// Brings the item's labels and milestone up to upstream's. Until the
+    /// tracker takes the edit, `t` keeps the old values and the next poll tries again.
+    async fn reconcile_facts(
+        &self,
+        t: &mut Tracked,
+        rules: &[Rule],
+        issue: &Issue,
+    ) -> Result<(), SourceError> {
+        let labels = kbl_core::work_fold::clean_labels(&issue.labels);
+        let milestone = issue
+            .milestone
+            .as_deref()
+            .and_then(kbl_core::work_fold::clean_milestone);
+        let same_labels = labels.len() == t.labels.len()
+            && labels
+                .iter()
+                .zip(&t.labels)
+                .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        if same_labels && milestone == t.milestone {
+            return Ok(());
+        }
+        let edit = WorkRecord::Edited {
+            item: t.item.clone(),
+            title: None,
+            tier: None,
+            labels: Some(labels.clone()),
+            milestone: Some(milestone.clone().unwrap_or_default()),
+            item_type: None,
+            area: None,
+            size: None,
+            depends_on: None,
+            proposal: None,
+            split: None,
+        };
+        // The tracker already holding these values is as good as a write.
+        let written = match self.tracker.append(&edit).await? {
+            Appended::Written => true,
+            Appended::Refused(why) if why == "no_change" => true,
+            Appended::Refused(why) => {
+                eprintln!("kbl-ingest: labels and milestone were not updated: {why}");
+                false
+            }
+        };
+        if written {
+            t.labels = labels;
+            t.milestone = milestone;
+            if let Some(rule) = rules.iter().find(|r| r.name == t.rule) {
+                self.map_class(&t.item, rule, issue).await?;
+            }
         }
         Ok(())
     }
@@ -572,6 +686,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                         })
                         .await?;
                 }
+                self.reconcile_facts(&mut t, rules, issue).await?;
                 let fp = fingerprint(issue);
                 if fp != t.fingerprint {
                     self.write(&WorkRecord::Updated {
@@ -1522,6 +1637,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             source: self.source.name().to_owned(),
             upstream_id: key.clone(),
             title: cut_title(title),
+            labels: vec![],
+            milestone: None,
         };
         let refused = self.tracker.append(&record).await?;
         p.state.opened.remove(item.as_str());
@@ -1615,6 +1732,11 @@ fn tracked_as(item: &ItemId, rule: &str, issue: &Issue) -> Tracked {
         rule: rule.to_owned(),
         fingerprint: fingerprint(issue),
         title: issue.title.clone(),
+        labels: kbl_core::work_fold::clean_labels(&issue.labels),
+        milestone: issue
+            .milestone
+            .as_deref()
+            .and_then(kbl_core::work_fold::clean_milestone),
         closed: None,
         in_scope: true,
         comments: BTreeMap::new(),

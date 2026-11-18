@@ -38,6 +38,24 @@ pass `--force`. Options you may want:
 | `--token-env` | `GITHUB_TOKEN`, `JIRA_API_TOKEN` | The variable that will hold the source token. |
 | `--jql` | `labels = "<label>"` | Jira only: the filter, combined with the project. |
 
+### Mapping labels and milestones
+
+Every imported item keeps its issue's labels and milestone, and reconcile updates them when upstream changes. A rule
+can also use them when it admits an item:
+
+```json
+{ "name": "agent-ok", "repo": "GetFelix/felix", "labels_all": ["agent-ok"], "mode": "admit",
+  "milestone_tiers": { "0.8": 0 },
+  "label_types": { "regression": "bug", "perf": "perf" },
+  "label_areas": { "disk": "storage" } }
+```
+
+`milestone_tiers` sets the tier (the lowest of this and `priority_labels` wins). `label_types` and `label_areas` set the
+item's type and area from the first label upstream lists that the rule maps. The value must be in the team's vocabulary
+(`vocabulary` in the standing rules), or the tracker refuses it and the item imports without it. Triage and a person
+replace a mapped value. The tracker must be at format 19; until it is, the facts are written after the raise
+([upgrades](upgrades.md)).
+
 ### What admit and propose do
 
 With `admit`, a match is imported as a root and its children come with it: a triage item and an augment item are

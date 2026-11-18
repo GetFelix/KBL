@@ -67,6 +67,15 @@ the recorded mark, and the mark goes to the attempt the block names. Every line 
 the wasm fold's `handoffs_json()`: a refused `done`, note, step, edit or mark is not counted, and a field with no record is
 left out. No record or format is added. See [Handoff](../docs/work-tracker.md#handoff-beside-a-finished-attempt).
 
+**Redo from here.** In the panel's Story, every decision of an attempt that can be redone has a Redo from here button
+(also `R`, and Redo in the command palette). It opens a confirm that names the decision and its attempt, says a new
+attempt will start from the commit recorded there, that it counts against the item's redos, and how many are left
+(from the fold, `redos_left`); a note is optional, and required while the pull request has a failed check. The note is
+saved first as the person's own note and the redo names it. When the redo cannot start (the item is closed, an agent
+holds it, a redo already waits, none are left, two attempts are open) there is no button, and the dialog opened by `R` or
+the palette says why. A redo is linked to its fork point under the Story's Redos list, with a jump to the decision.
+No record or format is added: it is the `forked_from` record, sent through `/v1/work/redo`.
+
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it
 follows and the plan for later views are in [docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md).
@@ -216,6 +225,7 @@ in the status line.
 | `Enter` | Open the selected item in the panel |
 | `Esc` | Close the panel or dialog, clear the search, or clear the selection |
 | `X` | Select or unselect the focused item for a bulk action |
+| `R` | Redo the open item from a decision: the one focused in the story, else the last decision of the newest attempt |
 | `Ctrl+Z` (`Cmd+Z` on a Mac) | Undo the last tier change (in a text field, the field's own undo) |
 
 Single-letter keys do nothing while you type in a field. `src/keys.ts` is the one list: the key handler, the
@@ -236,7 +246,7 @@ has one entry per filter value and per saved view.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
-- **Group by.** The list groups by stage (the default), tier, repo, kind or assignee, or not at all. Each group has a
+- **Group by.** The list groups by stage (the default), tier, repo, kind, milestone, label, type, area, size or assignee, or not at all. A card shows the milestone, type, area and size. An item with several labels is listed under its first label alphabetically. Each group has a
   header button with its name and count; Enter or Space folds it, and `J` and `K` skip folded groups. Folds are kept per
   view and per grouping while the page is open. The palette has a `Group by: …` entry per key and Collapse or Expand
   all groups. The board is always stage columns, so the control is disabled there. Needs you stays one list, oldest

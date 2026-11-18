@@ -123,6 +123,7 @@ impl Backend for Fake {
     }
 
     async fn cache_get(&self, cache: &str, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        self.step("cache_get", format!("{cache} {key}"))?;
         Ok(self.cache(cache, key))
     }
 
@@ -805,6 +806,28 @@ async fn artifact_text_refuses_bytes_that_do_not_hash_to_the_id() {
             .await
             .contains("could not be read")
     );
+}
+
+#[tokio::test]
+async fn an_artifact_read_felix_refuses_goes_on_the_log() {
+    let fake = Fake::default();
+    let t = tasks(&fake);
+    let Ok(Content::Artifact(id)) = t.content("x".repeat(5000)).await else {
+        panic!("over 4 KiB should be an artifact")
+    };
+    fake.fail_on("cache_get");
+    assert!(
+        t.artifact_text(id.as_str())
+            .await
+            .contains("could not be read")
+    );
+    match fake.log(RUN).as_slice() {
+        [Record::Refused { op, key, .. }] => {
+            assert_eq!(op, "cache_get");
+            assert_eq!(key.as_deref(), Some(id.as_str()));
+        }
+        other => panic!("expected one refused record, got {other:?}"),
+    }
 }
 
 #[tokio::test]

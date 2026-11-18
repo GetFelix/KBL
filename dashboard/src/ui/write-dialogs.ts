@@ -1,7 +1,8 @@
 // The sign-in dialog and the confirm step before a write that cannot be undone
 // (WCAG 3.3.4: the person reviews what will be written, and can cancel).
 import type { ItemRow } from '../fold.ts';
-import { acceptTier, assigneeAgent, assigneePerson, assignPick, checkPerson, CLOSE_WHY, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
+import type { DecisionLine } from '../story.ts';
+import { acceptTier, assigneeAgent, assigneePerson, assignPick, checkPerson, checkRedo, CLOSE_WHY, redoCopy, redoNeedsNote, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
 import { modal } from './dialog.ts';
 import { h } from './dom.ts';
 import { tierSelect } from './item-actions.ts';
@@ -190,6 +191,63 @@ export function assignDialog(send: (ids: string[], args: WriteArgs) => void) {
       m.body.replaceChildren(form);
       m.open();
       meButton.focus();
+    },
+  };
+}
+
+/**
+ * The redo confirm: names the decision it branches from, says what happens and what it costs,
+ * and takes an optional note (required while a check is red). `reason` set means the redo is
+ * not possible now; the dialog then only says why.
+ */
+export function redoDialog(send: (ids: string[], args: WriteArgs) => void) {
+  const m = modal('Redo from a decision', 'redo-dialog');
+  m.el.setAttribute('aria-labelledby', 'redo-title');
+  m.el.removeAttribute('aria-label');
+  return {
+    el: m.el,
+    isOpen: m.isOpen,
+    open(item: ItemRow, d: DecisionLine | null, reason: string | null) {
+      const cancel = h('button', { type: 'button', class: 'button ghost', onclick: () => m.close() }, reason ? 'Close' : 'Cancel');
+      if (reason || !d) {
+        m.body.replaceChildren(h('form', { method: 'dialog' },
+          h('h2', { id: 'redo-title' }, `Cannot redo ${item.id} now`),
+          h('p', { id: 'redo-does', role: 'alert' }, reason ?? 'There is no decision to redo from.'),
+          h('div', { class: 'dialog-actions' }, h('span', { class: 'spacer' }), cancel)));
+        m.open();
+        return cancel.focus();
+      }
+      const c = redoCopy(item, d);
+      const needsNote = redoNeedsNote(item);
+      const note = h('textarea', { id: 'redo-note', class: 'field textarea', 'data-focus': 'redo-note', rows: '3', 'aria-describedby': 'redo-note-help redo-error', 'aria-required': String(needsNote) });
+      const error = h('p', { id: 'redo-error', class: 'field-error', role: 'alert' });
+      const form = h('form', { method: 'dialog' },
+        h('h2', { id: 'redo-title' }, c.title),
+        h('p', { class: 'muted' }, item.title),
+        h('p', { id: 'redo-does' }, c.does),
+        h('p', { id: 'redo-budget' }, c.budget),
+        h('label', { for: 'redo-note', class: 'field-label' }, needsNote ? 'Note (required)' : 'Note (optional)'),
+        note,
+        h('p', { id: 'redo-note-help', class: 'muted small' }, needsNote
+          ? 'A check failed on the pull request. Say what the new attempt should do differently; it reads this note first.'
+          : 'The new attempt reads this note first. It is saved on the item as your note.'),
+        error,
+        h('p', { class: 'muted small' }, 'This cannot be undone.'),
+        h('div', { class: 'dialog-actions' }, h('span', { class: 'spacer' }), cancel, h('button', { type: 'submit', class: 'button primary' }, 'Start redo')));
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const problem = checkRedo(note.value, needsNote);
+        error.textContent = problem ?? '';
+        if (problem) {
+          note.setAttribute('aria-invalid', 'true');
+          return note.focus();
+        }
+        m.close();
+        send([item.id], { kind: 'redo', fromAttempt: d.attempt, at: d.offset, note: note.value });
+      });
+      m.body.replaceChildren(form);
+      m.open();
+      note.focus();
     },
   };
 }

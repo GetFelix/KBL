@@ -122,9 +122,15 @@ export function blockText(i: Pick<ItemRow, 'block'>, now: number): string | null
   return `Blocked${on}${until}: ${b.reason}`;
 }
 
-/** The small properties a card carries: tier, source, pull request, and a block that still holds. The assignee has its own chip. */
+/** The milestone and the class values a card shows. A value triage or a rule chose reads the same as a person's: provenance is in the item panel. */
+function classText(i: ItemRow): string[] {
+  const c = i.class;
+  return [i.milestone ?? null, c?.item_type?.value ?? null, c?.area?.value ?? null, c?.size?.value ?? null].filter((x): x is string => !!x);
+}
+
+/** The small properties a card carries: tier, source, milestone, type, area, size, pull request, and a block that still holds. The assignee has its own chip. */
 export function properties(i: ItemRow, now?: number): string[] {
   const tier = i.tier ?? i.proposed_tier;
   const block = now != null ? blockText(i, now) : null;
-  return [tier != null ? `Tier ${tier}` : null, i.source ?? null, prText(i), block].filter((x): x is string => !!x);
+  return [tier != null ? `Tier ${tier}` : null, i.source ?? null, ...classText(i), prText(i), block].filter((x): x is string => !!x);
 }

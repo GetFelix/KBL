@@ -22,6 +22,10 @@ use crate::work::{
     PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec,
     TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
+use crate::work::{
+    ClassDim, DEFAULT_SIZES, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, Vocabulary,
+    plain_class_value,
+};
 
 mod human_wait;
 mod snapshots;
@@ -232,6 +236,8 @@ pub struct RulesSet {
     pub root: Option<ItemId>,
     pub text: Option<String>,
     pub checks: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<Vocabulary>,
     /// The offset of the record, which is the version.
     pub version: u64,
 }
@@ -241,6 +247,9 @@ pub struct RulesSet {
 pub struct RulesInEffect {
     pub text: Option<String>,
     pub checks: Vec<String>,
+    /// What triage may classify with; the root's over the repo's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocabulary: Option<Vocabulary>,
     /// The newest of the records that contribute.
     pub version: u64,
     pub repo_version: Option<u64>,
@@ -373,6 +382,91 @@ pub struct Snooze {
     /// reason shows it again even when its start is unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<WaitKind>,
+}
+
+/// Who chose a class value. A person's choice is never replaced by triage or a rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassBy {
+    /// An intake rule mapped it from a label.
+    Rule,
+    Triage,
+    Person,
+}
+
+/// One class value and who chose it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Tag {
+    pub value: String,
+    pub by: ClassBy,
+}
+
+/// An item's type, area and size.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Class {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item_type: Option<Tag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<Tag>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<Tag>,
+}
+
+impl Class {
+    pub fn is_empty(&self) -> bool {
+        self.item_type.is_none() && self.area.is_none() && self.size.is_none()
+    }
+
+    /// Sets a value for `by`, unless a person chose the slot and `by` is not a person.
+    fn set(&mut self, dim: ClassDim, value: String, by: ClassBy) {
+        let slot = self.slot(dim);
+        if by != ClassBy::Person && slot.as_ref().is_some_and(|t| t.by == ClassBy::Person) {
+            return;
+        }
+        if by == ClassBy::Rule && slot.as_ref().is_some_and(|t| t.by == ClassBy::Triage) {
+            return;
+        }
+        *slot = Some(Tag { value, by });
+    }
+
+    fn slot(&mut self, dim: ClassDim) -> &mut Option<Tag> {
+        match dim {
+            ClassDim::Type => &mut self.item_type,
+            ClassDim::Area => &mut self.area,
+            ClassDim::Size => &mut self.size,
+        }
+    }
+}
+
+/// Upstream's labels, cut to what an item keeps: at most [`MAX_LABELS`],
+/// each at most [`MAX_LABEL_LEN`] bytes, with empty and repeated ones dropped
+/// (repeats judged without regard to case).
+pub fn clean_labels(labels: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for l in labels {
+        let l = cut_chars(l.trim(), MAX_LABEL_LEN);
+        if !l.is_empty()
+            && !out.iter().any(|o| o.eq_ignore_ascii_case(&l))
+            && out.len() < MAX_LABELS
+        {
+            out.push(l);
+        }
+    }
+    out
+}
+
+/// A milestone cut to [`MAX_MILESTONE_LEN`] bytes; empty is none.
+pub fn clean_milestone(m: &str) -> Option<String> {
+    let m = cut_chars(m.trim(), MAX_MILESTONE_LEN);
+    (!m.is_empty()).then_some(m)
+}
+
+fn cut_chars(s: &str, max: usize) -> String {
+    let mut end = s.len().min(max);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_owned()
 }
 
 /// What holds an item back from every claim, as a person set it.
@@ -661,6 +755,15 @@ pub struct Item {
     /// The ingest rule that admitted this root with no triage item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triage_skipped: Option<String>,
+    /// Upstream's labels and milestone, set at import and kept in step by
+    /// reconcile. Format 19.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub milestone: Option<String>,
+    /// Type, area and size, from triage, a rule or a person. Format 19.
+    #[serde(default, skip_serializing_if = "Class::is_empty")]
+    pub class: Class,
     pub tier: Option<u8>,
     pub proposal: Option<Proposal>,
     pub hold: Option<Hold>,
@@ -818,6 +921,10 @@ pub enum Reject {
     /// A block with neither a time nor a resource, a time that is past or too
     /// far out, an empty or too long reason, or a resource that is not plain.
     BadBlock,
+    /// A type, area or size outside the team's vocabulary, or written by
+    /// someone who may not set it, or an edit that mixes upstream facts with a
+    /// person's own fields.
+    BadClass,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1157,10 +1264,12 @@ impl State {
             .flatten()
             .find_map(|r| r.checks.clone())
             .unwrap_or_default();
+        let vocabulary = layers.iter().flatten().find_map(|r| r.vocabulary.clone());
         let version = layers.iter().flatten().map(|r| r.version).max()?;
         Some(RulesInEffect {
             text,
             checks,
+            vocabulary,
             version,
             repo_version: repo.map(|r| r.version),
             root_version: own.map(|r| r.version),
@@ -1222,6 +1331,102 @@ impl State {
         })
     }
 
+    /// `value` as the item's team spells it, if its vocabulary lists it. A
+    /// dimension with no list refuses everything but sizes, which default to
+    /// S, M and L.
+    fn vocab_value(&self, item: &ItemId, dim: ClassDim, value: &str) -> Result<String, Reject> {
+        if !plain_class_value(value) {
+            return Err(Reject::BadClass);
+        }
+        self.item(item)?;
+        let vocab = self.rules_for(item).and_then(|r| r.vocabulary);
+        let listed: Vec<&str> = match (&vocab, dim) {
+            (Some(v), ClassDim::Type) => v.types.iter().map(String::as_str).collect(),
+            (Some(v), ClassDim::Area) => v.areas.iter().map(String::as_str).collect(),
+            (Some(v), ClassDim::Size) if !v.sizes.is_empty() => {
+                v.sizes.iter().map(String::as_str).collect()
+            }
+            (_, ClassDim::Size) => DEFAULT_SIZES.to_vec(),
+            (None, _) => Vec::new(),
+        };
+        listed
+            .into_iter()
+            .find(|l| l.eq_ignore_ascii_case(value))
+            .map(str::to_owned)
+            .ok_or(Reject::BadClass)
+    }
+
+    /// An `edited` that sets upstream's facts (the tracker, for ingest) or a
+    /// class value (a person; the tracker for a rule's mapping). The two do
+    /// not mix with each other or with a title or tier edit, so each actor's
+    /// part is judged alone.
+    fn edit_facts(
+        &mut self,
+        rec: &WorkLogged,
+        item: &ItemId,
+        (own, labels, milestone): (bool, &Option<Vec<String>>, &Option<String>),
+        class: [&Option<String>; 3],
+    ) -> Result<(), Reject> {
+        let upstream = labels.is_some() || milestone.is_some();
+        let classed = class.iter().any(|c| c.is_some());
+        if own || (upstream && classed) {
+            return Err(Reject::BadClass);
+        }
+        if self.item(item)?.closed.is_some() {
+            return Err(Reject::Closed);
+        }
+        if upstream {
+            if rec.actor != Actor::Tracker {
+                return Err(Reject::ActorNotAllowed);
+            }
+            let labels = labels.as_deref().map(clean_labels);
+            let milestone = milestone.as_deref().map(clean_milestone);
+            let it = self.item_mut(item)?;
+            let same = labels.as_ref().is_none_or(|l| *l == it.labels)
+                && milestone.as_ref().is_none_or(|m| *m == it.milestone);
+            if same {
+                return Err(Reject::NoChange);
+            }
+            if let Some(l) = labels {
+                it.labels = l;
+            }
+            if let Some(m) = milestone {
+                it.milestone = m;
+            }
+            return Ok(());
+        }
+        let by = match rec.actor {
+            Actor::Person => ClassBy::Person,
+            Actor::Tracker => ClassBy::Rule,
+            Actor::Agent => return Err(Reject::ActorNotAllowed),
+        };
+        let mut set = Vec::new();
+        for (dim, v) in [ClassDim::Type, ClassDim::Area, ClassDim::Size]
+            .into_iter()
+            .zip(class)
+        {
+            let Some(v) = v else { continue };
+            // Empty removes the value whoever chose it; triage or a rule may set it again.
+            if v.is_empty() && by == ClassBy::Person {
+                set.push((dim, None));
+            } else {
+                set.push((dim, Some(self.vocab_value(item, dim, v)?)));
+            }
+        }
+        let it = self.item_mut(item)?;
+        let before = it.class.clone();
+        for (dim, v) in set {
+            match v {
+                Some(v) => it.class.set(dim, v, by),
+                None => *it.class.slot(dim) = None,
+            }
+        }
+        if it.class == before {
+            return Err(Reject::NoChange);
+        }
+        Ok(())
+    }
+
     /// Whether a block set on `id` still holds at `now_ms`. Every way an
     /// agent is handed an item asks this, and the fold refuses a claim on a
     /// blocked item as well, so no path can hand it out.
@@ -1242,6 +1447,18 @@ impl State {
         } else {
             Stage::Ready
         }
+    }
+
+    /// Redos the item may still take under its root's budget; 0 for an unknown item.
+    pub fn redos_left(&self, id: &ItemId) -> u8 {
+        let Some(it) = self.items.get(id) else {
+            return 0;
+        };
+        let limit = self
+            .budgets
+            .get(&it.root)
+            .map_or(DEFAULT_REDOS, |b| b.redos_per_item);
+        limit.saturating_sub(it.redos)
     }
 
     /// Why an open item waits on a person, if it does.
@@ -1705,6 +1922,9 @@ impl State {
             accepted: false,
             accepted_by_person: false,
             triage_skipped: None,
+            labels: Vec::new(),
+            milestone: None,
+            class: Class::default(),
             tier: None,
             proposal: None,
             hold: None,
@@ -1939,6 +2159,8 @@ impl State {
                 source,
                 upstream_id,
                 title,
+                labels,
+                milestone,
             } => {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
@@ -1956,6 +2178,8 @@ impl State {
                 self.upstream.insert(up, item.clone());
                 self.budgets.insert(item.clone(), Budget::for_new_root());
                 let mut root = Self::blank(item, WorkKind::Fix, title);
+                root.labels = clean_labels(labels);
+                root.milestone = milestone.as_deref().and_then(clean_milestone);
                 root.target = upstream_id.split_once('#').and_then(|(repo, _)| {
                     repo.contains('/').then(|| Target {
                         source: source.clone(),
@@ -1989,11 +2213,26 @@ impl State {
                 depends_on,
                 related,
                 split,
+                item_type,
+                area,
+                size,
             } => {
                 if *tier >= TIERS {
                     return Err(Reject::BadTier);
                 }
                 let held = self.may_triage(item, rec)?;
+                // Checked before anything changes, so a refused value leaves no half-set class.
+                let dims = [
+                    (ClassDim::Type, item_type),
+                    (ClassDim::Area, area),
+                    (ClassDim::Size, size),
+                ];
+                let mut chosen = Vec::new();
+                for (dim, v) in dims {
+                    if let Some(v) = v {
+                        chosen.push((dim, self.vocab_value(item, dim, v)?));
+                    }
+                }
                 if let Some((triage, attempt)) = held {
                     let same = self.item(item)?.proposal.as_ref().is_some_and(|p| {
                         p.tier == *tier
@@ -2022,6 +2261,9 @@ impl State {
                 });
                 let it = self.item_mut(item)?;
                 it.changed_upstream = false;
+                for (dim, v) in chosen {
+                    it.class.set(dim, v, ClassBy::Triage);
+                }
                 // An unclear item reaches a person as a question, not as Ready work.
                 if unclear.is_some() && it.open_question.is_none() {
                     it.open_question = Some(offset);
@@ -2641,11 +2883,7 @@ impl State {
                 if it.paths.iter().filter(|p| !p.closed).count() >= OPEN_ATTEMPTS {
                     return Err(Reject::TooManyOpen);
                 }
-                let limit = self
-                    .budgets
-                    .get(&it.root)
-                    .map_or(DEFAULT_REDOS, |b| b.redos_per_item);
-                if it.redos >= limit {
+                if self.redos_left(item) == 0 {
                     return Err(Reject::NoRedosLeft);
                 }
                 let it = self.item_mut(item)?;
@@ -3150,11 +3388,15 @@ impl State {
                 root,
                 text,
                 checks,
+                vocabulary,
             } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);
                 }
-                if (text.is_none() && checks.is_none())
+                if vocabulary.as_ref().is_some_and(|v| !v.fits()) {
+                    return Err(Reject::BadClass);
+                }
+                if (text.is_none() && checks.is_none() && vocabulary.is_none())
                     || target.source.is_empty()
                     || target.repo.is_empty()
                 {
@@ -3178,19 +3420,34 @@ impl State {
                         return Err(Reject::MissingField);
                     }
                 }
-                let set = RulesSet {
+                let mut set = RulesSet {
                     target: target.clone(),
                     root: root.clone(),
                     text: text.clone(),
                     checks: checks.clone(),
+                    vocabulary: vocabulary.clone().filter(|v| !v.is_empty()),
                     version: offset,
                 };
-                let same = |r: &RulesSet| {
-                    r.root == set.root && (set.root.is_some() || r.target == set.target)
+                let (scope_root, scope_target) = (set.root.clone(), set.target.clone());
+                let same = move |r: &RulesSet| {
+                    r.root == scope_root && (scope_root.is_some() || r.target == scope_target)
                 };
+                // A record that sets only the vocabulary keeps the scope's text and
+                // checks, and one without a vocabulary keeps the standing one; an
+                // empty vocabulary clears it.
+                if let Some(old) = self.rules.iter().find(|r| same(r)) {
+                    if set.text.is_none() && set.checks.is_none() && vocabulary.is_some() {
+                        set.text.clone_from(&old.text);
+                        set.checks.clone_from(&old.checks);
+                    }
+                    if vocabulary.is_none() {
+                        set.vocabulary.clone_from(&old.vocabulary);
+                    }
+                }
                 // Empty text and no checks clears the scope and frees its slot.
                 let clears = set.text.as_deref() == Some("")
-                    && set.checks.as_ref().is_none_or(Vec::is_empty);
+                    && set.checks.as_ref().is_none_or(Vec::is_empty)
+                    && set.vocabulary.is_none();
                 match self.rules.iter().position(same) {
                     Some(i) if clears => {
                         self.rules.remove(i);
@@ -3217,12 +3474,38 @@ impl State {
                 it.tier = Some(*tier);
             }
             WorkRecord::Edited {
+                labels,
+                milestone,
+                item_type,
+                area,
+                size,
                 item,
                 title,
                 tier,
                 depends_on,
                 split,
                 proposal,
+            } if labels.is_some()
+                || milestone.is_some()
+                || item_type.is_some()
+                || area.is_some()
+                || size.is_some() =>
+            {
+                let own = title.is_some()
+                    || tier.is_some()
+                    || depends_on.is_some()
+                    || split.is_some()
+                    || proposal.is_some();
+                self.edit_facts(rec, item, (own, labels, milestone), [item_type, area, size])?
+            }
+            WorkRecord::Edited {
+                item,
+                title,
+                tier,
+                depends_on,
+                split,
+                proposal,
+                ..
             } => {
                 if rec.actor != Actor::Person {
                     return Err(Reject::ActorNotAllowed);

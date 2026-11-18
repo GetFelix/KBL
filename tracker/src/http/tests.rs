@@ -476,6 +476,36 @@ async fn filters_and_the_peek_are_for_an_agent_token_and_bad_filters_are_refused
 }
 
 #[tokio::test]
+async fn facet_filters_are_read_and_bounded_and_classifying_is_for_a_person() {
+    let app = app().await;
+    let facets = json!({ "milestone": "0.8", "labels": ["perf"], "item_type": "bug", "area": "storage", "size": "S" });
+    let (status, reply) = call(&app, "/v1/work/peek", Some("tok-w1"), facets).await;
+    assert_eq!(
+        (status, reply["next"].as_array().map(Vec::len)),
+        (StatusCode::OK, Some(0))
+    );
+    let many: Vec<String> = (0..40).map(|i| format!("l{i}")).collect();
+    for path in ["/v1/work/next", "/v1/work/peek"] {
+        let (status, _) = call(&app, path, Some("tok-w1"), json!({ "labels": many })).await;
+        assert!(status.is_client_error(), "{path}: {status}");
+    }
+    let body = json!({ "item": "x", "item_type": "bug" });
+    assert_eq!(
+        call(&app, "/v1/work/classify", Some("tok-w1"), body.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    // The test log is below format 19, which cannot take a class.
+    assert_eq!(
+        call(&app, "/v1/work/classify", Some("tok-gab"), body)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
 async fn only_a_person_token_appends_records() {
     let app = app().await;
     let record = json!({ "record": { "kind": "imported", "item": "a1", "source": "gh", "upstream_id": "1", "title": "t" } });
@@ -987,6 +1017,10 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
         ("/v1/work/flag", json!({ "item": "a1" })),
         ("/v1/work/unflag", json!({ "item": "a1" })),
         ("/v1/work/retry", json!({ "item": "a1" })),
+        (
+            "/v1/work/redo",
+            json!({ "item": "a1", "from_attempt": 1, "at": 1 }),
+        ),
         ("/v1/work/snooze", json!({ "item": "a1", "until_ms": 1 })),
         (
             "/v1/work/block",
@@ -2425,4 +2459,27 @@ async fn a_proposal_edit_carries_advice_only_at_format_17_and_for_the_answer_rea
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_redo_names_an_attempt_the_item_has() {
+    let app = kept().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    let body = json!({ "item": "a1", "from_attempt": 1, "at": 1 });
+    let (status, reply) = call(&app, "/v1/work/redo", Some("tok-gab"), body.clone()).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("wrong_attempt"))
+    );
+    // The same record through the generic route is refused the same way.
+    let record =
+        json!({ "record": { "kind": "forked_from", "item": "a1", "from_attempt": 1, "at": 1 } });
+    let (status, reply) = call(&app, "/v1/work/records", Some("tok-gab"), record).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("wrong_attempt"))
+    );
+    // An agent's token cannot redo.
+    let (status, _) = call(&app, "/v1/work/redo", Some("tok-w1"), body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

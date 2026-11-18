@@ -142,7 +142,8 @@ impl Folder {
     /// or null; one with an `until_ms` in the past no longer holds, which the page checks
     /// against its own clock. `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
     /// the attempt an agent holds, or null; `holder` and `active_ms` name that
-    /// agent and when it last wrote. `parent`, `work`, `upstream` (the root's
+    /// agent and when it last wrote. `redos_left` is how many redos the item's budget still
+    /// allows and `redo_pending` is true while a redo waits for an agent. `parent`, `work`, `upstream` (the root's
     /// `owner/repo#number`), `pr`, `pr_phase`, `pr_checks` and `failing_check`
     /// let a card nest and describe itself. `hold_deadline_ms` is when the hold lapses
     /// unless the holder renews it.
@@ -200,6 +201,8 @@ impl Folder {
                     "block": i.block,
                     "assignee": i.assignee,
                     "held_attempt": i.hold.as_ref().map(|h| h.attempt),
+                    "redos_left": self.state.redos_left(&i.id),
+                    "redo_pending": i.pending_fork.is_some(),
                     "hold_deadline_ms": i.hold.as_ref().map(|h| h.deadline_ms),
                     "finding": i.finding,
                     "proposal": i.proposal.as_ref().map(|p| json!({

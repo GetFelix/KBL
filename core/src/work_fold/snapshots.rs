@@ -23,7 +23,7 @@ pub const SNAPSHOT_EVERY: u64 = 2_000;
 
 /// Bump when a change to the fold would make an old snapshot differ from a
 /// fold of the same prefix. Snapshots from another revision are dropped.
-pub const FOLD_REV: u32 = 6;
+pub const FOLD_REV: u32 = 7;
 
 /// Every record at an offset up to and including `upto`.
 ///

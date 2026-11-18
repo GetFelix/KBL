@@ -41,6 +41,8 @@ fn imported(item: &str) -> WorkRecord {
         source: "github".into(),
         upstream_id: format!("felix#{item}"),
         title: format!("bug {item}"),
+        labels: vec![],
+        milestone: None,
     }
 }
 fn proposed(item: &str, parent: Option<&str>, k: &str, work: WorkKind) -> WorkRecord {
@@ -211,6 +213,8 @@ fn a_snapshot_survives_json_and_keeps_deduping() {
         source: "github".into(),
         upstream_id: "felix#r1".into(),
         title: "again".into(),
+        labels: vec![],
+        milestone: None,
     });
     for (o, r) in &more.0[log.len()..] {
         restored.apply(*o, r);
@@ -610,6 +614,9 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
     let why: Vec<_> = s.rejections.iter().map(|r| r.why).collect();
     assert_eq!(why, vec![Reject::NoRedosLeft]);
     assert_eq!(s.items[&id("r1")].redos, 3);
+    // What the dashboard shows beside the redo button: none left, and 0 for an unknown item.
+    assert_eq!(s.redos_left(&id("r1")), 0);
+    assert_eq!(s.redos_left(&id("nope")), 0);
     // The limit belongs to the item: its child still has all three.
     let mut l = Log::default();
     l.tracker(imported("r1"));
@@ -817,6 +824,9 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
         depends_on: Vec::new(),
         related: Vec::new(),
         split: Vec::new(),
+        item_type: None,
+        area: None,
+        size: None,
     };
     l.agent("w2", triaged(3)); // 3: holds nothing
     l.agent("w1", claimed("t1", 1));
@@ -1328,6 +1338,9 @@ fn an_upstream_edit_flags_the_item_until_it_is_triaged_again() {
         depends_on: Vec::new(),
         related: Vec::new(),
         split: Vec::new(),
+        item_type: None,
+        area: None,
+        size: None,
     });
     assert!(!fold(&l.0).items[&id("r1")].changed_upstream);
 
@@ -1792,6 +1805,11 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item: id("p"),
         title: Some("the real title".into()),
         tier: Some(0),
+        labels: None,
+        milestone: None,
+        item_type: None,
+        area: None,
+        size: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -1809,6 +1827,11 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item: id("p"),
         title: None,
         tier: Some(3),
+        labels: None,
+        milestone: None,
+        item_type: None,
+        area: None,
+        size: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -1820,6 +1843,11 @@ fn a_person_edits_a_proposal_before_accepting_it() {
             item: id("p"),
             title: None,
             tier: Some(3),
+            labels: None,
+            milestone: None,
+            item_type: None,
+            area: None,
+            size: None,
             depends_on: None,
             split: None,
             proposal: None,
@@ -2499,6 +2527,9 @@ fn triage_posts_a_prerequisite_for_the_item_it_triages_and_keeps_its_claim() {
             depends_on: Vec::new(),
             related: Vec::new(),
             split: Vec::new(),
+            item_type: None,
+            area: None,
+            size: None,
         },
     );
     l.agent("w2", done("t1", 1, 0));
@@ -2734,6 +2765,9 @@ fn triaged_unclear(item: &str) -> WorkRecord {
         depends_on: Vec::new(),
         related: Vec::new(),
         split: Vec::new(),
+        item_type: None,
+        area: None,
+        size: None,
     }
 }
 
@@ -2851,6 +2885,8 @@ fn imported_in_felix(item: &str) -> WorkRecord {
         source: "github".into(),
         upstream_id: format!("GetFelix/felix#{item}"),
         title: format!("bug {item}"),
+        labels: vec![],
+        milestone: None,
     }
 }
 fn rules(root: Option<&str>, t: Option<&str>, checks: Option<&[&str]>) -> WorkRecord {
@@ -2859,6 +2895,7 @@ fn rules(root: Option<&str>, t: Option<&str>, checks: Option<&[&str]>) -> WorkRe
         root: root.map(id),
         text: t.map(str::to_owned),
         checks: checks.map(|c| c.iter().map(|s| s.to_string()).collect()),
+        vocabulary: None,
     }
 }
 
@@ -2944,6 +2981,7 @@ fn rules_are_bounded_in_size_and_count() {
             root: None,
             text: Some("t".into()),
             checks: None,
+            vocabulary: None,
         });
     }
     let s = fold(&log.0);
@@ -2983,6 +3021,7 @@ fn empty_text_with_no_checks_clears_a_scope_and_frees_its_slot() {
             root: None,
             text: Some("t".into()),
             checks: None,
+            vocabulary: None,
         });
     }
     let clear = |i: usize, text: &str| WorkRecord::RulesSet {
@@ -2993,6 +3032,7 @@ fn empty_text_with_no_checks_clears_a_scope_and_frees_its_slot() {
         root: None,
         text: Some(text.into()),
         checks: Some(vec![]),
+        vocabulary: None,
     };
     log.person(clear(0, ""));
     let fresh = log.person(clear(9999, "new"));
@@ -3114,6 +3154,7 @@ fn chained_answers_stop_at_the_depth_cap() {
 mod assignee;
 mod blocks;
 mod card_actions;
+mod classes;
 mod human_wait;
 mod inbox;
 mod related;
@@ -3389,6 +3430,9 @@ fn triage_answers_are_counted_unless_they_repeat_the_one_on_record() {
         depends_on: Vec::new(),
         related: Vec::new(),
         split: Vec::new(),
+        item_type: None,
+        area: None,
+        size: None,
     };
     l.agent("w1", triaged(1, "a"));
     l.agent("w1", triaged(1, "a"));
@@ -3422,6 +3466,9 @@ fn a_changed_dependency_or_split_is_a_different_triage_answer() {
         depends_on: depends_on.into_iter().map(id).collect(),
         related: Vec::new(),
         split: split.into_iter().map(String::from).collect(),
+        item_type: None,
+        area: None,
+        size: None,
     };
     l.tracker(imported("r0"));
     l.agent("w1", triaged(vec!["r0"], vec!["a"]));
@@ -3461,6 +3508,9 @@ fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
             depends_on: Vec::new(),
             related: Vec::new(),
             split: Vec::new(),
+            item_type: None,
+            area: None,
+            size: None,
         },
     );
     // Accepting again without a tier keeps the admitted tier too.
@@ -3501,6 +3551,8 @@ fn a_link_blocks_across_repos_and_sources_and_names_the_other_repo() {
             source: source.into(),
             upstream_id: up.into(),
             title: item.into(),
+            labels: vec![],
+            milestone: None,
         });
         l.person(WorkRecord::Accepted {
             item: id(item),
@@ -3550,6 +3602,8 @@ fn a_childs_repo_is_its_roots() {
         source: "github".into(),
         upstream_id: "GetFelix/felix#812".into(),
         title: "r1".into(),
+        labels: vec![],
+        milestone: None,
     });
     l.person(proposed("c1", Some("r1"), "k1", WorkKind::Split));
     let s = fold(&l.0);
@@ -3624,6 +3678,8 @@ fn a_gitlab_root_is_shown_with_its_repo() {
         source: "gitlab".into(),
         upstream_id: "group/app#12".into(),
         title: "gl".into(),
+        labels: vec![],
+        milestone: None,
     });
     let s = fold(&l.0);
     assert_eq!(
@@ -3640,6 +3696,8 @@ fn an_ado_roots_target_still_drives_rules_but_is_not_shown_as_a_repo() {
         source: "ado".into(),
         upstream_id: "org/project#4410".into(),
         title: "ado".into(),
+        labels: vec![],
+        milestone: None,
     });
     let ado = Target {
         source: "ado".into(),
@@ -3650,6 +3708,7 @@ fn an_ado_roots_target_still_drives_rules_but_is_not_shown_as_a_repo() {
         root: None,
         text: Some("ado rules".into()),
         checks: None,
+        vocabulary: None,
     });
     let s = fold(&l.0);
     assert!(s.rejections.is_empty(), "{:?}", s.rejections);

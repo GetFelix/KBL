@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 18.
+is 19.
 
 ### Formats
 
@@ -91,6 +91,7 @@ is 18.
 | 17 | `edited` carrying `depends_on`, `split` or the `proposal` offset: a person adjusts the dependencies and split titles in triage's answer for an item nobody has accepted ([work tracker](work-tracker.md#adjusting-triages-advice)). The edit names the answer it read and is refused as `stale_proposal` once triage has answered again. A plain title or tier edit stays format 1 | Until the raise, an edit with any of those fields is refused with `format`, and the dashboard hides the editor. A reader below 17 stops at the first such edit, so it never applies one without the check on the answer |
 | 13 | No record or field: `reassigned` may name an agent, `{"agent": "w1"}`. The fold then refuses `claimed` by any other agent as `not_assignee`, and the tracker may write `reassigned` to nobody for an agent assignee that went away ([work tracker](work-tracker.md#assignees)) | Until the raise, an agent assignee is refused as `bad_assignee`, as before. A reader below 13 stops at the raise itself, so it never lets another agent claim an agent's item |
 | 18 | `related` and `unrelated`, and `related` on a triage answer: a soft link between two items that never holds either back ([work tracker](work-tracker.md#related-items)). The fold keeps the relation both ways and shows it on both items. Only a person writes `related` or `unrelated`; an agent proposes one through its triage answer | Until the raise, `POST /v1/work/relate` and `/unrelate` are refused with `format`, and `work_triage` with `related` is refused with `needs_format_18`; a triage answer without it is unchanged. A reader below 18 stops at the first relation |
+| 19 | Upstream `labels` and `milestone` on `imported` and on an `edited` the tracker writes for ingest; `item_type`, `area` and `size` on `triaged`, on a person's `edited` and on an `edited` a rule's label map writes; a `vocabulary` on `rules_set`. The fold keeps them on the item, refuses a type or area outside the team's vocabulary (`bad_class`; sizes default to S, M and L) and never lets triage or a rule replace a person's value ([work tracker](work-tracker.md#labels-milestone-type-area-and-size)) | Until the raise, ingest imports an issue without its labels and milestone and writes them as an edit after the raise, and `POST /v1/work/classify` and a vocabulary are refused with `format`. A reader below 19 stops at the first record that uses a new field, so it never claims against a filter it cannot read |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, now 2. It follows the same rules. An org admin raises it with `POST /v1/org/records` and `{"record": {"kind": "format_raised", "to": 2}}`; a reader below the new format stops at the raise.
 

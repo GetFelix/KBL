@@ -368,6 +368,17 @@ pub(crate) struct Rule {
     /// Label to tier. The lowest tier among an issue's labels wins.
     #[serde(default)]
     pub(crate) priority_labels: BTreeMap<String, u8>,
+    /// Milestone (fix version, iteration) to tier. With `priority_labels`
+    /// the lowest tier wins.
+    #[serde(default)]
+    pub(crate) milestone_tiers: BTreeMap<String, u8>,
+    /// Label (tag) to the item's type or area, set when the issue is taken
+    /// and again when its labels change. The value must be in the team's
+    /// vocabulary or the tracker refuses it. A person's or triage's choice is kept.
+    #[serde(default)]
+    pub(crate) label_types: BTreeMap<String, String>,
+    #[serde(default)]
+    pub(crate) label_areas: BTreeMap<String, String>,
     /// The repository agents work in; the issue's own when unset.
     pub(crate) target_repo: Option<String>,
     /// Ingest opens an issue in `repo` for a prerequisite that targets it,
@@ -570,6 +581,7 @@ impl Config {
                 r.default_tier < kbl_core::work::TIERS
                     && r.priority_labels
                         .values()
+                        .chain(r.milestone_tiers.values())
                         .all(|t| *t < kbl_core::work::TIERS),
                 "rule {:?}: a tier is 0 to 3",
                 r.name

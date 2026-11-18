@@ -5,6 +5,7 @@ import { duration, metrics, metricsText, money, perItem, type MetricsReport } fr
 const report = (o: Partial<MetricsReport> = {}): MetricsReport => ({
   days: 30,
   partial: false,
+  clock_behind: false,
   stages: [
     { stage: 'triage', n: 4, p50_ms: 3_600_000, p85_ms: 90_000_000 },
     { stage: 'in_review', n: 0, p50_ms: null, p85_ms: null },
@@ -53,6 +54,11 @@ test('nothing done says so and shows no invented averages', () => {
 
 test('a partial window is flagged', () => {
   assert.match(metricsText(report({ partial: true })).partial ?? '', /too few stage times/);
+});
+
+test('a clock behind the records is flagged', () => {
+  assert.equal(metricsText(report()).clockBehind, null);
+  assert.match(metricsText(report({ clock_behind: true })).clockBehind ?? '', /clock is behind/);
 });
 
 test('an answer that is not a report is refused', () => {

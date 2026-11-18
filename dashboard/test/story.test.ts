@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, ratingChoices, ratingText, stories, type Story } from '../src/story.ts';
+import { attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, forkText, redoPoint, ratingChoices, ratingText, stories, type Story } from '../src/story.ts';
 
 const story: Story = {
   item: 'r1',
@@ -54,4 +54,24 @@ test('only a finished attempt offers a mark, and the recorded one is pressed', (
   assert.equal(ratingText(at(true, null)), null);
   assert.equal(ratingText(at(true, true)), 'Marked accurate');
   assert.equal(ratingText(at(true, false)), 'Marked not accurate');
+});
+
+test('a redo starts from the picked decision, else the last of the newest attempt', () => {
+  const dec = (offset: number, attempt: number) => ({ ...story.groups[0].decisions[0], offset, attempt });
+  const two: Story = {
+    ...story,
+    attempts: [
+      { attempt: 1, forked_from: null, done: true, closed: true, summary_accurate: null },
+      { attempt: 2, forked_from: [1, 7], done: false, closed: false, summary_accurate: null },
+    ],
+    groups: [{ phase: 'fix', decisions: [dec(7, 1), dec(20, 2), dec(15, 2)] }],
+  };
+  assert.equal((redoPoint(two) as { offset: number }).offset, 20);
+  // A pick names its own attempt: decision 7 is attempt 1's, whatever the newest attempt is.
+  assert.deepEqual(redoPoint(two, 7), two.groups[0].decisions[0]);
+  assert.match(redoPoint(two, 99) as string, /not in this item/);
+  assert.match(redoPoint(undefined) as string, /no recorded decision/);
+  assert.match(redoPoint({ ...two, groups: [] }) as string, /no recorded decision/);
+  assert.equal(forkText(two.attempts[1]), 'Attempt 2 is a redo from decision 7 on attempt 1.');
+  assert.equal(forkText(two.attempts[0]), null);
 });

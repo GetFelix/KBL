@@ -22,6 +22,12 @@ pub(crate) struct Tracked {
     /// change that touched none of them.
     pub(crate) fingerprint: String,
     pub(crate) title: String,
+    /// The labels and milestone the tracker holds for the item, as last
+    /// written. A difference from upstream's makes reconcile write an edit.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) labels: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) milestone: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) closed: Option<Closed>,
     /// Whether it still matches its rule.

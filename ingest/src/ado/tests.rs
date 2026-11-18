@@ -222,6 +222,7 @@ async fn fields_map_and_a_tag_selects_the_item() {
     assert_eq!(a.title, "Stale read after failover");
     assert_eq!(a.body, "Reads go stale & stay.\nTwice.");
     assert_eq!(a.labels, ["agent-ok", "storage"]);
+    assert_eq!(a.milestone.as_deref(), Some("Platform Team\\Sprint 4"));
     assert_eq!(a.priority.as_deref(), Some("1"));
     assert_eq!(a.components, ["Platform Team\\Storage\\Replication"]);
     assert_eq!(a.kind.as_deref(), Some("Bug"));
