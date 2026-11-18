@@ -45,6 +45,8 @@ impl Log {
                 source: "github".into(),
                 upstream_id: format!("{repo}#{item}"),
                 title: item.into(),
+                labels: vec![],
+                milestone: None,
             },
         );
         self.person(WorkRecord::Accepted {

@@ -756,6 +756,9 @@ impl<B: Broker> Tracker<B> {
             unclear,
             depends_on,
             split,
+            item_type,
+            area,
+            size,
         } = answer;
         bounded("why", &why, MAX_FIELD)?;
         // Compared with the standing answer, which was stored redacted.
@@ -799,6 +802,7 @@ impl<B: Broker> Tracker<B> {
                 && (p.tier, &p.why, &p.duplicate_of, p.unclear)
                     == (tier, &why, &duplicate_of, unclear)
                 && (&p.depends_on, &p.split) == (&depends_on, &split)
+                && same_class(&core, &target, [&item_type, &area, &size])
             {
                 return Ok(
                     json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),
@@ -818,6 +822,9 @@ impl<B: Broker> Tracker<B> {
                 unclear,
                 depends_on,
                 split,
+                item_type,
+                area,
+                size,
             };
             let offset = self
                 .agent_append(&mut core, agent, item, "triage", record)
@@ -1164,6 +1171,26 @@ pub(crate) struct TriageAnswer {
     pub(crate) unclear: Option<Unclear>,
     pub(crate) depends_on: Vec<ItemId>,
     pub(crate) split: Vec<String>,
+    /// Classification from the team's vocabulary.
+    pub(crate) item_type: Option<String>,
+    pub(crate) area: Option<String>,
+    pub(crate) size: Option<String>,
+}
+
+/// Whether the values an answer repeats are the ones triage already set on
+/// `target`. A value it leaves out is no change.
+fn same_class(core: &Core, target: &ItemId, new: [&Option<String>; 3]) -> bool {
+    let Some(it) = core.state.items.get(target) else {
+        return false;
+    };
+    let have = [&it.class.item_type, &it.class.area, &it.class.size];
+    new.iter().zip(have).all(|(n, h)| {
+        n.as_ref().is_none_or(|n| {
+            h.as_ref().is_some_and(|h| {
+                h.by == kbl_core::work_fold::ClassBy::Triage && h.value.eq_ignore_ascii_case(n)
+            })
+        })
+    })
 }
 
 /// The dependencies and split titles of a triage answer: few, distinct, short.
@@ -1305,12 +1332,18 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             source,
             upstream_id,
             title,
+            labels,
+            milestone,
             ..
         } => {
             field("source", source)?;
             field("upstream_id", upstream_id)?;
+            upstream_facts(Some(labels), milestone.as_deref())?;
             field("title", title)
         }
+        WorkRecord::Edited {
+            labels, milestone, ..
+        } => upstream_facts(labels.as_ref(), milestone.as_deref()),
         WorkRecord::Updated {
             title: Some(title), ..
         } => field("title", title),
@@ -1347,3 +1380,25 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests;
+
+/// Upstream's labels and milestone are cut by the fold, but a record that
+/// carries far more than it keeps is refused here instead of stored whole.
+fn upstream_facts(labels: Option<&Vec<String>>, milestone: Option<&str>) -> Result<(), Error> {
+    use kbl_core::work::{MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN};
+    if let Some(l) = labels {
+        if l.len() > MAX_LABELS * 8 {
+            return Err(Error::Invalid(format!(
+                "{} labels; at most {}",
+                l.len(),
+                MAX_LABELS * 8
+            )));
+        }
+        if l.iter().any(|x| x.len() > MAX_LABEL_LEN * 4) {
+            return Err(Error::Invalid("a label is too long".into()));
+        }
+    }
+    if milestone.is_some_and(|m| m.len() > MAX_MILESTONE_LEN * 4) {
+        return Err(Error::Invalid("the milestone is too long".into()));
+    }
+    Ok(())
+}

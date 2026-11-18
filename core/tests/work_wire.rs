@@ -21,6 +21,8 @@ fn every_record() -> Vec<WorkRecord> {
             source: "github".into(),
             upstream_id: "felix#2204".into(),
             title: "reads miss a fresh write".into(),
+            labels: vec![],
+            milestone: None,
         },
         WorkRecord::Proposed {
             item: item("c1"),
@@ -46,6 +48,9 @@ fn every_record() -> Vec<WorkRecord> {
             unclear: None,
             depends_on: Vec::new(),
             split: Vec::new(),
+            item_type: None,
+            area: None,
+            size: None,
         },
         WorkRecord::Accepted {
             item: item("r1"),
@@ -214,6 +219,7 @@ fn every_record() -> Vec<WorkRecord> {
             root: None,
             text: Some("one worktree per lane".into()),
             checks: Some(vec!["task lint".into()]),
+            vocabulary: None,
         },
         WorkRecord::RulesSet {
             target: Target {
@@ -223,6 +229,7 @@ fn every_record() -> Vec<WorkRecord> {
             root: Some(item("r1")),
             text: None,
             checks: Some(vec![]),
+            vocabulary: None,
         },
         WorkRecord::PrStatus {
             item: item("r1"),
@@ -299,6 +306,9 @@ fn every_record() -> Vec<WorkRecord> {
             unclear: Some(Unclear::Repo),
             depends_on: Vec::new(),
             split: Vec::new(),
+            item_type: None,
+            area: None,
+            size: None,
         },
         WorkRecord::Question {
             item: item("r1"),
@@ -338,6 +348,8 @@ fn every_record() -> Vec<WorkRecord> {
             source: "github".into(),
             upstream_id: "GetFelix/felix#9".into(),
             title: "stale read".into(),
+            labels: vec![],
+            milestone: None,
         },
         WorkRecord::Accepted {
             item: item("rv"),
@@ -513,6 +525,9 @@ fn a_triage_answer_carries_dependencies_and_a_split_only_when_it_has_them() {
         unclear: None,
         depends_on: vec![item("r0")],
         split: vec!["reader".into(), "writer".into()],
+        item_type: None,
+        area: None,
+        size: None,
     };
     let line = String::from_utf8(with.encode()).unwrap();
     assert!(

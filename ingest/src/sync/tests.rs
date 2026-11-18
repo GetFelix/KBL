@@ -160,6 +160,8 @@ fn imported_record() -> WorkRecord {
         source: "github".into(),
         upstream_id: UP.into(),
         title: "stale read".into(),
+        labels: vec![],
+        milestone: None,
     }
 }
 

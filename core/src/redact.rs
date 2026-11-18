@@ -1047,7 +1047,9 @@ fn redact_content(c: &mut Content) {
 /// enums, which the tracker checks against fixed shapes; evidence (a stream
 /// and an offset); sources, upstream ids and targets, which name where an
 /// item comes from; a review's tier and `pr`, a pull request reference and
-/// a refusal's `op`, which only the tracker writes. A progress record's
+/// a refusal's `op`, which only the tracker writes; upstream labels and
+/// milestone, which are filter keys, and class values, which a vocabulary
+/// limits to plain words. A progress record's
 /// `pr` and `branch` are keys too (the fold matches a pull request by
 /// `pr`), so only URL userinfo is cut from them: `acme/xoxb-slackbot-tools#7`
 /// is a repo, not a token.

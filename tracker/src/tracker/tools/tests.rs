@@ -1013,6 +1013,11 @@ async fn people_accept_edit_reject_move_close_and_unlink() {
             item: p.clone(),
             title: Some("the real bug".into()),
             tier: Some(0),
+            labels: None,
+            milestone: None,
+            item_type: None,
+            area: None,
+            size: None,
         },
     )
     .await
@@ -1275,6 +1280,11 @@ async fn an_edited_title_is_bounded_and_not_empty() {
         item: item("a1"),
         title: Some(title),
         tier: None,
+        labels: None,
+        milestone: None,
+        item_type: None,
+        area: None,
+        size: None,
     };
     let r = t.person_record(key("gab"), edit(String::new())).await;
     assert_eq!(why(r), "invalid");
@@ -1330,6 +1340,8 @@ async fn import(t: &crate::tracker::Tracker<Fake>, id: &str, upstream: &str) {
             source: "github".into(),
             upstream_id: upstream.into(),
             title: format!("fix {id}"),
+            labels: vec![],
+            milestone: None,
         },
     )
     .await;
@@ -1589,6 +1601,8 @@ async fn an_agent_reaches_only_the_repos_its_grants_name() {
             source: "jira".into(),
             upstream_id: "GetFelix/felix-gateway#4".into(),
             title: "fix f3".into(),
+            labels: vec![],
+            milestone: None,
         },
     )
     .await;
@@ -1857,6 +1871,8 @@ async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
             source: "gh".into(),
             upstream_id: "u1".into(),
             title: "fix u1".into(),
+            labels: vec![],
+            milestone: None,
         },
     )
     .await
@@ -1871,6 +1887,9 @@ async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
             unclear: Some(Unclear::Repo),
             depends_on: Vec::new(),
             split: Vec::new(),
+            item_type: None,
+            area: None,
+            size: None,
         },
     )
     .await
@@ -2117,6 +2136,9 @@ async fn an_agent_answers_the_triage_item_it_holds() {
             unclear: None,
             depends_on: Vec::new(),
             split: Vec::new(),
+            item_type: None,
+            area: None,
+            size: None,
         }
     );
     // A retry of the same answer writes nothing.
@@ -2398,6 +2420,9 @@ async fn a_triage_answer_can_carry_dependencies_and_a_split() {
             unclear: None,
             depends_on: vec![item("a2")],
             split: vec!["reader".into(), "writer".into()],
+            item_type: None,
+            area: None,
+            size: None,
         }
     );
     // The same answer again is a retry; changing only the split is a new answer.
@@ -2468,6 +2493,9 @@ async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
                 unclear: None,
                 depends_on: vec![],
                 split: many,
+                item_type: None,
+                area: None,
+                size: None,
             },
         )
         .await
@@ -2518,6 +2546,9 @@ fn ans(
         unclear,
         depends_on: Vec::new(),
         split: Vec::new(),
+        item_type: None,
+        area: None,
+        size: None,
     }
 }
 
@@ -2582,6 +2613,8 @@ async fn triaging(repo: &str) -> (Fake, Tracker<Fake>) {
         source: "gh".into(),
         upstream_id: "a1".into(),
         title: "fix a1".into(),
+        labels: vec![],
+        milestone: None,
     })
     .await;
     record(WorkRecord::Proposed {
@@ -2835,6 +2868,8 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
         source: "github".into(),
         upstream_id: up.into(),
         title: "gateway needs a CAS call".into(),
+        labels: vec![],
+        milestone: None,
     };
     let refused = |e: Error| match e {
         Error::Refused { why } => why,
@@ -3110,6 +3145,8 @@ async fn ingest_cannot_unlink_a_prerequisite_from_an_answer() {
             source: "github".into(),
             upstream_id: "GetFelix/felix-gateway#40".into(),
             title: "gateway needs a CAS call".into(),
+            labels: vec![],
+            milestone: None,
         },
     )
     .await

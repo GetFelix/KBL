@@ -87,8 +87,71 @@ pub const FORMAT_V15: u32 = 15;
 /// item back until a time or on a named outside resource.
 pub const FORMAT_V16: u32 = 16;
 
+/// The format that added upstream labels and milestone on an item, and
+/// triage's classification (type, area, size) with its vocabulary.
+pub const FORMAT_V19: u32 = 19;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V16;
+pub const FORMAT: u32 = FORMAT_V19;
+
+/// Most labels an item keeps, and the longest label or milestone, in bytes.
+/// What upstream sends beyond them is cut, not refused.
+pub const MAX_LABELS: usize = 32;
+pub const MAX_LABEL_LEN: usize = 64;
+pub const MAX_MILESTONE_LEN: usize = 100;
+
+/// Most values a vocabulary lists per dimension, and the longest value.
+pub const MAX_VOCAB_VALUES: usize = 32;
+pub const MAX_CLASS_LEN: usize = 40;
+
+/// What a size is when the rule lists none.
+pub const DEFAULT_SIZES: [&str; 3] = ["S", "M", "L"];
+
+/// The values triage may choose from for one team, in a `rules_set`. A value
+/// outside the list is refused, so grouping on it stays closed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Vocabulary {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub areas: Vec<String>,
+    /// Left empty, sizes are `S`, `M` and `L`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sizes: Vec<String>,
+}
+
+impl Vocabulary {
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty() && self.areas.is_empty() && self.sizes.is_empty()
+    }
+
+    /// Whether every list fits its bounds and holds plain, distinct values.
+    pub fn fits(&self) -> bool {
+        [&self.types, &self.areas, &self.sizes].iter().all(|l| {
+            l.len() <= MAX_VOCAB_VALUES
+                && l.iter().all(|v| plain_class_value(v))
+                && l.iter()
+                    .enumerate()
+                    .all(|(i, v)| !l[..i].iter().any(|w| w.eq_ignore_ascii_case(v)))
+        })
+    }
+}
+
+/// A class value: 1 to [`MAX_CLASS_LEN`] letters, digits, `-`, `_`, `.` or `/`.
+pub fn plain_class_value(v: &str) -> bool {
+    !v.is_empty()
+        && v.len() <= MAX_CLASS_LEN
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+}
+
+/// The three classification dimensions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassDim {
+    Type,
+    Area,
+    Size,
+}
 
 /// Longest reason a `block_set` carries.
 pub const MAX_BLOCK_REASON: usize = 300;
@@ -631,6 +694,12 @@ pub enum WorkRecord {
         source: String,
         upstream_id: String,
         title: String,
+        /// Upstream's labels (tags) when imported. Format 19.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        labels: Vec<String>,
+        /// Upstream's milestone (fix version, iteration). Format 19.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        milestone: Option<String>,
     },
     /// A new item. With a live kind, an agent needs to hold `parent`; an agent's
     /// `fix` is a proposal that a person accepts. `key` makes a retry a no-op.
@@ -661,6 +730,13 @@ pub enum WorkRecord {
         /// Titles this one should be split into, as advice: nothing is created.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         split: Vec<String>,
+        /// Triage's classification, each from the team's vocabulary. Format 19.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<String>,
     },
     /// The holder cannot go on until `prerequisite` is done. With `new`, the
     /// record also creates that prerequisite as a proposal in the target
@@ -972,13 +1048,27 @@ pub enum WorkRecord {
     AttemptClosed { item: ItemId, attempt: u32 },
     /// A person moves an item to another tier.
     TierChanged { item: ItemId, tier: u8 },
-    /// A person edits a proposal before accepting it.
+    /// A person edits a proposal before accepting it. From format 19 it also
+    /// carries a person's classification of any open item (empty clears a
+    /// value), and, written by the tracker for ingest, upstream's labels and
+    /// milestone as they are now (an empty milestone clears it) or a class a
+    /// rule mapped.
     Edited {
         item: ItemId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tier: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        labels: Option<Vec<String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        milestone: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item_type: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<String>,
     },
     /// Sets a root's budget outright. Only a person may; this is how it is raised.
     BudgetSet {
@@ -1030,6 +1120,9 @@ pub enum WorkRecord {
         /// Commands to run before pushing. The agent runs them; the tracker never does.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         checks: Option<Vec<String>>,
+        /// The values triage may classify with. Format 19.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vocabulary: Option<Vocabulary>,
     },
     /// Raises the log's format: records of formats up to `to` may follow.
     /// Only a person may, once every reader of the log is a build that reads
@@ -1293,6 +1386,29 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::Imported {
+                labels, milestone, ..
+            } if !labels.is_empty() || milestone.is_some() => FORMAT_V19,
+            WorkRecord::Triaged {
+                item_type: None,
+                area: None,
+                size: None,
+                ..
+            } => FORMAT_V1,
+            WorkRecord::Triaged { .. } => FORMAT_V19,
+            WorkRecord::Edited {
+                labels: None,
+                milestone: None,
+                item_type: None,
+                area: None,
+                size: None,
+                ..
+            } => FORMAT_V1,
+            WorkRecord::Edited { .. } => FORMAT_V19,
+            WorkRecord::RulesSet {
+                vocabulary: Some(_),
+                ..
+            } => FORMAT_V19,
             WorkRecord::BlockSet { .. } | WorkRecord::BlockCleared { .. } => FORMAT_V16,
             WorkRecord::Claimed { direct: true, .. } => FORMAT_V15,
             WorkRecord::Released { why: Some(w), .. } if w.waits() => FORMAT_V14,
@@ -1309,7 +1425,6 @@ impl WorkRecord {
             } => FORMAT_V3,
             WorkRecord::Imported { .. }
             | WorkRecord::Proposed { .. }
-            | WorkRecord::Triaged { .. }
             | WorkRecord::Accepted { .. }
             | WorkRecord::Prerequisite { .. }
             | WorkRecord::Shipped { .. }
@@ -1337,7 +1452,6 @@ impl WorkRecord {
             | WorkRecord::Reopened { .. }
             | WorkRecord::AttemptClosed { .. }
             | WorkRecord::TierChanged { .. }
-            | WorkRecord::Edited { .. }
             | WorkRecord::BudgetSet { .. }
             | WorkRecord::PrStatus { .. }
             | WorkRecord::SourceStalled { .. }

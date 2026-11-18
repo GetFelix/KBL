@@ -116,6 +116,12 @@ struct WorkTriageArgs {
     depends_on: Option<Vec<String>>,
     /// Titles this item should be split into, if it is too big for one change. A person decides; nothing is created.
     split: Option<Vec<String>>,
+    /// The item's type, one of the `types` in the rules' vocabulary (work_rules). A value outside it is refused.
+    item_type: Option<String>,
+    /// The item's code area, one of the vocabulary's `areas`.
+    area: Option<String>,
+    /// The item's expected size, one of the vocabulary's `sizes` (`S`, `M` or `L` when it lists none).
+    size: Option<String>,
     /// Your own key for this write, 1 to 64 characters of A-Z, a-z, 0-9, - and _. If a call may have landed and you did not see the answer, send it again with the same key and the same arguments: the tracker answers with the first write (`replayed: true`) instead of writing twice. The same key with other arguments is refused. Left out, a retry writes again.
     request_key: Option<String>,
 }
@@ -170,13 +176,36 @@ struct WorkNextArgs {
     repo: Option<String>,
     /// Ids of roots whose work you do not want, such as one you just finished a child of.
     exclude_roots: Option<Vec<String>>,
+    #[serde(flatten)]
+    facets: Facets,
 }
 
 impl WorkNextArgs {
     /// The narrowing fields as the tracker's route reads them.
     fn filter(&self) -> serde_json::Value {
-        filter_json(&self.kinds, &self.tiers, &self.repo, &self.exclude_roots)
+        filter_json(
+            &self.kinds,
+            &self.tiers,
+            &self.repo,
+            &self.exclude_roots,
+            &self.facets,
+        )
     }
+}
+
+/// Narrowing on the root's upstream milestone and labels and its classification.
+#[derive(Deserialize, JsonSchema, Default)]
+struct Facets {
+    /// Only take work whose root is in this milestone, without regard to case.
+    milestone: Option<String>,
+    /// Only take work whose root has at least one of these upstream labels, without regard to case.
+    labels: Option<Vec<String>>,
+    /// Only take work whose root triage or a person classed as this type.
+    item_type: Option<String>,
+    /// Only take work whose root is in this area.
+    area: Option<String>,
+    /// Only take work whose root has this size, such as `S`, `M` or `L`.
+    size: Option<String>,
 }
 
 fn filter_json(
@@ -184,6 +213,7 @@ fn filter_json(
     tiers: &Option<Vec<u8>>,
     repo: &Option<String>,
     exclude_roots: &Option<Vec<String>>,
+    facets: &Facets,
 ) -> serde_json::Value {
     let mut f = serde_json::Map::new();
     if let Some(k) = kinds {
@@ -197,6 +227,19 @@ fn filter_json(
     }
     if let Some(e) = exclude_roots {
         f.insert("exclude_roots".into(), serde_json::json!(e));
+    }
+    for (name, v) in [
+        ("milestone", &facets.milestone),
+        ("item_type", &facets.item_type),
+        ("area", &facets.area),
+        ("size", &facets.size),
+    ] {
+        if let Some(v) = v {
+            f.insert(name.into(), serde_json::json!(v));
+        }
+    }
+    if let Some(l) = &facets.labels {
+        f.insert("labels".into(), serde_json::json!(l));
     }
     serde_json::Value::Object(f)
 }
@@ -215,6 +258,8 @@ struct WorkPeekArgs {
     repo: Option<String>,
     /// Ids of roots whose work is left out.
     exclude_roots: Option<Vec<String>>,
+    #[serde(flatten)]
+    facets: Facets,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -532,7 +577,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. Roots take turns within a tier, so repeated calls do not keep returning children of the same root. To ask for something specific, pass kinds (such as triage or fix), tiers, repo, or exclude_roots; an item you filter out is left for others and nothing is lost. Look first with work_peek. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. Ask a person only with work_ask, never in your host's chat or its question prompt: nobody watching the tracker sees those. You can hold one item at a time. Keep taking items: call work_next again after each one, and stop when it says nothing is ready or you are asked to stop."
+        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. Roots take turns within a tier, so repeated calls do not keep returning children of the same root. To ask for something specific, pass kinds (such as triage or fix), tiers, repo, exclude_roots, milestone, labels (any of), item_type, area or size; an item you filter out is left for others and nothing is lost. Look first with work_peek. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. Ask a person only with work_ask, never in your host's chat or its question prompt: nobody watching the tracker sees those. You can hold one item at a time. Keep taking items: call work_next again after each one, and stop when it says nothing is ready or you are asked to stop."
     )]
     async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
         self.work()?
@@ -545,10 +590,10 @@ impl Server {
     }
 
     #[tool(
-        description = "List the next items work_next would hand you, in order, with each one's kind, tier, repo and root. Nothing is claimed, held or changed, so it is safe to call as often as you like. Use it to see what is waiting before you narrow work_next with kinds, tiers, repo or exclude_roots. Roots take turns, so the list can mix roots; the order can change if work arrives before you call work_next."
+        description = "List the next items work_next would hand you, in order, with each one's kind, tier, repo and root. Nothing is claimed, held or changed, so it is safe to call as often as you like. Use it to see what is waiting before you narrow work_next with kinds, tiers, repo, exclude_roots, milestone, labels, item_type, area or size. Each item shows its root's milestone, labels, type, area and size. Roots take turns, so the list can mix roots; the order can change if work arrives before you call work_next."
     )]
     async fn work_peek(&self, Parameters(a): Parameters<WorkPeekArgs>) -> Result<String, String> {
-        let filter = filter_json(&a.kinds, &a.tiers, &a.repo, &a.exclude_roots);
+        let filter = filter_json(&a.kinds, &a.tiers, &a.repo, &a.exclude_roots, &a.facets);
         self.work()?
             .peek(a.limit, a.review_tiers.unwrap_or_default(), filter)
             .await
@@ -590,7 +635,7 @@ impl Server {
     }
 
     #[tool(
-        description = "Answer the triage item you hold: propose a tier for the item it triages and say why in one line. Name `duplicate_of` if it repeats another item, `depends_on` for items it should wait on, and `split` for the titles it should be cut into. If you cannot settle it, set `unclear` to `scope`, `repo` or `acceptance` and it goes to a person as a question. This is a proposal; a person accepts or edits it. Complete the triage item after."
+        description = "Answer the triage item you hold: propose a tier for the item it triages and say why in one line. Name `duplicate_of` if it repeats another item, `depends_on` for items it should wait on, and `split` for the titles it should be cut into. Set `item_type`, `area` and `size` from the vocabulary in the rules work_next or work_rules returned; a value outside it is refused. If you cannot settle it, set `unclear` to `scope`, `repo` or `acceptance` and it goes to a person as a question. This is a proposal; a person accepts or edits it. Complete the triage item after."
     )]
     async fn work_triage(
         &self,
@@ -613,6 +658,9 @@ impl Server {
                         "unclear": a.unclear,
                         "depends_on": a.depends_on.unwrap_or_default(),
                         "split": a.split.unwrap_or_default(),
+                        "item_type": a.item_type,
+                        "area": a.area,
+                        "size": a.size,
                     }),
                     a.request_key.clone(),
                 ),

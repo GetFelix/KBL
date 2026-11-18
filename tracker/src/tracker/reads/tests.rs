@@ -43,6 +43,8 @@ async fn mixed() -> (Fake, Tracker<Fake>) {
             source: "gh".into(),
             upstream_id: other.clone(),
             title: other.clone(),
+            labels: vec![],
+            milestone: None,
         };
         t.person_record(key("gab"), imported).await.unwrap();
         for tier in [2, 1] {
