@@ -123,6 +123,9 @@ async function open(query, { mode = 'live', theme = 'dark', width = 1280, height
   if (script) await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: script });
   script = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeGateway(log ?? fixtureLog(), mode, pageSize) })).identifier;
   await page.setViewport(width, height, 1);
+  // The tab keeps its session across navigations (session.ts), so a page opened without a
+  // token starts from an empty session, as a new tab would.
+  if (!query.includes('token=')) await page.eval(`(() => { try { sessionStorage.clear(); } catch {} return true; })()`);
   await page.goto(`${server.origin}/index.html?theme=${theme}&${query}`);
   await page.eval(`document.fonts.ready.then(() => true)`);
 }
