@@ -17,13 +17,22 @@ pub(crate) struct Config {
     pub(crate) jira: Option<JiraConfig>,
     pub(crate) ado: Option<AdoConfig>,
     pub(crate) gitlab: Option<GitlabConfig>,
-    /// Seconds between polls when no webhook wakes it.
+    /// The least seconds between polls when no webhook wakes it. The worker
+    /// stretches the gap when the request budget needs it.
     #[serde(default = "default_poll")]
     pub(crate) poll_seconds: u64,
-    /// Every this many polls, fetch each open imported issue to notice a
-    /// transfer or a deletion, which no listing shows.
-    #[serde(default = "default_reconcile")]
-    pub(crate) reconcile_every: u32,
+    /// Hours for one pass that re-reads every open imported issue, to notice
+    /// a transfer or a deletion, which no listing shows. Each poll reads its share.
+    #[serde(default = "default_reconcile_hours")]
+    pub(crate) reconcile_hours: u64,
+    /// Requests per hour this worker may spend. Unset, it is `budget_share`
+    /// of the limit the vendor reports.
+    #[serde(default)]
+    pub(crate) budget_per_hour: Option<u64>,
+    /// The part of the vendor's reported hourly limit this worker may spend,
+    /// when `budget_per_hour` is unset.
+    #[serde(default = "default_budget_share")]
+    pub(crate) budget_share: f64,
     /// The most release compares one poll makes looking for the release
     /// that carries a merged root. The rest wait for the next poll.
     #[serde(default = "default_release_compares")]
@@ -32,11 +41,15 @@ pub(crate) struct Config {
 }
 
 fn default_poll() -> u64 {
-    60
+    300
 }
 
-fn default_reconcile() -> u32 {
-    20
+fn default_reconcile_hours() -> u64 {
+    24
+}
+
+fn default_budget_share() -> f64 {
+    0.5
 }
 
 fn default_release_compares() -> u32 {
@@ -358,6 +371,11 @@ impl Config {
         }
     }
 
+    /// The pass length of the spread reconcile.
+    pub(crate) fn reconcile_period(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.reconcile_hours * 3600)
+    }
+
     pub(crate) fn load(path: &Path) -> Result<Self> {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("read the config {}", path.display()))?;
@@ -367,6 +385,19 @@ impl Config {
     pub(crate) fn parse(text: &str) -> Result<Self> {
         let mut cfg: Config = serde_json::from_str(text)?;
         ensure!(!cfg.rules.is_empty(), "there are no intake rules");
+        ensure!(cfg.poll_seconds >= 1, "poll_seconds must be at least 1");
+        ensure!(
+            cfg.reconcile_hours >= 1,
+            "reconcile_hours must be at least 1"
+        );
+        ensure!(
+            cfg.budget_per_hour != Some(0),
+            "budget_per_hour must be above 0"
+        );
+        ensure!(
+            cfg.budget_share > 0.0 && cfg.budget_share <= 1.0,
+            "budget_share must be above 0 and at most 1"
+        );
         match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {
             (Some(g), None, None, None) => ensure!(
                 g.token_file.is_some() || g.app.is_some() || g.token_env.is_some(),

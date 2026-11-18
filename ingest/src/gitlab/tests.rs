@@ -738,7 +738,7 @@ fn engine(lab: &Lab, tracker: &Fake, extra: Value) -> Ingest<Gitlab<Lab>, Fake> 
         Settings {
             rules: cfg.rules.clone(),
             repos,
-            reconcile_every: 1000,
+            reconcile_period: None,
             release_compares: 20,
         },
     )

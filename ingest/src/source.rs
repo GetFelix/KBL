@@ -245,7 +245,10 @@ impl std::error::Error for SourceError {}
 
 impl From<anyhow::Error> for SourceError {
     fn from(e: anyhow::Error) -> Self {
-        SourceError::Failed(e)
+        match e.downcast::<crate::budget::Limited>() {
+            Ok(limited) => SourceError::RateLimited { wait: limited.wait },
+            Err(e) => SourceError::Failed(e),
+        }
     }
 }
 

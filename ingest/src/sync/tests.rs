@@ -23,7 +23,6 @@ fn config(rules: Value) -> Config {
         &json!({
             "tracker": { "url": "http://t", "token_env": "T" },
             "github": { "token_env": "G" },
-            "reconcile_every": 1000,
             "rules": rules,
         })
         .to_string(),
@@ -62,7 +61,7 @@ impl Rig {
             Settings {
                 rules: cfg.rules,
                 repos,
-                reconcile_every: cfg.reconcile_every,
+                reconcile_period: None,
                 release_compares: cfg.release_compares_per_poll,
             },
         )
@@ -1777,7 +1776,6 @@ async fn the_old_shared_cursor_seeds_every_repo_once() {
     let saved = rig.tracker.saved_state();
     assert!(saved.cursor.is_none());
     assert_eq!(saved.cursors.len(), 2);
-    assert_eq!(saved.polls, 4);
     // The form written now has no legacy field to migrate again.
     let raw = rig.tracker.saved_raw();
     assert!(raw.get("cursor").is_none(), "{raw}");
@@ -2484,7 +2482,7 @@ impl Rig {
             Settings {
                 rules: cfg.rules,
                 repos,
-                reconcile_every: cfg.reconcile_every,
+                reconcile_period: None,
                 release_compares: compares,
             },
         )
@@ -3352,4 +3350,92 @@ async fn a_rule_added_for_a_repo_reads_it_in_full() {
         .await
         .unwrap();
     assert_eq!(last_since(&rig), None);
+}
+
+fn fetched(rig: &Rig) -> Vec<String> {
+    rig.gh
+        .sent()
+        .iter()
+        .filter(|r| {
+            r.url
+                .rsplit_once("/issues/")
+                .is_some_and(|(_, n)| n.chars().all(|c| c.is_ascii_digit()))
+        })
+        .map(|r| r.url.rsplit('/').next().unwrap().to_owned())
+        .collect()
+}
+
+#[tokio::test]
+async fn the_reconcile_slice_reads_every_open_issue_once_per_period() {
+    let rig = rig();
+    let mut ingest = rig.ingest(json!([admit_rule()]));
+    // Four polls to a pass.
+    ingest.settings.reconcile_period = Some(Duration::from_secs(240));
+    ingest.set_interval(Duration::from_secs(60));
+    let all: Vec<Value> = (11..=18)
+        .map(|n| {
+            issue(n, |v| {
+                labels(v, &["agent-ok"]);
+            })
+        })
+        .collect();
+    for i in &all {
+        let n = i["number"].as_u64().unwrap();
+        rig.gh.on("GET", &format!("/issues/{n}"), ok(i.clone()));
+    }
+    rig.list(all.clone());
+    ingest.poll(false).await.unwrap();
+    rig.list(vec![]);
+    let first = fetched(&rig);
+    assert_eq!(first.len(), 2, "{first:?}");
+    for _ in 0..3 {
+        ingest.poll(false).await.unwrap();
+    }
+    let mut seen = fetched(&rig);
+    seen.sort();
+    let want: Vec<String> = (11..=18).map(|n| n.to_string()).collect();
+    assert_eq!(seen, want, "each issue is read once in four polls");
+    // The next pass starts over from the saved position.
+    ingest.poll(false).await.unwrap();
+    assert_eq!(fetched(&rig).len(), 10);
+}
+
+#[tokio::test]
+async fn a_missing_reconcile_position_starts_at_the_first_issue() {
+    let rig = rig();
+    let mut ingest = rig.ingest(json!([admit_rule()]));
+    ingest.settings.reconcile_period = Some(Duration::from_secs(120));
+    ingest.set_interval(Duration::from_secs(60));
+    let all: Vec<Value> = (11..=14)
+        .map(|n| issue(n, |v| labels(v, &["agent-ok"])))
+        .collect();
+    for i in &all {
+        let n = i["number"].as_u64().unwrap();
+        rig.gh.on("GET", &format!("/issues/{n}"), ok(i.clone()));
+    }
+    rig.list(all);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(fetched(&rig), ["11", "12"]);
+    assert_eq!(
+        rig.tracker.saved_state().reconcile_after.as_deref(),
+        Some("GetFelix/felix#12")
+    );
+}
+
+#[test]
+fn the_slice_skips_nothing_when_issues_close_between_polls() {
+    let mut open: Vec<String> = (1..=10).map(|n| format!("k{n:02}")).collect();
+    let mut after: Option<String> = None;
+    let mut read = BTreeSet::new();
+    for poll in 0..4 {
+        let (keys, _) = next_slice(&open, after.as_deref(), 4);
+        after = keys.last().cloned();
+        read.extend(keys);
+        // An issue already read, and one not yet read, close between polls.
+        if poll == 0 {
+            open.retain(|k| k != "k01" && k != "k09");
+        }
+    }
+    let want: BTreeSet<String> = open.iter().cloned().collect();
+    assert!(want.is_subset(&read), "missed {:?}", want.difference(&read));
 }
