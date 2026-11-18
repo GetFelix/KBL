@@ -151,6 +151,9 @@ fn render(init: InitCommand, ask: &mut Prompt) -> Result<(String, Common, String
     if matches!(common.triage, Triage::Skip) && matches!(common.mode, Mode::Propose) {
         bail!("--triage skip needs --mode admit; a proposed issue waits for a person");
     }
+    if matches!(common.triage, Triage::Skip) && common.label.len() > 120 {
+        bail!("--triage skip records the rule name, which is the label: keep it to 120 bytes");
+    }
     Ok(match init {
         InitCommand::Github(a) => {
             let repo = ask.value(a.repo, "repo", "The GitHub repository (owner/name)")?;

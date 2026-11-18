@@ -126,3 +126,30 @@ fn triage_skip_with_propose_is_refused() {
     .to_string();
     assert!(e.contains("--triage skip"), "{e}");
 }
+
+#[test]
+fn triage_skip_reaches_the_jira_rule_and_a_long_name_is_refused() {
+    let jira = [
+        "jira",
+        "--site",
+        "acme",
+        "--api",
+        "https://a.example",
+        "--project",
+        "FEL",
+        "--email",
+        "e@a.example",
+        "--target-repo",
+        "a/b",
+        "--triage",
+        "skip",
+    ];
+    assert_eq!(render_args(&jira).unwrap()["rules"][0]["triage"], "skip");
+    let long = "x".repeat(121);
+    let e = render_args(&[
+        "github", "--repo", "a/b", "--triage", "skip", "--label", &long,
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("120"), "{e}");
+}

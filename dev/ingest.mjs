@@ -14,7 +14,7 @@
 // its labels, and --cap bounds the open roots the rule may have. --mode propose
 // parks matches in Triage until a person accepts them. --triage skip admits an
 // already specified issue with no triage or augment item, so it is Ready to fix
-// at once (admit only). --keep-config reuses
+// at once. --keep-config reuses
 // dev/state/ingest.json as it is (for a hand-edited config) and ignores the
 // filter flags.
 //
@@ -60,6 +60,7 @@ const labels = list(values.label ?? values.labels);
 const excluded = list(values["exclude-label"]);
 if (!["admit", "propose"].includes(values.mode)) fail("--mode is admit or propose");
 if (!["run", "skip"].includes(values.triage)) fail("--triage is run or skip");
+if (values.triage === "skip" && (labels.join("+") || values.repo || "").length > 120) fail("--triage skip records the rule name, which is the labels joined: keep it to 120 bytes");
 if (values.triage === "skip" && values.mode !== "admit") fail("--triage skip needs --mode admit; a proposed issue waits for a person");
 const cap = values.cap === undefined ? undefined : Number(values.cap);
 if (cap !== undefined && !(Number.isInteger(cap) && cap > 0)) fail("--cap is a whole number above 0");
