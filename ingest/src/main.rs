@@ -470,6 +470,7 @@ async fn run<S: Source, T: tracker_api::Tracker>(
         // Without a fresh lease the poll would make no vendor call anyway;
         // skipping it also spares the tracker.
         if !lessee.may_poll() {
+            woken = false;
             let changed = lessee.changed.notified();
             tokio::select! {
                 () = changed => {}
@@ -543,7 +544,7 @@ async fn run<S: Source, T: tracker_api::Tracker>(
             tokio::select! {
                 () = tokio::time::sleep_until(deadline) => break,
                 () = wake.notify.notified() => {
-                    if budget.wake_affordable() {
+                    if lessee.may_poll() && budget.wake_affordable() {
                         woken = true;
                         break;
                     }

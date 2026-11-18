@@ -29,7 +29,10 @@ pub(crate) trait PoolApi: Send + Sync {
 impl PoolApi for Http {
     async fn backoff(&self, pool: &str, wait: Option<Duration>) -> Result<Duration> {
         let (status, body) = match wait {
-            Some(w) => self.pool_backoff_put(pool, w.as_secs().max(1)).await?,
+            Some(w) => {
+                self.pool_backoff_put(pool, w.as_secs_f64().ceil() as u64)
+                    .await?
+            }
             None => self.pool_backoff_get(pool).await?,
         };
         match (status, body["remaining_ms"].as_u64()) {
@@ -46,11 +49,12 @@ impl PoolApi for Http {
 /// the next round.
 pub(crate) async fn sync_once<A: PoolApi>(api: &A, budget: &Budget) {
     let Some(pool) = budget.pool() else { return };
+    let taken = budget.now();
     if let Some(wait) = budget.take_unsent() {
         match api.backoff(&pool, Some(wait)).await {
             Ok(left) => budget.set_pool_block(left),
             Err(e) => {
-                budget.keep_unsent(wait);
+                budget.restore_unsent(taken + wait);
                 eprintln!("kbl-ingest: could not share the rate limit: {e:#}");
             }
         }

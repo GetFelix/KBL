@@ -194,7 +194,7 @@ struct Inner {
     /// Another worker's refusal, as the tracker holds it for the pool.
     pool_blocked_until: Option<Instant>,
     /// A refusal not yet told to the tracker: the longest wait.
-    unsent: Option<Duration>,
+    unsent: Option<Instant>,
     /// What wakes may still spend, refilled at the wake share's rate.
     wake_tokens: Option<f64>,
     wake_refilled: Instant,
@@ -327,14 +327,29 @@ impl Budget {
     }
 
     /// The longest refusal not yet told to the tracker.
+    /// Kept as a deadline, so a refusal the tracker took late is told with
+    /// what is left of it, not its whole wait.
     pub(crate) fn take_unsent(&self) -> Option<Duration> {
-        self.inner.lock().expect("lock").unsent.take()
+        let now = (self.clock)();
+        let until = self.inner.lock().expect("lock").unsent.take()?;
+        until.checked_duration_since(now).filter(|d| !d.is_zero())
     }
 
-    /// Puts a refusal back when the tracker could not be told.
+    pub(crate) fn now(&self) -> Instant {
+        (self.clock)()
+    }
+
+    /// Records a refusal of `wait` from now.
+    #[cfg(test)]
     pub(crate) fn keep_unsent(&self, wait: Duration) {
+        let by = (self.clock)() + wait;
+        self.restore_unsent(by);
+    }
+
+    /// Puts back a refusal that ends at `by`.
+    pub(crate) fn restore_unsent(&self, by: Instant) {
         let mut i = self.inner.lock().expect("lock");
-        i.unsent = Some(i.unsent.map_or(wait, |u| u.max(wait)));
+        i.unsent = Some(i.unsent.map_or(by, |u| u.max(by)));
     }
 
     /// The pool's backoff as the tracker holds it, `left` from now. It
@@ -420,7 +435,8 @@ impl Budget {
             };
             *slot = Some(slot.map_or(until, |b| b.max(until)));
             if sig.refused && i.pool.is_some() {
-                i.unsent = Some(i.unsent.map_or(wait, |u| u.max(wait)));
+                let by = now + wait;
+                i.unsent = Some(i.unsent.map_or(by, |u| u.max(by)));
                 self.refused.notify_one();
             }
         }
@@ -488,9 +504,12 @@ impl Budget {
         self.refill_wake(&mut i, now);
         let hourly = self.hourly(&i);
         let part = hourly * Self::wake_part(&i);
-        let cost = i.last_poll_cost.max(1.0).min(part);
+        let cost = i.last_poll_cost.max(1.0);
         let floor = hourly * (Self::reserve(&i) - Self::wake_part(&i)).max(0.0);
-        part >= 1.0
+        // Without a lease there is no share to wake on, and the clamp above
+        // would drain the bucket the next lease starts from.
+        (i.share.is_none() || i.held > 0)
+            && part >= cost
             && i.wake_tokens.unwrap_or(part) >= cost
             && i.tokens.unwrap_or(hourly) >= floor + cost
     }

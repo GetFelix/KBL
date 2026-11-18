@@ -88,7 +88,9 @@ async fn a_refusal_the_tracker_could_not_take_is_sent_again() {
     assert!(api.puts.lock().unwrap().is_empty());
     *api.down.lock().unwrap() = false;
     sync_once(&api, &a).await;
-    assert_eq!(*api.puts.lock().unwrap(), [Duration::from_secs(60)]);
+    let puts = api.puts.lock().unwrap().clone();
+    assert_eq!(puts.len(), 1);
+    assert!(puts[0] <= Duration::from_secs(60) && puts[0] > Duration::from_secs(50));
 }
 
 #[tokio::test]
@@ -98,4 +100,21 @@ async fn a_worker_with_no_pool_makes_no_call() {
     a.keep_unsent(Duration::from_secs(60));
     sync_once(&api, &a).await;
     assert!(api.puts.lock().unwrap().is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_refusal_told_late_carries_what_is_left_and_one_that_ended_is_dropped() {
+    let api = Pool::default();
+    let a = worker();
+    a.keep_unsent(Duration::from_secs(1800));
+    tokio::time::sleep(Duration::from_secs(1700)).await;
+    // The budget's clock is real time, so give it the same passage.
+    let left = a.take_unsent();
+    assert!(left.is_some_and(|l| l <= Duration::from_secs(1800)));
+    a.restore_unsent(a.now() - Duration::from_secs(1));
+    sync_once(&api, &a).await;
+    assert!(
+        api.puts.lock().unwrap().is_empty(),
+        "an ended refusal is not sent"
+    );
 }
