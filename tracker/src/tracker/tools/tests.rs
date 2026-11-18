@@ -1018,6 +1018,7 @@ async fn people_accept_edit_reject_move_close_and_unlink() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
             depends_on: None,
             split: None,
             proposal: None,
@@ -1288,6 +1289,7 @@ async fn an_edited_title_is_bounded_and_not_empty() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -1897,6 +1899,7 @@ async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         },
     )
     .await
@@ -2147,6 +2150,7 @@ async fn an_agent_answers_the_triage_item_it_holds() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         }
     );
     // A retry of the same answer writes nothing.
@@ -2432,6 +2436,7 @@ async fn a_triage_answer_can_carry_dependencies_and_a_split() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         }
     );
     // The same answer again is a retry; changing only the split is a new answer.
@@ -2600,6 +2605,7 @@ async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
                 item_type: None,
                 area: None,
                 size: None,
+                needs: None,
             },
         )
         .await
@@ -2660,6 +2666,7 @@ async fn a_person_adjusts_triage_s_advice_only_at_format_17_and_on_the_answer_th
         labels: None,
         milestone: None,
         size: None,
+        needs: None,
     };
     let before = fake.log().len();
     // The log is below 17: refused, nothing written.
@@ -2751,6 +2758,7 @@ fn ans(
         item_type: None,
         area: None,
         size: None,
+        needs: None,
     }
 }
 

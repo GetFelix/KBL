@@ -101,9 +101,15 @@ pub const FORMAT_V18: u32 = 18;
 /// triage's classification (type, area, size) with its vocabulary.
 pub const FORMAT_V19: u32 = 19;
 
+/// The format that added `needs` on an item (set by triage, a person or an
+/// ingest rule), the vocabulary's `needs` list, and `resource_lifted`.
+pub const FORMAT_V20: u32 = 20;
+
+/// Most needs an item carries.
+pub const MAX_NEEDS: usize = 8;
+
 /// The format that added delegated workers: `worker_started` and
-/// `worker_stopped`, and `sup` on a record a worker wrote. Format 20 is taken
-/// by item needs and agent capabilities.
+/// `worker_stopped`, and `sup` on a record a worker wrote.
 pub const FORMAT_V21: u32 = 21;
 
 /// The highest record format this build reads and writes.
@@ -140,22 +146,30 @@ pub struct Vocabulary {
     /// Left empty, sizes are `S`, `M` and `L`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sizes: Vec<String>,
+    /// What an item may need, such as `azure`, `gpu` or `network`. Format 20.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needs: Vec<String>,
 }
 
 impl Vocabulary {
     pub fn is_empty(&self) -> bool {
-        self.types.is_empty() && self.areas.is_empty() && self.sizes.is_empty()
+        self.types.is_empty()
+            && self.areas.is_empty()
+            && self.sizes.is_empty()
+            && self.needs.is_empty()
     }
 
     /// Whether every list fits its bounds and holds plain, distinct values.
     pub fn fits(&self) -> bool {
-        [&self.types, &self.areas, &self.sizes].iter().all(|l| {
-            l.len() <= MAX_VOCAB_VALUES
-                && l.iter().all(|v| plain_class_value(v))
-                && l.iter()
-                    .enumerate()
-                    .all(|(i, v)| !l[..i].iter().any(|w| w.eq_ignore_ascii_case(v)))
-        })
+        [&self.types, &self.areas, &self.sizes, &self.needs]
+            .iter()
+            .all(|l| {
+                l.len() <= MAX_VOCAB_VALUES
+                    && l.iter().all(|v| plain_class_value(v))
+                    && l.iter()
+                        .enumerate()
+                        .all(|(i, v)| !l[..i].iter().any(|w| w.eq_ignore_ascii_case(v)))
+            })
     }
 }
 
@@ -766,6 +780,10 @@ pub enum WorkRecord {
         area: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size: Option<String>,
+        /// What the work needs, from the team's vocabulary. Empty clears
+        /// triage's earlier choice. Format 20.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        needs: Option<Vec<String>>,
     },
     /// The holder cannot go on until `prerequisite` is done. With `new`, the
     /// record also creates that prerequisite as a proposal in the target
@@ -1045,6 +1063,9 @@ pub enum WorkRecord {
     },
     /// A person lifts an item's block before its time. Format 16.
     BlockCleared { item: ItemId },
+    /// A person lifts every block that is still holding and names `resource`.
+    /// Format 20.
+    ResourceLifted { resource: String },
     /// A person asks `reviewer` to review the item's open pull request. It
     /// records the ask; upstream's own review state stays in `pr_status`.
     /// Format 11.
@@ -1106,6 +1127,10 @@ pub enum WorkRecord {
         area: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size: Option<String>,
+        /// What the work needs. A person's empty list clears it; the tracker
+        /// writes a rule's mapping. Format 20.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        needs: Option<Vec<String>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         depends_on: Option<Vec<ItemId>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1243,6 +1268,7 @@ impl WorkRecord {
             WorkRecord::Unblocked { .. } => "unblocked",
             WorkRecord::BlockSet { .. } => "block_set",
             WorkRecord::BlockCleared { .. } => "block_cleared",
+            WorkRecord::ResourceLifted { .. } => "resource_lifted",
             WorkRecord::ReviewRequested { .. } => "review_requested",
             WorkRecord::ChangesRequested { .. } => "changes_requested",
             WorkRecord::MergeMarked { .. } => "merge_marked",
@@ -1326,6 +1352,7 @@ impl WorkRecord {
                 root.as_ref()
             }
             WorkRecord::SourceStalled { .. }
+            | WorkRecord::ResourceLifted { .. }
             | WorkRecord::PriceSet { .. }
             | WorkRecord::FormatRaised { .. }
             | WorkRecord::WorkerStarted { .. }
@@ -1455,8 +1482,21 @@ impl WorkRecord {
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
             WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. } => FORMAT_V21,
+            WorkRecord::Edited { needs: Some(_), .. }
+            | WorkRecord::Triaged { needs: Some(_), .. }
+            | WorkRecord::ResourceLifted { .. } => FORMAT_V20,
+            WorkRecord::RulesSet {
+                vocabulary: Some(v),
+                ..
+            } if !v.needs.is_empty() => FORMAT_V20,
             WorkRecord::Related { .. } | WorkRecord::Unrelated { .. } => FORMAT_V18,
-            WorkRecord::Triaged { related, .. } if !related.is_empty() => FORMAT_V18,
+            WorkRecord::Triaged {
+                item_type: None,
+                area: None,
+                size: None,
+                related,
+                ..
+            } if !related.is_empty() => FORMAT_V18,
             WorkRecord::Imported {
                 labels, milestone, ..
             } if !labels.is_empty() || milestone.is_some() => FORMAT_V19,

@@ -32,6 +32,9 @@
  "core/src/work_fold.rs#attach_upstream": [
   "if !it.accepted_by_person {"
  ],
+ "core/src/work_fold.rs#can_take": [
+  ".all(|n| capabilities.iter().any(|c| c.eq_ignore_ascii_case(n)))"
+ ],
  "core/src/work_fold.rs#charge": [
   "let charged = c.floor_micros.max(priced);",
   "it.cost_micros = it.cost_micros.saturating_add(total);"
@@ -505,7 +508,8 @@
   ".find(|p| p.eq_ignore_ascii_case(pr));"
  ],
  "tracker/src/tracker.rs#claim_from": [
-  "if assigned_agent(&core.state, &item).is_some() {"
+  "if assigned_agent(&core.state, &item).is_some() {",
+  "if !core.state.can_take(&item, &filter.capabilities) {"
  ],
  "tracker/src/tracker.rs#claim_loop": [
   "let deadline = Instant::now() + wait.min(MAX_WAIT);"
@@ -594,6 +598,9 @@
  "tracker/src/tracker/request_keys.rs#take": [
   "if !set.lock().expect(\"running lock\").insert(id.clone()) {"
  ],
+ "tracker/src/tracker/selection.rs#Filter::matches": [
+  "&& core.state.can_take(&it.id, &self.capabilities)"
+ ],
  "tracker/src/tracker/selection.rs#candidates": [
   ".filter(|(_, it)| !matches!(it.assignee, Some(Assignee::Agent(_))))"
  ],
@@ -602,6 +609,9 @@
  ],
  "tracker/src/tracker/selection.rs#peek": [
   "let pool = self.candidates(&core, agent, &lanes, filter);"
+ ],
+ "tracker/src/tracker/selection.rs#skips_for_needs": [
+  "&& !core.state.can_take(id, &self.capabilities)"
  ],
  "tracker/src/tracker/snapshots.rs#restore": [
   "match read(&path).filter(|b| b.saved.valid(log)) {"

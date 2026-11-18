@@ -15,6 +15,8 @@ pub(super) enum Kind {
     Words(&'static [&'static str]),
     /// A string the tracker keeps as content. Sent as `{"text": ...}`.
     Content,
+    /// A list of words, sent as an array. An empty array is allowed.
+    List,
     /// A person's name, sent as `{"person": ...}`, or `agent:<name>`, sent as `{"agent": ...}`.
     Assignee,
     /// A list of strings, sent as an array.
@@ -234,7 +236,7 @@ pub(super) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "classify_item",
-        about: "Set or override an item's type, area or size. The value must be in the team's vocabulary; an empty value clears it. Triage and intake rules never replace a value you set.",
+        about: "Set or override an item's type, area, size or needs. The value must be in the team's vocabulary; an empty value clears it. Triage and intake rules never replace a value you set.",
         route: Route::Post("/v1/work/classify"),
         params: &[
             ITEM,
@@ -256,7 +258,24 @@ pub(super) const TOOLS: &[Tool] = &[
                 required: false,
                 about: "The expected size, `S`, `M` or `L` unless the vocabulary lists others.",
             },
+            Param {
+                name: "needs",
+                kind: Kind::List,
+                required: false,
+                about: "What the work needs, such as [`azure`, `gpu`], from the vocabulary's needs. An agent is handed it only when it declares all of them. An empty list clears it.",
+            },
         ],
+    },
+    Tool {
+        name: "lift_resource",
+        about: "End every block that still holds on one named resource at once, such as after the quota came back. Items blocked on a time only, or on another resource, are left alone.",
+        route: Route::Post("/v1/work/lift-resource"),
+        params: &[Param {
+            name: "resource",
+            kind: Kind::Text,
+            required: true,
+            about: "The resource name the items were blocked on, exactly as it was given to block_item.",
+        }],
     },
     Tool {
         name: "lift_block",

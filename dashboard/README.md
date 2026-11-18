@@ -246,7 +246,7 @@ has one entry per filter value and per saved view.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
-- **Group by.** The list groups by stage (the default), tier, repo, kind, milestone, label, type, area, size or assignee, or not at all. A card shows the milestone, type, area and size. An item with several labels is listed under its first label alphabetically. Each group has a
+- **Group by.** The list groups by stage (the default), tier, repo, kind, milestone, label, type, area, size or assignee, or not at all. A card shows the milestone, type, area, size and what the work needs. An item with several labels is listed under its first label alphabetically. Each group has a
   header button with its name and count; Enter or Space folds it, and `J` and `K` skip folded groups. Folds are kept per
   view and per grouping while the page is open. The palette has a `Group by: …` entry per key and Collapse or Expand
   all groups. The board is always stage columns, so the control is disabled there. Needs you stays one list, oldest

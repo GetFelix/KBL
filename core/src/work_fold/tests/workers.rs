@@ -248,22 +248,3 @@ fn a_hold_released_because_the_supervisor_went_away_costs_no_try() {
     l.tracker(release(crate::work::SUPERVISOR_GONE));
     assert_eq!(fold(&l.0).items[&id("r1")].paths[0].tries, 1);
 }
-
-#[test]
-fn format_20_is_not_read_by_this_build() {
-    let mut l = Log::default();
-    let mut raise = WorkLogged::new(
-        0,
-        key("gabriel"),
-        Actor::Person,
-        WorkRecord::FormatRaised { to: 20 },
-    );
-    raise.v = 20;
-    l.0.push((0, raise));
-    assert_eq!(last_rejection(&l), Some(Reject::Format));
-    let mut l = raised();
-    let mut rec = WorkLogged::new(30, key("w1"), Actor::Agent, claimed("r1", 1));
-    rec.v = 20;
-    l.0.push((3, rec));
-    assert_eq!(last_rejection(&l), Some(Reject::Format));
-}

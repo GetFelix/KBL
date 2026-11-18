@@ -241,6 +241,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/unblock", post(unblock::<B>))
         .route("/v1/work/block", post(block::<B>))
         .route("/v1/work/lift-block", post(lift_block::<B>))
+        .route("/v1/work/lift-resource", post(lift_resource::<B>))
         .route("/v1/work/request-review", post(request_review::<B>))
         .route("/v1/work/request-changes", post(request_changes::<B>))
         .route("/v1/work/mark-merged", post(mark_merged::<B>))
@@ -513,6 +514,9 @@ struct FilterBody {
     /// Roots whose work is not taken.
     #[serde(default)]
     exclude_roots: Vec<ItemId>,
+    /// What the caller can do now; work that needs more is not handed out.
+    #[serde(default)]
+    capabilities: Vec<String>,
     #[serde(flatten)]
     facets: Facets,
 }
@@ -525,7 +529,8 @@ impl FilterBody {
             self.repo.as_deref(),
             &self.exclude_roots,
         )?
-        .with_facets(self.facets.clone())
+        .with_facets(self.facets.clone())?
+        .with_capabilities(self.capabilities.clone())
     }
 }
 
@@ -936,6 +941,13 @@ struct ClassifyBody {
     area: Option<String>,
     #[serde(default)]
     size: Option<String>,
+    #[serde(default)]
+    needs: Option<Vec<String>>,
+}
+
+#[derive(Deserialize)]
+struct ResourceBody {
+    resource: String,
 }
 
 async fn next<B: Broker>(call: Call<B>, Json(body): Json<NextBody>) -> Response {
@@ -1292,6 +1304,8 @@ struct TriageBody {
     area: Option<String>,
     #[serde(default)]
     size: Option<String>,
+    #[serde(default)]
+    needs: Option<Vec<String>>,
 }
 
 async fn triage<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<TriageBody>) -> Response {
@@ -1313,6 +1327,7 @@ async fn triage<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<TriageBody>) -> Re
                         item_type: b.item_type,
                         area: b.area,
                         size: b.size,
+                        needs: b.needs,
                     },
                 ),
             )
@@ -1477,6 +1492,7 @@ async fn edit_proposal<B: Broker>(
         item_type: None,
         area: None,
         size: None,
+        needs: None,
         depends_on: b.depends_on,
         split: b.split,
         proposal: b.proposal,
@@ -1631,6 +1647,7 @@ async fn classify<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ClassifyBody>) -
         item_type: b.item_type,
         area: b.area,
         size: b.size,
+        needs: b.needs,
         depends_on: None,
         proposal: None,
         split: None,
@@ -1697,6 +1714,18 @@ async fn block<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<BlockBody>) -> Resp
 
 async fn lift_block<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
     as_person(&call, rk, WorkRecord::BlockCleared { item: b.item }).await
+}
+
+/// Lifts every block still holding on one resource, in one record.
+async fn lift_resource<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ResourceBody>) -> Response {
+    as_person(
+        &call,
+        rk,
+        WorkRecord::ResourceLifted {
+            resource: b.resource,
+        },
+    )
+    .await
 }
 
 async fn park<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {

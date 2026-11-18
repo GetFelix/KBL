@@ -2698,6 +2698,7 @@ mod assignee;
 mod blocks;
 mod facets;
 mod metrics;
+mod needs;
 mod races;
 mod recover;
 mod renewal;
@@ -2775,6 +2776,7 @@ async fn no_route_writes_an_oversized_string() {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
         },
         WorkRecord::RulesSet {
             target: kbl_core::work::Target {

@@ -1609,11 +1609,12 @@ impl<B: Broker> Tracker<B> {
         review: &[u8],
         filter: &Filter,
     ) -> Result<Option<Delivery>, Error> {
-        let (pool, direct_ok) = {
+        let (pool, direct_ok, skips) = {
             let core = self.0.core.lock().await;
             (
                 self.candidates(&core, agent, review, filter),
                 core.state.format() >= FORMAT_V15,
+                filter.skips_for_needs(&core),
             )
         };
         for tier in (0..TIERS).chain(review.iter().copied()) {
@@ -1623,7 +1624,9 @@ impl<B: Broker> Tracker<B> {
             // that was passed over.
             // Below format 15 a direct claim on an unassigned item is not
             // restart-safe, so the lane's own order is used.
-            if direct_ok && (!filter.is_empty() || Self::several_roots(&pool, tier)) {
+            // Work this caller lacks a capability for is passed over without polling
+            // its record, so a lane that holds some is claimed from the state too.
+            if direct_ok && (!filter.is_empty() || skips || Self::several_roots(&pool, tier)) {
                 let ordered = {
                     let core = self.0.core.lock().await;
                     let lane: Vec<_> = pool.iter().filter(|c| c.lane == tier).cloned().collect();
@@ -1693,7 +1696,7 @@ impl<B: Broker> Tracker<B> {
                 let mut ops = Vec::new();
                 let taken = {
                     let mut core = self.0.core.lock().await;
-                    self.claim_from(&mut core, agent, tier, record, polled_at, &mut ops)
+                    self.claim_from(&mut core, agent, tier, record, polled_at, filter, &mut ops)
                         .await
                 };
                 self.run(ops).await.ok();
@@ -2041,6 +2044,7 @@ impl<B: Broker> Tracker<B> {
 
     /// Turns one delivery into a claim, or settles it when it no longer
     /// describes claimable work.
+    #[allow(clippy::too_many_arguments)]
     async fn claim_from(
         &self,
         core: &mut Core,
@@ -2048,6 +2052,7 @@ impl<B: Broker> Tracker<B> {
         tier: u8,
         record: GroupRecord,
         polled_at: u64,
+        filter: &Filter,
         ops: &mut Vec<Op>,
     ) -> Result<Option<Delivery>, Error> {
         let stream = ready_stream(tier);
@@ -2154,6 +2159,13 @@ impl<B: Broker> Tracker<B> {
         // Acked, not refused: the item is published again once the block ends,
         // which a refusal would hold back until the log moves.
         if core.state.blocked_at(&item, now_ms()) {
+            core.live.remove(&item);
+            ack(ops, record.offset);
+            return Ok(None);
+        }
+        // Needs set after the candidates were read: the caller cannot take it, so the
+        // record goes back as it does for a block, and the next call claims from the state.
+        if !core.state.can_take(&item, &filter.capabilities) {
             core.live.remove(&item);
             ack(ops, record.offset);
             return Ok(None);
