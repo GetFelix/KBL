@@ -17,7 +17,7 @@ RUN set -eu; \
       aarch64) arch=aarch64; sha="$RUSTUP_SHA256_AARCH64" ;; \
       *) echo "unsupported platform $(uname -m)" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${arch}-unknown-linux-gnu/rustup-init"; \
+    curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${arch}-unknown-linux-gnu/rustup-init"; \
     echo "${sha}  /tmp/rustup-init" | sha256sum -c -; \
     chmod +x /tmp/rustup-init; \
     /tmp/rustup-init -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" --target wasm32-unknown-unknown; \
