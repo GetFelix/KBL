@@ -3164,6 +3164,7 @@ mod snapshots;
 mod spend;
 mod trust;
 mod waits;
+mod workers;
 
 /// The tracker refuses such a replacement before it is logged, but a log that holds
 /// one must keep folding as it always has.

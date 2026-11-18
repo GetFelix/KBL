@@ -101,8 +101,16 @@ pub const FORMAT_V18: u32 = 18;
 /// triage's classification (type, area, size) with its vocabulary.
 pub const FORMAT_V19: u32 = 19;
 
+/// The format that added delegated workers: `worker_started` and
+/// `worker_stopped`, and `sup` on a record a worker wrote. Format 20 is taken
+/// by item needs and agent capabilities.
+pub const FORMAT_V21: u32 = 21;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V19;
+pub const FORMAT: u32 = FORMAT_V21;
+
+/// Most live workers one supervisor may have, whatever the tracker's config says.
+pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
 
 /// Most labels an item keeps, and the longest label or milestone, in bytes.
 /// What upstream sends beyond them is cut, not refused.
@@ -1160,6 +1168,20 @@ pub enum WorkRecord {
     /// `to`. It never goes down.
     FormatRaised { to: u32 },
     /// An operation the tracker refused and logged. Only the tracker writes it.
+    /// A supervisor registers a worker that acts for it. Only the SHA-256 of
+    /// the worker's token is logged. Format 21.
+    WorkerStarted {
+        worker: Key,
+        token_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vendor: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+    },
+    /// The worker's token stops working and its name is never reused. Format 21.
+    WorkerStopped { worker: Key },
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<ItemId>,
@@ -1232,6 +1254,8 @@ impl WorkRecord {
             WorkRecord::RulesSet { .. } => "rules_set",
             WorkRecord::FormatRaised { .. } => "format_raised",
             WorkRecord::Refused { .. } => "refused",
+            WorkRecord::WorkerStarted { .. } => "worker_started",
+            WorkRecord::WorkerStopped { .. } => "worker_stopped",
             WorkRecord::Unknown => "unknown",
         }
     }
@@ -1297,6 +1321,8 @@ impl WorkRecord {
             WorkRecord::SourceStalled { .. }
             | WorkRecord::PriceSet { .. }
             | WorkRecord::FormatRaised { .. }
+            | WorkRecord::WorkerStarted { .. }
+            | WorkRecord::WorkerStopped { .. }
             | WorkRecord::Unknown => None,
         }
     }
@@ -1421,6 +1447,7 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. } => FORMAT_V21,
             WorkRecord::Related { .. } | WorkRecord::Unrelated { .. } => FORMAT_V18,
             WorkRecord::Triaged { related, .. } if !related.is_empty() => FORMAT_V18,
             WorkRecord::Imported {
@@ -1531,6 +1558,10 @@ pub struct WorkLogged {
     /// the first result. A reader that predates it ignores the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub req: Option<RequestKey>,
+    /// The supervisor `by` acts for, when `by` is a delegated worker. Set by the
+    /// tracker from the token, never from the payload. Format 21.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sup: Option<Key>,
     #[serde(flatten)]
     pub record: WorkRecord,
 }
@@ -1602,7 +1633,27 @@ impl WorkLogged {
             by,
             actor,
             req: None,
+            sup: None,
             record,
+        }
+    }
+
+    /// The same record, written by a worker acting for `sup`.
+    pub fn with_supervisor(mut self, sup: Option<Key>) -> Self {
+        if sup.is_some() {
+            self.v = self.v.max(FORMAT_V21);
+        }
+        self.sup = sup;
+        self
+    }
+
+    /// The lowest format that carries this record and its envelope.
+    pub fn min_format(&self) -> u32 {
+        let v = self.record.format();
+        if self.sup.is_some() {
+            v.max(FORMAT_V21)
+        } else {
+            v
         }
     }
 

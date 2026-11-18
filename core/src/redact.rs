@@ -1194,6 +1194,8 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::FormatRaised { .. }
         | WorkRecord::Refused { .. }
+        | WorkRecord::WorkerStarted { .. }
+        | WorkRecord::WorkerStopped { .. }
         | WorkRecord::Unknown => {}
     }
 }
