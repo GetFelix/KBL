@@ -86,7 +86,8 @@ export function inboxActions(on: InboxHandlers) {
       if (CAN.close(item)) actions.push(keyed(actions.length + 1, 'Close…', 'danger', guard(() => on.confirm('close', [id])), { 'data-focus': 'close' }));
       body.push(h('div', { class: 'inbox-row' }, ...actions, h('span', { class: 'muted small' }, 'Open the item for retries, notes and assigning.')));
     }
-    return h('div', { class: 'inbox-act', 'data-kind': kind }, ...body, status);
+    // data-id lets the list put focus back on this item's row when the item leaves.
+    return h('div', { class: 'inbox-act', 'data-kind': kind, 'data-id': id }, ...body, status);
   };
 
   return {
@@ -101,7 +102,12 @@ export function inboxActions(on: InboxHandlers) {
         strips.set(item.id, kept);
       }
       const busy = pending(s.writes, item.id);
-      kept.el.toggleAttribute('aria-busy', busy);
+      if (busy) kept.el.setAttribute('aria-busy', 'true');
+      else kept.el.removeAttribute('aria-busy');
+      for (const b of kept.el.querySelectorAll('button')) {
+        if (busy) b.setAttribute('aria-disabled', 'true');
+        else b.removeAttribute('aria-disabled');
+      }
       return kept.el;
     },
     /** Forgets strips of items no longer shown. */

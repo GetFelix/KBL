@@ -100,7 +100,8 @@ export function itemList(
   el.addEventListener('keydown', (e) => {
     if (!/^[1-9]$/.test(e.key) || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
     const target = e.target as HTMLElement;
-    if (target.closest('input, textarea, select, button')) return;
+    if (target.closest('input, textarea, select')) return;
+    if (target.closest('button') && !target.closest('.inbox-act')) return;
     const press = target.closest('.inbox-item')?.querySelector<HTMLElement>(`.inbox-act [data-key="${e.key}"]`);
     if (!press) return;
     e.preventDefault();
@@ -247,7 +248,8 @@ export function itemList(
             )),
         );
       }
-      if (s.layout === 'board') return showBoard(s, groups);
+      // The inbox is one ordered list; the board has no column for it.
+      if (s.layout === 'board' && s.view !== 'inbox') return showBoard(s, groups);
       const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? ''])]))}`;
       // A field in a strip loses focus when its list is rebuilt; it gets it back once the strips are in.
       let typing: HTMLElement | null = null;
