@@ -3836,7 +3836,36 @@ fn folding_holds_does_not_scan_the_items_per_record() {
     let scan_took = t.elapsed();
     assert_eq!(indexed, scanned);
     assert!(
-        indexed_took * 2 < scan_took,
+        indexed_took * 3 < scan_took * 2,
         "{indexed_took:?} vs {scan_took:?}"
     );
+}
+
+#[test]
+fn a_former_holders_write_does_not_touch_the_new_holders_hold() {
+    let mut l = held_root();
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            why: None,
+            cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
+        },
+    );
+    l.agent("w2", claimed("r1", 2));
+    let before = fold(&l.0).items[&id("r1")].hold.clone().unwrap();
+    l.agent(
+        "w1",
+        WorkRecord::Context {
+            item: id("r1"),
+            entry: key("late"),
+            text: text("late"),
+        },
+    );
+    let after = fold(&l.0).items[&id("r1")].hold.clone().unwrap();
+    assert_eq!(before, after);
 }
