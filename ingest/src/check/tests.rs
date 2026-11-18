@@ -951,7 +951,7 @@ async fn the_ado_dry_run_picks_what_the_worker_imports() {
         crate::sync::Settings {
             rules: cfg.rules.clone(),
             repos: cfg.repos(),
-            reconcile_every: 1000,
+            reconcile_period: None,
             release_compares: 20,
         },
     );
@@ -1169,11 +1169,12 @@ fn civil(days: i64) -> String {
 #[test]
 fn the_sources_check_builds_are_guarded_by_type() {
     let cfg = ado_config(json!({}));
-    let _: Ado<ReadOnlyWiql<crate::ado::transport::Reqwest>> =
-        ado_guarded(&cfg, cfg.ado.as_ref().unwrap()).unwrap();
+    let budget = Budget::new(crate::budget::Vendor::Ado, None, 0.5);
+    let _: Ado<ReadOnlyWiql<Budgeted<crate::ado::transport::Reqwest>>> =
+        ado_guarded(&cfg, cfg.ado.as_ref().unwrap(), &budget).unwrap();
     let cfg = gitlab_config(json!({}));
-    let _: Gitlab<ReadOnly<crate::gitlab::transport::Reqwest>> =
-        gitlab_guarded(&cfg, cfg.gitlab.as_ref().unwrap()).unwrap();
+    let _: Gitlab<ReadOnly<Budgeted<crate::gitlab::transport::Reqwest>>> =
+        gitlab_guarded(&cfg, cfg.gitlab.as_ref().unwrap(), &budget).unwrap();
 }
 
 #[tokio::test]
@@ -1230,7 +1231,7 @@ async fn the_gitlab_check_sends_no_write_and_the_dry_run_matches_the_worker() {
         crate::sync::Settings {
             rules: cfg.rules.clone(),
             repos: cfg.repos(),
-            reconcile_every: 1000,
+            reconcile_period: None,
             release_compares: 20,
         },
     );
@@ -1311,4 +1312,52 @@ async fn a_transport_error_that_quotes_a_token_is_cut_from_the_report() {
         !format!("{out:?}").contains("abcdefghij0123456789"),
         "{out:?}"
     );
+}
+
+#[tokio::test]
+async fn check_reports_the_vendors_remaining_budget_and_the_projection() {
+    let gh = Script::default();
+    let reset = (super::epoch_secs() + 1800).to_string();
+    gh.on(
+        "GET",
+        "/user",
+        Res {
+            body: json!({ "login": "kbl[bot]" }),
+            ..status(
+                200,
+                &[
+                    ("x-ratelimit-limit", "5000"),
+                    ("x-ratelimit-remaining", "4321"),
+                    ("x-ratelimit-reset", &reset),
+                ],
+            )
+        },
+    );
+    let budget = Budget::new(crate::budget::Vendor::Github, None, 0.5);
+    let source = Github::new(API, ReadOnly(budgeted(gh, budget.clone())), vec![]);
+    source.login().await;
+    let cfg = config(vec![]);
+    let f = budget_finding(&cfg, &source, None::<&Fake>, &budget).await;
+    assert_eq!(f.scope, "budget");
+    assert_eq!(f.level, Level::Ok);
+    for want in [
+        "4321 of 5000 requests left",
+        "resetting in 30 min",
+        "may spend 2500 an hour",
+        "projected to spend about 24 an hour",
+    ] {
+        assert!(f.message.contains(want), "{want}: {}", f.message);
+    }
+}
+
+#[tokio::test]
+async fn check_warns_when_the_config_cannot_fit_its_budget() {
+    let gh = Script::default();
+    let mut cfg = config(vec![]);
+    cfg.budget_per_hour = Some(10);
+    let budget = Budget::new(crate::budget::Vendor::Github, Some(10), 0.5);
+    let source = Github::new(API, ReadOnly(budgeted(gh, budget.clone())), vec![]);
+    let f = budget_finding(&cfg, &source, None::<&Fake>, &budget).await;
+    assert_eq!(f.level, Level::Warn, "{}", f.message);
+    assert!(f.message.contains("stretch"), "{}", f.message);
 }

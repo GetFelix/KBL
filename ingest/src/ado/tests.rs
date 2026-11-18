@@ -719,7 +719,7 @@ fn engine(org: &Org, tracker: &Fake, extra: Value) -> Ingest<Ado<Org>, Fake> {
         Settings {
             rules: cfg.rules.clone(),
             repos,
-            reconcile_every: 1000,
+            reconcile_period: None,
             release_compares: 20,
         },
     )

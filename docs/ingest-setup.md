@@ -169,6 +169,44 @@ kbl-ingest --config ingest.json          # keep polling
 Ready columns. If the result is not what `check` showed, run `check` again with
 `--json` and compare.
 
+### Request budget
+
+Every vendor has an hourly API limit that all of a credential's users share:
+5,000 requests an hour for a GitHub token or App installation, for example.
+Ingest spends only part of it, so a worker cannot use up a limit that `gh`, CI
+and other people's tools need.
+
+- **`budget_share`** (default `0.5`) is the part of the vendor's reported hourly
+  limit this worker may spend. **`budget_per_hour`** sets a number instead.
+  GitHub and GitLab report their limit in response headers; for Jira and Azure
+  DevOps, which do not, the worker assumes 5,000 an hour, so set
+  `budget_per_hour` there.
+- A fifth of the budget is kept back for write-backs and checks. Polling and
+  the reconcile pass cannot spend it. When the rest runs low the next poll waits.
+- **`poll_seconds`** (default 300) is a minimum. When a poll reads more than
+  the budget affords at that rate, the gap grows to fit, and the worker logs
+  the gap and the budget left after each poll.
+- **`reconcile_hours`** (default 24) is how long one pass over every open
+  imported issue takes. Each poll re-reads its share of them instead of all of
+  them every few polls.
+- When a vendor says to wait (GitHub's `403` secondary limit or `429`,
+  `Retry-After` and `X-RateLimit-*` on GitHub, Jira, Azure DevOps and GitLab),
+  the worker sends no request to it until the wait is over, capped at an hour.
+
+**Use a separate token for ingest.** A limit belongs to the credential, so a
+personal token shared with ingest also pays for your own `gh` and CI calls. A
+worker run locally with a personal token that polled every minute over many
+imported roots has used a whole account's hour three times. Give ingest its own
+token, or a GitHub App, and keep the budget at the default.
+
+`kbl-ingest check` prints the vendor's remaining requests, what this worker may
+spend, and the requests an hour the config is projected to need (an estimate
+from the repos, the open imported roots and the intervals). It warns when the
+projection is over budget.
+
+This is each worker's own budget. Splitting one limit between several workers
+is not done yet: set `budget_per_hour` on each so they sum to your share.
+
 ### Running more than one worker
 
 Set `"group"` under `"tracker"` to the worker group an org admin named in a
