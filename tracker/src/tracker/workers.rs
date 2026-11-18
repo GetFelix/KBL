@@ -2,15 +2,25 @@
 //! its own token, acting with the supervisor's grants and under its caps.
 
 use kbl_core::org::TokenHash;
-use kbl_core::work_fold::State;
+use kbl_core::work::SUPERVISOR_GONE;
+use kbl_core::work_fold::{State, Worker};
 
 use super::*;
 
 /// Longest vendor, profile or model name a worker records.
 pub(crate) const MAX_WORKER_LABEL: usize = 64;
 
-/// Worker token hash to (worker, supervisor), for the live workers only.
-pub(super) type WorkerTokens = HashMap<String, (AgentName, AgentName)>;
+/// Worker token hash to the worker, for the live workers only.
+pub(super) type WorkerTokens = HashMap<String, LiveWorker>;
+
+/// Who a worker's token names: the worker, and the supervisor identity it
+/// acts for, which is the supervisor's name and its token hash together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LiveWorker {
+    pub(crate) worker: AgentName,
+    pub(crate) supervisor: AgentName,
+    pub(crate) supervisor_token: TokenHash,
+}
 
 /// What a supervisor asks for when it starts a worker.
 pub(crate) struct NewWorker {
@@ -20,11 +30,15 @@ pub(crate) struct NewWorker {
     pub(crate) model: Option<String>,
 }
 
+/// Control characters, and the format characters that hide or reorder text.
+fn unprintable(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
 fn label(what: &str, v: &Option<String>) -> Result<(), Error> {
     match v {
-        Some(s)
-            if s.is_empty() || s.len() > MAX_WORKER_LABEL || s.chars().any(char::is_control) =>
-        {
+        Some(s) if s.is_empty() || s.len() > MAX_WORKER_LABEL || s.chars().any(unprintable) => {
             Err(Error::Invalid(format!(
                 "{what} must be 1 to {MAX_WORKER_LABEL} bytes with no control characters"
             )))
@@ -44,11 +58,13 @@ fn worker_token() -> Result<String, Error> {
 }
 
 impl<B: Broker> Tracker<B> {
-    /// Registers a worker for `supervisor` and returns its token, which is
-    /// shown here once and logged only as its hash.
+    /// Registers a worker for `supervisor`, whose own token hashes to
+    /// `supervisor_token`, and returns the worker's token, which is shown here
+    /// once and logged only as its hash.
     pub(crate) async fn start_worker(
         &self,
         supervisor: &AgentName,
+        supervisor_token: &TokenHash,
         new: NewWorker,
     ) -> Result<Value, Error> {
         label("vendor", &new.vendor)?;
@@ -80,6 +96,7 @@ impl<B: Broker> Tracker<B> {
         let record = WorkRecord::WorkerStarted {
             worker: worker.clone(),
             token_sha256: TokenHash::of(&token).as_str().to_owned(),
+            supervisor_token_sha256: supervisor_token.as_str().to_owned(),
             vendor: new.vendor,
             profile: new.profile,
             model: new.model,
@@ -129,8 +146,76 @@ impl<B: Broker> Tracker<B> {
         json!({ "workers": list })
     }
 
+    /// Stops every live worker `which` picks, as for a supervisor that is
+    /// gone: the token dies first, then each hold goes back at no cost to
+    /// its tries. Answers the items released.
+    pub(crate) async fn stop_workers(
+        &self,
+        which: impl Fn(&Worker) -> bool,
+    ) -> Result<Vec<ItemId>, Error> {
+        let picked: Vec<Key> = {
+            let core = self.0.core.lock().await;
+            core.state
+                .workers
+                .iter()
+                .filter(|(_, w)| w.stopped_ms.is_none() && which(w))
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
+        if picked.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.begin().await?;
+        let mut released = Vec::new();
+        for worker in picked {
+            let mut core = self.0.core.lock().await;
+            // Checked again: a person or the supervisor may have stopped it meanwhile.
+            if core
+                .state
+                .workers
+                .get(&worker)
+                .is_none_or(|w| w.stopped_ms.is_some())
+            {
+                continue;
+            }
+            let me = self.0.me.clone();
+            let record = WorkRecord::WorkerStopped {
+                worker: worker.clone(),
+            };
+            self.append(&mut core, Actor::Tracker, me.clone(), record)
+                .await?;
+            let held: Vec<(ItemId, u32)> = core
+                .state
+                .items
+                .values()
+                .filter(|i| i.closed.is_none())
+                .filter_map(|i| {
+                    let h = i.hold.as_ref()?;
+                    (h.by == worker).then(|| (i.id.clone(), h.attempt))
+                })
+                .collect();
+            for (item, attempt) in held {
+                let record = WorkRecord::Released {
+                    item: item.clone(),
+                    attempt,
+                    reason: Some(SUPERVISOR_GONE.into()),
+                    why: None,
+                    cost_micros: 0,
+                    usage: Vec::new(),
+                    floor_micros: self.floor(),
+                };
+                self.append(&mut core, Actor::Tracker, me.clone(), record)
+                    .await?;
+                core.owner.remove(&item);
+                released.push(item);
+            }
+        }
+        self.sync_ready().await;
+        Ok(released)
+    }
+
     /// The live worker a token belongs to, with its supervisor.
-    pub(crate) fn worker_by_token(&self, token: &str) -> Option<(AgentName, AgentName)> {
+    pub(crate) fn worker_by_token(&self, token: &str) -> Option<LiveWorker> {
         let hash = TokenHash::of(token);
         self.0
             .workers
@@ -168,10 +253,11 @@ impl<B: Broker> Tracker<B> {
             .filter_map(|(name, w)| {
                 Some((
                     w.token_sha256.clone(),
-                    (
-                        AgentName::new(name.as_str()).ok()?,
-                        AgentName::new(w.supervisor.as_str()).ok()?,
-                    ),
+                    LiveWorker {
+                        worker: AgentName::agent_or_worker(name.as_str()).ok()?,
+                        supervisor: AgentName::new(w.supervisor.as_str()).ok()?,
+                        supervisor_token: TokenHash::parse(&w.supervisor_token_sha256).ok()?,
+                    },
                 ))
             })
             .collect();

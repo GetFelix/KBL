@@ -10,9 +10,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::Result;
-use kbl_core::names::{AgentName, Key};
-use kbl_core::org::TeamName;
+use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::org::{TeamName, TokenHash};
 use kbl_core::org_fold::Principal;
+use kbl_core::work_fold::Worker;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::task::JoinSet;
 
@@ -274,16 +275,19 @@ impl<B: Broker> Teams<B> {
             _ => {}
         }
         // A delegated worker's token is on its team's work.events. It works only
-        // while its supervisor is still an agent of that team.
+        // while its supervisor's name still goes with the token it had when it
+        // started the worker: a supervisor removed and added again is another
+        // identity, and its old workers do not come back with the name.
+        let org = self.org.as_ref().map(|o| &*o.org);
         for team in self.all() {
             let Some(tracker) = team.tracker() else {
                 continue;
             };
-            if let Some((worker, sup)) = tracker.worker_by_token(token)
-                && let Ok(sup) = Key::new(sup.as_str())
-                && self.is_team_agent(&team, &sup)
+            if let Some(w) = tracker.worker_by_token(token)
+                && let Ok(sup) = Key::new(w.supervisor.as_str())
+                && supervisor_is(&team, org, &sup, &w.supervisor_token) == Some(true)
             {
-                found.push((team.clone(), Caller::Agent(worker)));
+                found.push((team.clone(), Caller::Agent(w.worker)));
             }
         }
         Ok(found)
@@ -346,10 +350,14 @@ impl<B: Broker> Teams<B> {
     /// a start that failed, is tried again until the team serves.
     fn keep(&self, team: Arc<Team<B>>) -> impl Future<Output = TeamName> + Send + 'static {
         let start = self.org.as_ref().map(|o| o.start.clone());
+        let org = self.org.as_ref().map(|o| o.org.clone());
         async move {
             loop {
                 if let Some(tracker) = team.tracker() {
-                    tracker.maintain().await;
+                    tokio::select! {
+                        () = tracker.maintain() => {}
+                        () = stop_orphaned_workers(&team, org.as_deref(), &tracker) => {}
+                    }
                 }
                 let Some(start) = start.as_ref() else {
                     return team.name.clone();
@@ -377,4 +385,63 @@ impl<B: Broker> Teams<B> {
             }
         }
     }
+}
+
+/// How often each team looks for workers whose supervisor is gone.
+const ORPHAN_CHECK_EVERY: Duration = Duration::from_secs(5);
+
+/// Whether `sup` is still the agent it was when it started a worker: the
+/// same name with the token hashing to `token`, in the token file or on the
+/// org log. None when only the org log could say and it cannot answer now.
+fn supervisor_is<B: Broker>(
+    team: &Team<B>,
+    org: Option<&Org<B>>,
+    sup: &Key,
+    token: &TokenHash,
+) -> Option<bool> {
+    if team
+        .tokens
+        .agent_token(sup.as_str())
+        .is_some_and(|t| t.ct_eq(token))
+    {
+        return Some(true);
+    }
+    match org.map(|o| o.agent_token(&team.name, sup)) {
+        None => Some(false),
+        Some(Ok(t)) => Some(t.is_some_and(|t| t.ct_eq(token))),
+        Some(Err(OrgUnavailable)) => None,
+    }
+}
+
+/// Stops, for good, the workers of a supervisor that was removed, revoked or
+/// given another token, so their holds go back and their tokens die instead
+/// of waiting for a supervisor that will not return. Only on evidence: while
+/// the org log cannot answer, nothing is stopped.
+async fn stop_orphaned_workers<B: Broker>(
+    team: &Team<B>,
+    org: Option<&Org<B>>,
+    tracker: &Tracker<B>,
+) {
+    loop {
+        tokio::time::sleep(ORPHAN_CHECK_EVERY).await;
+        if let Err(e) = stop_orphans(team, org, tracker).await {
+            eprintln!(
+                "kbl-tracker: team {}: stopping the workers of a removed supervisor: {e}",
+                team.name
+            );
+        }
+    }
+}
+
+/// One pass of [`stop_orphaned_workers`]. Answers the items released.
+pub(crate) async fn stop_orphans<B: Broker>(
+    team: &Team<B>,
+    org: Option<&Org<B>>,
+    tracker: &Tracker<B>,
+) -> Result<Vec<ItemId>, crate::tracker::Error> {
+    let gone = |w: &Worker| {
+        TokenHash::parse(&w.supervisor_token_sha256)
+            .is_ok_and(|t| supervisor_is(team, org, &w.supervisor, &t) == Some(false))
+    };
+    tracker.stop_workers(gone).await
 }

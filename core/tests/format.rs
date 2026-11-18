@@ -1519,7 +1519,7 @@ fn the_twenty_first_format_stamps_workers_and_their_records() {
     assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
     assert_eq!(s.rejections[0].offset, 7);
     assert_eq!(s.rejections[0].why, Reject::BadWorker);
-    let w = &s.workers[&kbl_core::names::Key::new("sup_w1").unwrap()];
+    let w = &s.workers[&kbl_core::names::Key::new("sup-w1").unwrap()];
     assert_eq!(w.supervisor.as_str(), "sup");
     assert!(w.stopped_ms.is_some());
 }

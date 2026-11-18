@@ -20,6 +20,7 @@ use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::org::TokenHash;
 use kbl_core::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase,
     PriceUnit, ReleaseWhy, RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
@@ -352,6 +353,8 @@ struct Call<B> {
     team: Arc<Team<B>>,
     teams: Arc<Teams<B>>,
     caller: Caller,
+    /// The hash of the bearer token, which a worker's start binds it to.
+    token: TokenHash,
     _slot: OwnedSemaphorePermit,
 }
 
@@ -359,6 +362,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {
+        let token = TokenHash::of(bearer(&parts.headers).unwrap_or_default());
         let mut found = match bearer(&parts.headers).map(|t| app.teams.who(t)) {
             Some(Ok(found)) => found,
             Some(Err(OrgUnavailable)) => return Err(org_unavailable()),
@@ -410,6 +414,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
             team,
             teams: app.teams.clone(),
             caller,
+            token,
             _slot: slot,
         })
     }
@@ -976,34 +981,26 @@ async fn worker_start<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStartB
         Ok(a) => a,
         Err(d) => return denied(d),
     };
-    let named_for = b
-        .worker
-        .strip_prefix(sup.as_str())
-        .and_then(|rest| rest.strip_prefix('_'))
-        .is_some_and(|rest| !rest.is_empty());
-    let worker = match AgentName::new(b.worker.as_str()) {
-        Ok(w) if named_for => w,
+    // No agent name has a `-`, so this name can never be an agent's.
+    let worker = match AgentName::agent_or_worker(&b.worker) {
+        Ok(w) if w.supervisor() == Some(sup.as_str()) => w,
         _ => {
             return reply(Err(Error::Invalid(format!(
-                "a worker's name is `{sup}_` and a suffix of letters, digits and _"
+                "a worker's name is `{sup}-` and a suffix of letters, digits and _"
             ))));
         }
     };
-    let key = Key::new(worker.as_str()).expect("an agent name is a key");
-    if call.teams.is_team_agent(&call.team, &key) {
-        return refused(
-            StatusCode::CONFLICT,
-            "an agent of that name is in this team",
-            "duplicate",
-        );
-    }
     let new = NewWorker {
         worker,
         vendor: b.vendor,
         profile: b.profile,
         model: b.model,
     };
-    reply(call.keyed(rk, call.tracker().start_worker(&sup, new)).await)
+    let token = call.token.clone();
+    reply(
+        call.keyed(rk, call.tracker().start_worker(&sup, &token, new))
+            .await,
+    )
 }
 
 /// A supervisor stops one of its workers; a person may stop any.

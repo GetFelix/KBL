@@ -112,6 +112,10 @@ pub const FORMAT: u32 = FORMAT_V21;
 /// Most live workers one supervisor may have, whatever the tracker's config says.
 pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
 
+/// The reason on a tracker's release of a worker's hold when its supervisor
+/// was removed. From format 21 it gives the try back.
+pub const SUPERVISOR_GONE: &str = "supervisor_gone";
+
 /// Most labels an item keeps, and the longest label or milestone, in bytes.
 /// What upstream sends beyond them is cut, not refused.
 pub const MAX_LABELS: usize = 32;
@@ -1167,12 +1171,14 @@ pub enum WorkRecord {
     /// Only a person may, once every reader of the log is a build that reads
     /// `to`. It never goes down.
     FormatRaised { to: u32 },
-    /// An operation the tracker refused and logged. Only the tracker writes it.
-    /// A supervisor registers a worker that acts for it. Only the SHA-256 of
-    /// the worker's token is logged. Format 21.
+    /// A supervisor registers a worker named `<supervisor>-<suffix>` that acts
+    /// for it. Only SHA-256 hashes of tokens are logged: the worker's, and the
+    /// supervisor's at the time, so the worker dies with that identity even
+    /// if the name comes back with another token. Format 21.
     WorkerStarted {
         worker: Key,
         token_sha256: String,
+        supervisor_token_sha256: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         vendor: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1182,6 +1188,7 @@ pub enum WorkRecord {
     },
     /// The worker's token stops working and its name is never reused. Format 21.
     WorkerStopped { worker: Key },
+    /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         item: Option<ItemId>,

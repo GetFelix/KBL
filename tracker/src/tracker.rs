@@ -818,7 +818,7 @@ impl<B: Broker> Tracker<B> {
                 .values()
                 .filter(|i| i.closed.is_none())
                 .filter_map(|i| i.hold.as_ref())
-                .filter_map(|h| AgentName::new(h.by.as_str()).ok())
+                .filter_map(|h| AgentName::agent_or_worker(h.by.as_str()).ok())
                 .collect()
         };
         for agent in holders {
@@ -1291,6 +1291,8 @@ impl<B: Broker> Tracker<B> {
             released.push(item);
         }
         drop(core);
+        let sup = Key::new(agent.as_str()).expect("an agent name is a key");
+        released.extend(self.stop_workers(|w| w.supervisor == sup).await?);
         self.sync_ready().await;
         Ok(released)
     }
@@ -2612,7 +2614,7 @@ impl<B: Broker> Tracker<B> {
                 core.recovering.retain(|_, r| now < r.until);
                 core.recovering
                     .keys()
-                    .filter_map(|a| AgentName::new(a.as_str()).ok())
+                    .filter_map(|a| AgentName::agent_or_worker(a.as_str()).ok())
                     .collect()
             };
             let mut tries = tokio::task::JoinSet::new();
@@ -2910,6 +2912,11 @@ impl<B: Broker> Tracker<B> {
         }
         // Not held across the write below.
         drop(apply_span);
+        // A stop takes the token away before the write, landed or not: a stop
+        // that did not land comes back with the rebuild.
+        if matches!(logged.record, WorkRecord::WorkerStopped { .. }) {
+            self.refresh_workers(&core.state);
+        }
         // Conditional on the tail: if another tracker took the lease and wrote,
         // Felix refuses this, whatever this tracker's clock says.
         // A caller that drops this future mid-write (a client that hung up)
@@ -2936,10 +2943,7 @@ impl<B: Broker> Tracker<B> {
                 core.recall
                     .remember(offset, &logged, &core.state, &self.0.me, absent, false);
                 self.note_landed(core, offset, &logged);
-                if matches!(
-                    logged.record,
-                    WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. }
-                ) {
+                if matches!(logged.record, WorkRecord::WorkerStarted { .. }) {
                     self.refresh_workers(&core.state);
                 }
                 if logged.req.is_some() {

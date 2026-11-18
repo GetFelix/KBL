@@ -790,7 +790,7 @@ impl Broker for Fake {
 }
 
 pub(super) fn agent(name: &str) -> AgentName {
-    AgentName::new(name).unwrap()
+    AgentName::agent_or_worker(name).unwrap()
 }
 
 pub(super) fn item(id: &str) -> ItemId {

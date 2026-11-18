@@ -11,17 +11,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::artifact::ArtifactId;
-use crate::names::{ItemId, Key};
+use crate::names::{AgentName, ItemId, Key};
 use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
-    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FindingVerdict, MAX_ASK_OPTION_LEN,
+    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FORMAT_V21, FindingVerdict, MAX_ASK_OPTION_LEN,
     MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE, MAX_CHECK_BYTES, MAX_FINDING_FILE,
     MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST, MAX_REVIEWER,
     MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
     MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MAX_WORKERS_PER_SUPERVISOR, MergeVerdict,
     NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy,
-    ReviewPass, ReviewSpec, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged,
-    WorkRecord, valid_review_tier,
+    ReviewPass, ReviewSpec, SUPERVISOR_GONE, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind,
+    WorkLogged, WorkRecord, valid_review_tier,
 };
 use crate::work::{
     ClassDim, DEFAULT_SIZES, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, Vocabulary,
@@ -937,6 +937,9 @@ pub enum Reject {
 pub struct Worker {
     pub supervisor: Key,
     pub token_sha256: String,
+    /// The supervisor's token hash when it started the worker: the worker
+    /// acts only while that token still names the supervisor.
+    pub supervisor_token_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1055,12 +1058,22 @@ impl PartialEq for Waiting {
 
 impl Eq for Waiting {}
 
+/// A format below [`FORMAT`] that this build does not read.
+const UNREAD_FORMAT: u32 = 20;
+
 /// Whether a build that reads formats up to `reads` takes `rec` on a log at
 /// format `log`. A raise answers with the new format. Everything else must
 /// be stamped at or below the log's format, so no record lands that a build
 /// still allowed on the log cannot read.
 fn format_gate(reads: u32, log: u32, rec: &WorkLogged) -> Result<Option<u32>, Reject> {
     if rec.v > reads || rec.v < rec.min_format() {
+        return Err(Reject::Format);
+    }
+    // Format 20 (item needs, agent capabilities) is not in this build. Folding
+    // its records without their meaning would diverge from a build that has it.
+    if rec.v == UNREAD_FORMAT
+        || matches!(rec.record, WorkRecord::FormatRaised { to: UNREAD_FORMAT })
+    {
         return Err(Reject::Format);
     }
     if let WorkRecord::FormatRaised { to } = rec.record {
@@ -2193,6 +2206,14 @@ impl State {
     fn check_worker(&self, rec: &WorkLogged) -> Result<(), Reject> {
         let worker = self.workers.get(&rec.by);
         match (&rec.sup, worker) {
+            // A name with a `-` is a worker's: no agent may write under one.
+            (None, None)
+                if rec.actor == Actor::Agent
+                    && self.format() >= FORMAT_V21
+                    && rec.by.as_str().contains('-') =>
+            {
+                Err(Reject::BadWorker)
+            }
             (None, None) => Ok(()),
             (None, Some(_)) if rec.actor != Actor::Agent => Ok(()),
             (Some(sup), Some(w))
@@ -2703,10 +2724,18 @@ impl State {
                 let lapse = self.format() >= FORMAT_V14
                     && rec.actor == Actor::Tracker
                     && reason.as_deref() == Some("lapsed");
+                // The worker did not fail: its supervisor went away under it.
+                let refund = self.format() >= FORMAT_V21
+                    && rec.actor == Actor::Tracker
+                    && reason.as_deref() == Some(SUPERVISOR_GONE)
+                    && self.workers.contains_key(&hold.by);
                 let it = self.item_mut(item)?;
                 it.hold = None;
                 if lapse {
                     it.lapsed = Some(hold);
+                }
+                if refund && let Some(p) = it.paths.iter_mut().find(|p| p.attempt == *attempt) {
+                    p.tries = p.tries.saturating_sub(1);
                 }
                 self.charge(item, &root, rec);
             }
@@ -3720,6 +3749,7 @@ impl State {
             WorkRecord::WorkerStarted {
                 worker,
                 token_sha256,
+                supervisor_token_sha256,
                 vendor,
                 profile,
                 model,
@@ -3727,16 +3757,16 @@ impl State {
                 if rec.actor != Actor::Agent || rec.sup.is_some() {
                     return Err(Reject::ActorNotAllowed);
                 }
-                let named_for = worker
-                    .as_str()
-                    .strip_prefix(rec.by.as_str())
-                    .and_then(|rest| rest.strip_prefix('_'))
-                    .is_some_and(|rest| !rest.is_empty());
-                let hex = token_sha256.len() == 64
-                    && token_sha256
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-                if !named_for || !hex {
+                // `<supervisor>-<suffix>`, split at the first `-`: no other
+                // supervisor's worker and no agent can ever have this name.
+                let named_for = AgentName::agent_or_worker(worker.as_str())
+                    .is_ok_and(|w| w.supervisor() == Some(rec.by.as_str()));
+                let hex = |h: &str| {
+                    h.len() == 64
+                        && h.bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                };
+                if !named_for || !hex(token_sha256) || !hex(supervisor_token_sha256) {
                     return Err(Reject::BadWorker);
                 }
                 if self.workers.contains_key(worker)
@@ -3755,6 +3785,7 @@ impl State {
                     Worker {
                         supervisor: rec.by.clone(),
                         token_sha256: token_sha256.clone(),
+                        supervisor_token_sha256: supervisor_token_sha256.clone(),
                         vendor: vendor.clone(),
                         profile: profile.clone(),
                         model: model.clone(),
@@ -3767,10 +3798,10 @@ impl State {
                 let Some(w) = self.workers.get_mut(worker) else {
                     return Err(Reject::BadWorker);
                 };
+                // The tracker stops the workers of a supervisor that is gone.
                 let may = match rec.actor {
-                    Actor::Person => true,
+                    Actor::Person | Actor::Tracker => true,
                     Actor::Agent => rec.sup.is_none() && w.supervisor == rec.by,
-                    Actor::Tracker => false,
                 };
                 if !may {
                     return Err(Reject::ActorNotAllowed);

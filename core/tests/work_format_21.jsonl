@@ -1,8 +1,8 @@
 {"v":21,"at_ms":1000,"by":"gabriel","actor":"person","kind":"format_raised","to":21}
 {"at_ms":1010,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix"}
 {"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1"}
-{"v":21,"at_ms":1030,"by":"sup","actor":"agent","kind":"worker_started","worker":"sup_w1","token_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","vendor":"fake","profile":"fake","model":"small"}
-{"v":21,"at_ms":1040,"by":"sup_w1","actor":"agent","sup":"sup","kind":"claimed","item":"r1","attempt":1,"deadline_ms":99999}
-{"v":21,"at_ms":1050,"by":"sup_w1","actor":"agent","sup":"sup","kind":"progress","item":"r1","attempt":1,"note":{"text":"started"}}
-{"v":21,"at_ms":1060,"by":"sup","actor":"agent","kind":"worker_stopped","worker":"sup_w1"}
-{"v":21,"at_ms":1070,"by":"sup_w1","actor":"agent","sup":"sup","kind":"progress","item":"r1","attempt":1,"note":{"text":"after stop"}}
+{"v":21,"at_ms":1030,"by":"sup","actor":"agent","kind":"worker_started","worker":"sup-w1","token_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","supervisor_token_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","vendor":"fake","profile":"fake","model":"small"}
+{"v":21,"at_ms":1040,"by":"sup-w1","actor":"agent","sup":"sup","kind":"claimed","item":"r1","attempt":1,"deadline_ms":99999}
+{"v":21,"at_ms":1050,"by":"sup-w1","actor":"agent","sup":"sup","kind":"progress","item":"r1","attempt":1,"note":{"text":"started"}}
+{"v":21,"at_ms":1060,"by":"sup","actor":"agent","kind":"worker_stopped","worker":"sup-w1"}
+{"v":21,"at_ms":1070,"by":"sup-w1","actor":"agent","sup":"sup","kind":"progress","item":"r1","attempt":1,"note":{"text":"after stop"}}
