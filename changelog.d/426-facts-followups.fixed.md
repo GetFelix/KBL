@@ -1,0 +1,1 @@
+Ingest no longer retries a labels and milestone edit on an item the tracker has closed, so the log and the refusal counts stay quiet. `POST /v1/work/classify` (and `classify_item`) refuses a child item as `not_a_root`, since `work_next` and `work_peek` filters read the root's class.

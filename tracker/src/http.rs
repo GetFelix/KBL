@@ -1638,6 +1638,20 @@ async fn rules<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<RulesBody>) -> Resp
 
 /// A person sets or overrides an item's type, area or size. An empty value clears it.
 async fn classify<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ClassifyBody>) -> Response {
+    if let Err(d) = call.person() {
+        return denied(d);
+    }
+    // The filters read the root's class, so a value on a child would never match.
+    // Checked here and not in the fold: the fold's verdict on a logged record must not change.
+    if let Ok(found) = call.tracker().item(&b.item).await
+        && !found["item"]["parent"].is_null()
+    {
+        return refused(
+            StatusCode::CONFLICT,
+            "only a root can be classified",
+            "not_a_root",
+        );
+    }
     let record = WorkRecord::Edited {
         item: b.item,
         title: None,

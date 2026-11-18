@@ -511,6 +511,26 @@ async fn facet_filters_are_read_and_bounded_and_classifying_is_for_a_person() {
 }
 
 #[tokio::test]
+async fn classifying_a_child_item_is_refused_as_not_a_root() {
+    let app = app().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    let child = json!({ "record": { "kind": "proposed", "item": "a1-t", "parent": "a1",
+        "key": "triage", "work": "triage", "title": "t" } });
+    let (status, _) = call(&app, "/v1/work/records", Some("tok-gab"), child).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = json!({ "item": "a1-t", "item_type": "bug" });
+    let (status, reply) = call(&app, "/v1/work/classify", Some("tok-gab"), body).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("not_a_root"))
+    );
+    // A root is not refused for this reason (this log is below format 19).
+    let body = json!({ "item": "a1", "item_type": "bug" });
+    let (_, reply) = call(&app, "/v1/work/classify", Some("tok-gab"), body).await;
+    assert_ne!(reply["why"].as_str(), Some("not_a_root"));
+}
+
+#[tokio::test]
 async fn capabilities_are_read_and_bounded_and_lifting_a_resource_is_for_a_person() {
     let app = app().await;
     for path in ["/v1/work/next", "/v1/work/peek"] {
