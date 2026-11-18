@@ -37,6 +37,16 @@ Save sends the price it showed as `expected_price` (`{"none": true}` when it sho
 and the page says "Price changed, review and retry." and asks for the confirm again.
 A price of 0 is allowed, as in the import. A table with nothing recorded says so.
 
+The detail panel answers "what is happening on this item" from the log alone. **Now** is one sentence: who holds it,
+the attempt, how long since the last recorded activity and when the hold lapses (the deadline recorded at claim time,
+so it is not extended by later activity), or what the item waits on next (a person, another item, a PR's checks).
+**Activity** lists the item's records newest first with relative times, and a step's command output sits behind a
+disclosure that stays open and focused when a record redraws the panel. **Linked work** shows the upstream issue,
+the PR with its checks, triage children and what blocks or is blocked. **Attempts** lists each attempt with its
+outcome, the summary it handed off, its cost and a link to its first decision in the replay. The panel reads the
+fold's `activity_json(item)` ([What is happening](../docs/work-tracker.md)) and has no live region, so a busy item does not
+interrupt a screen reader; the relative times refresh with the log.
+
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it
 follows and the plan for later views are in [docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md).

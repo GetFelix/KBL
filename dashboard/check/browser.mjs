@@ -593,7 +593,8 @@ try {
   // a fold a person opened stays open when a record redraws the panel.
   const text = (sel) => page.eval(`document.querySelector(${JSON.stringify(sel)})?.textContent ?? ''`);
   check(/^agent-1 is working on this, attempt 1, last activity /.test(await text('.panel .now-text')), `the panel says who works on the item (${await text('.panel .now-text')})`);
-  check((await text('.panel .tl-entry:first-child .tl-head strong')) === 'Edited core/src/cache.rs', 'the timeline lists the newest record first');
+  const newest = await text('.panel .tl-entry:first-child .tl-head strong');
+  check(newest === 'Edited core/src/cache.rs', `the timeline lists the newest record first (saw "${newest}")`);
   check(await page.eval(`!!document.querySelector('.panel .tl-entry time[datetime]')`), 'each timeline entry has a machine-readable time');
   await shoot('panel-now');
   await page.eval(`document.querySelector('.panel .tl-output summary').click()`);
@@ -607,8 +608,8 @@ try {
   await rec({ kind: 'done', cost_micros: 500000 });
   await page.waitFor(`document.querySelector('.panel .attempt')?.textContent.includes('Finished')`);
   check((await text('.panel .attempt')).includes('cost $0.50'), `an attempt shows what it cost (${await text('.panel .attempt')})`);
-  check((await text('.panel .attempt')).includes('moved the fill before the read'), 'an attempt shows the summary it handed off');
-  check(/^Finished, in review/.test(await text('.panel .now-text')), 'the Now line follows the item once the attempt finishes');
+  check((await text('.panel .attempt')).includes('moved the fill before the read'), `an attempt shows the summary it handed off (saw "${await text('.panel .attempt')}")`);
+  check(/^Finished, in review/.test(await text('.panel .now-text')), `the Now line follows the item once the attempt finishes (saw "${await text('.panel .now-text')}")`);
   await page.eval(`document.querySelector('.panel .attempt [data-focus="replay:1"]').click()`);
   check(await focused('.story-decision[data-attempt="1"]'), 'the replay link moves the focus to the attempt\'s first decision');
   await shoot('panel-history');
