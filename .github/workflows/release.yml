@@ -1,6 +1,6 @@
 name: Release
 
-# A `v*` tag builds kbl-mcp and kbl-tool for every platform, attests each
+# A `v*` tag builds kbl-mcp, kbl-tool and kbl-ingest for every platform, attests each
 # archive and the checksums, and publishes them as a GitHub release. It also
 # builds the tracker (with kbl-ingest) and dashboard images for amd64 and
 # arm64, pushes them to ghcr.io/getfelix and attests them. A manual run with
@@ -97,7 +97,7 @@ jobs:
           fi
       - run: rustup update stable && rustup default stable && rustup target add ${{ matrix.target }}
       - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }} -p kbl-mcp -p kbl-tool
+        run: cargo build --release --locked --target ${{ matrix.target }} -p kbl-mcp -p kbl-tool -p kbl-ingest
       - name: Check the binary starts
         # The Intel macOS binary is cross-built and the runner is arm.
         if: matrix.target != 'x86_64-apple-darwin'
@@ -107,13 +107,14 @@ jobs:
           bin=target/${{ matrix.target }}/release
           "$bin/kbl-mcp$ext" --help > /dev/null
           "$bin/kbl-tool$ext" --help > /dev/null
+          "$bin/kbl-ingest$ext" --help > /dev/null
       - name: Package
         shell: bash
         run: |
           name="kbl-${version}-${{ matrix.target }}"
           ext=""; [ "${{ runner.os }}" = Windows ] && ext=.exe
           mkdir -p "dist/$name"
-          for b in kbl-mcp kbl-tool; do
+          for b in kbl-mcp kbl-tool kbl-ingest; do
             cp "target/${{ matrix.target }}/release/$b$ext" "dist/$name/"
           done
           cp LICENSE README.md "dist/$name/"

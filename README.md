@@ -54,6 +54,17 @@ cd KBL
 dev/quickstart.sh
 ```
 
+**Without building (no npm needed).** Once a release is tagged, its tracker and dashboard images are on ghcr.io, and
+the stack can pull them instead of building:
+
+```bash
+KBL_IMAGE_TAG=v0.1.0 dev/quickstart.sh
+```
+
+Download `kbl-mcp`, `kbl-tool` and `kbl-ingest` from the same release ([Getting the binaries](#getting-the-binaries)).
+The images exist only after the first tag. The tracker, dashboard and every `dev/*.mjs` script need only Node and the
+container engine, with no npm install.
+
 When it finishes it prints a dashboard link (the sign-in token is in it, so keep it to yourself), the tracker address and
 the token for the dashboard's write actions. Ports 8081, 8788 and 8790 must be free. Choose the engine with `CONTAINER_ENGINE=docker` or `podman`.
 
@@ -283,8 +294,8 @@ sees a failed server instead of a list of tools that cannot work.
 
 ### Getting the binaries
 
-Each [release](https://github.com/GetFelix/KBL/releases) carries `kbl-mcp` and `kbl-tool` for Linux (x86_64,
-aarch64), macOS (aarch64, x86_64) and Windows (x86_64). Download the archive for your platform, verify it, and put the two
+Each [release](https://github.com/GetFelix/KBL/releases) carries `kbl-mcp`, `kbl-tool` and `kbl-ingest` for Linux (x86_64,
+aarch64), macOS (aarch64, x86_64) and Windows (x86_64). Download the archive for your platform, verify it, and put the
 binaries on your `PATH`. Each archive and `SHA256SUMS` carry a signed attestation of the release workflow that built
 them; `gh attestation verify` (GitHub CLI 2.49 or later) checks it, and `SHA256SUMS` catches a corrupt download:
 
@@ -298,13 +309,13 @@ gh attestation verify "kbl-$tag-$target.tar.gz" -R GetFelix/KBL
 gh attestation verify SHA256SUMS -R GetFelix/KBL   # the checksums are attested too
 tar -xzf "kbl-$tag-$target.tar.gz"
 kbl-$tag-$target/kbl-mcp --help
-install -m 755 kbl-$tag-$target/kbl-mcp kbl-$tag-$target/kbl-tool /usr/local/bin/   # or any directory on your PATH
+install -m 755 kbl-$tag-$target/kbl-mcp kbl-$tag-$target/kbl-tool kbl-$tag-$target/kbl-ingest /usr/local/bin/   # or any directory on your PATH
 ```
 
 On Windows, download `kbl-<tag>-x86_64-pc-windows-msvc.zip` and `SHA256SUMS`, then in PowerShell compare
 `(Get-FileHash kbl-<tag>-x86_64-pc-windows-msvc.zip).Hash` with its line in `SHA256SUMS` and run
 `Expand-Archive kbl-<tag>-x86_64-pc-windows-msvc.zip .`; `gh attestation verify kbl-<tag>-x86_64-pc-windows-msvc.zip -R GetFelix/KBL` works there too. The binaries themselves are not code-signed. If macOS refuses one that a
-browser downloaded, run `xattr -d com.apple.quarantine` on it (`curl` downloads are not affected). To build from source instead, use `cargo build --release -p kbl-mcp -p kbl-tool`.
+browser downloaded, run `xattr -d com.apple.quarantine` on it (`curl` downloads are not affected). To build from source instead, use `cargo build --release -p kbl-mcp -p kbl-tool -p kbl-ingest`.
 
 With the [dev stack](#running-felix-locally) running, build it and run the check that starts it the way a host would,
 lists its tools and calls one:

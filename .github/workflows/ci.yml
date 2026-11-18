@@ -235,6 +235,26 @@ jobs:
       - if: always()
         run: dev/down.sh
 
+  # Optional: runs only when the repository variable KBL_IMAGE_TAG names a
+  # published release. Not part of CI ok, since the images exist after a tag.
+  quickstart-images:
+    name: quick start, published images
+    if: vars.KBL_IMAGE_TAG != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      KBL_IMAGE_TAG: ${{ vars.KBL_IMAGE_TAG }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: dev/quickstart.sh
+      - run: cargo build --release -p kbl-mcp -p kbl-ingest
+      - run: node dev/check-quickstart.mjs
+      - if: always()
+        run: dev/down.sh
+
   # The one check branch protection requires.
   ci-ok:
     name: CI ok
