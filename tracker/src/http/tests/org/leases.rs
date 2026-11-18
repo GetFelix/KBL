@@ -338,7 +338,12 @@ async fn a_leave_releases_the_leases_even_when_the_membership_write_fails() {
 
 #[tokio::test]
 async fn two_hundred_workers_joining_at_once_all_get_in() {
-    let (_o, app, _groups) = leased().await;
+    let (o, app, _groups) = leased().await;
+    // The in-process cache has no write contention, so make the first
+    // writes lose as a crowd of trackers would.
+    o.broker("default")
+        .lose_members_puts
+        .store(50, std::sync::atomic::Ordering::SeqCst);
     let names: Vec<String> = (0..200).map(|i| format!("w{i}")).collect();
     // Past the team's in-flight cap a call is turned away with a 1 s
     // Retry-After and tried again. Any other refusal is a lost membership
