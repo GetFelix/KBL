@@ -1,0 +1,1 @@
+KBL now leads with what it is for: one engineer supervising far more concurrent agent work, with every decision on record. The README says so, and [docs/design/supervision.md](docs/design/supervision.md) lays out the supervision milestone and the experiment that measures it. Scale work waits on its result.
