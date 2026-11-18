@@ -43,6 +43,7 @@ async fn child(t: &Tracker<Fake>, id: &str, parent: &str, work: WorkKind, tier: 
         WorkRecord::Accepted {
             item: item(id),
             tier: Some(tier),
+            triage_skipped: None,
         },
     )
     .await
