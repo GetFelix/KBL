@@ -482,7 +482,10 @@ async fn a_write_already_made_or_refused_by_the_process_is_not_an_error() {
                 }),
             );
         }
-        res(400, Value::Null)
+        res(
+            400,
+            json!({ "typeKey": "RuleValidationException", "message": "TF401320: Rule Error" }),
+        )
     });
     let a = ado(&org);
     let issue = IssueRef::new("contoso/Platform", 12);
@@ -1151,4 +1154,75 @@ async fn a_redirected_service_principal_request_signs_in_again() {
     assert_eq!(got.status, 200);
     assert_eq!(*n.lock().unwrap(), 2);
     std::fs::remove_dir_all(dir).ok();
+}
+
+#[tokio::test]
+async fn a_transient_400_on_a_state_change_is_retried_not_dropped() {
+    let org = Org::new(|req| {
+        if req.method == "GET" {
+            return res(200, raw(12, |_| {}));
+        }
+        res(400, json!({ "message": "The request timed out upstream" }))
+    });
+    let result = ado(&org)
+        .write_back(&WriteBack::Transition {
+            issue: IssueRef::new("contoso/Platform", 12),
+            name: "Closed".into(),
+        })
+        .await;
+    assert!(result.is_err());
+}
+
+/// Eight items in one change instant, a cap of five: the second poll must
+/// resume after the last id, not read the first five again.
+#[tokio::test]
+async fn a_tie_wider_than_the_cap_pages_by_id() {
+    let items: Vec<Value> = (1..=8).map(|i| raw(i, |_| {})).collect();
+    let org = Org::new(move |req| {
+        let p = path(req);
+        if p.ends_with("/_apis/wit/wiql") {
+            let q = req.body.as_ref().unwrap()["query"].as_str().unwrap();
+            let after = q
+                .split("[System.Id] > ")
+                .nth(1)
+                .and_then(|r| r.trim_end_matches(')').split(')').next())
+                .and_then(|n| n.trim().parse::<u64>().ok())
+                .unwrap_or(0);
+            let ids: Vec<Value> = items
+                .iter()
+                .filter(|i| i["id"].as_u64().unwrap() > after)
+                .take(LIST_CAP)
+                .map(|i| json!({ "id": i["id"] }))
+                .collect();
+            return res(200, json!({ "workItems": ids }));
+        }
+        if p.ends_with("/_apis/wit/workitems") {
+            let want: Vec<u64> = param(req, "ids")
+                .unwrap()
+                .split(',')
+                .filter_map(|n| n.parse().ok())
+                .collect();
+            let found: Vec<Value> = items
+                .iter()
+                .filter(|i| want.contains(&i["id"].as_u64().unwrap()))
+                .cloned()
+                .collect();
+            return res(200, json!({ "value": found }));
+        }
+        if p.ends_with("/comments") {
+            return res(200, json!({ "comments": [] }));
+        }
+        res(200, Value::Null)
+    });
+    let a = ado(&org);
+    let first = a.changed(&repos(), &none()).await.unwrap();
+    let cursor = first.cursors["contoso/Platform"].clone();
+    assert_eq!(first.issues.len(), 5);
+    assert_eq!(cursor.issues_after_id, Some(5));
+    let cursors = BTreeMap::from([("contoso/Platform".to_owned(), cursor)]);
+    let second = a.changed(&repos(), &cursors).await.unwrap();
+    let mut ids: Vec<u64> = second.issues.iter().map(|i| i.id.number).collect();
+    ids.sort();
+    assert_eq!(ids, vec![6, 7, 8]);
+    assert_eq!(second.cursors["contoso/Platform"].issues_after_id, None);
 }

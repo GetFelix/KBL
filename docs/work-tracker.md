@@ -1925,6 +1925,12 @@ the rule uses to the real one:
   item, and no cursor that is not a date, is ever put in a query or an
   address. The first poll reads open items only. A query that fails (401, 403
   or 404) stalls that project with its items and cursor as they were.
+  A poll reads at most 2000 items; when that many share one change instant,
+  the cursor also keeps the last id read there and the next poll resumes
+  after it, so a wide tie advances. A state change the process refuses with a
+  rule error (a transition it does not allow from here) is reported once and
+  dropped; any other failed state change is retried on later polls, a few
+  times.
 - **Tiers.** Priority 1 to 4 maps to tiers 0 to 3. `priority_labels` can map
   a priority (`"2": 0`) or a tag, the lowest tier wins, and anything else
   takes `default_tier`.
