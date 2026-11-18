@@ -870,7 +870,7 @@ pub enum Reject {
     NotAProposal,
     /// Only a closed item can be reopened.
     NotClosed,
-    /// Upstream sync records and a class are about roots.
+    /// Upstream sync records are about roots.
     NotARoot,
     /// The attempt wrote as many records of this kind as it may.
     LimitReached,
@@ -1338,10 +1338,7 @@ impl State {
         if !plain_class_value(value) {
             return Err(Reject::BadClass);
         }
-        // Filters read the root's class, so a value on a child would never show.
-        if self.item(item)?.parent.is_some() {
-            return Err(Reject::NotARoot);
-        }
+        self.item(item)?;
         let vocab = self.rules_for(item).and_then(|r| r.vocabulary);
         let listed: Vec<&str> = match (&vocab, dim) {
             (Some(v), ClassDim::Type) => v.types.iter().map(String::as_str).collect(),

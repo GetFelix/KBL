@@ -2317,7 +2317,7 @@ answer as `bad_class`, and a team with no list for types or areas accepts none. 
 with `classify_item` (`POST /v1/work/classify`; an empty value clears it). The fold remembers who chose each value (a
 rule, triage or a person): triage replaces a rule's value, nothing replaces a person's, and the dashboard shows a value
 the same way whoever chose it. Only a root takes a class: classifying a child item (a triage or augment item, an
-attempt's work) is refused as `not_a_root`, because the filters below read the root's class and a value on a child
+attempt's work) with `classify_item` is refused as `not_a_root` before anything is written, because the filters below read the root's class and a value on a child
 would never match. These fields are format 19.
 
 `work_next` and `work_peek` filter on all of them, read from the item's root, so a root's triage and augment items
