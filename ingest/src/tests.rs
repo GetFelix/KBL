@@ -24,7 +24,7 @@ async fn a_failed_poll_keeps_the_reconcile_flag() {
         Settings {
             rules: cfg.rules,
             repos,
-            reconcile_every: 1000,
+            reconcile_period: None,
             release_compares: 20,
         },
     );
@@ -32,9 +32,16 @@ async fn a_failed_poll_keeps_the_reconcile_flag() {
     wake.reconcile.store(true, Ordering::SeqCst);
     let lessee = lease::Lessee::file_managed("github");
     assert!(
-        run(&ingest, &lessee, &wake, Duration::ZERO, true)
-            .await
-            .is_err()
+        run(
+            &ingest,
+            &lessee,
+            &wake,
+            &crate::budget::Budget::new(crate::budget::Vendor::Github, None, 0.5),
+            Duration::ZERO,
+            true,
+        )
+        .await
+        .is_err()
     );
     assert!(wake.reconcile.load(Ordering::SeqCst));
 }

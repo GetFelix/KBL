@@ -3,6 +3,7 @@
 //! its own token, and makes no model calls. See docs/work-tracker.md "Sources".
 
 mod ado;
+mod budget;
 mod check;
 mod config;
 mod github;
@@ -143,22 +144,27 @@ async fn serve() -> Result<()> {
         Some(_) => lease::Lessee::waiting(vendor, cfg.repos()),
     };
     let lanes = (tracker, lease_api, lessee.clone());
+    let budget = budget::Budget::new(
+        budget::Vendor::named(vendor),
+        cfg.budget_per_hour,
+        cfg.budget_share,
+    );
     match (&cfg.github, &cfg.jira, &cfg.ado, &cfg.gitlab) {
         (Some(g), None, None, None) => {
-            let github = github_source(g, &lessee).await?;
-            drive(github, lanes, cfg, cli).await
+            let github = github_source(g, &lessee, &budget).await?;
+            drive(github, lanes, budget, cfg, cli).await
         }
         (None, Some(j), None, None) => {
-            let jira = jira_source(j, &cfg, &lessee).await?;
-            drive(jira, lanes, cfg, cli).await
+            let jira = jira_source(j, &cfg, &lessee, &budget).await?;
+            drive(jira, lanes, budget, cfg, cli).await
         }
         (None, None, Some(a), None) => {
-            let ado = ado_source(a, &cfg, &lessee).await?;
-            drive(ado, lanes, cfg, cli).await
+            let ado = ado_source(a, &cfg, &lessee, &budget).await?;
+            drive(ado, lanes, budget, cfg, cli).await
         }
         (None, None, None, Some(g)) => {
-            let gitlab = gitlab_source(g, &cfg, &lessee).await?;
-            drive(gitlab, lanes, cfg, cli).await
+            let gitlab = gitlab_source(g, &cfg, &lessee, &budget).await?;
+            drive(gitlab, lanes, budget, cfg, cli).await
         }
         _ => unreachable!("the config checks for exactly one source"),
     }
@@ -180,11 +186,12 @@ pub(crate) fn github_token(gh: &config::GithubConfig) -> Result<Token> {
 }
 
 /// A source's HTTP behind the lease fence.
-type Gated<T> = lease::Gate<T>;
+type Gated<T> = lease::Gate<budget::Budgeted<T>>;
 
 async fn github_source(
     gh: &config::GithubConfig,
     lessee: &Arc<lease::Lessee>,
+    budget: &Arc<budget::Budget>,
 ) -> Result<Github<Gated<Reqwest>>> {
     let sources = [
         ("token_file", gh.token_file.is_some()),
@@ -201,7 +208,10 @@ async fn github_source(
     }
     let mut github = Github::new(
         &gh.api,
-        lease::gated(Reqwest::new(github_token(gh)?)?, lessee.clone()),
+        lease::gated(
+            budget::budgeted(Reqwest::new(github_token(gh)?)?, budget.clone()),
+            lessee.clone(),
+        ),
         gh.own_logins.clone(),
     );
     // A user token names itself; an App installation token cannot, so the config lists its bot login.
@@ -245,11 +255,15 @@ async fn jira_source(
     j: &config::JiraConfig,
     cfg: &Config,
     lessee: &Arc<lease::Lessee>,
+    budget: &Arc<budget::Budget>,
 ) -> Result<jira::Jira<Gated<jira::transport::Reqwest>>> {
     let mut jira = jira::Jira::new(
         &j.site,
         &j.api,
-        lease::gated(jira::transport::Reqwest::new(jira_auth(j))?, lessee.clone()),
+        lease::gated(
+            budget::budgeted(jira::transport::Reqwest::new(jira_auth(j))?, budget.clone()),
+            lessee.clone(),
+        ),
         j.own_logins.clone(),
         jira_scopes(cfg),
         &j.pr_url_base,
@@ -290,6 +304,7 @@ async fn ado_source(
     a: &config::AdoConfig,
     cfg: &Config,
     lessee: &Arc<lease::Lessee>,
+    budget: &Arc<budget::Budget>,
 ) -> Result<ado::Ado<Gated<ado::transport::Reqwest>>> {
     let plain = std::iter::once(a.api.as_str())
         .chain(a.entra.iter().map(|e| e.authority.as_str()))
@@ -302,7 +317,10 @@ async fn ado_source(
     let mut ado = ado::Ado::new(
         &a.organization,
         &a.api,
-        lease::gated(ado::transport::Reqwest::new(ado_auth(a))?, lessee.clone()),
+        lease::gated(
+            budget::budgeted(ado::transport::Reqwest::new(ado_auth(a))?, budget.clone()),
+            lessee.clone(),
+        ),
         a.own_logins.clone(),
         ado_scopes(cfg),
         &a.projects,
@@ -326,11 +344,15 @@ async fn gitlab_source(
     g: &config::GitlabConfig,
     cfg: &Config,
     lessee: &Arc<lease::Lessee>,
+    budget: &Arc<budget::Budget>,
 ) -> Result<gitlab::Gitlab<Gated<gitlab::transport::Reqwest>>> {
     let mut gitlab = gitlab::Gitlab::new(
         &g.api,
         lease::gated(
-            gitlab::transport::Reqwest::new(gitlab_secret(g))?,
+            budget::budgeted(
+                gitlab::transport::Reqwest::new(gitlab_secret(g))?,
+                budget.clone(),
+            ),
             lessee.clone(),
         ),
         g.own_logins.clone(),
@@ -349,11 +371,13 @@ async fn drive<S: Source>(
         Arc<tracker_api::Http>,
         Arc<lease::Lessee>,
     ),
+    budget: Arc<budget::Budget>,
     cfg: Config,
     cli: Cli,
 ) -> Result<()> {
     let repos = cfg.repos();
-    let poll_every = Duration::from_secs(cfg.poll_seconds);
+    let poll_min = Duration::from_secs(cfg.poll_seconds);
+    let reconcile_period = cfg.reconcile_period();
     let leasing = match cfg.tracker.group.clone() {
         Some(group) => {
             let instance = lease::instance()?;
@@ -379,7 +403,7 @@ async fn drive<S: Source>(
         Settings {
             rules: cfg.rules,
             repos,
-            reconcile_every: cfg.reconcile_every,
+            reconcile_period: Some(reconcile_period),
             release_compares: cfg.release_compares_per_poll,
         },
     );
@@ -408,7 +432,7 @@ async fn drive<S: Source>(
         });
     }
 
-    let done = run(&ingest, &lessee, &wake, poll_every, cli.once).await;
+    let done = run(&ingest, &lessee, &wake, &budget, poll_min, cli.once).await;
     // Released only once the poll loop has stopped, so the next holder never
     // overlaps this one.
     if let Some((group, instance, beating)) = leasing {
@@ -421,9 +445,12 @@ async fn run<S: Source, T: tracker_api::Tracker>(
     ingest: &Ingest<S, T>,
     lessee: &lease::Lessee,
     wake: &webhook::Wake,
-    every: Duration,
+    budget: &budget::Budget,
+    min_every: Duration,
     once: bool,
 ) -> Result<()> {
+    let mut every = min_every;
+    ingest.set_interval(every);
     loop {
         // Without a fresh lease the poll would make no vendor call anyway;
         // skipping it also spares the tracker.
@@ -436,12 +463,42 @@ async fn run<S: Source, T: tracker_api::Tracker>(
             }
             continue;
         }
+        // The vendor's wait, or a bucket too low to afford a poll, holds the
+        // poll back even when a webhook woke it.
+        if !once && let Some(hold) = budget.poll_wait() {
+            eprintln!(
+                "kbl-ingest: request budget low; next poll in {}s",
+                hold.as_secs()
+            );
+            tokio::select! {
+                () = tokio::time::sleep(hold) => {}
+                _ = tokio::signal::ctrl_c() => return Ok(()),
+            }
+            continue;
+        }
         let reconcile = wake.reconcile.swap(false, Ordering::SeqCst);
+        budget.begin_poll();
         let polled = ingest.poll(reconcile).await;
+        budget.end_poll();
         // A failed poll did not reconcile, so the next one still must.
         if reconcile && polled.is_err() {
             wake.reconcile.store(true, Ordering::SeqCst);
         }
+        every = budget.interval(min_every);
+        ingest.set_interval(every);
+        let snap = budget.snapshot();
+        tracing::info!(
+            interval_s = every.as_secs(),
+            budget_remaining = snap.tokens,
+            budget_per_hour = snap.hourly,
+            "poll finished"
+        );
+        eprintln!(
+            "kbl-ingest: next poll in {}s; request budget {} of {} an hour left",
+            every.as_secs(),
+            snap.tokens,
+            snap.hourly
+        );
         let wait = match polled {
             Ok(()) => every,
             Err(SourceError::RateLimited { wait }) => {

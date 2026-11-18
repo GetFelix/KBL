@@ -13,12 +13,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use serde::Serialize;
 use serde_json::Value;
 
 use crate::ado::Ado;
+use crate::budget::{Budget, Budgeted, Vendor, budgeted, projected_per_hour};
 use crate::config::{AdoConfig, Config, GithubConfig, Mode, Rule};
 use crate::github::transport::Reqwest as GithubHttp;
 use crate::github::{Github, Req, Res, Transport, parse_utc_ms};
@@ -204,6 +207,11 @@ async fn report_for(path: &Path) -> Report {
         .findings
         .extend(static_findings(&cfg, &|n| std::env::var(n).ok()));
 
+    let budget = Budget::new(
+        Vendor::named(source_name(&cfg)),
+        cfg.budget_per_hour,
+        cfg.budget_share,
+    );
     let tracker = match std::env::var(&cfg.tracker.token_env) {
         Ok(token) if !token.is_empty() => Http::new(&cfg.tracker.url, token).ok(),
         _ => None,
@@ -211,13 +219,19 @@ async fn report_for(path: &Path) -> Report {
     match (&cfg.github, &cfg.jira) {
         (Some(g), None) => match crate::github_token(g).and_then(GithubHttp::new) {
             Ok(http) => {
-                let mut github = Github::new(&g.api, ReadOnly(http), g.own_logins.clone());
+                let mut github = Github::new(
+                    &g.api,
+                    ReadOnly(budgeted(http, budget.clone())),
+                    g.own_logins.clone(),
+                );
                 // As the worker does, so its own issues are recognised.
                 if let Some(login) = github.login().await {
                     github.add_own(login);
                 }
                 github_findings(&cfg, g, &github, &mut report.findings).await;
                 dry_run(&cfg, &github, tracker.as_ref(), &mut report).await;
+                let f = budget_finding(&cfg, &github, tracker.as_ref(), &budget).await;
+                report.findings.push(f);
             }
             Err(e) => {
                 report
@@ -230,13 +244,15 @@ async fn report_for(path: &Path) -> Report {
                 let mut jira = Jira::new(
                     &j.site,
                     &j.api,
-                    ReadOnly(http),
+                    ReadOnly(budgeted(http, budget.clone())),
                     j.own_logins.clone(),
                     crate::jira_scopes(&cfg),
                     &j.pr_url_base,
                 );
                 jira_findings(&cfg, &mut jira, &mut report.findings).await;
                 dry_run(&cfg, &jira, tracker.as_ref(), &mut report).await;
+                let f = budget_finding(&cfg, &jira, tracker.as_ref(), &budget).await;
+                report.findings.push(f);
             }
             Err(e) => {
                 report
@@ -246,10 +262,12 @@ async fn report_for(path: &Path) -> Report {
         },
         (None, None) => {
             if let Some(a) = &cfg.ado {
-                match ado_guarded(&cfg, a) {
+                match ado_guarded(&cfg, a, &budget) {
                     Ok(mut ado) => {
                         ado_findings(&cfg, &mut ado, &mut report.findings).await;
                         dry_run(&cfg, &ado, tracker.as_ref(), &mut report).await;
+                        let f = budget_finding(&cfg, &ado, tracker.as_ref(), &budget).await;
+                        report.findings.push(f);
                     }
                     Err(e) => report.findings.push(Finding::new(
                         Level::Error,
@@ -258,10 +276,12 @@ async fn report_for(path: &Path) -> Report {
                     )),
                 }
             } else if let Some(g) = &cfg.gitlab {
-                match gitlab_guarded(&cfg, g) {
+                match gitlab_guarded(&cfg, g, &budget) {
                     Ok(mut gitlab) => {
                         gitlab_findings(&cfg, &mut gitlab, &mut report.findings).await;
                         dry_run(&cfg, &gitlab, tracker.as_ref(), &mut report).await;
+                        let f = budget_finding(&cfg, &gitlab, tracker.as_ref(), &budget).await;
+                        report.findings.push(f);
                     }
                     Err(e) => report.findings.push(Finding::new(
                         Level::Error,
@@ -290,12 +310,13 @@ async fn report_for(path: &Path) -> Report {
 fn ado_guarded(
     cfg: &Config,
     a: &AdoConfig,
-) -> Result<Ado<ReadOnlyWiql<crate::ado::transport::Reqwest>>> {
+    budget: &Arc<Budget>,
+) -> Result<Ado<ReadOnlyWiql<Budgeted<crate::ado::transport::Reqwest>>>> {
     let http = crate::ado::transport::Reqwest::new(crate::ado_auth(a))?;
     Ok(Ado::new(
         &a.organization,
         &a.api,
-        ReadOnlyWiql(http),
+        ReadOnlyWiql(budgeted(http, budget.clone())),
         a.own_logins.clone(),
         crate::ado_scopes(cfg),
         &a.projects,
@@ -307,15 +328,77 @@ fn ado_guarded(
 fn gitlab_guarded(
     cfg: &Config,
     g: &crate::config::GitlabConfig,
-) -> Result<Gitlab<ReadOnly<crate::gitlab::transport::Reqwest>>> {
+    budget: &Arc<Budget>,
+) -> Result<Gitlab<ReadOnly<Budgeted<crate::gitlab::transport::Reqwest>>>> {
     let http = crate::gitlab::transport::Reqwest::new(crate::gitlab_secret(g))?;
     Gitlab::new(
         &g.api,
-        ReadOnly(http),
+        ReadOnly(budgeted(http, budget.clone())),
         g.own_logins.clone(),
         cfg.rules.clone(),
         &g.projects,
     )
+}
+
+/// What the vendor says is left, what this worker may spend, and what the
+/// config is projected to spend an hour, so a config that cannot fit shows
+/// before it runs.
+async fn budget_finding<S: Source, T: Tracker>(
+    cfg: &Config,
+    source: &S,
+    tracker: Option<&T>,
+    budget: &Budget,
+) -> Finding {
+    let snap = budget.snapshot();
+    let mut roots = 0u64;
+    if let Some(t) = tracker
+        && let Ok(listed) = t.roots().await
+    {
+        roots = listed
+            .roots
+            .iter()
+            .filter(|r| r.source == source.name() && !r.closed)
+            .count() as u64;
+    }
+    let listings = 2 * cfg.repos().len() as u64;
+    let reads = if source.reads_pull_requests() {
+        roots
+    } else {
+        0
+    };
+    let every = Duration::from_secs(cfg.poll_seconds);
+    let projected = projected_per_hour(listings, reads, roots, every, cfg.reconcile_period());
+    let seen = match (snap.vendor_remaining, snap.vendor_hourly) {
+        (Some(left), Some(limit)) => format!("the vendor reports {left} of {limit} requests left"),
+        (Some(left), None) => format!("the vendor reports {left} requests left"),
+        _ => "the vendor reports no remaining count".to_owned(),
+    };
+    let reset = snap
+        .vendor_reset_epoch
+        .map(|r| r.saturating_sub(epoch_secs()))
+        .map_or(String::new(), |s| format!(", resetting in {} min", s / 60));
+    let usable = snap.hourly as f64 * 0.8;
+    let mut message = format!(
+        "{seen}{reset}; this worker may spend {} an hour; the config is projected to spend about {projected:.0} an hour \
+         ({listings} listing calls and {reads} pull request reads a poll every {}s, {roots} open issues re-read every {}h)",
+        snap.hourly, cfg.poll_seconds, cfg.reconcile_hours
+    );
+    let level = if projected > usable {
+        message.push_str(
+            "; that is over budget, so the worker will stretch its poll interval; \
+             raise poll_seconds or budget_per_hour, or use a token of its own",
+        );
+        Level::Warn
+    } else {
+        Level::Ok
+    };
+    Finding::new(level, "budget", message)
+}
+
+fn epoch_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 fn source_name(cfg: &Config) -> &'static str {

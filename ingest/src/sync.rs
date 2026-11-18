@@ -10,6 +10,8 @@
 //! The upstream-change table is in docs/work-tracker.md.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use anyhow::Context;
 use kbl_core::content::Content;
@@ -37,8 +39,10 @@ const MAX_WRITE_BACK_TRIES: u8 = 3;
 pub(crate) struct Settings {
     pub(crate) rules: Vec<Rule>,
     pub(crate) repos: Vec<String>,
-    /// Polls between full reconciles, which notice transfers and deletions.
-    pub(crate) reconcile_every: u32,
+    /// How long one pass over every open imported issue takes, to notice a
+    /// transfer or a deletion no listing shows. Each poll re-reads its share.
+    /// None never reconciles on its own; a webhook still forces one.
+    pub(crate) reconcile_period: Option<Duration>,
     /// Release-step requests one poll may make: pull request reads and compares.
     pub(crate) release_compares: u32,
 }
@@ -49,6 +53,8 @@ pub(crate) struct Ingest<S, T> {
     settings: Settings,
     /// Lower-cased logins of our own credential.
     own: HashSet<String>,
+    /// Seconds between polls now, which sizes the reconcile slice.
+    interval_s: AtomicU64,
 }
 
 /// What one poll knows about the tracker's side, kept current as it writes.
@@ -79,7 +85,14 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             tracker,
             settings,
             own,
+            interval_s: AtomicU64::new(60),
         }
+    }
+
+    /// Tells the reconcile slice how long a poll will wait before the next.
+    pub(crate) fn set_interval(&self, every: Duration) {
+        self.interval_s
+            .store(every.as_secs().max(1), Ordering::Relaxed);
     }
 
     /// Polls once. `reconcile` forces a full reconcile now (a webhook said an
@@ -183,16 +196,16 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             self.pull_requests(p).await?;
             self.foreign_pull_requests(p).await?;
         }
-        p.state.polls += 1;
-        let reconciled = reconcile || p.state.polls >= self.settings.reconcile_every;
-        if reconciled {
-            p.state.polls = 0;
+        let (keys, reconciled) = self.reconcile_keys(p, reconcile);
+        if !keys.is_empty() {
             // The other writer may have unlinked since, so a reconcile lets
             // the next touch try once more.
-            for t in p.state.items.values_mut() {
-                t.not_ours.clear();
+            for k in &keys {
+                if let Some(t) = p.state.items.get_mut(k) {
+                    t.not_ours.clear();
+                }
             }
-            self.reconcile(p).await?;
+            self.reconcile(p, keys).await?;
         }
         self.link(p).await?;
         let span = tracing::info_span!("ingest.write_back", source = self.source.name());
@@ -934,14 +947,35 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     }
 
     /// Fetches each open imported issue, which finds what no listing shows.
-    async fn reconcile(&self, p: &mut Poll) -> Result<(), SourceError> {
-        let keys: Vec<String> = p
+    /// The open imported issues this poll re-reads, and whether that
+    /// completes a pass over all of them. A forced reconcile reads every one;
+    /// otherwise a poll reads its share, so each is read once per period.
+    /// The position is the last key read, so removals never make a poll skip one.
+    fn reconcile_keys(&self, p: &mut Poll, forced: bool) -> (Vec<String>, bool) {
+        let open: Vec<String> = p
             .state
             .items
             .iter()
             .filter(|(_, t)| t.closed.is_none() && t.moved_to.is_none())
             .map(|(k, _)| k.clone())
             .collect();
+        if forced {
+            p.state.reconcile_after = None;
+            return (open, true);
+        }
+        let Some(period) = self.settings.reconcile_period else {
+            return (Vec::new(), false);
+        };
+        let interval = self.interval_s.load(Ordering::Relaxed);
+        let polls = (period.as_secs().div_ceil(interval)).max(1) as usize;
+        let (keys, wrapped) = next_slice(&open, p.state.reconcile_after.as_deref(), polls);
+        if let Some(last) = keys.last() {
+            p.state.reconcile_after = Some(last.clone());
+        }
+        (keys, wrapped)
+    }
+
+    async fn reconcile(&self, p: &mut Poll, keys: Vec<String>) -> Result<(), SourceError> {
         for key in keys {
             let Some(id) = IssueRef::parse(&key) else {
                 continue;
@@ -1780,6 +1814,20 @@ fn cut(s: &str) -> String {
         end -= 1;
     }
     format!("{}\n[cut; the rest is upstream]", &s[..end])
+}
+
+/// The next `1/polls` of the sorted `open` keys after `after`, going round
+/// from the end to the start, and whether the slice reached the end.
+fn next_slice(open: &[String], after: Option<&str>, polls: usize) -> (Vec<String>, bool) {
+    if open.is_empty() {
+        return (Vec::new(), false);
+    }
+    let take = open.len().div_ceil(polls).min(open.len());
+    let start = after.map_or(0, |a| open.partition_point(|k| k.as_str() <= a));
+    let keys = (0..take)
+        .map(|i| open[(start + i) % open.len()].clone())
+        .collect();
+    (keys, start + take >= open.len())
 }
 
 #[cfg(test)]
