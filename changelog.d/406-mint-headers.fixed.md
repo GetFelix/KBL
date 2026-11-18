@@ -1,0 +1,1 @@
+Ingest no longer lets a token mint's rate limit headers replace the installation's remaining count and hourly limit. A mint's figures are adopted only when it reports the same bucket (`x-ratelimit-resource`) as normal calls; it is still charged and a refusal's wait is still honoured.

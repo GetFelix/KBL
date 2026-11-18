@@ -152,6 +152,8 @@ struct Inner {
     reported_hourly: Option<u64>,
     remaining: Option<u64>,
     reset_epoch: Option<u64>,
+    /// The bucket normal calls report (GitHub's `x-ratelimit-resource`).
+    resource: Option<String>,
     /// What this poll's reads have spent, and what the last poll did.
     poll_spent: f64,
     last_poll_cost: f64,
@@ -204,6 +206,7 @@ impl Budget {
                 reported_hourly: None,
                 remaining: None,
                 reset_epoch: None,
+                resource: None,
                 poll_spent: 0.0,
                 last_poll_cost: 0.0,
             }),
@@ -259,14 +262,21 @@ impl Budget {
 
     /// Charges one answer and reads its rate limit signals. The wait is set
     /// when the request was refused for its rate.
-    fn record(&self, write: bool, res: &Res) -> Option<Duration> {
+    fn record(&self, write: bool, metered: bool, res: &Res) -> Option<Duration> {
         let now = (self.clock)();
         let sig = signal(self.vendor, res);
+        let resource = res.headers.get("x-ratelimit-resource");
         let mut i = self.inner.lock().expect("lock");
-        if sig.hourly.is_some() {
+        // A token mint can be counted against another bucket (a GitHub App's
+        // own), so its figures are adopted only when it names the tracked one.
+        let adopt = !metered || resource.is_some_and(|r| i.resource.as_deref() == Some(r.as_str()));
+        if !metered && let Some(r) = resource {
+            i.resource = Some(r.clone());
+        }
+        if adopt && sig.hourly.is_some() {
             i.reported_hourly = sig.hourly;
         }
-        if sig.remaining.is_some() {
+        if adopt && sig.remaining.is_some() {
             i.remaining = sig.remaining;
             i.reset_epoch = sig.reset_epoch;
         }
@@ -297,8 +307,10 @@ impl Budget {
 
     /// Runs a request that does not go through [`Budgeted`], such as a token
     /// mint, under the same gate: it waits out a vendor's hold, is charged
-    /// once, and its rate limit headers are read. It draws on the reserve,
-    /// since nothing else can go out without the token it fetches.
+    /// once, and its refusals are honoured. Its remaining and limit figures
+    /// are adopted only when it reports the bucket normal calls do. It draws
+    /// on the reserve, since nothing else can go out without the token it
+    /// fetches.
     pub(crate) async fn metered<F>(&self, send: F) -> Result<Res>
     where
         F: std::future::Future<Output = Result<Res>>,
@@ -307,7 +319,7 @@ impl Budget {
             return Err(Limited { wait }.into());
         }
         let res = send.await?;
-        match self.record(true, &res) {
+        match self.record(true, true, &res) {
             Some(wait) => Err(Limited { wait }.into()),
             None => Ok(res),
         }
@@ -415,7 +427,7 @@ impl<T: Transport> Transport for Budgeted<T> {
             return Err(Limited { wait }.into());
         }
         let res = self.inner.send(req).await?;
-        match self.budget.record(write, &res) {
+        match self.budget.record(write, false, &res) {
             Some(wait) => Err(Limited { wait }.into()),
             None => Ok(res),
         }
