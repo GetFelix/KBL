@@ -805,3 +805,24 @@ async fn a_source_added_mid_hour_does_not_push_two_workers_past_the_pool() {
     let total = b1.snapshot().hourly + b2.snapshot().hourly;
     assert!(total <= 4000, "spent {total} of a 4000 pool");
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_config_answer_built_before_a_heartbeat_does_not_undo_its_count() {
+    use crate::budget::{Budget, Vendor};
+    let l = leased(&["github:o/a", "github:o/b"]);
+    let budget = Budget::new(Vendor::Github, None, 0.9);
+    l.attach(budget.clone());
+    let cfg = |n: u64| {
+        json!({
+            "connection": { "pool": "gh", "sources": [] },
+            "budget": { "per_hour": 4000, "kept_back": 800, "wake_cap": 200, "pool_sources": n },
+        })
+    };
+    l.renewed_in(
+        l.sending(),
+        held(&[("github:o/a", 1), ("github:o/b", 1)]),
+        Some(5),
+    );
+    l.configure_budget(&cfg(4));
+    assert_eq!(budget.snapshot().hourly, 1600, "2 of 5, not 2 of 4");
+}

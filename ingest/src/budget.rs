@@ -191,6 +191,9 @@ struct Inner {
     share: Option<PoolShare>,
     /// Sources this worker serves now, not counting ones handed over.
     held: u64,
+    /// The pool's source count the last heartbeat answered with. It outranks
+    /// a config answer, which may have been built before it.
+    beat_sources: Option<u64>,
     /// Another worker's refusal, as the tracker holds it for the pool.
     pool_blocked_until: Option<Instant>,
     /// A refusal not yet told to the tracker: the longest wait.
@@ -257,6 +260,7 @@ impl Budget {
                 pool: None,
                 share: None,
                 held: 0,
+                beat_sources: None,
                 pool_blocked_until: None,
                 unsent: None,
                 wake_tokens: None,
@@ -315,6 +319,9 @@ impl Budget {
         let mut i = self.inner.lock().expect("lock");
         i.pool = pool;
         i.share = share;
+        if let (Some(n), Some(share)) = (i.beat_sources, i.share.as_mut()) {
+            share.pool_sources = n;
+        }
     }
 
     /// How many sources this worker serves now.
@@ -328,8 +335,12 @@ impl Budget {
     pub(crate) fn set_leases(&self, held: u64, pool_sources: Option<u64>) {
         let mut i = self.inner.lock().expect("lock");
         i.held = held;
-        if let (Some(n), Some(share)) = (pool_sources, i.share.as_mut()) {
-            share.pool_sources = n.max(1);
+        if let Some(n) = pool_sources {
+            let n = n.max(1);
+            i.beat_sources = Some(n);
+            if let Some(share) = i.share.as_mut() {
+                share.pool_sources = n;
+            }
         }
     }
 
