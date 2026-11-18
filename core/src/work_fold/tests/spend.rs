@@ -487,3 +487,28 @@ fn unpriced_names_the_unit_that_waits() {
         .collect();
     assert_eq!(waiting, [("m".to_owned(), PriceUnit::Output)]);
 }
+
+/// A record carries the format it needs. One sent as JSON without `v` reads as format 1, so a
+/// report with usage from a client that forgot the stamp is refused rather than guessed at.
+#[test]
+fn usage_sent_without_its_stamp_is_refused() {
+    let mut l = raised();
+    l.person(price("m", PriceUnit::Input, 1_000_000));
+    let json = |v: &str| {
+        let body = r#""actor":"agent","by":"w1","at_ms":99,"item":"r1","attempt":1,"kind":"done","usage":[{"unit":"tokens","model":"m","input":10000}]"#;
+        let rec: WorkLogged = serde_json::from_str(&format!("{{{v}{body}}}")).unwrap();
+        rec
+    };
+    let unstamped = json("");
+    assert_eq!(unstamped.v, 1);
+    let mut log = l.0.clone();
+    log.push((log.len() as u64, unstamped));
+    let s = fold(&log);
+    assert_eq!(rejected(&s), [Reject::Format]);
+
+    let mut log = l.0.clone();
+    log.push((log.len() as u64, json(r#""v":8,"#)));
+    let s = fold(&log);
+    assert_eq!(rejected(&s), []);
+    assert_eq!(s.items[&id("r1")].cost_micros, 10_000);
+}

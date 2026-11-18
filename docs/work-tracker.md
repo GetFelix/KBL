@@ -2445,6 +2445,22 @@ people who use Linear or Jira every day.
 - **Side panel.** Selecting an item opens it on the right: status, tier,
   assignee and source at the top, then what the item needs and its choices.
   `Esc` closes it.
+- **What is happening.** Under the title the panel leads with a **Now**
+  sentence: who holds the item, the attempt, how long ago it last wrote and
+  the claim-time deadline while it is still ahead (renewals are not recorded), or why it is not moving and who must act. Then
+  the actions (accept, tier, take, assign, steer, close), **Linked work** (the
+  pull request with its checks, child work such as triage with the answer it
+  recorded, what the item waits on and what it holds back), **Activity**
+  (the log's records on the item, newest first, with relative times that keep
+  moving: claims, notes, each step with its exit code and a folded tail of its
+  output, decisions, edits, questions and answers, and how each attempt ended)
+  and **Attempts** (how each ended, what it handed off, whether a person
+  marked the summary accurate, what it cost, and a link into the Story at that
+  attempt's first decision). All of it is read from records the fold already
+  applies; nothing is added to the log. A cost is what the fold charged the
+  item at that record, so usage with no price yet shows as $0.00 until a price
+  arrives. The claim deadline is the one the claim was written with; the fold
+  does not see an agent's heartbeats.
 - **Story.** An item with a recorded decision shows its story in the side
   panel: the decisions in order across attempts and people, grouped under
   Understand, Reproduce, Cause, Fix and Verify. Each decision shows what the
