@@ -117,3 +117,19 @@ test('an items update carries the handoffs of the same fold and keeps the last w
   assert.equal(sent.handoffs?.get('r1')?.attempt, 1);
   assert.equal(reduce(sent, { type: 'items', items: [], blocked: [], overlaps: new Map() }).handoffs?.get('r1')?.attempt, 1);
 });
+
+test('opening a nested child selects its visible root, not the hidden child', () => {
+  const items = [
+    { id: 'root', title: 'root', stage: 'ready' },
+    { id: 'kid', title: 'kid', stage: 'ready', parent: 'root' },
+    { id: 'ask', title: 'ask', stage: 'needs_you', parent: 'root' },
+  ];
+  const s = { ...base, items, selected: 'root' };
+  assert.equal(reduce(s, { type: 'open', id: 'kid' }).selected, 'root');
+  // A child that needs a person keeps its own card, so it is selectable.
+  assert.equal(reduce(s, { type: 'open', id: 'ask' }).selected, 'ask');
+  // As child cards the child has a row of its own.
+  assert.equal(reduce({ ...s, childCards: true }, { type: 'open', id: 'kid' }).selected, 'kid');
+  // An item the view does not show keeps the selection on itself.
+  assert.equal(reduce({ ...s, query: 'nomatch' }, { type: 'open', id: 'kid' }).selected, 'kid');
+});

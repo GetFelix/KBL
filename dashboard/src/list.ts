@@ -119,6 +119,22 @@ export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'que
   return flatten(visible(s));
 }
 
+/**
+ * What the list selection should be after `id` is opened. A nested child has no row of
+ * its own, so the selection goes to the nearest root that does; an item the view does not
+ * show at all keeps the selection on itself, as before.
+ */
+export function selectionFor(s: Parameters<typeof shownRows>[0], id: string): string {
+  const shown = new Set(shownRows(s).map((r) => r.id));
+  const byId = new Map(s.items.map((i) => [i.id, i]));
+  const seen = new Set<string>();
+  for (let at = byId.get(id); at && !seen.has(at.id); at = at.parent ? byId.get(at.parent) : undefined) {
+    if (shown.has(at.id)) return at.id;
+    seen.add(at.id);
+  }
+  return id;
+}
+
 /** The marked items the view shows now. A bulk action never reaches an item a search or filter hides. */
 export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting']; childCards?: boolean }): ItemRow[] {
   const marked = new Set(s.marked);

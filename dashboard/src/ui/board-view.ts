@@ -2,7 +2,7 @@
 // one Tab stop (roving tabindex): Tab moves between columns, j/k and the up and down
 // arrows move within one, h/l and the side arrows move across. Cards are links in a
 // list under the column's heading, so a screen reader hears "Ready, list, 3 items".
-import { lead, childIndex, properties, reasonLine, summarize, workingLine } from '../card.ts';
+import { lead, nameOf, childIndex, properties, reasonLine, summarize, workingLine } from '../card.ts';
 import { waitsOn } from '../fold.ts';
 import { visible, type Group } from '../list.ts';
 import type { ViewState } from '../state.ts';
@@ -82,7 +82,7 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
         last = drawn(columns);
         lastColumns = columns.map((g) => g.items.map((i) => i.id));
         // A card that moved keeps the focus; one that left hands it to a card in its old column first.
-        restoreFocus(focusedId, before, last, cards, el, quietly, { select: on.select, announce }, [column, before.order]);
+        restoreFocus(focusedId, before, last, cards, el, quietly, { select: on.select, announce, name: (id) => nameOf(s.items, id) }, [column, before.order]);
         refocusChip(focusedChip, el);
       }
       // One Tab stop per column: the selected card in its column, else the column's first card.
