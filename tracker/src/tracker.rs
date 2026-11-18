@@ -1821,7 +1821,10 @@ impl<B: Broker> Tracker<B> {
                 // Looked at again only once the log moves, like a refused ready record.
                 eprintln!("kbl-tracker: {item} not claimable ({why}); skipped");
                 let at = core.state.at;
-                core.refused.insert(item.clone(), at);
+                // A block that ends by time moves no log, so it must not be held back.
+                if why != "blocked" {
+                    core.refused.insert(item.clone(), at);
+                }
                 if why == "over_budget" {
                     self.log_over_budget(core, &item).await;
                 }
@@ -2184,7 +2187,9 @@ impl<B: Broker> Tracker<B> {
             Err(Error::Refused { why }) => {
                 eprintln!("kbl-tracker: {item} not claimable ({why}); skipped");
                 core.live.remove(&item);
-                core.refused.insert(item.clone(), core.state.at);
+                if why != "blocked" {
+                    core.refused.insert(item.clone(), core.state.at);
+                }
                 if why == "over_budget" {
                     self.log_over_budget(core, &item).await;
                 }
