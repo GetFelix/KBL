@@ -146,9 +146,11 @@ impl<B: Broker> Tracker<B> {
         json!({ "workers": list })
     }
 
-    /// Stops every live worker `which` picks, as for a supervisor that is
-    /// gone: the token dies first, then each hold goes back at no cost to
-    /// its tries. Answers the items released.
+    /// Stops every worker `which` picks, as for a supervisor that is gone:
+    /// the token dies first, then each hold goes back at no cost to its tries.
+    /// A worker already stopped that still holds an item is picked too, so a
+    /// release that failed after its stop landed is retried. Answers the items
+    /// released.
     pub(crate) async fn stop_workers(
         &self,
         which: impl Fn(&Worker) -> bool,
@@ -158,7 +160,10 @@ impl<B: Broker> Tracker<B> {
             core.state
                 .workers
                 .iter()
-                .filter(|(_, w)| w.stopped_ms.is_none() && which(w))
+                .filter(|(name, w)| {
+                    (w.stopped_ms.is_none() || core.state.held_by(name.as_str()).is_some())
+                        && which(w)
+                })
                 .map(|(name, _)| name.clone())
                 .collect()
         };
@@ -169,21 +174,20 @@ impl<B: Broker> Tracker<B> {
         let mut released = Vec::new();
         for worker in picked {
             let mut core = self.0.core.lock().await;
+            let me = self.0.me.clone();
             // Checked again: a person or the supervisor may have stopped it meanwhile.
-            if core
+            let live = core
                 .state
                 .workers
                 .get(&worker)
-                .is_none_or(|w| w.stopped_ms.is_some())
-            {
-                continue;
+                .is_some_and(|w| w.stopped_ms.is_none());
+            if live {
+                let record = WorkRecord::WorkerStopped {
+                    worker: worker.clone(),
+                };
+                self.append(&mut core, Actor::Tracker, me.clone(), record)
+                    .await?;
             }
-            let me = self.0.me.clone();
-            let record = WorkRecord::WorkerStopped {
-                worker: worker.clone(),
-            };
-            self.append(&mut core, Actor::Tracker, me.clone(), record)
-                .await?;
             let held: Vec<(ItemId, u32)> = core
                 .state
                 .items

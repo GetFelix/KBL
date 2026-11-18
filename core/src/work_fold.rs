@@ -2728,7 +2728,10 @@ impl State {
                 let refund = self.format() >= FORMAT_V21
                     && rec.actor == Actor::Tracker
                     && reason.as_deref() == Some(SUPERVISOR_GONE)
-                    && self.workers.contains_key(&hold.by);
+                    && self
+                        .workers
+                        .get(&hold.by)
+                        .is_some_and(|w| w.stopped_ms.is_some());
                 let it = self.item_mut(item)?;
                 it.hold = None;
                 if lapse {

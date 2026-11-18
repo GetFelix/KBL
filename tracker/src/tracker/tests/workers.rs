@@ -258,3 +258,28 @@ async fn revoking_a_supervisor_stops_its_workers() {
     assert!(core.state.workers[&key("sup-w1")].stopped_ms.is_some());
     assert_eq!(tries_on(&core.state, "a1"), 0);
 }
+
+#[tokio::test]
+async fn a_stopped_worker_still_holding_is_released_on_the_next_pass() {
+    let fake = Fake::default();
+    let t = at_21(&fake).await;
+    start_for(&t, "sup", "sup-w1").await.unwrap();
+    seed(&t, "a1", 2).await;
+    claim(&t, "sup-w1").await;
+    // Stopped, but the release after it never landed.
+    t.stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
+        .await
+        .unwrap();
+    let released = t
+        .stop_workers(|w| w.supervisor == key("sup"))
+        .await
+        .unwrap();
+    assert_eq!(released, vec![item("a1")]);
+    let core = t.0.core.lock().await;
+    assert!(
+        core.state.rejections.is_empty(),
+        "{:?}",
+        core.state.rejections
+    );
+    assert_eq!(tries_on(&core.state, "a1"), 0);
+}

@@ -241,6 +241,12 @@ fn a_hold_released_because_the_supervisor_went_away_costs_no_try() {
     };
     assert_eq!(tries(crate::work::SUPERVISOR_GONE), 0);
     assert_eq!(tries("revoked"), 1);
+    // Only a stopped worker's hold gets the try back.
+    let mut l = raised();
+    l.agent("sup", started("sup-w1", HASH_A));
+    as_worker(&mut l, "sup-w1", "sup", claimed("r1", 1));
+    l.tracker(release(crate::work::SUPERVISOR_GONE));
+    assert_eq!(fold(&l.0).items[&id("r1")].paths[0].tries, 1);
 }
 
 #[test]
