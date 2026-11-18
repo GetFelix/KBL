@@ -2,9 +2,10 @@
 // and which writes can be undone. No DOM: main.ts sends the requests and the views show
 // the results. Every write is one of the tracker's person routes, sent with the viewer's
 // own token, so the page can never do more than the person could with curl.
+import { ADVICE_FORMAT, canAdvise } from './advice.ts';
 import type { ItemRow } from './fold.ts';
 
-export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'undo';
+export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'undo';
 
 export interface Request {
   path: string;
@@ -134,7 +135,7 @@ export function marksAfter(marked: readonly string[], ids: readonly string[]): s
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
-export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer'>, (i: ItemRow) => boolean>> = {
+export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice'>, (i: ItemRow) => boolean>> = {
   accept: (i) => i.stage === 'triage' || i.stage === 'proposed',
   // The fold rejects only a proposal nobody accepted; an imported root is closed instead.
   reject: (i) => i.stage === 'proposed',
@@ -168,7 +169,9 @@ export type WriteArgs =
   /** Assigns the item to the named person, or the named agent with `agent`, or to nobody with null. */
   | { kind: 'reassign'; to: string | null; agent?: true }
   /** Sends a note to the agent holding `attempt`. */
-  | { kind: 'steer'; attempt: number; text: string };
+  | { kind: 'steer'; attempt: number; text: string }
+  /** Replaces triage's dependencies and split on the answer at offset `proposal`. */
+  | { kind: 'advice'; depends_on: string[]; split: string[]; proposal: number };
 
 /** A route under the viewer's team when the address names one (`/v1/teams/{team}/work/...`). */
 export function route(path: string, team: string | null): string {
@@ -197,6 +200,8 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/reassign', body: { item, to: a.to === null ? null : a.agent ? { agent: a.to } : { person: a.to } } };
     case 'steer':
       return { path: '/v1/work/steer', body: { item, attempt: a.attempt, text: { text: a.text.trim() } } };
+    case 'advice':
+      return { path: '/v1/work/proposals/edit', body: { item, depends_on: a.depends_on, split: a.split, proposal: a.proposal } };
     case 'answer': {
       const body: Record<string, unknown> = { item, question: a.question };
       // The tracker reads `text` as content: inline text is `{ text }`, never a bare string.
@@ -277,6 +282,8 @@ export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> =
   take: null,
   reassign: null,
   steer: 'A note goes to the agent as it works; it cannot be taken back.',
+  // Editing again sets it back, so it does not ask first.
+  advice: null,
 };
 
 export interface Undo {
@@ -348,6 +355,7 @@ function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly Ite
   if (!now) return `${id} is no longer in the log.`;
   if (kind === 'take' || kind === 'reassign') return canAssign(now) ? null : `${id} cannot be assigned now, so nothing was sent.`;
   if (kind === 'steer') return canSteer(now) ? null : `${id} is not held by an agent now, so nothing was sent.`;
+  if (kind === 'advice') return canAdvise(now) ? null : `${id} is not a proposal that can be adjusted now, so nothing was sent.`;
   if (kind === 'rate') return canRate(now) ? null : `The log is below format ${RATE_FORMAT}, so nothing was sent.`;
   if (CAN[kind](now)) return null;
   if (kind === 'flag' && OPEN(now) && now.flagged) return `${id} is already flagged, so nothing was sent.`;
@@ -372,6 +380,8 @@ export function jobsFor(ids: readonly string[], args: WriteArgs, items: readonly
     const why = stale(args.kind, item, items);
     if (why) return { item, req: why };
     const before = items.find((i) => i.id === item)!;
+    // Triage answering again replaces what the person read; the tracker refuses it, and so do we before sending.
+    if (args.kind === 'advice' && before.proposal?.at !== args.proposal) return { item, req: `Triage answered ${item} again since you opened it, so nothing was sent. Read its new answer and adjust that.` };
     const undo = args.kind === 'tier' ? undoFor(before, args.tier) : undefined;
     return { item, req: request(item, args), undo: typeof undo === 'object' ? undo : undefined, noUndo: typeof undo === 'string' ? undo : undefined };
   });
@@ -398,6 +408,7 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
   take: ['Taking', 'Took'],
   reassign: ['Assigning', 'Assigned'],
   steer: ['Sending the note on', 'Sent the note on'],
+  advice: ['Adjusting the advice on', 'Adjusted the advice on'],
   unflag: ['Unflagging', 'Unflagged'],
   undo: ['Undoing the tier change on', 'Undid the tier change on'],
 };
@@ -425,7 +436,7 @@ export function summary(batch: readonly Write[]): { text: string; tone: 'busy' |
   for (const x of batch) if (x.status === 'ok' && x.noUndo) noUndo.set(x.noUndo, [...(noUndo.get(x.noUndo) ?? []), x.item]);
   for (const [why, ids] of noUndo) parts.push(`No undo for ${items(ids)}: ${why}`);
   for (const x of bad) {
-    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${kind === 'rate' ? `${RATE_FORMAT} to mark summaries` : kind === 'take' || kind === 'reassign' || kind === 'steer' ? `${ASSIGN_FORMAT} to assign and steer` : `${FLAG_FORMAT} to use Needs-you flags`}.`);
+    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${kind === 'rate' ? `${RATE_FORMAT} to mark summaries` : kind === 'take' || kind === 'reassign' || kind === 'steer' ? `${ASSIGN_FORMAT} to assign and steer` : kind === 'advice' ? `${ADVICE_FORMAT} to adjust triage’s advice` : `${FLAG_FORMAT} to use Needs-you flags`}.`);
     else parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'failed'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
   }
   return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.filter((x) => x.status === 'ok' && x.undo).length };

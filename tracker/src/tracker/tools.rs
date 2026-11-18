@@ -798,7 +798,8 @@ impl<B: Broker> Tracker<B> {
                 && p.by.as_ref() == Some(&agent_key(agent))
                 && (p.tier, &p.why, &p.duplicate_of, p.unclear)
                     == (tier, &why, &duplicate_of, unclear)
-                && (&p.depends_on, &p.split) == (&depends_on, &split)
+                // After a person adjusted the lists, the agent's own repeat is still a retry.
+                && (p.edited || (&p.depends_on, &p.split) == (&depends_on, &split))
             {
                 return Ok(
                     json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),
@@ -1257,13 +1258,22 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
         | WorkRecord::HumanInput { text, .. }
         | WorkRecord::Steered { text, .. } => check_content("text", text),
         WorkRecord::Edited {
-            title: Some(title), ..
+            title,
+            depends_on,
+            split,
+            ..
         } => {
-            field("title", title)?;
-            if title.is_empty() {
-                return Err(Error::Invalid("a title is needed".into()));
+            if let Some(title) = title {
+                field("title", title)?;
+                if title.is_empty() {
+                    return Err(Error::Invalid("a title is needed".into()));
+                }
             }
-            Ok(())
+            // A person's advice is held to the bounds of triage's own.
+            triage_lists(
+                depends_on.as_deref().unwrap_or_default(),
+                split.as_deref().unwrap_or_default(),
+            )
         }
         WorkRecord::Shipped { release, .. } => {
             field("release", release)?;
