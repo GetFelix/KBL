@@ -32,6 +32,7 @@ pass `--force`. Options you may want:
 |---|---|---|
 | `--label` | `agent-ok` | The label that marks an issue for agents. It also names the rule. Jira uses it for the default `--jql`. |
 | `--mode` | `admit` | `admit` imports a match as a root and queues its triage and augment work; `propose` puts it in Triage and queues nothing until a person accepts it. See below. |
+| `--triage` | `run` | `skip` admits an already specified issue with no triage or augment item, so it is Ready to fix at once. Only with `--mode admit`. |
 | `--cap` | `5` | The most open roots the rule may have. Matches over it wait upstream. |
 | `--tracker-url` | `http://127.0.0.1:8790` | Where the tracker is. |
 | `--token-env` | `GITHUB_TOKEN`, `JIRA_API_TOKEN` | The variable that will hold the source token. |

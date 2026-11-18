@@ -15,15 +15,15 @@ trust and steer, it should pay for itself. The experiment below decides whether 
 Found by running KBL v0.1.0 over the Felix backlog with Claude Code agents, where scheduling worked and supervision
 did not:
 
-| Need | Issue |
-|---|---|
-| A question parks the item and frees the agent, and is answered on the board, never in the agent's chat | #375 |
-| See each issue's stage and its triage step | #373 |
-| A board that shows who is working, why something is blocked, and the upstream id, with child work nested | #374, #386 |
-| An item panel that says what is happening now, with a live activity timeline, PR and checks, and attempts | #369 |
-| One inbox for everything waiting on a person, answered in one action | #388 |
-| Summary, diff and checks beside each finished attempt, with a trust mark | #389, #307 |
-| Steer the queue: skip work that cannot run now, ask for a kind of work, soft links, skip triage per rule | #376, #377, #378, #384 |
+| Need | Issue | Status |
+|---|---|---|
+| A question parks the item and frees the agent, and is answered on the board, never in the agent's chat | #375 | Done |
+| See each issue's stage and its triage step | #373 | Done |
+| A board that shows who is working, why something is blocked, and the upstream id, with child work nested | #374, #386 | #374 done; #386 (follow-ups) planned |
+| An item panel that says what is happening now, with a live activity timeline, PR and checks, and attempts | #369 | Done |
+| One inbox for everything waiting on a person, answered in one action | #388 | Done |
+| Summary, diff and checks beside each finished attempt, with a trust mark | #389, #307 | #307 (trust numbers) done; #389 planned |
+| Steer the queue: skip work that cannot run now, ask for a kind of work, soft links, skip triage per rule | #376, #377, #378, #384 | #377 and #384 done; #376 and #378 planned |
 
 These form the milestone "Supervision: one engineer, many agents".
 
