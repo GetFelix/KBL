@@ -569,10 +569,12 @@ impl<B: Broker> Tracker<B> {
     ///
     /// `options` are choices a person can pick; they may always type something
     /// else. `default` is the option taken when they answer without choosing.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn ask(
         &self,
         agent: &AgentName,
         item: &ItemId,
+        which: Option<Which>,
         text: Content,
         options: Vec<String>,
         default: Option<String>,
@@ -580,36 +582,27 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         check_content("text", &text)?;
         check_options(&options, default.as_deref())?;
-        let record = |attempt| WorkRecord::Question {
-            item: item.clone(),
-            attempt,
-            text,
-            options,
-            default,
-            cost_micros: 0,
-            usage,
-            floor_micros: self.floor(),
-        };
-        let frees = self.0.core.lock().await.state.format() >= FORMAT_V14;
-        if !frees {
-            let mut reply = self.held_write(agent, item, "ask", record).await?;
-            reply["claim"] = "held".into();
-            return Ok(reply);
-        }
-        // The question ends the hold, so the delivery is settled like a release's.
-        let mut reply = self
-            .finish(
-                agent,
-                item,
-                None,
-                "question",
-                true,
-                record,
-                json!({ "item": item, "status": "waiting" }),
-            )
-            .await?;
-        reply["claim"] = "ended".into();
-        Ok(reply)
+        // From format 14 the question ends the hold, so the delivery is settled
+        // like a release's; `finish` answers whether the claim goes on.
+        self.finish(
+            agent,
+            item,
+            which,
+            "question",
+            true,
+            |attempt| WorkRecord::Question {
+                item: item.clone(),
+                attempt,
+                text,
+                options,
+                default,
+                cost_micros: 0,
+                usage,
+                floor_micros: self.floor(),
+            },
+            json!({ "item": item, "status": "waiting" }),
+        )
+        .await
     }
 
     /// Records a plan, a branch or a PR on the item the agent holds.

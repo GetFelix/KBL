@@ -2106,7 +2106,7 @@ impl<B: Broker> Tracker<B> {
         kind: &'static str,
         late: bool,
         record: impl FnOnce(u32) -> WorkRecord,
-        reply: Value,
+        mut reply: Value,
     ) -> Result<Value, Error> {
         self.begin().await?;
         let slot = self.slot(agent);
@@ -2154,11 +2154,17 @@ impl<B: Broker> Tracker<B> {
             offset = self
                 .append(&mut core, Actor::Agent, agent_key(agent), record(held))
                 .await?;
+            // Below format 14 a question keeps the hold, and its delivery with it.
+            let goes_on = core.state.items.get(item).is_some_and(|i| holds(i, agent));
+            if kind == "question" {
+                reply["claim"] = if goes_on { "held" } else { "ended" }.into();
+            }
             let ready = core.state.stage(item) == Some(Stage::Ready);
-            if !ready {
+            if !ready && !goes_on {
                 core.live.remove(item);
             }
-            if let Some(d) = delivery.take()
+            if !goes_on
+                && let Some(d) = delivery.take()
                 && core.owner.get(item).is_some_and(|o| o.id == d.id)
             {
                 core.owner.remove(item);
@@ -2174,7 +2180,6 @@ impl<B: Broker> Tracker<B> {
             .err()
             .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"));
         self.sync_ready().await;
-        let mut reply = reply;
         reply["offset"] = offset.into();
         let counter = match kind {
             "done" => Some("kbl_tracker_completions_total"),
@@ -2206,6 +2211,9 @@ impl<B: Broker> Tracker<B> {
         }
         reply["offset"] = offset.into();
         reply["late"] = true.into();
+        if reply.get("status").is_some_and(|s| s == "waiting") {
+            reply["claim"] = "ended".into();
+        }
         Ok(reply)
     }
 

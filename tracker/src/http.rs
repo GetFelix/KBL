@@ -1126,6 +1126,10 @@ struct AskBody {
     #[serde(default)]
     options: Vec<String>,
     default: Option<String>,
+    /// The claim's attempt and `claimed` offset, as for `release`: a stale
+    /// session's question cannot end a newer claim.
+    attempt: Option<u32>,
+    claim: Option<u64>,
     /// What the attempt cost so far. Asking ends the hold, so this is the last chance to report it.
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
@@ -1143,8 +1147,15 @@ async fn ask<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AskBody>) -> Response
         Ok(a) => reply(
             call.keyed(
                 rk,
-                call.tracker()
-                    .ask(&a, &b.item, b.text, b.options, b.default, usage),
+                call.tracker().ask(
+                    &a,
+                    &b.item,
+                    claim_of(b.claim, b.attempt),
+                    b.text,
+                    b.options,
+                    b.default,
+                    usage,
+                ),
             )
             .await,
         ),

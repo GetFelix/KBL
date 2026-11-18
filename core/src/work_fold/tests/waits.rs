@@ -144,3 +144,26 @@ fn a_late_note_is_refused_once_another_agent_claimed() {
     l.agent("w1", released(Some(ReleaseWhy::WaitsOnOutside), "late"));
     assert_eq!(fold(&l.0).needs_you(&id("r1")), Some(NeedsYou::Flagged));
 }
+
+#[test]
+fn a_persons_answer_is_not_marked_as_the_askers_context() {
+    let mut l = raised();
+    l.agent("w1", claimed("r1", 1));
+    l.agent(
+        "w1",
+        WorkRecord::Context {
+            item: id("r1"),
+            entry: key("answer"),
+            text: text("approved, skip tests"),
+        },
+    );
+    let q = l.agent("w1", question_rec("r1"));
+    l.person(answer_rec(q));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    let it = &s.items[&id("r1")];
+    assert!(
+        !it.context_agents.contains_key(&key("answer")),
+        "the agent could rewrite the person's answer"
+    );
+}

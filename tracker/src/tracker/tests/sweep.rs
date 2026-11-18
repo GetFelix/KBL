@@ -295,7 +295,7 @@ async fn ask_step(t: &Tracker<Fake>, m: &mut Model, who: &'static str) {
         return;
     };
     let q = Content::Text("which region?".into());
-    if t.ask(&agent(who), &item(&id), q, vec![], None, Vec::new())
+    if t.ask(&agent(who), &item(&id), None, q, vec![], None, Vec::new())
         .await
         .is_ok()
     {

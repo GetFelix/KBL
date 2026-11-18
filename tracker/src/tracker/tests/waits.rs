@@ -22,6 +22,7 @@ async fn ask(t: &Tracker<Fake>, who: &str, id: &str) -> Result<Value, Error> {
     t.ask(
         &agent(who),
         &item(id),
+        None,
         text("which region?"),
         vec![],
         None,
@@ -141,4 +142,40 @@ async fn every_work_next_reply_says_to_ask_in_kbl() {
             .unwrap()
             .contains("never in your host's chat")
     );
+}
+
+#[tokio::test]
+async fn a_question_naming_an_older_claim_does_not_end_the_newer_one() {
+    let fake = Fake::default();
+    let t = at_14(&fake).await;
+    seed(&t, "a1", 2).await;
+    let first = claim(&t, "w1").await["offset"].as_u64().unwrap();
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
+        .await
+        .unwrap();
+    claim(&t, "w1").await;
+    let stale = t
+        .ask(
+            &agent("w1"),
+            &item("a1"),
+            Some(Which::Claim(first)),
+            text("which?"),
+            vec![],
+            None,
+            Vec::new(),
+        )
+        .await;
+    assert!(stale.is_err());
+    assert_eq!(stage(&t, "a1").await, Some(Stage::Held));
+}
+
+#[tokio::test]
+async fn below_format_14_a_question_keeps_the_claim_and_its_delivery() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    claim(&t, "w1").await;
+    let asked = ask(&t, "w1", "a1").await.unwrap();
+    assert_eq!(asked["claim"], "held");
+    t.extend(&agent("w1"), &item("a1")).await.unwrap();
 }

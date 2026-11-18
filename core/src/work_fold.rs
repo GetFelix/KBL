@@ -2276,6 +2276,12 @@ impl State {
                 if v14 && ask.as_ref().is_some_and(|a| a.unclear.is_none()) {
                     for (name, at) in [("question", *question), ("answer", offset)] {
                         if let Ok(entry) = Key::new(name) {
+                            // Who wrote the entry decides who may rewrite it.
+                            if rec.actor == Actor::Agent && name == "answer" {
+                                it.context_agents.insert(entry.clone(), rec.by.clone());
+                            } else {
+                                it.context_agents.remove(&entry);
+                            }
                             it.context.insert(entry, at);
                         }
                     }
