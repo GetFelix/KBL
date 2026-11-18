@@ -179,3 +179,28 @@ export function ratingText(a: AttemptLine): string | null {
   if (a.summary_accurate === null) return null;
   return a.summary_accurate ? 'Marked accurate' : 'Marked not accurate';
 }
+
+/** The recorded decision at `offset`, or undefined. */
+export function decisionAt(story: Story, offset: number): DecisionLine | undefined {
+  for (const g of story.groups) for (const d of g.decisions) if (d.offset === offset) return d;
+  return undefined;
+}
+
+/**
+ * The decision a redo starts from when the person did not pick one: the last decision of the
+ * newest attempt that recorded any. A picked decision must be in the story, and the attempt
+ * it names is the one the story files it under, never one passed in separately.
+ */
+export function redoPoint(story: Story | undefined, pick?: number): DecisionLine | string {
+  if (!story) return 'This item has no recorded decision to redo from.';
+  if (pick !== undefined) return decisionAt(story, pick) ?? `Decision ${pick} is not in this item's story.`;
+  const all = story.groups.flatMap((g) => g.decisions);
+  if (all.length === 0) return 'This item has no recorded decision to redo from.';
+  const newest = Math.max(...all.map((d) => d.attempt));
+  return all.filter((d) => d.attempt === newest).sort((a, b) => a.offset - b.offset).at(-1)!;
+}
+
+/** One line saying where an attempt branched, or null for an attempt that did not. */
+export function forkText(a: AttemptLine): string | null {
+  return a.forked_from ? `Attempt ${a.attempt} is a redo from decision ${a.forked_from[1]} on attempt ${a.forked_from[0]}.` : null;
+}

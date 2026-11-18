@@ -2,12 +2,12 @@
 // phase, with the edits and evidence behind each and the flags where a claim and the
 // recorded steps disagree. Every line is a recorded field; offsets let a reader find
 // the record. See docs/decision-replay.md.
-import { PHASE_LABEL, attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, ratingChoices, ratingText, type AttemptLine, type CitedStep, type DecisionLine, type EditLine, type Flag, type Story } from '../story.ts';
+import { PHASE_LABEL, attemptFlags, citedSteps, citedText, contentText, decisionCount, flagsFor, forkText, ratingChoices, ratingText, type AttemptLine, type CitedStep, type DecisionLine, type EditLine, type Flag, type Story } from '../story.ts';
 import type { ItemRow } from '../fold.ts';
 import type { ViewState } from '../state.ts';
 import { h } from './dom.ts';
 import type { Field, PanelHandlers } from './item-panel.ts';
-import { canRate } from '../writes.ts';
+import { canRate, redoBlock } from '../writes.ts';
 
 /** Moves to the record with this offset in the story, opening what holds it. */
 function jump(root: () => HTMLElement | null, offset: number) {
@@ -55,7 +55,15 @@ function editLine(e: EditLine, decision: number, t: Targets): Node {
     h('p', {}, 'Carries out ', offsetButton(`decision ${decision}`, decision, `edit${e.offset}`, t)));
 }
 
-function decisionLine(d: DecisionLine, story: Story, t: Targets): Node {
+/** What the story offers for redoing: the viewer can write, and the item's own reason it cannot. */
+export interface Redoer {
+  enabled: boolean;
+  /** Why this attempt cannot be redone now, or null. */
+  block(attempt: number): string | null;
+  redo(attempt: number, at: number): void;
+}
+
+function decisionLine(d: DecisionLine, story: Story, t: Targets, redoer: Redoer): Node {
   const rc = d.revert_check;
   return h('li', { class: 'story-decision', 'data-at': String(d.offset), 'data-attempt': String(d.attempt), tabindex: '-1' },
     h('p', { class: 'story-chosen' }, h('strong', {}, d.chosen), h('span', { class: 'muted' }, ` decision ${d.offset}, attempt ${d.attempt}, ${d.by}`)),
@@ -69,7 +77,26 @@ function decisionLine(d: DecisionLine, story: Story, t: Targets): Node {
           c.found ? offsetButton(citedText(c), c.offset, `d${d.offset}`, t) : citedText(c))))
       : null,
     d.edits.length > 0 ? h('ul', { class: 'story-edits' }, ...d.edits.map((e) => editLine(e, d.offset, t))) : null,
-    flagList(flagsFor(story, d.offset), `d${d.offset}`, t));
+    flagList(flagsFor(story, d.offset), `d${d.offset}`, t),
+    redoer.enabled && redoer.block(d.attempt) === null
+      ? h('p', {}, h('button', {
+          type: 'button',
+          class: 'button',
+          'data-focus': `redo:${d.offset}`,
+          'aria-label': `Redo from decision ${d.offset} on attempt ${d.attempt}`,
+          title: 'Start a new attempt that branches from this decision',
+          onclick: () => redoer.redo(d.attempt, d.offset),
+        }, 'Redo from here'))
+      : null);
+}
+
+/** Where each redo branched, with a jump to the decision it started from. */
+function forkList(story: Story, t: Targets): Node | null {
+  const forks = story.attempts.filter((a) => a.forked_from);
+  if (forks.length === 0) return null;
+  return h('ul', { class: 'story-forks', 'aria-label': 'Redos' },
+    ...forks.map((a) => h('li', { 'data-attempt': String(a.attempt) },
+      forkText(a)!, ' ', offsetButton(`Go to decision ${a.forked_from![1]}`, a.forked_from![1], `fork${a.attempt}`, t))));
 }
 
 /** What a reviewer says to a finished attempt's summary. */
@@ -103,7 +130,7 @@ function ratingLine(a: AttemptLine, rater: Rater): Node | null {
       : []));
 }
 
-function storySection(story: Story, rater: Rater): Node {
+function storySection(story: Story, rater: Rater, redoer: Redoer): Node {
   let root: HTMLElement | null = null;
   const steps = citedSteps(story);
   const known = new Set<number>([
@@ -116,9 +143,11 @@ function storySection(story: Story, rater: Rater): Node {
   root = h('div', { class: 'story' },
     h('p', { class: 'muted' }, `${decisionCount(story)} recorded ${decisionCount(story) === 1 ? 'decision' : 'decisions'} across ${story.attempts.length} ${story.attempts.length === 1 ? 'attempt' : 'attempts'}. Flags come from fixed rules over what was recorded; a step nobody recorded is invisible to them.`),
     flagList(loose, 'story', t),
+    forkList(story, t),
+    redoer.enabled ? redoNote(story, redoer) : null,
     ...story.groups.map((g) => h('section', { class: 'story-phase', 'data-phase': g.phase, 'aria-label': PHASE_LABEL[g.phase] },
       h('h3', {}, PHASE_LABEL[g.phase]),
-      h('ol', { class: 'story-decisions' }, ...g.decisions.map((d) => decisionLine(d, story, t))))),
+      h('ol', { class: 'story-decisions' }, ...g.decisions.map((d) => decisionLine(d, story, t, redoer))))),
     story.attempts.some((a) => a.done)
       ? h('section', { class: 'story-ratings', 'aria-label': 'Summary accuracy' },
           h('h3', {}, 'Is the summary accurate?'),
@@ -139,17 +168,29 @@ function storySection(story: Story, rater: Rater): Node {
   return root;
 }
 
+/** Once, above the decisions: why no decision offers a redo, when the same reason holds for every attempt. */
+function redoNote(story: Story, redoer: Redoer): Node | null {
+  const reasons = new Set(story.attempts.map((a) => redoer.block(a.attempt)));
+  const only = reasons.size === 1 ? [...reasons][0] : null;
+  return only ? h('p', { class: 'muted small story-redo-note' }, `Redo is not available: ${only}`) : null;
+}
+
 const raterEnabled = (item: ItemRow, s: ViewState): boolean => s.tracker.kind === 'signed-in' && canRate(item);
 
 /** The panel field for the story. It is left out for an item with no recorded decision. */
 export const storyField: Field = {
   key: (item, s) => {
     const story = s.stories.get(item.id);
-    return story ? `${story.rev}|${raterEnabled(item, s)}` : '';
+    return story ? `${story.rev}|${raterEnabled(item, s)}|${s.tracker.kind === 'signed-in'}|${item.stage}|${item.redos_left}|${item.redo_pending}` : '';
   },
   render: (item, s, on: PanelHandlers) => {
     const story = s.stories.get(item.id);
     const rater: Rater = { enabled: raterEnabled(item, s), rate: (attempt, accurate) => on.rate(item.id, attempt, accurate) };
-    return story ? ['Story', storySection(story, rater)] : null;
+    const redoer: Redoer = {
+      enabled: s.tracker.kind === 'signed-in',
+      block: (attempt) => redoBlock(item, story, attempt),
+      redo: (attempt, at) => on.redo(item.id, attempt, at),
+    };
+    return story ? ['Story', storySection(story, rater, redoer)] : null;
   },
 };

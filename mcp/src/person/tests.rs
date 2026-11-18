@@ -93,6 +93,7 @@ async fn a_person_token_lists_every_tool() {
             "unflag_item",
             "add_note",
             "retry_item",
+            "redo_from_decision",
             "snooze_item",
             "block_item",
             "classify_item",
@@ -257,6 +258,12 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             json!({ "item": "a1", "attempt": 1, "accurate": true }),
             "/v1/work/rate-summary",
             json!({ "item": "a1", "attempt": 1, "accurate": true }),
+        ),
+        (
+            "redo_from_decision",
+            json!({ "item": "a1", "from_attempt": 1, "at": 7, "note": 9 }),
+            "/v1/work/redo",
+            json!({ "item": "a1", "from_attempt": 1, "at": 7, "note": 9 }),
         ),
         (
             "take_item",

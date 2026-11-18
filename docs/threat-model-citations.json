@@ -137,7 +137,7 @@
   "if p.edits.len() >= MAX_EDITS {",
   "if rec.actor == Actor::Agent {",
   "Some(a) => self.path_mut(item, *a)?.human_inputs.push(offset),",
-  "if it.redos >= limit {",
+  "if self.redos_left(item) == 0 {",
   "if rec.actor == Actor::Agent {",
   "self.item(item)?;",
   "if *why == CloseWhy::Merged && rec.actor == Actor::Tracker {",

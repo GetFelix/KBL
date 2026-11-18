@@ -141,6 +141,11 @@ branches from that point.
   once, the current one and the one being compared; picking one closes the
   other.
 
+In the dashboard, the Story section puts a Redo from here button on each
+decision. It asks first, says how many redos are left, takes an optional note,
+and lists each redo with its fork point afterwards. The same record is
+`redo_from_decision` for `kbl-mcp`'s person tools.
+
 "Request changes" on a pull request is the same action from the last
 decision: the comment becomes the note.
 
