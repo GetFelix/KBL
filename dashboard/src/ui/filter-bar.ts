@@ -81,12 +81,11 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     last = s;
     for (const b of [list, board]) b.setAttribute('aria-pressed', String(b.dataset.layout === s.layout));
     children.setAttribute('aria-pressed', String(!!s.childCards));
-    // The board's columns are its stages, so the choice waits for the list.
     const onBoard = s.layout === 'board' && s.view !== 'inbox';
-    groupSelect.disabled = onBoard;
-    groupLabel.title = onBoard ? 'The board groups by stage. Switch to the list to group by something else.' : '';
+    // On the board the columns stay stages; the choice makes the rows.
+    groupLabel.title = onBoard ? 'On the board, each group is a row of cards under the stage columns.' : '';
     if (groupSelect.options.length === 0) for (const [v, text] of [[NO_GROUP, 'None'], ...GROUP_KEYS.map((k) => [k.id, k.label])]) groupSelect.append(h('option', { value: v }, text));
-    const by = onBoard ? 'stage' : effectiveGroup(s.view, s.group);
+    const by = effectiveGroup(s.view, s.group);
     if (groupSelect.value !== by && groupSelect !== document.activeElement) groupSelect.value = by;
     const scoped = inScope(s);
     const offered = facets(scoped, s.filters);

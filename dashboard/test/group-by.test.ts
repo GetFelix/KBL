@@ -33,8 +33,9 @@ test('none is one list with no heading, in the item order', () => {
   assert.deepEqual(flatten(g).map((i) => i.id), ['a', 'b', 'c', 'd', 'e']);
 });
 
-test('the board stays on stage columns whatever the list groups by', () => {
-  assert.deepEqual(visible({ ...base, layout: 'board', group: 'tier' }).map((g) => g.stage), ['needs_you', 'triage', 'ready']);
+test('the board keeps stage columns when grouped, and none or stage add no lanes', () => {
+  assert.deepEqual(new Set(visible({ ...base, layout: 'board', group: 'tier' }).map((g) => g.column)), new Set(['needs_you', 'triage', 'ready']));
+  assert.deepEqual(visible({ ...base, layout: 'board', group: 'stage' }).map((g) => g.stage), ['needs_you', 'triage', 'ready']);
   assert.equal(visible({ ...base, layout: 'board', group: 'none' }).length, 3);
 });
 

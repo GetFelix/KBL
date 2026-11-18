@@ -2,9 +2,11 @@
 // one Tab stop (roving tabindex): Tab moves between columns, j/k and the up and down
 // arrows move within one, h/l and the side arrows move across. Cards are links in a
 // list under the column's heading, so a screen reader hears "Ready, list, 3 items".
+// Grouped by something other than stage, each group is a swimlane: a folding header over
+// one cell per column. Folded lanes keep their header and count; their cards are not drawn.
 import { lead, nameOf, childIndex, properties, reasonLine, relatedLine, summarize, workingLine } from '../card.ts';
 import { waitsOn } from '../fold.ts';
-import { visible, type Group } from '../list.ts';
+import { stageLabel, swimlanes, visible, type Group } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { flagText } from '../overlap.ts';
 import { assigneePerson } from '../writes.ts';
@@ -56,39 +58,59 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
       const kids = childIndex(s.items);
       const open = new Set(s.expanded ?? []);
       const strips = (id: string) => stripKey(kids.has(id) ? summarize(kids.get(id)!) : undefined, open.has(id));
-      const key = JSON.stringify(columns.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, strips(i.id)])]));
+      const lanes = swimlanes(s);
+      // A folded lane is drawn without cards, so the cards a redraw can focus are the open cells'.
+      const cells = columns.filter((g) => !g.collapsed);
+      const key = JSON.stringify([lanes?.map((l) => [l.value, l.label, l.collapsed, l.cells.reduce((n, c) => n + c.items.length, 0)]), columns.map((g) => [g.stage, g.label, !!g.collapsed, g.collapsed ? 0 : g.items.map((i) => [i.id, i.title, strips(i.id)])])]);
       if (key !== shown) {
         const active = document.activeElement;
         const focusedId = active instanceof HTMLElement && el.contains(active) ? active.dataset.id : undefined;
         const focusedChip = focusedStrip(el);
         const before = last;
+        const focusedToggle = active instanceof HTMLElement && el.contains(active) ? active.dataset.toggle : undefined;
         const column = lastColumns.find((c) => focusedId !== undefined && c.includes(focusedId)) ?? [];
         const kept = new Map(cards);
         shown = key;
         cards.clear();
-        for (const g of columns) for (const i of g.items) {
+        for (const g of cells) for (const i of g.items) {
           const a = kept.get(i.id);
           if (a) cards.set(i.id, a);
         }
+        const cell = (g: Group, title: string, id: string) =>
+          h('section', { class: 'column', 'aria-labelledby': id, 'data-empty': g.items.length ? undefined : '' },
+            h('h3', { id, class: 'group-title' }, title, h('span', { class: 'count' }, String(g.items.length))),
+            g.items.length ? h('ul', {}, ...g.items.map((i) => h('li', {}, card(i.id, i.title), kids.has(i.id) && !s.childCards ? childStrip(i.id, summarize(kids.get(i.id)!), open.has(i.id), (id) => itemHref(id, s), on) : null))) : null,
+          );
+        const slug = (v: string) => v.replace(/[^\w-]/g, (c) => `_${c.charCodeAt(0).toString(16)}`);
+        el.classList.toggle('lanes', !!lanes);
         el.replaceChildren(
-          ...columns.map((g) => {
-            const headingId = `column-${g.stage}`;
-            return h('section', { class: 'column', 'aria-labelledby': headingId },
-              h('h3', { id: headingId, class: 'group-title' }, g.label, h('span', { class: 'count' }, String(g.items.length))),
-              h('ul', {}, ...g.items.map((i) => h('li', {}, card(i.id, i.title), kids.has(i.id) && !s.childCards ? childStrip(i.id, summarize(kids.get(i.id)!), open.has(i.id), (id) => itemHref(id, s), on) : null))),
-            );
-          }),
+          ...(lanes
+            ? lanes.map((l) => {
+                const id = `lane-${slug(l.value)}`;
+                const count = h('span', { class: 'count' }, String(l.cells.reduce((n, c) => n + c.items.length, 0)));
+                return h('section', { class: 'lane', 'aria-labelledby': id },
+                  h('h2', { id, class: 'group-title lane-title' },
+                    h('button', { type: 'button', class: 'group-toggle', 'data-toggle': l.toggle, 'aria-expanded': String(!l.collapsed), 'aria-controls': l.collapsed ? undefined : `${id}-cells`, onclick: () => on.toggleGroup(l.toggle) },
+                      h('span', { class: 'chevron', 'aria-hidden': 'true' }, l.collapsed ? '▸' : '▾'), h('span', { class: 'group-name' }, l.label), count)),
+                  l.collapsed ? null : h('div', { class: 'lane-cells', id: `${id}-cells` }, ...l.cells.map((c) => cell(c, stageLabel(c.column!), `${id}-${slug(c.column!)}`))),
+                );
+              })
+            : columns.map((g) => cell(g, g.label, `column-${g.stage}`))),
         );
         last = drawn(columns);
-        lastColumns = columns.map((g) => g.items.map((i) => i.id));
+        lastColumns = cells.map((g) => g.items.map((i) => i.id));
+        if (focusedToggle) Array.from(el.querySelectorAll<HTMLElement>('[data-toggle]')).find((b) => b.dataset.toggle === focusedToggle)?.focus({ preventScroll: true });
         // A card that moved keeps the focus; one that left hands it to a card in its old column first.
         restoreFocus(focusedId, before, last, cards, el, quietly, { select: on.select, announce, name: (id) => nameOf(s.items, id) }, [column, before.order]);
         refocusChip(focusedChip, el);
       }
-      // One Tab stop per column: the selected card in its column, else the column's first card.
-      for (const g of columns) {
-        const stop = g.items.find((i) => i.id === s.selected)?.id ?? g.items[0]?.id;
-        for (const i of g.items) cards.get(i.id)?.setAttribute('tabindex', i.id === stop ? '0' : '-1');
+      // One Tab stop per column, across lanes: the selected card in it, else its first drawn card.
+      const byColumn = new Map<string, Group[]>();
+      for (const g of cells) byColumn.set(g.column ?? g.stage, [...(byColumn.get(g.column ?? g.stage) ?? []), g]);
+      for (const gs of byColumn.values()) {
+        const all = gs.flatMap((g) => g.items);
+        const stop = all.find((i) => i.id === s.selected)?.id ?? all[0]?.id;
+        for (const i of all) cards.get(i.id)?.setAttribute('tabindex', i.id === stop ? '0' : '-1');
       }
       const now = Date.now();
       const waits = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));

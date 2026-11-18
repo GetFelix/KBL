@@ -291,6 +291,26 @@ try {
   const lastInColumn = await page.eval(`(() => { const c = document.activeElement.closest('.column'); return document.activeElement === [...c.querySelectorAll('.card')].at(-1); })()`);
   check(lastInColumn && (await page.eval(colOf)) === 2, 'End goes to the last card of the column, not of the board');
 
+  // Swimlanes: the board grouped by tier is a row per tier under the same stage columns.
+  await open(`${connected}&layout=board&group=tier`);
+  await page.waitFor(`!!document.querySelector('.board.lanes .lane')`);
+  const lanes = await page.eval(`[...document.querySelectorAll('.lane')].map((l) => l.querySelector('.group-toggle .group-name').textContent + ':' + l.querySelector('.group-toggle').getAttribute('aria-expanded') + ':' + l.querySelectorAll('.card').length).join(' ')`);
+  console.log(`swimlanes saw: ${lanes}`);
+  check(await page.eval(`document.querySelectorAll('.lane').length > 1 && !document.querySelector('#group-by').disabled`), `the board's Group by is enabled and makes lanes (${lanes})`);
+  check(await page.eval(`[...document.querySelectorAll('.column')].every((c) => c.closest('.lane'))`), 'every column cell sits in a lane');
+  check(await page.eval(`new Set([...document.querySelectorAll('.lane')].map((l) => l.querySelectorAll('.column').length)).size === 1`), 'every lane has the same stage columns');
+  await page.eval(`document.querySelector('.group-toggle').focus()`);
+  await press(page, 'Enter');
+  await page.waitFor(`document.querySelector('.group-toggle').getAttribute('aria-expanded') === 'false'`);
+  check(await page.eval(`document.activeElement === document.querySelector('.group-toggle') && document.querySelector('.lane').querySelectorAll('.card').length === 0`), 'Enter on a lane header folds it and keeps the focus on the header');
+  await page.eval(`document.querySelectorAll('.card')[0].focus()`);
+  await press(page, 'k');
+  check(await page.eval(`!!document.activeElement.closest('.card') && !!document.activeElement.closest('.lane') && document.activeElement.closest('.lane') !== document.querySelector('.lane')`), 'k never lands on a card of the folded lane');
+  await page.eval(`document.querySelector('.group-toggle').click()`);
+  await page.waitFor(`document.querySelector('.group-toggle').getAttribute('aria-expanded') === 'true'`);
+  check(await page.eval(`location.search.includes('group=tier') && location.search.includes('layout=board')`), 'the board grouping is in the address, so a saved view keeps it');
+  await axe('board swimlanes');
+
   // Live records on the board: a card that leaves the filter hands the focus to its column,
   // a card that moves column keeps it. Both are announced, and the selection follows.
   // The board was once ?view=board: such a link still opens it, and the address moves to ?layout=board.

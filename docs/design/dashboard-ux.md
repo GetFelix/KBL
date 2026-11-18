@@ -85,9 +85,15 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   on the page: a folded group is skipped, and folding the group the selection is in moves it to the nearest row left,
   as does a live update that lands the selected item in a folded group. Folds are kept per view and per grouping, in
   the page only. Groups come from a table of keys (`src/group-by.ts`), so a new field is one entry. Stage is the
-  default; the Needs you view stays one list, oldest first, until a grouping is picked. The board is always stage
-  columns: swimlanes would need a second axis in its keyboard model (up, down, left, right across lanes and columns),
-  so the control is disabled there and says why.
+  default; the Needs you view stays one list, oldest first, until a grouping is picked. On the board the columns stay
+  stages and a grouping other than stage makes swimlanes: one row per group, each with the same columns, so a card's
+  column still says its stage. A lane header is the same folding button (name, count, `aria-expanded`). Lanes are
+  stacked, so `J` and `K` walk a column down through every open lane, and `H` and `L` move along the lane to the next
+  column that has a card there. A folded lane has no cards to land on; folding the lane the selection is in, or a live
+  update that regroups the selected card into a folded lane, moves it to the nearest card that is drawn. `Home` and `End`
+  go to the first and last card of the column across the open lanes, and each column is still one `Tab` stop. Moving a
+  card between stages is unchanged: its stage is the column, whatever lane it sits in. The grouping is shared with the
+  list and lives in the address and saved views.
 - **Saved views.** View, layout, search, filters and grouping are the address (`view`, `layout`, `q`, `source`, `tier`,
   `repo`, `group`), so a view is a link. The board was once `?view=board`; such a link or saved view still opens the board,
   and the page rewrites it to `?layout=board` when it reads it. Save view stores it by name in local storage, per viewer, and puts it in the sidebar, where the
