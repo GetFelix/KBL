@@ -605,9 +605,10 @@ try {
   check(await page.eval(`document.activeElement?.dataset.focus?.startsWith('out:') === true`), 'a live record keeps the focus on the output toggle');
   await shoot('panel-timeline');
   await axe('panel timeline');
-  await rec({ kind: 'done', cost_micros: 500000 });
+  // From format 8 a report carries usage and the fold prices it; a reported cost is refused.
+  await rec({ kind: 'done', usage: [{ unit: 'tokens', model: 'claude-opus-5-5', input: 10_000 }] });
   await page.waitFor(`document.querySelector('.panel .attempt')?.textContent.includes('Finished')`);
-  check((await text('.panel .attempt')).includes('cost $0.50'), `an attempt shows what it cost (${await text('.panel .attempt')})`);
+  check((await text('.panel .attempt')).includes('cost $0.15'), `an attempt shows what it cost (${await text('.panel .attempt')})`);
   check((await text('.panel .attempt')).includes('moved the fill before the read'), `an attempt shows the summary it handed off (saw "${await text('.panel .attempt')}")`);
   check(/^Finished, in review/.test(await text('.panel .now-text')), `the Now line follows the item once the attempt finishes (saw "${await text('.panel .now-text')}")`);
   await page.eval(`document.querySelector('.panel .attempt [data-focus="replay:1"]').click()`);
