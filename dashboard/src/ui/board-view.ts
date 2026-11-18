@@ -8,6 +8,7 @@ import type { ViewState } from '../state.ts';
 import { flagText } from '../overlap.ts';
 import { assigneePerson } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
+import { paintTriage } from './triage-chip.ts';
 import { h } from './dom.ts';
 import { drawn, itemHref, restoreFocus, type Announce, type Drawn, type ListHandlers } from './item-list.ts';
 
@@ -39,7 +40,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }), h('span', { class: 'card-mark', hidden: true }, 'Selected'), h('span', { class: 'assignee', hidden: true }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }), h('span', { class: 'triage-chip', hidden: true }), h('span', { class: 'card-mark', hidden: true }, 'Selected'), h('span', { class: 'assignee', hidden: true }));
       cards.set(id, a);
     }
     const t = a.querySelector('.card-title')!;
@@ -98,6 +99,7 @@ export function boardView(on: ListHandlers, announce: Announce) {
         if (flag.textContent !== text) flag.textContent = text;
         flag.hidden = text === '';
         paintAssignee(a, assigneePerson(byId.get(id) ?? {}));
+        paintTriage(a, byId.get(id));
         // Same "waits on" line as a Blocked row in the list.
         const w = a.querySelector<HTMLElement>('.card-waits')!;
         const what = waits.get(id);

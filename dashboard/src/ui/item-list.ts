@@ -8,6 +8,7 @@ import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
 import { assigneePerson, needsLine } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
+import { paintTriage } from './triage-chip.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers {
@@ -144,7 +145,7 @@ export function itemList(
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }), h('span', { class: 'assignee', hidden: true }));
+      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }), h('span', { class: 'triage-chip', hidden: true }), h('span', { class: 'assignee', hidden: true }));
       rows.set(id, a);
     }
     const t = a.querySelector('.row-title')!;
@@ -268,6 +269,7 @@ export function itemList(
         if (flag.textContent !== text) flag.textContent = text;
         flag.hidden = text === '';
         paintAssignee(a, assigneePerson(byId.get(id) ?? {}));
+        paintTriage(a, byId.get(id));
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

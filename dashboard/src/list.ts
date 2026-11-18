@@ -33,6 +33,16 @@ export function stageLabel(stage: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** A root's stage as the panel and cards name it: a ready root is ready to fix, once triage is accepted. */
+export function rootStageLabel(item: Pick<ItemRow, 'stage' | 'root'>): string {
+  return item.root && item.stage === 'ready' ? 'Ready to fix' : stageLabel(item.stage);
+}
+
+/** The small chip text for a root's triage child, or null when it has none. */
+export function triageChip(item: Pick<ItemRow, 'triage' | 'root'>): string | null {
+  return item.root && item.triage ? `Triage: ${stageLabel(item.triage).toLowerCase()}` : null;
+}
+
 /** Items matching `query` by id or title, grouped by stage in board order, empty groups left out. */
 export function group(items: readonly ItemRow[], query = ''): Group[] {
   const matching = query.trim() ? items.filter((i) => score(i.title, query) >= 0 || score(i.id, query) >= 0) : items;
