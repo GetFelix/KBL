@@ -154,7 +154,7 @@ fn story() -> Log {
         at: d,
         note: Some(10),
     }); // 12
-    l.agent("w2", claimed("r1", 1)); // 13
+    l.agent("w2", claimed("r1", 2)); // 13
     l.agent("w2", done("c1", 1, 0)); // 14: w2 does not hold c1, refused
     l.agent("w3", claimed("c1", 1)); // 15
     l.agent("w3", done("c1", 1, 500_000)); // 16
@@ -553,7 +553,7 @@ fn human_inputs_follow_the_path_up_to_the_fork_plus_its_note() {
         at: d,
         note: Some(steer),
     });
-    l.agent("w2", claimed("r1", 1));
+    l.agent("w2", claimed("r1", 2));
     let own = note_in(&mut l, Some(2), "also this");
     let s = fold(&l.0);
     assert!(s.rejections.is_empty(), "{:?}", s.rejections);
@@ -745,7 +745,7 @@ fn a_finished_attempt_can_be_redone_until_the_item_is_closed() {
         note: None,
     });
     assert_eq!(fold(&l.0).stage(&id("r1")), Some(Stage::Ready));
-    l.agent("w2", claimed("r1", 1));
+    l.agent("w2", claimed("r1", 2));
     let d2 = l.agent("w2", decision("r1", 2, vec![]));
     l.agent(
         "w2",
@@ -1016,7 +1016,7 @@ fn a_closed_attempt_is_never_claimable() {
         at: d,
         note: None,
     });
-    l.agent("w2", claimed("r1", 1));
+    l.agent("w2", claimed("r1", 2));
     l.agent(
         "w2",
         WorkRecord::Released {
