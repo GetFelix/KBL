@@ -144,7 +144,10 @@ struct Inner {
     /// None until the first use, which starts the bucket full.
     tokens: Option<f64>,
     refilled: Instant,
+    /// Set by a refusal: nothing goes out, writes included.
     blocked_until: Option<Instant>,
+    /// Set by an answer that says the window is spent: reads wait, writes may try.
+    read_blocked_until: Option<Instant>,
     /// The vendor's own count at its last answer.
     reported_hourly: Option<u64>,
     remaining: Option<u64>,
@@ -197,6 +200,7 @@ impl Budget {
                 tokens: None,
                 refilled: now,
                 blocked_until: None,
+                read_blocked_until: None,
                 reported_hourly: None,
                 remaining: None,
                 reset_epoch: None,
@@ -237,6 +241,12 @@ impl Budget {
         if write {
             return Ok(());
         }
+        if let Some(until) = i.read_blocked_until {
+            if until > now {
+                return Err(until - now);
+            }
+            i.read_blocked_until = None;
+        }
         let hourly = self.hourly(&i);
         let need = hourly * RESERVE + 1.0;
         let tokens = i.tokens.unwrap_or(hourly);
@@ -262,7 +272,12 @@ impl Budget {
         }
         if let Some(wait) = sig.wait {
             let until = now + wait;
-            i.blocked_until = Some(i.blocked_until.map_or(until, |b| b.max(until)));
+            let slot = if sig.refused {
+                &mut i.blocked_until
+            } else {
+                &mut i.read_blocked_until
+            };
+            *slot = Some(slot.map_or(until, |b| b.max(until)));
         }
         // GitHub does not count a conditional request that answers 304.
         let cost = if self.vendor == Vendor::Github && res.status == 304 {
@@ -284,9 +299,13 @@ impl Budget {
         self.inner.lock().expect("lock").poll_spent = 0.0;
     }
 
-    pub(crate) fn end_poll(&self) {
+    /// A poll that stopped early spent less than a whole one would, so only
+    /// a complete poll sets the cost the interval is sized from.
+    pub(crate) fn end_poll(&self, complete: bool) {
         let mut i = self.inner.lock().expect("lock");
-        i.last_poll_cost = i.poll_spent;
+        if complete {
+            i.last_poll_cost = i.poll_spent;
+        }
     }
 
     /// How long to hold the next poll so it can be afforded: the vendor's
@@ -294,7 +313,12 @@ impl Budget {
     pub(crate) fn poll_wait(&self) -> Option<Duration> {
         let now = (self.clock)();
         let mut i = self.inner.lock().expect("lock");
-        if let Some(until) = i.blocked_until.filter(|u| *u > now) {
+        let held = [i.blocked_until, i.read_blocked_until]
+            .into_iter()
+            .flatten()
+            .filter(|u| *u > now)
+            .max();
+        if let Some(until) = held {
             return Some(until - now);
         }
         self.refill(&mut i, now);
@@ -349,6 +373,13 @@ pub(crate) fn projected_per_hour(
     (listings + reads) as f64 * polls + sweep
 }
 
+/// Azure DevOps reads with a POST of a query; it is a read, not a write-back.
+fn is_search(url: &str) -> bool {
+    url.split('?')
+        .next()
+        .is_some_and(|p| p.ends_with("/_apis/wit/wiql"))
+}
+
 /// A vendor transport behind the budget.
 pub(crate) struct Budgeted<T> {
     inner: T,
@@ -361,7 +392,7 @@ pub(crate) fn budgeted<T>(inner: T, budget: Arc<Budget>) -> Budgeted<T> {
 
 impl<T: Transport> Transport for Budgeted<T> {
     async fn send(&self, req: Req) -> Result<Res> {
-        let write = req.method != "GET";
+        let write = req.method != "GET" && !is_search(&req.url);
         if let Err(wait) = self.budget.admit(write) {
             return Err(Limited { wait }.into());
         }

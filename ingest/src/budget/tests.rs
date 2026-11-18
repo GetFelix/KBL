@@ -214,7 +214,7 @@ async fn the_interval_stretches_to_fit_the_budget() {
     for _ in 0..200 {
         get(&t).await.unwrap();
     }
-    budget.end_poll();
+    budget.end_poll(true);
     assert_eq!(
         budget.interval(Duration::from_secs(60)),
         Duration::from_secs(900)
@@ -222,7 +222,7 @@ async fn the_interval_stretches_to_fit_the_budget() {
     // A cheap poll keeps the minimum.
     budget.begin_poll();
     get(&t).await.unwrap();
-    budget.end_poll();
+    budget.end_poll(true);
     assert_eq!(
         budget.interval(Duration::from_secs(300)),
         Duration::from_secs(300)
@@ -266,4 +266,62 @@ fn the_projection_counts_polls_and_one_pass() {
         Duration::from_secs(24 * 3600),
     );
     assert_eq!(p.round() as u64, 58);
+}
+
+#[tokio::test]
+async fn a_query_post_is_a_read_and_a_spent_window_does_not_stop_writes() {
+    let (t, script, budget, _) = rig(Vendor::Ado, Some(10));
+    script.on("POST", "/_apis/wit/wiql", ok(json!({})));
+    let q = || {
+        Req::post(
+            "https://dev/o/p/_apis/wit/wiql?api-version=7".into(),
+            json!({}),
+        )
+    };
+    let mut sent = 0;
+    while t.send(q()).await.is_ok() {
+        sent += 1;
+        assert!(sent < 20);
+    }
+    assert_eq!(sent, 8, "queries draw on the poll budget");
+
+    let (t, script, _, _) = rig(Vendor::Github, None);
+    let reset = (epoch() + 3000).to_string();
+    script.on(
+        "GET",
+        "/x",
+        Res {
+            body: json!([]),
+            ..status(
+                200,
+                &[
+                    ("x-ratelimit-remaining", "0"),
+                    ("x-ratelimit-reset", &reset),
+                ],
+            )
+        },
+    );
+    script.on("POST", "/y", ok(json!({})));
+    get(&t).await.unwrap();
+    assert!(get(&t).await.is_err());
+    assert!(
+        t.send(Req::post("https://api/y".into(), json!({})))
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn an_aborted_poll_does_not_set_the_poll_cost() {
+    let (t, script, budget, _) = rig(Vendor::Github, Some(1000));
+    script.on("GET", "/x", ok(json!([])));
+    budget.begin_poll();
+    for _ in 0..200 {
+        get(&t).await.unwrap();
+    }
+    budget.end_poll(false);
+    assert_eq!(
+        budget.interval(Duration::from_secs(60)),
+        Duration::from_secs(60)
+    );
 }

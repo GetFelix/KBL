@@ -479,7 +479,7 @@ async fn run<S: Source, T: tracker_api::Tracker>(
         let reconcile = wake.reconcile.swap(false, Ordering::SeqCst);
         budget.begin_poll();
         let polled = ingest.poll(reconcile).await;
-        budget.end_poll();
+        budget.end_poll(polled.is_ok());
         // A failed poll did not reconcile, so the next one still must.
         if reconcile && polled.is_err() {
             wake.reconcile.store(true, Ordering::SeqCst);
