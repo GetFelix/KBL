@@ -373,7 +373,7 @@ impl<T: Transport> Gitlab<T> {
                 .and_then(|r| r["updated_at"].as_str())
                 .filter(|t| utc_ms(t).is_some());
             match last {
-                Some(t) if out.len() > before => {
+                Some(t) if out.len() > before && from.as_deref() != Some(t) => {
                     from = Some(t.to_owned());
                     page = 1;
                 }
