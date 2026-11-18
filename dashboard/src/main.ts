@@ -30,7 +30,7 @@ import { viewDialog } from './ui/view-dialog.ts';
 import { assignDialog, confirmDialog, redoDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { forgetGateway, forgetPerson, loadGateway, loadPerson, saveGateway, savePerson } from './session.ts';
 import { Tracker } from './tracker.ts';
-import { assigneePerson, assignTarget, redoBlock, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
+import { assigneePerson, assignTarget, redoBlock, redoStale, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -147,6 +147,11 @@ async function send(kind: WriteKind, jobs: Job[]) {
 
 const write = (ids: string[], args: WriteArgs) => {
   const s = store.get();
+  if (args.kind === 'redo') {
+    // The dialog may have been open while the item changed. Refuse here, before the note is written.
+    const why = redoStale(s.items.find((i) => i.id === ids[0]), s.stories.get(ids[0]), args);
+    if (why) return void send('redo', [{ item: ids[0], req: why }]);
+  }
   // Checked against the log as it is now: a confirm dialog may have been open while someone else acted.
   const jobs = jobsFor(ids, args, s.items, s.writes);
   if (!jobs.length) return;
@@ -370,8 +375,10 @@ const run = (id: CommandId): void => {
       return ids.length === 1 ? assignItem(ids[0]) : undefined;
     }
     case 'redo': {
-      const ids = targets();
-      return ids.length === 1 ? redoItem(ids[0], focusedDecision()) : undefined;
+      // A focused decision belongs to the open item, whatever is marked.
+      const pick = focusedDecision();
+      const ids = pick !== undefined && s.selected ? [s.selected] : targets();
+      return ids.length === 1 ? redoItem(ids[0], pick) : undefined;
     }
     case 'undo':
       return undoLast();

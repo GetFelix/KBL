@@ -4,7 +4,7 @@
 // own token, so the page can never do more than the person could with curl.
 import { ADVICE_FORMAT, canAdvise } from './advice.ts';
 import type { ItemRow } from './fold.ts';
-import type { DecisionLine } from './story.ts';
+import { decisionAt, type DecisionLine, type Story } from './story.ts';
 
 export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'undo';
 
@@ -251,6 +251,16 @@ export function checkRedo(note: string, needsNote: boolean): string | null {
   const text = note.trim();
   if (needsNote && !text) return 'A check failed on the pull request. Write a note saying what to do differently.';
   if (new TextEncoder().encode(text).length > 4096) return 'Keep the note under 4 KiB, or link to the longer text.';
+  return null;
+}
+
+/** Why a redo confirmed a moment ago would be refused now, or null. Checked before the note is written, so a refusal leaves no stray note. */
+export function redoStale(item: ItemRow | undefined, story: Story | undefined, a: { fromAttempt: number; at: number; note: string }): string | null {
+  if (!item) return 'The item is no longer in the log. Nothing was sent.';
+  const why = redoBlock(item, story, a.fromAttempt);
+  if (why) return `${why} Nothing was sent.`;
+  if (!story || decisionAt(story, a.at)?.attempt !== a.fromAttempt) return 'That decision is not in the story now. Nothing was sent.';
+  if (redoNeedsNote(item) && !a.note.trim()) return 'A check failed on the pull request since you opened this. Write a note and try again. Nothing was sent.';
   return null;
 }
 

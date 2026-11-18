@@ -4,7 +4,7 @@ import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
 import type { DecisionLine } from '../src/story.ts';
-import { acceptTier, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkRedo, checkSteer, redoBlock, redoCopy, redoNeedsNote, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import { acceptTier, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkRedo, checkSteer, redoBlock, redoCopy, redoStale, redoNeedsNote, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
@@ -447,4 +447,16 @@ test('the redo key and command exist', async () => {
   assert.equal(commandFor({ key: 'r', metaKey: false, ctrlKey: false, altKey: false, inText: false }, false), 'redo');
   assert.equal(commandFor({ key: 'r', metaKey: false, ctrlKey: false, altKey: false, inText: true }, false), undefined);
   assert.ok(COMMANDS.some((c) => c.id === 'redo'));
+});
+
+test('a redo confirmed earlier is refused before its note is written when the item moved on', () => {
+  const story = { item: 'a', rev: 1, attempts: [{ attempt: 1, closed: false }], groups: [{ phase: 'fix', decisions: [{ offset: 5, attempt: 1 }] }] } as never;
+  const ok = item({ id: 'a', stage: 'needs_you', redos_left: 1 });
+  const a = { fromAttempt: 1, at: 5, note: 'x' };
+  assert.equal(redoStale(ok, story, a), null);
+  assert.match(redoStale({ ...ok, stage: 'held', held_attempt: 1 }, story, a)!, /Nothing was sent/);
+  assert.match(redoStale({ ...ok, redos_left: 0 }, story, a)!, /No redos/);
+  assert.match(redoStale(ok, story, { ...a, fromAttempt: 2 })!, /not in the story/);
+  assert.match(redoStale(ok, story, { ...a, at: 9 })!, /decision is not/);
+  assert.match(redoStale({ ...ok, pr_phase: 'open', pr_checks: 'red' }, story, { ...a, note: '' })!, /check failed/);
 });
