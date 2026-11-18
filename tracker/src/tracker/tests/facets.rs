@@ -288,6 +288,7 @@ async fn a_persons_class_does_not_make_the_agents_repeated_answer_a_new_one() {
         duplicate_of: None,
         unclear: None,
         depends_on: vec![],
+        related: vec![],
         split: vec![],
         item_type: Some("perf".into()),
         area: None,

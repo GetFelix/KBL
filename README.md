@@ -191,15 +191,15 @@ it under "Felix gaps", and each one has an issue labelled
 
 Bugs come in as roots from GitHub, Azure DevOps or Jira, and from people. An ingest worker writes each upstream
 id once and posts one triage item and one augment item for it. The agent that claims the triage item answers
-it with `work_triage` (a tier and why, a duplicate, dependencies, a split, or what is unclear), and a person accepts or edits that
-proposal; the dependencies and split are advice a person acts on. Work the item needs from another repo is
+it with `work_triage` (a tier and why, a duplicate, dependencies, related items, a split, or what is unclear), and a person accepts or edits that
+proposal; the dependencies, related items and split are advice a person acts on. A related item is scheduled alongside and never blocks; only a dependency does. Work the item needs from another repo is
 different: the triaging agent posts it as a prerequisite, and the item waits on it before anyone builds. A dependency can sit in any repo or source,
 and the board names where each blocker lives (its repo, else its source) when it differs from the row's repo. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
 Each agent runs `kbl-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
 tracker for the highest-priority ready item: the tracker claims it from the ready streams' consumer group as a
-member named after the agent and logs the claim in the same step. Roots take turns in a tier, `work_next` can be narrowed by kind, tier, repo, excluded roots, milestone, label, type, area or size, and `work_peek` lists what it would hand out next without claiming. Both skip an item a person blocked until a time or on a named resource (`block_item`, `lift_block`; [work tracker](docs/work-tracker.md#blocking-an-item)). `kbl-mcp` extends the claim every 30
+member named after the agent and logs the claim in the same step. Roots take turns in a tier, `work_next` can be narrowed by kind, tier, repo, excluded roots, milestone, label, type, area or size, and `work_peek` lists what it would hand out next without claiming. Both skip an item a person blocked until a time or on a named resource (`block_item`, `lift_block`; [work tracker](docs/work-tracker.md#blocking-an-item)). A person can relate two items (`relate_items`; [work tracker](docs/work-tracker.md#related-items)) so they are scheduled together, and neither waits on the other. `kbl-mcp` extends the claim every 30
 seconds while the agent works, and `work_complete`, `work_release` or giving up ends it. A dead agent stops
 extending, so its claim lapses and the item goes to another agent. An item has one holder at a time: a release
 that lands while the item is being handed on does not cost the next agent its claim. An agent adds children only under an item it holds (`split`, `augment`,

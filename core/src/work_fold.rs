@@ -16,7 +16,7 @@ use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
     FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FindingVerdict, MAX_ASK_OPTION_LEN,
     MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE, MAX_CHECK_BYTES, MAX_FINDING_FILE,
-    MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_REVERT_TEST, MAX_REVIEWER,
+    MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST, MAX_REVIEWER,
     MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
     MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, PrChecks,
     PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec,
@@ -546,6 +546,8 @@ pub struct Proposal {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub depends_on: Vec<ItemId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub related: Vec<ItemId>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub split: Vec<String>,
     /// A person adjusted the advice, so an agent's repeat of its own answer is a retry, not a new one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -941,6 +943,10 @@ pub struct State {
     /// Edges that wait for a release. Any edge not listed waits for a merge.
     #[serde(default)]
     pub release_edges: BTreeSet<(ItemId, ItemId)>,
+    /// Soft relations, stored in both directions. A relation holds nothing back:
+    /// no stage, claim or selection reads it.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub related: BTreeSet<(ItemId, ItemId)>,
     pub budgets: BTreeMap<ItemId, Budget>,
     /// The latest rules record per scope.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1627,6 +1633,16 @@ impl State {
             .map(|(_, b)| b)
     }
 
+    /// What `id` is related to, open or not. Nothing decides from this.
+    pub fn related_to<'a>(&'a self, id: &ItemId) -> impl Iterator<Item = &'a ItemId> + use<'a> {
+        let owner = id.clone();
+        let lowest = ItemId::new("-").expect("a valid name");
+        self.related
+            .range((owner.clone(), lowest)..)
+            .take_while(move |(a, _)| *a == owner)
+            .map(|(_, b)| b)
+    }
+
     /// Whether a link says `from` waits on `to`, open or not.
     pub fn is_linked(&self, from: &ItemId, to: &ItemId) -> bool {
         self.edges.contains(&(from.clone(), to.clone()))
@@ -2183,6 +2199,7 @@ impl State {
                 duplicate_of,
                 unclear,
                 depends_on,
+                related,
                 split,
                 item_type,
                 area,
@@ -2211,6 +2228,7 @@ impl State {
                             && p.duplicate_of == *duplicate_of
                             && p.unclear == *unclear
                             && p.depends_on == *depends_on
+                            && p.related == *related
                             && p.split == *split
                     });
                     if !same && let Ok(path) = self.path_mut(&triage, attempt) {
@@ -2223,6 +2241,7 @@ impl State {
                     duplicate_of: duplicate_of.clone(),
                     unclear: *unclear,
                     depends_on: depends_on.clone(),
+                    related: related.clone(),
                     split: split.clone(),
                     edited: false,
                     at: offset,
@@ -2358,6 +2377,33 @@ impl State {
                 self.item(item)?;
                 self.edges.remove(&(item.clone(), to.clone()));
                 self.release_edges.remove(&(item.clone(), to.clone()));
+            }
+            WorkRecord::Related { item, to } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                self.item(item)?;
+                self.item(to)?;
+                if item == to {
+                    return Err(Reject::Cycle);
+                }
+                let already = self.related.contains(&(item.clone(), to.clone()));
+                if !already
+                    && (self.related_to(item).count() >= MAX_RELATED
+                        || self.related_to(to).count() >= MAX_RELATED)
+                {
+                    return Err(Reject::LimitReached);
+                }
+                self.related.insert((item.clone(), to.clone()));
+                self.related.insert((to.clone(), item.clone()));
+            }
+            WorkRecord::Unrelated { item, to } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                self.item(item)?;
+                self.related.remove(&(item.clone(), to.clone()));
+                self.related.remove(&(to.clone(), item.clone()));
             }
             WorkRecord::Context { item, entry, .. } => {
                 self.item(item)?;

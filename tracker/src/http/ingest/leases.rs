@@ -277,15 +277,15 @@ pub(super) async fn heartbeat<B: Broker>(
         );
     };
     let team = call.team.name().clone();
-    let Some(sources) = org.with_view(|state, _| {
+    let Some(found) = org.with_view(|state, _| {
         super::connection_for(state, &team, &group, worker.source.as_deref())
-            .map(|(_, c)| c.sources.clone())
+            .map(|(_, c)| (c.sources.clone(), state.pool_sources(&c.pool)))
     }) else {
         return super::super::org_unavailable();
     };
     // Only a connection of the worker's own team names the sources, and the
     // leases sit in that team's namespace: another team's are out of reach.
-    let Some(sources) = sources else {
+    let Some((sources, pool_sources)) = found else {
         return refused(
             StatusCode::CONFLICT,
             "no connection of this team names this group",
@@ -395,6 +395,9 @@ pub(super) async fn heartbeat<B: Broker>(
         .collect();
     Json(json!({
         "leases": leases,
+        // Read with the sources just assigned, so a worker's share of the pool
+        // never uses a count older than the leases it came with.
+        "pool_sources": pool_sources,
         "lease_ms": LEASE_MS,
         "fence_ms": FENCE_MS,
         "heartbeat_ms": HEARTBEAT_MS,

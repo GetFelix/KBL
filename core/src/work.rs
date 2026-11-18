@@ -92,6 +92,11 @@ pub const FORMAT_V16: u32 = 16;
 /// advice. Readers below 17 would ignore them and apply a blind edit.
 pub const FORMAT_V17: u32 = 17;
 
+/// The format from which an item may be related to another: a soft link that
+/// never holds either one back (`related`, `unrelated`, and `related` on a
+/// triage answer). Readers below 18 stop at the first such record.
+pub const FORMAT_V18: u32 = 18;
+
 /// The format that added upstream labels and milestone on an item, and
 /// triage's classification (type, area, size) with its vocabulary.
 pub const FORMAT_V19: u32 = 19;
@@ -157,6 +162,9 @@ pub enum ClassDim {
     Area,
     Size,
 }
+
+/// Most items one item may be related to.
+pub const MAX_RELATED: usize = 20;
 
 /// Longest reason a `block_set` carries.
 pub const MAX_BLOCK_REASON: usize = 300;
@@ -732,6 +740,10 @@ pub enum WorkRecord {
         /// Items this one should wait on, as advice: a person links them.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         depends_on: Vec<ItemId>,
+        /// Items to schedule with this one, as advice: a person relates them.
+        /// Unlike `depends_on`, a relation never holds either item back.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        related: Vec<ItemId>,
         /// Titles this one should be split into, as advice: nothing is created.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         split: Vec<String>,
@@ -791,6 +803,11 @@ pub enum WorkRecord {
     Linked { item: ItemId, to: ItemId },
     /// A person removes the edge, for example after a dependency was dropped.
     Unlinked { item: ItemId, to: ItemId },
+    /// A person relates two items so they are scheduled together. The relation
+    /// is symmetric and never blocks claiming, unlike `Linked`.
+    Related { item: ItemId, to: ItemId },
+    /// A person removes a relation.
+    Unrelated { item: ItemId, to: ItemId },
     /// A context entry; the same `entry` again replaces it.
     Context {
         item: ItemId,
@@ -1168,6 +1185,8 @@ impl WorkRecord {
             WorkRecord::Shipped { .. } => "shipped",
             WorkRecord::Linked { .. } => "linked",
             WorkRecord::Unlinked { .. } => "unlinked",
+            WorkRecord::Related { .. } => "related",
+            WorkRecord::Unrelated { .. } => "unrelated",
             WorkRecord::Context { .. } => "context",
             WorkRecord::Claimed { .. } => "claimed",
             WorkRecord::Progress { .. } => "progress",
@@ -1230,6 +1249,8 @@ impl WorkRecord {
             | WorkRecord::Shipped { item, .. }
             | WorkRecord::Linked { item, .. }
             | WorkRecord::Unlinked { item, .. }
+            | WorkRecord::Related { item, .. }
+            | WorkRecord::Unrelated { item, .. }
             | WorkRecord::Context { item, .. }
             | WorkRecord::Claimed { item, .. }
             | WorkRecord::Progress { item, .. }
@@ -1400,6 +1421,8 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::Related { .. } | WorkRecord::Unrelated { .. } => FORMAT_V18,
+            WorkRecord::Triaged { related, .. } if !related.is_empty() => FORMAT_V18,
             WorkRecord::Imported {
                 labels, milestone, ..
             } if !labels.is_empty() || milestone.is_some() => FORMAT_V19,

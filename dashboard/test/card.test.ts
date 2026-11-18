@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ago, blockText, chipText, childIndex, lead, properties, reasonLine, summarize, upstreamRef, upstreamUrl, workingLine } from '../src/card.ts';
+import { ago, blockText, chipText, childIndex, lead, properties, reasonLine, relatedLine, summarize, upstreamRef, upstreamUrl, workingLine } from '../src/card.ts';
 import type { ItemRow } from '../src/fold.ts';
 
 const root: ItemRow = { id: 'g0378517ddd9edf0f', title: 'Reads miss', stage: 'ready', upstream: 'GetFelix/felix#1694', source: 'github', root: true };
@@ -69,4 +69,15 @@ test('a screen reader name is the upstream reference, the id when there is none'
   assert.equal(nameOf(items, 'gh-1'), 'felix#1694');
   assert.equal(nameOf(items, 'loc-2'), 'loc-2');
   assert.equal(nameOf(items, 'gone'), 'gone');
+});
+
+test('a related item is named on both cards and is not a reason the card waits', () => {
+  const a: ItemRow = { id: 'a', title: 'a', stage: 'ready', upstream: 'GetFelix/felix#1505', related: ['b'] };
+  const b: ItemRow = { id: 'b', title: 'b', stage: 'ready', upstream: 'GetFelix/felix#376', related: ['a'] };
+  assert.equal(relatedLine(a, [a, b]), 'Related: felix#376');
+  assert.equal(relatedLine(b, [a, b]), 'Related: felix#1505');
+  assert.equal(relatedLine({}, [a, b]), null);
+  assert.equal(relatedLine({ related: [] }, [a, b]), null);
+  assert.equal(reasonLine(a, undefined), '', 'a relation is not a wait');
+  assert.equal(relatedLine({ related: ['w', 'x', 'y', 'z', 'q'] }, []), 'Related: w, x, y and 2 more');
 });

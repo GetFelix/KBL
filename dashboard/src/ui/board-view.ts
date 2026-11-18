@@ -2,7 +2,7 @@
 // one Tab stop (roving tabindex): Tab moves between columns, j/k and the up and down
 // arrows move within one, h/l and the side arrows move across. Cards are links in a
 // list under the column's heading, so a screen reader hears "Ready, list, 3 items".
-import { lead, nameOf, childIndex, properties, reasonLine, summarize, workingLine } from '../card.ts';
+import { lead, nameOf, childIndex, properties, reasonLine, relatedLine, summarize, workingLine } from '../card.ts';
 import { waitsOn } from '../fold.ts';
 import { visible, type Group } from '../list.ts';
 import type { ViewState } from '../state.ts';
@@ -42,7 +42,7 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id card-lead' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-working', hidden: true }), h('span', { class: 'card-props muted', hidden: true }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }), h('span', { class: 'triage-chip', hidden: true }), h('span', { class: 'card-mark', hidden: true }, 'Selected'), h('span', { class: 'assignee', hidden: true }));
+      }, h('span', { class: 'row-id card-lead' }, id), h('span', { class: 'card-title' }), h('span', { class: 'card-working', hidden: true }), h('span', { class: 'card-props muted', hidden: true }), h('span', { class: 'card-waits muted', hidden: true }), h('span', { class: 'card-related muted', hidden: true }), h('span', { class: 'row-flag card-flag', hidden: true }), h('span', { class: 'triage-chip', hidden: true }), h('span', { class: 'card-mark', hidden: true }, 'Selected'), h('span', { class: 'assignee', hidden: true }));
       cards.set(id, a);
     }
     const t = a.querySelector('.card-title')!;
@@ -117,6 +117,7 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
           set('.card-lead', lead(item));
           set('.card-working', workingLine(item, now) ?? '');
           set('.card-props', properties(item, now).join(' · '));
+          set('.card-related', relatedLine(item, s.items) ?? '');
         }
         paintTriage(a, item);
         // Same "waits on" line as a Blocked row in the list.

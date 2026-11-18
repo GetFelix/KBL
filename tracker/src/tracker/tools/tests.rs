@@ -1892,6 +1892,7 @@ async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
             duplicate_of: None,
             unclear: Some(Unclear::Repo),
             depends_on: Vec::new(),
+            related: Vec::new(),
             split: Vec::new(),
             item_type: None,
             area: None,
@@ -2141,6 +2142,7 @@ async fn an_agent_answers_the_triage_item_it_holds() {
             duplicate_of: Some(item("a2")),
             unclear: None,
             depends_on: Vec::new(),
+            related: Vec::new(),
             split: Vec::new(),
             item_type: None,
             area: None,
@@ -2425,6 +2427,7 @@ async fn a_triage_answer_can_carry_dependencies_and_a_split() {
             duplicate_of: None,
             unclear: None,
             depends_on: vec![item("a2")],
+            related: Vec::new(),
             split: vec!["reader".into(), "writer".into()],
             item_type: None,
             area: None,
@@ -2445,6 +2448,100 @@ async fn a_triage_answer_can_carry_dependencies_and_a_split() {
     let core = t.0.core.lock().await;
     assert!(core.state.edges.is_empty());
     assert!(!core.state.items.values().any(|i| i.title == "whole"));
+}
+
+#[tokio::test]
+async fn a_triage_answer_can_name_related_items_from_format_18_and_blocks_nothing() {
+    let fake = Fake::default();
+    let grants = [("w1".to_owned(), vec![github("GetFelix/felix")])].into();
+    let t = start_with(
+        &fake,
+        crate::tracker::Settings {
+            grants,
+            ..settings()
+        },
+    )
+    .await;
+    held_triage(&t, "w1").await;
+    seed_in_felix(&t, "a2").await;
+    let w1 = agent("w1");
+    let mut answer = ans(1, "same boxes as a2".into(), None, None);
+    answer.related = vec![item("a2")];
+    let before = fake.log().len();
+    let err = t
+        .triage(&w1, &item("a1-t"), answer.clone())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Refused { ref why } if why == "needs_format_18"),
+        "{err:?}"
+    );
+    assert_eq!(fake.log().len(), before, "nothing is written below 18");
+    // Without a relation the old format still takes the answer.
+    t.triage(&w1, &item("a1-t"), ans(1, "plain".into(), None, None))
+        .await
+        .unwrap();
+
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 18 })
+        .await
+        .unwrap();
+    t.triage(&w1, &item("a1-t"), answer.clone()).await.unwrap();
+    let last = fake.log().pop().unwrap();
+    assert_eq!((last.v, last.record.kind()), (18, "triaged"));
+    let reply = t.triage(&w1, &item("a1-t"), answer).await.unwrap();
+    assert_eq!(reply["triaged"], "a1");
+    assert_eq!(
+        fake.kinds().iter().filter(|k| *k == "triaged").count(),
+        2,
+        "a retry is not rewritten"
+    );
+    // Advice only: no relation and no dependency until a person writes one.
+    let core = t.0.core.lock().await;
+    assert!(core.state.edges.is_empty() && core.state.related.is_empty());
+}
+
+#[tokio::test]
+async fn triage_refuses_bad_related_items_and_writes_nothing() {
+    let fake = Fake::default();
+    let grants = [("w1".to_owned(), vec![github("GetFelix/felix")])].into();
+    let t = start_with(
+        &fake,
+        crate::tracker::Settings {
+            grants,
+            ..settings()
+        },
+    )
+    .await;
+    held_triage(&t, "w1").await;
+    seed_in_felix(&t, "a2").await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 18 })
+        .await
+        .unwrap();
+    let before = fake.log().len();
+    let w1 = agent("w1");
+    let with = |related: Vec<&str>, depends_on: Vec<&str>| {
+        let mut a = ans(1, "w".into(), None, None);
+        a.related = related.into_iter().map(item).collect();
+        a.depends_on = depends_on.into_iter().map(item).collect();
+        a
+    };
+    for a in [
+        with(vec!["nope"], vec![]),
+        with(vec!["a1"], vec![]),
+        with(vec!["a1-t"], vec![]),
+        with(vec!["a2", "a2"], vec![]),
+        with(vec!["a2"], vec!["a2"]),
+    ] {
+        assert!(t.triage(&w1, &item("a1-t"), a).await.is_err());
+    }
+    // Only the holder of the triage item may answer.
+    let w2 = agent("w2");
+    assert!(
+        t.triage(&w2, &item("a1-t"), with(vec!["a2"], vec![]))
+            .await
+            .is_err()
+    );
+    assert_eq!(fake.log().len(), before);
 }
 
 #[tokio::test]
@@ -2498,6 +2595,7 @@ async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
                 duplicate_of: None,
                 unclear: None,
                 depends_on: vec![],
+                related: Vec::new(),
                 split: many,
                 item_type: None,
                 area: None,
@@ -2648,6 +2746,7 @@ fn ans(
         duplicate_of,
         unclear,
         depends_on: Vec::new(),
+        related: Vec::new(),
         split: Vec::new(),
         item_type: None,
         area: None,

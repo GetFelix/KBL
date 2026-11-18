@@ -100,6 +100,8 @@ async fn a_person_token_lists_every_tool() {
             "park_item",
             "unpark_item",
             "unblock_item",
+            "relate_items",
+            "unrelate_items",
             "request_review",
             "request_changes",
             "mark_merged",
@@ -129,7 +131,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 24] = [
+    let cases: [(&str, Value, &str, Value); 26] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -221,6 +223,18 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             json!({ "item": "a1", "to": "a2" }),
         ),
         (
+            "relate_items",
+            json!({ "item": "a1", "to": "a2" }),
+            "/v1/work/relate",
+            json!({ "item": "a1", "to": "a2" }),
+        ),
+        (
+            "unrelate_items",
+            json!({ "item": "a1", "to": "a2" }),
+            "/v1/work/unrelate",
+            json!({ "item": "a1", "to": "a2" }),
+        ),
+        (
             "request_review",
             json!({ "item": "a1", "reviewer": "sam" }),
             "/v1/work/request-review",
@@ -286,8 +300,8 @@ async fn each_tool_posts_to_its_route_with_its_body() {
 
 #[tokio::test]
 async fn every_table_entry_is_covered_by_a_case() {
-    // 22 writes above and the queue below: a new entry needs its case.
-    assert_eq!(TOOLS.len(), 23);
+    // 24 writes above and the queue below: a new entry needs its case.
+    assert_eq!(TOOLS.len(), 25);
 }
 
 #[tokio::test]

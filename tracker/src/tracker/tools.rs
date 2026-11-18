@@ -13,7 +13,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::redact::redact;
 use kbl_core::work::{
-    Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FORMAT_V14, FindingVerdict,
+    Actor, DoneWhen, Evidence, FORMAT_V5, FORMAT_V6, FORMAT_V14, FORMAT_V18, FindingVerdict,
     MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_REVERT_TEST,
     MAX_SCENARIO, MAX_VERDICT_WHY, MergeVerdict, NewPrerequisite, Phase, RefusalReason,
     RevertCheck, Severity, Target, Then, Unclear, Usage, WorkKind, WorkRecord,
@@ -755,6 +755,7 @@ impl<B: Broker> Tracker<B> {
             duplicate_of,
             unclear,
             depends_on,
+            related,
             split,
             item_type,
             area,
@@ -763,11 +764,17 @@ impl<B: Broker> Tracker<B> {
         bounded("why", &why, MAX_FIELD)?;
         // Compared with the standing answer, which was stored redacted.
         let why = redact(&why).into_owned();
-        triage_lists(&depends_on, &split)?;
+        triage_lists(&depends_on, &related, &split)?;
         self.begin().await?;
+
         let reply = {
             let mut core = self.0.core.lock().await;
             let attempt = held(&core, agent, item)?;
+            if !related.is_empty() && core.state.format() < FORMAT_V18 {
+                return Err(Error::Refused {
+                    why: "needs_format_18".into(),
+                });
+            }
             let target = core
                 .state
                 .items
@@ -791,6 +798,17 @@ impl<B: Broker> Tracker<B> {
                     )));
                 }
             }
+            for d in &related {
+                if d == &target
+                    || d == item
+                    || depends_on.contains(d)
+                    || !visible(&core, &allowed, item, d)
+                {
+                    return Err(Error::Invalid(format!(
+                        "related names {d}, which is not another item (or is also in depends_on)"
+                    )));
+                }
+            }
             // The same answer again is a retry, not a new record.
             let standing = core
                 .state
@@ -802,7 +820,8 @@ impl<B: Broker> Tracker<B> {
                 && (p.tier, &p.why, &p.duplicate_of, p.unclear)
                     == (tier, &why, &duplicate_of, unclear)
                 // After a person adjusted the lists, the agent's own repeat is still a retry.
-                && (p.edited || (&p.depends_on, &p.split) == (&depends_on, &split))
+                && (p.edited
+                    || (&p.depends_on, &p.related, &p.split) == (&depends_on, &related, &split))
                 && same_class(&core, &target, [&item_type, &area, &size])
             {
                 return Ok(
@@ -822,6 +841,7 @@ impl<B: Broker> Tracker<B> {
                 duplicate_of,
                 unclear,
                 depends_on,
+                related,
                 split,
                 item_type,
                 area,
@@ -1171,6 +1191,7 @@ pub(crate) struct TriageAnswer {
     pub(crate) duplicate_of: Option<ItemId>,
     pub(crate) unclear: Option<Unclear>,
     pub(crate) depends_on: Vec<ItemId>,
+    pub(crate) related: Vec<ItemId>,
     pub(crate) split: Vec<String>,
     /// Classification from the team's vocabulary.
     pub(crate) item_type: Option<String>,
@@ -1198,8 +1219,11 @@ fn same_class(core: &Core, target: &ItemId, new: [&Option<String>; 3]) -> bool {
 }
 
 /// The dependencies and split titles of a triage answer: few, distinct, short.
-fn triage_lists(depends_on: &[ItemId], split: &[String]) -> Result<(), Error> {
-    if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {
+fn triage_lists(depends_on: &[ItemId], related: &[ItemId], split: &[String]) -> Result<(), Error> {
+    if depends_on.len() > MAX_TRIAGE_LIST
+        || related.len() > MAX_TRIAGE_LIST
+        || split.len() > MAX_TRIAGE_LIST
+    {
         return Err(Error::Invalid(format!(
             "at most {MAX_TRIAGE_LIST} dependencies and {MAX_TRIAGE_LIST} split titles"
         )));
@@ -1207,6 +1231,10 @@ fn triage_lists(depends_on: &[ItemId], split: &[String]) -> Result<(), Error> {
     let distinct: BTreeSet<_> = depends_on.iter().collect();
     if distinct.len() != depends_on.len() {
         return Err(Error::Invalid("depends_on repeats an item".into()));
+    }
+    let distinct: BTreeSet<_> = related.iter().collect();
+    if distinct.len() != related.len() {
+        return Err(Error::Invalid("related repeats an item".into()));
     }
     for title in split {
         bounded("split title", title, MAX_SPLIT_TITLE)?;
@@ -1305,6 +1333,7 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             // A person's advice is held to the bounds of triage's own.
             triage_lists(
                 depends_on.as_deref().unwrap_or_default(),
+                &[],
                 split.as_deref().unwrap_or_default(),
             )
         }
@@ -1368,11 +1397,12 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
         WorkRecord::Triaged {
             why,
             depends_on,
+            related,
             split,
             ..
         } => {
             field("why", why)?;
-            triage_lists(depends_on, split)
+            triage_lists(depends_on, related, split)
         }
         // Only a holding agent writes these, through the tools, but a person's
         // record is held to the same bounds.

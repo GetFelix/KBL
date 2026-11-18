@@ -1165,6 +1165,8 @@ pub fn redact_record(record: &mut WorkRecord) {
         WorkRecord::Accepted { .. }
         | WorkRecord::Linked { .. }
         | WorkRecord::Unlinked { .. }
+        | WorkRecord::Related { .. }
+        | WorkRecord::Unrelated { .. }
         | WorkRecord::Claimed { .. }
         | WorkRecord::Done { .. }
         | WorkRecord::ForkedFrom { .. }

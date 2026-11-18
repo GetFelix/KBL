@@ -1,0 +1,1 @@
+A worker's share of its pool now uses the pool's source count from each lease heartbeat answer, not only the config answer, so a source added or removed mid-hour cannot leave worker shares summing past the pool. The heartbeat answer gains `pool_sources`.

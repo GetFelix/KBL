@@ -44,6 +44,7 @@ fn triaged(item: &str, t: Option<&str>, a: Option<&str>, s: Option<&str>) -> Wor
         item_type: t.map(str::to_owned),
         area: a.map(str::to_owned),
         size: s.map(str::to_owned),
+        related: vec![],
     }
 }
 
