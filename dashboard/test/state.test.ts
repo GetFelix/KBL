@@ -95,3 +95,11 @@ test('the header counts what the pause counts: In review plus held fixes', () =>
   assert.equal(reviewFull({ load: 2, inReview: 1 }, 3), null);
   assert.equal(reviewFull({ load: 9, inReview: 9 }, 0), null);
 });
+
+test('child cards and open children are separate viewer choices', () => {
+  const on = reduce(base, { type: 'childCards', on: true });
+  assert.equal(on.childCards, true);
+  const open = reduce(on, { type: 'expand', id: 'r1' });
+  assert.deepEqual(open.expanded, ['r1']);
+  assert.deepEqual(reduce(open, { type: 'expand', id: 'r1' }).expanded, []);
+});

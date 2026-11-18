@@ -141,9 +141,10 @@ async function shoot(name) {
 async function axe(name) {
   await page.eval(axeSource);
   const result = await page.eval(`axe.run(document, { runOnly: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'] })
-    .then((r) => r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 3).map((n) => n.target.join(' ')) })))`);
+    .then((r) => r.violations.map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 3).map((n) => n.target.join(' ')), why: v.nodes.slice(0, 3).map((n) => n.failureSummary) })))`);
   const bad = result.filter((v) => v.impact === 'serious' || v.impact === 'critical');
   for (const v of result) console.log(`     axe ${name}: ${v.impact} ${v.id} (${v.nodes}) ${v.help} [${v.targets.join(' | ')}]`);
+  for (const v of result) for (const [i, why] of v.why.entries()) console.log(`       ${v.id} ${v.targets[i]}: ${String(why).replace(/\s+/g, ' ')}`);
   check(bad.length === 0, `axe ${name}: no serious or critical violations (${result.length} total)`);
 }
 
@@ -276,7 +277,7 @@ try {
   await press(page, 'Enter');
   await page.waitFor(`location.search.includes('item=${card}')`);
   check(await focused('.panel'), 'Enter on a card opens the panel');
-  check(await page.eval(`[...document.querySelectorAll('.panel dt')].map((d) => d.textContent).join(',').startsWith('Stage')`), 'the panel shows the recorded fields');
+  check(await page.eval(`[...document.querySelectorAll('.panel dt')].map((d) => d.textContent).join(',').startsWith('Upstream,Stage')`), 'the panel shows the recorded fields');
   await shoot('board-panel-dark');
   await press(page, 'Escape');
   check(await page.eval(`document.activeElement?.dataset.id === ${JSON.stringify(card)}`), 'closing the panel gives focus back to the card');
@@ -305,7 +306,37 @@ try {
   await page.eval(`window.__push({ kind: 'claimed', item: 'gh-2219', attempt: 1, deadline_ms: 1900000000000, actor: 'agent', by: 'agent-1', at_ms: 1800000000001 })`);
   await page.waitFor(`!!document.querySelector('#column-held + ul .card[data-id=gh-2219]')`);
   check(await focused('.card[data-id=gh-2219]'), 'a card a record moves to another column keeps the focus');
-  check((await announced()) === 'gh-2219 moved to Held.', `the move is announced (${await announced()})`);
+  check((await announced()) === 'gh-2219 moved to Working.', `the move is announced (${await announced()})`);
+
+  // Child work nests under its root, cards lead with the upstream reference, and the Working column says who holds what.
+  await open(`${connected}&layout=board`);
+  await page.waitFor(live);
+  check(await page.eval(`!document.querySelector('.card[data-id=rev-2300]')`), 'a review child is not a card of its own');
+  check(await page.eval(`document.querySelector('.card[data-id=gh-2300] .card-lead').textContent === 'felix#2300'`), 'a card leads with the upstream reference, not the KBL id');
+  check(await page.eval(`document.querySelector('[data-chip=gh-2300]')?.textContent.includes('1 sub-task, 1 done')`), 'the root carries a sub-task count and progress chip');
+  check(await page.eval(`document.querySelector('[data-chip=gh-2300]').getAttribute('aria-expanded') === 'false'`), 'the chip starts closed');
+  // A script click does not focus a button the way a real one does, so focus first.
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').focus(); document.querySelector('[data-chip=gh-2300]').click(); true`);
+  await page.waitFor(`document.querySelector('[data-chip=gh-2300]')?.getAttribute('aria-expanded') === 'true'`);
+  check(await page.eval(`document.querySelector('#children-gh-2300 .child-link').textContent.includes('Review the cache fix')`), 'the chip opens the children as links');
+  check(await focused('[data-chip=gh-2300]'), 'the chip keeps the focus when it opens');
+  await axe('board nested');
+  await shoot('board-nested-dark');
+  check(await page.eval(`document.querySelector('#column-held').textContent.startsWith('Working')`), 'the held column is called Working');
+  const working = await page.eval(`document.querySelector('#column-held + ul .card-working')?.textContent ?? ''`);
+  check(/ working, attempt 1/.test(working), `a working card names the agent, attempt and last activity (${working})`);
+  await shoot('board-working-dark');
+  await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).click(); true`);
+  await page.waitFor(`!!document.querySelector('.card[data-id=rev-2300]')`);
+  check(await page.eval(`!document.querySelector('.child-strip') && [...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).getAttribute('aria-pressed') === 'true'`), 'the toggle shows child work as cards and drops the strips');
+  await axe('board child cards');
+  await shoot('board-child-cards-dark');
+  // The choice is remembered per viewer, so turn it off or the list below shows child cards too.
+  await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).click(); true`);
+  await page.waitFor(`!document.querySelector('.card[data-id=rev-2300]')`);
+  await open(connected);
+  await page.waitFor(live);
+  check(await page.eval(`!document.querySelector('.row[data-id=rev-2300]') && !!document.querySelector('.row[data-id=gh-2300] ~ .child-strip, li:has(.row[data-id=gh-2300]) .child-strip')`), 'the list nests children under their root too');
 
   // A filter that takes the focused row away hands the focus to the next row still shown.
   await open(connected);
@@ -341,8 +372,8 @@ try {
   await page.eval(`(() => { const s = document.querySelector('#filter-repo'); s.value = 'GetFelix/felix'; s.dispatchEvent(new Event('change')); return true; })()`);
   await page.waitFor(`location.search.includes('repo=GetFelix')`);
   const repoRows = await page.eval(`document.querySelectorAll('.row').length`);
-  check(repoRows === 7, `a repo filter keeps only that repo's items (${repoRows})`);
-  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 7 of 18: Repo GetFelix/felix'`), 'the summary says what the filters hide');
+  check(repoRows === 6, `a repo filter keeps only that repo's items (${repoRows})`);
+  check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 6 of 18: Repo GetFelix/felix'`), 'the summary says what the filters hide');
   await press(page, 'k', MOD);
   for (const ch of 'tier: 2') await press(page, ch);
   await press(page, 'Enter');
@@ -356,7 +387,7 @@ try {
   check(await page.eval(`[...document.querySelectorAll('.empty button')].map((b) => b.textContent).join(',') === 'Clear search,Clear filters'`), 'no match inside filters offers Clear search and Clear filters');
   await press(page, 'Escape');
   await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent === 'Clear filters').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 18 && !location.search.includes('tier=')`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 17 && !location.search.includes('tier=')`);
   check(true, 'Clear filters shows everything and clears the address');
 
   // Saved views: from the address, to the sidebar, rename, delete, and back from storage.
@@ -382,7 +413,7 @@ try {
   await page.waitFor(`document.querySelector('.saved-row a')?.textContent === 'Urgent GitHub'`);
   check(await focused('.saved-row button[aria-label="Edit view Urgent GitHub"]'), 'Edit renames a view and the focus is back on its Edit button');
   await page.eval(`document.querySelector('.nav a').click(); true`);
-  await page.waitFor(`document.querySelectorAll('.row').length === 18`);
+  await page.waitFor(`document.querySelectorAll('.row').length === 17`);
   check(await page.eval(`document.querySelector('.nav a').getAttribute('aria-current') === 'page' && !document.querySelector('.saved-row a').hasAttribute('aria-current')`), 'All work resets the view');
   await page.eval(`document.querySelector('.saved-row a').click(); true`);
   await page.waitFor(`document.querySelectorAll('.card').length === 6`);

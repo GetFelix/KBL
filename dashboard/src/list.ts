@@ -14,7 +14,7 @@ export const STAGES = [
   ['in_review', 'In review'],
   ['ready', 'Ready'],
   ['blocked', 'Blocked'],
-  ['held', 'Held'],
+  ['held', 'Working'],
   ['done', 'Done'],
   ['closed', 'Closed'],
 ] as const;
@@ -44,8 +44,8 @@ export function triageChip(item: Pick<ItemRow, 'triage' | 'root'>): string | nul
 }
 
 /** Items matching `query` by id or title, grouped by stage in board order, empty groups left out. */
-export function group(items: readonly ItemRow[], query = ''): Group[] {
-  const matching = query.trim() ? items.filter((i) => score(i.title, query) >= 0 || score(i.id, query) >= 0) : items;
+export function group(items: readonly ItemRow[], query = '', hide: (i: ItemRow) => boolean = () => false): Group[] {
+  const matching = (query.trim() ? items.filter((i) => matches(i, query)) : [...items]).filter((i) => !hide(i));
   const order = (s: string) => {
     const at = STAGES.findIndex(([k]) => k === s);
     return at < 0 ? STAGES.length : at;
@@ -55,6 +55,20 @@ export function group(items: readonly ItemRow[], query = ''): Group[] {
   return [...byStage.entries()]
     .sort(([a], [b]) => order(a) - order(b) || a.localeCompare(b))
     .map(([stage, rows]) => ({ stage, label: stageLabel(stage), items: rows }));
+}
+
+/** Whether the search matches the item's id, title or upstream reference. */
+export function matches(i: ItemRow, query: string): boolean {
+  return score(i.title, query) >= 0 || score(i.id, query) >= 0 || (i.upstream ? score(i.upstream, query) >= 0 : false);
+}
+
+/**
+ * Child work shown under its root instead of as a card: an item whose parent is also
+ * in `shown`. A child that needs a person stays a card, so nothing waiting on someone hides.
+ */
+export function nestedIds(shown: readonly ItemRow[]): Set<string> {
+  const ids = new Set(shown.map((i) => i.id));
+  return new Set(shown.filter((i) => i.parent && ids.has(i.parent) && i.stage !== 'needs_you').map((i) => i.id));
 }
 
 /** The rows in display order, which is the order j and k walk. */
@@ -91,17 +105,20 @@ export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'> & { tra
 }
 
 /** What the page shows: the items in the view, filtered, matching the search, grouped by stage. */
-export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker'] }): Group[] {
-  return group(applyFilters(inScope(s), s.filters), s.query);
+export function visible(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; childCards?: boolean }): Group[] {
+  const rows = applyFilters(inScope(s), s.filters);
+  const found = s.query.trim() ? rows.filter((i) => matches(i, s.query)) : rows;
+  const nested = s.childCards ? new Set<string>() : nestedIds(found);
+  return group(found, '', (i) => nested.has(i.id));
 }
 
 /** The rows the list shows, in the order j and k walk. */
-export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
+export function shownRows(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; childCards?: boolean }): ItemRow[] {
   return flatten(visible(s));
 }
 
 /** The marked items the view shows now. A bulk action never reaches an item a search or filter hides. */
-export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'> & { tracker?: ViewState['tracker'] }): ItemRow[] {
+export function markedShown(s: Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters' | 'marked'> & { tracker?: ViewState['tracker']; childCards?: boolean }): ItemRow[] {
   const marked = new Set(s.marked);
   return shownRows(s).filter((i) => marked.has(i.id));
 }

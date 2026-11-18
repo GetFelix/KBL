@@ -112,10 +112,18 @@ impl Folder {
     /// and `default`, and `unclear` (`scope`, `repo` or `acceptance`) when it is
     /// triage's. `root` is true for an item with no parent. `accepted` and `flagged` say
     /// whether a person accepted it and whether one flagged it for a person.
-    /// `triage` is the stage of a root's triage child, or null. `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
-    /// the attempt an agent holds, or null.
+    /// `triage` is the stage of a root's triage child, or null.
+    /// `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
+    /// the attempt an agent holds, or null; `holder` and `active_ms` name that
+    /// agent and when it last wrote. `parent`, `work`, `upstream` (the root's
+    /// `owner/repo#number`), `pr`, `pr_phase`, `pr_checks` and `failing_check`
+    /// let a card nest and describe itself.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
+        let mut upstreams = std::collections::BTreeMap::new();
+        for (_, id, root) in self.state.imported() {
+            upstreams.entry(root).or_insert(id);
+        }
         let items: Vec<_> = self
             .state
             .items
@@ -126,6 +134,8 @@ impl Folder {
                 let source = target
                     .map(|t| t.source.as_str())
                     .or_else(|| imported.get(&i.root).copied());
+                let upstream = upstreams.get(&i.root).copied();
+                let pr = i.pr_status.as_ref();
                 // The state of a root's triage child, so a card can show why a root is not fixable yet.
                 let triage = i
                     .children
@@ -136,6 +146,15 @@ impl Folder {
                 json!({
                     "id": i.id,
                     "title": i.title,
+                    "parent": i.parent,
+                    "work": i.work,
+                    "upstream": upstream,
+                    "pr": i.pr,
+                    "pr_phase": pr.map(|p| p.phase),
+                    "pr_checks": pr.map(|p| p.checks),
+                    "failing_check": pr.and_then(|p| p.failing.as_ref()).map(|f| &f.name),
+                    "holder": i.hold.as_ref().map(|h| &h.by),
+                    "active_ms": i.hold.as_ref().map(|h| h.active_ms),
                     "stage": self.state.stage(&i.id),
                     "tier": i.tier,
                     "proposed_tier": i.proposal.as_ref().map(|p| p.tier),

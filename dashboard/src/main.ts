@@ -47,6 +47,7 @@ if (q.get('token')) {
 // be missing or throw (private windows, blocked site data); the page works without it.
 const VIEWS_KEY = 'kbl.dashboard.views';
 const DENSITY_KEY = 'kbl.dashboard.density';
+const CHILDREN_KEY = 'kbl.dashboard.children';
 // Undefined when storage cannot be read at all, null when the key is not set.
 const stored = (key: string): string | null | undefined => {
   try {
@@ -75,6 +76,8 @@ const initial: ViewState = {
   ...address,
   selected: address.open,
   density: stored(DENSITY_KEY) === 'compact' ? 'compact' : 'comfortable',
+  childCards: stored(CHILDREN_KEY) === 'cards',
+  expanded: [],
   saved: parseSaved(stored(VIEWS_KEY) ?? null),
   marked: [],
   writes: NO_WRITES,
@@ -293,6 +296,9 @@ const run = (id: CommandId): void => {
       store_(DENSITY_KEY, density);
       return store.dispatch({ type: 'density', density });
     }
+    case 'children':
+      store_(CHILDREN_KEY, s.childCards ? 'nested' : 'cards');
+      return store.dispatch({ type: 'childCards', on: !s.childCards });
     case 'view-all':
     case 'view-inbox':
     case 'view-blocked':
@@ -343,6 +349,8 @@ const ui = shell(
       ui.search.focus();
     },
     layout: (layout) => store.dispatch({ type: 'layout', layout }),
+    children: () => run('children'),
+    toggle: (id) => store.dispatch({ type: 'expand', id }),
     filter: (facet, value) => store.dispatch({ type: 'filter', facet, value }),
     saveView: () => run('saveView'),
     openView: (search) => store.dispatch({ type: 'openView', search }),
@@ -478,6 +486,8 @@ const paint = (s: ViewState) => {
   else addressTimer = setTimeout(writeAddress, wait);
 };
 store.subscribe(paint);
+// "Last active 3 min ago" ages without a record; redraw in place so it keeps up.
+setInterval(() => ui.render(store.get()), 30_000);
 paint(initial);
 
 document.addEventListener('keydown', (e) => {

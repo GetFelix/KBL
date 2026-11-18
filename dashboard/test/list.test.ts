@@ -111,6 +111,20 @@ test('a selected id the view no longer shows starts j and k from the ends', () =
   assert.equal(move(shown, 'b', -1), 'a');
 });
 
+test('child work nests under its root unless it needs a person or the toggle shows cards', () => {
+  const items = [
+    { id: 'r', title: 'root', stage: 'ready', root: true },
+    { id: 'r-t', title: 'triage', stage: 'done', parent: 'r' },
+    { id: 'r-q', title: 'asks', stage: 'needs_you', parent: 'r' },
+    { id: 'orphan', title: 'child of a hidden parent', stage: 'ready', parent: 'gone' },
+  ];
+  const base = { items, blocked: [], view: 'all' as const, query: '', filters: {} };
+  assert.deepEqual(shownRows(base).map((i) => i.id).sort(), ['orphan', 'r', 'r-q']);
+  assert.deepEqual(shownRows({ ...base, childCards: true }).map((i) => i.id).sort(), ['orphan', 'r', 'r-q', 'r-t']);
+  // A search that matches only the child shows it, since its root is not shown.
+  assert.deepEqual(shownRows({ ...base, query: 'triage' }).map((i) => i.id), ['r-t']);
+});
+
 test('a root names its stage and its triage child', () => {
   assert.equal(rootStageLabel({ stage: 'ready', root: true }), 'Ready to fix');
   assert.equal(rootStageLabel({ stage: 'ready', root: false }), 'Ready');
