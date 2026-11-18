@@ -442,12 +442,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         issue: &Issue,
     ) -> Result<(), SourceError> {
         let (item_type, area) = rule.mapped_class(issue);
-        if item_type.is_none() && area.is_none() {
+        let needs = rule.mapped_needs(issue);
+        if item_type.is_none() && area.is_none() && needs.is_empty() {
             return Ok(());
         }
         // One edit per dimension, so a value outside the vocabulary costs only itself.
-        for (item_type, area) in [(item_type, None), (None, area)] {
-            if item_type.is_none() && area.is_none() {
+        for (item_type, area, needs) in [
+            (item_type, None, None),
+            (None, area, None),
+            (None, None, (!needs.is_empty()).then_some(needs)),
+        ] {
+            if item_type.is_none() && area.is_none() && needs.is_none() {
                 continue;
             }
             self.write(&WorkRecord::Edited {
@@ -459,6 +464,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 item_type,
                 area,
                 size: None,
+                needs,
                 depends_on: None,
                 proposal: None,
                 split: None,
@@ -568,6 +574,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             item_type: None,
             area: None,
             size: None,
+            needs: None,
             depends_on: None,
             proposal: None,
             split: None,

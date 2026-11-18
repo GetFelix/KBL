@@ -28,6 +28,7 @@ fn vocab(types: &[&str], areas: &[&str]) -> WorkRecord {
             types: types.iter().map(|t| (*t).to_owned()).collect(),
             areas: areas.iter().map(|t| (*t).to_owned()).collect(),
             sizes: vec![],
+            needs: vec![],
         }),
     }
 }
@@ -44,6 +45,7 @@ fn triaged(item: &str, t: Option<&str>, a: Option<&str>, s: Option<&str>) -> Wor
         item_type: t.map(str::to_owned),
         area: a.map(str::to_owned),
         size: s.map(str::to_owned),
+        needs: None,
         related: vec![],
     }
 }
@@ -58,6 +60,7 @@ fn classed(item: &str, t: Option<&str>, a: Option<&str>, s: Option<&str>) -> Wor
         item_type: t.map(str::to_owned),
         area: a.map(str::to_owned),
         size: s.map(str::to_owned),
+        needs: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -74,6 +77,7 @@ fn facts(item: &str, labels: Option<&[&str]>, milestone: Option<&str>) -> WorkRe
         item_type: None,
         area: None,
         size: None,
+        needs: None,
         depends_on: None,
         split: None,
         proposal: None,

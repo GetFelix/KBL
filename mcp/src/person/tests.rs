@@ -98,6 +98,7 @@ async fn a_person_token_lists_every_tool() {
             "block_item",
             "classify_item",
             "lift_block",
+            "lift_resource",
             "park_item",
             "unpark_item",
             "unblock_item",
@@ -132,7 +133,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 26] = [
+    let cases: [(&str, Value, &str, Value); 29] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -200,10 +201,22 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             json!({ "item": "a1", "item_type": "bug", "size": "S" }),
         ),
         (
+            "classify_item",
+            json!({ "item": "a1", "needs": ["azure", "gpu"] }),
+            "/v1/work/classify",
+            json!({ "item": "a1", "needs": ["azure", "gpu"] }),
+        ),
+        (
             "lift_block",
             json!({ "item": "a1" }),
             "/v1/work/lift-block",
             json!({ "item": "a1" }),
+        ),
+        (
+            "lift_resource",
+            json!({ "resource": "azure-vms" }),
+            "/v1/work/lift-resource",
+            json!({ "resource": "azure-vms" }),
         ),
         (
             "park_item",

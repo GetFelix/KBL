@@ -31,6 +31,24 @@ fn vocabulary(rig: &Rig) {
             types: vec!["bug".into(), "perf".into()],
             areas: vec!["storage".into()],
             sizes: vec![],
+            needs: vec![],
+        }),
+    });
+}
+
+/// A vocabulary that lists needs, which only a log at format 20 takes.
+fn needs_vocabulary(rig: &Rig) {
+    rig.tracker.person(WorkRecord::RulesSet {
+        target: Target {
+            source: "github".into(),
+            repo: "GetFelix/felix".into(),
+        },
+        root: None,
+        text: None,
+        checks: None,
+        vocabulary: Some(Vocabulary {
+            needs: vec!["azure".into(), "gpu".into()],
+            ..Default::default()
         }),
     });
 }
@@ -152,4 +170,84 @@ async fn a_value_outside_the_vocabulary_costs_only_itself() {
     let it = &s.items[&rig.root(UP)];
     assert_eq!(it.class.item_type.as_ref().unwrap().value, "perf");
     assert!(it.class.area.is_none());
+}
+
+#[tokio::test]
+async fn a_rules_label_map_sets_what_the_work_needs() {
+    let rig = rig();
+    raise(&rig, 20);
+    needs_vocabulary(&rig);
+    let mut rule = admit_rule();
+    rule["label_needs"] = json!({ "needs-gpu": "gpu", "azure": "azure", "net": "network" });
+    let ingest = rig.ingest(json!([rule]));
+    rig.list(vec![
+        with_facts(812, &["agent-ok", "Needs-GPU", "azure", "gpu-again"], None),
+        with_facts(813, &["agent-ok"], None),
+    ]);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    let it = &s.items[&rig.root(UP)];
+    // Each mapped label adds one need, in the order upstream lists them.
+    let n = it.class.needs.as_ref().unwrap();
+    assert_eq!(n.values, ["gpu", "azure"]);
+    assert_eq!(n.by, kbl_core::work_fold::ClassBy::Rule);
+    assert!(
+        s.items[&rig.root("GetFelix/felix#813")]
+            .class
+            .needs
+            .is_none()
+    );
+    // The same labels again write nothing more.
+    let edits = rig.tracker.count("edited");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("edited"), edits);
+}
+
+#[tokio::test]
+async fn a_need_outside_the_vocabulary_is_refused_and_the_import_stands() {
+    let rig = rig();
+    raise(&rig, 20);
+    needs_vocabulary(&rig);
+    let mut rule = admit_rule();
+    rule["label_needs"] = json!({ "net": "network", "perf": "gpu" });
+    let ingest = rig.ingest(json!([rule]));
+    rig.list(vec![with_facts(812, &["agent-ok", "net", "perf"], None)]);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    // "network" is not listed, so the whole set is refused rather than half applied.
+    assert!(s.items[&rig.root(UP)].class.needs.is_none());
+    assert_eq!(rig.tracker.count("imported"), 1);
+}
+
+#[tokio::test]
+async fn a_rules_need_never_replaces_a_persons() {
+    let rig = rig();
+    raise(&rig, 20);
+    needs_vocabulary(&rig);
+    let mut rule = admit_rule();
+    rule["label_needs"] = json!({ "perf": "gpu" });
+    let ingest = rig.ingest(json!([rule]));
+    rig.list(vec![with_facts(812, &["agent-ok"], None)]);
+    ingest.poll(false).await.unwrap();
+    rig.tracker.person(WorkRecord::Edited {
+        item: rig.root(UP),
+        title: None,
+        tier: None,
+        labels: None,
+        milestone: None,
+        item_type: None,
+        area: None,
+        size: None,
+        needs: Some(vec!["azure".into()]),
+        depends_on: None,
+        split: None,
+        proposal: None,
+    });
+    rig.list(vec![at(
+        with_facts(812, &["agent-ok", "perf"], None),
+        "2027-01-16T00:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&rig.root(UP)].class.needs().to_vec(), ["azure"]);
 }

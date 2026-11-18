@@ -132,6 +132,10 @@ fn convert(p: &Param, v: Value) -> Result<Value, String> {
     let wrong = |what: &str| format!("{} must be {what}", p.name);
     match p.kind {
         Kind::Text => v.is_string().then_some(v).ok_or_else(|| wrong("a string")),
+        Kind::List => match v.as_array() {
+            Some(a) if a.iter().all(Value::is_string) => Ok(v),
+            _ => Err(wrong("a list of strings")),
+        },
         Kind::Number => v
             .as_u64()
             .map(Value::from)
@@ -165,6 +169,7 @@ fn describe(tool: &Tool) -> McpTool {
             Kind::Text | Kind::Content | Kind::Assignee => json!({ "type": "string" }),
             Kind::Number => json!({ "type": "integer", "minimum": 0 }),
             Kind::Bool => json!({ "type": "boolean" }),
+            Kind::List => json!({ "type": "array", "items": { "type": "string" } }),
             Kind::Words(w) => json!({ "type": "string", "enum": w }),
         };
         s["description"] = p.about.into();
