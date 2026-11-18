@@ -123,11 +123,21 @@ http://localhost:5173/?gateway=ws://127.0.0.1:8787/ws&room=kbl&token=<ID token>
 
 `stream=<alias>` names a different alias than `events`.
 
-The token is read once and then removed from the address with `history.replaceState`. It stays in memory only,
-so reloading the page needs the link again. The first GET still carries it in the URL, so it reaches the dev
-server's access log. Two cautions: use `wss://` for any gateway but your own machine,
-since `ws://` sends the token in the clear; and treat a `?gateway=` link from someone else as untrusted, because
-the page sends the token to whatever address it names.
+The token is read once and then removed from the address with `history.replaceState`. This tab keeps the
+session (gateway, room, token) in `sessionStorage` so a reload does not lose it. The first GET still carries the
+token in the URL, so it reaches the dev server's access log.
+
+Where the token goes is fixed by the link that carried it:
+
+- A gateway is taken from the address only together with a token and room in the same link, which starts a new
+  session. A link with `?gateway=` and no token keeps the gateway the tab already signed in with, so it cannot
+  move a saved token to another server.
+- The gateway must be `wss://`, or `ws://` for `localhost`, `127.0.0.1` or `[::1]`. Anything else (including a
+  gateway with a user name or password in it) is refused and the page says so. A saved session that fails the
+  same check is dropped.
+- The gateway host is shown beside the connection status once the page is signed in.
+
+Still treat a link with a token from someone else as untrusted: it signs you in to the gateway it names.
 
 An expired or rejected token (`signed_out`, `forbidden`) or an error a retry cannot fix (`trimmed`, `bad_request`,
 `past_end`) stops the page with a message, and for a token it adds that a new sign-in link fixes it. A record of

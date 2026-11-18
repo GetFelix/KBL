@@ -39,8 +39,8 @@ tracker:
   # Always one: the tracker is the single writer of work.events, and running
   # more than one is not supported yet.
   resources:
-    requests: { cpu: 100m, memory: 128Mi }
-    limits: { memory: 512Mi }
+    requests: { cpu: 100m, memory: 128Mi, ephemeral-storage: 256Mi }
+    limits: { memory: 512Mi, ephemeral-storage: 1Gi }
   # Secret with the token file, a key holding
   # {"agents": {"<token>": "name"}, "people": {"<token>": "name"}}.
   tokensSecret:
@@ -66,8 +66,8 @@ dashboard:
   enabled: true
   replicas: 1
   resources:
-    requests: { cpu: 25m, memory: 32Mi }
-    limits: { memory: 128Mi }
+    requests: { cpu: 25m, memory: 32Mi, ephemeral-storage: 64Mi }
+    limits: { memory: 128Mi, ephemeral-storage: 256Mi }
   service:
     port: 8080
   nodeSelector: {}
@@ -96,8 +96,8 @@ ingest:
     enabled: false
     port: 9791
   resources:
-    requests: { cpu: 50m, memory: 64Mi }
-    limits: { memory: 256Mi }
+    requests: { cpu: 50m, memory: 64Mi, ephemeral-storage: 64Mi }
+    limits: { memory: 256Mi, ephemeral-storage: 512Mi }
   nodeSelector: {}
   tolerations: []
   affinity: {}
