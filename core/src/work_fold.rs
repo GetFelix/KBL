@@ -1298,14 +1298,14 @@ impl State {
     }
 
     /// The repo an item's work lands in: its own target (a prerequisite's),
-    /// else its root's. Only a GitHub target names a repo; an ADO target is an
+    /// else its root's. A GitHub or GitLab target names a repo; an ADO target is an
     /// `org/project` that drives rules and spend but is not shown as a repo.
     pub fn repo_of(&self, id: &ItemId) -> Option<&Target> {
         let it = self.items.get(id)?;
         it.target
             .as_ref()
             .or_else(|| self.items.get(&it.root)?.target.as_ref())
-            .filter(|t| t.source == "github")
+            .filter(|t| matches!(t.source.as_str(), "github" | "gitlab"))
     }
 
     fn is_closed(&self, id: &ItemId) -> bool {

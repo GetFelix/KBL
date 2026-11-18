@@ -319,6 +319,70 @@ impl<T: Transport> Gitlab<T> {
         Ok(Ok(out))
     }
 
+    /// The issues of a project in `updated_at` order, read by keyset: each
+    /// request restarts at page 1 from the last time seen, so an issue
+    /// updated mid-read cannot shift the pages and hide a neighbour. GitLab
+    /// documents no `pagination=keyset` for the issues list, and
+    /// `updated_after` is inclusive, so this does the same by hand. Ids seen
+    /// already are dropped. A full page of nothing new (one timestamp shared
+    /// by a page's worth of issues) moves to the next page number instead.
+    async fn issues_since(
+        &self,
+        project: &str,
+        state: &str,
+        since: Option<&str>,
+    ) -> Result<Result<Vec<Value>, u16>, SourceError> {
+        let mut out: Vec<Value> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut from = since.map(str::to_owned);
+        let mut page = 1usize;
+        for _ in 0..MAX_PAGES {
+            let n = page.to_string();
+            let mut q = vec![
+                ("scope", "all"),
+                ("state", state),
+                ("order_by", "updated_at"),
+                ("sort", "asc"),
+                ("per_page", PER_PAGE),
+                ("page", n.as_str()),
+            ];
+            if let Some(f) = &from {
+                q.push(("updated_after", f));
+            }
+            let res = self
+                .call(Req::get(self.in_project(project, &["issues"], &q)?))
+                .await?;
+            match res.status {
+                200 => {}
+                401 | 403 | 404 => return Ok(Err(res.status)),
+                s => return Err(anyhow!("GitLab answered {s} to a listing").into()),
+            }
+            let items = res.body.as_array().cloned().unwrap_or_default();
+            let full = items.len().to_string() == PER_PAGE;
+            let before = out.len();
+            for raw in &items {
+                if seen.insert(raw["id"].as_u64().unwrap_or(u64::MAX)) || raw["id"].is_null() {
+                    out.push(raw.clone());
+                }
+            }
+            if !full {
+                break;
+            }
+            let last = items
+                .last()
+                .and_then(|r| r["updated_at"].as_str())
+                .filter(|t| utc_ms(t).is_some());
+            match last {
+                Some(t) if out.len() > before => {
+                    from = Some(t.to_owned());
+                    page = 1;
+                }
+                _ => page += 1,
+            }
+        }
+        Ok(Ok(out))
+    }
+
     fn parse_issue(&self, repo: &str, raw: &Value) -> Option<Issue> {
         let number = raw["iid"].as_u64()?;
         let text = |v: &Value| v.as_str().unwrap_or_default().to_owned();
@@ -532,12 +596,37 @@ impl<T: Transport> Gitlab<T> {
     }
 }
 
-/// Milliseconds since the epoch from a GitLab time, `2026-11-10T12:00:05.123Z`.
-/// Only UTC is read: a time with an offset is unknown, never guessed.
+/// Milliseconds since the epoch from an RFC 3339 time: `Z` or a `+hh:mm`
+/// offset, with optional fractional seconds. Anything else is unknown.
 fn utc_ms(t: &str) -> Option<u64> {
     let head = t.get(..19)?;
     let rest = t.get(19..)?;
-    let fraction = rest.strip_suffix('Z')?;
+    let (fraction, offset_ms) = match rest.strip_suffix('Z') {
+        Some(f) => (f, 0i64),
+        None => {
+            let i = rest.len().checked_sub(6)?;
+            let (f, off) = (rest.get(..i)?, rest.get(i..)?);
+            let sign = match off.as_bytes()[0] {
+                b'+' => 1,
+                b'-' => -1,
+                _ => return None,
+            };
+            let num = |r: std::ops::Range<usize>| {
+                off.get(r)
+                    .filter(|d| d.bytes().all(|b| b.is_ascii_digit()))?
+                    .parse::<i64>()
+                    .ok()
+            };
+            if off.as_bytes()[3] != b':' {
+                return None;
+            }
+            let (h, m) = (num(1..3)?, num(4..6)?);
+            if h > 23 || m > 59 {
+                return None;
+            }
+            (f, sign * (h * 60 + m) * 60_000)
+        }
+    };
     let ok = fraction.is_empty()
         || fraction
             .strip_prefix('.')
@@ -549,7 +638,8 @@ fn utc_ms(t: &str) -> Option<u64> {
         .strip_prefix('.')
         .map(|f| format!("{:0<3}", &f[..f.len().min(3)]))
         .map_or(0, |f| f.parse().unwrap_or(0));
-    parse_utc_ms(&format!("{head}Z")).map(|s| s + ms)
+    let utc = parse_utc_ms(&format!("{head}Z"))? + ms;
+    utc.checked_add_signed(-offset_ms)
 }
 
 impl<T: Transport> Source for Gitlab<T> {
@@ -580,19 +670,7 @@ impl<T: Transport> Source for Gitlab<T> {
             // The first poll reads open issues only; later ones read every
             // change, which includes a close.
             let state = if since.is_some() { "all" } else { "opened" };
-            let mut query = vec![
-                ("scope", "all"),
-                ("state", state),
-                ("order_by", "updated_at"),
-                ("sort", "asc"),
-            ];
-            if let Some(s) = since {
-                query.push(("updated_after", s));
-            }
-            let listed = match self
-                .listing(project, &["issues"], &query, MAX_PAGES)
-                .await?
-            {
+            let listed = match self.issues_since(project, state, since).await? {
                 Ok(l) => l,
                 Err(status) => {
                     eprintln!("kbl-ingest: {repo} answered {status}; skipping it this poll");
@@ -607,8 +685,8 @@ impl<T: Transport> Source for Gitlab<T> {
                     eprintln!("kbl-ingest: skipped a GitLab issue of {repo} that does not parse");
                     continue;
                 };
-                if !issue.updated_at.is_empty()
-                    && newest.as_ref().is_none_or(|n| issue.updated_at > *n)
+                if let Some(at) = utc_ms(&issue.updated_at)
+                    && newest.as_deref().and_then(utc_ms).is_none_or(|n| at > n)
                 {
                     newest = Some(issue.updated_at.clone());
                 }
@@ -635,12 +713,8 @@ impl<T: Transport> Source for Gitlab<T> {
                 },
             );
         }
-        changes
-            .issues
-            .sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
-        changes
-            .comments
-            .sort_by(|a, b| a.updated_at.cmp(&b.updated_at));
+        changes.issues.sort_by_key(|i| utc_ms(&i.updated_at));
+        changes.comments.sort_by_key(|c| utc_ms(&c.updated_at));
         Ok(changes)
     }
 
