@@ -80,6 +80,10 @@ fn replay(fake: &Fake) -> Replayed {
             WorkRecord::Claimed { item, .. } => {
                 let held = state.items.get(item).and_then(|i| i.hold.as_ref());
                 assert!(held.is_none(), "{item} claimed at {offset} while held");
+                assert!(
+                    !state.blocked_at(item, logged.at_ms),
+                    "{item} claimed at {offset} while blocked"
+                );
                 if let Some(Assignee::Agent(a)) =
                     state.items.get(item).and_then(|i| i.assignee.as_ref())
                 {
@@ -411,6 +415,29 @@ async fn assign_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
         .await;
 }
 
+/// A person blocks an accepted item on a resource, sometimes with a time that
+/// stays far out, or lifts a block. Either may be refused; the check is that
+/// no claim lands on an item while its block holds.
+async fn block_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, lift: bool) {
+    let mut ids: Vec<_> = m.accepted.iter().cloned().collect();
+    ids.sort();
+    if ids.is_empty() {
+        return;
+    }
+    let id = ids[rng.below(ids.len())].clone();
+    let record = if lift {
+        WorkRecord::BlockCleared { item: item(&id) }
+    } else {
+        WorkRecord::BlockSet {
+            item: item(&id),
+            until_ms: (rng.below(2) == 0).then(|| now_ms() + 30 * 86_400_000),
+            resource: Some("azure-vms".into()),
+            reason: "no credit".into(),
+        }
+    };
+    let _ = t.person_record(key("gab"), record).await;
+}
+
 async fn dismiss_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
     let mut ids: Vec<_> = m.imported.iter().cloned().collect();
     ids.sort();
@@ -660,8 +687,10 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     let who = AGENTS[rng.below(AGENTS.len())];
     let serving = t.serving(rng.below(100) < 40);
-    match rng.below(15) {
+    match rng.below(18) {
         0..=1 => seed_item(serving, m).await,
+        15 => block_step(serving, m, rng, false).await,
+        16..=17 => block_step(serving, m, rng, true).await,
         2..=5 => claim_step(serving, fake, m, who).await,
         14 => filtered_claim_step(serving, fake, m, rng, who).await,
         6..=8 => finish_step(serving, m, rng, who).await,
@@ -689,6 +718,19 @@ async fn heal(fake: &Fake, m: &mut Model) {
     fake.lift_publish_budget();
     fake.fail_polls(None);
     let t = restart(fake).await;
+    // A person lifts every block, so what was held back is worked too.
+    let blocked: Vec<ItemId> = replay(fake)
+        .state
+        .items
+        .values()
+        .filter(|i| i.block.is_some())
+        .map(|i| i.id.clone())
+        .collect();
+    for id in blocked {
+        let _ = t
+            .person_record(key("gab"), WorkRecord::BlockCleared { item: id })
+            .await;
+    }
     // A person retries an accept that was not acknowledged.
     let mut imported: Vec<_> = m.imported.iter().cloned().collect();
     imported.sort();
@@ -769,10 +811,10 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             cur: start(&fake).await,
             old: None,
         };
-        // Format 15, so items can be assigned to agents, a question frees the
-        // asker and a direct claim says it was one.
+        // Format 16, so items can be assigned to agents, a question frees the
+        // asker, a direct claim says it was one and an item can be blocked.
         t.cur
-            .person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
+            .person_record(key("gab"), WorkRecord::FormatRaised { to: 16 })
             .await
             .unwrap();
         let mut m = Model::default();

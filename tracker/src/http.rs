@@ -228,6 +228,8 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/park", post(park::<B>))
         .route("/v1/work/unpark", post(unpark::<B>))
         .route("/v1/work/unblock", post(unblock::<B>))
+        .route("/v1/work/block", post(block::<B>))
+        .route("/v1/work/lift-block", post(lift_block::<B>))
         .route("/v1/work/request-review", post(request_review::<B>))
         .route("/v1/work/request-changes", post(request_changes::<B>))
         .route("/v1/work/mark-merged", post(mark_merged::<B>))
@@ -528,6 +530,16 @@ struct ItemBody {
 struct SnoozeBody {
     item: ItemId,
     until_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct BlockBody {
+    item: ItemId,
+    #[serde(default)]
+    until_ms: Option<u64>,
+    #[serde(default)]
+    resource: Option<String>,
+    reason: String,
 }
 
 #[derive(Deserialize)]
@@ -1475,6 +1487,20 @@ async fn snooze<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<SnoozeBody>) -> Re
         until_ms: b.until_ms,
     };
     as_person(&call, rk, record).await
+}
+
+async fn block<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<BlockBody>) -> Response {
+    let record = WorkRecord::BlockSet {
+        item: b.item,
+        until_ms: b.until_ms,
+        resource: b.resource,
+        reason: b.reason,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn lift_block<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::BlockCleared { item: b.item }).await
 }
 
 async fn park<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {

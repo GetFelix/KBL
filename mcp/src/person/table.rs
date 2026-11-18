@@ -179,6 +179,38 @@ pub(super) const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
+        name: "block_item",
+        about: "Hold an item back from every agent until a time, or on a named outside resource until you lift it. An agent already working it keeps its claim.",
+        route: Route::Post("/v1/work/block"),
+        params: &[
+            ITEM,
+            Param {
+                name: "reason",
+                kind: Kind::Text,
+                required: true,
+                about: "Why it is held, shown on the card.",
+            },
+            Param {
+                name: "until_ms",
+                kind: Kind::Number,
+                required: false,
+                about: "Milliseconds since the Unix epoch, in the future and within a year. The block ends then by itself.",
+            },
+            Param {
+                name: "resource",
+                kind: Kind::Text,
+                required: false,
+                about: "What it waits on, such as `azure-vms`: letters, digits, `-`, `_` and `.`. Give this or `until_ms`, or both.",
+            },
+        ],
+    },
+    Tool {
+        name: "lift_block",
+        about: "End an item's block now, so agents are handed it again.",
+        route: Route::Post("/v1/work/lift-block"),
+        params: &[ITEM],
+    },
+    Tool {
         name: "park_item",
         about: "Hide an item from the queue until it waits for a new reason.",
         route: Route::Post("/v1/work/park"),

@@ -94,6 +94,8 @@ async fn a_person_token_lists_every_tool() {
             "add_note",
             "retry_item",
             "snooze_item",
+            "block_item",
+            "lift_block",
             "park_item",
             "unpark_item",
             "unblock_item",
@@ -126,7 +128,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 21] = [
+    let cases: [(&str, Value, &str, Value); 23] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -180,6 +182,18 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             json!({ "item": "a1", "until_ms": 5 }),
             "/v1/work/snooze",
             json!({ "item": "a1", "until_ms": 5 }),
+        ),
+        (
+            "block_item",
+            json!({ "item": "a1", "reason": "no credit", "resource": "azure-vms", "until_ms": 9 }),
+            "/v1/work/block",
+            json!({ "item": "a1", "reason": "no credit", "resource": "azure-vms", "until_ms": 9 }),
+        ),
+        (
+            "lift_block",
+            json!({ "item": "a1" }),
+            "/v1/work/lift-block",
+            json!({ "item": "a1" }),
         ),
         (
             "park_item",
@@ -265,8 +279,8 @@ async fn each_tool_posts_to_its_route_with_its_body() {
 
 #[tokio::test]
 async fn every_table_entry_is_covered_by_a_case() {
-    // 19 writes above and the queue below: a new entry needs its case.
-    assert_eq!(TOOLS.len(), 20);
+    // 21 writes above and the queue below: a new entry needs its case.
+    assert_eq!(TOOLS.len(), 22);
 }
 
 #[tokio::test]
@@ -313,6 +327,7 @@ async fn a_bad_call_never_reaches_the_tracker() {
     let p = person(&fake).await;
     let bad = [
         ("snooze_item", json!({ "item": "a1" }), "until_ms is needed"),
+        ("block_item", json!({ "item": "a1" }), "reason is needed"),
         (
             "snooze_item",
             json!({ "item": "a1", "until_ms": -1 }),
