@@ -311,7 +311,7 @@ impl Folder {
     /// `note`, `done`, `released`, `gave_up`, `attempt_closed`, `rated`, `accepted`, `tier`,
     /// `taken`, `reassigned`, `closed` and `reopened`. `cost_micros` is what the fold charged
     /// the item for that record. A record the fold refused carries `refused` (the reason, such
-    /// as `bad_usage`): it changed nothing, so the page shows it as refused and counts it nowhere.
+    /// as `bad_usage`): it did not take effect, so the page shows it as refused and counts it nowhere.
     /// Read from records already applied; nothing is added to the log.
     pub fn activity_json(&self, item: &str) -> String {
         match ItemId::new(item) {
