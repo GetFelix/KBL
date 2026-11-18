@@ -50,6 +50,16 @@ value on focus or hover, and a screen reader reads both. A record the fold refus
 format 8 log, say) stays in Activity marked "refused" with the reason, and counts for nothing: not in Attempts, the Now line's
 last activity or a child's answer. A held item that waits on a person reads as waiting, never as working.
 
+**Handoff** (in the panel's fields, and above the strip under a Needs you row) shows what the item's latest finished
+attempt handed off, so a merge, steer or reject can be decided without opening other tabs: the agent's last progress
+note, the diff (files and `+`/`-` lines counted from the attempt's recorded edit hunks, "at least" when a hunk is stored
+outside the log, "No edits logged" when there are none; the line reads "Logged edits: ..." and its title says it is not the pull request's own diff), the pull request as a link with its recorded checks and the
+failing check's name, the attempt's failed steps with their commands and exit codes, and the reviewer's mark. Accurate
+and Not accurate are two plain buttons, one click each (Tab and Enter or Space from the keyboard); the pressed one is
+the recorded mark, and the mark goes to the attempt the block names. Every line is a record the fold accepted, read from
+the wasm fold's `handoffs_json()`: a refused `done`, note, step, edit or mark is not counted, and a field with no record is
+left out. No record or format is added. See [Handoff](../docs/work-tracker.md#handoff-beside-a-finished-attempt).
+
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it
 follows and the plan for later views are in [docs/design/dashboard-ux.md](../docs/design/dashboard-ux.md).

@@ -110,3 +110,10 @@ test('switching items drops the previous item\'s activity until the next read', 
   assert.equal(reduce(open, { type: 'open', id: 'r2' }).activity, undefined);
   assert.equal(reduce(open, { type: 'open', id: 'r1' }).activity, act);
 });
+
+test('an items update carries the handoffs of the same fold and keeps the last when one is not sent', () => {
+  const ho = { attempt: 1, summary: null, files: 0, added: 0, removed: 0, partial: false, failed_steps: [], failed_total: 0, accurate: null };
+  const sent = reduce(base, { type: 'items', items: [], blocked: [], overlaps: new Map(), handoffs: new Map([['r1', ho]]) });
+  assert.equal(sent.handoffs?.get('r1')?.attempt, 1);
+  assert.equal(reduce(sent, { type: 'items', items: [], blocked: [], overlaps: new Map() }).handoffs?.get('r1')?.attempt, 1);
+});

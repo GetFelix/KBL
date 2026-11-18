@@ -2729,6 +2729,24 @@ longest began, and are left out of p50 and p90. Percentiles use the nearest
 rank. The numbers are for the team whose log is folded; nothing names who
 acted. The fold keeps the last 20,000 finished waits; past that the response sets `truncated` for a window that reaches the dropped ones. The waits are not in a state's wire form, so a state restored from that counts only from the first record after it, and `truncated` is true for any window reaching earlier.
 
+#### Handoff beside a finished attempt
+
+The dashboard shows what an attempt handed off next to the item, in the panel and in the Needs you inbox, so
+a person can merge, steer or reject without opening the pull request, the log and the checks in turn. It
+reads the latest attempt that finished (an accepted `done`) and shows only what the fold took from the log:
+
+- **Summary.** The attempt's last `progress` note, as written. The note is stored inline; one kept in an artifact is not shown.
+- **Diff.** Shown as "Logged edits: ..." with a note that it is not the pull request's diff. Files touched and lines added and removed, counted from the `+` and `-` lines of the attempt's
+  `edit` hunks. A hunk stored as an artifact is not counted, and the page says "at least". The pull
+  request's own diff stats are not recorded, so the figure is what the agent logged, which may differ from the pull request.
+- **Pull request and checks.** The item's `pr` as a link, with the checks and the failing check's name from the
+  last `pr_status`.
+- **Failed steps.** The attempt's `step` records with a nonzero exit code (the first ten, with a count of the rest).
+- **Mark.** The standing `summary_rated` mark, and Accurate and Not accurate buttons that write one.
+
+A record the fold refused (a `done` with its own cost on a log at format 8 or above, a mark on a log below 11) counts for
+none of it. This is read in the page's fold (`handoffs_json`); no new record kind is added and the format does not change.
+
 #### Summary trust
 
 How often a person who marked an agent's summary marked it accurate. The fold

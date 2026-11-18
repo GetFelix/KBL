@@ -9,6 +9,7 @@ import { byFocus, h } from './dom.ts';
 import { itemHref } from './item-list.ts';
 import { overlapField } from './overlap-section.ts';
 import { storyField } from './story-section.ts';
+import { handoffField } from './handoff-field.ts';
 import { historySection } from './history-section.ts';
 import { linkedSection } from './linked-section.ts';
 import { nowSection } from './now-section.ts';
@@ -16,6 +17,7 @@ import { tickTimes, timelineSection } from './timeline-section.ts';
 import { itemActions, type WriteHandlers } from './item-actions.ts';
 import { assigneePerson, needsLine } from '../writes.ts';
 import type { ActivityEvent } from '../activity.ts';
+import { handoffKey } from '../handoff.ts';
 
 export interface PanelHandlers extends WriteHandlers {
   closeItem(): void;
@@ -75,7 +77,7 @@ const facetFields: Field[] = FACETS.map(([facet, label]) => ({
 }));
 
 // A new field is one module and one entry here.
-const FIELDS: readonly Field[] = [upstreamField, stageField, needsField, assigneeField, ...facetFields, overlapField, storyField];
+const FIELDS: readonly Field[] = [upstreamField, stageField, needsField, assigneeField, ...facetFields, overlapField, handoffField, storyField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,
@@ -173,5 +175,5 @@ function sectionsKey(item: ItemRow, s: ViewState): string {
   const ev = s.activity?.get(item.id) ?? [];
   const kids = s.items.filter((i) => i.parent === item.id).map((i) => `${i.id}:${i.stage}:${s.activity?.get(i.id)?.length ?? 0}`);
   const blocking = s.blocked.filter((b) => b.id === item.id || b.waits_on.some((w) => w.id === item.id));
-  return [ev.length, ev.at(-1)?.offset ?? '', item.pr ?? '', item.pr_phase ?? '', item.pr_checks ?? '', item.failing_check ?? '', kids.join(','), JSON.stringify(blocking), s.stories.get(item.id)?.rev ?? ''].join('|');
+  return [ev.length, ev.at(-1)?.offset ?? '', item.pr ?? '', item.pr_phase ?? '', item.pr_checks ?? '', item.failing_check ?? '', kids.join(','), JSON.stringify(blocking), s.stories.get(item.id)?.rev ?? '', handoffKey(item, s.handoffs?.get(item.id))].join('|');
 }

@@ -13,6 +13,8 @@ export interface Fold {
   overlapsJson(): string;
   /** What happened on one item, oldest first: the events its timeline and history are built from. */
   activityJson(item: string): string;
+  /** What each item's latest finished attempt handed off, keyed by item id. */
+  handoffsJson(): string;
   /** The story of every item with a recorded decision, keyed by item id. */
   storiesJson(): string;
   /** `{load, in_review}`: the review load the tracker's pause counts, and the In review part of it. */

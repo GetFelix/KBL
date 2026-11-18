@@ -320,6 +320,15 @@ impl Folder {
         }
     }
 
+    /// The latest finished attempt of each item, as `{item: {attempt, done_at, summary,
+    /// files, added, removed, partial, failed_steps, failed_total, accurate}}`: the
+    /// last progress note, the files and diff lines its recorded edits touch (`partial`
+    /// when a hunk is stored as an artifact), its failed steps, and the standing mark.
+    /// Only records the fold accepted count.
+    pub fn handoffs_json(&self) -> String {
+        self.activity.handoffs_json()
+    }
+
     /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.
     pub fn spend_json(&self) -> String {
         serde_json::to_string(&self.state.spend()).expect("plain data serializes")

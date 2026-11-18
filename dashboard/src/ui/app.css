@@ -300,3 +300,12 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 /* The absolute time appears beside the relative one on keyboard focus, as it does on hover. */
 .abs-time { cursor: help; }
 .abs-time:focus::after { content: ' (' attr(data-abs) ')'; color: var(--text-muted, inherit); }
+
+/* Trust block: what a finished attempt handed off, in the panel and under an inbox row. */
+.handoff { border: 1px solid var(--line); border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); margin-bottom: var(--space-2); }
+.handoff p { margin: var(--space-1) 0; }
+.handoff-facts, .handoff-failed { margin: var(--space-1) 0; padding-left: var(--space-4); }
+.handoff-failed code { overflow-wrap: anywhere; }
+.handoff-checks[data-checks='red'] { border-left: 3px solid var(--warn); padding-left: var(--space-2); }
+.handoff-mark { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.handoff-mark .button[aria-pressed="true"] { border-color: var(--text); font-weight: 600; }
