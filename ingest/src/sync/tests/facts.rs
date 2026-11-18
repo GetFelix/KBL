@@ -251,3 +251,64 @@ async fn a_rules_need_never_replaces_a_persons() {
     let s = rig.tracker.state();
     assert_eq!(s.items[&rig.root(UP)].class.needs().to_vec(), ["azure"]);
 }
+
+#[tokio::test]
+async fn needs_refused_below_format_20_are_mapped_after_the_raise() {
+    let rig = rig();
+    raise(&rig, 19);
+    let mut rule = admit_rule();
+    rule["label_needs"] = json!({ "needs-gpu": "gpu" });
+    let ingest = rig.ingest(json!([rule]));
+    rig.list(vec![with_facts(812, &["agent-ok", "needs-gpu"], None)]);
+    ingest.poll(false).await.unwrap();
+    assert!(
+        rig.tracker.state().items[&rig.root(UP)]
+            .class
+            .needs
+            .is_none()
+    );
+    raise(&rig, 20);
+    needs_vocabulary(&rig);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&rig.root(UP)].class.needs().to_vec(), ["gpu"]);
+}
+
+#[tokio::test]
+async fn a_rule_maps_at_most_the_most_needs_an_item_carries() {
+    let rig = rig();
+    raise(&rig, 20);
+    rig.tracker.person(WorkRecord::RulesSet {
+        target: Target {
+            source: "github".into(),
+            repo: "GetFelix/felix".into(),
+        },
+        root: None,
+        text: None,
+        checks: None,
+        vocabulary: Some(Vocabulary {
+            needs: (0..12).map(|i| format!("need{i}")).collect(),
+            ..Default::default()
+        }),
+    });
+    let mut rule = admit_rule();
+    let map: serde_json::Map<String, Value> = (0..12)
+        .map(|i| (format!("n{i}"), json!(format!("need{i}"))))
+        .collect();
+    rule["label_needs"] = map.into();
+    let ingest = rig.ingest(json!([rule]));
+    let labels_: Vec<String> = std::iter::once("agent-ok".to_owned())
+        .chain((0..12).map(|i| format!("n{i}")))
+        .collect();
+    rig.list(vec![with_facts(
+        812,
+        &labels_.iter().map(String::as_str).collect::<Vec<_>>(),
+        None,
+    )]);
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(
+        s.items[&rig.root(UP)].class.needs().len(),
+        kbl_core::work::MAX_NEEDS
+    );
+}

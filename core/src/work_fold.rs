@@ -445,7 +445,14 @@ impl Class {
         if by == ClassBy::Rule && standing == Some(ClassBy::Triage) {
             return;
         }
-        self.needs = (!values.is_empty()).then_some(NeedSet { values, by });
+        if values.is_empty() {
+            // An empty list removes only what the same actor set.
+            if by == ClassBy::Person || standing == Some(by) {
+                self.needs = None;
+            }
+            return;
+        }
+        self.needs = Some(NeedSet { values, by });
     }
 
     /// Sets a value for `by`, unless a person chose the slot and `by` is not a person.
@@ -1426,6 +1433,10 @@ impl State {
     ) -> Result<(), Reject> {
         let upstream = labels.is_some() || milestone.is_some();
         let classed = class.iter().any(|c| c.is_some()) || needs.is_some();
+        // Needs are read from the root only, so another item's would be ignored.
+        if needs.is_some() && self.item(item)?.root != *item {
+            return Err(Reject::BadClass);
+        }
         if own || (upstream && classed) {
             return Err(Reject::BadClass);
         }
@@ -2322,6 +2333,9 @@ impl State {
                     if let Some(v) = v {
                         chosen.push((dim, self.vocab_value(item, dim, v)?));
                     }
+                }
+                if needs.is_some() && self.item(item)?.root != *item {
+                    return Err(Reject::BadClass);
                 }
                 let chosen_needs = match needs {
                     Some(n) => Some(self.vocab_needs(item, n)?),

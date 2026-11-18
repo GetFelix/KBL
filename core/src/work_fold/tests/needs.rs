@@ -290,3 +290,28 @@ fn lifting_a_resource_nothing_waits_on_is_refused_and_only_a_person_lifts() {
     assert_eq!(last_rejection(&l), Some(Reject::NoChange));
     assert!(blocked_now(&l, "a1"));
 }
+
+#[test]
+fn triage_s_empty_list_does_not_remove_a_rules_needs() {
+    let mut l = at_20();
+    l.tracker(edited("r1", list(&["azure"])));
+    l.person(triaged("r1", list(&[])));
+    assert_eq!(needs_of(&l, "r1"), ["azure"]);
+    // Its own set it may drop.
+    l.person(triaged("r1", list(&["gpu"])));
+    l.person(triaged("r1", list(&[])));
+    assert!(needs_of(&l, "r1").is_empty());
+}
+
+#[test]
+fn needs_on_an_item_that_is_not_a_root_are_refused() {
+    let mut l = at_20();
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: None,
+        triage_skipped: None,
+    });
+    l.person(proposed("r1-t", Some("r1"), "k", WorkKind::Triage));
+    l.person(edited("r1-t", list(&["gpu"])));
+    assert_eq!(last_rejection(&l), Some(Reject::BadClass));
+}

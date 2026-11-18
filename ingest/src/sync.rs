@@ -389,10 +389,14 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         self.context(&item, "issue", issue_text(issue)).await?;
         self.context(&item, "intake", intake_text(&rule, issue))
             .await?;
+        // Before the admit: an admitted root is Ready at once, and an agent must
+        // not be able to take it before its needs are on it.
+        if !self.map_class(&item, &rule, issue).await? {
+            facts_written = false;
+        }
         if rule.mode == Mode::Admit {
             self.admit(&item, &rule, issue, true).await?;
         }
-        self.map_class(&item, &rule, issue).await?;
         p.roots.insert(
             key.clone(),
             Root {
@@ -440,12 +444,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         item: &ItemId,
         rule: &Rule,
         issue: &Issue,
-    ) -> Result<(), SourceError> {
+    ) -> Result<bool, SourceError> {
         let (item_type, area) = rule.mapped_class(issue);
         let needs = rule.mapped_needs(issue);
         if item_type.is_none() && area.is_none() && needs.is_empty() {
-            return Ok(());
+            return Ok(true);
         }
+        // False while the log is below format 20 and the needs could not be
+        // written, so the caller tries again on the next poll.
+        let mut complete = true;
         // One edit per dimension, so a value outside the vocabulary costs only itself.
         for (item_type, area, needs) in [
             (item_type, None, None),
@@ -455,7 +462,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             if item_type.is_none() && area.is_none() && needs.is_none() {
                 continue;
             }
-            self.write(&WorkRecord::Edited {
+            let is_needs = needs.is_some();
+            let edit = WorkRecord::Edited {
                 item: item.clone(),
                 title: None,
                 tier: None,
@@ -468,10 +476,17 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 depends_on: None,
                 proposal: None,
                 split: None,
-            })
-            .await?;
+            };
+            if is_needs {
+                if matches!(self.tracker.append(&edit).await?, Appended::Refused(why) if why == "format")
+                {
+                    complete = false;
+                }
+            } else {
+                self.write(&edit).await?;
+            }
         }
-        Ok(())
+        Ok(complete)
     }
 
     /// An issue whose rule names no repository for it goes to Needs you as
@@ -589,10 +604,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             }
         };
         if written {
-            t.labels = labels;
-            t.milestone = milestone;
-            if let Some(rule) = rules.iter().find(|r| r.name == t.rule) {
-                self.map_class(&t.item, rule, issue).await?;
+            let complete = match rules.iter().find(|r| r.name == t.rule) {
+                Some(rule) => self.map_class(&t.item, rule, issue).await?,
+                None => true,
+            };
+            // Needs the log could not take yet: keep the old labels, so the next
+            // poll sees a change and maps them again.
+            if complete {
+                t.labels = labels;
+                t.milestone = milestone;
             }
         }
         Ok(())

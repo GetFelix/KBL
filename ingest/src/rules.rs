@@ -146,6 +146,7 @@ impl Rule {
                 .find(|(k, _)| k.eq_ignore_ascii_case(l))
                 .map(|(_, v)| v);
             if let Some(v) = hit
+                && out.len() < kbl_core::work::MAX_NEEDS
                 && !out.iter().any(|o| o.eq_ignore_ascii_case(v))
             {
                 out.push(v.clone());
