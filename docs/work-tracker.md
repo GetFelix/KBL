@@ -1032,7 +1032,14 @@ What it does with GitHub:
   App lost access) keeps its cursor and stalls only itself: the tracker gets a
   `source_stalled` record, shown in Needs you for that source, and a second
   record when the repo can be read again. State saved with the older single
-  cursor is read once: every repo starts from it. A single-page
+  cursor is read once: every repo starts from it. The saved state also keeps a
+  digest of each rule's selector (repo or project, labels, milestone, assignee,
+  type, query). A rule that is new or whose selector changed drops its repo's
+  cursor, so the next poll reads that repo in full, once, within the rule's cap;
+  repos whose rules did not change keep their cursors. State saved before the
+  digests existed reads as unchanged, so an upgrade re-reads nothing. This holds
+  for GitHub, Jira, Azure DevOps and GitLab, which all keep one cursor per repo
+  or project. A single-page
   listing is requested with `If-None-Match`, so an unchanged repo costs no rate
   limit. A spent budget or `retry-after` makes every later call wait.
 - **Import once.** The item id is derived from the upstream id, and the fold

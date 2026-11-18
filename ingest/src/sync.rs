@@ -108,6 +108,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         };
         let mut state = state;
         state.migrate(&self.settings.repos);
+        state.reset_changed(&self.settings.rules);
         let listed = self.tracker.roots().await?;
         let (own, foreign): (Vec<Root>, Vec<Root>) =
             listed.roots.into_iter().partition(|r| r.source == name);
