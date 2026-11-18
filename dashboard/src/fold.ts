@@ -62,7 +62,7 @@ export interface ItemRow {
   labels?: string[] | null;
   milestone?: string | null;
   /** Type, area and size, with who chose each: a rule, triage or a person. */
-  class?: { item_type?: Tag; area?: Tag; size?: Tag } | null;
+  class?: { item_type?: Tag; area?: Tag; size?: Tag; needs?: { values: string[]; by: Tag['by'] } } | null;
   /** What a person blocked it on, or null. A block with `until_ms` in the past no longer holds. */
   block?: { at_ms: number; by: string; until_ms?: number | null; resource?: string | null; reason: string } | null;
   /** Who the item is assigned to, or absent. An agent assignee is not accepted yet. */

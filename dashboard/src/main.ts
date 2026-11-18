@@ -15,6 +15,7 @@ import { redoPoint, stories } from './story.ts';
 import { priceAgeDays, priceRequest, spend, type PriceEntry, type PriceUnit } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
+import { DEFAULT_GATEWAY, gatewayHost, pickSession } from './gateway-url.ts';
 import { commandFor, type CommandId } from './keys.ts';
 import { boardEdge, flatten, laneEdge, markedShown, move, moveBoard, moveLanes, shownRows, swimlanes, visible } from './list.ts';
 import { adviceFor, createStore, fromAddress, toAddress, type Density, type View, type ViewState } from './state.ts';
@@ -37,12 +38,15 @@ const q = new URLSearchParams(location.search);
 // The token never stays in the address bar, history or a shared link. This tab keeps the
 // session in sessionStorage so a reload does not lose it (see session.ts).
 // A new link is a new session: the earlier person sign-in does not carry over to it.
-if (q.get('token') && q.get('room')) forgetPerson();
-if (q.get('token') && q.get('room')) saveGateway({ gateway: q.get('gateway'), room: q.get('room')!, token: q.get('token')! });
-const linked = q.get('token') ? null : loadGateway();
-const token = q.get('token') ?? linked?.token ?? null;
-const roomName = q.get('room') ?? linked?.room ?? null;
-const gatewayUrl = q.get('gateway') ?? linked?.gateway ?? null;
+const pick = pickSession(q, loadGateway());
+if (pick.kind === 'session' && pick.fresh) {
+  forgetPerson();
+  saveGateway({ gateway: pick.gateway, room: pick.room, token: pick.token });
+}
+const refusal = pick.kind === 'refused' ? pick.reason : null;
+const token = pick.kind === 'session' ? pick.token : null;
+const roomName = pick.kind === 'session' ? pick.room : null;
+const gatewayUrl = pick.kind === 'session' ? pick.gateway : null;
 if (q.get('token')) {
   q.delete('token');
   history.replaceState(null, '', `${location.pathname}${q.size ? `?${q}` : ''}${location.hash}`);
@@ -70,7 +74,8 @@ const store_ = (key: string, value: string) => {
 const themeParam = q.get('theme');
 const address = fromAddress(location.search);
 const initial: ViewState = {
-  connection: roomName && token ? { kind: 'loading', what: 'history' } : { kind: 'setup' },
+  connection: refusal ? { kind: 'stopped', reason: refusal, advice: null } : roomName && token ? { kind: 'loading', what: 'history' } : { kind: 'setup' },
+  gateway: roomName && token ? gatewayHost(gatewayUrl) : undefined,
   synced: false,
   items: [],
   blocked: [],
@@ -593,7 +598,7 @@ function openActivity(fold: Fold): Activities {
 }
 
 async function main() {
-  const url = gatewayUrl ?? 'ws://127.0.0.1:8787/ws';
+  const url = gatewayUrl ?? DEFAULT_GATEWAY;
   const room = roomName;
   if (!room || !token) return;
   await init();

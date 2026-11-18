@@ -71,6 +71,7 @@ async fn vocabulary(t: &Tracker<Fake>) {
                 types: vec!["bug".into(), "perf".into()],
                 areas: vec!["storage".into()],
                 sizes: vec![],
+                needs: vec![],
             }),
         },
     )
@@ -90,6 +91,7 @@ async fn classify(t: &Tracker<Fake>, id: &str, item_type: &str) -> Result<Value,
             item_type: Some(item_type.into()),
             area: None,
             size: None,
+            needs: None,
             depends_on: None,
             split: None,
             proposal: None,
@@ -215,6 +217,7 @@ async fn upstream_facts_are_written_by_ingest_and_not_by_a_person() {
         item_type: None,
         area: None,
         size: None,
+        needs: None,
         depends_on: None,
         split: None,
         proposal: None,
@@ -293,6 +296,7 @@ async fn a_persons_class_does_not_make_the_agents_repeated_answer_a_new_one() {
         item_type: Some("perf".into()),
         area: None,
         size: None,
+        needs: None,
     };
     t.triage(&agent("w1"), &item("a1-t"), answer())
         .await

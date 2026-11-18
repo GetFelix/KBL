@@ -28,6 +28,9 @@ pub(crate) struct Filter {
     pub(crate) exclude_roots: Vec<ItemId>,
     /// Upstream facts and triage's class, read from the item's root.
     pub(crate) facets: Facets,
+    /// What the caller can do now. Work whose needs are not all in it is never
+    /// handed out; with none declared, only work that needs nothing is.
+    pub(crate) capabilities: Vec<String>,
 }
 
 /// The narrowing on a root's upstream milestone and labels and its
@@ -80,6 +83,35 @@ impl Facets {
 const MAX_FILTER_LABELS: usize = 32;
 
 impl Filter {
+    /// Sets what the caller can do. Values are matched without regard to case.
+    pub(crate) fn with_capabilities(mut self, capabilities: Vec<String>) -> Result<Self, Error> {
+        if capabilities.len() > MAX_FILTER_LABELS {
+            return Err(Error::Invalid(format!(
+                "declare at most {MAX_FILTER_LABELS} capabilities"
+            )));
+        }
+        if let Some(c) = capabilities
+            .iter()
+            .find(|c| !kbl_core::work::plain_class_value(c))
+        {
+            return Err(Error::Invalid(format!(
+                "capability {c:?} is not a plain word: letters, digits, `-`, `_`, `.` or `/`"
+            )));
+        }
+        self.capabilities = capabilities;
+        Ok(self)
+    }
+
+    /// Whether a Ready item exists that this caller may not take for want of a
+    /// capability. Such a caller claims from the state, so the lane's records
+    /// are never polled and none is spent on the item it passes over.
+    pub(super) fn skips_for_needs(&self, core: &Core) -> bool {
+        core.state.items.keys().any(|id| {
+            core.state.stage(id) == Some(Stage::Ready)
+                && !core.state.can_take(id, &self.capabilities)
+        })
+    }
+
     /// Adds the facet narrowing. The values are free text, so only their count is checked.
     pub(crate) fn with_facets(mut self, facets: Facets) -> Result<Self, Error> {
         if facets.labels.len() > MAX_FILTER_LABELS {
@@ -132,6 +164,7 @@ impl Filter {
             repo: repo.map(str::to_owned),
             exclude_roots: exclude_roots.to_vec(),
             facets: Facets::default(),
+            capabilities: Vec::new(),
         })
     }
 
@@ -142,6 +175,7 @@ impl Filter {
                     .tiers
                     .contains(&it.tier.unwrap_or(DEFAULT_TIER).min(TIERS - 1)))
             && !self.exclude_roots.contains(&it.root)
+            && core.state.can_take(&it.id, &self.capabilities)
             && (self.facets.is_empty()
                 || core
                     .state
@@ -347,6 +381,7 @@ impl<B: Broker> Tracker<B> {
                     "type": root.and_then(|r| r.class.item_type.as_ref()).map(|t| &t.value),
                     "area": root.and_then(|r| r.class.area.as_ref()).map(|t| &t.value),
                     "size": root.and_then(|r| r.class.size.as_ref()).map(|t| &t.value),
+                    "needs": core.state.needs_of(&id),
                 }))
             })
             .collect();

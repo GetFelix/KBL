@@ -13,9 +13,9 @@ beforeEach(() => {
 });
 
 test('a gateway session and a person token survive in session storage only', () => {
-  saveGateway({ gateway: 'ws://g/ws', room: 'kbl', token: 'gw-secret' });
+  saveGateway({ gateway: 'wss://g.example/ws', room: 'kbl', token: 'gw-secret' });
   savePerson('person-secret');
-  assert.deepEqual(loadGateway(), { gateway: 'ws://g/ws', room: 'kbl', token: 'gw-secret' });
+  assert.deepEqual(loadGateway(), { gateway: 'wss://g.example/ws', room: 'kbl', token: 'gw-secret' });
   assert.equal(loadPerson(), 'person-secret');
   assert.equal(local.size, 0, 'nothing reaches localStorage');
 });
@@ -34,6 +34,11 @@ test('a damaged saved session reads as none', () => {
   backing.set('kbl.session.gateway', '{"room":1}');
   assert.equal(loadGateway(), null);
   backing.set('kbl.session.gateway', 'not json');
+  assert.equal(loadGateway(), null);
+});
+
+test('a saved gateway that is not allowed reads as none', () => {
+  backing.set('kbl.session.gateway', JSON.stringify({ gateway: 'ws://evil.example/ws', room: 'kbl', token: 't' }));
   assert.equal(loadGateway(), null);
 });
 

@@ -17,10 +17,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - run: node scripts/lint.mjs
@@ -55,8 +55,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - run: node scripts/check-intake.mjs
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: cargo fmt --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
@@ -80,21 +80,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: dashboard/package-lock.json
       - run: rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - id: bindgen
         run: echo "version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')" >> "$GITHUB_OUTPUT"
       - name: Install the wasm-bindgen CLI at the locked version
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2
         with:
           tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
-      - run: npm ci
+      - run: npm ci --ignore-scripts
         working-directory: dashboard
       - run: npm run wasm
         working-directory: dashboard
@@ -113,15 +113,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - run: dev/up.sh
       - run: node dev/check.mjs
       - name: Create a run, then refuse the same id again
         run: |
-          cargo build -p kbl-tool
+          cargo build --locked -p kbl-tool
           tool=target/debug/kbl-tool
           "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2
           if "$tool" run create ci --goal "CI run" --budget-usd 1 --workers 2; then
@@ -130,23 +130,23 @@ jobs:
           fi
       - name: Start kbl-mcp and list its tools
         run: |
-          cargo build -p kbl-mcp
+          cargo build --locked -p kbl-mcp
           node dev/check-mcp.mjs
       - name: Run the task tools against Felix
         run: node dev/check-tasks.mjs
       - name: Run the tracker's claim path against Felix
         run: |
-          cargo build -p kbl-tool -p kbl-mcp -p kbl-tracker
+          cargo build --locked -p kbl-tool -p kbl-mcp -p kbl-tracker
           node dev/check-tracker-claims.mjs
       - name: Poll one issue again and again, and import it once
         run: |
-          cargo build -p kbl-ingest
+          cargo build --locked -p kbl-ingest
           node dev/check-tracker-ingest.mjs
       - name: Run the work tools against Felix
         run: node dev/check-tracker-work.mjs
       - name: Create teams and keep them apart
         run: |
-          cargo build -p kbl-tool --example raw_felix
+          cargo build --locked -p kbl-tool --example raw_felix
           node dev/check-teams.mjs
       - name: Run review as work against Felix
         run: node dev/check-tracker-review.mjs
@@ -174,7 +174,7 @@ jobs:
           else
             TRACKER=agents-tracker; MCP=felix-mcp
           fi
-          cargo build --manifest-path ../previous/Cargo.toml --target-dir target/previous -p "$TRACKER" -p "$MCP"
+          cargo build --locked --manifest-path ../previous/Cargo.toml --target-dir target/previous -p "$TRACKER" -p "$MCP"
           KBL_TRACKER_OLD="target/previous/debug/$TRACKER" KBL_MCP_OLD="target/previous/debug/$MCP" \
             node dev/check-upgrade.mjs
       - name: Run a scripted job twice from one seed
@@ -186,14 +186,14 @@ jobs:
       # On a stack of its own with 20 s tokens, then the stack is recreated as it was.
       - name: Outlive the first Felix token, holding a claim
         run: |
-          cargo build -p kbl-tool -p kbl-mcp
+          cargo build --locked -p kbl-tool -p kbl-mcp
           KBL_DEV_TOKEN_TTL_SECONDS=20 dev/up.sh
           node dev/check-renewal.mjs
           dev/up.sh
       # Last, because it recreates the stack.
       - name: Back up, restore into a fresh stack, and compare the folds
         run: |
-          cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker
+          cargo build --locked -p kbl-mcp -p kbl-tool -p kbl-tracker
           node dev/check-backup.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml logs
@@ -209,8 +209,8 @@ jobs:
       BUILDKIT_PROGRESS: plain
       COMPOSE_PROGRESS: plain
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       # What the README's quick start tells a new machine to run. The budget is
@@ -223,12 +223,12 @@ jobs:
           took=$((SECONDS - start))
           echo "quick start took ${took}s"
           test "$took" -le 900 || { echo "over the 900s budget"; exit 1; }
-      - run: cargo build --release -p kbl-mcp -p kbl-ingest
+      - run: cargo build --locked --release -p kbl-mcp -p kbl-ingest
       - run: node dev/check-quickstart.mjs
       - if: failure()
         run: docker compose -f dev/compose.yml --profile quickstart logs
       - if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: quickstart-log
           path: quickstart.log
@@ -245,12 +245,12 @@ jobs:
     env:
       KBL_IMAGE_TAG: ${{ vars.KBL_IMAGE_TAG }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - run: dev/quickstart.sh
-      - run: cargo build --release -p kbl-mcp -p kbl-ingest
+      - run: cargo build --locked --release -p kbl-mcp -p kbl-ingest
       - run: node dev/check-quickstart.mjs
       - if: always()
         run: dev/down.sh

@@ -123,11 +123,21 @@ http://localhost:5173/?gateway=ws://127.0.0.1:8787/ws&room=kbl&token=<ID token>
 
 `stream=<alias>` names a different alias than `events`.
 
-The token is read once and then removed from the address with `history.replaceState`. It stays in memory only,
-so reloading the page needs the link again. The first GET still carries it in the URL, so it reaches the dev
-server's access log. Two cautions: use `wss://` for any gateway but your own machine,
-since `ws://` sends the token in the clear; and treat a `?gateway=` link from someone else as untrusted, because
-the page sends the token to whatever address it names.
+The token is read once and then removed from the address with `history.replaceState`. This tab keeps the
+session (gateway, room, token) in `sessionStorage` so a reload does not lose it. The first GET still carries the
+token in the URL, so it reaches the dev server's access log.
+
+Where the token goes is fixed by the link that carried it:
+
+- A gateway is taken from the address only together with a token and room in the same link, which starts a new
+  session. A link with `?gateway=` and no token keeps the gateway the tab already signed in with, so it cannot
+  move a saved token to another server.
+- The gateway must be `wss://`, or `ws://` for `localhost`, `127.0.0.1` or `[::1]`. Anything else (including a
+  gateway with a user name or password in it) is refused and the page says so. A saved session that fails the
+  same check is dropped.
+- The gateway host is shown beside the connection status once the page is signed in.
+
+Still treat a link with a token from someone else as untrusted: it signs you in to the gateway it names.
 
 An expired or rejected token (`signed_out`, `forbidden`) or an error a retry cannot fix (`trimmed`, `bad_request`,
 `past_end`) stops the page with a message, and for a token it adds that a new sign-in link fixes it. A record of
@@ -246,7 +256,7 @@ has one entry per filter value and per saved view.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
-- **Group by.** The list groups by stage (the default), tier, repo, kind, milestone, label, type, area, size or assignee, or not at all. A card shows the milestone, type, area and size. An item with several labels is listed under its first label alphabetically. Each group has a
+- **Group by.** The list groups by stage (the default), tier, repo, kind, milestone, label, type, area, size or assignee, or not at all. A card shows the milestone, type, area, size and what the work needs. An item with several labels is listed under its first label alphabetically. Each group has a
   header button with its name and count; Enter or Space folds it, and `J` and `K` skip folded groups. Folds are kept per
   view and per grouping while the page is open. The palette has a `Group by: …` entry per key and Collapse or Expand
   all groups. On the board the columns stay stages and a grouping makes swimlanes, one folding row per group; `J` and `K` walk a column through the open lanes, `H` and `L` move along a lane, and the grouping is kept in saved views. Needs you stays one list, oldest

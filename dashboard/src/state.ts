@@ -40,6 +40,8 @@ export type { View };
 
 export interface ViewState {
   connection: Connection;
+  /** The host of the gateway this tab sends its token to, shown beside the connection status. */
+  gateway?: string;
   /** True once the page has read the whole log and gone live, so an empty list means the log is empty. */
   synced: boolean;
   items: ItemRow[];
