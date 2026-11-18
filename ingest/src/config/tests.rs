@@ -355,3 +355,12 @@ fn a_rule_may_skip_triage_only_when_it_admits() {
     assert!(err.contains("triage"), "{err}");
     assert!(parse(&rule(r#""mode":"admit","triage":"never""#), GH).is_err());
 }
+
+#[test]
+fn a_skip_rule_name_must_fit_the_record() {
+    let long = "n".repeat(121);
+    let rules = format!(r#"[{{"name":"{long}","repo":"o/r","mode":"admit","triage":"skip"}}]"#);
+    assert!(parse(&rules, GH).is_err());
+    let ok = format!(r#"[{{"name":"{long}","repo":"o/r","mode":"admit"}}]"#);
+    assert!(parse(&ok, GH).is_ok());
+}

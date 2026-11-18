@@ -431,6 +431,13 @@ impl Config {
         let mut seen = std::collections::HashSet::new();
         for r in &cfg.rules {
             ensure!(seen.insert(&r.name), "rule {:?} is listed twice", r.name);
+            // The tracker keeps the name as the reason triage was skipped and
+            // refuses a longer one, which would leave the root unaccepted.
+            ensure!(
+                r.triage == Triage::Run || r.name.len() <= 120,
+                "rule {:?}: a name over 120 bytes cannot be used with triage \"skip\"",
+                r.name
+            );
             ensure!(
                 r.triage == Triage::Run || r.mode == Mode::Admit,
                 "rule {:?}: triage \"skip\" is for mode \"admit\"; a proposed issue waits for a person",
