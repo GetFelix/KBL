@@ -282,8 +282,8 @@ export function itemList(
           if (a) rows.set(i.id, a);
         }
         el.replaceChildren(
-          ...groups.map((g) => {
-            const headingId = `group-${g.stage.replace(/[^\w-]/g, '_')}`;
+          ...groups.map((g, at) => {
+            const headingId = `group-${at}`;
             const count = h('span', { class: 'count' }, String(g.items.length));
             // A grouped list folds: the header is a button, so Tab, Enter and Space already work.
             const title = g.toggle

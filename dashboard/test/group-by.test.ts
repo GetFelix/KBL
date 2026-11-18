@@ -126,3 +126,15 @@ test('part B adds a key with one table entry: the table carries everything a key
   }
   assert.deepEqual(groupItems(items, 'nope'), []);
 });
+
+test('a layout, view or saved-view change moves a selection off a folded row', () => {
+  const s = { ...base, group: 'tier', collapsed: [collapseKey('all', 'tier', '2')], layout: 'board' as const, selected: 'a' };
+  assert.equal(reduce(s, { type: 'layout', layout: 'list' }).selected, 'd');
+  assert.notEqual(reduce({ ...s, layout: 'list' as const, selected: 'b' }, { type: 'openView', search: 'group=tier' }).selected, null);
+});
+
+test('picking the view default is no choice, so the inbox keeps its own default', () => {
+  const s = reduce(base, { type: 'group', group: 'stage' });
+  assert.equal(s.group, undefined);
+  assert.equal(reduce(base, { type: 'group', group: 'tier' }).group, 'tier');
+});

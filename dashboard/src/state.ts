@@ -2,6 +2,7 @@
 // only main.ts talks to the gateway. The view, item and search are kept in the address so
 // a link opens the same view for someone else.
 import type { BlockedRow, ItemRow, ReviewLoad } from './fold.ts';
+import { defaultGroup } from './group-by.ts';
 import { selectionFor, settleSelection, visible } from './list.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
@@ -120,6 +121,9 @@ export type Action =
   /** Opens a saved view: its scope, layout, search and filters replace the current ones. */
   | { type: 'openView'; search: string };
 
+/** The state with its selection moved off any row the groups hide. */
+const settled = (s: ViewState): ViewState => ({ ...s, selected: settleSelection(s) });
+
 export function reduce(s: ViewState, a: Action): ViewState {
   switch (a.type) {
     case 'connection':
@@ -155,7 +159,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'tracker':
       return { ...s, tracker: a.tracker };
     case 'view':
-      return { ...s, view: a.view };
+      return settled({ ...s, view: a.view });
     case 'kind':
       return { ...s, kind: a.kind };
     case 'query':
@@ -168,13 +172,14 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'theme':
       return { ...s, theme: a.theme };
     case 'layout':
-      return { ...s, layout: a.layout };
+      return settled({ ...s, layout: a.layout });
     case 'filter':
       return { ...s, filters: setFilter(s.filters, a.facet, a.value) };
     case 'clearFilters':
       return { ...s, filters: {} };
     case 'group': {
-      const next = { ...s, group: a.group };
+      // Picking the view's own default is no choice, so it follows the view when that changes.
+      const next = { ...s, group: a.group === defaultGroup(s.view) ? undefined : a.group };
       return { ...next, selected: settleSelection(next) };
     }
     case 'collapse': {
@@ -200,7 +205,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'saved':
       return { ...s, saved: a.saved };
     case 'openView':
-      return { ...s, group: undefined, ...decodeView(a.search), kind: null };
+      return settled({ ...s, group: undefined, ...decodeView(a.search), kind: null });
   }
 }
 
