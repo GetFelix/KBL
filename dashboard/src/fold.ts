@@ -39,6 +39,8 @@ export interface ItemRow {
   default?: string | null;
   /** What triage could not settle (`scope`, `repo`, `acceptance`) when the open question is triage's. */
   unclear?: string | null;
+  /** The stage of a root's triage child, or null when it has none. */
+  triage?: string | null;
   /** True for an item with no parent. */
   root?: boolean;
   /** A person accepted it. Only an accepted item can be flagged. */
@@ -53,6 +55,19 @@ export interface ItemRow {
   finding?: number | null;
   /** What triage proposed besides the tier, for a person to accept or adjust. */
   proposal?: { why: string; depends_on: string[]; split: string[] } | null;
+  /** The agent that holds it and when it last wrote, in the tracker's clock (ms). */
+  holder?: string | null;
+  active_ms?: number | null;
+  /** The item this one is a child of, and what kind of work it is (`fix`, `triage`, `augment`, `review`, ...). */
+  parent?: string | null;
+  work?: string | null;
+  /** The upstream id of the item's root, such as `GetFelix/felix#1694`. */
+  upstream?: string | null;
+  /** The pull request it reports, and what upstream shows of it. */
+  pr?: string | null;
+  pr_phase?: string | null;
+  pr_checks?: string | null;
+  failing_check?: string | null;
   /** The log's format when the page read it, the same for every row. A log below 7 refuses flags. */
   format?: number;
 }

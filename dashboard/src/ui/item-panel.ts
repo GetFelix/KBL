@@ -1,7 +1,8 @@
 // The side panel for the open item. It shows what the fold recorded, nothing inferred.
 // Each entry in FIELDS adds one labelled row, so a new kind of detail is one module.
+import { prText, upstreamRef, upstreamUrl, workingLine } from '../card.ts';
 import type { ItemRow } from '../fold.ts';
-import { stageLabel } from '../list.ts';
+import { rootStageLabel, triageChip } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { FACETS, valueOf } from '../views.ts';
 import { byFocus, h } from './dom.ts';
@@ -27,8 +28,11 @@ export interface Field {
 }
 
 const stageField: Field = {
-  key: () => '',
-  render: (item) => ['Stage', document.createTextNode(stageLabel(item.stage))],
+  key: (item) => item.triage ?? '',
+  render: (item) => {
+    const chip = triageChip(item);
+    return ['Stage', document.createTextNode(chip ? `${rootStageLabel(item)} (${chip.toLowerCase()})` : rootStageLabel(item))];
+  },
 };
 
 const needsField: Field = {
@@ -44,6 +48,33 @@ const assigneeField: Field = {
   },
 };
 
+// The upstream reference as a link when the source and id allow one; the KBL id is in the panel header.
+const upstreamField: Field = {
+  key: (item) => item.upstream ?? '',
+  render: (item) => {
+    const ref = upstreamRef(item);
+    if (!ref) return null;
+    const url = upstreamUrl(item);
+    return ['Upstream', url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, ref) : document.createTextNode(ref)];
+  },
+};
+
+const workingField: Field = {
+  key: (item) => `${item.holder ?? ''}|${item.held_attempt ?? ''}`,
+  render: (item) => {
+    const line = workingLine(item, Date.now());
+    return line ? ['Working', document.createTextNode(line)] : null;
+  },
+};
+
+const prField: Field = {
+  key: (item) => `${item.pr ?? ''}|${item.pr_phase ?? ''}|${item.pr_checks ?? ''}|${item.failing_check ?? ''}`,
+  render: (item) => {
+    const t = prText(item);
+    return t ? ['Pull request', document.createTextNode(item.failing_check ? `${t}: ${item.failing_check}` : t)] : null;
+  },
+};
+
 // Only what the log recorded: a facet with no value is left out, not shown as "none".
 const facetFields: Field[] = FACETS.map(([facet, label]) => ({
   key: (item) => valueOf(item, facet) ?? '',
@@ -54,7 +85,7 @@ const facetFields: Field[] = FACETS.map(([facet, label]) => ({
 }));
 
 // A new field is one module and one entry here.
-const FIELDS: readonly Field[] = [stageField, needsField, assigneeField, ...facetFields, waitsOnField, overlapField, storyField];
+const FIELDS: readonly Field[] = [upstreamField, stageField, workingField, needsField, assigneeField, ...facetFields, prField, waitsOnField, overlapField, storyField];
 
 const WHY = {
   missing: (id: string) => `The log has no item ${id}.`,

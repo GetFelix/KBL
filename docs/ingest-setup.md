@@ -31,11 +31,23 @@ pass `--force`. Options you may want:
 | Flag | Default | What it sets |
 |---|---|---|
 | `--label` | `agent-ok` | The label that marks an issue for agents. It also names the rule. Jira uses it for the default `--jql`. |
-| `--mode` | `admit` | `admit` makes a match a root at once; `propose` puts it in Triage until a person accepts it. |
+| `--mode` | `admit` | `admit` imports a match as a root and queues its triage and augment work; `propose` puts it in Triage and queues nothing until a person accepts it. See below. |
 | `--cap` | `5` | The most open roots the rule may have. Matches over it wait upstream. |
 | `--tracker-url` | `http://127.0.0.1:8790` | Where the tracker is. |
 | `--token-env` | `GITHUB_TOKEN`, `JIRA_API_TOKEN` | The variable that will hold the source token. |
 | `--jql` | `labels = "<label>"` | Jira only: the filter, combined with the project. |
+
+### What admit and propose do
+
+With `admit`, a match is imported as a root and its children come with it: a triage item and an augment item are
+queued first, so agents are handed that work before any fix. The root becomes ready to fix once a person accepts the
+triage. That is why a freshly admitted root shows `has_children: true` and agents seem to be doing something other
+than the fix. The dashboard shows the root's stage (Triage, Ready to fix, Held, Needs you) and a chip for its triage
+child.
+
+With `propose`, the match waits in Triage for a person before anything is queued.
+
+A rule cannot skip triage today; both modes go through it.
 
 The file is plain JSON, which has no comments, so the fields are explained in
 [the reference](work-tracker.md#running-the-ingest-worker). The starter holds

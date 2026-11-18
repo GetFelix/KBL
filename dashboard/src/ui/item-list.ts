@@ -1,18 +1,21 @@
 // The list view: items grouped by stage, one link per row, or the state that
 // explains why there are none. A Blocked row also says what it waits on. Rows are links, so Tab, Enter and middle-click work
 // natively; j and k move the selection and the focus together.
+import { childIndex, lead, properties, reasonLine, summarize, workingLine } from '../card.ts';
 import { waitsOn } from '../fold.ts';
 import { inScope, neighbour, visible, type Group } from '../list.ts';
 import { flagText } from '../overlap.ts';
 import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
-import { assigneePerson, needsLine } from '../writes.ts';
+import { assigneePerson } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
+import { childStrip, focusedStrip, refocusChip, stripKey, type StripHandlers } from './child-strip.ts';
+import { paintTriage } from './triage-chip.ts';
 import { h } from './dom.ts';
 import { inboxActions, type InboxHandlers } from './inbox-actions.ts';
 import { inboxKind, kindLabel } from '../inbox.ts';
 
-export interface ListHandlers extends InboxHandlers {
+export interface ListHandlers extends StripHandlers, InboxHandlers {
   open(id: string): void;
   /** Focus landed on a row: it becomes the selection, so keys act on what has focus. */
   select(id: string | null): void;
@@ -158,7 +161,7 @@ export function itemList(
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }), h('span', { class: 'assignee', hidden: true }));
+      }, h('span', { class: 'row-id row-lead' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-props muted' }), h('span', { class: 'row-flag', hidden: true }), h('span', { class: 'triage-chip', hidden: true }), h('span', { class: 'assignee', hidden: true }));
       rows.set(id, a);
     }
     const t = a.querySelector('.row-title')!;
@@ -229,10 +232,16 @@ export function itemList(
         return show('noblocked', emptyState('Nothing is blocked', 'An item shows here while a link or a prerequisite holds it back.'));
       }
       const groups = visible(s);
-      const waits = new Map(s.blocked.map((b) => [b.id, `waits on ${waitsOn(b)}`]));
-      for (const i of s.items) {
-        if (i.needs) waits.set(i.id, needsLine(i));
-        else if (s.view === 'inbox') {
+      const now = Date.now();
+      const kids = childIndex(s.items);
+      const open = new Set(s.expanded ?? []);
+      const strips = (id: string) => stripKey(kids.has(id) ? summarize(kids.get(id)!) : undefined, open.has(id));
+      const blocked = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
+      // What the row says on its right: why it needs a person, else the agent working it, else why it is not moving.
+      const waits = new Map(s.items.map((i) => [i.id, (i.needs ? null : workingLine(i, now)) ?? reasonLine(i, blocked.get(i.id))] as const));
+      if (s.view === 'inbox') {
+        for (const i of s.items) {
+          if (i.needs) continue;
           const k = inboxKind(i);
           if (k) waits.set(i.id, k === 'review' ? 'A review finding to accept' : 'Triage proposed this');
         }
@@ -250,11 +259,12 @@ export function itemList(
       }
       // The inbox is one ordered list; the board has no column for it.
       if (s.layout === 'board' && s.view !== 'inbox') return showBoard(s, groups);
-      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? ''])]))}`;
+      const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? '', lead(i), strips(i.id)])]))}`;
       // A field in a strip loses focus when its list is rebuilt; it gets it back once the strips are in.
       let typing: HTMLElement | null = null;
       if (key !== shown) {
         const focusedId = focusedHere();
+        const focusedChip = focusedStrip(el);
         typing = document.activeElement instanceof HTMLElement && document.activeElement.closest('.inbox-act') && el.contains(document.activeElement) ? document.activeElement : null;
         const focusedMark = document.activeElement instanceof HTMLInputElement && marks.get(document.activeElement.dataset.mark ?? '') === document.activeElement ? document.activeElement : null;
         const before = last;
@@ -270,7 +280,7 @@ export function itemList(
             const headingId = `group-${g.stage}`;
             return h('section', { class: 'group', 'aria-labelledby': headingId },
               h('h2', { id: headingId, class: 'group-title' }, g.label, h('span', { class: 'count' }, String(g.items.length))),
-              h('ul', {}, ...g.items.map((item) => h('li', { class: s.view === 'inbox' ? 'row-item inbox-item' : 'row-item' }, markBox(item.id), row(item.id, item.title, waits.get(item.id) ?? '')))),
+              h('ul', {}, ...g.items.map((item) => h('li', { class: s.view === 'inbox' ? 'row-item inbox-item' : 'row-item' }, markBox(item.id), row(item.id, item.title, waits.get(item.id) ?? ''), kids.has(item.id) && !s.childCards && s.view !== 'inbox' ? childStrip(item.id, summarize(kids.get(item.id)!), open.has(item.id), (id) => itemHref(id, s), on) : null))),
             );
           }),
         );
@@ -279,6 +289,7 @@ export function itemList(
         restoreFocus(focusedId, before, last, rows, el, quietly, { select: on.select, announce });
         // A checkbox that had the focus keeps it, rather than handing it to its row.
         if (focusedMark?.isConnected) quietly(focusedMark);
+        refocusChip(focusedChip, el);
         for (const id of marks.keys()) if (!rows.has(id)) marks.delete(id);
       }
       if (s.view === 'inbox') {
@@ -311,6 +322,14 @@ export function itemList(
         if (flag.textContent !== text) flag.textContent = text;
         flag.hidden = text === '';
         paintAssignee(a, assigneePerson(byId.get(id) ?? {}));
+        const item = byId.get(id);
+        const props = item ? properties(item).join(', ') : '';
+        const leadEl = a.querySelector<HTMLElement>('.row-lead')!;
+        const text2 = item ? lead(item) : id;
+        if (leadEl.textContent !== text2) leadEl.textContent = text2;
+        const pe = a.querySelector<HTMLElement>('.row-props')!;
+        if (pe.textContent !== props) pe.textContent = props;
+        paintTriage(a, item);
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

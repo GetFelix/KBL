@@ -175,6 +175,7 @@ in the status line.
 | `J` / `K`, `↓` / `↑` | Next and previous item (on the board, within the column) |
 | `H` / `L`, `←` / `→` | Previous and next column on the board |
 | `V` | Switch list and board |
+| `C` | Show child work as cards, or nested under its root |
 | `F` | Go to the filters |
 | `Home` / `End` | First and last item; on the board, of the current column |
 | `Enter` | Open the selected item in the panel |

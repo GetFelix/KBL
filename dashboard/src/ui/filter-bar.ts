@@ -9,6 +9,7 @@ import { h, kbd } from './dom.ts';
 
 export interface FilterHandlers {
   layout(layout: Layout): void;
+  children(): void;
   filter(facet: Facet, value: string | null): void;
   clearFilters(): void;
   saveView(): void;
@@ -21,6 +22,7 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     h('button', { type: 'button', class: 'segment', 'data-layout': layout, 'aria-pressed': 'false', onclick: () => on.layout(layout) }, label);
   const list = layoutButton('list', 'List');
   const board = layoutButton('board', 'Board');
+  const children = h('button', { type: 'button', class: 'button ghost', 'aria-pressed': 'false', onclick: on.children }, 'Child cards', kbd(displayChord(chordFor('children'), mac)));
   const selects = h('div', { class: 'filter-selects' });
   const clear = h('button', { type: 'button', class: 'button ghost', onclick: on.clearFilters, hidden: true }, 'Clear filters');
   const save = h('button', { type: 'button', class: 'button ghost', onclick: on.saveView }, 'Save view');
@@ -29,6 +31,7 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   const summaryEl = h('p', { class: 'filter-summary muted', 'aria-live': 'polite' });
   const el = h('div', { class: 'filter-bar' },
     h('div', { class: 'segmented', role: 'group', 'aria-label': 'Layout' }, list, board, kbd(displayChord(chordFor('layout'), mac))),
+    children,
     h('div', { class: 'filters', role: 'group', 'aria-label': 'Filters' }, selects),
     summaryEl,
     clear,
@@ -71,6 +74,7 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   const render = (s: ViewState) => {
     last = s;
     for (const b of [list, board]) b.setAttribute('aria-pressed', String(b.dataset.layout === s.layout));
+    children.setAttribute('aria-pressed', String(!!s.childCards));
     const scoped = inScope(s);
     const offered = facets(scoped, s.filters);
     const busy = document.activeElement;

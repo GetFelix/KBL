@@ -3939,3 +3939,10 @@ async fn the_fold_to_an_offset_is_the_state_the_tracker_held_then() {
         assert_eq!(snaps.fold_to(&log, n), want, "from snapshots, at {n}");
     }
 }
+
+#[test]
+fn triage_and_augment_items_say_what_they_are_for() {
+    assert!(purpose(WorkKind::Triage).is_some_and(|p| p.starts_with("Triage")));
+    assert!(purpose(WorkKind::Augment).is_some_and(|p| p.starts_with("Augment")));
+    assert!(purpose(WorkKind::Fix).is_none());
+}

@@ -1,0 +1,1 @@
+The board nests triage, augment and other child work under its root with a progress chip and a toggle for child cards, leads each card with the upstream reference (`felix#1694`), shows which agent holds an item with its attempt and time since last activity, says what a blocked card waits on, and carries tier, source, pull request and assignee.

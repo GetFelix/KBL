@@ -19,10 +19,17 @@
   </a>
 </p>
 
-KBL (Kanban By Log, pronounced Kibble) is a work tracker for coding agents, backed by [Felix](https://github.com/GetFelix/felix). It pulls bugs
-in from GitHub, Azure DevOps or Jira, hands each piece of work to one agent, keeps dependencies and priorities,
-and shows the queue in a dashboard. Agents from any vendor take work from it through an MCP server,
-`kbl-mcp`. People guide it from the dashboard.
+KBL (pronounced Kibble) lets one engineer supervise far more concurrent engineering work by coding agents than
+they could by driving each session themselves. It pulls issues in from GitHub, Azure DevOps, Jira or GitLab, hands
+each piece of work to exactly one agent, and keeps people in the loop for the decisions that need them: accepting a
+triage, answering a question, steering or taking over an item. Every claim, step and decision is recorded on a
+[Felix](https://github.com/GetFelix/felix) event log with who made it, so the queue, the board and the full history of
+a fix are all replays of one record. Agents from any vendor take work through an MCP server, `kbl-mcp`; people
+supervise from the dashboard.
+
+The name comes from Kanban By Log, but the board is only the view. Underneath, KBL is a work scheduler on an event
+log: exactly one holder per attempt, priorities and dependencies, budgets, and a record you can audit and replay.
+What we are proving now is the supervision claim, measured: see [the supervision plan](docs/design/supervision.md).
 
 KBL is not agentic. The tracker, `kbl-mcp` and the dashboard make no model calls and generate no text.
 Triage, gathering context, splitting, answering questions and fixing are all work items that an agent or a
@@ -36,7 +43,7 @@ person completes.
 fixtures. The [quick start](#quick-start) runs the real thing.</sub>
 
 > **Status:** M0, M1 and M2 are done: the task tools, the tracker with ingest, ready tiers and the work tools, and the
-> dashboard and replay. Work continues on real work (M3), the live dashboard (M4) and self-hosting (M10). See [Status](#status).
+> dashboard and replay. The current focus is supervision: the human and provenance experience, then a measured experiment ([plan](docs/design/supervision.md)). Scale work (more sources, many agents) waits on its result. See [Status](#status).
 
 ## Quick start
 
@@ -115,9 +122,12 @@ The view link works once: the page removes the token from the address and keeps 
    anything, then keeps polling the local tracker until you press Ctrl-C. The issues appear in the dashboard's Ready
    column. Add `--check-only` to stop after the check, or `--once` for a single poll. The config it writes is
    `dev/state/ingest.json`. Narrow or change the filter with `--labels a,b` (all required), `--exclude-label x,y`,
-   `--milestone NAME`, `--cap N` (open roots at most) and `--mode propose` (matches wait in Triage until a person accepts
-   them; the default `admit` makes them work at once). `--keep-config` runs the existing file as it is, for a config you
-   edited by hand. [Setting up ingest](docs/ingest-setup.md) explains the rest.
+   `--milestone NAME`, `--cap N` (open roots at most) and `--mode propose` (see below). `--keep-config` runs the existing file as it is, for a config you
+   edited by hand.
+
+   What the mode means: `admit` imports each match as a root and queues its triage and augment work first, so agents
+   are handed that before any fix, and the root becomes ready to fix once a person accepts the triage. `propose` waits
+   for a person before anything is queued. There is no option to skip triage yet. [Setting up ingest](docs/ingest-setup.md) explains the rest.
 5. **Stop it** with `dev/down.sh`, which also deletes its data.
 
 ### Troubleshooting
