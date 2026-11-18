@@ -975,6 +975,31 @@ mod signing {
     }
 
     #[tokio::test]
+    async fn an_entra_sign_in_is_charged_to_the_budget_once() {
+        let app = axum::Router::new()
+            .route(
+                "/t/oauth2/v2.0/token",
+                post(|| async {
+                    axum::Json(json!({ "access_token": "entra-token", "expires_in": 3600 }))
+                }),
+            )
+            .route("/who", who());
+        let base = serve(app).await;
+        let (dir, file) = secret_file("budget", "client-s3cret\n");
+        let budget = crate::budget::Budget::new(crate::budget::Vendor::Ado, Some(1000), 1.0);
+        let t = Reqwest::new(Auth::Entra(
+            Entra::new("t", "a", Secret::File(file), &base).with_budget(budget.clone()),
+        ))
+        .unwrap();
+        for _ in 0..2 {
+            t.send(Req::get(format!("{base}/who"))).await.unwrap();
+        }
+        // The transport here is not wrapped, so only the one sign-in is counted.
+        assert_eq!(budget.snapshot().tokens, 999);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
     async fn a_rejected_service_principal_is_an_error_that_holds_no_secret() {
         let app = axum::Router::new().route(
             "/tenant-1/oauth2/v2.0/token",

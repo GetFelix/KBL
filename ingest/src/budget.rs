@@ -295,6 +295,24 @@ impl Budget {
         sig.refused.then(|| sig.wait.unwrap_or(DEFAULT_WAIT))
     }
 
+    /// Runs a request that does not go through [`Budgeted`], such as a token
+    /// mint, under the same gate: it waits out a vendor's hold, is charged
+    /// once, and its rate limit headers are read. It draws on the reserve,
+    /// since nothing else can go out without the token it fetches.
+    pub(crate) async fn metered<F>(&self, send: F) -> Result<Res>
+    where
+        F: std::future::Future<Output = Result<Res>>,
+    {
+        if let Err(wait) = self.admit(true) {
+            return Err(Limited { wait }.into());
+        }
+        let res = send.await?;
+        match self.record(true, &res) {
+            Some(wait) => Err(Limited { wait }.into()),
+            None => Ok(res),
+        }
+    }
+
     pub(crate) fn begin_poll(&self) {
         self.inner.lock().expect("lock").poll_spent = 0.0;
     }

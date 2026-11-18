@@ -15,7 +15,9 @@ use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
+use crate::budget::Budget;
 use crate::config::{AppConfig, Installation};
+use crate::github::Res;
 
 /// The JWT is backdated this far, so a clock a little ahead of GitHub's
 /// does not make it "issued in the future".
@@ -61,6 +63,9 @@ pub(crate) struct AppAuth {
     client: reqwest::Client,
     clock: Clock,
     log: Log,
+    /// Charged for the mint and the installation lookup, which are requests
+    /// to the vendor like any other.
+    budget: Option<Arc<Budget>>,
     // Held across the mint, so requests that arrive together mint once.
     cache: Mutex<Option<Cached>>,
     installation_id: Mutex<Option<u64>>,
@@ -108,12 +113,18 @@ impl AppAuth {
                 .build()?,
             clock,
             log,
+            budget: None,
             cache: Mutex::new(None),
             installation_id: Mutex::new(match cfg.installation {
                 Installation::Id(id) => Some(id),
                 _ => None,
             }),
         })
+    }
+
+    pub(crate) fn with_budget(mut self, budget: Arc<Budget>) -> Self {
+        self.budget = Some(budget);
+        self
     }
 
     /// The App id, for error messages. Not a secret.
@@ -221,6 +232,14 @@ impl AppAuth {
     }
 
     async fn call(&self, method: &str, url: &str, jwt: &str) -> Result<(u16, Value)> {
+        let res = match &self.budget {
+            Some(b) => b.metered(self.send(method, url, jwt)).await?,
+            None => self.send(method, url, jwt).await?,
+        };
+        Ok((res.status, res.body))
+    }
+
+    async fn send(&self, method: &str, url: &str, jwt: &str) -> Result<Res> {
         let res = self
             .client
             .request(reqwest::Method::from_bytes(method.as_bytes())?, url)
@@ -232,7 +251,16 @@ impl AppAuth {
             // A reqwest error can carry the URL but never a header.
             .with_context(|| format!("reach {url}"))?;
         let status = res.status().as_u16();
-        Ok((status, res.json().await.unwrap_or(Value::Null)))
+        let headers = res
+            .headers()
+            .iter()
+            .filter_map(|(k, v)| Some((k.as_str().to_owned(), v.to_str().ok()?.to_owned())))
+            .collect();
+        Ok(Res {
+            status,
+            headers,
+            body: res.json().await.unwrap_or(Value::Null),
+        })
     }
 
     fn jwt(&self, now: u64) -> Result<String> {
