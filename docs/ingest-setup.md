@@ -212,4 +212,4 @@ machine until you press Ctrl-C. Without `--token-file` it reads `GITHUB_TOKEN`.
 
 ## Changing a rule
 
-Edit the rules and restart ingest. A rule that is new, or whose selector changed (repo or project, labels, milestone, assignee, type, JQL or saved query), makes its repo or project read in full on the next poll, so issues that already match the new rule and are older than the saved cursor are imported (up to the rule's cap). Rules you did not touch keep their cursor. Changing only options such as `cap`, `mode` or `comment` re-reads nothing.
+Edit the rules and restart ingest. A rule that is new, or whose selector changed (repo or project, labels, milestone, assignee, type, JQL or saved query), makes its repo or project read in full on the next poll, so issues that already match the new rule and are older than the saved cursor are imported (up to the rule's cap). Rules you did not touch keep their cursor. Rules edited in the same restart that first runs this version are recorded as they are and not re-read; restart once on the old rules first, or clear the saved state. Changing only options such as `cap`, `mode` or `comment` re-reads nothing.
