@@ -822,6 +822,33 @@ pub struct State {
     /// When each attempt's summary mark was written. Derived by replay, so not in the wire form.
     #[serde(skip)]
     mark_times: trust::MarkTimes,
+    /// Which items an agent may hold, so a record finds its hold without a scan.
+    #[serde(skip)]
+    holders: Holders,
+}
+
+/// A superset of the items each agent holds, filled where a hold is set and
+/// pruned when a lookup finds a hold gone. Derived from the items, so two
+/// states are equal whether or not they carry it; a decoded state rebuilds
+/// it on first use.
+#[derive(Debug, Clone, Default)]
+struct Holders {
+    by: BTreeMap<Key, BTreeSet<ItemId>>,
+    built: bool,
+}
+
+impl PartialEq for Holders {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for Holders {}
+
+impl Holders {
+    fn note(&mut self, by: &Key, item: &ItemId) {
+        self.by.entry(by.clone()).or_default().insert(item.clone());
+    }
 }
 
 /// The root each proposal waiting for a person came from, by item, and how many
@@ -915,14 +942,36 @@ impl State {
         if rec.actor != Actor::Agent {
             return;
         }
-        let held = self
-            .items
-            .values_mut()
-            .filter_map(|i| i.hold.as_mut())
-            .find(|h| h.by == rec.by);
-        if let Some(h) = held {
-            h.active_ms = h.active_ms.max(rec.at_ms);
+        if !self.holders.built {
+            for it in self.items.values() {
+                if let Some(h) = &it.hold {
+                    self.holders.note(&h.by, &it.id);
+                }
+            }
+            self.holders.built = true;
         }
+        let Some(candidates) = self.holders.by.get_mut(&rec.by) else {
+            return;
+        };
+        // Lowest id first, like a scan of the items. A candidate whose hold
+        // is gone is dropped here; one is added again when a claim sets it.
+        while let Some(id) = candidates.first().cloned() {
+            match self
+                .items
+                .get_mut(&id)
+                .and_then(|i| i.hold.as_mut())
+                .filter(|h| h.by == rec.by)
+            {
+                Some(h) => {
+                    h.active_ms = h.active_ms.max(rec.at_ms);
+                    return;
+                }
+                None => {
+                    candidates.remove(&id);
+                }
+            }
+        }
+        self.holders.by.remove(&rec.by);
     }
 
     /// The open item `agent` holds, with the attempt, if any.
@@ -2077,6 +2126,7 @@ impl State {
                         return Err(Reject::SelfReview);
                     }
                 }
+                self.holders.note(&rec.by, item);
                 let it = self.item_mut(item)?;
                 it.first_claim_ms.get_or_insert(rec.at_ms);
                 let want = it.next_attempt();

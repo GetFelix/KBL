@@ -3697,3 +3697,168 @@ fn only_the_tracker_admits_a_root_without_triage_and_only_a_childless_root() {
     l.tracker(skip("t1"));
     assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotARoot);
 }
+
+/// The scan `touch_hold` replaced: the lowest item whose hold is by the writer.
+fn apply_by_scan(s: &mut State, offset: u64, rec: &WorkLogged) {
+    match s.step(offset, rec) {
+        Ok(()) => {
+            if rec.actor == Actor::Agent
+                && let Some(h) = s
+                    .items
+                    .values_mut()
+                    .filter_map(|i| i.hold.as_mut())
+                    .find(|h| h.by == rec.by)
+            {
+                h.active_ms = h.active_ms.max(rec.at_ms);
+            }
+        }
+        Err(why) => s.rejections.push(Rejection { offset, why }),
+    }
+    s.at = Some(offset);
+}
+
+/// A seeded log of roots, claims, writes, releases, completions and give-ups
+/// by a few agents, most of them refused or stale.
+fn churn(roots: usize, agents: usize, records: usize) -> Log {
+    let mut l = Log::default();
+    for r in 0..roots {
+        let item = format!("r{r:04}");
+        l.tracker(imported(&item));
+        l.person(WorkRecord::Accepted {
+            item: id(&item),
+            tier: None,
+            triage_skipped: None,
+        });
+    }
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = |n: usize| {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x % n as u64) as usize
+    };
+    for _ in 0..records {
+        let who = format!("w{}", next(agents));
+        let item = format!("r{:04}", next(roots));
+        let attempt = 1 + next(2) as u32;
+        let rec = match next(6) {
+            0 | 1 => claimed(&item, attempt),
+            2 => WorkRecord::Released {
+                item: id(&item),
+                attempt,
+                reason: None,
+                why: None,
+                cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: 0,
+            },
+            3 => done(&item, attempt, 0),
+            4 => WorkRecord::GaveUp {
+                item: id(&item),
+                attempt,
+                reason: "stuck".into(),
+                cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: 0,
+            },
+            _ => WorkRecord::Context {
+                item: id(&item),
+                entry: key(&format!("e{}", next(1000))),
+                text: text("note"),
+            },
+        };
+        l.agent(&who, rec);
+    }
+    l
+}
+
+#[test]
+fn the_hold_index_moves_the_same_holds_the_scan_did() {
+    let l = churn(40, 6, 4000);
+    let indexed = fold(&l.0);
+    let mut scanned = State::default();
+    for (o, r) in &l.0 {
+        apply_by_scan(&mut scanned, *o, r);
+    }
+    assert_eq!(indexed, scanned);
+    // The log must exercise the path: holds exist and were touched.
+    assert!(indexed.items.values().any(|i| i.hold.is_some()));
+    // A decoded state has no index and rebuilds it on the next write.
+    let wire = serde_json::to_string(&indexed).unwrap();
+    let mut decoded: State = serde_json::from_str(&wire).unwrap();
+    let mut live = indexed.clone();
+    let more = churn(40, 6, 4400);
+    for (o, r) in more.0.iter().skip(l.0.len()) {
+        decoded.apply(*o, r);
+        live.apply(*o, r);
+    }
+    assert_eq!(decoded, live);
+}
+
+#[test]
+fn folding_holds_does_not_scan_the_items_per_record() {
+    // Each agent holds one of the last roots, the worst case for a scan from the front.
+    let roots = 20_000;
+    let mut l = Log::default();
+    for r in 0..roots {
+        let item = format!("r{r:05}");
+        l.tracker(imported(&item));
+        l.person(WorkRecord::Accepted {
+            item: id(&item),
+            tier: None,
+            triage_skipped: None,
+        });
+    }
+    for a in 0..8 {
+        l.agent(
+            &format!("w{a}"),
+            claimed(&format!("r{:05}", roots - 1 - a), 1),
+        );
+    }
+    for n in 0..30_000 {
+        l.agent(
+            &format!("w{}", n % 8),
+            WorkRecord::Context {
+                item: id(&format!("r{:05}", roots - 1 - n % 8)),
+                entry: key("e"),
+                text: text("note"),
+            },
+        );
+    }
+    // Timing is not asserted: shared CI runners make wall-clock ratios flaky.
+    let indexed = fold(&l.0);
+    let mut scanned = State::default();
+    for (o, r) in &l.0 {
+        apply_by_scan(&mut scanned, *o, r);
+    }
+    assert_eq!(indexed, scanned);
+}
+
+#[test]
+fn a_former_holders_write_does_not_touch_the_new_holders_hold() {
+    let mut l = held_root();
+    l.agent(
+        "w1",
+        WorkRecord::Released {
+            item: id("r1"),
+            attempt: 1,
+            reason: None,
+            why: None,
+            cost_micros: 0,
+            usage: Vec::new(),
+            floor_micros: 0,
+        },
+    );
+    l.agent("w2", claimed("r1", 1));
+    let before = fold(&l.0).items[&id("r1")].hold.clone().unwrap();
+    l.agent(
+        "w1",
+        WorkRecord::Context {
+            item: id("r1"),
+            entry: key("late"),
+            text: text("late"),
+        },
+    );
+    let after = fold(&l.0).items[&id("r1")].hold.clone().unwrap();
+    assert_eq!(before, after);
+}
