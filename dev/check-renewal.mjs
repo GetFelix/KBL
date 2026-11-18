@@ -10,11 +10,10 @@
 // renewed on schedule with no traffic driving it (at two thirds of each
 // token's life), and then a publish, a cache write and the ack of the claim
 // it held all along must succeed.
-import { mkdtempSync, renameSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { agent as spawnAgent, check, createRunWhenReady, felixToken, giveUpAfter, idToken, killAll, sleep, whenReady } from "./lib/stack.mjs";
 
 const CONTROL_PLANE = process.env.KBL_FELIX_CONTROL_PLANE || "http://127.0.0.1:8443";
@@ -22,25 +21,6 @@ const CONTROL_PLANE = process.env.KBL_FELIX_CONTROL_PLANE || "http://127.0.0.1:8
 const LEEWAY_MS = 60_000;
 
 giveUpAfter(240, "the renewal check");
-
-// The broker holds its leases with a token of the same short life, and re-reads
-// the file it came from. Left alone it would lapse its leases a minute and a
-// half in, which is the broker failing, not the worker under test. The seed
-// made the state directory writable for the broker's user.
-const NODE_TOKEN = join(dirname(fileURLToPath(import.meta.url)), "state", "node.token");
-async function renewNodeToken() {
-  const exchanged = await fetch(`${CONTROL_PLANE}/v1/tenants/agents/token/exchange`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${await idToken("agents-broker")}` },
-    body: JSON.stringify({ audience: "felix-controlplane" }),
-  });
-  if (!exchanged.ok) throw new Error(`the broker's token was not renewed: ${exchanged.status}`);
-  const next = `${NODE_TOKEN}.next`;
-  writeFileSync(next, (await exchanged.json()).felix_token, { mode: 0o644 });
-  renameSync(next, NODE_TOKEN);
-}
-await renewNodeToken();
-const nodeTokenTimer = setInterval(() => renewNodeToken().catch((e) => console.error(e.message)), 5000);
 
 // Arrival time (ms) and `exp` (s) of each exchange the worker made.
 const exchanges = [];
@@ -114,7 +94,6 @@ try {
   check(done.status === "done" && !done.warning, "the claim held across the renewals completed: its cache write and ack landed with no lapse warning");
   worker.kill();
 } finally {
-  clearInterval(nodeTokenTimer);
   counter.close();
   killAll();
 }
