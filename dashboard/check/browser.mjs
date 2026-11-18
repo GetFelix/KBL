@@ -605,8 +605,9 @@ try {
   check(await page.eval(`document.activeElement?.dataset.focus?.startsWith('out:') === true`), 'a live record keeps the focus on the output toggle');
   await shoot('panel-timeline');
   await axe('panel timeline');
-  // From format 8 a report carries usage and the fold prices it; a reported cost is refused.
-  await rec({ kind: 'done', usage: [{ unit: 'tokens', model: 'claude-opus-5-5', input: 10_000 }] });
+  // From format 8 a report carries usage and the fold prices it; a reported cost is refused. A record
+  // that needs format 8 must say so with `v`, or the fold refuses it as Format.
+  await rec({ v: 8, kind: 'done', usage: [{ unit: 'tokens', model: 'claude-opus-5-5', input: 10_000 }] });
   await page.waitFor(`document.querySelector('.panel .attempt')?.textContent.includes('Finished')`);
   check((await text('.panel .attempt')).includes('cost $0.15'), `an attempt shows what it cost (${await text('.panel .attempt')})`);
   check((await text('.panel .attempt')).includes('moved the fill before the read'), `an attempt shows the summary it handed off (saw "${await text('.panel .attempt')}")`);
