@@ -1013,6 +1013,9 @@ async fn people_accept_edit_reject_move_close_and_unlink() {
             item: p.clone(),
             title: Some("the real bug".into()),
             tier: Some(0),
+            depends_on: None,
+            split: None,
+            proposal: None,
         },
     )
     .await
@@ -1275,6 +1278,9 @@ async fn an_edited_title_is_bounded_and_not_empty() {
         item: item("a1"),
         title: Some(title),
         tier: None,
+        depends_on: None,
+        split: None,
+        proposal: None,
     };
     let r = t.person_record(key("gab"), edit(String::new())).await;
     assert_eq!(why(r), "invalid");
@@ -2474,6 +2480,83 @@ async fn triage_refuses_bad_dependencies_and_splits_and_writes_nothing() {
         .unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
     assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn a_person_adjusts_triage_s_advice_only_at_format_17_and_on_the_answer_they_read() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    // a1 is imported and not accepted: triage's answer is a proposal for a person.
+    t.person_record(
+        key("gab"),
+        WorkRecord::Imported {
+            item: item("a1"),
+            source: "gh".into(),
+            upstream_id: "a1".into(),
+            title: "fix a1".into(),
+        },
+    )
+    .await
+    .unwrap();
+    t.person_record(
+        key("gab"),
+        WorkRecord::Proposed {
+            item: item("a1-t"),
+            parent: Some(item("a1")),
+            key: key("triage"),
+            work: WorkKind::Triage,
+            title: "Triage: fix a1".into(),
+            review: None,
+        },
+    )
+    .await
+    .unwrap();
+    claim_item(&t, "w1", &item("a1-t")).await;
+    seed(&t, "a2", 2).await;
+    t.triage(&agent("w1"), &item("a1-t"), ans(1, "w".into(), None, None))
+        .await
+        .unwrap();
+    let at = {
+        let core = t.0.core.lock().await;
+        core.state.items[&item("a1")].proposal.as_ref().unwrap().at
+    };
+    let edit = |proposal: u64, deps: Vec<&str>, split: Vec<String>| WorkRecord::Edited {
+        item: item("a1"),
+        title: None,
+        tier: None,
+        depends_on: Some(deps.into_iter().map(item).collect()),
+        split: Some(split),
+        proposal: Some(proposal),
+    };
+    let before = fake.log().len();
+    // The log is below 17: refused, nothing written.
+    let r = t
+        .person_record(key("gab"), edit(at, vec!["a2"], vec!["x".into()]))
+        .await;
+    assert_eq!(why(r), "format");
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 17 })
+        .await
+        .unwrap();
+    let before = before + 1;
+    // Bounds are triage's own; a stale offset and an unknown item are refused.
+    let many: Vec<String> = (0..9).map(|n| format!("part {n}")).collect();
+    let r = t.person_record(key("gab"), edit(at, vec![], many)).await;
+    assert_eq!(why(r), "invalid");
+    let r = t
+        .person_record(key("gab"), edit(at + 1, vec![], vec!["x".into()]))
+        .await;
+    assert_ne!(why(r), "ok");
+    let r = t
+        .person_record(key("gab"), edit(at, vec!["nope"], vec![]))
+        .await;
+    assert_ne!(why(r), "ok");
+    assert_eq!(fake.log().len(), before);
+    t.person_record(key("gab"), edit(at, vec!["a2"], vec!["x".into()]))
+        .await
+        .unwrap();
+    let core = t.0.core.lock().await;
+    let p = core.state.items[&item("a1")].proposal.clone().unwrap();
+    assert_eq!((p.depends_on, p.split), (vec![item("a2")], vec!["x".to_owned()]));
 }
 
 #[tokio::test]

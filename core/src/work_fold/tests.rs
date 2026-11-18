@@ -1790,6 +1790,9 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item: id("p"),
         title: Some("the real title".into()),
         tier: Some(0),
+        depends_on: None,
+        split: None,
+        proposal: None,
     });
     let s = fold(&l.0);
     assert_eq!(s.items[&id("p")].title, "the real title");
@@ -1804,6 +1807,9 @@ fn a_person_edits_a_proposal_before_accepting_it() {
         item: id("p"),
         title: None,
         tier: Some(3),
+        depends_on: None,
+        split: None,
+        proposal: None,
     });
     assert_eq!(last_rejection(&l), Some(Reject::NotAProposal));
     l.agent(
@@ -1812,6 +1818,9 @@ fn a_person_edits_a_proposal_before_accepting_it() {
             item: id("p"),
             title: None,
             tier: Some(3),
+            depends_on: None,
+            split: None,
+            proposal: None,
         },
     );
     assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
@@ -3101,6 +3110,7 @@ fn chained_answers_stop_at_the_depth_cap() {
 mod assignee;
 mod card_actions;
 mod human_wait;
+mod inbox;
 mod review;
 mod review_actions;
 mod snapshots;

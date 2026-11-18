@@ -1257,13 +1257,22 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
         | WorkRecord::HumanInput { text, .. }
         | WorkRecord::Steered { text, .. } => check_content("text", text),
         WorkRecord::Edited {
-            title: Some(title), ..
+            title,
+            depends_on,
+            split,
+            ..
         } => {
-            field("title", title)?;
-            if title.is_empty() {
-                return Err(Error::Invalid("a title is needed".into()));
+            if let Some(title) = title {
+                field("title", title)?;
+                if title.is_empty() {
+                    return Err(Error::Invalid("a title is needed".into()));
+                }
             }
-            Ok(())
+            // A person's advice is held to the bounds of triage's own.
+            triage_lists(
+                depends_on.as_deref().unwrap_or_default(),
+                split.as_deref().unwrap_or_default(),
+            )
         }
         WorkRecord::Shipped { release, .. } => {
             field("release", release)?;
