@@ -373,9 +373,9 @@ try {
   // Filters: a select per recorded facet, a summary, Clear filters, and palette commands.
   await open(connected);
   await page.waitFor(live);
-  const offered = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.dataset.facet).join(' ')`);
+  const offered = await page.eval(`[...document.querySelectorAll('.filters .filter select')].map((s) => s.dataset.facet).join(' ')`);
   check(offered === 'source tier repo', `filters offer the recorded facets (${offered})`);
-  const shownValues = await page.eval(`[...document.querySelectorAll('.filter select')].map((s) => s.selectedOptions[0]?.textContent ?? '').join(',')`);
+  const shownValues = await page.eval(`[...document.querySelectorAll('.filters .filter select')].map((s) => s.selectedOptions[0]?.textContent ?? '').join(',')`);
   check(shownValues === 'Any,Any,Any', `every filter with no value shows Any, not a blank (${shownValues})`);
   await press(page, 'f');
   check(await focused('#filter-source'), 'F focuses the first filter');
@@ -920,6 +920,46 @@ try {
   check(noRing.length === 0, `keyboard: every Tab stop shows a focus indicator${noRing.length ? ` (missing on ${[...new Set(noRing)].join(', ')})` : ''}`);
   check(hidden.length === 0, `keyboard: no Tab stop is an invisible element${hidden.length ? ` (${[...new Set(hidden)].join(', ')})` : ''}`);
   clean();
+
+  // Group by: headers are buttons, folding hides rows and j/k skip them, the choice is in the address.
+  {
+    const seen = (js) => page.eval(js);
+    await open(`${connected}&group=tier`);
+    await page.waitFor(live);
+    const names = await seen(`[...document.querySelectorAll('.list .group-toggle')].map((b) => b.querySelector('.group-name').textContent + ' ' + b.querySelector('.count').textContent).join(' | ')`);
+    console.log(`     group by tier: ${names}`);
+    check(await seen(`document.querySelector('#group-by').value === 'tier' && document.querySelectorAll('.list .group-toggle').length > 1`), 'group by: ?group=tier groups the list by tier and the toolbar shows it');
+    check(await seen(`[...document.querySelectorAll('.list .group-toggle')].every((b) => b.getAttribute('aria-expanded') === 'true' && /^(Tier \\d+|No tier)$/.test(b.querySelector('.group-name').textContent))`), 'group by: each header is a button, open, named for its tier');
+    const rowsBefore = await seen(`document.querySelectorAll('.list .row').length`);
+    const firstCount = Number(await seen(`document.querySelector('.list .group-toggle .count').textContent`));
+    await seen(`document.querySelector('.list .group-toggle').focus(); document.querySelector('.list .group-toggle').click(); true`);
+    const rowsAfter = await seen(`document.querySelectorAll('.list .row').length`);
+    console.log(`     folded the first group: ${rowsBefore} rows -> ${rowsAfter}, count ${firstCount}`);
+    check(rowsAfter === rowsBefore - firstCount, 'group by: folding a group hides its rows and keeps its count');
+    check(await seen(`document.querySelector('.list .group-toggle').getAttribute('aria-expanded') === 'false'`), 'group by: a folded header says aria-expanded false');
+    check(await focused('.list .group-toggle'), 'group by: the header keeps the focus after folding');
+    let stray = 0;
+    for (let n = 0; n < rowsAfter + 1; n++) {
+      await press(page, 'j');
+      if (!(await seen(`(() => { const r = document.querySelector('.list .row[data-selected]'); return !!r && r.closest('section').querySelector('.group-toggle').getAttribute('aria-expanded') === 'true'; })()`))) stray++;
+    }
+    check(stray === 0, `group by: j never selects a row in a folded group (${stray} strays over ${rowsAfter + 1} presses)`);
+    await seen(`document.querySelector('.list .row[data-selected]').focus(); true`);
+    await seen(`(() => { const s = document.querySelector('#group-by'); s.value = 'repo'; s.dispatchEvent(new Event('change')); return true; })()`);
+    check(await seen(`document.activeElement?.classList.contains('row') && document.activeElement.hasAttribute('data-selected')`), 'group by: regrouping keeps the focus on the same row');
+    await page.waitFor(`location.search.includes('group=repo')`);
+    check(await seen(`[...document.querySelectorAll('.list .group-name')].some((n) => n.textContent === 'GetFelix/felix')`), 'group by: picking repo regroups the list and writes group=repo to the address');
+    await seen(`(() => { const s = document.querySelector('#group-by'); s.value = 'none'; s.dispatchEvent(new Event('change')); return true; })()`);
+    check(await seen(`document.querySelectorAll('.list .group-toggle').length === 0 && document.querySelectorAll('.list .row').length > 0`), 'group by: None is one list with no headers');
+    await open(`${connected}&group=assignee`);
+    await page.waitFor(live);
+    check(await seen(`document.querySelector('#group-by').value === 'assignee'`), 'group by: a link restores the grouping');
+    await open(`${connected}&layout=board&group=tier`);
+    await page.waitFor(live);
+    check(await seen(`document.querySelector('#group-by').disabled && document.querySelectorAll('.column').length > 1`), 'group by: the board keeps its stage columns and the control says so');
+    await axe('group by');
+    clean();
+  }
 
   // The Needs-you inbox answers in place: a question by its option key, a triage proposal by Accept.
   {

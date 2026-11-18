@@ -200,6 +200,7 @@ in the status line.
 | `V` | Switch list and board |
 | `C` | Show child work as cards, or nested under its root |
 | `F` | Go to the filters |
+| `G` | Go to Group by |
 | `Home` / `End` | First and last item; on the board, of the current column |
 | `Enter` | Open the selected item in the panel |
 | `Esc` | Close the panel or dialog, clear the search, or clear the selection |
@@ -224,10 +225,15 @@ has one entry per filter value and per saved view.
 - **Filters.** Source, tier and repo, each offering only values the log recorded. A value's count is what picking
   it would show under the other filters. A facet no item recorded is not shown. The bar says how many items the
   search and filters leave, with Clear filters. A select is updated in place and left alone while it has focus.
-- **The address.** `view=blocked`, `view=inbox`, `layout=board`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
+- **Group by.** The list groups by stage (the default), tier, repo, kind or assignee, or not at all. Each group has a
+  header button with its name and count; Enter or Space folds it, and `J` and `K` skip folded groups. Folds are kept per
+  view and per grouping while the page is open. The palette has a `Group by: …` entry per key and Collapse or Expand
+  all groups. The board is always stage columns, so the control is disabled there. Needs you stays one list, oldest
+  first, until a grouping is picked.
+- **The address.** `view=blocked`, `view=inbox`, `layout=board`, `group=`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
   address, so a link opens the same view. An older `view=board` link still opens the board and is rewritten to
   `layout=board`.
-- **Saved views.** Save view names the current view, layout, search and filters and puts it in the sidebar; Edit
+- **Saved views.** Save view names the current view, layout, search, filters and grouping and puts it in the sidebar; Edit
   renames or deletes it, and a name another view has is refused. After a rename the focus is back on that view's
   Edit; after a delete, on the next saved view or Save view. Saved views and the density are kept in this
   browser's local storage, per viewer, and the page works without them when storage is blocked. Each change
@@ -244,7 +250,7 @@ has one entry per filter value and per saved view.
 - `src/state.ts`: the view state, its reducer and the address round-trip (`?view=`, `?layout=`, `?item=`, `?q=`, filters).
 - `src/writes.ts`: what each item allows, the request for each write, how the tracker's answer reads, undo,
   and the write list. `src/tracker.ts`: the REST client. Both pure, tested in `test/writes.test.ts`.
-- `src/views.ts`: filters, the view in the address, and saved views.
+- `src/views.ts`: filters, the view in the address, and saved views. `src/group-by.ts`: the table of Group by keys.
 - `src/keys.ts`, `src/palette.ts`, `src/list.ts`: the shortcut registry, palette ranking and stage grouping.
   All pure, tested in `test/`.
 - `src/ui/`: the views (shell, filter bar, list, board, panel, palette, shortcuts, saved-view dialog, status line), `tokens.css` for colour, space and

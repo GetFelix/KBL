@@ -2,7 +2,8 @@
 // only main.ts talks to the gateway. The view, item and search are kept in the address so
 // a link opens the same view for someone else.
 import type { BlockedRow, ItemRow, ReviewLoad } from './fold.ts';
-import { selectionFor } from './list.ts';
+import { defaultGroup } from './group-by.ts';
+import { selectionFor, settleSelection, visible } from './list.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
 import type { Activities } from './activity.ts';
@@ -62,6 +63,10 @@ export interface ViewState {
   theme: 'light' | 'dark';
   layout: Layout;
   filters: Filters;
+  /** What the list groups by; absent is the view's default. Part of the address and of a saved view. */
+  group?: string;
+  /** Folded-away groups, as `collapseKey`s. Per view and grouping; not part of the address. */
+  collapsed?: string[];
   density: Density;
   /** Child work (triage, augment, review) shows as cards of its own instead of under its root. */
   childCards?: boolean;
@@ -102,6 +107,12 @@ export type Action =
   | { type: 'layout'; layout: Layout }
   | { type: 'filter'; facet: Facet; value: string | null }
   | { type: 'clearFilters' }
+  /** Picks what the list groups by; undefined goes back to the view's default. */
+  | { type: 'group'; group: string | undefined }
+  /** Folds one group away, or opens it; `collapsed` forces the state. */
+  | { type: 'collapse'; key: string; collapsed?: boolean }
+  /** Folds or opens every group the list shows. */
+  | { type: 'collapseAll'; collapsed: boolean }
   | { type: 'density'; density: Density }
   | { type: 'childCards'; on: boolean }
   /** Opens or closes the child list under one root. */
@@ -109,6 +120,9 @@ export type Action =
   | { type: 'saved'; saved: SavedView[] }
   /** Opens a saved view: its scope, layout, search and filters replace the current ones. */
   | { type: 'openView'; search: string };
+
+/** The state with its selection moved off any row the groups hide. */
+const settled = (s: ViewState): ViewState => ({ ...s, selected: settleSelection(s) });
 
 export function reduce(s: ViewState, a: Action): ViewState {
   switch (a.type) {
@@ -131,7 +145,9 @@ export function reduce(s: ViewState, a: Action): ViewState {
         marked: s.marked.filter((id) => a.items.some((i) => i.id === id)),
       };
       // A link straight to a nested child seeds the selection before the items arrive.
-      return next.selected && next.selected === next.open ? { ...next, selected: selectionFor(next, next.selected) } : next;
+      const seeded = next.selected && next.selected === next.open ? { ...next, selected: selectionFor(next, next.selected) } : next;
+      // An update can land an item in a collapsed group; the selection must not sit on a row that is not drawn.
+      return { ...seeded, selected: settleSelection(seeded) };
     case 'activity':
       return { ...s, activity: a.activity };
     case 'mark':
@@ -143,7 +159,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'tracker':
       return { ...s, tracker: a.tracker };
     case 'view':
-      return { ...s, view: a.view };
+      return settled({ ...s, view: a.view });
     case 'kind':
       return { ...s, kind: a.kind };
     case 'query':
@@ -156,11 +172,28 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'theme':
       return { ...s, theme: a.theme };
     case 'layout':
-      return { ...s, layout: a.layout };
+      return settled({ ...s, layout: a.layout });
     case 'filter':
       return { ...s, filters: setFilter(s.filters, a.facet, a.value) };
     case 'clearFilters':
       return { ...s, filters: {} };
+    case 'group': {
+      // Picking the view's own default is no choice, so it follows the view when that changes.
+      const next = { ...s, group: a.group === defaultGroup(s.view) ? undefined : a.group };
+      return { ...next, selected: settleSelection(next) };
+    }
+    case 'collapse': {
+      const was = (s.collapsed ?? []).includes(a.key);
+      const fold = a.collapsed ?? !was;
+      const next = { ...s, collapsed: fold ? (was ? s.collapsed : [...(s.collapsed ?? []), a.key]) : (s.collapsed ?? []).filter((k) => k !== a.key) };
+      return { ...next, selected: settleSelection(next) };
+    }
+    case 'collapseAll': {
+      const keys = visible(s).flatMap((g) => (g.toggle ? [g.toggle] : []));
+      const rest = (s.collapsed ?? []).filter((k) => !keys.includes(k));
+      const next = { ...s, collapsed: a.collapsed ? [...rest, ...keys] : rest };
+      return { ...next, selected: settleSelection(next) };
+    }
     case 'density':
       return { ...s, density: a.density };
     case 'childCards':
@@ -172,7 +205,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'saved':
       return { ...s, saved: a.saved };
     case 'openView':
-      return { ...s, ...decodeView(a.search), kind: null };
+      return settled({ ...s, group: undefined, ...decodeView(a.search), kind: null });
   }
 }
 
@@ -195,7 +228,7 @@ export function createStore(initial: ViewState): Store {
   };
 }
 
-export type AddressState = Pick<ViewState, 'view' | 'query' | 'open' | 'layout' | 'filters'>;
+export type AddressState = Pick<ViewState, 'view' | 'query' | 'open' | 'layout' | 'filters' | 'group'>;
 
 /** Reads the view (`view`, `layout`, `q`, filters) and `item` from a query string. */
 export function fromAddress(search: string): AddressState {
