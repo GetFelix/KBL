@@ -78,3 +78,38 @@ test('linked work lists children with their answers, what the item waits on, and
   assert.deepEqual(l.children, [{ id: 'k', work: 'triage', title: 'Triage', stage: 'done', answer: 'Rust client' }]);
   assert.deepEqual(l.blocks, [{ id: 'z', title: 'Z' }]);
 });
+
+test('a refused record is shown as refused and counts for nothing', () => {
+  const events = [
+    ev({ offset: 1, kind: 'claimed', attempt: 1, at_ms: NOW - 600_000 }),
+    ev({ offset: 2, kind: 'done', attempt: 1, refused: 'bad_usage', at_ms: NOW - 1000 }),
+    ev({ offset: 3, kind: 'progress', attempt: 1, text: 'never took', refused: 'not_holder' }),
+    ev({ offset: 4, kind: 'step', attempt: 1, exit_code: 1, refused: 'closed' }),
+    ev({ offset: 5, kind: 'attempt_closed', attempt: 9, refused: 'closed' }),
+  ];
+  const held = item({ stage: 'held', holder: 'w1', held_attempt: 1 });
+  const rows = history(events, held);
+  assert.deepEqual(rows.map((r) => [r.attempt, r.outcome, r.summary, r.steps]), [[1, 'Working', null, 0]]);
+  const t = timeline(events);
+  assert.equal(t[4].refused, null);
+  assert.equal(t[3].refused, 'bad_usage');
+  assert.equal(t[3].title, 'Refused: Finished the attempt');
+  assert.match(t[3].detail ?? '', /did not take effect/);
+  assert.equal(t[3].failed, true);
+  const n = nowLine({ ...held, active_ms: null }, [], events, NOW);
+  assert.match(n.text, /last activity 10 min ago/, 'a refused write is not activity');
+  const acts = new Map([['k', [ev({ kind: 'answer', chosen: 'nope', refused: 'not_open_question' })]]]);
+  const kid = item({ id: 'k', parent: 'a', work: 'triage', stage: 'ready' });
+  assert.equal(linked(item(), [item(), kid], [], acts).children[0].answer, null);
+});
+
+test('a held item waiting on a person never reads as working', () => {
+  const asked = [ev({ attempt: 1 }), ev({ offset: 2, kind: 'question', attempt: 1 })];
+  const waiting = item({ stage: 'needs_you', needs: 'question', holder: 'w1', held_attempt: 1 });
+  const n = nowLine(waiting, [], asked, NOW);
+  assert.match(n.text, /^Waiting for a person: /);
+  assert.equal(n.tone, 'warn');
+  assert.equal(history(asked, waiting)[0].outcome, 'Waiting on a person');
+  const answered = item({ stage: 'held', holder: 'w1', held_attempt: 1 });
+  assert.equal(history(asked, answered)[0].outcome, 'Working');
+});

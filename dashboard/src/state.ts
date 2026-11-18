@@ -144,7 +144,8 @@ export function reduce(s: ViewState, a: Action): ViewState {
     case 'select':
       return { ...s, selected: a.id };
     case 'open':
-      return { ...s, open: a.id, selected: a.id ?? s.selected };
+      // The activity read is for the item that was open; the next read follows right behind.
+      return { ...s, open: a.id, selected: a.id ?? s.selected, activity: a.id === s.open ? s.activity : undefined };
     case 'theme':
       return { ...s, theme: a.theme };
     case 'layout':

@@ -8,14 +8,19 @@ const SHOWN = 30;
 /** A relative time that keeps its absolute value in the title and `datetime`. */
 export function timeEl(ms: number, now = Date.now()): HTMLTimeElement {
   const iso = new Date(ms).toISOString();
-  return h('time', { datetime: iso, title: iso.replace('T', ' ').replace('.000Z', ' UTC'), 'data-ms': String(ms) }, since(ms, now));
+  const abs = iso.replace('T', ' ').replace('.000Z', ' UTC');
+  // Focusable so the absolute time shows on focus as well as hover, and read out with the relative one.
+  return h('time', { datetime: iso, title: abs, tabindex: '0', class: 'abs-time', 'data-abs': abs, 'data-ms': String(ms) },
+    h('span', { class: 'rel' }, since(ms, now)),
+    h('span', { class: 'sr-only' }, `, ${abs}`));
 }
 
 /** Rewrites every relative time under `root`. */
 export function tickTimes(root: ParentNode, now = Date.now()): void {
   for (const t of Array.from(root.querySelectorAll<HTMLElement>('time[data-ms]'))) {
     const next = since(Number(t.dataset.ms), now);
-    if (t.textContent !== next) t.textContent = next;
+    const rel = t.querySelector('.rel');
+    if (rel && rel.textContent !== next) rel.textContent = next;
   }
 }
 
@@ -39,12 +44,12 @@ export function timelineSection(): TimelineSection {
       const shown = all ? entries : entries.slice(0, SHOWN);
       const line = (e: TimelineEntry): HTMLElement => {
         const out = e.output?.trim();
-        return h('li', { class: `tl-entry${e.failed ? ' tl-failed' : ''}`, 'data-at': String(e.offset) },
+        return h('li', { class: `tl-entry${e.failed || e.refused ? ' tl-failed' : ''}${e.refused ? ' tl-refused' : ''}`, 'data-at': String(e.offset) },
           h('div', { class: 'tl-head' },
             h('strong', {}, e.title),
             h('span', { class: 'muted' }, ` ${e.who} `),
             timeEl(e.at_ms),
-            e.failed ? h('span', { class: 'tl-flag' }, ' failed') : null),
+            e.refused ? h('span', { class: 'tl-flag' }, ' refused') : e.failed ? h('span', { class: 'tl-flag' }, ' failed') : null),
           e.detail ? h('p', { class: 'tl-detail' }, e.detail) : null,
           out
             ? h('details', {
@@ -61,12 +66,12 @@ export function timelineSection(): TimelineSection {
             : null);
       };
       return h('section', { class: 'timeline', 'aria-labelledby': 'timeline-title' },
-        h('h3', { id: 'timeline-title', class: 'section-title' }, 'Activity'),
+        h('h3', { id: 'timeline-title', class: 'section-title', tabindex: '-1', 'data-focus': 'tl-title' }, 'Activity'),
         entries.length === 0
           ? h('p', { class: 'muted' }, 'Nothing recorded on this item yet.')
           : h('ol', { class: 'tl' }, ...shown.map(line)),
         entries.length > SHOWN && !all
-          ? h('button', { type: 'button', class: 'button', 'data-focus': 'tl-all', onclick: () => {
+          ? h('button', { type: 'button', class: 'button', 'data-focus': 'tl-all', 'data-focus-fallback': 'tl-title', onclick: () => {
               all = true;
               redraw();
             } }, `Show all ${entries.length}`)

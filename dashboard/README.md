@@ -45,7 +45,10 @@ disclosure that stays open and focused when a record redraws the panel. **Linked
 the PR with its checks, triage children and what blocks or is blocked. **Attempts** lists each attempt with its
 outcome, the summary it handed off, its cost and a link to its first decision in the replay. The panel reads the
 fold's `activity_json(item)` ([What is happening](../docs/work-tracker.md)) and has no live region, so a busy item does not
-interrupt a screen reader; the relative times refresh with the log.
+interrupt a screen reader; the relative times refresh with the log. Each time is focusable and shows its absolute
+value on focus or hover, and a screen reader reads both. A record the fold refused (a `done` with a cost of its own on a
+format 8 log, say) stays in Activity marked "refused" with the reason, and counts for nothing: not in Attempts, the Now line's
+last activity or a child's answer. A held item that waits on a person reads as waiting, never as working.
 
 A person signed in to the tracker can accept, reject, set the tier of, close and answer items, one at a
 time from the panel or in bulk from the marked items ([Writes](#writes)). The design, the conventions it

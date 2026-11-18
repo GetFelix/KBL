@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use kbl_core::content::Content;
 use kbl_core::names::ItemId;
 use kbl_core::work::{WorkLogged, WorkRecord};
+use kbl_core::work_fold::Reject;
 use serde_json::{Value, json};
 
 /// Events kept per item; the oldest go first.
@@ -41,8 +42,15 @@ fn tail(s: &str) -> &str {
 }
 
 impl Activity {
-    /// Notes `rec` at `offset`. `charged` is what the fold charged the item for it.
-    pub(crate) fn note(&mut self, offset: u64, rec: &WorkLogged, charged: u64) {
+    /// Notes `rec` at `offset`. `charged` is what the fold charged the item for it, and
+    /// `refused` is why the fold took nothing from it.
+    pub(crate) fn note(
+        &mut self,
+        offset: u64,
+        rec: &WorkLogged,
+        charged: u64,
+        refused: Option<Reject>,
+    ) {
         let Some(item) = rec.record.item() else {
             return;
         };
@@ -162,7 +170,10 @@ impl Activity {
             WorkRecord::Reopened { .. } => e("reopened", None, json!({})),
             _ => None,
         };
-        if let Some(v) = event {
+        if let Some(mut v) = event {
+            if let Some(why) = refused {
+                v["refused"] = serde_json::to_value(why).expect("plain data serializes");
+            }
             let list = self.by_item.entry(item.clone()).or_default();
             list.push(v);
             if list.len() > MAX_EVENTS {

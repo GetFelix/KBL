@@ -32,7 +32,7 @@ export function prLink(item: ItemRow): Node | null {
   const text = item.failing_check ? `${t}: ${item.failing_check}` : t;
   const m = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(item.pr ?? '');
   return m && item.source === 'github'
-    ? h('a', { href: `https://github.com/${m[1]}/${m[2]}/pull/${m[3]}`, target: '_blank', rel: 'noopener noreferrer' }, text)
+    ? h('a', { 'data-focus': 'pr-link', href: `https://github.com/${m[1]}/${m[2]}/pull/${m[3]}`, target: '_blank', rel: 'noopener noreferrer' }, text)
     : document.createTextNode(text);
 }
 
