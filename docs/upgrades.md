@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 16.
+is 18.
 
 ### Formats
 

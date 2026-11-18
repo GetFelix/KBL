@@ -1363,4 +1363,13 @@ fn a_reader_below_18_stops_at_a_relation() {
         .find(|(_, r)| r.record.kind() == "related")
         .unwrap();
     assert!(first.1.v > 17);
+    // A build that reads up to 17 refuses the record, so its fold stops there.
+    let raised = entries(FORMAT_18_LOG)
+        .into_iter()
+        .find(|(_, r)| r.record.kind() == "format_raised")
+        .unwrap();
+    assert_eq!(
+        raised.1.v, FORMAT_V18,
+        "the raise itself stops an older reader"
+    );
 }
