@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 21. Format 20 is item needs and agent capabilities.
+is 21. Format 20 is item needs and agent capabilities, which this build does not read yet: it refuses a raise to 20 and any record stamped 20.
 
 ### Formats
 

@@ -8,6 +8,9 @@
  "core/src/lease.rs#step": [
   "Some(l) if l.free(now_ms) => Step::Take,"
  ],
+ "core/src/names.rs#worker": [
+  "if Self::new(suffix).is_ok() && is_valid_key(&s) {"
+ ],
  "core/src/org_fold.rs#check": [
   "if logged.v > self.format {",
   "return Err(OrgRefusal::SourceServed);"
@@ -46,7 +49,8 @@
   "if title.len() > MAX_TITLE"
  ],
  "core/src/work_fold.rs#check_worker": [
-  "(None, None) => Ok(()),"
+  "(None, None) => Ok(()),",
+  "&& rec.by.as_str().contains('-') =>"
  ],
  "core/src/work_fold.rs#finding": [
   "self.agent_holder(review, attempt, rec)?;",
@@ -438,7 +442,7 @@
   "Caller::Agent(a) => Some(Key::new(a.as_str()).expect(\"an agent name is a key\")),"
  ],
  "tracker/src/http.rs#worker_start": [
-  "if call.teams.is_team_agent(&call.team, &key) {"
+  "Ok(w) if w.supervisor() == Some(sup.as_str()) => w,"
  ],
  "tracker/src/http/ingest.rs#config": [
   "None => return busy(),"
@@ -485,8 +489,11 @@
  "tracker/src/teams.rs#admit": [
   "pub(crate) fn admit(&self, waits: bool) -> Option<OwnedSemaphorePermit> {"
  ],
- "tracker/src/teams.rs#who": [
-  "&& self.is_team_agent(&team, &sup)"
+ "tracker/src/teams.rs#stop_orphans": [
+  ".is_ok_and(|t| supervisor_is(team, org, &w.supervisor, &t) == Some(false))"
+ ],
+ "tracker/src/teams.rs#supervisor_is": [
+  "Some(Err(OrgUnavailable)) => None,"
  ],
  "tracker/src/tracker.rs#append_expecting": [
   "if let Some(why) = unavailable(&writer, self.lease_margin()) {",
@@ -537,6 +544,9 @@
  ],
  "tracker/src/tracker.rs#review_lanes": [
   "fn review_lanes(&self, reviews: &[String]) -> Result<Vec<u8>, Error> {"
+ ],
+ "tracker/src/tracker.rs#revoke": [
+  "released.extend(self.stop_workers(|w| w.supervisor == sup).await?);"
  ],
  "tracker/src/tracker.rs#sync_ready": [
   ".filter(|id| core.state.stage(id) == Some(Stage::Ready))"
@@ -668,5 +678,8 @@
  ],
  "tracker/src/tracker/workers.rs#start_worker": [
   "if mine >= s.max_workers || all >= s.max_team_workers {"
+ ],
+ "tracker/src/tracker/workers.rs#stop_workers": [
+  "reason: Some(SUPERVISOR_GONE.into()),"
  ]
 }
