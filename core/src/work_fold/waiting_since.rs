@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{NeedsYou, Stage, State};
 use crate::names::ItemId;
-use crate::work::WorkLogged;
+use crate::work::{WorkLogged, WorkRecord};
 
 /// A reason an item waits on a person and the offset of the record that began it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,7 +47,12 @@ impl State {
             return;
         };
         self.refresh_waiting_since(&id, offset);
-        if self.items.get(&id).is_some_and(|i| i.closed.is_some()) {
+        // A budget flag lands on the root, and a close or reopen frees or drops what waits on it.
+        if let Some(root) = self.items.get(&id).map(|i| i.root.clone()) {
+            self.refresh_waiting_since(&root, offset);
+        }
+        let reopened = matches!(rec.record, WorkRecord::Reopened { .. });
+        if reopened || self.items.get(&id).is_some_and(|i| i.closed.is_some()) {
             let dependents: Vec<ItemId> = self
                 .edges
                 .iter()
@@ -57,6 +62,18 @@ impl State {
             for a in dependents {
                 self.refresh_waiting_since(&a, offset);
             }
+        }
+    }
+
+    /// For a record the fold refused after it set a flag, such as a root going over budget.
+    pub(super) fn track_waiting_since_refused(&mut self, offset: u64, rec: &WorkLogged) {
+        if let Some(root) = rec
+            .record
+            .item()
+            .and_then(|id| self.items.get(id))
+            .map(|i| i.root.clone())
+        {
+            self.refresh_waiting_since(&root, offset);
         }
     }
 

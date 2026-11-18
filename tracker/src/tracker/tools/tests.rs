@@ -2560,6 +2560,16 @@ async fn a_person_adjusts_triage_s_advice_only_at_format_17_and_on_the_answer_th
         (p.depends_on, p.split),
         (vec![item("a2")], vec!["x".to_owned()])
     );
+    drop(core);
+    // The agent repeating its own answer after the person's edit is a retry, so the edit stands.
+    let triaged = fake.kinds().iter().filter(|k| *k == "triaged").count();
+    t.triage(&agent("w1"), &item("a1-t"), ans(1, "w".into(), None, None))
+        .await
+        .unwrap();
+    assert_eq!(
+        fake.kinds().iter().filter(|k| *k == "triaged").count(),
+        triaged
+    );
 }
 
 #[tokio::test]

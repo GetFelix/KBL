@@ -176,3 +176,47 @@ fn advice_in_an_edit_needs_format_17() {
     l.person(rec);
     assert_eq!(last_rejection(&l), Some(Reject::Format));
 }
+
+#[test]
+fn a_reopened_dependency_ends_the_wait_and_a_second_drop_is_a_new_one() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "d");
+    accepted_root(&mut l, "x");
+    l.person(WorkRecord::Linked {
+        item: id("d"),
+        to: id("x"),
+    });
+    let close = |l: &mut Log| {
+        l.person(WorkRecord::Closed {
+            item: id("x"),
+            why: CloseWhy::Dismissed,
+        })
+    };
+    let first = close(&mut l);
+    assert_eq!(since(&l, "d"), Some(first));
+    l.person(WorkRecord::Reopened { item: id("x") });
+    assert_eq!(since(&l, "d"), None);
+    let second = close(&mut l);
+    assert_eq!(since(&l, "d"), Some(second));
+}
+
+#[test]
+fn a_root_going_over_budget_starts_a_new_wait_when_a_child_is_refused() {
+    let mut l = Log::default();
+    accepted_root(&mut l, "r1");
+    l.person(WorkRecord::FormatRaised { to: 17 });
+    l.person(proposed("c1", Some("r1"), "k", WorkKind::Test));
+    let flagged = l.person(WorkRecord::Flagged {
+        item: id("r1"),
+        flagged: true,
+    });
+    assert_eq!(since(&l, "r1"), Some(flagged));
+    let over = l.tracker(WorkRecord::Refused {
+        item: Some(id("c1")),
+        op: "claim".into(),
+        reason: RefusalReason::Budget,
+    });
+    let s = fold(&l.0);
+    assert_eq!(s.needs_you(&id("r1")), Some(NeedsYou::OverBudget));
+    assert_eq!(s.items[&id("r1")].waiting_since.map(|w| w.at), Some(over));
+}

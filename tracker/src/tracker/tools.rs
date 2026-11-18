@@ -798,7 +798,8 @@ impl<B: Broker> Tracker<B> {
                 && p.by.as_ref() == Some(&agent_key(agent))
                 && (p.tier, &p.why, &p.duplicate_of, p.unclear)
                     == (tier, &why, &duplicate_of, unclear)
-                && (&p.depends_on, &p.split) == (&depends_on, &split)
+                // After a person adjusted the lists, the agent's own repeat is still a retry.
+                && (p.edited || (&p.depends_on, &p.split) == (&depends_on, &split))
             {
                 return Ok(
                     json!({ "item": item, "attempt": attempt, "triaged": target, "offset": p.at }),

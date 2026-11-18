@@ -453,6 +453,9 @@ pub struct Proposal {
     pub depends_on: Vec<ItemId>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub split: Vec<String>,
+    /// A person adjusted the advice, so an agent's repeat of its own answer is a retry, not a new one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
     pub at: u64,
     /// Who wrote it, so a retry by the same writer can be told from a new holder's answer.
     /// Left out of the state's wire form; a replay of the log sets it again.
@@ -1896,7 +1899,10 @@ impl State {
     }
 
     fn step(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
-        self.step_record(offset, rec)?;
+        if let Err(e) = self.step_record(offset, rec) {
+            self.track_waiting_since_refused(offset, rec);
+            return Err(e);
+        }
         self.track_human_wait(rec);
         self.track_waiting_since(offset, rec);
         Ok(())
@@ -1988,6 +1994,7 @@ impl State {
                     unclear: *unclear,
                     depends_on: depends_on.clone(),
                     split: split.clone(),
+                    edited: false,
                     at: offset,
                     by: Some(rec.by.clone()),
                 });
@@ -3213,6 +3220,7 @@ impl State {
                     if let Some(titles) = split {
                         p.split.clone_from(titles);
                     }
+                    p.edited = true;
                 }
             }
             WorkRecord::Refused { item, reason, .. } => {
