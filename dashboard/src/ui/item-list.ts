@@ -220,8 +220,8 @@ export function itemList(
       const open = new Set(s.expanded ?? []);
       const strips = (id: string) => stripKey(kids.has(id) ? summarize(kids.get(id)!) : undefined, open.has(id));
       const blocked = new Map(s.blocked.map((b) => [b.id, waitsOn(b)]));
-      // What the row says on its right: the agent working it, else why it is not moving.
-      const waits = new Map(s.items.map((i) => [i.id, workingLine(i, now) ?? reasonLine(i, blocked.get(i.id))] as const));
+      // What the row says on its right: why it needs a person, else the agent working it, else why it is not moving.
+      const waits = new Map(s.items.map((i) => [i.id, (i.needs ? null : workingLine(i, now)) ?? reasonLine(i, blocked.get(i.id))] as const));
       if (groups.length === 0) {
         const filtered = activeCount(s.filters) > 0;
         const what = s.query ? `“${s.query}”` : 'these filters';

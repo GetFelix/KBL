@@ -371,7 +371,7 @@ try {
   await page.eval(`(() => { const s = document.querySelector('#filter-repo'); s.value = 'GetFelix/felix'; s.dispatchEvent(new Event('change')); return true; })()`);
   await page.waitFor(`location.search.includes('repo=GetFelix')`);
   const repoRows = await page.eval(`document.querySelectorAll('.row').length`);
-  check(repoRows === 7, `a repo filter keeps only that repo's items (${repoRows})`);
+  check(repoRows === 6, `a repo filter keeps only that repo's items (${repoRows})`);
   check(await page.eval(`document.querySelector('.filter-summary').textContent === 'Showing 6 of 18: Repo GetFelix/felix'`), 'the summary says what the filters hide');
   await press(page, 'k', MOD);
   for (const ch of 'tier: 2') await press(page, ch);
