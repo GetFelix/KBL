@@ -61,3 +61,11 @@ test('a block shows its resource, its end and its reason until it ends', () => {
   assert.equal(properties(row, now).at(-1), blockText(row, now));
   assert.ok(!properties(row).some((x) => x.startsWith('Blocked')));
 });
+
+test('a screen reader name is the upstream reference, the id when there is none', async () => {
+  const { nameOf } = await import('../src/card.ts');
+  const items = [{ id: 'gh-1', title: 't', stage: 'ready', upstream: 'GetFelix/felix#1694' }, { id: 'loc-2', title: 't', stage: 'ready' }];
+  assert.equal(nameOf(items, 'gh-1'), 'felix#1694');
+  assert.equal(nameOf(items, 'loc-2'), 'loc-2');
+  assert.equal(nameOf(items, 'gone'), 'gone');
+});

@@ -302,11 +302,11 @@ try {
   await page.waitFor(`!document.querySelector('.card[data-id=gh-3001]')`);
   await page.waitFor(`document.querySelector('.card[data-selected]')?.dataset.id === 'gh-2219'`);
   check(await focused('.card[data-id=gh-2219]'), 'a focused card re-triaged out of the filter hands the focus to its column, and the selection follows');
-  check((await announced()) === 'gh-3001 is no longer in this view.', `the card leaving is announced (${await announced()})`);
+  check((await announced()) === 'felix#3001 is no longer in this view.', `the card leaving is announced (${await announced()})`);
   await page.eval(`window.__push({ kind: 'claimed', item: 'gh-2219', attempt: 1, deadline_ms: 1900000000000, actor: 'agent', by: 'agent-1', at_ms: 1800000000001 })`);
   await page.waitFor(`!!document.querySelector('#column-held + ul .card[data-id=gh-2219]')`);
   check(await focused('.card[data-id=gh-2219]'), 'a card a record moves to another column keeps the focus');
-  check((await announced()) === 'gh-2219 moved to Working.', `the move is announced (${await announced()})`);
+  check((await announced()) === 'felix#2219 moved to Working.', `the move is announced (${await announced()})`);
 
   // Child work nests under its root, cards lead with the upstream reference, and the Working column says who holds what.
   await open(`${connected}&layout=board`);
@@ -320,6 +320,16 @@ try {
   await page.waitFor(`document.querySelector('[data-chip=gh-2300]')?.getAttribute('aria-expanded') === 'true'`);
   check(await page.eval(`document.querySelector('#children-gh-2300 .child-link').textContent.includes('Review the cache fix')`), 'the chip opens the children as links');
   check(await focused('[data-chip=gh-2300]'), 'the chip keeps the focus when it opens');
+  // Opening a child from its root's chip must leave the selection on a card that is drawn.
+  await page.eval(`document.querySelector('#children-gh-2300 .child-link').click(); true`);
+  await page.waitFor(`!document.querySelector('.panel').hidden`);
+  const picked = await page.eval(`document.querySelector('[data-selected]')?.dataset.id ?? null`);
+  console.log(`  after opening rev-2300 from its chip the selection is ${picked}`);
+  check(picked === 'gh-2300', 'opening a child from its root chip selects the visible root');
+  await press(page, 'Escape');
+  await page.waitFor(`document.querySelector('.panel').hidden`);
+  check(await page.eval(`document.activeElement?.closest('[data-id]')?.dataset.id === 'gh-2300'`), 'closing the child returns the focus to the root card');
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').focus(); true`);
   await axe('board nested');
   await shoot('board-nested-dark');
   check(await page.eval(`document.querySelector('#column-held').textContent.startsWith('Working')`), 'the held column is called Working');
