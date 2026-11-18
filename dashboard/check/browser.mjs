@@ -902,9 +902,10 @@ try {
     const inboxRows = await page.eval(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',')`);
     const inboxKinds = await page.eval(`[...document.querySelectorAll('.kinds .kind')].map((b) => b.textContent).join('|')`);
     const inboxQuestion = await page.eval(`[document.querySelector('.inbox-act[data-kind=question] .inbox-question')?.textContent, [...document.querySelectorAll('.inbox-act[data-kind=question] .inbox-options button')].map((b) => b.textContent).join('|')].join(' / ')`);
-    check(inboxRows === 'inb-1,inb-2', `the inbox lists a question and a triage proposal, oldest first (${inboxRows}; kinds ${inboxKinds}; question ${inboxQuestion})`);
-    check(await page.eval(`document.querySelector('.inbox-act[data-kind=question] .inbox-question').textContent === 'Retry forever or give up after five?' && [...document.querySelectorAll('.inbox-act[data-kind=question] .inbox-options button')].map((b) => b.textContent).join('|') === '1 Forever|2 Five tries (default)'`), 'a question shows what was asked and its numbered options, the default named');
-    check(await page.eval(`[...document.querySelectorAll('.kinds .kind')].map((b) => b.textContent).join('|') === 'Everything2|Questions1|Triage1|Review findings|Decisions'`), 'the sidebar counts each kind');
+    // The shared fixture already has one question waiting (gh-2204), oldest of all.
+    check(inboxRows === 'gh-2204,inb-1,inb-2', `the inbox lists the questions and the triage proposal, oldest first (${inboxRows}; kinds ${inboxKinds}; question ${inboxQuestion})`);
+    check(await page.eval(`document.querySelector('.inbox-item:has(.row[data-id=inb-1]) .inbox-act[data-kind=question] .inbox-question').textContent === 'Retry forever or give up after five?' && [...document.querySelectorAll('.inbox-item:has(.row[data-id=inb-1]) .inbox-act[data-kind=question] .inbox-options button')].map((b) => b.textContent).join('|') === '1 Forever|2 Five tries (default)'`), 'a question shows what was asked and its numbered options, the default named');
+    check(await page.eval(`[...document.querySelectorAll('.kinds .kind')].map((b) => b.textContent).join('|') === 'Everything3|Questions2|Triage1|Review findings|Decisions'`), 'the sidebar counts each kind');
     await axe('inbox actions');
     await shoot('inbox-actions-dark');
     await page.eval(`[...document.querySelectorAll('.kinds .kind')].find((b) => b.textContent.startsWith('Triage')).click(); true`);
@@ -915,12 +916,12 @@ try {
     await press(page, '2');
     await page.waitFor(`window.__tracker.calls.some((c) => c.url === '/v1/work/questions/answer')`);
     check(await page.eval(`window.__tracker.calls.at(-1).body.chosen === 'Five tries' && window.__tracker.calls.at(-1).body.item === 'inb-1'`), 'one key answers a question with the numbered option, from the list');
-    await page.waitFor(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',') === 'inb-2'`);
+    await page.waitFor(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',') === 'gh-2204,inb-2'`);
     check(true, 'the answered item leaves the inbox');
-    await page.eval(`document.querySelector('.inbox-act [data-focus=accept]').click(); true`);
+    await page.eval(`document.querySelector('.inbox-item:has(.row[data-id=inb-2]) .inbox-act [data-focus=accept]').click(); true`);
     await page.waitFor(`window.__tracker.calls.at(-1).url === '/v1/work/proposals/accept'`);
     check(await page.eval(`window.__tracker.calls.at(-1).body.item === 'inb-2' && window.__tracker.calls.at(-1).body.tier === 2`), 'Accept in the list sends the shown tier without a confirm');
-    await page.waitFor(`document.querySelector('.empty h2')?.textContent === 'Nothing needs you'`);
+    await page.waitFor(`[...document.querySelectorAll('.row')].map((r) => r.dataset.id).join(',') === 'gh-2204'`);
     check(true, 'the accepted proposal leaves the inbox');
     clean();
   }
