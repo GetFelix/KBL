@@ -382,7 +382,8 @@ impl<T: TrackerApi> Claim for WorkClaim<T> {
     async fn extended(&self, _visible: Duration) {}
 
     async fn failed(&self, error: &anyhow::Error) {
-        eprintln!("kbl-mcp: extending {} failed: {error:#}", self.item);
+        let error = kbl_core::redact::redact(&format!("{error:#}")).into_owned();
+        eprintln!("kbl-mcp: extending {} failed: {error}", self.item);
     }
 
     async fn lost(&self, _cause: ClaimLostCause) {

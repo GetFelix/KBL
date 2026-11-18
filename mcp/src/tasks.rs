@@ -528,6 +528,10 @@ impl<B: Backend> Tasks<B> {
             Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {
                 String::from_utf8_lossy(&bytes).into_owned()
             }
+            Err(e) => {
+                self.refuse("cache_get", &blobs, Some(id), &e).await;
+                unreadable()
+            }
             _ => unreadable(),
         }
     }
@@ -627,10 +631,11 @@ impl<B: Backend> Tasks<B> {
     }
 
     fn missed(&self, count: u32, error: &anyhow::Error) {
-        eprintln!("kbl-mcp: could not write to the run log: {error:#}");
+        let error = redacted(format!("{error:#}"));
+        eprintln!("kbl-mcp: could not write to the run log: {error}");
         let mut gap = self.0.unlogged.lock().expect("unlogged lock");
         let total = gap.as_ref().map_or(0, |(n, _)| *n) + count;
-        *gap = Some((total, redacted(format!("{error:#}"))));
+        *gap = Some((total, error));
     }
 }
 
