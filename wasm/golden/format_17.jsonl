@@ -1,0 +1,6 @@
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix"}
+{"at_ms":1015,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"fix the docs build"}
+{"v":17,"at_ms":1020,"by":"gabriel","actor":"person","kind":"format_raised","to":17}
+{"at_ms":1030,"by":"gabriel","actor":"person","kind":"triaged","item":"r1","tier":1,"why":"blocked on the docs build","depends_on":["r2"],"split":["matrix","report"]}
+{"v":17,"at_ms":1040,"by":"gabriel","actor":"person","kind":"edited","item":"r1","depends_on":[],"split":["matrix"],"proposal":3}
+{"at_ms":1050,"by":"gabriel","actor":"person","kind":"triaged","item":"r2","tier":2,"why":"small"}
