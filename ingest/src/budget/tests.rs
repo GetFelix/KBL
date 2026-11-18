@@ -270,7 +270,7 @@ fn the_projection_counts_polls_and_one_pass() {
 
 #[tokio::test]
 async fn a_query_post_is_a_read_and_a_spent_window_does_not_stop_writes() {
-    let (t, script, budget, _) = rig(Vendor::Ado, Some(10));
+    let (t, script, _, _) = rig(Vendor::Ado, Some(10));
     script.on("POST", "/_apis/wit/wiql", ok(json!({})));
     let q = || {
         Req::post(
