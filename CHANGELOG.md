@@ -4,6 +4,7 @@
 
 ## [0.1.0] - 2026-11-17
 
+- Added: `KBL_IMAGE_TAG=v0.1.0 dev/quickstart.sh` pulls the published tracker and dashboard images instead of building them, so the quick start needs no npm or Rust toolchain for the stack. Release archives now also carry `kbl-ingest` ([#128](https://github.com/GetFelix/KBL/issues/128)).
 - Added: a triage answer can carry `depends_on` (items the root should wait on)
   and `split` (titles it should be cut into), on `work_triage`, `POST
   /v1/work/triage` and the `triaged` record. Both are advice for a person: the
