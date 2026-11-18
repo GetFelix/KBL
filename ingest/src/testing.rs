@@ -158,6 +158,10 @@ struct Inner {
     ingest_edges: HashSet<(ItemId, ItemId)>,
     /// `linked` records ingest sent, written or refused.
     links_sent: usize,
+    /// Appends the fold refused.
+    refused: usize,
+    /// The roots listing shows closed items as open.
+    roots_show_open: bool,
 }
 
 /// A tracker that folds what it is given, so a record the real fold would refuse is refused here.
@@ -181,6 +185,8 @@ impl Default for Fake {
             lose_next_append_reply: false,
             ingest_edges: HashSet::new(),
             links_sent: 0,
+            refused: 0,
+            roots_show_open: false,
         })))
     }
 }
@@ -249,6 +255,17 @@ impl Fake {
 
     pub(crate) fn count(&self, kind: &str) -> usize {
         self.kinds().iter().filter(|k| **k == kind).count()
+    }
+
+    /// The roots listing shows closed items as open, as a tracker that
+    /// lags the log would.
+    pub(crate) fn roots_show_closed_as_open(&self) {
+        self.0.lock().unwrap().roots_show_open = true;
+    }
+
+    /// Appends from ingest that the fold refused.
+    pub(crate) fn refused(&self) -> usize {
+        self.0.lock().unwrap().refused
     }
 
     pub(crate) fn state(&self) -> State {
@@ -390,7 +407,7 @@ impl Fake {
                         .as_str()
                         .unwrap()
                         .to_owned(),
-                    closed: it.closed.is_some(),
+                    closed: it.closed.is_some() && !i.roots_show_open,
                     closed_by_sync: it.closed_by_sync,
                     closed_by_merge: (!i.old_tracker)
                         .then_some(it.closed == Some(kbl_core::work_fold::Closure::Merged)),
@@ -484,7 +501,10 @@ impl Tracker for Fake {
         }
         Ok(match pushed {
             Ok(()) => Appended::Written,
-            Err(why) => Appended::Refused(why),
+            Err(why) => {
+                self.0.lock().unwrap().refused += 1;
+                Appended::Refused(why)
+            }
         })
     }
 

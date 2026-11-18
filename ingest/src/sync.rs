@@ -576,6 +576,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         let written = match self.tracker.append(&edit).await? {
             Appended::Written => true,
             Appended::Refused(why) if why == "no_change" => true,
+            // Closed after this poll listed its roots. Nothing will take the
+            // edit, so the values are kept as seen and the retries stop.
+            Appended::Refused(why) if why == "closed" => {
+                t.labels = labels;
+                t.milestone = milestone;
+                return Ok(());
+            }
             Appended::Refused(why) => {
                 eprintln!("kbl-ingest: labels and milestone were not updated: {why}");
                 false

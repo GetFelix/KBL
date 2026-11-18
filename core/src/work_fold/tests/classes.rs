@@ -239,6 +239,22 @@ fn a_person_clears_their_own_value_and_an_agent_cannot_set_one() {
 }
 
 #[test]
+fn a_class_on_a_non_root_item_is_refused() {
+    let mut l = at_19();
+    l.tracker(import("r1", &[], None));
+    l.tracker(proposed("r1-t", Some("r1"), "triage", WorkKind::Triage));
+    assert_eq!(fold(&l.0).rejections, []);
+    l.person(classed("r1-t", Some("bug"), None, None));
+    assert_eq!(last_rejection(&l), Some(Reject::NotARoot));
+    l.0.pop();
+    l.person(triaged("r1-t", Some("bug"), None, None));
+    assert_eq!(last_rejection(&l), Some(Reject::NotARoot));
+    l.0.pop();
+    l.person(classed("r1", Some("bug"), None, None));
+    assert_eq!(last_rejection(&l), None);
+}
+
+#[test]
 fn a_class_is_refused_below_format_19() {
     let mut l = Log::default();
     l.person(WorkRecord::FormatRaised { to: 18 });

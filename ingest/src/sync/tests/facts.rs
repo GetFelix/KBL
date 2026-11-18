@@ -153,3 +153,29 @@ async fn a_value_outside_the_vocabulary_costs_only_itself() {
     assert_eq!(it.class.item_type.as_ref().unwrap().value, "perf");
     assert!(it.class.area.is_none());
 }
+
+#[tokio::test]
+async fn a_closed_item_is_not_edited_again_every_poll() {
+    let rig = rig();
+    raise(&rig, 19);
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![with_facts(812, &["agent-ok"], Some("0.8"))]);
+    ingest.poll(false).await.unwrap();
+    assert!(rig.tracker.try_person(WorkRecord::Closed {
+        item: rig.root(UP),
+        why: kbl_core::work::CloseWhy::Dismissed,
+    }));
+    // A listing that lags the log still shows the root open.
+    rig.tracker.roots_show_closed_as_open();
+    rig.list(vec![at(
+        with_facts(812, &["agent-ok", "perf"], Some("0.9")),
+        "2027-01-16T00:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    let refused = rig.tracker.refused();
+    for _ in 0..3 {
+        ingest.poll(false).await.unwrap();
+    }
+    assert_eq!(rig.tracker.count("edited"), 0);
+    assert_eq!(rig.tracker.refused(), refused);
+}
