@@ -29,9 +29,13 @@ pub(crate) struct MetricsArgs {
     /// End of the window in epoch milliseconds. Default: now.
     #[arg(long)]
     to_ms: Option<u64>,
-    /// Engineer minutes logged by hand for the window. Divided by the items done.
+    /// Engineer minutes logged by hand for the window.
     #[arg(long)]
     engineer_minutes: Option<f64>,
+    /// Merged fixes in the window, from GitHub. The Metrics tab's done count also holds
+    /// reviews, triage and redo follow-ups, so minutes per fix divide by this.
+    #[arg(long)]
+    merged_fixes: Option<u64>,
     #[arg(long, value_enum, default_value = "json")]
     format: Format,
 }
@@ -42,10 +46,14 @@ pub(crate) async fn metrics(target: Target, args: MetricsArgs) -> Result<()> {
     let to_ms = args.to_ms.unwrap_or_else(crate::now_ms);
     let out = export(
         &records,
-        &args.label,
-        args.days,
-        to_ms,
-        args.engineer_minutes,
+        &Window {
+            label: &args.label,
+            days: args.days,
+            to_ms,
+            explicit_end: args.to_ms.is_some(),
+            engineer_minutes: args.engineer_minutes,
+            merged_fixes: args.merged_fixes,
+        },
     )?;
     match args.format {
         Format::Json => println!("{}", serde_json::to_string_pretty(&out)?),
@@ -54,27 +62,53 @@ pub(crate) async fn metrics(target: Target, args: MetricsArgs) -> Result<()> {
     Ok(())
 }
 
-/// The report over `records` for the `days` ending at `to_ms`, with the headline figures flat.
-pub(crate) fn export(
-    records: &[(u64, Vec<u8>)],
-    label: &str,
-    days: u32,
-    to_ms: u64,
-    engineer_minutes: Option<f64>,
-) -> Result<Value> {
+/// What one export covers.
+pub(crate) struct Window<'a> {
+    pub(crate) label: &'a str,
+    pub(crate) days: u32,
+    pub(crate) to_ms: u64,
+    /// `to_ms` was asked for, not defaulted to now.
+    pub(crate) explicit_end: bool,
+    pub(crate) engineer_minutes: Option<f64>,
+    pub(crate) merged_fixes: Option<u64>,
+}
+
+/// The report over `records` for the window, with the headline figures flat.
+pub(crate) fn export(records: &[(u64, Vec<u8>)], w: &Window) -> Result<Value> {
+    let Window {
+        label,
+        days,
+        to_ms,
+        engineer_minutes,
+        ..
+    } = *w;
     ensure!((1..=90).contains(&days), "--days is 1 to 90");
     let mut fold = Folder::new();
+    // Refused and malformed records are not applied; the count shows a log that is mostly noise.
+    let mut not_applied = 0u64;
     for (offset, payload) in records {
-        fold.apply(*offset as f64, payload);
+        if !fold.apply(*offset as f64, payload) {
+            not_applied += 1;
+        }
     }
     if fold.newer() > 0 {
         bail!("work.events holds a record newer than this build reads; update kbl-tool");
     }
     let report: Value = serde_json::from_str(&fold.metrics_json(to_ms as f64, days))?;
+    // The fold moves the window's end up to the newest record, so a window ending
+    // earlier would silently report a later block.
+    if w.explicit_end && report["clock_behind"] == true {
+        bail!(
+            "work.events has records after --to-ms; the fold only keeps each item's latest done time, so an earlier window cannot be rebuilt. Export at the end of each block."
+        );
+    }
     let done = report["throughput"]["done"].as_u64().unwrap_or(0);
-    let per_done_minutes = engineer_minutes
-        .filter(|_| done > 0)
-        .map(|m| m / done as f64);
+    let per_fix_minutes = engineer_minutes
+        .zip(w.merged_fixes.filter(|n| *n > 0))
+        .map(|(m, n)| m / n as f64);
+    let unpriced = report["cost"]["by_model"]
+        .as_array()
+        .is_some_and(|m| m.iter().any(|x| x["unpriced"] == true));
     let summary = json!({
         "done": done,
         "done_per_day": done as f64 / f64::from(days),
@@ -87,11 +121,14 @@ pub(crate) fn export(
         "failed_attempts_per_done": report["rework"]["failed_attempts_per_done"],
         "cost_per_done_micros": report["cost"]["per_done_micros"],
         "engineer_minutes": engineer_minutes,
-        "engineer_minutes_per_done": per_done_minutes,
+        "merged_fixes": w.merged_fixes,
+        "engineer_minutes_per_merged_fix": per_fix_minutes,
+        "cost_is_a_floor": unpriced,
     });
     Ok(json!({
         "label": label,
         "records": records.len(),
+        "records_not_applied": not_applied,
         "clock_behind": report["clock_behind"],
         "partial": report["partial"],
         "summary": summary,

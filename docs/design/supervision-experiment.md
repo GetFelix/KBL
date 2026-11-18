@@ -49,7 +49,7 @@ says so, and it is not compared across arms.
 | Measure | Arm 1 (no KBL) | Arms 2 and 3 (KBL) |
 |---|---|---|
 | Merged fixes per day | Merged PRs that close an assigned issue, from GitHub | `summary.done_per_day`: Metrics tab, throughput |
-| Engineer minutes per merged fix | Hand log divided by merged fixes | `--engineer-minutes` divided by `summary.done`; same hand log |
+| Engineer minutes per merged fix | Hand log divided by merged fixes | `--engineer-minutes` divided by `--merged-fixes` (GitHub's count): `summary.engineer_minutes_per_merged_fix`; same hand log |
 | Rework | PRs that needed a fix-up after the first review, or an issue reopened, from GitHub | `redos_per_done`, `reopened_per_done`, `failed_attempts_per_done`: Metrics tab, rework |
 | Escaped defects | Issues filed within 14 days that name the merged PR, from GitHub | Same |
 | Confidence | Engineer rates each merge 1 to 5 when approving | Same |
@@ -65,6 +65,10 @@ Notes on what these mean:
   figure. In the arms, the pool is fixes only, but follow-up items KBL creates (a review, a redo) are counted as
   the Metrics tab counts them. Publish both the tab's count and the count of merged fixes from GitHub, and use
   the GitHub count for merged fixes per day in every arm.
+- `touches_per_done` and `cost_per_done_micros` average over every done item, including KBL's own reviews and
+  redo follow-ups, so they run lower than a per-fix figure. Read them as per KBL item, not per merged fix.
+- `cost_is_a_floor` is true when a model had no price, and cost is priced with the prices recorded when the usage
+  was written. A floor is reported as a floor.
 - Cost in arm 1 comes from outside KBL and prices tokens differently, so a cost comparison across arm 1 and the
   others is only indicative. Compare arms 2 and 3 directly.
 - Escaped defects need 14 days after the last merge. The experiment is not complete until then.
@@ -74,7 +78,7 @@ Notes on what these mean:
 ## The export
 
 ```text
-kbl-tool work metrics --label arm-3-block-1 --days 7 --to-ms 1795000000000 --engineer-minutes 640 --format json
+kbl-tool work metrics --label arm-3-block-1 --days 7 --to-ms 1795000000000 --engineer-minutes 640 --merged-fixes 14 --format json
 ```
 
 It reads `work.events` with the same Felix credentials as `kbl-tool work export`, folds it with the dashboard's own
@@ -83,8 +87,12 @@ holds the full Metrics report and a flat `summary`; `csv` holds `label`, the win
 `name,value` rows. A figure with nothing done in the window is empty, not zero.
 
 Run it at the end of each block and keep the files with the hand log and the GitHub lists. The window is whole days
-back from `--to-ms`, up to 90, so a block longer than that is exported in parts. Items done count in the window
-where they last became done, so a block's export is final only after nothing from it can still be reopened.
+back from `--to-ms`, up to 90, so a block longer than that is exported in parts. Export at the end of each block: the fold keeps only
+each item's latest done time, so an item reopened later vanishes from an earlier window, and the tool refuses an
+explicit `--to-ms` that is earlier than the newest record. `records_not_applied` counts records the fold did not
+take (refusals the tracker logged, and anything malformed); a large number means the log needs a look before the
+figures are trusted. `done_per_day` counts calendar days, so use blocks of whole weeks or report GitHub's
+per-working-day count alongside it.
 
 ## How many items
 
@@ -119,6 +127,12 @@ the test only has to tell "about 1x" from "about 3x or more".
   side so effort spent on redos is not lost.
 - **Counting what is easy.** More merged fixes can come from taking easy work first. The size-class mix per arm is
   published, and escaped defects and confidence are read together with the count.
+- **Agents work off hours.** In KBL arms agents run while the engineer is idle and the log counts only the
+  engineer's stretches, so minutes per fix is not wall-clock cost. Report wall-clock days alongside.
+- **What "done" means.** KBL arms include reviews and triage items that arm 1 does not have. Per-fix figures use
+  GitHub's merged-fix count in every arm.
+- **Stale or triaged pool.** Issues that were already triaged or stale may suit KBL's triage flow. The pool rule is
+  applied before assignment and the age and triage state of each arm's issues is published.
 - **Machine and network load.** Record the hardware and any outage. A block with an outage is kept and flagged.
 
 ## Publishing the result
