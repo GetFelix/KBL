@@ -429,11 +429,9 @@ async fn filters_and_the_peek_are_for_an_agent_token_and_bad_filters_are_refused
     let app = app().await;
     let filtered =
         json!({ "wait_seconds": 0, "kinds": ["fix"], "tiers": [2], "exclude_roots": ["x"] });
-    let (status, reply) = call(&app, "/v1/work/next", Some("tok-w1"), filtered).await;
-    assert_eq!(
-        (status, reply["claimed"].as_bool()),
-        (StatusCode::OK, Some(false))
-    );
+    // The test log is below format 15, which cannot serve a filtered claim.
+    let (status, _) = call(&app, "/v1/work/next", Some("tok-w1"), filtered).await;
+    assert_eq!(status, StatusCode::CONFLICT);
     let (status, reply) = call(&app, "/v1/work/peek", Some("tok-w1"), json!({ "limit": 3 })).await;
     assert_eq!(
         (status, reply["next"].as_array().map(Vec::len)),

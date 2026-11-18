@@ -221,14 +221,6 @@ async fn a_rebuild_on_a_stream_that_lost_its_durability_refuses_work() {
     t.extend(&agent("w1"), &item("a1")).await.unwrap();
 }
 
-async fn at_15(fake: &Fake) -> Tracker<Fake> {
-    let t = start(fake).await;
-    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
-        .await
-        .unwrap();
-    t
-}
-
 #[tokio::test]
 async fn a_direct_claim_among_several_roots_survives_a_restart() {
     let fake = Fake::default();
@@ -252,21 +244,47 @@ async fn a_direct_claim_among_several_roots_survives_a_restart() {
 }
 
 #[tokio::test]
-async fn below_format_15_a_direct_claim_is_written_without_the_flag() {
+async fn below_format_15_several_roots_are_served_from_the_lane_not_by_a_direct_claim() {
     let fake = Fake::default();
     let t = start(&fake).await;
     seed(&t, "a1", 2).await;
     seed(&t, "b1", 2).await;
-    claim(&t, "w1").await;
+    let got = claimed_id(&claim(&t, "w1").await).unwrap();
+    let log = fake.log();
     assert!(
-        fake.log()
-            .iter()
-            .any(|l| matches!(&l.record, WorkRecord::Claimed { direct: false, .. }))
+        !log.iter()
+            .any(|l| matches!(&l.record, WorkRecord::Claimed { direct: true, .. }))
+    );
+    // The claim came from a polled record: exactly one ready record is leased.
+    let leased = (0..2)
+        .filter(|o| matches!(fake.slot(READY, *o), Slot::Leased(_)))
+        .count();
+    assert_eq!(leased, 1, "the claim was not made from a polled record");
+    drop(t);
+    let second = start(&fake).await;
+    assert_eq!(released(&fake), 0, "a restart lapsed a lane claim");
+    assert!(second.extend(&agent("w1"), &item(&got)).await.is_ok());
+}
+
+#[tokio::test]
+async fn below_format_15_a_filtered_claim_is_refused_and_spends_nothing() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let f = Filter::parse(&["fix".to_string()], &[], None, &[]).unwrap();
+    let err = t
+        .next_filtered(&agent("w1"), Duration::ZERO, &[], &f)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Refused { why } if why == "needs_format_15"),
+        "{err:?}"
     );
     assert!(
         !fake
             .log()
             .iter()
-            .any(|l| matches!(&l.record, WorkRecord::Claimed { direct: true, .. }))
+            .any(|l| matches!(&l.record, WorkRecord::Claimed { .. }))
     );
+    assert!(claimed_id(&claim(&t, "w2").await).is_some());
 }

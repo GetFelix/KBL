@@ -69,7 +69,7 @@ async fn peeked(t: &Tracker<Fake>, who: &str, n: usize, f: &Filter) -> Vec<Strin
 #[tokio::test]
 async fn a_kind_filter_takes_only_that_kind_and_spends_no_ready_record() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let t = at_15(&fake).await;
     seed(&t, "r1", 2).await;
     child(&t, "t1", "r1", WorkKind::Triage, 2).await;
     seed(&t, "r2", 2).await;
@@ -93,7 +93,7 @@ async fn a_kind_filter_takes_only_that_kind_and_spends_no_ready_record() {
 #[tokio::test]
 async fn tier_repo_and_excluded_roots_narrow_the_claim() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let t = at_15(&fake).await;
     seed(&t, "plain", 1).await;
     seed_in_felix(&t, "felix").await;
     seed(&t, "urgent", 0).await;
@@ -120,6 +120,9 @@ async fn a_filter_never_hands_out_what_the_caller_could_not_claim_without_it() {
     let fake = Fake::default();
     let t = start(&fake).await;
     t.person_record(key("gab"), WorkRecord::FormatRaised { to: 13 })
+        .await
+        .unwrap();
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
         .await
         .unwrap();
     seed(&t, "mine", 2).await;
@@ -159,7 +162,7 @@ async fn a_filter_never_hands_out_what_the_caller_could_not_claim_without_it() {
 #[tokio::test]
 async fn the_peek_lists_the_order_and_claims_nothing() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let t = at_15(&fake).await;
     for (id, tier) in [("c", 2), ("a", 2), ("b", 1)] {
         seed(&t, id, tier).await;
     }
@@ -199,7 +202,7 @@ async fn the_peek_lists_the_order_and_claims_nothing() {
 #[tokio::test]
 async fn roots_take_turns_in_a_tier() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let t = at_15(&fake).await;
     seed(&t, "a", 2).await;
     child(&t, "a1", "a", WorkKind::Augment, 2).await;
     child(&t, "a2", "a", WorkKind::Augment, 2).await;
@@ -227,6 +230,9 @@ async fn an_answers_follow_up_waits_behind_other_roots_until_it_has_waited() {
     let fake = Fake::default();
     let t = start(&fake).await;
     t.person_record(key("gab"), WorkRecord::FormatRaised { to: 14 })
+        .await
+        .unwrap();
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
         .await
         .unwrap();
     seed(&t, "asked", 2).await;
@@ -282,7 +288,7 @@ async fn an_answers_follow_up_waits_behind_other_roots_until_it_has_waited() {
 #[tokio::test]
 async fn two_agents_never_hold_the_same_item_under_filters() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let t = at_15(&fake).await;
     seed(&t, "r1", 2).await;
     seed(&t, "r2", 2).await;
     let f = filter(&["fix"], &[], None, &[]);

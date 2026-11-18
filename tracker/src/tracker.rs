@@ -888,6 +888,14 @@ impl<B: Broker> Tracker<B> {
         filter: &Filter,
     ) -> Result<Value, Error> {
         let lanes = self.review_lanes(reviews)?;
+        // A filter is served by claiming from the state, which only a log at
+        // format 15 can carry across a restart. Polling the lane and passing
+        // over non-matching items would spend ready records, so it is refused.
+        if !filter.is_empty() && self.0.core.lock().await.state.format() < FORMAT_V15 {
+            return Err(Error::Refused {
+                why: "needs_format_15".into(),
+            });
+        }
         let deadline = Instant::now() + wait.min(MAX_WAIT);
         let mut moved = 0;
         loop {
@@ -1590,16 +1598,21 @@ impl<B: Broker> Tracker<B> {
         review: &[u8],
         filter: &Filter,
     ) -> Result<Option<Delivery>, Error> {
-        let pool = {
+        let (pool, direct_ok) = {
             let core = self.0.core.lock().await;
-            self.candidates(&core, agent, review, filter)
+            (
+                self.candidates(&core, agent, review, filter),
+                core.state.format() >= FORMAT_V15,
+            )
         };
         for tier in (0..TIERS).chain(review.iter().copied()) {
             // With a filter, or several roots ready in the lane, the lane's own
             // order is not the one to hand out. The claim is made from the state
             // and no record in the lane is polled, so none is spent on an item
             // that was passed over.
-            if !filter.is_empty() || Self::several_roots(&pool, tier) {
+            // Below format 15 a direct claim on an unassigned item is not
+            // restart-safe, so the lane's own order is used.
+            if direct_ok && (!filter.is_empty() || Self::several_roots(&pool, tier)) {
                 let ordered = {
                     let core = self.0.core.lock().await;
                     let lane: Vec<_> = pool.iter().filter(|c| c.lane == tier).cloned().collect();

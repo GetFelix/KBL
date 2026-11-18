@@ -864,6 +864,14 @@ pub(super) async fn start_with(fake: &Fake, settings: Settings) -> Tracker<Fake>
     Tracker::start(fake.reconnect(), settings).await.unwrap()
 }
 
+pub(super) async fn at_15(fake: &Fake) -> Tracker<Fake> {
+    let t = start(fake).await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
+        .await
+        .unwrap();
+    t
+}
+
 pub(super) async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
     t.next(&agent(who), Duration::ZERO).await.unwrap()
 }

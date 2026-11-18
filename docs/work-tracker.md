@@ -1823,6 +1823,13 @@ so two agents still never hold one item. A lane with one root ready and no
 filter is polled as before. A direct claim has no Felix delivery, so the sweep
 lapses it when it is not extended, as described under assignees.
 
+Filters and fairness across roots need the log raised to format 15. Below it,
+a call with a filter is refused with `needs_format_15`, and a lane with several
+roots is polled in its own order. Polling and passing over non-matching items
+would spend ready records, and a direct claim on an unassigned item would not
+survive a restart, so neither is done. The peek is read-only and works at any
+format.
+
 ## The Felix mapping
 
 It reuses the pieces the run resources already use. No database.
