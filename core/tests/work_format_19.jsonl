@@ -1,0 +1,11 @@
+{"v":19,"at_ms":1000,"by":"gabriel","actor":"person","kind":"format_raised","to":19}
+{"v":19,"at_ms":1005,"by":"gabriel","actor":"person","kind":"rules_set","target":{"source":"github","repo":"GetFelix/felix"},"vocabulary":{"types":["bug","feature","perf"],"areas":["storage","dashboard"]}}
+{"v":19,"at_ms":1010,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix","labels":["Perf","good first issue"],"milestone":"0.8"}
+{"at_ms":1015,"by":"ingest","actor":"tracker","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"fix the docs build"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1025,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"v":19,"at_ms":1030,"by":"ingest","actor":"tracker","kind":"edited","item":"r1","labels":["Perf","P1"],"milestone":"0.9"}
+{"v":19,"at_ms":1035,"by":"gabriel","actor":"person","kind":"triaged","item":"r1","tier":1,"why":"a benchmark run","item_type":"perf","area":"storage","size":"M"}
+{"v":19,"at_ms":1040,"by":"gabriel","actor":"person","kind":"edited","item":"r1","item_type":"bug"}
+{"v":19,"at_ms":1045,"by":"gabriel","actor":"person","kind":"triaged","item":"r1","tier":1,"why":"a benchmark run","item_type":"perf","area":"dashboard","size":"L"}
+{"v":19,"at_ms":1050,"by":"gabriel","actor":"person","kind":"triaged","item":"r2","tier":1,"why":"docs","item_type":"docs"}

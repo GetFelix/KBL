@@ -20,6 +20,11 @@ export interface GroupKey {
 const text = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
 const some = (v: string | null | undefined) => (v === null || v === undefined || v === '' ? null : v);
 
+const sizeRank = (s: string) => {
+  const k = ['XS', 'S', 'M', 'L', 'XL'].indexOf(s.toUpperCase());
+  return k < 0 ? 99 : k;
+};
+
 export const GROUP_KEYS: readonly GroupKey[] = [
   {
     id: 'stage',
@@ -38,6 +43,12 @@ export const GROUP_KEYS: readonly GroupKey[] = [
   { id: 'tier', label: 'Tier', value: (i) => some(i.tier === null || i.tier === undefined ? null : String(i.tier)), name: (v) => `Tier ${v}`, compare: text, none: 'No tier' },
   { id: 'repo', label: 'Repo', value: (i) => some(i.repo), name: (v) => v, none: 'No repo' },
   { id: 'kind', label: 'Kind', value: (i) => some(i.work), name: (v) => v.charAt(0).toUpperCase() + v.slice(1).replaceAll('_', ' '), none: 'No kind' },
+  { id: 'milestone', label: 'Milestone', value: (i) => some(i.milestone), name: (v) => v, compare: text, none: 'No milestone' },
+  // An item has several labels but sits in one group: the first in alphabetical order.
+  { id: 'label', label: 'Label', value: (i) => some([...(i.labels ?? [])].sort(text)[0]), name: (v) => v, compare: text, none: 'No label' },
+  { id: 'type', label: 'Type', value: (i) => some(i.class?.item_type?.value), name: (v) => v, compare: text, none: 'No type' },
+  { id: 'area', label: 'Area', value: (i) => some(i.class?.area?.value), name: (v) => v, compare: text, none: 'No area' },
+  { id: 'size', label: 'Size', value: (i) => some(i.class?.size?.value), name: (v) => v, compare: (a, b) => sizeRank(a) - sizeRank(b) || text(a, b), none: 'No size' },
   {
     id: 'assignee',
     label: 'Assignee',

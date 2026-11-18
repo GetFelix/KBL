@@ -1,5 +1,7 @@
 //! Which rule an issue belongs to. The first rule that matches wins.
 
+use std::collections::BTreeMap;
+
 use crate::config::Rule;
 use crate::source::Issue;
 
@@ -108,8 +110,27 @@ impl Rule {
                     .find(|(k, _)| k.eq_ignore_ascii_case(l))
                     .map(|(_, t)| *t)
             }))
+            .chain(issue.milestone.iter().filter_map(|m| {
+                self.milestone_tiers
+                    .iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(m))
+                    .map(|(_, t)| *t)
+            }))
             .min()
             .unwrap_or(self.default_tier)
+    }
+
+    /// The type and area the issue's labels map to: the first label, in the
+    /// order upstream lists them, that the rule maps for each.
+    pub(crate) fn mapped_class(&self, issue: &Issue) -> (Option<String>, Option<String>) {
+        let pick = |map: &BTreeMap<String, String>| {
+            issue.labels.iter().find_map(|l| {
+                map.iter()
+                    .find(|(k, _)| k.eq_ignore_ascii_case(l))
+                    .map(|(_, v)| v.clone())
+            })
+        };
+        (pick(&self.label_types), pick(&self.label_areas))
     }
 }
 

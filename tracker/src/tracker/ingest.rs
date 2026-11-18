@@ -37,6 +37,8 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::Reopened { .. }
         | WorkRecord::Shipped { .. } => true,
+        // Upstream's labels and milestone and a rule's class; never a person's title or tier.
+        WorkRecord::Edited { title, tier, .. } => title.is_none() && tier.is_none(),
         // The two items an admitted root starts with.
         WorkRecord::Proposed { work, .. } => matches!(work, WorkKind::Triage | WorkKind::Augment),
         WorkRecord::Closed { why, .. } => matches!(
@@ -59,6 +61,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::PrStatus { item, .. }
         | WorkRecord::Reopened { item }
         | WorkRecord::Shipped { item, .. }
+        | WorkRecord::Edited { item, .. }
         | WorkRecord::Closed { item, .. } => vec![item],
         WorkRecord::Linked { item, to } | WorkRecord::Unlinked { item, to } => vec![item, to],
         WorkRecord::Proposed {

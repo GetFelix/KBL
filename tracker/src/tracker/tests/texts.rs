@@ -11,6 +11,8 @@ async fn ingest_root(t: &Tracker<Fake>) {
         source: "github".into(),
         upstream_id: "GetFelix/felix#1".into(),
         title: "a bug".into(),
+        labels: vec![],
+        milestone: None,
     };
     t.ingest_record(key("ingest-gh"), r).await.unwrap();
 }

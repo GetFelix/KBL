@@ -105,6 +105,8 @@ async fn the_dry_run_counts_roots_the_tracker_already_has() {
             source: "github".into(),
             upstream_id: "GetFelix/felix#1".into(),
             title: "t".into(),
+            labels: vec![],
+            milestone: None,
         })
         .await
         .unwrap();
@@ -587,6 +589,8 @@ async fn the_dry_run_skips_ingests_own_prerequisite_issues_and_other_sources_roo
             source: "jira".into(),
             upstream_id: "GetFelix/felix#1".into(),
             title: "t".into(),
+            labels: vec![],
+            milestone: None,
         })
         .await
         .unwrap();

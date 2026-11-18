@@ -810,6 +810,8 @@ pub(super) async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
             source: "gh".into(),
             upstream_id: id.into(),
             title: format!("fix {id}"),
+            labels: vec![],
+            milestone: None,
         },
     )
     .await
@@ -1676,6 +1678,8 @@ async fn a_tracker_that_lost_the_lease_serves_and_writes_nothing() {
                     source: "gh".into(),
                     upstream_id: "b1".into(),
                     title: "t".into(),
+                    labels: vec![],
+                    milestone: None,
                 },
             )
             .await,
@@ -1835,6 +1839,8 @@ async fn ingest_writes_upstream_records_as_the_tracker_under_its_own_name() {
         source: "github".into(),
         upstream_id: "GetFelix/felix#1".into(),
         title: "a bug".into(),
+        labels: vec![],
+        milestone: None,
     };
     t.ingest_record(key("ingest-gh"), imported.clone())
         .await
@@ -1845,6 +1851,8 @@ async fn ingest_writes_upstream_records_as_the_tracker_under_its_own_name() {
         source: "github".into(),
         upstream_id: "GetFelix/felix#1".into(),
         title: "a bug".into(),
+        labels: vec![],
+        milestone: None,
     };
     let err = t.ingest_record(key("ingest-gh"), again).await.unwrap_err();
     assert!(matches!(err, Error::Refused { why } if why == "duplicate"));
@@ -1869,6 +1877,8 @@ async fn jira_and_github_roots(t: &Tracker<Fake>, pr: &str) {
             source: source.into(),
             upstream_id: up.into(),
             title: format!("fix {id}"),
+            labels: vec![],
+            milestone: None,
         })
         .await
         .unwrap();
@@ -2030,6 +2040,8 @@ async fn ingest_writing_a_context_entry_again_unchanged_logs_nothing() {
         source: "github".into(),
         upstream_id: "GetFelix/felix#1".into(),
         title: "a bug".into(),
+        labels: vec![],
+        milestone: None,
     };
     ingest(imported).await.unwrap();
     let context = |body: &str| WorkRecord::Context {
@@ -2119,6 +2131,8 @@ async fn ingest_unlinks_only_an_edge_its_own_link_made() {
                 source: "github".into(),
                 upstream_id: format!("o/r#{n}"),
                 title: "a bug".into(),
+                labels: vec![],
+                milestone: None,
             },
         )
         .await
@@ -2172,6 +2186,8 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
         source: "github".into(),
         upstream_id: "o/r#1".into(),
         title: "a bug".into(),
+        labels: vec![],
+        milestone: None,
     })
     .await
     .unwrap();
@@ -2303,6 +2319,8 @@ async fn ingest_cannot_close_as_merged_without_a_merged_status() {
             source: "github".into(),
             upstream_id: "o/r#1".into(),
             title: "a bug".into(),
+            labels: vec![],
+            milestone: None,
         },
     )
     .await
@@ -2552,6 +2570,8 @@ pub(super) async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
             source: "github".into(),
             upstream_id: format!("GetFelix/felix#{id}"),
             title: format!("fix {id}"),
+            labels: vec![],
+            milestone: None,
         },
     )
     .await
@@ -2577,6 +2597,7 @@ fn felix_rules(root: Option<&str>, text: Option<&str>, checks: Option<&[&str]>) 
         root: root.map(item),
         text: text.map(str::to_owned),
         checks: checks.map(|c| c.iter().map(|s| s.to_string()).collect()),
+        vocabulary: None,
     }
 }
 
@@ -2673,6 +2694,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 
 mod assignee;
 mod blocks;
+mod facets;
 mod metrics;
 mod races;
 mod recover;
@@ -2710,6 +2732,8 @@ async fn no_route_writes_an_oversized_string() {
         source: source.into(),
         upstream_id: upstream_id.into(),
         title: title.into(),
+        labels: vec![],
+        milestone: None,
     };
     // Ingest.
     for r in [
@@ -2745,6 +2769,9 @@ async fn no_route_writes_an_oversized_string() {
             depends_on: Vec::new(),
             related: Vec::new(),
             split: Vec::new(),
+            item_type: None,
+            area: None,
+            size: None,
         },
         WorkRecord::RulesSet {
             target: kbl_core::work::Target {
@@ -2754,6 +2781,7 @@ async fn no_route_writes_an_oversized_string() {
             root: None,
             text: None,
             checks: None,
+            vocabulary: None,
         },
     ] {
         let err = t.person_record(key("gab"), r).await.unwrap_err();
@@ -3304,6 +3332,8 @@ async fn an_append_on_a_state_that_may_miss_records_is_refused() {
         source: "gh".into(),
         upstream_id: "b1".into(),
         title: "t".into(),
+        labels: vec![],
+        milestone: None,
     };
     assert!(matches!(
         t.append(&mut core, Actor::Person, key("gab"), record).await,
@@ -3421,6 +3451,8 @@ pub(super) fn imported(id: &str) -> WorkRecord {
         source: "gh".into(),
         upstream_id: id.into(),
         title: "t".into(),
+        labels: vec![],
+        milestone: None,
     }
 }
 

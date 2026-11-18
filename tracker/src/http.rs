@@ -37,7 +37,7 @@ use crate::felix::Broker;
 use crate::org::OrgUnavailable;
 use crate::teams::{Team, Teams};
 use crate::tracker::ExpectedPrice;
-use crate::tracker::selection::Filter;
+use crate::tracker::selection::{Facets, Filter};
 use crate::tracker::{
     Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
 };
@@ -222,6 +222,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/budget", post(budget::<B>))
         .route("/v1/work/prices", post(price::<B>))
         .route("/v1/work/rules", post(rules::<B>))
+        .route("/v1/work/classify", post(classify::<B>))
         .route("/v1/work/rules/read", post(rules_read::<B>))
         .route("/v1/work/flag", post(flag::<B>))
         .route("/v1/work/unflag", post(unflag::<B>))
@@ -500,6 +501,8 @@ struct FilterBody {
     /// Roots whose work is not taken.
     #[serde(default)]
     exclude_roots: Vec<ItemId>,
+    #[serde(flatten)]
+    facets: Facets,
 }
 
 impl FilterBody {
@@ -509,7 +512,8 @@ impl FilterBody {
             &self.tiers,
             self.repo.as_deref(),
             &self.exclude_roots,
-        )
+        )?
+        .with_facets(self.facets.clone())
     }
 }
 
@@ -897,6 +901,20 @@ struct RulesBody {
     root: Option<ItemId>,
     text: Option<String>,
     checks: Option<Vec<String>>,
+    /// The values triage may classify with, for this repo or root.
+    #[serde(default)]
+    vocabulary: Option<kbl_core::work::Vocabulary>,
+}
+
+#[derive(Deserialize)]
+struct ClassifyBody {
+    item: ItemId,
+    #[serde(default)]
+    item_type: Option<String>,
+    #[serde(default)]
+    area: Option<String>,
+    #[serde(default)]
+    size: Option<String>,
 }
 
 async fn next<B: Broker>(call: Call<B>, Json(body): Json<NextBody>) -> Response {
@@ -1165,6 +1183,12 @@ struct TriageBody {
     related: Vec<ItemId>,
     #[serde(default)]
     split: Vec<String>,
+    #[serde(default)]
+    item_type: Option<String>,
+    #[serde(default)]
+    area: Option<String>,
+    #[serde(default)]
+    size: Option<String>,
 }
 
 async fn triage<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<TriageBody>) -> Response {
@@ -1183,6 +1207,9 @@ async fn triage<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<TriageBody>) -> Re
                         depends_on: b.depends_on,
                         related: b.related,
                         split: b.split,
+                        item_type: b.item_type,
+                        area: b.area,
+                        size: b.size,
                     },
                 ),
             )
@@ -1342,6 +1369,11 @@ async fn edit_proposal<B: Broker>(
         item: b.item,
         title: b.title,
         tier: b.tier,
+        labels: None,
+        milestone: None,
+        item_type: None,
+        area: None,
+        size: None,
         depends_on: b.depends_on,
         split: b.split,
         proposal: b.proposal,
@@ -1480,6 +1512,25 @@ async fn rules<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<RulesBody>) -> Resp
         root: b.root,
         text: b.text,
         checks: b.checks,
+        vocabulary: b.vocabulary,
+    };
+    as_person(&call, rk, record).await
+}
+
+/// A person sets or overrides an item's type, area or size. An empty value clears it.
+async fn classify<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ClassifyBody>) -> Response {
+    let record = WorkRecord::Edited {
+        item: b.item,
+        title: None,
+        tier: None,
+        labels: None,
+        milestone: None,
+        item_type: b.item_type,
+        area: b.area,
+        size: b.size,
+        depends_on: None,
+        proposal: None,
+        split: None,
     };
     as_person(&call, rk, record).await
 }

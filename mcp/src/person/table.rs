@@ -205,6 +205,32 @@ pub(super) const TOOLS: &[Tool] = &[
         ],
     },
     Tool {
+        name: "classify_item",
+        about: "Set or override an item's type, area or size. The value must be in the team's vocabulary; an empty value clears it. Triage and intake rules never replace a value you set.",
+        route: Route::Post("/v1/work/classify"),
+        params: &[
+            ITEM,
+            Param {
+                name: "item_type",
+                kind: Kind::Text,
+                required: false,
+                about: "The type, such as `bug` or `feature`.",
+            },
+            Param {
+                name: "area",
+                kind: Kind::Text,
+                required: false,
+                about: "The code area.",
+            },
+            Param {
+                name: "size",
+                kind: Kind::Text,
+                required: false,
+                about: "The expected size, `S`, `M` or `L` unless the vocabulary lists others.",
+            },
+        ],
+    },
+    Tool {
         name: "lift_block",
         about: "End an item's block now, so agents are handed it again.",
         route: Route::Post("/v1/work/lift-block"),

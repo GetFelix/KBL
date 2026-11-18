@@ -1887,6 +1887,9 @@ take without them:
 | `tiers` | Work in these priority tiers, 0 the highest |
 | `repo` | Work that lands in this repo, as `owner/name`, in any letter case |
 | `exclude_roots` | Work outside these roots, at most 64 |
+| `milestone` | Work whose root has this upstream milestone, in any letter case |
+| `labels` | Work whose root has at least one of these upstream labels, in any letter case, at most 32 |
+| `item_type`, `area`, `size` | Work whose root was classed this type, area or size, in any letter case |
 
 An item assigned to the agent is filtered the same way, so a caller that asks
 for triage is not handed its assigned fix. An unknown kind or tier is refused
@@ -2253,6 +2256,39 @@ the default; a self-managed instance sets `api`:
   A redirect is read as a refusal (a sign-in page or a moved instance) and
   stalls the project.
 
+### Labels, milestone, type, area and size
+
+An item carries two kinds of facts that help an agent choose and a person see the shape of the queue.
+
+**From upstream, at import.** The `imported` record carries the issue's labels and milestone, so an item has them
+before any triage. The sources map their own words: GitHub and GitLab labels and milestone, Jira labels and fix
+version, Azure DevOps tags and iteration path. An item keeps at most 32 labels of at most 64 bytes and a milestone of
+at most 100 bytes. When the issue's labels or milestone change, reconcile writes an `edited` record with the new values
+(an empty milestone clears it). Only ingest may write those fields, so a person cannot edit upstream's facts. A rule
+can map them as it admits an item: `milestone_tiers` (milestone to tier; the lowest tier among the milestone and the
+priority labels wins), `label_types` and `label_areas` (label to type or area; the first label upstream lists that the
+rule maps). A mapped type or area must be in the vocabulary below, or the tracker refuses it and the item imports
+without it. A log below format 19 imports the issue without the facts, and ingest writes them after the raise.
+
+**Classified, from a vocabulary.** The team declares what triage may choose from in the standing rules:
+
+```json
+{ "source": "github", "repo": "GetFelix/felix",
+  "vocabulary": { "types": ["bug", "feature", "perf"], "areas": ["storage", "dashboard"], "sizes": ["S", "M", "L"] } }
+```
+
+`POST /v1/work/rules` takes `vocabulary` like `text` and `checks`, and a root's own vocabulary overrides its repo's.
+Each list holds at most 32 plain values (letters, digits, `-`, `_`, `.`, `/`), and `sizes` defaults to `S`, `M` and
+`L`. Triage sets `item_type`, `area` and `size` in `work_triage` from that list. A value outside it refuses the whole
+answer as `bad_class`, and a team with no list for types or areas accepts none. A person overrides any of the three
+with `classify_item` (`POST /v1/work/classify`; an empty value clears it). The fold remembers who chose each value (a
+rule, triage or a person): triage replaces a rule's value, nothing replaces a person's, and the dashboard shows a value
+the same way whoever chose it. These fields are format 19.
+
+`work_next` and `work_peek` filter on all of them, read from the item's root, so a root's triage and augment items
+follow it. A filtered claim is made from the state, so the ready records of items it passes over are not polled, acked
+or nacked. A peek shows each item's milestone, labels, type, area and size.
+
 ### Intake rules
 
 Each source has one or more intake rules. A rule is the source's own filter
@@ -2266,7 +2302,7 @@ Each source has one or more intake rules. A rule is the source's own filter
 - **A cap** on the open roots the rule may have at a time, so a broad filter
   cannot flood the queue. Matches over the cap wait upstream and are picked up
   as roots close.
-- **A default tier** and the mapping from the upstream priority.
+- **A default tier** and the mapping from the upstream priority, plus maps from milestone to tier and from labels to type and area ([labels and class](#labels-milestone-type-area-and-size)).
 - **The repository** agents work in. ADO and Jira items do not name one, so
   the rule maps an area path or component to it. An item with no
   repository goes to Needs you.

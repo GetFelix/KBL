@@ -48,6 +48,7 @@ test('a card says what it waits on: an edge, a failed check, or a person', () =>
 test('properties list tier, source and the pull request with its checks', () => {
   assert.deepEqual(properties({ ...root, tier: 2, pr: 'GetFelix/felix#2300', pr_phase: 'open', pr_checks: 'red' }), ['Tier 2', 'github', 'PR #2300, checks fail']);
   assert.deepEqual(properties({ id: 'a', title: 'a', stage: 'ready' }), []);
+  assert.deepEqual(properties({ id: 'a', title: 'a', stage: 'ready', tier: 1, milestone: '0.8', class: { item_type: { value: 'bug', by: 'triage' }, size: { value: 'M', by: 'person' } } }), ['Tier 1', '0.8', 'bug', 'M']);
 });
 
 test('a block shows its resource, its end and its reason until it ends', () => {

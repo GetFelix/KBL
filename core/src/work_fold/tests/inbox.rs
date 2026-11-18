@@ -12,6 +12,9 @@ fn triaged(item: &str, tier: u8) -> WorkRecord {
         depends_on: vec![id("r9")],
         related: vec![],
         split: vec!["half".into()],
+        area: None,
+        item_type: None,
+        size: None,
     }
 }
 
@@ -23,6 +26,11 @@ fn edit(item: &str, deps: Option<&[&str]>, split: Option<&[&str]>, at: Option<u6
         depends_on: deps.map(|d| d.iter().map(|x| id(x)).collect()),
         split: split.map(|d| d.iter().map(|x| (*x).to_owned()).collect()),
         proposal: at,
+        area: None,
+        item_type: None,
+        labels: None,
+        milestone: None,
+        size: None,
     }
 }
 

@@ -476,6 +476,36 @@ async fn filters_and_the_peek_are_for_an_agent_token_and_bad_filters_are_refused
 }
 
 #[tokio::test]
+async fn facet_filters_are_read_and_bounded_and_classifying_is_for_a_person() {
+    let app = app().await;
+    let facets = json!({ "milestone": "0.8", "labels": ["perf"], "item_type": "bug", "area": "storage", "size": "S" });
+    let (status, reply) = call(&app, "/v1/work/peek", Some("tok-w1"), facets).await;
+    assert_eq!(
+        (status, reply["next"].as_array().map(Vec::len)),
+        (StatusCode::OK, Some(0))
+    );
+    let many: Vec<String> = (0..40).map(|i| format!("l{i}")).collect();
+    for path in ["/v1/work/next", "/v1/work/peek"] {
+        let (status, _) = call(&app, path, Some("tok-w1"), json!({ "labels": many })).await;
+        assert!(status.is_client_error(), "{path}: {status}");
+    }
+    let body = json!({ "item": "x", "item_type": "bug" });
+    assert_eq!(
+        call(&app, "/v1/work/classify", Some("tok-w1"), body.clone())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    // The test log is below format 19, which cannot take a class.
+    assert_eq!(
+        call(&app, "/v1/work/classify", Some("tok-gab"), body)
+            .await
+            .0,
+        StatusCode::CONFLICT
+    );
+}
+
+#[tokio::test]
 async fn only_a_person_token_appends_records() {
     let app = app().await;
     let record = json!({ "record": { "kind": "imported", "item": "a1", "source": "gh", "upstream_id": "1", "title": "t" } });

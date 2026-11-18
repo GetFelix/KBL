@@ -6,7 +6,7 @@ use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
     FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, FORMAT_V15,
-    FORMAT_V16, FORMAT_V17, FORMAT_V18, ReadError, WorkLogged, WorkRecord, read,
+    FORMAT_V16, FORMAT_V17, FORMAT_V18, FORMAT_V19, ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1359,7 +1359,6 @@ const FORMAT_18_LOG: &str = include_str!("work_format_18.jsonl");
 #[test]
 fn the_eighteenth_format_stamps_relations_and_a_triage_answer_that_names_them() {
     assert_eq!(FORMAT_V18, 18);
-    assert_eq!(FORMAT, FORMAT_V18);
     for (_, r) in &entries(FORMAT_18_LOG) {
         if matches!(r.record.kind(), "related" | "unrelated") {
             assert_eq!(r.record.format(), FORMAT_V18, "{}", r.record.kind());
@@ -1430,4 +1429,71 @@ fn a_reader_below_18_stops_at_a_relation() {
         raised.1.v, FORMAT_V18,
         "the raise itself stops an older reader"
     );
+}
+
+/// A log at the nineteenth format: upstream labels and milestone on an import
+/// and an edit, a vocabulary, triage's class and a person's override. Its
+/// folded state is pinned in `wasm/golden/format_19.state.json`.
+const FORMAT_19_LOG: &str = include_str!("work_format_19.jsonl");
+
+#[test]
+fn the_nineteenth_format_is_nineteen_and_stamps_each_use_of_a_new_field() {
+    assert_eq!(FORMAT_V19, 19);
+    assert_eq!(FORMAT, FORMAT_V19);
+    let log = entries(FORMAT_19_LOG);
+    for (_, r) in &log {
+        assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
+    }
+}
+
+#[test]
+fn the_nineteenth_format_log_folds_with_its_class_and_facts() {
+    let log = entries(FORMAT_19_LOG);
+    let s = fold(&log);
+    // The last record names a type outside the vocabulary.
+    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
+    assert_eq!(s.rejections[0].offset, 10);
+    assert_eq!(s.rejections[0].why, Reject::BadClass);
+    assert!(
+        s.items[&kbl_core::names::ItemId::new("r2").unwrap()]
+            .class
+            .is_empty()
+    );
+    let r1 = &s.items[&kbl_core::names::ItemId::new("r1").unwrap()];
+    // Reconcile replaced the labels and milestone the import carried.
+    assert_eq!(r1.labels, ["Perf", "P1"]);
+    assert_eq!(r1.milestone.as_deref(), Some("0.9"));
+    // A person's type outlasts a later triage answer; triage's size and area replace its own.
+    assert_eq!(r1.class.item_type.as_ref().unwrap().value, "bug");
+    assert_eq!(r1.class.area.as_ref().unwrap().value, "dashboard");
+    assert_eq!(r1.class.size.as_ref().unwrap().value, "L");
+}
+
+/// Below 19 the fold refuses each new field, and an older reader stops at the first one.
+#[test]
+fn a_new_field_is_refused_below_format_19() {
+    let log = entries(FORMAT_19_LOG);
+    for (i, (_, r)) in log.iter().enumerate().skip(1) {
+        if r.v < FORMAT_V19 {
+            continue;
+        }
+        let mut below = State::default();
+        let raise = WorkLogged::new(
+            1,
+            kbl_core::names::Key::new("gabriel").unwrap(),
+            Actor::Person,
+            WorkRecord::FormatRaised { to: 18 },
+        );
+        below.try_apply(0, &raise).unwrap();
+        // Prepare the items the record acts on, then offer the record itself.
+        for (o, prior) in log[1..i].iter().filter(|(_, p)| p.v < FORMAT_V19) {
+            let _ = below.try_apply(*o, prior);
+        }
+        assert_eq!(
+            below.try_apply(i as u64, r),
+            Err(Reject::Format),
+            "{}",
+            r.record.kind()
+        );
+    }
 }

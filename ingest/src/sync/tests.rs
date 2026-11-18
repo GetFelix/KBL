@@ -9,6 +9,7 @@ use crate::testing::{Fake, Script, cut, fixture, issue, labels, ok, status};
 
 const LIST: &str = "/repos/GetFelix/felix/issues?";
 
+mod facts;
 mod metrics;
 mod sweep;
 mod traces;
@@ -160,6 +161,8 @@ fn imported_record() -> WorkRecord {
         source: "github".into(),
         upstream_id: UP.into(),
         title: "stale read".into(),
+        labels: vec![],
+        milestone: None,
     }
 }
 
@@ -2892,7 +2895,7 @@ async fn prerequisite_rig_until(
     let ingest = rig.ingest(rules);
     rig.gh.on("GET", GATEWAY_LIST, ok(json!([])));
     rig.tracker.person(WorkRecord::FormatRaised {
-        to: kbl_core::work::FORMAT_V6,
+        to: kbl_core::work::FORMAT_V19,
     });
     rig.list(vec![issue(812, |_| {})]);
     ingest.poll(false).await.unwrap();
