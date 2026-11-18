@@ -2743,6 +2743,7 @@ async fn no_route_writes_an_oversized_string() {
             duplicate_of: None,
             unclear: None,
             depends_on: Vec::new(),
+            related: Vec::new(),
             split: Vec::new(),
         },
         WorkRecord::RulesSet {
@@ -3052,6 +3053,48 @@ async fn ingest_returns_an_item_to_scope_once_the_format_is_raised() {
     let last = log.last().unwrap();
     assert_eq!((last.v, last.record.kind()), (2, "returned_to_scope"));
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+}
+
+/// A relation is a hint for people, never a hold: both items stay claimable
+/// while the other is open, and a dependency still holds its dependent back.
+#[tokio::test]
+async fn a_related_item_is_claimable_while_its_partner_is_open_and_a_dependency_is_not() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 1).await;
+    seed(&t, "a2", 2).await;
+    seed(&t, "a3", 3).await;
+    let rel = |a: &str, b: &str| WorkRecord::Related {
+        item: item(a),
+        to: item(b),
+    };
+    let err = t
+        .person_record(key("gab"), rel("a1", "a2"))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Refused { why } if why == "format"));
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 18 })
+        .await
+        .unwrap();
+    t.person_record(key("gab"), rel("a1", "a2")).await.unwrap();
+    t.person_record(
+        key("gab"),
+        WorkRecord::Linked {
+            item: item("a3"),
+            to: item("a1"),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
+    // a2 is related to the held a1 and still goes out; a3 waits on a1.
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a2"));
+    assert_eq!(claimed_id(&claim(&t, "w3").await), None);
+    let core = t.0.core.lock().await;
+    assert_eq!(
+        core.state.stage(&item("a3")),
+        Some(kbl_core::work_fold::Stage::Blocked)
+    );
 }
 
 #[tokio::test]

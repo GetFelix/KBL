@@ -10,6 +10,7 @@ fn triaged(item: &str, tier: u8) -> WorkRecord {
         duplicate_of: None,
         unclear: None,
         depends_on: vec![id("r9")],
+        related: vec![],
         split: vec!["half".into()],
     }
 }

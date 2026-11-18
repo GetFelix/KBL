@@ -178,6 +178,7 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 }
 .row-waits { margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--text-sm); }
 .card-waits { font-size: var(--text-sm); overflow-wrap: anywhere; }
+.card-related { font-size: var(--text-sm); overflow-wrap: anywhere; }
 .blockers { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1); }
 .blocker-id { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); }
 .overlap-link { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--text); text-decoration: underline; }

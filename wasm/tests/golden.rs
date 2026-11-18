@@ -119,6 +119,10 @@ fn logs() -> Vec<(&'static str, String)> {
             std::fs::read_to_string(format!("{core}/work_format_17.jsonl")).unwrap(),
         ),
         (
+            "format_18",
+            std::fs::read_to_string(format!("{core}/work_format_18.jsonl")).unwrap(),
+        ),
+        (
             "pre_review",
             std::fs::read_to_string(format!("{core}/work_pre_review.jsonl")).unwrap(),
         ),
@@ -510,7 +514,7 @@ fn items_carry_the_proposal_a_person_can_accept() {
     };
     assert_eq!(
         find("p1")["proposal"],
-        serde_json::json!({"at": 2, "why": "needs p0 first", "depends_on": ["p0"], "split": ["api", "docs"]})
+        serde_json::json!({"at": 2, "why": "needs p0 first", "depends_on": ["p0"], "related": [], "split": ["api", "docs"]})
     );
     // It began waiting at the triage record, which the inbox sorts by.
     assert_eq!(find("p1")["waiting_at"], 2);
@@ -538,4 +542,30 @@ fn a_root_admitted_without_triage_names_the_rule() {
     assert_eq!(items[0]["triage_skipped"], "curated");
     assert_eq!(items[0]["stage"], "ready");
     assert!(items[0]["triage"].is_null());
+}
+
+#[test]
+fn items_list_what_they_are_related_to_on_both_sides() {
+    let mut f = Folder::new();
+    let recs = [
+        r#"{"at_ms":1,"by":"gabriel","actor":"person","kind":"imported","item":"p1","source":"github","upstream_id":"o/r#1","title":"t"}"#,
+        r#"{"at_ms":2,"by":"gabriel","actor":"person","kind":"imported","item":"p0","source":"github","upstream_id":"o/r#2","title":"u"}"#,
+        r#"{"v":18,"at_ms":3,"by":"gabriel","actor":"person","kind":"format_raised","to":18}"#,
+        r#"{"v":18,"at_ms":4,"by":"gabriel","actor":"person","kind":"related","item":"p1","to":"p0"}"#,
+    ];
+    for (i, r) in recs.iter().enumerate() {
+        assert!(f.apply(i as f64, r.as_bytes()), "{i}");
+    }
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    let related = |id: &str| {
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap()["related"]
+            .clone()
+    };
+    assert_eq!(related("p1"), serde_json::json!(["p0"]));
+    assert_eq!(related("p0"), serde_json::json!(["p1"]));
 }

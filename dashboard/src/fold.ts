@@ -63,7 +63,15 @@ export interface ItemRow {
   finding?: number | null;
   /** What triage proposed besides the tier, for a person to accept or adjust. */
   /** `at` is the offset of triage's answer, which an edit of its advice must name. */
-  proposal?: { at?: number; why: string; depends_on: string[]; split: string[] } | null;
+  proposal?: {
+    at?: number;
+    why: string;
+    depends_on: string[];
+    related?: string[];
+    split: string[];
+  } | null;
+  /** Items related to this one, both ways. A relation holds nothing back: it is shown, never a block. */
+  related?: string[];
   /** The log offset where the item began waiting on a person for its present reason, or null. */
   waiting_at?: number | null;
   /** The agent that holds it and when it last wrote, in the tracker's clock (ms). */

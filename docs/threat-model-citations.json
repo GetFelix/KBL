@@ -643,6 +643,6 @@
   "if let Some(d) = &duplicate_of"
  ],
  "tracker/src/tracker/tools.rs#triage_lists": [
-  "if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {"
+  "|| related.len() > MAX_TRIAGE_LIST"
  ]
 }
