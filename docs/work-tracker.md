@@ -2736,7 +2736,7 @@ a person can merge, steer or reject without opening the pull request, the log an
 reads the latest attempt that finished (an accepted `done`) and shows only what the fold took from the log:
 
 - **Summary.** The attempt's last `progress` note, as written. The note is stored inline; one kept in an artifact is not shown.
-- **Diff.** Files touched and lines added and removed, counted from the `+` and `-` lines of the attempt's
+- **Diff.** Shown as "Logged edits: ..." with a note that it is not the pull request's diff. Files touched and lines added and removed, counted from the `+` and `-` lines of the attempt's
   `edit` hunks. A hunk stored as an artifact is not counted, and the page says "at least". The pull
   request's own diff stats are not recorded, so the figure is what the agent logged, which may differ from the pull request.
 - **Pull request and checks.** The item's `pr` as a link, with the checks and the failing check's name from the

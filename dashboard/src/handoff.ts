@@ -38,11 +38,11 @@ export function prUrl(pr: string | null | undefined): string | null {
 
 const count = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
-/** `3 files, +42 -7`, with a note when part of the diff is not in the log. */
+/** `Logged edits: 3 files, +42 -7`, counted from the agent's recorded edits and not from the pull request, with a note when part of the diff is not in the log. */
 export function diffText(h: Handoff): string {
-  if (h.files === 0 && h.added === 0 && h.removed === 0 && !h.partial) return 'No edits recorded';
+  if (h.files === 0 && h.added === 0 && h.removed === 0 && !h.partial) return 'No edits logged';
   const lines = `+${h.added} -${h.removed}`;
-  return `${count(h.files, 'file', 'files')}, ${h.partial ? `at least ${lines} (some hunks are stored outside the log)` : lines}`;
+  return `Logged edits: ${count(h.files, 'file', 'files')}, ${h.partial ? `at least ${lines} (some hunks are stored outside the log)` : lines}`;
 }
 
 /** The recorded checks of the item's pull request, or null when it reports none. */

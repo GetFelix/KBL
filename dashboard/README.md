@@ -53,7 +53,7 @@ last activity or a child's answer. A held item that waits on a person reads as w
 **Handoff** (in the panel's fields, and above the strip under a Needs you row) shows what the item's latest finished
 attempt handed off, so a merge, steer or reject can be decided without opening other tabs: the agent's last progress
 note, the diff (files and `+`/`-` lines counted from the attempt's recorded edit hunks, "at least" when a hunk is stored
-outside the log, "No edits recorded" when there are none), the pull request as a link with its recorded checks and the
+outside the log, "No edits logged" when there are none; the line reads "Logged edits: ..." and its title says it is not the pull request's own diff), the pull request as a link with its recorded checks and the
 failing check's name, the attempt's failed steps with their commands and exit codes, and the reviewer's mark. Accurate
 and Not accurate are two plain buttons, one click each (Tab and Enter or Space from the keyboard); the pressed one is
 the recorded mark, and the mark goes to the attempt the block names. Every line is a record the fold accepted, read from

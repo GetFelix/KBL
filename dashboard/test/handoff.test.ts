@@ -13,9 +13,9 @@ test('handoffs are keyed by item', () => {
 });
 
 test('the diff is the recorded edits, and says so when it records none or only part', () => {
-  assert.equal(diffText(ho()), '3 files, +42 -7');
-  assert.equal(diffText(ho({ files: 1, added: 1, removed: 0 })), '1 file, +1 -0');
-  assert.equal(diffText(ho({ files: 0, added: 0, removed: 0 })), 'No edits recorded');
+  assert.equal(diffText(ho()), 'Logged edits: 3 files, +42 -7');
+  assert.equal(diffText(ho({ files: 1, added: 1, removed: 0 })), 'Logged edits: 1 file, +1 -0');
+  assert.equal(diffText(ho({ files: 0, added: 0, removed: 0 })), 'No edits logged');
   assert.match(diffText(ho({ partial: true })), /at least \+42 -7 \(some hunks are stored outside the log\)/);
 });
 

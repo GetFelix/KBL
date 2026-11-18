@@ -5,6 +5,8 @@ import { checksText, diffText, failedText, markText, marks, prUrl, type Handoff 
 import type { ItemRow } from '../fold.ts';
 import { h } from './dom.ts';
 
+const DIFF_NOTE = 'Counted from the edits the agent recorded, not from the pull request.';
+
 export interface HandoffMarker {
   /** Whether the viewer can write: signed in, on a log that takes the mark. */
   enabled: boolean;
@@ -25,7 +27,7 @@ export function handoffBlock(item: ItemRow, ho: Handoff, marker: HandoffMarker, 
     h('p', { class: 'handoff-title', id: `${id}-title` }, h('strong', {}, `Attempt ${ho.attempt} handed off`)),
     ho.summary ? h('p', { class: 'handoff-summary' }, h('span', { class: 'story-label' }, 'Summary '), ho.summary) : h('p', { class: 'muted' }, 'No summary note recorded.'),
     h('ul', { class: 'handoff-facts' },
-      h('li', {}, h('span', { class: 'story-label' }, 'Diff '), diffText(ho)),
+      h('li', { title: DIFF_NOTE, 'aria-label': `${diffText(ho)}. ${DIFF_NOTE}` }, h('span', { class: 'story-label' }, 'Diff '), diffText(ho)),
       item.pr ? h('li', {}, h('span', { class: 'story-label' }, 'Item’s pull request '), url ? h('a', { href: url, target: '_blank', rel: 'noopener noreferrer' }, item.pr) : item.pr) : null,
       checks ? h('li', { class: 'handoff-checks', 'data-checks': item.pr_checks ?? '' }, h('span', { class: 'story-label' }, 'Item’s checks '), checks.replace(/^Checks /, '')) : null,
       failed ? h('li', {}, h('span', { class: 'story-label' }, 'Steps '), failed) : null),
