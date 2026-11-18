@@ -403,7 +403,8 @@ The `work_next` reply says the same in its `loop` field, so a host that was give
 standing rules, the records and the log are unchanged.
 
 `dev/agents.mjs` starts N such sessions. It makes no model calls: it runs the host you already have, once per session,
-in a directory with its own `.mcp.json` that points at `kbl-mcp` with that session's tokens.
+in a directory with its own `.mcp.json` that points at `kbl-mcp` with that session's tokens. Sessions run without a
+terminal, so an agent asks a person only through `work_ask`; a question in the host's own chat would wait forever.
 
 ```bash
 node dev/agents.mjs --run demo --tokens tokens.json --ca-file "$PWD/dev/state/broker-cert.pem" \

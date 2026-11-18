@@ -22,7 +22,7 @@ use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase,
-    PriceUnit, RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
+    PriceUnit, ReleaseWhy, RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
 };
 use kbl_core::work_fold::Stage;
 use serde::Deserialize;
@@ -547,6 +547,9 @@ struct ReleaseBody {
     /// names the claim exactly, and wins over `attempt`.
     claim: Option<u64>,
     reason: Option<String>,
+    /// `failed` (the default), `waits_on_person` or `waits_on_outside`.
+    #[serde(default)]
+    why: Option<ReleaseWhy>,
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
     usage: Vec<Usage>,
@@ -885,6 +888,7 @@ async fn release<B: Broker>(call: Call<B>, Json(body): Json<ReleaseBody>) -> Res
                     &body.item,
                     claim_of(body.claim, body.attempt),
                     body.reason,
+                    body.why,
                     usage,
                 )
                 .await,
@@ -1133,6 +1137,10 @@ struct AskBody {
     #[serde(default)]
     options: Vec<String>,
     default: Option<String>,
+    /// The claim's attempt and `claimed` offset, as for `release`: a stale
+    /// session's question cannot end a newer claim.
+    attempt: Option<u32>,
+    claim: Option<u64>,
     /// What the attempt cost so far. Asking ends the hold, so this is the last chance to report it.
     /// What each model used during the attempt; the tracker prices it.
     #[serde(default)]
@@ -1150,8 +1158,15 @@ async fn ask<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AskBody>) -> Response
         Ok(a) => reply(
             call.keyed(
                 rk,
-                call.tracker()
-                    .ask(&a, &b.item, b.text, b.options, b.default, usage),
+                call.tracker().ask(
+                    &a,
+                    &b.item,
+                    claim_of(b.claim, b.attempt),
+                    b.text,
+                    b.options,
+                    b.default,
+                    usage,
+                ),
             )
             .await,
         ),

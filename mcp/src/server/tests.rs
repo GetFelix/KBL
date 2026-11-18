@@ -154,3 +154,21 @@ fn the_tool_span_names_a_listed_tool_and_hides_an_unlisted_one() {
     assert_eq!(spans[1].attributes["outcome"], "ok");
     assert!(!format!("{spans:?}").contains("secret-tool"));
 }
+
+/// A question asked in the host's chat never reaches Needs you, so every tool
+/// an agent works through says where questions go.
+#[test]
+fn the_work_tools_send_questions_to_work_ask_not_the_host_chat() {
+    let tools = Server::tool_router().list_all();
+    for name in ["work_next", "work_ask", "work_release"] {
+        let tool = tools.iter().find(|t| t.name == name).expect(name);
+        let text = tool.description.as_deref().unwrap_or_default();
+        assert!(
+            text.contains("never") && text.contains("chat"),
+            "{name}: {text}"
+        );
+    }
+    let release = tools.iter().find(|t| t.name == "work_release").unwrap();
+    let schema = serde_json::to_value(&release.input_schema).unwrap();
+    assert!(schema["properties"]["why"].is_object());
+}

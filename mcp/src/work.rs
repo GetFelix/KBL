@@ -255,12 +255,27 @@ impl<T: TrackerApi> Work<T> {
         &self,
         item: &str,
         reason: Option<String>,
+        why: Option<String>,
         charge: Value,
     ) -> Result<String, String> {
         let mut body = charge;
         body["item"] = json!(item);
         body["reason"] = json!(reason);
+        if let Some(why) = why {
+            body["why"] = json!(why);
+        }
         self.finish("/v1/work/release", body, item).await
+    }
+
+    /// A call that may end the claim, such as a question. The tracker
+    /// answers `"claim": "held"` when it does not.
+    pub(crate) async fn finish_tool(
+        &self,
+        path: &str,
+        item: &str,
+        body: Value,
+    ) -> Result<String, String> {
+        self.finish(path, body, item).await
     }
 
     /// A post that ends the claim, such as a prerequisite. One posted from

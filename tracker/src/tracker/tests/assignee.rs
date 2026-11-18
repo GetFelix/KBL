@@ -84,7 +84,7 @@ async fn the_assignee_gets_its_item_ahead_of_the_lanes_and_a_release_spends_no_h
     seed(&t, "a1", 3).await;
     assign(&t, "a1", Some("w1")).await;
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(count(&fake, "nack"), 0);
@@ -105,7 +105,7 @@ async fn a_reassign_while_held_waits_for_the_holder_then_routes_to_the_new_assig
     assert_eq!(holder(&t).await.as_deref(), Some("w1"));
     // The holder keeps working: its extension does not touch Felix.
     assert!(t.extend(&agent("w1"), &item("a1")).await.is_ok());
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     assert!(claimed_id(&claim(&t, "w1").await).is_none());
@@ -139,19 +139,19 @@ async fn an_assignee_that_keeps_calling_keeps_its_item() {
     assign(&t, "a1", Some("w1")).await;
     let first = claimed_id(&claim(&t, "w1").await).unwrap();
     assert_eq!(first, "a1");
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     // w1 takes the other item and keeps extending it, long past AWAY.
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(claimed_id(&claim(&t, "w9").await).as_deref(), Some("other"));
     for _ in 0..12 {
         pass(&t, Duration::from_secs(60)).await;
         let _ = claim(&t, "w1").await;
-        t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+        t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
             .await
             .ok();
         t.sweep().await;
@@ -207,7 +207,7 @@ async fn a_lane_claim_assigned_while_held_is_acked_not_handed_back() {
     seed(&t, "a1", 2).await;
     assert_eq!(claimed_id(&claim(&t, "w1").await).as_deref(), Some("a1"));
     assign(&t, "a1", Some("w2")).await;
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     // A nack would count a handout toward Felix's dead-letter bound for a
@@ -240,7 +240,7 @@ async fn a_lapsed_hold_is_not_adopted_as_a_direct_claim() {
     seed(&t, "a1", 2).await;
     assign(&t, "a1", Some("w1")).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     // The hold ended after `recover` read it; the item is still w1's.
@@ -320,7 +320,7 @@ async fn a_restart_keeps_a_direct_claim_reassigned_while_held_and_spends_no_hand
         .unwrap();
     assert!(second.extend(&agent("w1"), &item("a1")).await.is_ok());
     second
-        .release(&agent("w1"), &item("a1"), None, None, Vec::new())
+        .release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     assert_eq!(

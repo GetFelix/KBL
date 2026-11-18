@@ -25,7 +25,7 @@ async fn claims_releases_give_ups_and_completions_are_counted_per_team() {
     seed(&t, "a1", 2).await;
     seed(&t, "a2", 2).await;
     claim(&t, "w1").await;
-    t.release(&agent("w1"), &item("a1"), None, None, Vec::new())
+    t.release(&agent("w1"), &item("a1"), None, None, None, Vec::new())
         .await
         .unwrap();
     claim(&t, "w1").await;

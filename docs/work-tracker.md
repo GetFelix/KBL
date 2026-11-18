@@ -43,8 +43,8 @@ operations as MCP tools in `kbl-mcp` for agents:
 | `work_post` | Creates a child under the item the agent holds: `split`, `augment`, `question` or `test`. Anything else is a proposal, except `prerequisite`, which is work another repo must do first |
 | `work_rules` | Reads the standing rules in effect for the held item. Read-only |
 | `work_progress` | Records a plan, a branch or a PR |
-| `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
-| `work_complete` / `work_release` | Finishes the item or hands it back, with the `usage` each model used (see [Cost and spend](#cost-and-spend)) |
+| `work_ask` / `work_answer` | Asks a person a question, which parks the item in Needs you and, from format 14, frees the agent, with optional `options` and a `default`. Answers one, with `chosen` or free text, while holding a `question` item under it. See [Questions with choices](#questions-with-choices) |
+| `work_complete` / `work_release` | Finishes the item or hands it back, with the `usage` each model used (see [Cost and spend](#cost-and-spend)). `work_release` takes `why`: `failed` (the default), `waits_on_person` or `waits_on_outside`; see [Questions and waits free the agent](#questions-and-waits-free-the-agent) |
 | `decide`, `record_step`, `edit` | Record a decision, a command it ran, or a code change, on the item ([decision-replay.md](decision-replay.md#what-gets-recorded)). A fix's decision can carry a revert check |
 | `work_triage` | Answers the triage item the agent holds with a proposal for the item under triage: `tier` and `why`, an optional `duplicate_of`, `depends_on` and `split`, or `unclear`. Work the item needs from another repo is posted first, with `work_post`. See [Kinds of work](#kinds-of-work) |
 | `work_finding`, `work_verdict` | Record a finding of the review the agent holds, and end a final review with a recommendation. See [Review as work](#review-as-work) |
@@ -419,7 +419,7 @@ does not parse, an unknown kind of work or text over the inline limit is a
 | `POST /v1/work/decide` | A decision: `phase`, `so_far`, `why` and `commit` are required; `evidence` is a list of `{stream, offset}` (see Evidence below) |
 | `POST /v1/work/step` `{item, command, exit_code, output}` | A command the agent ran |
 | `POST /v1/work/edit` `{item, file, hunk, decision}` | A code change and the offset of the decision it carries out |
-| `POST /v1/work/ask` `{item, text, options?, default?}` / `POST /v1/work/answer` `{item, question, text?, chosen?, evidence}` | Asks a person, or answers as the holder of a `question` item. An answer starts resume work; see [Questions with choices](#questions-with-choices) |
+| `POST /v1/work/ask` `{item, text, options?, default?}` / `POST /v1/work/answer` `{item, question, text?, chosen?, evidence}` | Asks a person, or answers as the holder of a `question` item. Below format 14 an answer starts resume work; see [Questions with choices](#questions-with-choices). From 14 the ask ends the claim and answers `claim: ended`; see [Questions and waits free the agent](#questions-and-waits-free-the-agent) |
 
 **Evidence.** A decision, an answer and a new prerequisite can cite evidence: records that
 show why, as `{stream, offset}`. A person reads them as support, so the
@@ -1533,6 +1533,36 @@ a proposal in that repo's Triage, with the asking item waiting on it. The
 answer's text is the reason shown with the proposal. Routing a question to the
 people who own a repo waits for roles (#120); until then every question goes
 to My queue.
+
+### Questions and waits free the agent
+
+From format 14 an agent that needs a person, or something outside KBL, lets
+go of the item instead of holding it while it waits:
+
+- `work_ask` ends the claim. The item waits in Needs you and the agent can call
+  `work_next` for other work. The claim it ended is given back, so asking never
+  uses one of the attempt's two tries. A plain answer sends the item itself
+  back to Ready with `question` and `answer` in its context, for whoever claims
+  it next. An answer with `moves_to` still creates the prerequisite.
+- `work_release` with `why: waits_on_person` or `why: waits_on_outside` (no
+  credit, an outage) also gives the claim back. The item is not handed straight
+  to another agent: it moves into Needs you as flagged, with the release's
+  `reason`, until a person moves it out. `why: failed`, the default, uses a try
+  as before, and a give-up always does.
+- An agent whose claim lapsed while it waited (a long build, a host that went
+  quiet) may still ask, or release as a wait, once, as long as nobody claimed
+  the item since. The reply says `late: true`. Anything else after a lapse is
+  refused as before.
+
+Only failures count toward the two tries. An agent that calls a failure a wait
+gains nothing: every wait stops in Needs you until a person acts, and questions
+stay capped at 20 per attempt.
+
+Agents must ask through `work_ask`, never through their host's own chat or
+question prompt. Nobody watching the tracker sees a chat question, and a session
+`dev/agents.mjs` started runs without a terminal, so it would wait forever.
+Every `work_next` reply carries a `questions` line that says so, and so do the
+`kbl-mcp` tool descriptions.
 
 Triage can mark an item `unclear` with a reason, `scope`, `repo` or
 `acceptance`. The item then reaches a person as a question in Needs you

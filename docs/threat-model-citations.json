@@ -89,7 +89,7 @@
   "let it = self.acting_on(item, *attempt, rec)?;",
   "if self.open_children(item).iter().any(|c| {",
   "&& !self.verdict_given(item)",
-  "WorkRecord::Released { item, attempt, .. } => {",
+  "let Some(hold) = it.hold.clone() else {",
   "WorkRecord::GaveUp { item, attempt, .. } => {",
   "self.agent_holder(item, *attempt, rec)?;",
   "if p.questions >= MAX_QUESTIONS {",
@@ -598,5 +598,17 @@
  ],
  "ingest/src/check.rs#is_wiql_query": [
   "tail == [\"_apis\", \"wit\", \"wiql\"]"
+ ],
+ "core/src/work_fold.rs#late_writer": [
+  ".is_some_and(|h| h.by == rec.by && h.attempt == attempt)"
+ ],
+ "tracker/src/tracker.rs#lapsed_attempt": [
+  ".filter(|i| i.hold.is_none())"
+ ],
+ "core/src/work_fold.rs#park_wait": [
+  "p.tries = p.tries.saturating_sub(1);"
+ ],
+ "tracker/src/tracker.rs#release": [
+  "let late = why.is_some_and(ReleaseWhy::waits);"
  ]
 }
