@@ -198,6 +198,7 @@ async fn out_of_scope_work_is_a_proposal_a_person_accepts() {
         WorkRecord::Accepted {
             item: p_id.clone(),
             tier: Some(0),
+            triage_skipped: None,
         },
     )
     .await
@@ -878,6 +879,7 @@ async fn a_prerequisite_is_charged_at_least_the_floor() {
         WorkRecord::Accepted {
             item: item("a1"),
             tier: Some(2),
+            triage_skipped: None,
         },
     )
     .await;
@@ -1020,6 +1022,7 @@ async fn people_accept_edit_reject_move_close_and_unlink() {
         WorkRecord::Accepted {
             item: p.clone(),
             tier: None,
+            triage_skipped: None,
         },
     )
     .await
@@ -1307,6 +1310,7 @@ async fn granted() -> (Fake, crate::tracker::Tracker<Fake>) {
         WorkRecord::Accepted {
             item: item("a1"),
             tier: Some(2),
+            triage_skipped: None,
         },
     )
     .await;
@@ -1429,6 +1433,7 @@ async fn the_item_is_ready_again_when_the_prerequisite_is_merged() {
         WorkRecord::Accepted {
             item: g.clone(),
             tier: None,
+            triage_skipped: None,
         },
     )
     .await;
@@ -1482,6 +1487,7 @@ async fn a_release_link_waits_for_the_release_not_the_merge() {
         WorkRecord::Accepted {
             item: g.clone(),
             tier: None,
+            triage_skipped: None,
         },
     )
     .await;
@@ -1875,6 +1881,7 @@ async fn an_unclear_triage_waits_in_my_queue_and_is_never_ready() {
         WorkRecord::Accepted {
             item: item("u1"),
             tier: Some(1),
+            triage_skipped: None,
         },
     )
     .await
@@ -2540,6 +2547,7 @@ async fn a_prerequisite_proposal_cites_the_record_that_filed_it() {
         WorkRecord::Accepted {
             item: g.clone(),
             tier: Some(2),
+            triage_skipped: None,
         },
     )
     .await;
@@ -2589,6 +2597,7 @@ async fn triaging(repo: &str) -> (Fake, Tracker<Fake>) {
     record(WorkRecord::Accepted {
         item: item("a1"),
         tier: Some(2),
+        triage_skipped: None,
     })
     .await;
     (fake, t)
@@ -2667,6 +2676,7 @@ async fn triage_posts_a_prerequisite_before_any_build_claim() {
         WorkRecord::Accepted {
             item: g.clone(),
             tier: None,
+            triage_skipped: None,
         },
     )
     .await;
@@ -2843,6 +2853,7 @@ async fn ingest_takes_an_issue_only_for_a_prerequisite_a_person_accepted() {
         WorkRecord::Accepted {
             item: g.clone(),
             tier: None,
+            triage_skipped: None,
         },
     )
     .await;
@@ -3087,6 +3098,7 @@ async fn ingest_cannot_unlink_a_prerequisite_from_an_answer() {
         WorkRecord::Accepted {
             item: p.clone(),
             tier: None,
+            triage_skipped: None,
         },
     )
     .await;

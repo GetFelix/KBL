@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, rootStageLabel, visible } from '../src/list.ts';
+import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, triageSkipReason, rootStageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -131,4 +131,12 @@ test('a root names its stage and its triage child', () => {
   assert.equal(triageChip({ root: true, triage: 'done' }), 'Triage: done');
   assert.equal(triageChip({ root: true, triage: null }), null);
   assert.equal(triageChip({ root: false, triage: 'done' }), null);
+});
+
+test('a root admitted without triage says which rule skipped it', () => {
+  const skipped = { root: true, triage: null, triage_skipped: 'curated' };
+  assert.equal(triageChip(skipped), 'Triage skipped');
+  assert.equal(triageSkipReason(skipped), 'triage skipped by rule curated');
+  assert.equal(triageSkipReason({ root: true, triage: null, triage_skipped: null }), null);
+  assert.equal(triageSkipReason({ root: false, triage_skipped: 'curated' }), null);
 });

@@ -209,6 +209,7 @@ async fn seed_item(t: &Tracker<Fake>, m: &mut Model) {
     let accepted = WorkRecord::Accepted {
         item: item(&id),
         tier: Some(2),
+        triage_skipped: None,
     };
     if put(accepted).await.is_ok() {
         m.accepted.insert(id);
@@ -698,6 +699,7 @@ async fn heal(fake: &Fake, m: &mut Model) {
         let accepted = WorkRecord::Accepted {
             item: item(&id),
             tier: Some(2),
+            triage_skipped: None,
         };
         if t.person_record(key("gab"), accepted).await.is_ok() {
             m.accepted.insert(id);

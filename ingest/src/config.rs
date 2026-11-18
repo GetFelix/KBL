@@ -283,6 +283,18 @@ pub(crate) enum Mode {
     Propose,
 }
 
+/// What an admitted root does before it can be fixed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Triage {
+    /// The root starts with a triage item and an augment item.
+    #[default]
+    Run,
+    /// The issue is already specified: the root goes straight to Ready to fix
+    /// with no children.
+    Skip,
+}
+
 /// One intake rule: GitHub's filter, combined with AND, plus what to do with a match.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -302,6 +314,9 @@ pub(crate) struct Rule {
     #[serde(rename = "type")]
     pub(crate) issue_type: Option<String>,
     pub(crate) mode: Mode,
+    /// `skip` admits a match with no triage or augment item. Only with `admit`.
+    #[serde(default)]
+    pub(crate) triage: Triage,
     /// Jira: the JQL filter, combined with the project in `repo`
     /// (`site/PROJ`).
     pub(crate) jql: Option<String>,
@@ -416,6 +431,18 @@ impl Config {
         let mut seen = std::collections::HashSet::new();
         for r in &cfg.rules {
             ensure!(seen.insert(&r.name), "rule {:?} is listed twice", r.name);
+            // The tracker keeps the name as the reason triage was skipped and
+            // refuses a longer one, which would leave the root unaccepted.
+            ensure!(
+                r.triage == Triage::Run || r.name.len() <= 120,
+                "rule {:?}: a name over 120 bytes cannot be used with triage \"skip\"",
+                r.name
+            );
+            ensure!(
+                r.triage == Triage::Run || r.mode == Mode::Admit,
+                "rule {:?}: triage \"skip\" is for mode \"admit\"; a proposed issue waits for a person",
+                r.name
+            );
             let write_back = r.comment
                 || r.link_pr
                 || r.transition_on_pr.is_some()

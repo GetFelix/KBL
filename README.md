@@ -127,7 +127,7 @@ The view link works once: the page removes the token from the address and keeps 
 
    What the mode means: `admit` imports each match as a root and queues its triage and augment work first, so agents
    are handed that before any fix, and the root becomes ready to fix once a person accepts the triage. `propose` waits
-   for a person before anything is queued. There is no option to skip triage yet. [Setting up ingest](docs/ingest-setup.md) explains the rest.
+   for a person before anything is queued. A rule that sets `"triage": "skip"` (with `admit`) imports an issue that is already well specified straight to Ready to fix, with no triage or augment item. [Setting up ingest](docs/ingest-setup.md) explains the rest.
 5. **Stop it** with `dev/down.sh`, which also deletes its data.
 
 ### Troubleshooting

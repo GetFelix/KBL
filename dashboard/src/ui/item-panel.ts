@@ -2,7 +2,7 @@
 // Each entry in FIELDS adds one labelled row, so a new kind of detail is one module.
 import { upstreamRef, upstreamUrl } from '../card.ts';
 import type { ItemRow } from '../fold.ts';
-import { rootStageLabel, triageChip } from '../list.ts';
+import { rootStageLabel, triageChip, triageSkipReason } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { FACETS, valueOf } from '../views.ts';
 import { byFocus, h } from './dom.ts';
@@ -32,8 +32,10 @@ export interface Field {
 }
 
 const stageField: Field = {
-  key: (item) => item.triage ?? '',
+  key: (item) => `${item.triage ?? ''}|${item.triage_skipped ?? ''}`,
   render: (item) => {
+    const why = triageSkipReason(item);
+    if (why) return ['Stage', document.createTextNode(`${rootStageLabel(item)} (${why})`)];
     const chip = triageChip(item);
     return ['Stage', document.createTextNode(chip ? `${rootStageLabel(item)} (${chip.toLowerCase()})` : rootStageLabel(item))];
   },

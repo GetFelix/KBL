@@ -1306,6 +1306,7 @@ async fn accept<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AcceptBody>) -> Re
     let record = WorkRecord::Accepted {
         item: b.item,
         tier: b.tier,
+        triage_skipped: None,
     };
     as_person(&call, rk, record).await
 }

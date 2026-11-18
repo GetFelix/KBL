@@ -20,7 +20,7 @@ use kbl_core::work::{Actor, CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord}
 use sha2::{Digest, Sha256};
 use tracing::Instrument as _;
 
-use crate::config::{Mode, Rule};
+use crate::config::{Mode, Rule, Triage};
 use crate::rules::first_match;
 use crate::source::{
     Changes, Closed, Comment, Fetched, Issue, IssueRef, Releases, Source, SourceError, WriteBack,
@@ -387,7 +387,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 closed_by_merge: Some(false),
                 left_scope_by_sync: false,
                 reopened_by: None,
-                has_children: rule.mode == Mode::Admit,
+                has_children: rule.mode == Mode::Admit && rule.triage == Triage::Run,
                 pr: None,
                 claimed_at_ms: None,
                 pr_status: None,
@@ -440,7 +440,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
     }
 
     /// An admitted root starts accepted, with one triage item and one augment
-    /// item. `accept` is false once a person may have acted on the root, so a
+    /// item, or with neither when the rule skips triage. `accept` is false once a person may have acted on the root, so a
     /// retry does not undo their tier.
     async fn admit(
         &self,
@@ -453,8 +453,12 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             self.write(&WorkRecord::Accepted {
                 item: item.clone(),
                 tier: Some(rule.tier_for(issue)),
+                triage_skipped: (rule.triage == Triage::Skip).then(|| rule.name.clone()),
             })
             .await?;
+        }
+        if rule.triage == Triage::Skip {
+            return Ok(());
         }
         for (suffix, work, key, title) in [
             ("t", WorkKind::Triage, "triage", "Triage"),
@@ -1786,6 +1790,7 @@ fn intake_text(rule: &Rule, issue: &Issue) -> String {
         .target_for(issue)
         .unwrap_or_else(|| "no repository is mapped for it, so it waits in Needs you".to_owned());
     let how = match rule.mode {
+        Mode::Admit if rule.triage == Triage::Skip => "admitted without triage",
         Mode::Admit => "admitted",
         Mode::Propose => "proposed, waiting for a person to accept it",
     };

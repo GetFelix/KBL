@@ -101,6 +101,7 @@ fn story() -> Log {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: Some(1),
+        triage_skipped: None,
     }); // 2
     l.agent("w1", claimed("r1", 1)); // 3
     l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split)); // 4
@@ -231,6 +232,7 @@ fn agent_records_never_raise_a_budget() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     let raise = |n: u32| WorkRecord::BudgetSet {
@@ -295,6 +297,7 @@ fn a_child_without_a_held_parent_is_refused() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     // Nobody holds r1 yet.
     l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
@@ -358,6 +361,7 @@ fn budgets_cap_items_and_depth() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     for i in 0..13 {
@@ -385,6 +389,7 @@ fn budgets_cap_items_and_depth() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     let mut parent = "r1".to_string();
     for d in 1..=4u32 {
@@ -408,6 +413,7 @@ fn people_children_are_free_and_agent_fixes_are_proposals() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.person(proposed("p1", Some("r1"), "x", WorkKind::Fix));
     l.agent("w1", claimed("r1", 1));
@@ -427,6 +433,7 @@ fn a_cycle_is_refused_and_a_dependency_blocks() {
         l.person(WorkRecord::Accepted {
             item: id(r),
             tier: None,
+            triage_skipped: None,
         });
     }
     l.tracker(WorkRecord::Linked {
@@ -455,6 +462,7 @@ fn a_decision_cannot_cite_the_future_or_skip_its_fields() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent("w1", decision("r1", 1, vec![evidence(3)])); // 3 is itself
@@ -505,6 +513,7 @@ fn human_inputs_follow_the_path_up_to_the_fork_plus_its_note() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1)); // 2
     let note_in = |l: &mut Log, attempt, t: &str| {
@@ -566,6 +575,7 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     for a in 1..=4u32 {
         l.agent("w1", claimed("r1", a));
@@ -606,6 +616,7 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
@@ -641,6 +652,7 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent(
@@ -671,6 +683,7 @@ fn a_path_gets_two_claims_then_needs_you() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     let release = |l: &mut Log, w: &str, cost| {
         l.agent(
@@ -718,6 +731,7 @@ fn a_finished_attempt_can_be_redone_until_the_item_is_closed() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     let d = l.agent("w1", decision("r1", 1, vec![]));
@@ -792,6 +806,7 @@ fn only_the_holders_triage_and_answer_and_only_the_tracker_refuses() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     let triaged = |tier| WorkRecord::Triaged {
         item: id("r1"),
@@ -874,6 +889,7 @@ fn proposals_are_keyed_and_draw_no_budget_until_accepted() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent("w1", proposed("bug2", None, "found", WorkKind::Fix));
@@ -892,6 +908,7 @@ fn proposals_are_keyed_and_draw_no_budget_until_accepted() {
     l2.person(WorkRecord::Accepted {
         item: id("bug2"),
         tier: None,
+        triage_skipped: None,
     });
     let s = fold(&l2.0);
     assert!(s.budgets.contains_key(&id("bug2")));
@@ -912,6 +929,7 @@ fn closing_a_root_cancels_its_open_descendants() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent("w1", proposed("c1", Some("r1"), "a", WorkKind::Split));
@@ -956,6 +974,7 @@ fn people_nest_no_deeper_than_agents() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     let mut parent = "r1".to_string();
     for d in 1..=5 {
@@ -986,6 +1005,7 @@ fn a_closed_attempt_is_never_claimable() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     let d = l.agent("w1", decision("r1", 1, vec![]));
@@ -1038,6 +1058,7 @@ fn a_refused_done_changes_nothing() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     let before = fold(&l.0);
@@ -1079,12 +1100,14 @@ fn agents_keys_do_not_collide_on_roots() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.tracker(imported("r2"));
     l.person(WorkRecord::Accepted {
         item: id("r2"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w2", claimed("r2", 1));
     l.agent("w1", proposed("a", None, "found", WorkKind::Fix));
@@ -1106,6 +1129,7 @@ fn a_dropped_dependency_sends_the_dependent_to_needs_you() {
         l.person(WorkRecord::Accepted {
             item: id(r),
             tier: None,
+            triage_skipped: None,
         });
     }
     l.tracker(WorkRecord::Linked {
@@ -1146,6 +1170,7 @@ fn a_release_must_name_the_running_attempt() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.tracker(WorkRecord::Released {
@@ -1180,6 +1205,7 @@ fn done_for_an_attempt_that_does_not_exist_changes_nothing() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent(
@@ -1210,6 +1236,7 @@ fn upstream_closure_counts_as_done_or_dropped_by_its_reason() {
         l.person(WorkRecord::Accepted {
             item: id(r),
             tier: None,
+            triage_skipped: None,
         });
     }
     l.tracker(WorkRecord::Linked {
@@ -1245,6 +1272,7 @@ fn try_apply_leaves_no_trace_when_it_refuses() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.person(WorkRecord::BudgetSet {
         root: id("r1"),
@@ -1269,6 +1297,7 @@ fn accepted_root(l: &mut Log, item: &str) {
     l.person(WorkRecord::Accepted {
         item: id(item),
         tier: None,
+        triage_skipped: None,
     });
 }
 
@@ -1514,6 +1543,7 @@ fn held_root() -> Log {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.person(WorkRecord::BudgetSet {
@@ -1723,11 +1753,13 @@ fn tiers_are_zero_to_three_and_a_person_can_move_an_item() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: Some(4),
+        triage_skipped: None,
     });
     assert_eq!(last_rejection(&l), Some(Reject::BadTier));
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: Some(1),
+        triage_skipped: None,
     });
     l.person(WorkRecord::TierChanged {
         item: id("r1"),
@@ -1764,6 +1796,7 @@ fn a_person_edits_a_proposal_before_accepting_it() {
     l.person(WorkRecord::Accepted {
         item: id("p"),
         tier: None,
+        triage_skipped: None,
     });
     assert_eq!(fold(&l.0).items[&id("p")].tier, Some(0));
     // Accepted: the queue owns it, and tier_changed is the way to move it.
@@ -1920,6 +1953,7 @@ fn with_pr() -> Log {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: Some(1),
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent(
@@ -2144,6 +2178,7 @@ fn a_request_another_open_item_reports_cannot_be_reported_again() {
     l.person(WorkRecord::Accepted {
         item: id("r2"),
         tier: Some(1),
+        triage_skipped: None,
     });
     l.agent("w2", claimed("r2", 1));
     let progress = |item: &str, pr: &str| WorkRecord::Progress {
@@ -2193,6 +2228,7 @@ fn accept(item: &str) -> WorkRecord {
     WorkRecord::Accepted {
         item: id(item),
         tier: None,
+        triage_skipped: None,
     }
 }
 
@@ -2696,6 +2732,7 @@ fn an_unclear_triage_goes_to_a_person_as_a_question_not_to_ready() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     let s = fold(&l.0);
     assert_eq!(s.stage(&id("r1")), Some(Stage::NeedsYou));
@@ -3030,6 +3067,7 @@ fn resume_work_for_an_unaccepted_item_waits_for_its_acceptance() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: Some(1),
+        triage_skipped: None,
     });
     let s = fold(&l.0);
     assert_eq!(s.stage(&rid), Some(Stage::Ready));
@@ -3160,6 +3198,7 @@ fn a_record_above_the_log_format_waits_for_the_raise() {
     let accepted = || WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     };
     // The build could read it, and an older reader still on the log could not.
     assert_eq!(
@@ -3390,6 +3429,7 @@ fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: Some(2),
+        triage_skipped: None,
     });
     l.agent("w1", claimed("t1", 1));
     l.agent(
@@ -3408,6 +3448,7 @@ fn a_triage_tier_never_moves_the_tier_an_admitted_root_already_has() {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: None,
+        triage_skipped: None,
     });
     let s = fold(&l.0);
     assert_eq!(s.items[&id("r1")].tier, Some(2));
@@ -3445,6 +3486,7 @@ fn a_link_blocks_across_repos_and_sources_and_names_the_other_repo() {
         l.person(WorkRecord::Accepted {
             item: id(item),
             tier: None,
+            triage_skipped: None,
         });
     }
     for to in ["gw", "ado"] {
@@ -3507,6 +3549,7 @@ fn linked_pair() -> Log {
         l.person(WorkRecord::Accepted {
             item: id(i),
             tier: None,
+            triage_skipped: None,
         });
     }
     l.person(WorkRecord::Linked {
@@ -3616,4 +3659,41 @@ fn a_hold_notes_when_its_holder_last_wrote_and_nobody_else_moves_it() {
     l.agent("w2", ctx("stranger"));
     l.person(ctx("mine"));
     assert_eq!(held(&l), after_write);
+}
+
+#[test]
+fn only_the_tracker_admits_a_root_without_triage_and_only_a_childless_root() {
+    let skip = |item: &str| WorkRecord::Accepted {
+        item: id(item),
+        tier: Some(1),
+        triage_skipped: Some("curated".into()),
+    };
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(skip("r1"));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Ready));
+    assert_eq!(
+        s.items[&id("r1")].triage_skipped.as_deref(),
+        Some("curated")
+    );
+
+    // A person or an agent cannot claim a rule skipped triage.
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.person(skip("r1"));
+    let s = fold(&l.0);
+    assert_eq!(s.rejections.last().unwrap().why, Reject::ActorNotAllowed);
+    assert_eq!(s.items[&id("r1")].triage_skipped, None);
+    assert_eq!(s.stage(&id("r1")), Some(Stage::Triage));
+
+    // Not a root that already has triage work, and not a child.
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.tracker(skip("r1"));
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotARoot);
+    l.tracker(skip("t1"));
+    assert_eq!(fold(&l.0).rejections.last().unwrap().why, Reject::NotARoot);
 }

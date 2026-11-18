@@ -43,6 +43,8 @@ export interface ItemRow {
   unclear?: string | null;
   /** The stage of a root's triage child, or null when it has none. */
   triage?: string | null;
+  /** The ingest rule that admitted a root with no triage item, or null. */
+  triage_skipped?: string | null;
   /** True for an item with no parent. */
   root?: boolean;
   /** A person accepted it. Only an accepted item can be flagged. */

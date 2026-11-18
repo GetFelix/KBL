@@ -23,6 +23,7 @@ fn a_proposal_waits_until_a_person_accepts_it() {
     l.person(WorkRecord::Accepted {
         item: id("c1"),
         tier: None,
+        triage_skipped: None,
     }); // 5: at 50
     let s = stats(&l);
     assert_eq!((s.open, s.all.count, s.all.p50_ms), (0, 1, Some(10)));
@@ -267,6 +268,7 @@ fn the_queue_lists_waits_oldest_first_then_by_tier() {
     l.person(WorkRecord::Accepted {
         item: id("c1"),
         tier: None,
+        triage_skipped: None,
     });
     assert_eq!(ids(&l), ["c2"]);
 }

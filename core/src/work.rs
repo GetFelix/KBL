@@ -690,6 +690,11 @@ pub enum WorkRecord {
         item: ItemId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tier: Option<u8>,
+        /// The ingest rule that admitted this root without triage or augment
+        /// children. Only the tracker's own ingest path may set it, and it
+        /// changes no stage: it is shown so a person sees why no triage ran.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        triage_skipped: Option<String>,
     },
     /// `item` waits on `to`.
     Linked { item: ItemId, to: ItemId },

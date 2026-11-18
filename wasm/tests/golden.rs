@@ -507,3 +507,24 @@ fn items_carry_the_proposal_a_person_can_accept() {
     assert!(find("p0")["proposal"].is_null());
     assert!(find("p1")["finding"].is_null());
 }
+
+#[test]
+fn a_root_admitted_without_triage_names_the_rule() {
+    let mut f = Folder::new();
+    let rec =
+        |o: &str| format!(r#"{{"at_ms":1,"by":"ingest","actor":"tracker",{o}}}"#).into_bytes();
+    f.apply(
+        0.0,
+        &rec(
+            r#""kind":"imported","item":"r1","source":"github","upstream_id":"o/r#1","title":"t""#,
+        ),
+    );
+    f.apply(
+        1.0,
+        &rec(r#""kind":"accepted","item":"r1","tier":1,"triage_skipped":"curated""#),
+    );
+    let items: serde_json::Value = serde_json::from_str(&f.items_json()).unwrap();
+    assert_eq!(items[0]["triage_skipped"], "curated");
+    assert_eq!(items[0]["stage"], "ready");
+    assert!(items[0]["triage"].is_null());
+}
