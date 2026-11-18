@@ -45,6 +45,9 @@
   "if rec.actor != Actor::Person {",
   "if title.len() > MAX_TITLE"
  ],
+ "core/src/work_fold.rs#check_worker": [
+  "(None, None) => Ok(()),"
+ ],
  "core/src/work_fold.rs#finding": [
   "self.agent_holder(review, attempt, rec)?;",
   "if file.len() > MAX_FINDING_FILE",
@@ -199,11 +202,11 @@
  "ingest/src/budget.rs#Budget::hourly": [
   "p.per_hour as f64 * i.held.min(p.pool_sources) as f64 / p.pool_sources as f64"
  ],
- "ingest/src/budget.rs#Budget::set_leases": [
-  "i.beat_sources = Some(n);"
- ],
  "ingest/src/budget.rs#Budget::read_floor": [
   "let wake = if i.waking { Self::wake_part(i) } else { 0.0 };"
+ ],
+ "ingest/src/budget.rs#Budget::set_leases": [
+  "i.beat_sources = Some(n);"
  ],
  "ingest/src/check.rs#ReadOnly::send": [
   "if req.method != \"GET\" {"
@@ -431,6 +434,12 @@
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
  ],
+ "tracker/src/http.rs#worker_list": [
+  "Caller::Agent(a) => Some(Key::new(a.as_str()).expect(\"an agent name is a key\")),"
+ ],
+ "tracker/src/http.rs#worker_start": [
+  "if call.teams.is_team_agent(&call.team, &key) {"
+ ],
  "tracker/src/http/ingest.rs#config": [
   "None => return busy(),"
  ],
@@ -475,6 +484,9 @@
  ],
  "tracker/src/teams.rs#admit": [
   "pub(crate) fn admit(&self, waits: bool) -> Option<OwnedSemaphorePermit> {"
+ ],
+ "tracker/src/teams.rs#who": [
+  "&& self.is_team_agent(&team, &sup)"
  ],
  "tracker/src/tracker.rs#append_expecting": [
   "if let Some(why) = unavailable(&writer, self.lease_margin()) {",
@@ -647,5 +659,14 @@
  ],
  "tracker/src/tracker/tools.rs#triage_lists": [
   "|| related.len() > MAX_TRIAGE_LIST"
+ ],
+ "tracker/src/tracker/workers.rs#grant_name": [
+  ".map_or(agent.as_str(), |w| w.supervisor.as_str())"
+ ],
+ "tracker/src/tracker/workers.rs#refresh_workers": [
+  ".filter(|(_, w)| w.stopped_ms.is_none())"
+ ],
+ "tracker/src/tracker/workers.rs#start_worker": [
+  "if mine >= s.max_workers || all >= s.max_team_workers {"
  ]
 }

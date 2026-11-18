@@ -490,6 +490,9 @@ record if the fold accepts it:
 | `POST /v1/work/unlink` `{item, to}` | `unlinked` |
 | `POST /v1/work/relate` `{item, to}` / `POST /v1/work/unrelate` `{item, to}` | `related` / `unrelated`: a soft link between two items that holds neither back, shown on both. [Format 18](upgrades.md#formats); below it, refused with `format`. See [Related items](#related-items) |
 | `POST /v1/work/budget` `{root, items_left, max_depth, cost_left_micros, redos_per_item}` | `budget_set`, the only way a budget goes up |
+| `POST /v1/work/workers` `{worker, vendor?, profile?, model?}` (agent token) | `worker_started`. Registers a worker named `<your name>_<suffix>` that acts for you, and returns its token once. Capped by `KBL_MAX_WORKERS` per supervisor (default 8) and `KBL_MAX_TEAM_WORKERS` per team (default 32), refused with `worker_cap` past them. [Format 21](upgrades.md#formats); see [supervise](design/supervise.md) |
+| `POST /v1/work/workers/stop` `{worker}` (agent or person token) | `worker_stopped`. The worker's token stops working; its hold goes back when its claim runs out |
+| `GET /v1/work/workers` (agent or person token) | Your workers, or every worker for a person: supervisor, vendor, profile, model, what each holds, and when it stopped |
 | `POST /v1/work/prices` `{model, unit, price_micros, effective_from_ms?, expected_price?}` | `price_set`: the price of one unit of a model from now, or from a later time. See [Cost and spend](#cost-and-spend) |
 | `POST /v1/work/rules` `{source, repo, root?, text?, checks?}` (`text` is a string) | `rules_set`, the [standing rules](#standing-rules) for a repo or one root |
 | `POST /v1/work/flag` `{item}` | `flagged` with `flagged: true`: the item moves to Needs you and is not handed out. See [Flagging an item for a person](#flagging-an-item-for-a-person) |
