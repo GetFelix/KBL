@@ -38,8 +38,8 @@ and the page says "Price changed, review and retry." and asks for the confirm ag
 A price of 0 is allowed, as in the import. A table with nothing recorded says so.
 
 The detail panel answers "what is happening on this item" from the log alone. **Now** is one sentence: who holds it,
-the attempt, how long since the last recorded activity and when the hold lapses (the deadline recorded at claim time,
-so it is not extended by later activity), or what the item waits on next (a person, another item, a PR's checks).
+the attempt, how long since the last recorded activity and, while still ahead, the deadline recorded at claim time
+(renewals are not recorded, so a passed deadline is never shown as a problem), or what the item waits on next (a person, another item, a PR's checks).
 **Activity** lists the item's records newest first with relative times, and a step's command output sits behind a
 disclosure that stays open and focused when a record redraws the panel. **Linked work** shows the upstream issue,
 the PR with its checks, triage children and what blocks or is blocked. **Attempts** lists each attempt with its

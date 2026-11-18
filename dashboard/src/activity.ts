@@ -44,7 +44,7 @@ export function since(ms: number, now: number): string {
   const diff = Math.round((now - ms) / 1000);
   const s = Math.abs(diff);
   const span = s < 60 ? `${s} s` : s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} d`;
-  if (s < 5) return 'just now';
+  if (s < 5 && diff >= 0) return 'just now';
   return diff >= 0 ? `${span} ago` : `in ${span}`;
 }
 
@@ -75,10 +75,10 @@ export function nowLine(item: ItemRow, blocked: readonly BlockedRow[], events: r
   if (item.holder && item.held_attempt) {
     const last = item.active_ms ?? lastWrite(events, item.held_attempt)?.at_ms ?? null;
     const quiet = last === null ? 'no activity recorded yet' : `last activity ${since(last, now)}`;
+    // Renewals are not recorded, so a passed claim-time deadline says nothing about a live agent.
     const deadline = item.hold_deadline_ms;
-    const lapse = deadline == null ? '' : deadline > now ? `. Claim deadline ${since(deadline, now)}` : `. The claim deadline passed ${since(deadline, now)}; the tracker releases a lapsed claim`;
-    const stale = deadline != null && deadline <= now;
-    return { text: `${item.holder} is working on this, attempt ${item.held_attempt}, ${quiet}${lapse}.`, tone: stale ? 'warn' : 'ok' };
+    const lapse = deadline != null && deadline > now ? `. Claimed with a deadline ${since(deadline, now)}` : '';
+    return { text: `${item.holder} is working on this, attempt ${item.held_attempt}, ${quiet}${lapse}.`, tone: 'ok' };
   }
   const waits = waitsText(item, blocked);
   switch (item.stage) {

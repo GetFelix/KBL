@@ -12,16 +12,17 @@ test('since says how long ago, and how far ahead', () => {
   assert.equal(since(NOW - 40_000, NOW), '40 s ago');
   assert.equal(since(NOW - 180_000, NOW), '3 min ago');
   assert.equal(since(NOW + 50_000, NOW), 'in 50 s');
+  assert.equal(since(NOW + 3_000, NOW), 'in 3 s');
 });
 
 test('the Now line names the holder, the attempt, the last activity and the claim deadline', () => {
   const held = item({ stage: 'held', holder: 'agent1', held_attempt: 2, active_ms: NOW - 40_000, hold_deadline_ms: NOW + 50_000 });
   const n = nowLine(held, [], [], NOW);
-  assert.equal(n.text, 'agent1 is working on this, attempt 2, last activity 40 s ago. Claim deadline in 50 s.');
+  assert.equal(n.text, 'agent1 is working on this, attempt 2, last activity 40 s ago. Claimed with a deadline in 50 s.');
   assert.equal(n.tone, 'ok');
   const late = nowLine({ ...held, hold_deadline_ms: NOW - 5_000 }, [], [], NOW);
-  assert.equal(late.tone, 'warn');
-  assert.match(late.text, /claim deadline passed 5 s ago/);
+  assert.equal(late.tone, 'ok');
+  assert.equal(late.text, 'agent1 is working on this, attempt 2, last activity 40 s ago.');
 });
 
 test('the Now line says what a waiting item waits on', () => {

@@ -2392,7 +2392,7 @@ people who use Linear or Jira every day.
   `Esc` closes it.
 - **What is happening.** Under the title the panel leads with a **Now**
   sentence: who holds the item, the attempt, how long ago it last wrote and
-  when its claim deadline falls, or why it is not moving and who must act. Then
+  the claim-time deadline while it is still ahead (renewals are not recorded), or why it is not moving and who must act. Then
   the actions (accept, tier, take, assign, steer, close), **Linked work** (the
   pull request with its checks, child work such as triage with the answer it
   recorded, what the item waits on and what it holds back), **Activity**
