@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
-    AckMode, Client, ClientConfig, CursorErrorReason, StartPosition, SubscribeCursorError,
+    AckMode, ClientConfig, Connection, CursorErrorReason, StartPosition, SubscribeCursorError,
     quic_client_config, root_store_from_pem_file,
 };
 use serde_json::{Value, json};
@@ -198,7 +198,7 @@ impl Session {
             .collect();
         let client = tokio::time::timeout(
             REQUEST_TIMEOUT,
-            Client::connect_any(&seeds, &self.target.broker_name, config),
+            Connection::connect_any(&seeds, &self.target.broker_name, config),
         )
         .await
         .context("the broker did not answer in time")?
@@ -212,7 +212,7 @@ impl Session {
 }
 
 pub(crate) struct Broker {
-    client: Arc<Client>,
+    client: Arc<Connection>,
     tenant: String,
     namespace: String,
 }

@@ -20,7 +20,7 @@ futures = { version = "=0.3.34", default-features = false, features = ["std", "a
 axum = { version = "=0.8.8", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path"] }
 bytes = "=1.12.1"
 clap = { version = "=4.5.51", features = ["derive", "env"] }
-felix-client = "=0.6.2"
+felix-client = "=0.7.2"
 getrandom = "=0.3.4"
 metrics = "=0.24.6"
 reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls"] }

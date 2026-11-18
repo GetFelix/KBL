@@ -11,7 +11,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
-use felix_client::{AckMode, Client, ClientConfig, quic_client_config, root_store_from_pem_file};
+use felix_client::{
+    AckMode, ClientConfig, Connection, quic_client_config, root_store_from_pem_file,
+};
 
 fn env(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_owned())
@@ -41,7 +43,7 @@ async fn run() -> Result<()> {
     config.ack_on_commit = true;
     let seeds: Vec<_> = broker.to_socket_addrs()?.collect();
     let client =
-        Client::connect_any(&seeds, &env("KBL_FELIX_BROKER_NAME", "localhost"), config).await?;
+        Connection::connect_any(&seeds, &env("KBL_FELIX_BROKER_NAME", "localhost"), config).await?;
 
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         ["read", namespace, stream] => {

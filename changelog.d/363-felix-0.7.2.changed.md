@@ -1,0 +1,1 @@
+KBL runs on Felix 0.7.2: `felix-client` is pinned at `=0.7.2` and the dev stack and quick start run the 0.7.2 control plane and broker with felix-gateway 0.9.0. The tools hold a `Connection` where they held the 0.6 `Client`; behaviour is unchanged, and the broker environment the stack sets is unchanged.
