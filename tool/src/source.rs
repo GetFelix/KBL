@@ -42,6 +42,23 @@ impl Mode {
     }
 }
 
+#[derive(Clone, Copy, ValueEnum)]
+pub(crate) enum Triage {
+    /// An admitted root starts with a triage item and an augment item.
+    Run,
+    /// The issue is already specified: the root is Ready to fix at once.
+    Skip,
+}
+
+impl Triage {
+    fn name(self) -> &'static str {
+        match self {
+            Triage::Run => "run",
+            Triage::Skip => "skip",
+        }
+    }
+}
+
 #[derive(Args)]
 pub(crate) struct Common {
     /// Write the config here instead of printing it. Refuses to overwrite a file.
@@ -58,6 +75,10 @@ pub(crate) struct Common {
     label: String,
     #[arg(long, value_enum, default_value = "admit")]
     mode: Mode,
+    /// `skip` admits an already specified issue with no triage or augment item.
+    /// Only with `--mode admit`.
+    #[arg(long, value_enum, default_value = "run")]
+    triage: Triage,
     /// The most open roots the rule may have at once.
     #[arg(long, default_value_t = 5)]
     cap: u32,
@@ -123,6 +144,16 @@ pub(crate) fn run(command: SourceCommand) -> Result<()> {
 
 /// The config text, the shared options, and the variable the source token goes in.
 fn render(init: InitCommand, ask: &mut Prompt) -> Result<(String, Common, String)> {
+    let common = match &init {
+        InitCommand::Github(a) => &a.common,
+        InitCommand::Jira(a) => &a.common,
+    };
+    if matches!(common.triage, Triage::Skip) && matches!(common.mode, Mode::Propose) {
+        bail!("--triage skip needs --mode admit; a proposed issue waits for a person");
+    }
+    if matches!(common.triage, Triage::Skip) && common.label.len() > 120 {
+        bail!("--triage skip records the rule name, which is the label: keep it to 120 bytes");
+    }
     Ok(match init {
         InitCommand::Github(a) => {
             let repo = ask.value(a.repo, "repo", "The GitHub repository (owner/name)")?;
@@ -135,6 +166,7 @@ fn render(init: InitCommand, ask: &mut Prompt) -> Result<(String, Common, String
                     ("tracker_url", &a.common.tracker_url),
                     ("label", &a.common.label),
                     ("mode", a.common.mode.name()),
+                    ("triage", a.common.triage.name()),
                 ],
                 a.common.cap,
             );
@@ -178,6 +210,7 @@ fn render(init: InitCommand, ask: &mut Prompt) -> Result<(String, Common, String
                     ("repo", &repo),
                     ("jql", &jql),
                     ("mode", a.common.mode.name()),
+                    ("triage", a.common.triage.name()),
                     ("target_repo", &target),
                 ],
                 a.common.cap,

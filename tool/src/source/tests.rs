@@ -108,3 +108,48 @@ fn a_file_is_not_overwritten_without_force() {
     write(&path, "two", true).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "two");
 }
+
+#[test]
+fn triage_skip_is_written_to_the_rule_and_defaults_to_run() {
+    let v = render_args(&["github", "--repo", "a/b"]).unwrap();
+    assert_eq!(v["rules"][0]["triage"], "run");
+    let v = render_args(&["github", "--repo", "a/b", "--triage", "skip"]).unwrap();
+    assert_eq!(v["rules"][0]["triage"], "skip");
+}
+
+#[test]
+fn triage_skip_with_propose_is_refused() {
+    let e = render_args(&[
+        "github", "--repo", "a/b", "--triage", "skip", "--mode", "propose",
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("--triage skip"), "{e}");
+}
+
+#[test]
+fn triage_skip_reaches_the_jira_rule_and_a_long_name_is_refused() {
+    let jira = [
+        "jira",
+        "--site",
+        "acme",
+        "--api",
+        "https://a.example",
+        "--project",
+        "FEL",
+        "--email",
+        "e@a.example",
+        "--target-repo",
+        "a/b",
+        "--triage",
+        "skip",
+    ];
+    assert_eq!(render_args(&jira).unwrap()["rules"][0]["triage"], "skip");
+    let long = "x".repeat(121);
+    let e = render_args(&[
+        "github", "--repo", "a/b", "--triage", "skip", "--label", &long,
+    ])
+    .unwrap_err()
+    .to_string();
+    assert!(e.contains("120"), "{e}");
+}

@@ -147,6 +147,7 @@ fn the_starter_configs_of_kbl_tool_parse() {
             ("token_env", "SOURCE_TOKEN"),
             ("tracker_url", "http://127.0.0.1:8790"),
             ("label", "agent-ok"),
+            ("triage", "run"),
             ("jql", "labels = \"agent-ok\""),
             ("mode", "admit"),
             ("target_repo", "GetFelix/felix"),

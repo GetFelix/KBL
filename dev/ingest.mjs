@@ -6,12 +6,15 @@
 //
 //   node dev/ingest.mjs --repo OWNER/NAME [--token-file FILE] [--labels agent-ok,bug]
 //                       [--exclude-label wontfix,blocked] [--milestone NAME] [--cap N]
-//                       [--mode admit|propose] [--keep-config] [--once] [--check-only]
+//                       [--mode admit|propose] [--triage run|skip]
+//                       [--keep-config] [--once] [--check-only]
 //                       [--ingest /path/to/kbl-ingest]
 //
 // --labels needs every label listed, --exclude-label skips an issue with any of
 // its labels, and --cap bounds the open roots the rule may have. --mode propose
-// parks matches in Triage until a person accepts them. --keep-config reuses
+// parks matches in Triage until a person accepts them. --triage skip admits an
+// already specified issue with no triage or augment item, so it is Ready to fix
+// at once. --keep-config reuses
 // dev/state/ingest.json as it is (for a hand-edited config) and ignores the
 // filter flags.
 //
@@ -37,6 +40,7 @@ const { values } = parseArgs({
     milestone: { type: "string" },
     cap: { type: "string" },
     mode: { type: "string", default: "admit" },
+    triage: { type: "string", default: "run" },
     "keep-config": { type: "boolean", default: false },
     ingest: { type: "string" },
     // A GitHub Enterprise address, or a stand-in for tests.
@@ -55,6 +59,9 @@ const list = (text) => (text ?? "").split(",").map((l) => l.trim()).filter(Boole
 const labels = list(values.label ?? values.labels);
 const excluded = list(values["exclude-label"]);
 if (!["admit", "propose"].includes(values.mode)) fail("--mode is admit or propose");
+if (!["run", "skip"].includes(values.triage)) fail("--triage is run or skip");
+if (values.triage === "skip" && (labels.join("+") || values.repo || "").length > 120) fail("--triage skip records the rule name, which is the labels joined: keep it to 120 bytes");
+if (values.triage === "skip" && values.mode !== "admit") fail("--triage skip needs --mode admit; a proposed issue waits for a person");
 const cap = values.cap === undefined ? undefined : Number(values.cap);
 if (cap !== undefined && !(Number.isInteger(cap) && cap > 0)) fail("--cap is a whole number above 0");
 const config = join(here, "state", "ingest.json");
@@ -89,6 +96,7 @@ if (!values["keep-config"]) {
     : { token_env: "GITHUB_TOKEN" };
   if (values["github-api"]) github.api = values["github-api"];
   const rule = { name: labels.join("+") || values.repo, repo: values.repo, mode: values.mode, labels_all: labels };
+  if (values.triage === "skip") rule.triage = "skip";
   if (excluded.length) rule.labels_excluded = excluded;
   if (values.milestone) rule.milestone = values.milestone;
   if (cap !== undefined) rule.cap = cap;
@@ -114,7 +122,7 @@ if (values["check-only"]) process.exit(0);
 console.log(
   values["keep-config"]
     ? `ingest is running with ${config}. Ctrl-C stops it.`
-    : `ingest is running; issues in ${values.repo} labelled ${labels.join(", ")} arrive on the dashboard${values.mode === "propose" ? " (in Triage)" : ""}. Ctrl-C stops it.`,
+    : `ingest is running; issues in ${values.repo} labelled ${labels.join(", ")} arrive on the dashboard${values.triage === "skip" ? " as Ready to fix" : ""}${values.mode === "propose" ? " (in Triage)" : ""}. Ctrl-C stops it.`,
 );
 const worker = spawn(bin, ["--config", config, ...(values.once ? ["--once"] : [])], { env, stdio: "inherit" });
 worker.on("exit", (code) => process.exit(code ?? 1));
