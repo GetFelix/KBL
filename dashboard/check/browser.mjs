@@ -1020,7 +1020,7 @@ try {
     check(await seen(`document.querySelector('#group-by').value === 'assignee'`), 'group by: a link restores the grouping');
     await open(`${connected}&layout=board&group=tier`);
     await page.waitFor(live);
-    check(await seen(`document.querySelector('#group-by').disabled && document.querySelectorAll('.column').length > 1`), 'group by: the board keeps its stage columns and the control says so');
+    check(await seen(`!document.querySelector('#group-by').disabled && document.querySelector('#group-by').value === 'tier' && document.querySelectorAll('.column').length > 1`), 'group by: the board keeps its stage columns and groups them into lanes by the chosen key');
     await axe('group by');
     clean();
   }
