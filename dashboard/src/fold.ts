@@ -21,6 +21,8 @@ export interface Fold {
   reviewLoadJson(): string;
   /** The fold's spend: what claims cost per root, reviewer tier and repo. */
   spendJson(): string;
+  /** Flow, rework, cost and supervision over the `days` before `nowMs`. */
+  metricsJson(nowMs: number, days: number): string;
 }
 
 export interface ItemRow {

@@ -12,6 +12,13 @@ in `src/state.ts` holds only what the view adds (selection, search, open dialogs
 Two open items whose `files` context entries share a path each get a flag on their row and a "Same files"
 note in the panel, with the suggested link ([Files that overlap](../docs/work-tracker.md#files-that-overlap)).
 
+Metrics (sidebar button, `g` then `m`) shows time in each stage (p50 and p85), items done per day and
+week, rework (redos, reopened, failed attempts per done item), cost per done item (per model where recorded)
+and how much a person stepped in, for the last 7, 30 or 90 days, with the trust in summaries card below. The
+flow numbers come from the fold's `metrics_json(now_ms, days)` over accepted records, so a refused record never
+counts and an item reopened and done again counts once; trust still comes from the tracker and needs a sign-in.
+Definitions are in [Flow metrics](../docs/flow-metrics.md). Nothing is per person or per agent.
+
 Spend (sidebar button, or `Show spend` in the palette) lists what claims cost per root, reviewer tier and repo, largest
 first, and a By model table with each model's unit, usage and cost. It reads the fold's `spend_json()`
 ([Cost and spend](../docs/work-tracker.md#cost-and-spend)). Costs are derived from the usage agents reported and the
