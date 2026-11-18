@@ -35,7 +35,7 @@ once as `version` under `[workspace.package]` in `Cargo.toml`, and the binaries 
 2. Move the `changelog.d` fragments into `CHANGELOG.md` and merge that.
 3. Tag and push, with the tag set to `v` plus the version: `git tag v0.1.0 origin/main && git push origin v0.1.0`.
 
-The `Release` workflow builds `kbl-mcp` and `kbl-tool` for five targets (Linux x86_64 and aarch64, macOS aarch64 and
+The `Release` workflow builds `kbl-mcp`, `kbl-tool` and `kbl-ingest` for five targets (Linux x86_64 and aarch64, macOS aarch64 and
 x86_64, Windows x86_64), attests each archive and `SHA256SUMS`, and creates a GitHub release with one archive per
 target plus `SHA256SUMS`. It refuses a tag that is not on `main` and a tag that does not equal `v` plus the workspace
 version, before it builds anything. The attestations are signed build provenance (GitHub artifact attestations, backed

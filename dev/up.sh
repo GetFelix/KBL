@@ -13,13 +13,24 @@ if [[ -n "${KBL_QUICKSTART:-}" ]]; then
   ./quickstart-tokens.sh
 fi
 up=(up --detach)
-[[ -n "${KBL_QUICKSTART:-}" ]] && up+=(--build)
+if [[ -n "${KBL_QUICKSTART:-}" ]]; then
+  if [[ -n "${KBL_IMAGE_TAG:-}" ]]; then
+    # Published images carry the version without the tag's leading v.
+    tag="${KBL_IMAGE_TAG#v}"
+    export KBL_TRACKER_IMAGE="ghcr.io/getfelix/kbl-tracker:$tag"
+    export KBL_DASHBOARD_IMAGE="ghcr.io/getfelix/kbl-dashboard:$tag"
+    "${compose[@]}" pull tracker dashboard
+  else
+    up+=(--build)
+  fi
+fi
 if ! "${compose[@]}" "${up[@]}"; then
   "${compose[@]}" logs >&2
   exit 1
 fi
 
-# The quick start also builds the tracker and the dashboard from source.
+# The quick start also builds the tracker and the dashboard from source,
+# unless it pulls them.
 tries=90
 [[ -n "${KBL_QUICKSTART:-}" ]] && tries=450
 for _ in $(seq 1 "$tries"); do

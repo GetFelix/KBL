@@ -1,0 +1,1 @@
+`KBL_IMAGE_TAG=v0.1.0 dev/quickstart.sh` pulls the published tracker and dashboard images instead of building them, so the quick start needs no npm or Rust toolchain for the stack. Release archives now also carry `kbl-ingest` ([#128](https://github.com/GetFelix/KBL/issues/128)).

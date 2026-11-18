@@ -125,6 +125,8 @@ services:
   # gateway for it, built from this checkout. Published on loopback only.
   tracker:
     profiles: [quickstart]
+    # KBL_IMAGE_TAG (dev/up.sh) swaps in the published image; unset, this builds.
+    image: ${KBL_TRACKER_IMAGE:-kbl-tracker}
     build:
       context: ..
       dockerfile: tracker/Dockerfile
@@ -154,6 +156,7 @@ services:
 
   dashboard:
     profiles: [quickstart]
+    image: ${KBL_DASHBOARD_IMAGE:-kbl-dashboard}
     build:
       context: ..
       dockerfile: dashboard/Dockerfile
