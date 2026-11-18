@@ -272,6 +272,14 @@ impl OrgState {
             .map(|((_, name), c)| (name, c))
     }
 
+    /// Whether one of `team`'s connections spends `pool`. A token tied to a
+    /// vendor counts only that vendor's connections.
+    pub fn team_spends_pool(&self, team: &TeamName, pool: &Key, tied: Option<&str>) -> bool {
+        self.connections
+            .iter()
+            .any(|((t, _), c)| t == team && c.pool == *pool && tied.is_none_or(|v| v == c.vendor))
+    }
+
     /// How many sources every connection spending `pool` serves, across teams.
     pub fn pool_sources(&self, pool: &Key) -> usize {
         self.connections

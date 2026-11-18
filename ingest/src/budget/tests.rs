@@ -390,3 +390,137 @@ async fn a_mint_before_any_normal_call_adopts_nothing() {
     budget.metered(async { Ok(res) }).await.unwrap();
     assert_eq!(budget.snapshot().vendor_remaining, None);
 }
+
+fn pool(per_hour: u64, kept_back: u64, wake_cap: u64, sources: u64) -> PoolShare {
+    PoolShare {
+        per_hour,
+        kept_back,
+        wake_cap,
+        pool_sources: sources,
+    }
+}
+
+#[test]
+fn a_workers_share_follows_the_sources_it_holds_of_the_pool() {
+    let (_, _, budget, _) = rig(Vendor::Github, Some(9999));
+    budget.set_pool(Some("gh".into()), Some(pool(4500, 900, 300, 10)));
+    budget.set_held(0);
+    assert_eq!(budget.snapshot().hourly, 1, "no lease, no share");
+    budget.set_held(4);
+    assert_eq!(budget.snapshot().hourly, 1800, "4 of 10 sources of 4500");
+    budget.set_held(10);
+    assert_eq!(budget.snapshot().hourly, 4500);
+    budget.set_held(25);
+    assert_eq!(budget.snapshot().hourly, 4500, "never past the pool");
+    budget.set_pool(None, None);
+    assert_eq!(budget.snapshot().hourly, 9999, "the file's own setting");
+}
+
+#[test]
+fn workers_holding_every_source_between_them_spend_no_more_than_the_pool() {
+    let held = [3u64, 3, 2, 2];
+    let total: u64 = held
+        .iter()
+        .map(|h| {
+            let (_, _, b, _) = rig(Vendor::Github, None);
+            b.set_pool(Some("gh".into()), Some(pool(4500, 900, 300, 10)));
+            b.set_held(*h);
+            b.snapshot().hourly
+        })
+        .sum();
+    assert_eq!(total, 4500);
+}
+
+#[test]
+fn the_pools_kept_back_share_sets_the_reserve() {
+    let (_, _, budget, _) = rig(Vendor::Github, None);
+    budget.set_pool(Some("gh".into()), Some(pool(1000, 500, 0, 1)));
+    budget.set_held(1);
+    // Half the bucket is kept back: a read needs tokens above 500.
+    for _ in 0..500 {
+        assert!(budget.admit(false).is_ok());
+        budget.record(false, false, &status(200, &[]));
+    }
+    assert!(budget.admit(false).is_err(), "polling stops at the reserve");
+    assert!(budget.admit(true).is_ok(), "writes still go");
+}
+
+#[test]
+fn a_wake_spends_only_the_wake_part_of_the_reserve() {
+    let (_, _, budget, now) = rig(Vendor::Github, None);
+    // 3600 an hour, a fifth kept back, 360 of it for wakes: one a second.
+    budget.set_pool(Some("gh".into()), Some(pool(3600, 720, 360, 1)));
+    budget.set_held(1);
+    // Polling drains the bucket to its reserve.
+    while budget.admit(false).is_ok() {
+        budget.record(false, false, &status(200, &[]));
+    }
+    assert!(budget.admit(true).is_ok());
+    assert!(!budget.wake_affordable() || budget.snapshot().tokens >= 360);
+    budget.begin_wake_poll();
+    let mut spent = 0;
+    while budget.admit(false).is_ok() {
+        budget.record(false, false, &status(200, &[]));
+        spent += 1;
+        assert!(spent < 1000, "never stopped");
+    }
+    assert!(
+        (300..=361).contains(&spent),
+        "a wake got the wake part of the reserve, got {spent}"
+    );
+    // What writes keep is untouched.
+    assert!(budget.snapshot().tokens >= 359);
+    assert!(budget.admit(true).is_ok());
+    advance(&now, 1);
+}
+
+#[test]
+fn a_wake_that_the_wake_share_cannot_pay_for_waits_for_the_interval() {
+    let (_, _, budget, now) = rig(Vendor::Github, None);
+    budget.set_pool(Some("gh".into()), Some(pool(3600, 720, 60, 1)));
+    budget.set_held(1);
+    budget.begin_wake_poll();
+    for _ in 0..60 {
+        budget.record(false, false, &status(200, &[]));
+    }
+    budget.end_poll(true);
+    assert!(!budget.wake_affordable(), "the wake share is spent");
+    advance(&now, 3600);
+    assert!(budget.wake_affordable(), "an hour earns it back");
+}
+
+#[tokio::test]
+async fn another_workers_refusal_stops_this_worker_and_a_lifted_one_frees_it() {
+    let (t, _, budget, now) = rig(Vendor::Github, None);
+    budget.set_pool(Some("gh".into()), Some(pool(4500, 900, 300, 1)));
+    budget.set_held(1);
+    budget.set_pool_block(Duration::from_secs(90));
+    let e = get(&t).await.unwrap_err();
+    assert_eq!(waited(&e), Duration::from_secs(90));
+    assert!(budget.admit(true).is_err(), "writes wait too");
+    advance(&now, 91);
+    assert!(budget.admit(false).is_ok());
+    budget.set_pool_block(Duration::from_secs(90));
+    budget.set_pool_block(Duration::ZERO);
+    assert!(budget.admit(false).is_ok(), "the tracker lifted it");
+}
+
+#[tokio::test]
+async fn a_refusal_is_kept_for_the_tracker_only_when_the_worker_has_a_pool() {
+    let (t, script, budget, _) = rig(Vendor::Github, None);
+    script.on("GET", "/x", status(429, &[("retry-after", "120")]));
+    get(&t).await.unwrap_err();
+    assert_eq!(
+        budget.take_unsent(),
+        None,
+        "a file-managed worker has no pool"
+    );
+    budget.set_pool(Some("gh".into()), None);
+    // The local block still holds; clear it with a fresh budget's clock.
+    let (t, script, budget, _) = rig(Vendor::Github, None);
+    budget.set_pool(Some("gh".into()), None);
+    script.on("GET", "/x", status(429, &[("retry-after", "120")]));
+    get(&t).await.unwrap_err();
+    assert_eq!(budget.take_unsent(), Some(Duration::from_secs(120)));
+    assert_eq!(budget.take_unsent(), None);
+}

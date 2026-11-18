@@ -601,7 +601,7 @@ All person routes are team routes and check the role as the org routes do.
 | `GET /v1/ingest/config` (long poll), `PUT /v1/ingest/checks/{id}` | Ingest | Above |
 | `PUT /v1/ingest/leases` | Ingest | Takes, renews and releases the worker's leases |
 | `GET /v1/ingest/roots?source=&after=`, `GET`/`PUT /v1/ingest/state/{source}`, `PUT /v1/ingest/status/{source}` | Ingest, holding the source's lease | Above; writes carry the lease epoch |
-| `PUT /v1/ingest/backoff/{pool}` | Ingest, in the pool | Sets `blocked_until`, keeping the later time |
+| `PUT /v1/ingest/backoff/{pool}` `{wait_s}`, `GET /v1/ingest/backoff/{pool}` | Ingest, whose team has a connection in the pool | Sets `blocked_until` for the pool, keeping the later time and at most an hour; answers what is left as `remaining_ms`. A worker tells the tracker on a refusal and reads it every 10 s, so a refusal reaches the pool's other workers in about that time |
 | `PUT /v1/ingest/secrets/{id}` | Ingest, holding an active key of the group | Re-seal: the same secret version sealed to exactly the group's active keys |
 | `POST /v1/hooks/github/app/{app}` | GitHub, by the App's webhook signature | Verifies, drops a repeated `X-GitHub-Delivery`, maps the repo only within connections naming the payload's `installation.id`, wakes the lease holder |
 | `POST /v1/hooks/{vendor}/{connection}` | GitLab or Azure DevOps, by that connection's own hook secret | Verifies in constant time, maps the repo only within that connection's sources, wakes the lease holder |

@@ -186,7 +186,7 @@ Every vendor has an hourly API limit that all of a credential's users share:
 Ingest spends only part of it, so a worker cannot use up a limit that `gh`, CI
 and other people's tools need.
 
-- **`budget_share`** (default `0.5`) is the part of the vendor's reported hourly
+- **`budget_share`** (default `0.9`) is the part of the vendor's reported hourly
   limit this worker may spend. **`budget_per_hour`** sets a number instead.
   GitHub and GitLab report their limit in response headers; for Jira and Azure
   DevOps, which do not, the worker assumes 5,000 an hour unless
@@ -196,7 +196,19 @@ and other people's tools need.
   same budget and wait when the vendor has asked for a pause.
 - A fifth of the budget is kept back for write-backs and checks. Polling and
   the reconcile pass cannot spend it. When the rest runs low the next poll waits.
-- **`poll_seconds`** (default 300) is a minimum. When a poll reads more than
+  A third of the kept-back part is the wake share: a webhook delivery may start
+  a poll ahead of its interval only while that share can pay for one, and it
+  never touches what write-backs keep. A delivery that finds the share spent
+  waits for the interval.
+- A worker that serves a connection takes its budget from the tracker, not from
+  these settings: the pool's hourly budget (`PUT /v1/org/budgets/{pool}`) times
+  the sources the worker holds leases on over the sources the pool serves, and
+  the pool's kept-back and wake numbers in place of the fifth and the third.
+  The share moves when leases do. A pool with no budget set falls back to the
+  settings above.
+- **`poll_seconds`** (default 300) is a minimum, and never below 60: a smaller
+  value polls every 60 seconds and logs a warning at start. A webhook still
+  wakes a poll sooner. When a poll reads more than
   the budget affords at that rate, the gap grows to fit, and the worker logs
   the gap and the budget left after each poll.
 - **`reconcile_hours`** (default 24) is how long one pass over every open
@@ -205,13 +217,16 @@ and other people's tools need.
 - When a vendor says to wait (GitHub's `403` secondary limit or `429`,
   `Retry-After` and `X-RateLimit-*` on GitHub, Jira, Azure DevOps and GitLab),
   the worker sends no request to it until the wait is over, capped at an hour.
+  A worker that serves a connection also tells the tracker, which holds the
+  wait for the whole budget pool: every worker in the pool stops, within about
+  ten seconds, even those the vendor has not yet refused.
 
 Guidance by vendor:
 
 | Vendor | Limit ingest sees | What to set |
 | --- | --- | --- |
-| GitHub | `X-RateLimit-*` headers (5,000 an hour for a token or App installation) | Nothing; keep `budget_share` at 0.5 |
-| GitLab | `RateLimit-*` headers | Nothing; keep `budget_share` at 0.5 |
+| GitHub | `X-RateLimit-*` headers (5,000 an hour for a token or App installation) | Nothing; keep `budget_share` at 0.9 |
+| GitLab | `RateLimit-*` headers | Nothing; keep `budget_share` at 0.9 |
 | Jira Cloud | No hourly count; it answers 429 with `Retry-After` when it throttles | `budget_per_hour` if your site is throttled below 5,000 an hour |
 | Azure DevOps | No hourly count; it delays or answers 429 when a user's usage is high | `budget_per_hour` if your organization is throttled below 5,000 an hour |
 

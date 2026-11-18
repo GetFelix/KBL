@@ -55,6 +55,12 @@ fn source_lease_key(source: &str) -> String {
 fn group_members_key(group: &str) -> String {
     format!("ingest/members/{group}")
 }
+
+/// The key of a budget pool's shared backoff, in the org's cache. A pool is a
+/// key, so it never meets the keys above.
+fn pool_backoff_key(pool: &str) -> String {
+    format!("ingest/budget/{pool}")
+}
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long a new stream may take to get a broker.
 const PLACEMENT_WAIT: Duration = Duration::from_secs(30);
@@ -196,6 +202,25 @@ pub(crate) trait Broker: Clone + Send + Sync + 'static {
         _expect: Option<u64>,
     ) -> impl Future<Output = Result<Option<u64>>> + Send {
         async { bail!("this broker keeps no ingest cursors") }
+    }
+
+    /// A budget pool's shared backoff and its version.
+    fn pool_backoff_get(
+        &self,
+        _pool: &str,
+    ) -> impl Future<Output = Result<Option<(Vec<u8>, u64)>>> + Send {
+        async { bail!("this broker keeps no pool backoffs") }
+    }
+
+    /// Writes a pool's backoff if its version is still `expect` (none:
+    /// absent). Returns the new version, or none when the condition failed.
+    fn pool_backoff_put(
+        &self,
+        _pool: &str,
+        _value: Vec<u8>,
+        _expect: Option<u64>,
+    ) -> impl Future<Output = Result<Option<u64>>> + Send {
+        async { bail!("this broker keeps no pool backoffs") }
     }
 
     /// A source's ingest lease and its version.
@@ -487,7 +512,7 @@ impl Felix {
             let got = self
                 .main()
                 .await?
-                .cache_get_versioned(self.tenant(), self.namespace(), LEASE_CACHE, key)
+                .cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, key)
                 .await?;
             Ok(got.map(|v| (v.value.to_vec(), v.version)))
         }
@@ -513,7 +538,7 @@ impl Felix {
                 .cache_put_if(
                     self.tenant(),
                     self.namespace(),
-                    LEASE_CACHE,
+                    self.lease_cache,
                     key,
                     Bytes::from(value),
                     None,
@@ -886,6 +911,20 @@ impl Broker for Felix {
         expect: Option<u64>,
     ) -> Result<Option<u64>> {
         self.cache_put_key(&group_members_key(group), value, expect)
+            .await
+    }
+
+    async fn pool_backoff_get(&self, pool: &str) -> Result<Option<(Vec<u8>, u64)>> {
+        self.cache_get_key(&pool_backoff_key(pool)).await
+    }
+
+    async fn pool_backoff_put(
+        &self,
+        pool: &str,
+        value: Vec<u8>,
+        expect: Option<u64>,
+    ) -> Result<Option<u64>> {
+        self.cache_put_key(&pool_backoff_key(pool), value, expect)
             .await
     }
 

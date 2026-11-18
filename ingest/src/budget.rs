@@ -5,8 +5,10 @@
 //! bucket that polling and the reconcile slice draw from, and it reads the
 //! vendor's rate limit headers. Writes (write-backs and the like) draw on a
 //! reserve polling cannot touch, so a spent poll budget never stops them.
-//! The split of one limit across several workers is the tracker's job and is
-//! not done here. See docs/design/sources.md "Request budget".
+//! A worker that serves a connection takes its share of the pool's budget
+//! from the tracker (the pool's hourly budget times the sources it holds
+//! over the sources the pool serves), and shares the pool's backoff through
+//! the tracker. See docs/design/sources.md "Request budget".
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -17,8 +19,10 @@ use crate::github::{Req, Res, Transport};
 
 /// The longest a vendor's wait is believed.
 pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(3600);
-/// The part of the bucket kept for writes and checks.
+/// The part of the bucket kept for writes and checks, when the pool names none.
 const RESERVE: f64 = 0.2;
+/// The part of that reserve wakes may spend, when the pool names none.
+const WAKE_OF_RESERVE: f64 = 1.0 / 3.0;
 /// Used when a vendor refuses and names no wait.
 const DEFAULT_WAIT: Duration = Duration::from_secs(30);
 /// GitHub asks for at least a minute after a secondary limit with no `retry-after`.
@@ -140,6 +144,31 @@ fn signal(vendor: Vendor, res: &Res) -> Signal {
 
 type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
+/// A pool's budget as the tracker's config answer gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PoolShare {
+    pub(crate) per_hour: u64,
+    pub(crate) kept_back: u64,
+    pub(crate) wake_cap: u64,
+    /// Sources every connection spending the pool serves, across teams.
+    pub(crate) pool_sources: u64,
+}
+
+impl PoolShare {
+    /// Reads the config answer's `budget`. None for a null or a malformed one,
+    /// which leaves the worker on its own settings.
+    pub(crate) fn from_config(budget: &serde_json::Value) -> Option<Self> {
+        let per_hour = budget["per_hour"].as_u64().filter(|p| *p > 0)?;
+        let kept_back = budget["kept_back"].as_u64()?.min(per_hour);
+        Some(Self {
+            per_hour,
+            kept_back,
+            wake_cap: budget["wake_cap"].as_u64()?.min(kept_back),
+            pool_sources: budget["pool_sources"].as_u64()?.max(1),
+        })
+    }
+}
+
 struct Inner {
     /// None until the first use, which starts the bucket full.
     tokens: Option<f64>,
@@ -157,6 +186,20 @@ struct Inner {
     /// What this poll's reads have spent, and what the last poll did.
     poll_spent: f64,
     last_poll_cost: f64,
+    /// The pool this worker spends and its budget, once the tracker names them.
+    pool: Option<String>,
+    share: Option<PoolShare>,
+    /// Sources this worker serves now, not counting ones handed over.
+    held: u64,
+    /// Another worker's refusal, as the tracker holds it for the pool.
+    pool_blocked_until: Option<Instant>,
+    /// A refusal not yet told to the tracker: the longest wait.
+    unsent: Option<Duration>,
+    /// What wakes may still spend, refilled at the wake share's rate.
+    wake_tokens: Option<f64>,
+    wake_refilled: Instant,
+    /// This poll was woken by a delivery, not the interval.
+    waking: bool,
 }
 
 pub(crate) struct Budget {
@@ -165,6 +208,8 @@ pub(crate) struct Budget {
     share: f64,
     clock: Clock,
     inner: Mutex<Inner>,
+    /// Woken when a refusal is waiting to be told to the tracker.
+    pub(crate) refused: tokio::sync::Notify,
 }
 
 /// What `kbl-ingest check` reports.
@@ -209,16 +254,95 @@ impl Budget {
                 resource: None,
                 poll_spent: 0.0,
                 last_poll_cost: 0.0,
+                pool: None,
+                share: None,
+                held: 0,
+                pool_blocked_until: None,
+                unsent: None,
+                wake_tokens: None,
+                wake_refilled: now,
+                waking: false,
             }),
+            refused: tokio::sync::Notify::new(),
         })
     }
 
+    /// What this worker may spend an hour, reserve included: its slice of
+    /// the pool's budget while the tracker gives one, else its own setting.
     fn hourly(&self, i: &Inner) -> f64 {
-        let h = self.per_hour.map_or_else(
-            || i.reported_hourly.unwrap_or(FALLBACK_HOURLY) as f64 * self.share,
-            |p| p as f64,
-        );
+        let h = match i.share {
+            Some(p) => {
+                p.per_hour as f64 * i.held.min(p.pool_sources) as f64 / p.pool_sources as f64
+            }
+            None => self.per_hour.map_or_else(
+                || i.reported_hourly.unwrap_or(FALLBACK_HOURLY) as f64 * self.share,
+                |p| p as f64,
+            ),
+        };
         h.max(1.0)
+    }
+
+    /// The part of the bucket polling leaves for writes, checks and wakes.
+    fn reserve(i: &Inner) -> f64 {
+        i.share
+            .map_or(RESERVE, |p| p.kept_back as f64 / p.per_hour as f64)
+    }
+
+    /// The part of the bucket wakes may spend, inside the reserve.
+    fn wake_part(i: &Inner) -> f64 {
+        i.share.map_or(RESERVE * WAKE_OF_RESERVE, |p| {
+            p.wake_cap as f64 / p.per_hour as f64
+        })
+    }
+
+    /// Tokens a read needs to go out. A wake poll may dip into the wake part
+    /// of the reserve; writes and checks keep the rest of it.
+    fn read_floor(&self, i: &Inner, hourly: f64) -> f64 {
+        let wake = if i.waking { Self::wake_part(i) } else { 0.0 };
+        hourly * (Self::reserve(i) - wake).max(0.0)
+    }
+
+    fn refill_wake(&self, i: &mut Inner, now: Instant) {
+        let hourly = self.hourly(i);
+        let part = hourly * Self::wake_part(i);
+        let gained = now.saturating_duration_since(i.wake_refilled).as_secs_f64() * part / 3600.0;
+        i.wake_refilled = now;
+        i.wake_tokens = Some((i.wake_tokens.unwrap_or(part) + gained).min(part));
+    }
+
+    /// Sets the pool this worker spends and its budget, or clears them.
+    pub(crate) fn set_pool(&self, pool: Option<String>, share: Option<PoolShare>) {
+        let mut i = self.inner.lock().expect("lock");
+        i.pool = pool;
+        i.share = share;
+    }
+
+    /// How many sources this worker serves now.
+    pub(crate) fn set_held(&self, held: u64) {
+        self.inner.lock().expect("lock").held = held;
+    }
+
+    pub(crate) fn pool(&self) -> Option<String> {
+        self.inner.lock().expect("lock").pool.clone()
+    }
+
+    /// The longest refusal not yet told to the tracker.
+    pub(crate) fn take_unsent(&self) -> Option<Duration> {
+        self.inner.lock().expect("lock").unsent.take()
+    }
+
+    /// Puts a refusal back when the tracker could not be told.
+    pub(crate) fn keep_unsent(&self, wait: Duration) {
+        let mut i = self.inner.lock().expect("lock");
+        i.unsent = Some(i.unsent.map_or(wait, |u| u.max(wait)));
+    }
+
+    /// The pool's backoff as the tracker holds it, `left` from now. It
+    /// replaces the last one the tracker gave, so a lifted block is lifted.
+    pub(crate) fn set_pool_block(&self, left: Duration) {
+        let now = (self.clock)();
+        let mut i = self.inner.lock().expect("lock");
+        i.pool_blocked_until = (!left.is_zero()).then(|| now + left.min(MAX_BACKOFF));
     }
 
     fn refill(&self, i: &mut Inner, now: Instant) {
@@ -240,6 +364,13 @@ impl Budget {
             }
             i.blocked_until = None;
         }
+        // Another worker's refusal stops this one too, writes included.
+        if let Some(until) = i.pool_blocked_until {
+            if until > now {
+                return Err(until - now);
+            }
+            i.pool_blocked_until = None;
+        }
         self.refill(&mut i, now);
         if write {
             return Ok(());
@@ -251,7 +382,7 @@ impl Budget {
             i.read_blocked_until = None;
         }
         let hourly = self.hourly(&i);
-        let need = hourly * RESERVE + 1.0;
+        let need = self.read_floor(&i, hourly) + 1.0;
         let tokens = i.tokens.unwrap_or(hourly);
         if tokens < need {
             let secs = (need - tokens) * 3600.0 / hourly;
@@ -288,6 +419,10 @@ impl Budget {
                 &mut i.read_blocked_until
             };
             *slot = Some(slot.map_or(until, |b| b.max(until)));
+            if sig.refused && i.pool.is_some() {
+                i.unsent = Some(i.unsent.map_or(wait, |u| u.max(wait)));
+                self.refused.notify_one();
+            }
         }
         // GitHub does not count a conditional request that answers 304.
         let cost = if self.vendor == Vendor::Github && res.status == 304 {
@@ -301,6 +436,12 @@ impl Budget {
         }
         if !write {
             i.poll_spent += cost;
+            if i.waking {
+                self.refill_wake(&mut i, now);
+                if let Some(t) = i.wake_tokens.as_mut() {
+                    *t -= cost;
+                }
+            }
         }
         sig.refused.then(|| sig.wait.unwrap_or(DEFAULT_WAIT))
     }
@@ -326,7 +467,32 @@ impl Budget {
     }
 
     pub(crate) fn begin_poll(&self) {
-        self.inner.lock().expect("lock").poll_spent = 0.0;
+        let mut i = self.inner.lock().expect("lock");
+        i.poll_spent = 0.0;
+        i.waking = false;
+    }
+
+    /// Starts a poll a delivery woke ahead of its interval. Its reads spend
+    /// the wake share of the reserve, and are served after everything else.
+    pub(crate) fn begin_wake_poll(&self) {
+        self.begin_poll();
+        self.inner.lock().expect("lock").waking = true;
+    }
+
+    /// Whether a wake may start a poll now: the wake share holds what the
+    /// last poll cost, and the bucket is above what writes keep.
+    pub(crate) fn wake_affordable(&self) -> bool {
+        let now = (self.clock)();
+        let mut i = self.inner.lock().expect("lock");
+        self.refill(&mut i, now);
+        self.refill_wake(&mut i, now);
+        let hourly = self.hourly(&i);
+        let part = hourly * Self::wake_part(&i);
+        let cost = i.last_poll_cost.max(1.0).min(part);
+        let floor = hourly * (Self::reserve(&i) - Self::wake_part(&i)).max(0.0);
+        part >= 1.0
+            && i.wake_tokens.unwrap_or(part) >= cost
+            && i.tokens.unwrap_or(hourly) >= floor + cost
     }
 
     /// A poll that stopped early spent less than a whole one would, so only
@@ -343,7 +509,7 @@ impl Budget {
     pub(crate) fn poll_wait(&self) -> Option<Duration> {
         let now = (self.clock)();
         let mut i = self.inner.lock().expect("lock");
-        let held = [i.blocked_until, i.read_blocked_until]
+        let held = [i.blocked_until, i.read_blocked_until, i.pool_blocked_until]
             .into_iter()
             .flatten()
             .filter(|u| *u > now)
@@ -353,7 +519,9 @@ impl Budget {
         }
         self.refill(&mut i, now);
         let hourly = self.hourly(&i);
-        let need = hourly * RESERVE + i.last_poll_cost.min(hourly * (1.0 - RESERVE));
+        let reserve = Self::reserve(&i);
+        let floor = self.read_floor(&i, hourly);
+        let need = floor + i.last_poll_cost.min(hourly * (1.0 - reserve));
         let deficit = need - i.tokens.unwrap_or(hourly);
         (deficit > 0.0).then(|| Duration::from_secs_f64(deficit * 3600.0 / hourly).min(MAX_BACKOFF))
     }
@@ -362,7 +530,7 @@ impl Budget {
     /// would overspend the hourly budget at that rate.
     pub(crate) fn interval(&self, min: Duration) -> Duration {
         let i = self.inner.lock().expect("lock");
-        let polling = self.hourly(&i) * (1.0 - RESERVE);
+        let polling = self.hourly(&i) * (1.0 - Self::reserve(&i));
         stretch(min, i.last_poll_cost, polling)
     }
 

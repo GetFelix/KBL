@@ -326,6 +326,7 @@ Each session needs a token of its own; `kbl-tool agent add` makes one
 | `POST /v1/ingest/records` `{record}` | ingest | Appends an upstream sync record (`imported`, `accepted`, `context`, `linked`, `unlinked` of an edge ingest made, `updated`, `left_scope`, `returned_to_scope`, `reopened`, a `triage` or `augment` `proposed`, a `closed` as completed or upstream) as the tracker's role under ingest's name, if the fold accepts it. A `context` with the same text as the entry already holds, on an entry no agent wrote, logs nothing and answers `unchanged: true` with the entry's offset, so an ingest that lost its saved state and writes every open root's entries again does not grow the log |
 | `GET /v1/ingest/roots` | ingest | Every imported root: item, source, upstream id, stage, whether it is closed, whether upstream sync (not a person) closed it (and whether that close was a merge) or last reopened it, whether upstream sync took it out of scope (`left_scope_by_sync`), whether it has children, whether an agent holds it, its pull request, when it was first claimed and its pull request status |
 | `GET`, `PUT /v1/ingest/state/{source}` | ingest | Ingest's saved state (cursor and bookkeeping), kept in the `work.tracker` cache. A `PUT` names the version it read and is refused with `stale_state` if another save came first |
+| `GET`, `PUT /v1/ingest/backoff/{pool}` | ingest | A budget pool's shared backoff, kept in the org's cache. `PUT {"wait_s": 120}` holds every worker of the pool off for that long (the later time wins, at most an hour); both answer `{"remaining_ms"}`. Refused with 403 unless one of the caller's team's connections spends the pool |
 | `GET /v1/me` | person | The person's teams and role in each. A person in the token file is an org admin: `{"person": "gabriel", "org_admin": true, "teams": [{"team": "default", "role": "admin", "review_limit": 3}]}` |
 
 A call that ends a claim (`complete`, `release`, `give_up`, and a
@@ -934,7 +935,7 @@ To set ingest up for the first time, start with [Setting up ingest](ingest-setup
 `kbl-ingest` is a separate binary. It never writes to Felix: it reads
 GitHub, then writes through the three `ingest` calls above under its own token,
 and it makes no model calls. `kbl-ingest --config ingest.json` polls every
-`poll_seconds` (default 300, a minimum: the gap stretches when the request
+`poll_seconds` (default 300, a minimum of 60: the gap stretches when the request
 budget needs it; see [Request budget](ingest-setup.md#request-budget));
 `--once` polls once. `--webhook-listen` adds an
 endpoint whose only effect is to wake the poll (a `check_suite`,
