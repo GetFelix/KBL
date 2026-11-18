@@ -20,6 +20,7 @@ use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
+use kbl_core::org::TokenHash;
 use kbl_core::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FindingVerdict, HumanKind, MergeVerdict, Phase,
     PriceUnit, ReleaseWhy, RequestKey, RevertCheck, Severity, Target, Unclear, Usage, WorkRecord,
@@ -37,6 +38,7 @@ use crate::felix::Broker;
 use crate::org::OrgUnavailable;
 use crate::teams::{Team, Teams};
 use crate::tracker::ExpectedPrice;
+use crate::tracker::NewWorker;
 use crate::tracker::selection::{Facets, Filter};
 use crate::tracker::{
     Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
@@ -220,6 +222,11 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/relate", post(relate::<B>))
         .route("/v1/work/unrelate", post(unrelate::<B>))
         .route("/v1/work/budget", post(budget::<B>))
+        .route(
+            "/v1/work/workers",
+            post(worker_start::<B>).get(worker_list::<B>),
+        )
+        .route("/v1/work/workers/stop", post(worker_stop::<B>))
         .route("/v1/work/prices", post(price::<B>))
         .route("/v1/work/rules", post(rules::<B>))
         .route("/v1/work/classify", post(classify::<B>))
@@ -347,6 +354,8 @@ struct Call<B> {
     team: Arc<Team<B>>,
     teams: Arc<Teams<B>>,
     caller: Caller,
+    /// The hash of the bearer token, which a worker's start binds it to.
+    token: TokenHash,
     _slot: OwnedSemaphorePermit,
 }
 
@@ -354,6 +363,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {
+        let token = TokenHash::of(bearer(&parts.headers).unwrap_or_default());
         let mut found = match bearer(&parts.headers).map(|t| app.teams.who(t)) {
             Some(Ok(found)) => found,
             Some(Err(OrgUnavailable)) => return Err(org_unavailable()),
@@ -405,6 +415,7 @@ impl<B: Broker> FromRequestParts<Arc<App<B>>> for Call<B> {
             team,
             teams: app.teams.clone(),
             caller,
+            token,
             _slot: slot,
         })
     }
@@ -956,6 +967,88 @@ async fn next<B: Broker>(call: Call<B>, Json(body): Json<NextBody>) -> Response 
             .next_filtered(&agent, wait, &body.review_tiers, &filter)
             .await,
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerStartBody {
+    worker: String,
+    #[serde(default)]
+    vendor: Option<String>,
+    #[serde(default)]
+    profile: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkerStopBody {
+    worker: Key,
+}
+
+/// A supervisor's agent token registers a worker and gets its token back once.
+async fn worker_start<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStartBody>) -> Response {
+    let sup = match call.agent() {
+        Ok(a) => a,
+        Err(d) => return denied(d),
+    };
+    // No agent name has a `-`, so this name can never be an agent's.
+    let worker = match AgentName::agent_or_worker(&b.worker) {
+        Ok(w) if w.supervisor() == Some(sup.as_str()) => w,
+        _ => {
+            return reply(Err(Error::Invalid(format!(
+                "a worker's name is `{sup}-` and a suffix of letters, digits and _"
+            ))));
+        }
+    };
+    let new = NewWorker {
+        worker,
+        vendor: b.vendor,
+        profile: b.profile,
+        model: b.model,
+    };
+    let token = call.token.clone();
+    reply(
+        call.keyed(rk, call.tracker().start_worker(&sup, &token, new))
+            .await,
+    )
+}
+
+/// A supervisor stops one of its workers; a person may stop any.
+async fn worker_stop<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStopBody>) -> Response {
+    let (actor, by) = match &call.caller {
+        Caller::Agent(a) => (
+            Actor::Agent,
+            Key::new(a.as_str()).expect("an agent name is a key"),
+        ),
+        Caller::Person(p) => (Actor::Person, p.clone()),
+        Caller::Ingest(_) => {
+            return denied((
+                StatusCode::FORBIDDEN,
+                "this call is for an agent or a person",
+            ));
+        }
+    };
+    reply(
+        call.keyed(rk, call.tracker().stop_worker(actor, by, b.worker))
+            .await,
+    )
+}
+
+/// An agent sees the workers it started; a person sees every worker.
+async fn worker_list<B: Broker>(call: Call<B>) -> Response {
+    let sup = match &call.caller {
+        Caller::Agent(a) => Some(Key::new(a.as_str()).expect("an agent name is a key")),
+        Caller::Person(_) => None,
+        Caller::Ingest(_) => {
+            return denied((
+                StatusCode::FORBIDDEN,
+                "this call is for an agent or a person",
+            ));
+        }
+    };
+    reply(Ok(call.tracker().workers(sup.as_ref()).await))
 }
 
 async fn peek<B: Broker>(call: Call<B>, Json(body): Json<PeekBody>) -> Response {

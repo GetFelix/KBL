@@ -1506,7 +1506,6 @@ const FORMAT_20_LOG: &str = include_str!("work_format_20.jsonl");
 #[test]
 fn the_twentieth_format_is_twenty_and_stamps_each_use_of_a_new_field() {
     assert_eq!(FORMAT_V20, 20);
-    assert_eq!(FORMAT, FORMAT_V20);
     for (_, r) in &entries(FORMAT_20_LOG) {
         assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
     }
@@ -1557,4 +1556,41 @@ fn a_new_field_is_refused_below_format_20() {
             r.record.kind()
         );
     }
+}
+
+/// A log at format 21: a supervisor registers a worker, the worker claims and
+/// reports for it, and a record after the stop is refused. Its folded state is
+/// pinned in `wasm/golden/format_21.state.json`.
+const FORMAT_21_LOG: &str = include_str!("work_format_21.jsonl");
+
+#[test]
+fn the_twenty_first_format_stamps_workers_and_their_records() {
+    assert_eq!(kbl_core::work::FORMAT_V21, 21);
+    assert_eq!(FORMAT, kbl_core::work::FORMAT_V21);
+    for (_, r) in &entries(FORMAT_21_LOG) {
+        assert_eq!(
+            r.min_format(),
+            r.v.max(r.min_format()),
+            "{}",
+            r.record.kind()
+        );
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    let s = fold(&entries(FORMAT_21_LOG));
+    assert_eq!(s.rejections.len(), 1, "{:?}", s.rejections);
+    assert_eq!(s.rejections[0].offset, 7);
+    assert_eq!(s.rejections[0].why, Reject::BadWorker);
+    let w = &s.workers[&kbl_core::names::Key::new("sup-w1").unwrap()];
+    assert_eq!(w.supervisor.as_str(), "sup");
+    assert!(w.stopped_ms.is_some());
+}
+
+#[test]
+fn a_reader_of_format_20_stops_at_the_raise_to_21() {
+    let log = entries(FORMAT_21_LOG);
+    let raise = &log[0].1;
+    assert_eq!(raise.v, 21);
+    // A worker record carries format 21 even when its kind is older.
+    assert_eq!(log[4].1.record.format(), 1);
+    assert_eq!(log[4].1.min_format(), 21);
 }

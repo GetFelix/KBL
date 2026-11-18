@@ -105,11 +105,22 @@ pub const FORMAT_V19: u32 = 19;
 /// ingest rule), the vocabulary's `needs` list, and `resource_lifted`.
 pub const FORMAT_V20: u32 = 20;
 
-/// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V20;
-
 /// Most needs an item carries.
 pub const MAX_NEEDS: usize = 8;
+
+/// The format that added delegated workers: `worker_started` and
+/// `worker_stopped`, and `sup` on a record a worker wrote.
+pub const FORMAT_V21: u32 = 21;
+
+/// The highest record format this build reads and writes.
+pub const FORMAT: u32 = FORMAT_V21;
+
+/// Most live workers one supervisor may have, whatever the tracker's config says.
+pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
+
+/// The reason on a tracker's release of a worker's hold when its supervisor
+/// was removed. From format 21 it gives the try back.
+pub const SUPERVISOR_GONE: &str = "supervisor_gone";
 
 /// Most labels an item keeps, and the longest label or milestone, in bytes.
 /// What upstream sends beyond them is cut, not refused.
@@ -1185,6 +1196,23 @@ pub enum WorkRecord {
     /// Only a person may, once every reader of the log is a build that reads
     /// `to`. It never goes down.
     FormatRaised { to: u32 },
+    /// A supervisor registers a worker named `<supervisor>-<suffix>` that acts
+    /// for it. Only SHA-256 hashes of tokens are logged: the worker's, and the
+    /// supervisor's at the time, so the worker dies with that identity even
+    /// if the name comes back with another token. Format 21.
+    WorkerStarted {
+        worker: Key,
+        token_sha256: String,
+        supervisor_token_sha256: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        vendor: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+    },
+    /// The worker's token stops working and its name is never reused. Format 21.
+    WorkerStopped { worker: Key },
     /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1259,6 +1287,8 @@ impl WorkRecord {
             WorkRecord::RulesSet { .. } => "rules_set",
             WorkRecord::FormatRaised { .. } => "format_raised",
             WorkRecord::Refused { .. } => "refused",
+            WorkRecord::WorkerStarted { .. } => "worker_started",
+            WorkRecord::WorkerStopped { .. } => "worker_stopped",
             WorkRecord::Unknown => "unknown",
         }
     }
@@ -1325,6 +1355,8 @@ impl WorkRecord {
             | WorkRecord::ResourceLifted { .. }
             | WorkRecord::PriceSet { .. }
             | WorkRecord::FormatRaised { .. }
+            | WorkRecord::WorkerStarted { .. }
+            | WorkRecord::WorkerStopped { .. }
             | WorkRecord::Unknown => None,
         }
     }
@@ -1449,6 +1481,7 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. } => FORMAT_V21,
             WorkRecord::Edited { needs: Some(_), .. }
             | WorkRecord::Triaged { needs: Some(_), .. }
             | WorkRecord::ResourceLifted { .. } => FORMAT_V20,
@@ -1572,6 +1605,10 @@ pub struct WorkLogged {
     /// the first result. A reader that predates it ignores the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub req: Option<RequestKey>,
+    /// The supervisor `by` acts for, when `by` is a delegated worker. Set by the
+    /// tracker from the token, never from the payload. Format 21.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sup: Option<Key>,
     #[serde(flatten)]
     pub record: WorkRecord,
 }
@@ -1643,7 +1680,27 @@ impl WorkLogged {
             by,
             actor,
             req: None,
+            sup: None,
             record,
+        }
+    }
+
+    /// The same record, written by a worker acting for `sup`.
+    pub fn with_supervisor(mut self, sup: Option<Key>) -> Self {
+        if sup.is_some() {
+            self.v = self.v.max(FORMAT_V21);
+        }
+        self.sup = sup;
+        self
+    }
+
+    /// The lowest format that carries this record and its envelope.
+    pub fn min_format(&self) -> u32 {
+        let v = self.record.format();
+        if self.sup.is_some() {
+            v.max(FORMAT_V21)
+        } else {
+            v
         }
     }
 

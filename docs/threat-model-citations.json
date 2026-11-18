@@ -8,6 +8,9 @@
  "core/src/lease.rs#step": [
   "Some(l) if l.free(now_ms) => Step::Take,"
  ],
+ "core/src/names.rs#worker": [
+  "if Self::new(suffix).is_ok() && is_valid_key(&s) {"
+ ],
  "core/src/org_fold.rs#check": [
   "if logged.v > self.format {",
   "return Err(OrgRefusal::SourceServed);"
@@ -29,6 +32,9 @@
  "core/src/work_fold.rs#attach_upstream": [
   "if !it.accepted_by_person {"
  ],
+ "core/src/work_fold.rs#can_take": [
+  ".all(|n| capabilities.iter().any(|c| c.eq_ignore_ascii_case(n)))"
+ ],
  "core/src/work_fold.rs#charge": [
   "let charged = c.floor_micros.max(priced);",
   "it.cost_micros = it.cost_micros.saturating_add(total);"
@@ -44,6 +50,10 @@
   "if par.depth.saturating_add(1) > max {",
   "if rec.actor != Actor::Person {",
   "if title.len() > MAX_TITLE"
+ ],
+ "core/src/work_fold.rs#check_worker": [
+  "(None, None) => Ok(()),",
+  "&& rec.by.as_str().contains('-') =>"
  ],
  "core/src/work_fold.rs#finding": [
   "self.agent_holder(review, attempt, rec)?;",
@@ -199,11 +209,11 @@
  "ingest/src/budget.rs#Budget::hourly": [
   "p.per_hour as f64 * i.held.min(p.pool_sources) as f64 / p.pool_sources as f64"
  ],
- "ingest/src/budget.rs#Budget::set_leases": [
-  "i.beat_sources = Some(n);"
- ],
  "ingest/src/budget.rs#Budget::read_floor": [
   "let wake = if i.waking { Self::wake_part(i) } else { 0.0 };"
+ ],
+ "ingest/src/budget.rs#Budget::set_leases": [
+  "i.beat_sources = Some(n);"
  ],
  "ingest/src/check.rs#ReadOnly::send": [
   "if req.method != \"GET\" {"
@@ -431,6 +441,12 @@
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
  ],
+ "tracker/src/http.rs#worker_list": [
+  "Caller::Agent(a) => Some(Key::new(a.as_str()).expect(\"an agent name is a key\")),"
+ ],
+ "tracker/src/http.rs#worker_start": [
+  "Ok(w) if w.supervisor() == Some(sup.as_str()) => w,"
+ ],
  "tracker/src/http/ingest.rs#config": [
   "None => return busy(),"
  ],
@@ -475,6 +491,12 @@
  ],
  "tracker/src/teams.rs#admit": [
   "pub(crate) fn admit(&self, waits: bool) -> Option<OwnedSemaphorePermit> {"
+ ],
+ "tracker/src/teams.rs#stop_orphans": [
+  ".is_ok_and(|t| supervisor_is(team, org, &w.supervisor, &t) == Some(false))"
+ ],
+ "tracker/src/teams.rs#supervisor_is": [
+  "Some(Err(OrgUnavailable)) => None,"
  ],
  "tracker/src/tracker.rs#append_expecting": [
   "if let Some(why) = unavailable(&writer, self.lease_margin()) {",
@@ -527,6 +549,9 @@
  "tracker/src/tracker.rs#review_lanes": [
   "fn review_lanes(&self, reviews: &[String]) -> Result<Vec<u8>, Error> {"
  ],
+ "tracker/src/tracker.rs#revoke": [
+  "released.extend(self.stop_workers(|w| w.supervisor == sup).await?);"
+ ],
  "tracker/src/tracker.rs#sync_ready": [
   ".filter(|id| core.state.stage(id) == Some(Stage::Ready))"
  ],
@@ -573,6 +598,9 @@
  "tracker/src/tracker/request_keys.rs#take": [
   "if !set.lock().expect(\"running lock\").insert(id.clone()) {"
  ],
+ "tracker/src/tracker/selection.rs#Filter::matches": [
+  "&& core.state.can_take(&it.id, &self.capabilities)"
+ ],
  "tracker/src/tracker/selection.rs#candidates": [
   ".filter(|(_, it)| !matches!(it.assignee, Some(Assignee::Agent(_))))"
  ],
@@ -581,6 +609,9 @@
  ],
  "tracker/src/tracker/selection.rs#peek": [
   "let pool = self.candidates(&core, agent, &lanes, filter);"
+ ],
+ "tracker/src/tracker/selection.rs#skips_for_needs": [
+  "&& !core.state.can_take(id, &self.capabilities)"
  ],
  "tracker/src/tracker/snapshots.rs#restore": [
   "match read(&path).filter(|b| b.saved.valid(log)) {"
@@ -649,13 +680,16 @@
  "tracker/src/tracker/tools.rs#triage_lists": [
   "|| related.len() > MAX_TRIAGE_LIST"
  ],
- "core/src/work_fold.rs#can_take": [
-  ".all(|n| capabilities.iter().any(|c| c.eq_ignore_ascii_case(n)))"
+ "tracker/src/tracker/workers.rs#grant_name": [
+  ".map_or(agent.as_str(), |w| w.supervisor.as_str())"
  ],
- "tracker/src/tracker/selection.rs#Filter::matches": [
-  "&& core.state.can_take(&it.id, &self.capabilities)"
+ "tracker/src/tracker/workers.rs#refresh_workers": [
+  ".filter(|(_, w)| w.stopped_ms.is_none())"
  ],
- "tracker/src/tracker/selection.rs#skips_for_needs": [
-  "&& !core.state.can_take(id, &self.capabilities)"
+ "tracker/src/tracker/workers.rs#start_worker": [
+  "if mine >= s.max_workers || all >= s.max_team_workers {"
+ ],
+ "tracker/src/tracker/workers.rs#stop_workers": [
+  "reason: Some(SUPERVISOR_GONE.into()),"
  ]
 }
