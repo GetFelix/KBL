@@ -610,6 +610,9 @@ fn redos_are_limited_per_item_and_a_fork_needs_a_real_decision() {
     let why: Vec<_> = s.rejections.iter().map(|r| r.why).collect();
     assert_eq!(why, vec![Reject::NoRedosLeft]);
     assert_eq!(s.items[&id("r1")].redos, 3);
+    // What the dashboard shows beside the redo button: none left, and 0 for an unknown item.
+    assert_eq!(s.redos_left(&id("r1")), 0);
+    assert_eq!(s.redos_left(&id("nope")), 0);
     // The limit belongs to the item: its child still has all three.
     let mut l = Log::default();
     l.tracker(imported("r1"));

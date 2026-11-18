@@ -987,6 +987,10 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
         ("/v1/work/flag", json!({ "item": "a1" })),
         ("/v1/work/unflag", json!({ "item": "a1" })),
         ("/v1/work/retry", json!({ "item": "a1" })),
+        (
+            "/v1/work/redo",
+            json!({ "item": "a1", "from_attempt": 1, "at": 1 }),
+        ),
         ("/v1/work/snooze", json!({ "item": "a1", "until_ms": 1 })),
         (
             "/v1/work/block",
@@ -2425,4 +2429,27 @@ async fn a_proposal_edit_carries_advice_only_at_format_17_and_for_the_answer_rea
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_redo_names_an_attempt_the_item_has() {
+    let app = kept().await;
+    call(&app, "/v1/work/records", Some("tok-gab"), imported("a1")).await;
+    let body = json!({ "item": "a1", "from_attempt": 1, "at": 1 });
+    let (status, reply) = call(&app, "/v1/work/redo", Some("tok-gab"), body.clone()).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("wrong_attempt"))
+    );
+    // The same record through the generic route is refused the same way.
+    let record =
+        json!({ "record": { "kind": "forked_from", "item": "a1", "from_attempt": 1, "at": 1 } });
+    let (status, reply) = call(&app, "/v1/work/records", Some("tok-gab"), record).await;
+    assert_eq!(
+        (status, reply["why"].as_str()),
+        (StatusCode::CONFLICT, Some("wrong_attempt"))
+    );
+    // An agent's token cannot redo.
+    let (status, _) = call(&app, "/v1/work/redo", Some("tok-w1"), body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }

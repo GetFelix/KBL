@@ -1244,6 +1244,18 @@ impl State {
         }
     }
 
+    /// Redos the item may still take under its root's budget; 0 for an unknown item.
+    pub fn redos_left(&self, id: &ItemId) -> u8 {
+        let Some(it) = self.items.get(id) else {
+            return 0;
+        };
+        let limit = self
+            .budgets
+            .get(&it.root)
+            .map_or(DEFAULT_REDOS, |b| b.redos_per_item);
+        limit.saturating_sub(it.redos)
+    }
+
     /// Why an open item waits on a person, if it does.
     pub fn needs_you(&self, id: &ItemId) -> Option<NeedsYou> {
         let it = self.items.get(id)?;
@@ -2641,11 +2653,7 @@ impl State {
                 if it.paths.iter().filter(|p| !p.closed).count() >= OPEN_ATTEMPTS {
                     return Err(Reject::TooManyOpen);
                 }
-                let limit = self
-                    .budgets
-                    .get(&it.root)
-                    .map_or(DEFAULT_REDOS, |b| b.redos_per_item);
-                if it.redos >= limit {
+                if self.redos_left(item) == 0 {
                     return Err(Reject::NoRedosLeft);
                 }
                 let it = self.item_mut(item)?;

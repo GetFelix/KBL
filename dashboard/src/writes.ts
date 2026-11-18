@@ -4,12 +4,15 @@
 // own token, so the page can never do more than the person could with curl.
 import { ADVICE_FORMAT, canAdvise } from './advice.ts';
 import type { ItemRow } from './fold.ts';
+import type { DecisionLine } from './story.ts';
 
-export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'undo';
+export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'undo';
 
 export interface Request {
   path: string;
   body: Record<string, unknown>;
+  /** Sent first; its offset goes into `body.note`. A redo's note is its own record, which the redo names. */
+  note?: Request;
 }
 
 /** Why an item is in Needs you, in words, from the fold's `needs`. */
@@ -135,7 +138,7 @@ export function marksAfter(marked: readonly string[], ids: readonly string[]): s
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
-export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice'>, (i: ItemRow) => boolean>> = {
+export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo'>, (i: ItemRow) => boolean>> = {
   accept: (i) => i.stage === 'triage' || i.stage === 'proposed',
   // The fold rejects only a proposal nobody accepted; an imported root is closed instead.
   reject: (i) => i.stage === 'proposed',
@@ -170,6 +173,8 @@ export type WriteArgs =
   | { kind: 'reassign'; to: string | null; agent?: true }
   /** Sends a note to the agent holding `attempt`. */
   | { kind: 'steer'; attempt: number; text: string }
+  /** Starts a new attempt from the decision at offset `at` on `fromAttempt`. `note` may be empty. */
+  | { kind: 'redo'; fromAttempt: number; at: number; note: string }
   /** Replaces triage's dependencies and split on the answer at offset `proposal`. */
   | { kind: 'advice'; depends_on: string[]; split: string[]; proposal: number };
 
@@ -200,6 +205,11 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/reassign', body: { item, to: a.to === null ? null : a.agent ? { agent: a.to } : { person: a.to } } };
     case 'steer':
       return { path: '/v1/work/steer', body: { item, attempt: a.attempt, text: { text: a.text.trim() } } };
+    case 'redo': {
+      const body = { item, from_attempt: a.fromAttempt, at: a.at };
+      const text = a.note.trim();
+      return text ? { path: '/v1/work/redo', body, note: { path: '/v1/work/note', body: { item, text: { text } } } } : { path: '/v1/work/redo', body };
+    }
     case 'advice':
       return { path: '/v1/work/proposals/edit', body: { item, depends_on: a.depends_on, split: a.split, proposal: a.proposal } };
     case 'answer': {
@@ -210,6 +220,50 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/questions/answer', body };
     }
   }
+}
+
+/** Open attempts one item may have at once, as the fold counts them. */
+export const OPEN_ATTEMPTS = 2;
+
+/** The story fields a redo check reads. */
+type RedoStory = { attempts: readonly { attempt: number; closed: boolean }[] };
+
+/**
+ * Why `item` cannot be redone from a decision on `attempt`, or null. The fold decides; this
+ * hides what it would refuse so the button is not offered for it. A closed item, one an agent
+ * holds, one with a redo already waiting, one out of redos, and one with its open attempts used.
+ */
+export function redoBlock(item: ItemRow, story: RedoStory | undefined, attempt: number): string | null {
+  if (!OPEN(item)) return 'The item is closed.';
+  if (item.stage === 'held' || item.held_attempt != null) return 'An agent holds the item now. A redo starts once its attempt ends.';
+  if (item.redo_pending) return 'A redo already waits for an agent.';
+  if (item.redos_left != null && item.redos_left <= 0) return 'No redos are left for this item.';
+  if (!story?.attempts.some((a) => a.attempt === attempt)) return 'That attempt is not in the story.';
+  if (story.attempts.filter((a) => !a.closed).length >= OPEN_ATTEMPTS) return 'Two attempts are open. Close one before redoing.';
+  return null;
+}
+
+/** Whether a red check on the item's open pull request means a redo must carry a note. */
+export const redoNeedsNote = (i: Pick<ItemRow, 'pr_phase' | 'pr_checks'>): boolean => i.pr_phase === 'open' && i.pr_checks === 'red';
+
+/** What the redo dialog would send, or what is wrong with it. */
+export function checkRedo(note: string, needsNote: boolean): string | null {
+  const text = note.trim();
+  if (needsNote && !text) return 'A check failed on the pull request. Write a note saying what to do differently.';
+  if (new TextEncoder().encode(text).length > 4096) return 'Keep the note under 4 KiB, or link to the longer text.';
+  return null;
+}
+
+/** What the redo dialog says it will do, so the words are tested without a page. */
+export function redoCopy(item: Pick<ItemRow, 'id' | 'redos_left'>, d: DecisionLine): { title: string; does: string; budget: string } {
+  const left = item.redos_left;
+  return {
+    title: `Redo ${item.id} from decision ${d.offset}?`,
+    does: `A new attempt starts on ${item.id}, branching from decision ${d.offset} on attempt ${d.attempt} (${d.chosen}). It starts from the commit recorded with that decision; the attempt it branches from stays in the story.`,
+    budget: left == null
+      ? 'This counts against the redos the item may take.'
+      : `This counts against the redos the item may take. ${left} left now, ${Math.max(left - 1, 0)} after this one.`,
+  };
 }
 
 /** What an answer form would send, or what is wrong with it (WCAG 3.3.1, 3.3.3). */
@@ -282,6 +336,7 @@ export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> =
   take: null,
   reassign: null,
   steer: 'A note goes to the agent as it works; it cannot be taken back.',
+  redo: 'The new attempt starts at once. It counts against the redos this item may take, and no record takes it back.',
   // Editing again sets it back, so it does not ask first.
   advice: null,
 };
@@ -356,6 +411,7 @@ function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly Ite
   if (kind === 'take' || kind === 'reassign') return canAssign(now) ? null : `${id} cannot be assigned now, so nothing was sent.`;
   if (kind === 'steer') return canSteer(now) ? null : `${id} is not held by an agent now, so nothing was sent.`;
   if (kind === 'advice') return canAdvise(now) ? null : `${id} is not a proposal that can be adjusted now, so nothing was sent.`;
+  if (kind === 'redo') return null;
   if (kind === 'rate') return canRate(now) ? null : `The log is below format ${RATE_FORMAT}, so nothing was sent.`;
   if (CAN[kind](now)) return null;
   if (kind === 'flag' && OPEN(now) && now.flagged) return `${id} is already flagged, so nothing was sent.`;
@@ -408,6 +464,7 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
   take: ['Taking', 'Took'],
   reassign: ['Assigning', 'Assigned'],
   steer: ['Sending the note on', 'Sent the note on'],
+  redo: ['Starting a redo of', 'Started a redo of'],
   advice: ['Adjusting the advice on', 'Adjusted the advice on'],
   unflag: ['Unflagging', 'Unflagged'],
   undo: ['Undoing the tier change on', 'Undid the tier change on'],

@@ -19,6 +19,8 @@ export interface WriteHandlers {
   take(item: string): void;
   /** Opens the assign picker for the item. */
   assign(item: string): void;
+  /** Opens the redo dialog for the decision at offset `at` on `attempt`. It asks first and says what happens. */
+  redo(item: string, attempt: number, at: number): void;
   /** Sends a note to the agent holding `attempt`. */
   steer(item: string, attempt: number, text: string): void;
   answer(item: string, question: number, text: string, chosen: string | null): void;
@@ -59,6 +61,7 @@ const PENDING: Record<WriteKind, string> = {
   take: 'Taking…',
   reassign: 'Assigning…',
   steer: 'Sending the note…',
+  redo: 'Starting the redo…',
   advice: 'Adjusting the advice…',
   undo: 'Undoing…',
 };

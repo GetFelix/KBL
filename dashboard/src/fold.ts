@@ -59,6 +59,10 @@ export interface ItemRow {
   block?: { at_ms: number; by: string; until_ms?: number | null; resource?: string | null; reason: string } | null;
   /** Who the item is assigned to, or absent. An agent assignee is not accepted yet. */
   assignee?: { person: string } | { agent: string } | null;
+  /** How many redos the item's budget still allows. Absent from an older build's rows. */
+  redos_left?: number;
+  /** A redo was asked for and no agent has started it yet. */
+  redo_pending?: boolean;
   /** The attempt an agent holds, when the item is held. */
   held_attempt?: number | null;
   /** The offset of the review finding this item came from, when a review made it. */
