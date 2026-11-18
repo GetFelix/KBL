@@ -13,5 +13,8 @@ WORKDIR /src/dashboard
 RUN npm ci && npm run build
 
 FROM docker.io/nginxinc/nginx-unprivileged:1-alpine
-COPY dashboard/nginx.conf /etc/nginx/conf.d/default.conf
+# The base image renders templates into conf.d at start, after it has read the
+# container's resolvers into NGINX_LOCAL_RESOLVERS.
+ENV NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1
+COPY dashboard/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /src/dashboard/dist /usr/share/nginx/html
