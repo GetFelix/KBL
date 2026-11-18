@@ -119,6 +119,10 @@ impl Folder {
     /// let a card nest and describe itself.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
+        let mut upstreams = std::collections::BTreeMap::new();
+        for (_, id, root) in self.state.imported() {
+            upstreams.entry(root).or_insert(id);
+        }
         let items: Vec<_> = self
             .state
             .items
@@ -129,11 +133,7 @@ impl Folder {
                 let source = target
                     .map(|t| t.source.as_str())
                     .or_else(|| imported.get(&i.root).copied());
-                let upstream = self
-                    .state
-                    .imported()
-                    .find(|(_, _, r)| **r == i.root)
-                    .map(|(_, id, _)| id);
+                let upstream = upstreams.get(&i.root).copied();
                 let pr = i.pr_status.as_ref();
                 json!({
                     "id": i.id,

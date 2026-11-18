@@ -261,3 +261,4 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .child-link { display: block; padding: var(--space-1) 0; color: var(--text); font-size: var(--text-sm); text-decoration: none; overflow-wrap: anywhere; }
 .child-link:hover { text-decoration: underline; }
 .filter-bar [aria-pressed='true'].button { background: var(--accent-soft); }
+.row-props { font-size: var(--text-xs); white-space: nowrap; }

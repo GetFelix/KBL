@@ -29,6 +29,7 @@ export function childStrip(root: string, c: ChildSummary, open: boolean, href: (
   const list = h('ul', { id: listId, class: 'child-list', hidden: !open },
     ...c.kids.map((k) => h('li', {}, h('a', {
       class: 'child-link',
+      'data-child': k.id,
       href: href(k.id),
       onclick: (e) => {
         const m = e as MouseEvent;
@@ -41,7 +42,15 @@ export function childStrip(root: string, c: ChildSummary, open: boolean, href: (
   return h('div', { class: 'child-strip' }, chip, list);
 }
 
-/** Puts the focus back on a chip that was rebuilt under it. */
+/** The key of the chip or child link holding the focus, for `refocusChip` after a rebuild. */
+export function focusedStrip(host: HTMLElement): string | undefined {
+  const a = document.activeElement;
+  if (!(a instanceof HTMLElement) || !host.contains(a)) return undefined;
+  return a.dataset.chip ?? (a.dataset.child ? `child:${a.dataset.child}` : undefined);
+}
+
+/** Puts the focus back on a chip or child link that was rebuilt under it. */
 export function refocusChip(id: string | undefined, host: ParentNode): void {
-  if (id) host.querySelector<HTMLElement>(`[data-chip="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
+  if (id?.startsWith('child:')) host.querySelector<HTMLElement>(`[data-child="${CSS.escape(id.slice(6))}"]`)?.focus({ preventScroll: true });
+  else if (id) host.querySelector<HTMLElement>(`[data-chip="${CSS.escape(id)}"]`)?.focus({ preventScroll: true });
 }

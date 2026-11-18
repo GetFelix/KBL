@@ -9,7 +9,7 @@ import { toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
 import { assigneePerson } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
-import { childStrip, refocusChip, stripKey, type StripHandlers } from './child-strip.ts';
+import { childStrip, focusedStrip, refocusChip, stripKey, type StripHandlers } from './child-strip.ts';
 import { h } from './dom.ts';
 
 export interface ListHandlers extends StripHandlers {
@@ -146,7 +146,7 @@ export function itemList(
           e.preventDefault();
           on.open(id);
         },
-      }, h('span', { class: 'row-id row-lead' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-flag', hidden: true }), h('span', { class: 'assignee', hidden: true }));
+      }, h('span', { class: 'row-id row-lead' }, id), h('span', { class: 'row-title' }), h('span', { class: 'row-waits muted' }), h('span', { class: 'row-props muted' }), h('span', { class: 'row-flag', hidden: true }), h('span', { class: 'assignee', hidden: true }));
       rows.set(id, a);
     }
     const t = a.querySelector('.row-title')!;
@@ -236,7 +236,7 @@ export function itemList(
       const key = `list|${JSON.stringify(groups.map((g) => [g.stage, g.items.map((i) => [i.id, i.title, waits.get(i.id) ?? '', lead(i), strips(i.id)])]))}`;
       if (key !== shown) {
         const focusedId = focusedHere();
-        const focusedChip = document.activeElement instanceof HTMLElement && el.contains(document.activeElement) ? document.activeElement.dataset.chip : undefined;
+        const focusedChip = focusedStrip(el);
         const focusedMark = document.activeElement instanceof HTMLInputElement && marks.get(document.activeElement.dataset.mark ?? '') === document.activeElement ? document.activeElement : null;
         const before = last;
         const kept = new Map(rows);
@@ -282,7 +282,8 @@ export function itemList(
         const leadEl = a.querySelector<HTMLElement>('.row-lead')!;
         const text2 = item ? lead(item) : id;
         if (leadEl.textContent !== text2) leadEl.textContent = text2;
-        if (a.title !== props) a.title = props;
+        const pe = a.querySelector<HTMLElement>('.row-props')!;
+        if (pe.textContent !== props) pe.textContent = props;
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

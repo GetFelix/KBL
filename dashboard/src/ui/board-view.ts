@@ -9,7 +9,7 @@ import type { ViewState } from '../state.ts';
 import { flagText } from '../overlap.ts';
 import { assigneePerson } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
-import { childStrip, refocusChip, stripKey, type StripHandlers } from './child-strip.ts';
+import { childStrip, focusedStrip, refocusChip, stripKey, type StripHandlers } from './child-strip.ts';
 import { h } from './dom.ts';
 import { drawn, itemHref, restoreFocus, type Announce, type Drawn, type ListHandlers } from './item-list.ts';
 
@@ -59,7 +59,7 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
       if (key !== shown) {
         const active = document.activeElement;
         const focusedId = active instanceof HTMLElement && el.contains(active) ? active.dataset.id : undefined;
-        const focusedChip = active instanceof HTMLElement && el.contains(active) ? active.dataset.chip : undefined;
+        const focusedChip = focusedStrip(el);
         const before = last;
         const column = lastColumns.find((c) => focusedId !== undefined && c.includes(focusedId)) ?? [];
         const kept = new Map(cards);
