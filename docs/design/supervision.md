@@ -46,8 +46,8 @@ Measured per arm:
 - the engineer's confidence in each merge, 1 to 5
 
 KBL passes if arm 3 delivers several times the merged, trusted work of arm 1 at the same or lower human minutes per
-fix, with no more escaped defects. The results get written up either way. The protocol and the metrics that still
-need recording are in #390.
+fix, with no more escaped defects. The results get written up either way. The protocol, with how each measure is read
+from recorded fields, is in [supervision-experiment.md](supervision-experiment.md).
 
 ## What waits
 
