@@ -1,5 +1,3 @@
-use std::os::unix::fs::PermissionsExt as _;
-
 use super::*;
 use crate::supervise::config::COMMAND_VARS;
 

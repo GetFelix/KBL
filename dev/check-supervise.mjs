@@ -7,7 +7,7 @@
 //      is refused.
 //
 //   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-supervise.mjs
-import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -90,7 +90,12 @@ try {
     if (tries > 90) throw new Error(`only ${done().length} of ${ITEMS.length} items completed`);
     const status = await sup.tool("supervise_status", {});
     finished.push(...status.finished);
-    if (status.failed.length) throw new Error(`a worker failed: ${JSON.stringify(status.failed)}`);
+    if (status.failed.length) {
+      for (const f of readdirSync(join(dir, "state"), { recursive: true }).filter((f) => String(f).endsWith("out.log"))) {
+        console.log(`--- ${f}\n${readFileSync(join(dir, "state", String(f)), "utf8")}`);
+      }
+      throw new Error(`a worker failed: ${JSON.stringify(status.failed)}`);
+    }
     await sleep(2000);
   }
   const completed = done();
