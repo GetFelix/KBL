@@ -827,14 +827,19 @@ A direct claim has no Felix delivery. The agent extends it as usual and the
 tracker's sweep lapses it when it is not extended.
 
 A restarted tracker takes a direct claim back from the log without polling
-Felix, whoever the item is assigned to by then. The tracker records whether
-each claim was direct: the item was assigned to the claiming agent when its
-`claimed` record landed, since a lane claim is never written for an item
-assigned to an agent. The hold then runs one visibility period from the
-restart, past any deadline the old tracker gave, and lapses unless the agent
-extends it. So a restart neither ends a direct claim early, which would let a
-new assignee start a second attempt while the holder still works, nor spends a
-handout on another item's ready record looking for it.
+Felix, whoever the item is assigned to by then. A `claimed` record from format
+15 says whether it was direct (`direct: true`), which covers a claim made for a
+filter or among several roots, where the item is assigned to nobody. A claim
+from before then has no flag and counts as direct only when the item was
+assigned to the claiming agent, since a lane claim is never written for an item
+assigned to an agent. Until the format is raised the tracker writes no flag, so
+an unassigned direct claim does not survive a restart. A lane poll that meets
+the held item's old record before its agent has called again does not lapse the
+hold either. The hold then runs one visibility period from the restart, past any
+deadline the old tracker gave, and lapses unless the agent extends it. So a
+restart neither ends a direct claim early, which would let a new holder start a
+second attempt while the first still works, nor spends a handout on another
+item's ready record looking for it.
 
 If the assigned agent goes away (it is revoked, or makes no call to the
 tracker to claim, extend or finish work for `KBL_ASSIGNEE_AWAY_SECS`, 600 by

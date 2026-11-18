@@ -67,6 +67,7 @@ impl Log {
                 item: id(item),
                 attempt: 1,
                 deadline_ms: 90_000,
+                direct: false,
             },
         );
     }

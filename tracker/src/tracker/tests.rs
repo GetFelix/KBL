@@ -1804,6 +1804,7 @@ async fn a_record_the_fold_refuses_is_not_appended() {
                 item: item("a1"),
                 attempt: 1,
                 deadline_ms: 0,
+                direct: false,
             },
         )
         .await

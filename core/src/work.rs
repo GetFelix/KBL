@@ -78,8 +78,13 @@ pub const FORMAT_V13: u32 = 13;
 /// whose claim lapsed may still ask or release with such a `why`.
 pub const FORMAT_V14: u32 = 14;
 
+/// The format from which a `claimed` says whether the tracker handed the item
+/// over directly, so a restart can tell a direct claim from one made through
+/// the item's ready record. Readers below 15 stop at the first such claim.
+pub const FORMAT_V15: u32 = 15;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V14;
+pub const FORMAT: u32 = FORMAT_V15;
 
 /// Longest reviewer name a `review_requested` carries.
 pub const MAX_REVIEWER: usize = 100;
@@ -700,6 +705,11 @@ pub enum WorkRecord {
         item: ItemId,
         attempt: u32,
         deadline_ms: u64,
+        /// The tracker handed the item over from its state, with no ready
+        /// record in Felix behind it. Format 15; absent on older claims, where
+        /// an item assigned to the claimer is the only direct claim.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        direct: bool,
     },
     Progress {
         item: ItemId,
@@ -1251,6 +1261,7 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::Claimed { direct: true, .. } => FORMAT_V15,
             WorkRecord::Released { why: Some(w), .. } if w.waits() => FORMAT_V14,
             WorkRecord::PriceSet { as_of: Some(_), .. } => FORMAT_V9,
             WorkRecord::PriceSet { .. } => FORMAT_V8,

@@ -220,3 +220,53 @@ async fn a_rebuild_on_a_stream_that_lost_its_durability_refuses_work() {
     fake.weaken_acks(false);
     t.extend(&agent("w1"), &item("a1")).await.unwrap();
 }
+
+async fn at_15(fake: &Fake) -> Tracker<Fake> {
+    let t = start(fake).await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
+        .await
+        .unwrap();
+    t
+}
+
+#[tokio::test]
+async fn a_direct_claim_among_several_roots_survives_a_restart() {
+    let fake = Fake::default();
+    let first = at_15(&fake).await;
+    // Two roots ready: the claim is made from the state, not from a record.
+    seed(&first, "a1", 2).await;
+    seed(&first, "b1", 2).await;
+    let got = claimed_id(&claim(&first, "w1").await).unwrap();
+    // Another agent's poll reaches the claimed item's stale ready record and acks it.
+    let other = claimed_id(&claim(&first, "w2").await).unwrap();
+    assert_ne!(got, other);
+    let stale = (0..2).any(|o| fake.slot(READY, o) == Slot::Acked);
+    assert!(stale, "w2's poll acked nothing");
+    drop(first);
+
+    let second = start(&fake).await;
+    assert_eq!(released(&fake), 0, "a restart lapsed a live direct claim");
+    assert!(second.extend(&agent("w1"), &item(&got)).await.is_ok());
+    assert!(second.extend(&agent("w2"), &item(&other)).await.is_ok());
+    assert!(claimed_id(&claim(&second, "w3").await).is_none());
+}
+
+#[tokio::test]
+async fn below_format_15_a_direct_claim_is_written_without_the_flag() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    seed(&t, "b1", 2).await;
+    claim(&t, "w1").await;
+    assert!(
+        fake.log()
+            .iter()
+            .any(|l| matches!(&l.record, WorkRecord::Claimed { direct: false, .. }))
+    );
+    assert!(
+        !fake
+            .log()
+            .iter()
+            .any(|l| matches!(&l.record, WorkRecord::Claimed { direct: true, .. }))
+    );
+}

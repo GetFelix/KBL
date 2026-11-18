@@ -476,6 +476,7 @@ async fn an_agents_pull_request_is_announced_once() {
             item: item.clone(),
             attempt: 1,
             deadline_ms: 90_000,
+            direct: false,
         },
     );
     tracker.agent(
@@ -659,6 +660,7 @@ async fn cross(pr: &str, head: impl FnOnce(&kbl_core::names::ItemId) -> String) 
             item: item.clone(),
             attempt: 1,
             deadline_ms: 90_000,
+            direct: false,
         },
     );
     tracker.agent(

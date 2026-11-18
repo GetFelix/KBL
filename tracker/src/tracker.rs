@@ -22,9 +22,9 @@ use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, Assignee, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason,
-    ReleaseWhy, TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream,
-    valid_review_tier,
+    Actor, Assignee, FORMAT_V15, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord,
+    RefusalReason, ReleaseWhy, TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read,
+    ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
 use serde::{Deserialize, Serialize};
@@ -614,11 +614,13 @@ impl Recall {
         let claims = self.attempts.entry((item.clone(), attempt)).or_default();
         if !ends {
             self.claims.insert(offset, (item.clone(), attempt));
-            // A claim leaves the assignee alone, and a lane claim is never
-            // written for an item assigned to an agent (`claim_from` acks
-            // it), so this is exactly a claim `try_assigned` made.
-            let direct = state.items.get(item).and_then(|i| i.assignee.as_ref())
-                == Some(&Assignee::Agent(logged.by.clone()));
+            // Claims from before the flag were direct only for an item assigned
+            // to the claimer: a lane claim is never written for one
+            // (`claim_from` acks it), so that was exactly `try_assigned`.
+            let flagged = matches!(&logged.record, WorkRecord::Claimed { direct: true, .. });
+            let direct = flagged
+                || state.items.get(item).and_then(|i| i.assignee.as_ref())
+                    == Some(&Assignee::Agent(logged.by.clone()));
             claims.push(ClaimLog {
                 offset,
                 by: logged.by.clone(),
@@ -640,11 +642,11 @@ impl Recall {
     }
 
     /// Whether `agent`'s newest claim of `attempt` was handed straight to it.
-    fn direct(&self, item: &ItemId, attempt: u32, agent: &AgentName) -> bool {
+    fn direct(&self, item: &ItemId, attempt: u32, agent: &str) -> bool {
         self.attempts
             .get(&(item.clone(), attempt))
             .and_then(|c| c.last())
-            .is_some_and(|c| c.direct && c.by.as_str() == agent.as_str())
+            .is_some_and(|c| c.direct && c.by.as_str() == agent)
     }
 
     /// The offset of the newest `claimed` record of `attempt`.
@@ -1604,7 +1606,7 @@ impl<B: Broker> Tracker<B> {
                     self.ordered(&core, lane)
                 };
                 for c in ordered {
-                    if let Some(d) = self.try_selected(agent, &c.item).await? {
+                    if let Some(d) = self.try_selected(agent, &c.item, filter, tier).await? {
                         return Ok(Some(d));
                     }
                 }
@@ -1722,6 +1724,8 @@ impl<B: Broker> Tracker<B> {
         &self,
         agent: &AgentName,
         item: &ItemId,
+        filter: &Filter,
+        lane: u8,
     ) -> Result<Option<Delivery>, Error> {
         let mut core = self.0.core.lock().await;
         if core.revoked.contains(agent) {
@@ -1732,10 +1736,13 @@ impl<B: Broker> Tracker<B> {
         let Some(it) = core.state.items.get(item) else {
             return Ok(None);
         };
-        let Some(tier) = self.0.settings.lane(it) else {
+        // An edit may have moved the item to another lane, which the caller may
+        // not have asked for, or out of the filter, since the candidates were read.
+        let Some(tier) = self.0.settings.lane(it).filter(|t| *t == lane) else {
             return Ok(None);
         };
         if core.state.stage(item) != Some(Stage::Ready)
+            || !filter.matches(&core, it)
             || matches!(it.assignee, Some(Assignee::Agent(_)))
             || core.refused.get(item) == Some(&core.state.at)
             || self.review_full(&core.state, item)
@@ -1765,6 +1772,8 @@ impl<B: Broker> Tracker<B> {
             item: item.clone(),
             attempt,
             deadline_ms: now_ms() + self.0.settings.visibility.as_millis() as u64,
+            // Below 15 the fold refuses the flag; the assignee rule covers it.
+            direct: core.state.format() >= FORMAT_V15,
         };
         match self.append(core, Actor::Agent, key, claim).await {
             Ok(_) => {
@@ -1817,7 +1826,7 @@ impl<B: Broker> Tracker<B> {
         let mut core = self.0.core.lock().await;
         // The hold may have lapsed since `recover` read it.
         if core.state.held_by(agent.as_str()) != Some((item.clone(), attempt))
-            || !core.recall.direct(item, attempt, agent)
+            || !core.recall.direct(item, attempt, agent.as_str())
         {
             return false;
         }
@@ -2076,7 +2085,10 @@ impl<B: Broker> Tracker<B> {
                 };
                 // A direct claim has no record, so this one is from before it and
                 // says nothing about the holder; the sweep lapses direct claims.
-                if core.owner.get(&item).is_some_and(|o| o.direct) {
+                // After a restart the owner is not back yet, so the log says.
+                if core.owner.get(&item).is_some_and(|o| o.direct)
+                    || core.recall.direct(&item, hold.attempt, hold.by.as_str())
+                {
                     core.live.remove(&item);
                     ack(ops, record.offset);
                     return Ok(None);
@@ -2113,6 +2125,7 @@ impl<B: Broker> Tracker<B> {
             item: item.clone(),
             attempt,
             deadline_ms: now_ms() + self.0.settings.visibility.as_millis() as u64,
+            direct: false,
         };
         match self
             .append(core, Actor::Agent, agent_key(agent), claim)
@@ -2432,7 +2445,7 @@ impl<B: Broker> Tracker<B> {
             .lock()
             .await
             .recall
-            .direct(&item, attempt, agent);
+            .direct(&item, attempt, agent.as_str());
         if direct {
             if !self.adopt_direct(agent, &item, attempt, delivery).await {
                 self.0.core.lock().await.recovering.remove(agent.as_str());

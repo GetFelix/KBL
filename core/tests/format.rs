@@ -5,8 +5,8 @@
 use kbl_core::codec::Codec;
 use kbl_core::work::{
     Actor, FORMAT, FORMAT_V1, FORMAT_V2, FORMAT_V3, FORMAT_V4, FORMAT_V5, FORMAT_V6, FORMAT_V7,
-    FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, ReadError,
-    WorkLogged, WorkRecord, read,
+    FORMAT_V8, FORMAT_V9, FORMAT_V10, FORMAT_V11, FORMAT_V12, FORMAT_V13, FORMAT_V14, FORMAT_V15,
+    ReadError, WorkLogged, WorkRecord, read,
 };
 use kbl_core::work_fold::{NeedsYou, Reject, Rejection, Stage, State, fold};
 
@@ -1168,7 +1168,6 @@ const FORMAT_14_LOG: &str = include_str!("work_format_14.jsonl");
 #[test]
 fn the_fourteenth_format_is_fourteen_and_stamps_only_waits() {
     assert_eq!(FORMAT_V14, 14);
-    assert_eq!(FORMAT, FORMAT_V14);
     for (_, r) in entries(FORMAT_14_LOG) {
         assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
     }
@@ -1196,5 +1195,49 @@ fn a_question_or_a_wait_frees_the_agent_at_format_14() {
     assert!(
         log.iter()
             .any(|(_, r)| r.v == FORMAT_V14 && r.record.kind() == "released")
+    );
+}
+
+/// A log at the fifteenth format: a claim that says the tracker handed the item
+/// over directly. Its folded state is pinned in `wasm/golden/format_15.state.json`.
+const FORMAT_15_LOG: &str = include_str!("work_format_15.jsonl");
+
+/// Format 15 stamps only a claim that is direct; a lane claim stays format 1.
+#[test]
+fn the_fifteenth_format_is_fifteen_and_stamps_only_direct_claims() {
+    assert_eq!(FORMAT_V15, 15);
+    assert_eq!(FORMAT, FORMAT_V15);
+    let log = entries(FORMAT_15_LOG);
+    for (_, r) in &log {
+        assert_eq!(r.record.format(), r.v, "{}", r.record.kind());
+    }
+    let direct = |r: &kbl_core::work::WorkRecord| {
+        matches!(r, kbl_core::work::WorkRecord::Claimed { direct: true, .. })
+    };
+    assert_eq!(
+        log.iter().filter(|(_, r)| direct(&r.record)).count(),
+        1,
+        "one direct claim in the log"
+    );
+}
+
+/// A log below 15 refuses the stamped claim, and a reader that reads only 14 stops at it.
+#[test]
+fn a_direct_claim_is_refused_below_format_15_and_stops_an_older_reader() {
+    let log = entries(FORMAT_15_LOG);
+    let mut s = kbl_core::work_fold::State::default();
+    let refused: Vec<u64> = log
+        .iter()
+        .filter(|(o, r)| s.try_apply(*o, r).is_err())
+        .map(|(o, _)| *o)
+        .collect();
+    assert!(refused.is_empty(), "{refused:?}");
+    let direct = log
+        .iter()
+        .find(|(_, r)| r.record.format() == FORMAT_V15)
+        .expect("a direct claim");
+    assert!(
+        direct.1.v > FORMAT_V14,
+        "an older reader sees v above its own"
     );
 }

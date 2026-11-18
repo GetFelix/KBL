@@ -153,7 +153,7 @@ tracker starts as root only long enough to read the token file the host owns, th
 [felix-blocks](https://github.com/GetFelix/felix-blocks) is keyed state with many writers. KBL puts them to
 work on a backlog that never ends:
 
-- **Each piece of work is claimed once, even when agents die.** A consumer group hands an item to one agent and gives it to another when the first stops answering. An item that keeps failing is dead-lettered instead of retried forever. The tracker publishes a Ready item's record again if Felix dead-lettered it, so the item is not lost.
+- **Each piece of work is claimed once, even when agents die.** A consumer group hands an item to one agent and gives it to another when the first stops answering. Felix dead-letters a delivery that is handed out too many times; the tracker publishes a new record for the Ready item, so the item is not lost. Work items have no attempt cap there: a failing item uses its tries (two claims), then waits in Needs you for a person.
 - **People and agents don't overwrite each other.** Items are keys written with `cache_put_if` at the version read, so a stale write is refused.
 - **One log is the record.** `work.events` holds every import, claim, decision and refusal in order, with the broker's record of who wrote it. The queue, an item's history and the replay are folds of it.
 - **Budgets hold under a race.** A root's budget only decreases, and a create over it is refused.
