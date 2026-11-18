@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { blocked, reviewLoad, waitsOn, type Fold, type ItemRow } from '../src/fold.ts';
 import { MAX_FILES, MAX_NOTES, overlapNotes } from '../src/overlap.ts';
+import { activities, timeline } from '../src/activity.ts';
 import { attemptFlags, citedText, decisionCount, flagsFor, stories } from '../src/story.ts';
 
 // Built by `npm run wasm`.
@@ -30,7 +31,7 @@ test('items lists each item with its stage', () => {
   const rec = (o: object) => new TextEncoder().encode(JSON.stringify({ at_ms: 1, by: 'gabriel', actor: 'person', ...o }));
   fold.apply(0, rec({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'a#1', title: 'first' }));
   assert.deepEqual(JSON.parse(fold.items_json()), [
-    { id: 'r1', title: 'first', stage: 'triage', tier: null, proposed_tier: null, source: 'github', repo: null, needs: null, question: null, options: null, default: null, unclear: null, root: true, accepted: false, flagged: false, assignee: null, held_attempt: null, triage: null, parent: null, work: 'fix', upstream: 'a#1', pr: null, pr_phase: null, pr_checks: null, failing_check: null, holder: null, active_ms: null },
+    { id: 'r1', title: 'first', stage: 'triage', tier: null, proposed_tier: null, source: 'github', repo: null, needs: null, question: null, options: null, default: null, unclear: null, root: true, accepted: false, flagged: false, assignee: null, held_attempt: null, triage: null, parent: null, work: 'fix', upstream: 'a#1', pr: null, pr_phase: null, pr_checks: null, failing_check: null, holder: null, active_ms: null, hold_deadline_ms: null },
   ]);
   fold.apply(1, rec({ kind: 'accepted', item: 'r1', tier: 1 }));
   assert.equal(JSON.parse(fold.items_json())[0].stage, 'ready');
@@ -189,4 +190,16 @@ test('the story groups recorded decisions by phase and flags a claim with no run
   assert.deepEqual(flagsFor(story, 9).map((f) => f.rule), ['claims_pass_without_run']);
   assert.deepEqual(attemptFlags(story).map((f) => f.rule), ['edits_never_run']);
   assert.equal(story.people[0].by, 'gabriel');
+});
+
+test('the wasm fold feeds the timeline from the records it applied', () => {
+  const fold = new Folder();
+  const put = (o: object) => fold.apply(fold.at() + 1, new TextEncoder().encode(JSON.stringify({ at_ms: 5, by: 'gabriel', actor: 'person', ...o })));
+  put({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'a#1', title: 't', by: 'ingest', actor: 'tracker' });
+  put({ kind: 'accepted', item: 'r1', tier: 1 });
+  put({ kind: 'claimed', item: 'r1', attempt: 1, deadline_ms: 9e12, by: 'w1', actor: 'agent' });
+  put({ kind: 'step', item: 'r1', attempt: 1, command: 'make', exit_code: 2, output: { text: 'err' }, by: 'w1', actor: 'agent' });
+  const got = activities({ activityJson: (i) => fold.activity_json(i) }, ['r1']).get('r1')!;
+  assert.deepEqual(got.map((e) => e.kind), ['accepted', 'claimed', 'step']);
+  assert.equal(timeline(got)[0].title, 'Ran make');
 });

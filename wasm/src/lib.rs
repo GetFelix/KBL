@@ -4,6 +4,8 @@
 //! it returns. It adds no rules of its own: the state is the same fold the
 //! tracker runs, so the two cannot disagree about an item's stage.
 
+mod activity;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
@@ -38,6 +40,8 @@ pub struct Folder {
     /// Each item's story as serialised JSON (with its `rev`), by the count it
     /// was built at. None is an item with no story yet.
     stories: RefCell<BTreeMap<ItemId, (u64, Option<String>)>>,
+    /// What happened on each item, for the panel's timeline and history.
+    activity: activity::Activity,
 }
 
 #[wasm_bindgen]
@@ -59,7 +63,16 @@ impl Folder {
         match read(payload) {
             Ok(rec) => {
                 let before = self.files_offset(&rec);
+                let spent = |s: &State| {
+                    rec.record
+                        .item()
+                        .and_then(|i| s.items.get(i))
+                        .map_or(0, |i| i.cost_micros)
+                };
+                let cost_before = spent(&self.state);
                 self.state.apply(offset, &rec);
+                let charged = spent(&self.state).saturating_sub(cost_before);
+                self.activity.note(offset, &rec, charged);
                 self.keep_files(offset, &rec, before);
                 if accepted(&self.state, offset, &rec)
                     && let Some(k) = Kept::of(&rec)
@@ -117,7 +130,8 @@ impl Folder {
     /// the attempt an agent holds, or null; `holder` and `active_ms` name that
     /// agent and when it last wrote. `parent`, `work`, `upstream` (the root's
     /// `owner/repo#number`), `pr`, `pr_phase`, `pr_checks` and `failing_check`
-    /// let a card nest and describe itself.
+    /// let a card nest and describe itself. `hold_deadline_ms` is when the hold lapses
+    /// unless the holder renews it.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
         let mut upstreams = std::collections::BTreeMap::new();
@@ -170,6 +184,7 @@ impl Folder {
                     "flagged": i.flagged,
                     "assignee": i.assignee,
                     "held_attempt": i.hold.as_ref().map(|h| h.attempt),
+                    "hold_deadline_ms": i.hold.as_ref().map(|h| h.deadline_ms),
                     "triage": triage,
                 })
             })
@@ -274,6 +289,19 @@ impl Folder {
         }
         out.push('}');
         out
+    }
+
+    /// What happened on one item, oldest first, as `[{offset, at_ms, by, kind, attempt?,
+    /// cost_micros?, ...}]`. `kind` is one of `claimed`, `progress`, `step` (with `command`,
+    /// `exit_code` and the tail of `output`), `edit`, `decision`, `question`, `answer`,
+    /// `note`, `done`, `released`, `gave_up`, `attempt_closed`, `rated`, `accepted`, `tier`,
+    /// `taken`, `reassigned`, `closed` and `reopened`. `cost_micros` is what the fold charged
+    /// the item for that record. Read from records already applied; nothing is added to the log.
+    pub fn activity_json(&self, item: &str) -> String {
+        match ItemId::new(item) {
+            Ok(id) => self.activity.json(&id),
+            Err(_) => "[]".to_owned(),
+        }
     }
 
     /// Claim costs summed per root, reviewer tier and repo: `Spend` from the core fold.

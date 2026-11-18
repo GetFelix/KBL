@@ -57,7 +57,7 @@ function editLine(e: EditLine, decision: number, t: Targets): Node {
 
 function decisionLine(d: DecisionLine, story: Story, t: Targets): Node {
   const rc = d.revert_check;
-  return h('li', { class: 'story-decision', 'data-at': String(d.offset), tabindex: '-1' },
+  return h('li', { class: 'story-decision', 'data-at': String(d.offset), 'data-attempt': String(d.attempt), tabindex: '-1' },
     h('p', { class: 'story-chosen' }, h('strong', {}, d.chosen), h('span', { class: 'muted' }, ` decision ${d.offset}, attempt ${d.attempt}, ${d.by}`)),
     h('p', { class: 'muted' }, d.question),
     h('p', {}, h('span', { class: 'story-label' }, 'Why '), d.why),

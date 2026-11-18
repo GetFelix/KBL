@@ -4,6 +4,7 @@
 import type { BlockedRow, ItemRow, ReviewLoad } from './fold.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
+import type { Activities } from './activity.ts';
 import type { Stories } from './story.ts';
 import { putWrite, type Write, type Writes } from './writes.ts';
 
@@ -46,6 +47,8 @@ export interface ViewState {
   stories: Stories;
   /** The tracker's review load, from the same fold as `items`. */
   reviewLoad: ReviewLoad;
+  /** What happened on the open item and its children, from the same fold as `items`. */
+  activity?: Activities;
   view: View;
   query: string;
   selected: string | null;
@@ -73,8 +76,10 @@ export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; stories?: Stories; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string> }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; stories?: Stories; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string>; activity?: Activities }
   /** Marks or unmarks one item for a bulk action. */
+  /** What happened on the open item, read when it opens or the log moves. */
+  | { type: 'activity'; activity: Activities }
   | { type: 'mark'; id: string }
   | { type: 'marks'; ids: string[] }
   | { type: 'write'; write: Write }
@@ -110,8 +115,11 @@ export function reduce(s: ViewState, a: Action): ViewState {
         stories: a.stories ?? s.stories,
         reviewLoad: a.reviewLoad ?? s.reviewLoad,
         questions: a.questions ?? s.questions,
+        activity: a.activity ?? s.activity,
         marked: s.marked.filter((id) => a.items.some((i) => i.id === id)),
       };
+    case 'activity':
+      return { ...s, activity: a.activity };
     case 'mark':
       return { ...s, marked: s.marked.includes(a.id) ? s.marked.filter((x) => x !== a.id) : [...s.marked, a.id] };
     case 'marks':

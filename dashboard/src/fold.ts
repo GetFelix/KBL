@@ -11,6 +11,8 @@ export interface Fold {
   itemsJson(): string;
   blockedJson(): string;
   overlapsJson(): string;
+  /** What happened on one item, oldest first: the events its timeline and history are built from. */
+  activityJson(item: string): string;
   /** The story of every item with a recorded decision, keyed by item id. */
   storiesJson(): string;
   /** `{load, in_review}`: the review load the tracker's pause counts, and the In review part of it. */
@@ -54,6 +56,8 @@ export interface ItemRow {
   /** The agent that holds it and when it last wrote, in the tracker's clock (ms). */
   holder?: string | null;
   active_ms?: number | null;
+  /** When the agent's claim runs out, in the tracker's clock (ms). */
+  hold_deadline_ms?: number | null;
   /** The item this one is a child of, and what kind of work it is (`fix`, `triage`, `augment`, `review`, ...). */
   parent?: string | null;
   work?: string | null;

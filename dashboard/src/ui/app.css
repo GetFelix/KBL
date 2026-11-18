@@ -266,3 +266,21 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .child-link:hover { text-decoration: underline; }
 .filter-bar [aria-pressed='true'].button { background: var(--accent-soft); }
 .row-props { font-size: var(--text-xs); white-space: nowrap; }
+
+/* Item panel: Now, Linked work, Activity, Attempts. */
+.section-title { margin: var(--space-4) 0 var(--space-2); font-size: var(--text-sm); color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.panel h4 { margin: var(--space-2) 0 var(--space-1); font-size: var(--text-sm); color: var(--muted); }
+.now { border-left: 3px solid var(--line-strong); padding: var(--space-1) var(--space-3); }
+.now[data-tone="warn"] { border-left-color: var(--warn); }
+.now .section-title { margin-top: 0; }
+.now-text { margin: 0; font-size: var(--text-md, 1em); }
+.tl, .attempts, .linked, .blockers { list-style: none; margin: 0; padding: 0; }
+.tl-entry { border-left: 2px solid var(--line-strong); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-2); }
+.tl-failed { border-left-color: var(--warn); }
+.tl-flag { color: var(--text); font-weight: 600; }
+.tl-detail { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
+.tl-output summary { padding: var(--space-2) 0; cursor: pointer; }
+.tl-pre { overflow-x: auto; font-family: var(--font-mono); font-size: var(--text-sm); margin: 0; }
+.attempt { border-left: 3px solid var(--line-strong); padding: var(--space-1) var(--space-3); margin-bottom: var(--space-3); }
+.attempt p, .linked li { margin: var(--space-1) 0; }
+.linked-answer { margin: var(--space-1) 0 0; }

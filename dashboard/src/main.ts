@@ -8,6 +8,7 @@ import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { blocked, items, questionText, reviewLoad, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
+import { activities, type Activities } from './activity.ts';
 import { stories } from './story.ts';
 import { priceAgeDays, priceRequest, spend, type PriceEntry, type PriceUnit } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
@@ -486,6 +487,16 @@ const paint = (s: ViewState) => {
   else addressTimer = setTimeout(writeAddress, wait);
 };
 store.subscribe(paint);
+
+// The open item's events and its children's, read from the fold: when the log moves (see `redraw`)
+// and when another item opens.
+let readActivity: (() => Activities) | null = null;
+let activityFor: string | null = null;
+store.subscribe((s) => {
+  if (s.open === activityFor) return;
+  activityFor = s.open;
+  if (readActivity) store.dispatch({ type: 'activity', activity: readActivity() });
+});
 // "Last active 3 min ago" ages without a record; redraw in place so it keeps up.
 setInterval(() => ui.render(store.get()), 30_000);
 paint(initial);
@@ -506,6 +517,12 @@ document.addEventListener('keydown', (e) => {
   e.preventDefault();
   run(id);
 });
+
+function openActivity(fold: Fold): Activities {
+  const open = store.get().open;
+  if (!open) return new Map();
+  return activities(fold, [open, ...items(fold).filter((i) => i.parent === open).map((i) => i.id)]);
+}
 
 async function main() {
   const url = gatewayUrl ?? 'ws://127.0.0.1:8787/ws';
@@ -533,10 +550,12 @@ async function main() {
     blockedJson: () => fold.blocked_json(),
     overlapsJson: () => fold.overlaps_json(),
     storiesJson: () => fold.stories_json(),
+    activityJson: (item) => fold.activity_json(item),
     reviewLoadJson: () => fold.review_load_json(),
     spendJson: () => fold.spend_json(),
   };
   readSpend = () => spend(sink);
+  readActivity = () => openActivity(sink);
   // Redraw once per frame however many records arrive.
   let queued = false;
   const redraw = () => {
@@ -547,7 +566,7 @@ async function main() {
     const wait = store.get().connection.kind === 'live' ? 0 : 500;
     setTimeout(() => requestAnimationFrame(() => {
       queued = false;
-      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
+      store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions), activity: openActivity(sink) });
       if (spendBox.isOpen()) showSpend();
       if (readSpend) pricesBox.refresh(readSpend());
     }), wait);
@@ -573,7 +592,7 @@ async function main() {
         onLive: () => {
           delay = 1000;
           performance.mark('kbl-live', { detail: { foldMs } });
-          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions) });
+          store.dispatch({ type: 'items', items: items(sink), blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions), activity: openActivity(sink) });
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();
           if (readSpend) pricesBox.refresh(readSpend());
