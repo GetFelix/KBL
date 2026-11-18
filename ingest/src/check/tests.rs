@@ -536,6 +536,7 @@ fn the_text_report_lists_picks_and_the_json_report_is_machine_readable() {
             rule: "r".into(),
             repo: "o/n".into(),
             mode: "admit",
+            skips_triage: true,
             cap: None,
             open_now: 0,
             would_import: vec![Pick {
@@ -554,9 +555,11 @@ fn the_text_report_lists_picks_and_the_json_report_is_machine_readable() {
     assert!(text.contains("ERROR github: bad"));
     assert!(text.contains("import o/n#1 (tier 2, work in no repository: Needs you)"));
     assert!(text.contains("3 open issue(s) match no rule"));
+    assert!(text.contains("admits straight to ready"));
     let v: Value = serde_json::to_value(&report).unwrap();
     assert_eq!(v["ok"], false);
     assert_eq!(v["rules"][0]["would_import"][0]["issue"], "o/n#1");
+    assert_eq!(v["rules"][0]["skips_triage"], true);
 }
 
 #[tokio::test]

@@ -301,6 +301,7 @@ fn the_models_waiting_for_a_price_are_bounded() {
         l.person(WorkRecord::Accepted {
             item: id(r),
             tier: None,
+            triage_skipped: None,
         });
         l.agent("w1", claimed(r, 1));
     }

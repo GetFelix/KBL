@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::ado::Ado;
 use crate::budget::{Budget, Budgeted, Vendor, budgeted, projected_per_hour};
-use crate::config::{AdoConfig, Config, GithubConfig, Mode, Rule};
+use crate::config::{AdoConfig, Config, GithubConfig, Mode, Rule, Triage};
 use crate::github::transport::Reqwest as GithubHttp;
 use crate::github::{Github, Req, Res, Transport, parse_utc_ms};
 use crate::gitlab::Gitlab;
@@ -87,6 +87,8 @@ pub(crate) struct RuleReport {
     pub(crate) rule: String,
     pub(crate) repo: String,
     pub(crate) mode: &'static str,
+    /// The rule admits straight to Ready to fix, with no triage item.
+    pub(crate) skips_triage: bool,
     pub(crate) cap: Option<u32>,
     /// Open roots the rule has now, from the tracker.
     pub(crate) open_now: usize,
@@ -1355,6 +1357,7 @@ pub(crate) async fn dry_run<S: Source, T: Tracker>(
                 Mode::Admit => "admit",
                 Mode::Propose => "propose",
             },
+            skips_triage: r.triage == Triage::Skip,
             cap: r.cap,
             open_now: open.get(&r.name).copied().unwrap_or(0),
             would_import: Vec::new(),
@@ -1444,6 +1447,12 @@ fn render(r: &Report) -> String {
             rule.over_cap.len(),
             rule.already_imported
         );
+        if rule.skips_triage {
+            let _ = writeln!(
+                s,
+                "  admits straight to ready: no triage or augment item, so an agent can fix it at once"
+            );
+        }
         for p in rule.would_import.iter().take(SHOWN) {
             let _ = writeln!(
                 s,

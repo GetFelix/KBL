@@ -192,6 +192,7 @@ async fn a_crash_right_after_accepted_is_finished_by_the_next_poll() {
         WorkRecord::Accepted {
             item: item_id(UP),
             tier: Some(1),
+            triage_skipped: None,
         },
     ])
     .await;
@@ -908,6 +909,7 @@ async fn a_childless_root_ingest_reopened_is_not_accepted_on_a_retry() {
     rig.tracker.person(WorkRecord::Accepted {
         item: item.clone(),
         tier: Some(3),
+        triage_skipped: None,
     });
     rig.list(vec![closed(
         issue(812, |_| {}),
@@ -2921,6 +2923,7 @@ async fn prerequisite_rig_until(
         rig.tracker.person(WorkRecord::Accepted {
             item: g1,
             tier: None,
+            triage_skipped: None,
         });
     }
     rig.gh.on(
@@ -3438,4 +3441,36 @@ fn the_slice_skips_nothing_when_issues_close_between_polls() {
     }
     let want: BTreeSet<String> = open.iter().cloned().collect();
     assert!(want.is_subset(&read), "missed {:?}", want.difference(&read));
+}
+
+#[tokio::test]
+async fn a_skip_triage_rule_admits_straight_to_ready_with_no_children() {
+    let rig = rig();
+    let mut rule = admit_rule();
+    rule["triage"] = json!("skip");
+    let ingest = rig.ingest(json!([rule]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+
+    let s = rig.tracker.state();
+    let root = &s.items[&item_id(UP)];
+    assert!(root.children.is_empty());
+    assert_eq!(rig.tracker.count("proposed"), 0);
+    assert_eq!(s.stage(&root.id), Some(Stage::Ready));
+    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.triage_skipped.as_deref(), Some("agent-ok"));
+    assert!(!root.accepted_by_person);
+}
+
+#[tokio::test]
+async fn the_default_admit_rule_still_queues_triage_and_augment() {
+    let rig = rig();
+    let ingest = rig.ingest(json!([admit_rule()]));
+    rig.list(vec![issue(812, |_| {})]);
+    ingest.poll(false).await.unwrap();
+
+    let s = rig.tracker.state();
+    let root = &s.items[&item_id(UP)];
+    assert_eq!(root.children.len(), 2);
+    assert_eq!(root.triage_skipped, None);
 }

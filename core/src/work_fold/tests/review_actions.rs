@@ -12,6 +12,7 @@ fn raised() -> Log {
     l.person(WorkRecord::Accepted {
         item: id("r1"),
         tier: Some(1),
+        triage_skipped: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent(

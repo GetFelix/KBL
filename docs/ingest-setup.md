@@ -47,7 +47,16 @@ child.
 
 With `propose`, the match waits in Triage for a person before anything is queued.
 
-A rule cannot skip triage today; both modes go through it.
+With `admit` and `"triage": "skip"`, a match is imported already accepted and ready to fix, with no triage or augment
+item. Use it for issues that are already well specified, such as a curated milestone or an `agent-ok` label a person
+applies after writing the acceptance. The dashboard shows such a root as Ready to fix with "triage skipped by rule
+<name>", and `kbl-ingest check` says the rule "admits straight to ready". Skipping also skips augment, so nothing adds
+missing context before the fix; an agent that needs it asks a question. `skip` is refused with `propose`, since a
+proposed match waits for a person. The default is `"triage": "run"`.
+
+```json
+{ "name": "curated", "repo": "GetFelix/felix", "milestone": "0.8", "mode": "admit", "triage": "skip" }
+```
 
 The file is plain JSON, which has no comments, so the fields are explained in
 [the reference](work-tracker.md#running-the-ingest-worker). The starter holds

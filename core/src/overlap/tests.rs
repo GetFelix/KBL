@@ -50,6 +50,7 @@ impl Log {
         self.person(WorkRecord::Accepted {
             item: id(item),
             tier: Some(1),
+            triage_skipped: None,
         });
     }
     fn files(&mut self, item: &str, text: &str) {
