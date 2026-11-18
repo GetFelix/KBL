@@ -756,6 +756,7 @@ async fn re_polling_never_imports_an_item_twice_and_a_pull_request_is_announced_
             item: item.clone(),
             attempt: 1,
             deadline_ms: 90_000,
+            direct: false,
         },
     );
     tracker.agent(
@@ -796,6 +797,7 @@ async fn a_pull_request_outside_the_mapped_repositories_is_not_announced() {
             item: item.clone(),
             attempt: 1,
             deadline_ms: 90_000,
+            direct: false,
         },
     );
     tracker.agent(

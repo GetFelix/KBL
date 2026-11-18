@@ -865,6 +865,14 @@ pub(super) async fn start_with(fake: &Fake, settings: Settings) -> Tracker<Fake>
     Tracker::start(fake.reconnect(), settings).await.unwrap()
 }
 
+pub(super) async fn at_15(fake: &Fake) -> Tracker<Fake> {
+    let t = start(fake).await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
+        .await
+        .unwrap();
+    t
+}
+
 pub(super) async fn claim(t: &Tracker<Fake>, who: &str) -> Value {
     t.next(&agent(who), Duration::ZERO).await.unwrap()
 }
@@ -1806,6 +1814,7 @@ async fn a_record_the_fold_refuses_is_not_appended() {
                 item: item("a1"),
                 attempt: 1,
                 deadline_ms: 0,
+                direct: false,
             },
         )
         .await
@@ -2672,6 +2681,7 @@ mod request_keys;
 mod retry;
 mod review;
 mod review_limit;
+mod selection;
 mod sweep;
 mod texts;
 mod traces;
@@ -2819,11 +2829,21 @@ async fn a_republish_that_loses_a_race_with_a_claim_is_not_recorded() {
         tokio::task::yield_now().await;
     }
     // Meanwhile w1 claims through the first record.
-    assert!(t.try_claim(&agent("w1"), &[]).await.unwrap().is_some());
+    assert!(
+        t.try_claim(&agent("w1"), &[], &Filter::default())
+            .await
+            .unwrap()
+            .is_some()
+    );
     fake.open_gate();
     sync.await.unwrap();
     // The second record is stale: w2's poll acks it and does not take w1's item.
-    assert!(t.try_claim(&agent("w2"), &[]).await.unwrap().is_none());
+    assert!(
+        t.try_claim(&agent("w2"), &[], &Filter::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert!(t.0.core.lock().await.state.held_by("w1").is_some());
     assert!(!fake.kinds().contains(&"released".to_owned()));
 }
@@ -3084,9 +3104,10 @@ async fn a_pull_request_is_one_request_in_any_letter_case() {
 async fn revoking_an_agent_releases_only_its_holds_and_stops_its_claims() {
     let fake = Fake::default();
     let t = start(&fake).await;
+    // One root ready at a time, so both claims go through the lane.
     seed(&t, "a1", 2).await;
-    seed(&t, "a2", 2).await;
     let w1 = claimed_id(&claim(&t, "w1").await).unwrap();
+    seed(&t, "a2", 2).await;
     let w2 = claimed_id(&claim(&t, "w2").await).unwrap();
     assert_eq!(t.revoke(&agent("w1")).await.unwrap(), [item(&w1)]);
     let log = fake.log();

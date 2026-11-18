@@ -217,7 +217,38 @@ async fn seed_item(t: &Tracker<Fake>, m: &mut Model) {
 }
 
 async fn claim_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, who: &'static str) {
-    let Ok(reply) = t.next(&agent(who), Duration::ZERO).await else {
+    claim_with(t, fake, m, who, &Filter::default()).await;
+}
+
+/// A claim that names kinds or tiers: it may find nothing, and what it finds is
+/// still a claim the log accepts.
+async fn filtered_claim_step(
+    t: &Tracker<Fake>,
+    fake: &Fake,
+    m: &mut Model,
+    rng: &mut Rng,
+    who: &'static str,
+) {
+    let filter = match rng.below(3) {
+        0 => Filter::parse(&["fix".into()], &[], None, &[]),
+        1 => Filter::parse(&[], &[0, 1], None, &[]),
+        _ => Filter::parse(&["triage".into()], &[], None, &[]),
+    }
+    .unwrap();
+    claim_with(t, fake, m, who, &filter).await;
+}
+
+async fn claim_with(
+    t: &Tracker<Fake>,
+    fake: &Fake,
+    m: &mut Model,
+    who: &'static str,
+    filter: &Filter,
+) {
+    let Ok(reply) = t
+        .next_filtered(&agent(who), Duration::ZERO, &[], filter)
+        .await
+    else {
         return;
     };
     let Some(id) = claimed_id(&reply) else {
@@ -421,6 +452,7 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
                     item: id.clone(),
                     attempt: it.next_attempt(),
                     deadline_ms: now_ms() + 60_000,
+                    direct: false,
                 },
             ),
             // Another tracker's person assigns an agent this one has not folded.
@@ -467,8 +499,8 @@ async fn foreign_write(fake: &Fake, m: &mut Model, rng: &mut Rng) {
     }
 }
 
-/// The holds that came from a direct claim: the item was assigned to its
-/// claimer when the claim landed. By agent: item and attempt.
+/// The holds that came from a direct claim: the claim says so, or the item was
+/// assigned to its claimer when an older claim landed. By agent: item and attempt.
 fn direct_holds(fake: &Fake) -> HashMap<String, (String, u32)> {
     let mut state = State::default();
     let mut direct = HashMap::new();
@@ -480,8 +512,14 @@ fn direct_holds(fake: &Fake) -> HashMap<String, (String, u32)> {
         if state.try_apply(offset as u64, &logged).is_err() {
             continue;
         }
-        if let WorkRecord::Claimed { item, attempt, .. } = &logged.record {
-            let mine = before == Some(Assignee::Agent(logged.by.clone()));
+        if let WorkRecord::Claimed {
+            item,
+            attempt,
+            direct: flagged,
+            ..
+        } = &logged.record
+        {
+            let mine = *flagged || before == Some(Assignee::Agent(logged.by.clone()));
             direct.retain(|_, (i, _)| i != item.as_str());
             if mine {
                 direct.insert(logged.by.to_string(), (item.to_string(), *attempt));
@@ -502,6 +540,20 @@ fn direct_holds(fake: &Fake) -> HashMap<String, (String, u32)> {
 /// tracker restarts. The new tracker keeps the hold, polls no lane for it,
 /// and the holder extends it.
 async fn reassign_and_restart(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
+    direct_and_restart(fake, t, m, rng, true).await;
+}
+
+/// A direct claim made for a filter or among several roots, which the
+/// assignee rule alone cannot recognise: another agent's poll may ack the
+/// item's stale ready record, then the tracker restarts. The hold must
+/// survive, with no lane polled for it, and its agent can extend it.
+async fn direct_and_restart(
+    fake: &Fake,
+    t: &mut Trackers,
+    m: &mut Model,
+    rng: &mut Rng,
+    reassign: bool,
+) {
     let mut held: Vec<_> = direct_holds(fake)
         .into_iter()
         .filter_map(|(who, claim)| {
@@ -515,17 +567,26 @@ async fn reassign_and_restart(fake: &Fake, t: &mut Trackers, m: &mut Model, rng:
         return;
     }
     let (who, (id, attempt)) = held[rng.below(held.len())].clone();
-    let to = AGENTS
-        .iter()
-        .filter(|a| **a != who)
-        .map(|a| Assignee::Agent(key(a)))
-        .nth(rng.below(AGENTS.len()));
-    let reassigned = WorkRecord::Reassigned {
-        item: item(&id),
-        to,
-    };
-    if t.cur.person_record(key("gab"), reassigned).await.is_err() {
-        return;
+    if reassign {
+        let to = AGENTS
+            .iter()
+            .filter(|a| **a != who)
+            .map(|a| Assignee::Agent(key(a)))
+            .nth(rng.below(AGENTS.len()));
+        let reassigned = WorkRecord::Reassigned {
+            item: item(&id),
+            to,
+        };
+        if t.cur.person_record(key("gab"), reassigned).await.is_err() {
+            return;
+        }
+    } else if rng.below(2) == 0 {
+        // Another agent's lane poll reaches the item's stale ready record.
+        let other = AGENTS.iter().find(|a| **a != who).copied().unwrap();
+        claim_step(&t.cur, fake, m, other).await;
+        if m.beliefs.get(who) != Some(&id) {
+            return;
+        }
     }
     let polls = |fake: &Fake| {
         let mine = format!(" {who}");
@@ -579,6 +640,7 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
         // anyone is told. A record Felix acknowledged is never cut.
         41..=45 => fake.cut_next_lost_write(WORK_EVENTS),
         46..=50 => reassign_and_restart(fake, t, m, rng).await,
+        51..=57 => direct_and_restart(fake, t, m, rng, false).await,
         18..=22 => foreign_write(fake, m, rng).await,
         23..=30 => {
             // Felix hands a record out again: a lapsed lease, or a repeat of an acked one.
@@ -598,9 +660,10 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     let who = AGENTS[rng.below(AGENTS.len())];
     let serving = t.serving(rng.below(100) < 40);
-    match rng.below(14) {
+    match rng.below(15) {
         0..=1 => seed_item(serving, m).await,
         2..=5 => claim_step(serving, fake, m, who).await,
+        14 => filtered_claim_step(serving, fake, m, rng, who).await,
         6..=8 => finish_step(serving, m, rng, who).await,
         9 => extend_step(serving, fake, m, who).await,
         10 => assign_step(serving, m, rng).await,
@@ -706,9 +769,10 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             cur: start(&fake).await,
             old: None,
         };
-        // Format 14, so items can be assigned to agents and a question frees the asker.
+        // Format 15, so items can be assigned to agents, a question frees the
+        // asker and a direct claim says it was one.
         t.cur
-            .person_record(key("gab"), WorkRecord::FormatRaised { to: 14 })
+            .person_record(key("gab"), WorkRecord::FormatRaised { to: 15 })
             .await
             .unwrap();
         let mut m = Model::default();

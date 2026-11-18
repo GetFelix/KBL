@@ -89,6 +89,7 @@ impl Rig {
                 item: item.clone(),
                 attempt: 1,
                 deadline_ms: 90_000,
+                direct: false,
             },
         );
         if let Some(pr) = pr {
@@ -2333,6 +2334,7 @@ impl Rig {
                 item: waiting.clone(),
                 attempt: 1,
                 deadline_ms: 90_000,
+                direct: false,
             },
         );
         self.tracker.agent(

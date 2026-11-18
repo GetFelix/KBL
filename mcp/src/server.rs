@@ -162,6 +162,59 @@ struct WorkNextArgs {
     wait_seconds: Option<u64>,
     /// Reviewer tiers you take reviews of, such as `fast` or `deep`. Without one you are given ordinary work only. You are never given a review of work you did.
     review_tiers: Option<Vec<String>>,
+    /// Only take work of these kinds: `triage`, `augment`, `fix`, `split`, `question`, `test`, `resume` or `review` (reviews need `review_tiers` too). Leave out to take any kind.
+    kinds: Option<Vec<String>>,
+    /// Only take work in these priority tiers, 0 the highest. Leave out to take any tier.
+    tiers: Option<Vec<u8>>,
+    /// Only take work that lands in this repo, as `owner/name`.
+    repo: Option<String>,
+    /// Ids of roots whose work you do not want, such as one you just finished a child of.
+    exclude_roots: Option<Vec<String>>,
+}
+
+impl WorkNextArgs {
+    /// The narrowing fields as the tracker's route reads them.
+    fn filter(&self) -> serde_json::Value {
+        filter_json(&self.kinds, &self.tiers, &self.repo, &self.exclude_roots)
+    }
+}
+
+fn filter_json(
+    kinds: &Option<Vec<String>>,
+    tiers: &Option<Vec<u8>>,
+    repo: &Option<String>,
+    exclude_roots: &Option<Vec<String>>,
+) -> serde_json::Value {
+    let mut f = serde_json::Map::new();
+    if let Some(k) = kinds {
+        f.insert("kinds".into(), serde_json::json!(k));
+    }
+    if let Some(t) = tiers {
+        f.insert("tiers".into(), serde_json::json!(t));
+    }
+    if let Some(r) = repo {
+        f.insert("repo".into(), serde_json::json!(r));
+    }
+    if let Some(e) = exclude_roots {
+        f.insert("exclude_roots".into(), serde_json::json!(e));
+    }
+    serde_json::Value::Object(f)
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct WorkPeekArgs {
+    /// How many items to list, default 10, at most 50.
+    limit: Option<u64>,
+    /// Reviewer tiers you take reviews of, as for `work_next`.
+    review_tiers: Option<Vec<String>>,
+    /// Only list work of these kinds, as for `work_next`.
+    kinds: Option<Vec<String>>,
+    /// Only list work in these priority tiers, 0 the highest.
+    tiers: Option<Vec<u8>>,
+    /// Only list work that lands in this repo, as `owner/name`.
+    repo: Option<String>,
+    /// Ids of roots whose work is left out.
+    exclude_roots: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -479,14 +532,25 @@ impl Server {
     }
 
     #[tool(
-        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. Ask a person only with work_ask, never in your host's chat or its question prompt: nobody watching the tracker sees those. You can hold one item at a time. Keep taking items: call work_next again after each one, and stop when it says nothing is ready or you are asked to stop."
+        description = "Take the highest-priority work item you can start, waiting a few seconds if there is none. Roots take turns within a tier, so repeated calls do not keep returning children of the same root. To ask for something specific, pass kinds (such as triage or fix), tiers, repo, or exclude_roots; an item you filter out is left for others and nothing is lost. Look first with work_peek. The reply carries the standing rules for the item's repo and root, with their version: follow the text and run the checks before you push. You cannot change them. You keep it while you work and it is extended for you. Finish with work_complete, or hand it back with work_release. Ask a person only with work_ask, never in your host's chat or its question prompt: nobody watching the tracker sees those. You can hold one item at a time. Keep taking items: call work_next again after each one, and stop when it says nothing is ready or you are asked to stop."
     )]
     async fn work_next(&self, Parameters(a): Parameters<WorkNextArgs>) -> Result<String, String> {
         self.work()?
-            .next_for(
+            .next_filtered(
                 a.wait_seconds.map(Duration::from_secs),
-                a.review_tiers.unwrap_or_default(),
+                a.review_tiers.clone().unwrap_or_default(),
+                a.filter(),
             )
+            .await
+    }
+
+    #[tool(
+        description = "List the next items work_next would hand you, in order, with each one's kind, tier, repo and root. Nothing is claimed, held or changed, so it is safe to call as often as you like. Use it to see what is waiting before you narrow work_next with kinds, tiers, repo or exclude_roots. Roots take turns, so the list can mix roots; the order can change if work arrives before you call work_next."
+    )]
+    async fn work_peek(&self, Parameters(a): Parameters<WorkPeekArgs>) -> Result<String, String> {
+        let filter = filter_json(&a.kinds, &a.tiers, &a.repo, &a.exclude_roots);
+        self.work()?
+            .peek(a.limit, a.review_tiers.unwrap_or_default(), filter)
             .await
     }
 

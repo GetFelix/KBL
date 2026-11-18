@@ -1,0 +1,7 @@
+{"at_ms":1010,"by":"gabriel","actor":"person","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix"}
+{"at_ms":1015,"by":"gabriel","actor":"person","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"fix the docs build"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1","tier":1}
+{"at_ms":1025,"by":"gabriel","actor":"person","kind":"accepted","item":"r2","tier":1}
+{"v":15,"at_ms":1030,"by":"gabriel","actor":"person","kind":"format_raised","to":15}
+{"v":15,"at_ms":1040,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000,"direct":true}
+{"at_ms":1050,"by":"w2","actor":"agent","kind":"claimed","item":"r2","attempt":1,"deadline_ms":1800000090000}

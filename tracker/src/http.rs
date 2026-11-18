@@ -37,6 +37,7 @@ use crate::felix::Broker;
 use crate::org::OrgUnavailable;
 use crate::teams::{Team, Teams};
 use crate::tracker::ExpectedPrice;
+use crate::tracker::selection::Filter;
 use crate::tracker::{
     Decide, Error, NewFinding, Post, Prereq, Reply, Tracker, TriageAnswer, Which,
 };
@@ -188,6 +189,7 @@ fn record_request(route: &str, method: &str, status: StatusCode, took: Duration)
 fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
     Router::new()
         .route("/v1/work/next", post(next::<B>))
+        .route("/v1/work/peek", post(peek::<B>))
         .route("/v1/work/extend", post(extend::<B>))
         .route("/v1/work/complete", post(complete::<B>))
         .route("/v1/work/release", post(release::<B>))
@@ -476,6 +478,45 @@ struct NextBody {
     /// Reviewer tiers the agent takes reviews of.
     #[serde(default)]
     review_tiers: Vec<String>,
+    #[serde(flatten)]
+    filter: FilterBody,
+}
+
+/// What a caller narrows `work_next` and `work_peek` to.
+#[derive(Deserialize, Default)]
+struct FilterBody {
+    /// Kinds of work to take, such as `triage` or `fix`.
+    #[serde(default)]
+    kinds: Vec<String>,
+    /// Priority tiers to take, 0 the highest.
+    #[serde(default)]
+    tiers: Vec<u8>,
+    /// Only work that lands in this repo, as `owner/name`.
+    repo: Option<String>,
+    /// Roots whose work is not taken.
+    #[serde(default)]
+    exclude_roots: Vec<ItemId>,
+}
+
+impl FilterBody {
+    fn parse(&self) -> Result<Filter, Error> {
+        Filter::parse(
+            &self.kinds,
+            &self.tiers,
+            self.repo.as_deref(),
+            &self.exclude_roots,
+        )
+    }
+}
+
+#[derive(Deserialize)]
+struct PeekBody {
+    /// How many items to list; default 10.
+    limit: Option<usize>,
+    #[serde(default)]
+    review_tiers: Vec<String>,
+    #[serde(flatten)]
+    filter: FilterBody,
 }
 
 #[derive(Deserialize)]
@@ -846,9 +887,34 @@ async fn next<B: Broker>(call: Call<B>, Json(body): Json<NextBody>) -> Response 
     let wait = body
         .wait_seconds
         .map_or(Duration::from_secs(10), Duration::from_secs);
+    let filter = match body.filter.parse() {
+        Ok(f) => f,
+        Err(e) => return reply(Err(e)),
+    };
     reply(
         call.tracker()
-            .next_for(&agent, wait, &body.review_tiers)
+            .next_filtered(&agent, wait, &body.review_tiers, &filter)
+            .await,
+    )
+}
+
+async fn peek<B: Broker>(call: Call<B>, Json(body): Json<PeekBody>) -> Response {
+    let agent = match call.agent() {
+        Ok(a) => a,
+        Err(d) => return denied(d),
+    };
+    let filter = match body.filter.parse() {
+        Ok(f) => f,
+        Err(e) => return reply(Err(e)),
+    };
+    reply(
+        call.tracker()
+            .peek(
+                &agent,
+                body.limit.unwrap_or(10),
+                &body.review_tiers,
+                &filter,
+            )
             .await,
     )
 }

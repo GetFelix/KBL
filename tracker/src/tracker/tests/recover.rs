@@ -22,11 +22,13 @@ fn tries_of(fake: &Fake, offset: u64) -> u32 {
 async fn restarts_do_not_spend_the_attempts_of_ready_records() {
     let fake = Fake::default();
     let mut t = start(&fake).await;
-    for id in ["a1", "a2", "a3", "b1", "b2"] {
+    // One root ready at a time, so each claim polls the lane and is a Felix handout.
+    for (who, id) in [("w1", "a1"), ("w2", "a2"), ("w3", "a3")] {
         seed(&t, id, 2).await;
-    }
-    for who in ["w1", "w2", "w3"] {
         claim(&t, who).await;
+    }
+    for id in ["b1", "b2"] {
+        seed(&t, id, 2).await;
     }
     let restarts = 3;
     for _ in 0..restarts {
@@ -217,4 +219,72 @@ async fn a_rebuild_on_a_stream_that_lost_its_durability_refuses_work() {
     assert!(t.lease().stale, "the state must stay stale while refused");
     fake.weaken_acks(false);
     t.extend(&agent("w1"), &item("a1")).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_direct_claim_among_several_roots_survives_a_restart() {
+    let fake = Fake::default();
+    let first = at_15(&fake).await;
+    // Two roots ready: the claim is made from the state, not from a record.
+    seed(&first, "a1", 2).await;
+    seed(&first, "b1", 2).await;
+    let got = claimed_id(&claim(&first, "w1").await).unwrap();
+    // Another agent's poll reaches the claimed item's stale ready record and acks it.
+    let other = claimed_id(&claim(&first, "w2").await).unwrap();
+    assert_ne!(got, other);
+    let stale = (0..2).any(|o| fake.slot(READY, o) == Slot::Acked);
+    assert!(stale, "w2's poll acked nothing");
+    drop(first);
+
+    let second = start(&fake).await;
+    assert_eq!(released(&fake), 0, "a restart lapsed a live direct claim");
+    assert!(second.extend(&agent("w1"), &item(&got)).await.is_ok());
+    assert!(second.extend(&agent("w2"), &item(&other)).await.is_ok());
+    assert!(claimed_id(&claim(&second, "w3").await).is_none());
+}
+
+#[tokio::test]
+async fn below_format_15_several_roots_are_served_from_the_lane_not_by_a_direct_claim() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    seed(&t, "b1", 2).await;
+    let got = claimed_id(&claim(&t, "w1").await).unwrap();
+    let log = fake.log();
+    assert!(
+        !log.iter()
+            .any(|l| matches!(&l.record, WorkRecord::Claimed { direct: true, .. }))
+    );
+    // The claim came from a polled record: exactly one ready record is leased.
+    let leased = (0..2)
+        .filter(|o| matches!(fake.slot(READY, *o), Slot::Leased(_)))
+        .count();
+    assert_eq!(leased, 1, "the claim was not made from a polled record");
+    drop(t);
+    let second = start(&fake).await;
+    assert_eq!(released(&fake), 0, "a restart lapsed a lane claim");
+    assert!(second.extend(&agent("w1"), &item(&got)).await.is_ok());
+}
+
+#[tokio::test]
+async fn below_format_15_a_filtered_claim_is_refused_and_spends_nothing() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    seed(&t, "a1", 2).await;
+    let f = Filter::parse(&["fix".to_string()], &[], None, &[]).unwrap();
+    let err = t
+        .next_filtered(&agent("w1"), Duration::ZERO, &[], &f)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Refused { why } if why == "needs_format_15"),
+        "{err:?}"
+    );
+    assert!(
+        !fake
+            .log()
+            .iter()
+            .any(|l| matches!(&l.record, WorkRecord::Claimed { .. }))
+    );
+    assert!(claimed_id(&claim(&t, "w2").await).is_some());
 }

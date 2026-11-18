@@ -58,6 +58,7 @@ fn claimed(item: &str, attempt: u32) -> WorkRecord {
         item: id(item),
         attempt,
         deadline_ms: 90_000,
+        direct: false,
     }
 }
 fn decision(item: &str, attempt: u32, evidence: Vec<Evidence>) -> WorkRecord {

@@ -1,10 +1,27 @@
 {
+ "core/src/lease.rs#Lease::free": [
+  "self.expires_ms.saturating_add(TAKE_MARGIN_MS) <= now_ms"
+ ],
+ "core/src/lease.rs#next": [
+  "Step::Take => epoch + 1,"
+ ],
+ "core/src/lease.rs#step": [
+  "Some(l) if l.free(now_ms) => Step::Take,"
+ ],
+ "core/src/org_fold.rs#check": [
+  "if logged.v > self.format {",
+  "return Err(OrgRefusal::SourceServed);"
+ ],
  "core/src/redact.rs#redact_record": [
   "pub fn redact_record(record: &mut WorkRecord) {"
  ],
  "core/src/work_fold.rs#agent_may_link": [
   "if self.item(item)?.root != self.item(to)?.root {",
   "self.agent_scope(item, &rec.by, true)"
+ ],
+ "core/src/work_fold.rs#assign": [
+  "if rec.actor != Actor::Person {",
+  "if !it.accepted {"
  ],
  "core/src/work_fold.rs#attach_upstream": [
   "if !it.accepted_by_person {"
@@ -35,6 +52,9 @@
   "if to <= log || rec.v != to {",
   "if rec.v > log {"
  ],
+ "core/src/work_fold.rs#late_writer": [
+  ".is_some_and(|h| h.by == rec.by && h.attempt == attempt)"
+ ],
  "core/src/work_fold.rs#may_answer": [
   ".filter(|q| q.work == WorkKind::Question)"
  ],
@@ -45,6 +65,9 @@
  "core/src/work_fold.rs#needs_you": [
   "if it.flagged && it.hold.is_none() {",
   "if matches!(it.assignee, Some(Assignee::Person(_)))"
+ ],
+ "core/src/work_fold.rs#park_wait": [
+  "p.tries = p.tries.saturating_sub(1);"
  ],
  "core/src/work_fold.rs#prerequisite": [
   ".prerequisite_holder(item, attempt, triage, rec)?",
@@ -140,11 +163,53 @@
  "core/src/work_fold/human_wait.rs#KEPT_WAITS": [
   "const KEPT_WAITS: usize = 20_000;"
  ],
- "core/src/work_fold/trust.rs#summary_trust": [
-  "for p in it.paths.iter().filter(|p| p.done) {"
+ "core/src/work_fold/human_wait.rs#State::queue_for": [
+  "Some(Assignee::Person(p)) => Some(p) == viewer,"
  ],
  "core/src/work_fold/human_wait.rs#hide_covers": [
   "pub(super) fn hide_covers(&self, id: &ItemId, at_ms: u64, kind: Option<WaitKind>) -> bool {"
+ ],
+ "core/src/work_fold/trust.rs#summary_trust": [
+  "for p in it.paths.iter().filter(|p| p.done) {"
+ ],
+ "ingest/src/ado.rs#call": [
+  "if res.status == 203 || (300..400).contains(&res.status) {"
+ ],
+ "ingest/src/ado.rs#html_escape": [
+  "fn html_escape(s: &str) -> String {"
+ ],
+ "ingest/src/ado.rs#project_of": [
+  "self.project_name(&id.repo)"
+ ],
+ "ingest/src/ado.rs#wiql_date": [
+  "(shaped && head.bytes().filter(u8::is_ascii_digit).count() == 14).then(|| format!(\"{head}Z\"))"
+ ],
+ "ingest/src/ado.rs#write_back": [
+  "return Err(anyhow!(\"no rule asks for a write to Azure DevOps\").into());"
+ ],
+ "ingest/src/ado/transport.rs#Secret": [
+  "pub(crate) enum Secret {"
+ ],
+ "ingest/src/ado/transport.rs#token": [
+  "bail!(\"Entra answered {status} ({code}) to the client credentials sign-in\");"
+ ],
+ "ingest/src/check.rs#ReadOnly::send": [
+  "if req.method != \"GET\" {"
+ ],
+ "ingest/src/check.rs#ReadOnlyWiql::send": [
+  "if req.method != \"GET\" && !is_wiql_query(&req) {"
+ ],
+ "ingest/src/check.rs#is_wiql_query": [
+  "tail == [\"_apis\", \"wit\", \"wiql\"]"
+ ],
+ "ingest/src/check.rs#safe": [
+  "kbl_core::redact::redact(&text.to_string()).into_owned()"
+ ],
+ "ingest/src/config.rs#check_ado": [
+  "fn check_ado(&self, a: &AdoConfig) -> Result<()> {"
+ ],
+ "ingest/src/config.rs#check_gitlab": [
+  "fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {"
  ],
  "ingest/src/github.rs#check_state": [
   ".any(|o| o.eq_ignore_ascii_case(&format!(\"{app}[bot]\")))",
@@ -157,11 +222,53 @@
  "ingest/src/github.rs#review_state": [
   "fn review_state(reviews: &Value, author: &str, asked: bool) -> PrReview {"
  ],
+ "ingest/src/gitlab.rs#base_url": [
+  "\"http\" if loopback => {}",
+  "url.username().is_empty() && url.password().is_none(),"
+ ],
+ "ingest/src/gitlab.rs#call": [
+  "if (300..400).contains(&res.status) {"
+ ],
+ "ingest/src/gitlab.rs#parse_note": [
+  "if raw[\"system\"] == true || raw[\"internal\"] == true {"
+ ],
+ "ingest/src/gitlab.rs#project_of": [
+  ".ok_or_else(|| anyhow!(\"{repo} is not a project this worker is configured for\").into())"
+ ],
+ "ingest/src/gitlab.rs#pull_request": [
+  "if !self.is_own(&author) {",
+  "into_default && merger.is_some_and(|m| !self.is_own(m))"
+ ],
+ "ingest/src/gitlab.rs#write_back": [
+  "return Err(anyhow!(\"no rule asks for a write to GitLab\").into());"
+ ],
+ "ingest/src/gitlab/transport.rs#send": [
+  "value.set_sensitive(true);"
+ ],
  "ingest/src/jira/transport.rs#Secret": [
   "pub(crate) enum Secret {"
  ],
+ "ingest/src/lease.rs#Gate::send": [
+  "if let Err(why) = self.lessee.open_for(repos, elsewhere) {",
+  "why = self.lessee.closes(repos, elsewhere) => {"
+ ],
+ "ingest/src/lease.rs#Lessee::left": [
+  "limit.checked_sub(mono.max(wall)).filter(|d| !d.is_zero())"
+ ],
+ "ingest/src/lease.rs#Lessee::open_for": [
+  ".ok_or(\"another worker holds this source's lease\")?;"
+ ],
+ "ingest/src/lease.rs#leave": [
+  "beating.abort();"
+ ],
+ "ingest/src/lease.rs#read_elsewhere": [
+  "lessee.check_in(Some(repo), true)?;"
+ ],
  "ingest/src/main.rs#check_listen": [
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
+ ],
+ "ingest/src/source.rs#mark": [
+  "format!(\"<!-- kbl:{item}:{kind}:{key} -->\")"
  ],
  "ingest/src/sync.rs#announce": [
   ".chain(rule.gitlab.then_some(&rule.repo));"
@@ -172,8 +279,15 @@
  "ingest/src/sync.rs#cut_title": [
   "fn cut_title(s: &str) -> String {"
  ],
+ "ingest/src/sync.rs#foreign_pull_requests": [
+  ".any(|repo| repo.eq_ignore_ascii_case(&pr.repo));"
+ ],
  "ingest/src/sync.rs#link": [
   "if links.complete {"
+ ],
+ "ingest/src/sync.rs#linked_request": [
+  "let ours = self.own.contains(&pull.author.to_ascii_lowercase());",
+  "let linked = match claimed {"
  ],
  "ingest/src/sync.rs#may_write_to": [
   "let allowed = named && pr.repo.eq_ignore_ascii_case(&issue.repo);"
@@ -186,13 +300,6 @@
  ],
  "ingest/src/sync.rs#park_unmapped": [
   "if rule.target_for(issue).is_some() {"
- ],
- "ingest/src/sync.rs#linked_request": [
-  "let ours = self.own.contains(&pull.author.to_ascii_lowercase());",
-  "let linked = match claimed {"
- ],
- "ingest/src/sync.rs#foreign_pull_requests": [
-  ".any(|repo| repo.eq_ignore_ascii_case(&pr.repo));"
  ],
  "ingest/src/sync.rs#write_back": [
   ".filter(|pr| self.may_write_to(&key, pr));"
@@ -269,11 +376,12 @@
  "tracker/src/http.rs#agent": [
   "fn agent(&self) -> Result<AgentName, Denied> {"
  ],
- "tracker/src/http.rs#index": [
-  "async fn index() -> Json<Value> {"
- ],
  "tracker/src/http.rs#answer": [
   "if b.moves_to.is_some() {"
+ ],
+ "tracker/src/http.rs#as_person": [
+  "} => (!call.teams.is_member(&call.team, to)).then_some(\"that person is not in this team\"),",
+  "(!call.teams.is_team_agent(&call.team, to)).then_some(\"that agent is not in this team\")"
  ],
  "tracker/src/http.rs#from_request_parts": [
   "async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {",
@@ -282,12 +390,11 @@
  "tracker/src/http.rs#in_team": [
   "if !(rest.starts_with(\"work/\") || rest.starts_with(\"ingest/\")) {"
  ],
+ "tracker/src/http.rs#index": [
+  "async fn index() -> Json<Value> {"
+ ],
  "tracker/src/http.rs#items": [
   "match call.person() {"
- ],
- "tracker/src/http.rs#team_agents": [
-  "if let Err(d) = call.person() {",
-  ".filter(|(_, a)| !a.revoked)"
  ],
  "tracker/src/http.rs#me": [
   "async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Response {"
@@ -302,14 +409,41 @@
   "fn person(&self) -> Result<Key, Denied> {",
   "Err((StatusCode::FORBIDDEN, \"this call is for a person's token\"))"
  ],
+ "tracker/src/http.rs#team_agents": [
+  "if let Err(d) = call.person() {",
+  ".filter(|(_, a)| !a.revoked)"
+ ],
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
+ ],
+ "tracker/src/http/ingest.rs#config": [
+  "None => return busy(),"
+ ],
+ "tracker/src/http/ingest.rs#connection_for": [
+  ".connection_of_group(team, group)",
+  ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor))"
  ],
  "tracker/src/http/ingest.rs#load": [
   "Ok(w) if !w.may_keep(&source) => denied(STATE_OF_OTHER),"
  ],
  "tracker/src/http/ingest.rs#worker": [
   "fn worker(&self) -> Result<Worker, super::Denied> {"
+ ],
+ "tracker/src/http/ingest/leases.rs#MAX_MEMBERS": [
+  "pub(crate) const MAX_MEMBERS: usize = 256;"
+ ],
+ "tracker/src/http/ingest/leases.rs#Membership": [
+  "struct Membership {"
+ ],
+ "tracker/src/http/ingest/leases.rs#heartbeat": [
+  "super::connection_for(state, &team, &group, worker.source.as_deref())",
+  "release_all(tracker, groups, &sources, &me).await;"
+ ],
+ "tracker/src/http/ingest/leases.rs#join": [
+  "match tracker.put_group_members(group, &m, version).await {"
+ ],
+ "tracker/src/http/org.rs#org_record": [
+  "let (org, by) = match org_admin(&app, req.headers()) {"
  ],
  "tracker/src/main.rs#check_listen": [
   "behind_tls_proxy || addr.ip().to_canonical().is_loopback(),"
@@ -326,8 +460,17 @@
  "tracker/src/tracker.rs#canonical_pr": [
   ".find(|p| p.eq_ignore_ascii_case(pr));"
  ],
+ "tracker/src/tracker.rs#claim_from": [
+  "if assigned_agent(&core.state, &item).is_some() {"
+ ],
  "tracker/src/tracker.rs#claim_loop": [
   "let deadline = Instant::now() + wait.min(MAX_WAIT);"
+ ],
+ "tracker/src/tracker.rs#direct_claim": [
+  "match self.append(core, Actor::Agent, key, claim).await {"
+ ],
+ "tracker/src/tracker.rs#drop_away_assignees": [
+  "revoked || last.elapsed() >= away"
  ],
  "tracker/src/tracker.rs#ended_by": [
   "&& ended.actor == Actor::Agent"
@@ -346,6 +489,12 @@
   "return if &d.item == item {",
   "Some(i) if holds(i, agent) => Ok(i.hold.as_ref().map_or(1, |h| h.attempt)),"
  ],
+ "tracker/src/tracker.rs#lapsed_attempt": [
+  ".filter(|i| i.hold.is_none())"
+ ],
+ "tracker/src/tracker.rs#release": [
+  "let late = why.is_some_and(ReleaseWhy::waits);"
+ ],
  "tracker/src/tracker.rs#retry_has_note": [
   "if note.is_some_and(|n| Some(n) > it.red_since) {"
  ],
@@ -355,15 +504,15 @@
  "tracker/src/tracker.rs#sync_ready": [
   ".filter(|id| core.state.stage(id) == Some(Stage::Ready))"
  ],
+ "tracker/src/tracker.rs#try_assigned": [
+  ".filter(|(_, it)| it.assignee == Some(Assignee::Agent(key.clone())))"
+ ],
  "tracker/src/tracker.rs#try_claim": [
   "&& (self.lane_is_all_own(agent, tier).await",
   "if tier >= TIERS && self.is_own_work(agent, &record).await {"
  ],
  "tracker/src/tracker/ingest.rs#allowed": [
   "fn allowed(record: &WorkRecord) -> bool {"
- ],
- "tracker/src/tracker/ingest.rs#ingest_roots": [
-  ".filter(|(source, _, _)| only.is_none_or(|o| o == *source))"
  ],
  "tracker/src/tracker/ingest.rs#ingest_record_in": [
   "&& text.len() > INLINE_LIMIT",
@@ -374,6 +523,9 @@
   "if let WorkRecord::Shipped { item, .. } = &record {",
   "let ours = core.recall.ingest_edges.contains(&edge);",
   "TextRead::Text(old) if old == text => {"
+ ],
+ "tracker/src/tracker/ingest.rs#ingest_roots": [
+  ".filter(|(source, _, _)| only.is_none_or(|o| o == *source))"
  ],
  "tracker/src/tracker/ingest.rs#ingest_save": [
   "if bytes.len() > MAX_STATE_BYTES {",
@@ -394,6 +546,15 @@
  ],
  "tracker/src/tracker/request_keys.rs#take": [
   "if !set.lock().expect(\"running lock\").insert(id.clone()) {"
+ ],
+ "tracker/src/tracker/selection.rs#candidates": [
+  ".filter(|(_, it)| !matches!(it.assignee, Some(Assignee::Agent(_))))"
+ ],
+ "tracker/src/tracker/selection.rs#parse": [
+  "if let Some(t) = tiers.iter().find(|t| **t >= TIERS) {"
+ ],
+ "tracker/src/tracker/selection.rs#peek": [
+  "let pool = self.candidates(&core, agent, &lanes, filter);"
  ],
  "tracker/src/tracker/snapshots.rs#restore": [
   "match read(&path).filter(|b| b.saved.valid(log)) {"
@@ -461,154 +622,5 @@
  ],
  "tracker/src/tracker/tools.rs#triage_lists": [
   "if depends_on.len() > MAX_TRIAGE_LIST || split.len() > MAX_TRIAGE_LIST {"
- ],
- "core/src/work_fold/human_wait.rs#State::queue_for": [
-  "Some(Assignee::Person(p)) => Some(p) == viewer,"
- ],
- "core/src/work_fold.rs#assign": [
-  "if rec.actor != Actor::Person {",
-  "if !it.accepted {"
- ],
- "tracker/src/http.rs#as_person": [
-  "} => (!call.teams.is_member(&call.team, to)).then_some(\"that person is not in this team\"),",
-  "(!call.teams.is_team_agent(&call.team, to)).then_some(\"that agent is not in this team\")"
- ],
- "tracker/src/tracker.rs#try_assigned": [
-  ".filter(|(_, it)| it.assignee == Some(Assignee::Agent(key.clone())))"
- ],
- "tracker/src/tracker.rs#claim_from": [
-  "if assigned_agent(&core.state, &item).is_some() {"
- ],
- "tracker/src/tracker.rs#drop_away_assignees": [
-  "revoked || last.elapsed() >= away"
- ],
- "ingest/src/ado/transport.rs#Secret": [
-  "pub(crate) enum Secret {"
- ],
- "ingest/src/ado/transport.rs#token": [
-  "bail!(\"Entra answered {status} ({code}) to the client credentials sign-in\");"
- ],
- "ingest/src/ado.rs#write_back": [
-  "return Err(anyhow!(\"no rule asks for a write to Azure DevOps\").into());"
- ],
- "ingest/src/ado.rs#project_of": [
-  "self.project_name(&id.repo)"
- ],
- "ingest/src/ado.rs#wiql_date": [
-  "(shaped && head.bytes().filter(u8::is_ascii_digit).count() == 14).then(|| format!(\"{head}Z\"))"
- ],
- "ingest/src/config.rs#check_ado": [
-  "fn check_ado(&self, a: &AdoConfig) -> Result<()> {"
- ],
- "ingest/src/ado.rs#html_escape": [
-  "fn html_escape(s: &str) -> String {"
- ],
- "ingest/src/ado.rs#call": [
-  "if res.status == 203 || (300..400).contains(&res.status) {"
- ],
- "core/src/org_fold.rs#check": [
-  "if logged.v > self.format {",
-  "return Err(OrgRefusal::SourceServed);"
- ],
- "tracker/src/http/ingest.rs#connection_for": [
-  ".connection_of_group(team, group)",
-  ".filter(|(_, c)| tied.is_none_or(|v| v == c.vendor))"
- ],
- "tracker/src/http/ingest.rs#config": [
-  "None => return busy(),"
- ],
- "tracker/src/http/org.rs#org_record": [
-  "let (org, by) = match org_admin(&app, req.headers()) {"
- ],
- "ingest/src/gitlab.rs#base_url": [
-  "\"http\" if loopback => {}",
-  "url.username().is_empty() && url.password().is_none(),"
- ],
- "ingest/src/gitlab.rs#call": [
-  "if (300..400).contains(&res.status) {"
- ],
- "ingest/src/gitlab.rs#write_back": [
-  "return Err(anyhow!(\"no rule asks for a write to GitLab\").into());"
- ],
- "ingest/src/gitlab.rs#project_of": [
-  ".ok_or_else(|| anyhow!(\"{repo} is not a project this worker is configured for\").into())"
- ],
- "ingest/src/gitlab.rs#pull_request": [
-  "if !self.is_own(&author) {",
-  "into_default && merger.is_some_and(|m| !self.is_own(m))"
- ],
- "ingest/src/gitlab.rs#parse_note": [
-  "if raw[\"system\"] == true || raw[\"internal\"] == true {"
- ],
- "ingest/src/gitlab/transport.rs#send": [
-  "value.set_sensitive(true);"
- ],
- "ingest/src/config.rs#check_gitlab": [
-  "fn check_gitlab(&self, g: &GitlabConfig) -> Result<()> {"
- ],
- "tracker/src/http/ingest/leases.rs#heartbeat": [
-  "super::connection_for(state, &team, &group, worker.source.as_deref())",
-  "release_all(tracker, groups, &sources, &me).await;"
- ],
- "core/src/lease.rs#step": [
-  "Some(l) if l.free(now_ms) => Step::Take,"
- ],
- "core/src/lease.rs#next": [
-  "Step::Take => epoch + 1,"
- ],
- "tracker/src/http/ingest/leases.rs#MAX_MEMBERS": [
-  "pub(crate) const MAX_MEMBERS: usize = 256;"
- ],
- "tracker/src/http/ingest/leases.rs#join": [
-  "match tracker.put_group_members(group, &m, version).await {"
- ],
- "core/src/lease.rs#Lease::free": [
-  "self.expires_ms.saturating_add(TAKE_MARGIN_MS) <= now_ms"
- ],
- "ingest/src/lease.rs#Gate::send": [
-  "if let Err(why) = self.lessee.open_for(repos, elsewhere) {",
-  "why = self.lessee.closes(repos, elsewhere) => {"
- ],
- "ingest/src/lease.rs#read_elsewhere": [
-  "lessee.check_in(Some(repo), true)?;"
- ],
- "ingest/src/source.rs#mark": [
-  "format!(\"<!-- kbl:{item}:{kind}:{key} -->\")"
- ],
- "tracker/src/http/ingest/leases.rs#Membership": [
-  "struct Membership {"
- ],
- "ingest/src/lease.rs#Lessee::open_for": [
-  ".ok_or(\"another worker holds this source's lease\")?;"
- ],
- "ingest/src/lease.rs#Lessee::left": [
-  "limit.checked_sub(mono.max(wall)).filter(|d| !d.is_zero())"
- ],
- "ingest/src/lease.rs#leave": [
-  "beating.abort();"
- ],
- "ingest/src/check.rs#safe": [
-  "kbl_core::redact::redact(&text.to_string()).into_owned()"
- ],
- "ingest/src/check.rs#ReadOnly::send": [
-  "if req.method != \"GET\" {"
- ],
- "ingest/src/check.rs#ReadOnlyWiql::send": [
-  "if req.method != \"GET\" && !is_wiql_query(&req) {"
- ],
- "ingest/src/check.rs#is_wiql_query": [
-  "tail == [\"_apis\", \"wit\", \"wiql\"]"
- ],
- "core/src/work_fold.rs#late_writer": [
-  ".is_some_and(|h| h.by == rec.by && h.attempt == attempt)"
- ],
- "tracker/src/tracker.rs#lapsed_attempt": [
-  ".filter(|i| i.hold.is_none())"
- ],
- "core/src/work_fold.rs#park_wait": [
-  "p.tries = p.tries.saturating_sub(1);"
- ],
- "tracker/src/tracker.rs#release": [
-  "let late = why.is_some_and(ReleaseWhy::waits);"
  ]
 }

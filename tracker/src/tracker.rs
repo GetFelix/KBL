@@ -22,9 +22,9 @@ use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, Assignee, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord, RefusalReason,
-    ReleaseWhy, TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read, ready_stream,
-    valid_review_tier,
+    Actor, Assignee, FORMAT_V15, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord,
+    RefusalReason, ReleaseWhy, TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read,
+    ready_stream, valid_review_tier,
 };
 use kbl_core::work_fold::{Stage, State};
 use serde::{Deserialize, Serialize};
@@ -33,11 +33,13 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::Instrument as _;
 
+use self::selection::Filter;
 use crate::felix::{Broker, ConditionalWrite, ExtendError, holder_token};
 
 mod ingest;
 pub(crate) mod reads;
 mod request_keys;
+pub(crate) mod selection;
 mod snapshots;
 mod texts;
 
@@ -251,6 +253,10 @@ struct Core {
     /// an offset, not a delivery, so it also takes the lease of anyone Felix
     /// handed the record to before it landed (felix#2207).
     handed_back: HashMap<ItemId, u64>,
+    /// When each root last had an item handed out, as a count of claims. Kept in
+    /// memory only: a restart starts the round-robin over.
+    served: HashMap<ItemId, u64>,
+    served_count: u64,
     recall: Recall,
     /// Saves of snapshots from this running state. None when snapshots are off
     /// or saving stopped until the next rebuild.
@@ -608,11 +614,13 @@ impl Recall {
         let claims = self.attempts.entry((item.clone(), attempt)).or_default();
         if !ends {
             self.claims.insert(offset, (item.clone(), attempt));
-            // A claim leaves the assignee alone, and a lane claim is never
-            // written for an item assigned to an agent (`claim_from` acks
-            // it), so this is exactly a claim `try_assigned` made.
-            let direct = state.items.get(item).and_then(|i| i.assignee.as_ref())
-                == Some(&Assignee::Agent(logged.by.clone()));
+            // Claims from before the flag were direct only for an item assigned
+            // to the claimer: a lane claim is never written for one
+            // (`claim_from` acks it), so that was exactly `try_assigned`.
+            let flagged = matches!(&logged.record, WorkRecord::Claimed { direct: true, .. });
+            let direct = flagged
+                || state.items.get(item).and_then(|i| i.assignee.as_ref())
+                    == Some(&Assignee::Agent(logged.by.clone()));
             claims.push(ClaimLog {
                 offset,
                 by: logged.by.clone(),
@@ -634,11 +642,11 @@ impl Recall {
     }
 
     /// Whether `agent`'s newest claim of `attempt` was handed straight to it.
-    fn direct(&self, item: &ItemId, attempt: u32, agent: &AgentName) -> bool {
+    fn direct(&self, item: &ItemId, attempt: u32, agent: &str) -> bool {
         self.attempts
             .get(&(item.clone(), attempt))
             .and_then(|c| c.last())
-            .is_some_and(|c| c.direct && c.by.as_str() == agent.as_str())
+            .is_some_and(|c| c.direct && c.by.as_str() == agent)
     }
 
     /// The offset of the newest `claimed` record of `attempt`.
@@ -825,11 +833,24 @@ impl<B: Broker> Tracker<B> {
     }
 
     /// Like `next`, and the agent also takes reviews of the tiers it names.
+    #[cfg(test)]
     pub(crate) async fn next_for(
         &self,
         agent: &AgentName,
         wait: Duration,
         reviews: &[String],
+    ) -> Result<Value, Error> {
+        self.next_filtered(agent, wait, reviews, &Filter::default())
+            .await
+    }
+
+    /// Like `next_for`, and only work that matches `filter` is taken.
+    pub(crate) async fn next_filtered(
+        &self,
+        agent: &AgentName,
+        wait: Duration,
+        reviews: &[String],
+        filter: &Filter,
     ) -> Result<Value, Error> {
         let started = Instant::now();
         let span = tracing::info_span!(
@@ -838,7 +859,7 @@ impl<B: Broker> Tracker<B> {
             outcome = tracing::field::Empty,
         );
         let out = self
-            .claim_loop(agent, wait, reviews)
+            .claim_loop(agent, wait, reviews, filter)
             .instrument(span.clone())
             .await;
         let outcome = match &out {
@@ -864,8 +885,17 @@ impl<B: Broker> Tracker<B> {
         agent: &AgentName,
         wait: Duration,
         reviews: &[String],
+        filter: &Filter,
     ) -> Result<Value, Error> {
         let lanes = self.review_lanes(reviews)?;
+        // A filter is served by claiming from the state, which only a log at
+        // format 15 can carry across a restart. Polling the lane and passing
+        // over non-matching items would spend ready records, so it is refused.
+        if !filter.is_empty() && self.0.core.lock().await.state.format() < FORMAT_V15 {
+            return Err(Error::Refused {
+                why: "needs_format_15".into(),
+            });
+        }
         let deadline = Instant::now() + wait.min(MAX_WAIT);
         let mut moved = 0;
         loop {
@@ -894,13 +924,16 @@ impl<B: Broker> Tracker<B> {
                     }));
                 }
                 self.sync_ready().await;
-                if let Some(d) = self.try_assigned(agent).await? {
+                if let Some(d) = self.try_assigned(agent, filter).await? {
                     let reply = claimed(&*self.0.core.lock().await, &d, false);
                     *delivery = Some(d);
                     return Ok(reply);
                 }
-                if let Some(d) = self.try_claim(agent, &lanes).await? {
-                    let reply = claimed(&*self.0.core.lock().await, &d, false);
+                if let Some(d) = self.try_claim(agent, &lanes, filter).await? {
+                    let mut core = self.0.core.lock().await;
+                    Self::served(&mut core, &d.item);
+                    let reply = claimed(&core, &d, false);
+                    drop(core);
                     *delivery = Some(d);
                     return Ok(reply);
                 }
@@ -1559,8 +1592,39 @@ impl<B: Broker> Tracker<B> {
 
     /// Polls the priority tiers in order, then the reviewer lanes the agent
     /// named, and returns the first delivery that turns into a claim.
-    async fn try_claim(&self, agent: &AgentName, review: &[u8]) -> Result<Option<Delivery>, Error> {
+    async fn try_claim(
+        &self,
+        agent: &AgentName,
+        review: &[u8],
+        filter: &Filter,
+    ) -> Result<Option<Delivery>, Error> {
+        let (pool, direct_ok) = {
+            let core = self.0.core.lock().await;
+            (
+                self.candidates(&core, agent, review, filter),
+                core.state.format() >= FORMAT_V15,
+            )
+        };
         for tier in (0..TIERS).chain(review.iter().copied()) {
+            // With a filter, or several roots ready in the lane, the lane's own
+            // order is not the one to hand out. The claim is made from the state
+            // and no record in the lane is polled, so none is spent on an item
+            // that was passed over.
+            // Below format 15 a direct claim on an unassigned item is not
+            // restart-safe, so the lane's own order is used.
+            if direct_ok && (!filter.is_empty() || Self::several_roots(&pool, tier)) {
+                let ordered = {
+                    let core = self.0.core.lock().await;
+                    let lane: Vec<_> = pool.iter().filter(|c| c.lane == tier).cloned().collect();
+                    self.ordered(&core, lane)
+                };
+                for c in ordered {
+                    if let Some(d) = self.try_selected(agent, &c.item, filter, tier).await? {
+                        return Ok(Some(d));
+                    }
+                }
+                continue;
+            }
             let stream = ready_stream(tier);
             // Nothing in this lane is for this agent: leave the records alone.
             if tier >= TIERS
@@ -1635,7 +1699,11 @@ impl<B: Broker> Tracker<B> {
     /// handed them and Felix counts no handout. The fold refuses a claim by
     /// anyone else, and the claim's write is conditional on the tail, so this
     /// cannot make a second holder.
-    async fn try_assigned(&self, agent: &AgentName) -> Result<Option<Delivery>, Error> {
+    async fn try_assigned(
+        &self,
+        agent: &AgentName,
+        filter: &Filter,
+    ) -> Result<Option<Delivery>, Error> {
         let mut core = self.0.core.lock().await;
         if core.revoked.contains(agent) {
             return Err(Error::Refused {
@@ -1651,19 +1719,76 @@ impl<B: Broker> Tracker<B> {
             .filter(|(id, _)| core.state.stage(id) == Some(Stage::Ready))
             .filter(|(id, _)| core.refused.get(*id) != Some(&core.state.at))
             .filter(|(id, _)| !self.review_full(&core.state, id))
+            .filter(|(_, it)| filter.matches(&core, it))
             .map(|(id, it)| (self.0.settings.lane(it).unwrap_or(DEFAULT_TIER), id.clone()))
             .collect();
         mine.sort();
         let Some((tier, item)) = mine.into_iter().next() else {
             return Ok(None);
         };
+        self.direct_claim(&mut core, agent, tier, item).await
+    }
+
+    /// Claims `item` for `agent` from the state, if it is still Ready, no agent
+    /// is assigned it and the agent is not revoked. The lane is picked again
+    /// under the lock, so a state that moved since the candidates were read
+    /// cannot hand out an item that is no longer there.
+    async fn try_selected(
+        &self,
+        agent: &AgentName,
+        item: &ItemId,
+        filter: &Filter,
+        lane: u8,
+    ) -> Result<Option<Delivery>, Error> {
+        let mut core = self.0.core.lock().await;
+        if core.revoked.contains(agent) {
+            return Err(Error::Refused {
+                why: "agent_revoked".into(),
+            });
+        }
+        let Some(it) = core.state.items.get(item) else {
+            return Ok(None);
+        };
+        // An edit may have moved the item to another lane, which the caller may
+        // not have asked for, or out of the filter, since the candidates were read.
+        let Some(tier) = self.0.settings.lane(it).filter(|t| *t == lane) else {
+            return Ok(None);
+        };
+        if core.state.stage(item) != Some(Stage::Ready)
+            || !filter.matches(&core, it)
+            || matches!(it.assignee, Some(Assignee::Agent(_)))
+            || core.refused.get(item) == Some(&core.state.at)
+            || self.review_full(&core.state, item)
+            || (tier >= TIERS && core.state.worked_on(&it.root, &agent_key(agent)))
+        {
+            return Ok(None);
+        }
+        self.direct_claim(&mut core, agent, tier, item.clone())
+            .await
+    }
+
+    /// Writes the claim of a Ready `item` straight from the state, with no
+    /// delivery in Felix to settle. The fold refuses a claim by anyone else, and
+    /// the claim's write is conditional on the tail, so this cannot make a second
+    /// holder. The item's ready record, if one stands, is acked as stale when it
+    /// is next polled.
+    async fn direct_claim(
+        &self,
+        core: &mut Core,
+        agent: &AgentName,
+        tier: u8,
+        item: ItemId,
+    ) -> Result<Option<Delivery>, Error> {
+        let key = agent_key(agent);
         let attempt = core.state.items[&item].next_attempt();
         let claim = WorkRecord::Claimed {
             item: item.clone(),
             attempt,
             deadline_ms: now_ms() + self.0.settings.visibility.as_millis() as u64,
+            // Below 15 the fold refuses the flag; the assignee rule covers it.
+            direct: core.state.format() >= FORMAT_V15,
         };
-        match self.append(&mut core, Actor::Agent, key, claim).await {
+        match self.append(core, Actor::Agent, key, claim).await {
             Ok(_) => {
                 core.published.remove(&item);
                 core.live.remove(&item);
@@ -1691,7 +1816,7 @@ impl<B: Broker> Tracker<B> {
                 let at = core.state.at;
                 core.refused.insert(item.clone(), at);
                 if why == "over_budget" {
-                    self.log_over_budget(&mut core, &item).await;
+                    self.log_over_budget(core, &item).await;
                 }
                 Ok(None)
             }
@@ -1714,7 +1839,7 @@ impl<B: Broker> Tracker<B> {
         let mut core = self.0.core.lock().await;
         // The hold may have lapsed since `recover` read it.
         if core.state.held_by(agent.as_str()) != Some((item.clone(), attempt))
-            || !core.recall.direct(item, attempt, agent)
+            || !core.recall.direct(item, attempt, agent.as_str())
         {
             return false;
         }
@@ -1973,7 +2098,10 @@ impl<B: Broker> Tracker<B> {
                 };
                 // A direct claim has no record, so this one is from before it and
                 // says nothing about the holder; the sweep lapses direct claims.
-                if core.owner.get(&item).is_some_and(|o| o.direct) {
+                // After a restart the owner is not back yet, so the log says.
+                if core.owner.get(&item).is_some_and(|o| o.direct)
+                    || core.recall.direct(&item, hold.attempt, hold.by.as_str())
+                {
                     core.live.remove(&item);
                     ack(ops, record.offset);
                     return Ok(None);
@@ -2010,6 +2138,7 @@ impl<B: Broker> Tracker<B> {
             item: item.clone(),
             attempt,
             deadline_ms: now_ms() + self.0.settings.visibility.as_millis() as u64,
+            direct: false,
         };
         match self
             .append(core, Actor::Agent, agent_key(agent), claim)
@@ -2329,7 +2458,7 @@ impl<B: Broker> Tracker<B> {
             .lock()
             .await
             .recall
-            .direct(&item, attempt, agent);
+            .direct(&item, attempt, agent.as_str());
         if direct {
             if !self.adopt_direct(agent, &item, attempt, delivery).await {
                 self.0.core.lock().await.recovering.remove(agent.as_str());

@@ -271,6 +271,7 @@ async fn a_rebuild_ignores_a_claim_the_fold_refused() {
             item: item("a1"),
             attempt,
             deadline_ms: 0,
+            direct: false,
         },
     );
     fake.publish(WORK_EVENTS, stray.encode()).await.unwrap();

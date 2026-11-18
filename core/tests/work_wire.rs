@@ -74,6 +74,7 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("r1"),
             attempt: 1,
             deadline_ms: 1_800_000_090_000,
+            direct: false,
         },
         WorkRecord::Progress {
             item: item("r1"),
@@ -347,6 +348,7 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("rv"),
             attempt: 1,
             deadline_ms: 1_800_000_090_000,
+            direct: false,
         },
         WorkRecord::Decision {
             item: item("rv"),
@@ -417,6 +419,7 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("v1"),
             attempt: 1,
             deadline_ms: 1_800_000_090_000,
+            direct: false,
         },
         WorkRecord::Finding {
             item: item("v1"),
@@ -439,6 +442,7 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("v2"),
             attempt: 1,
             deadline_ms: 1_800_000_090_000,
+            direct: false,
         },
         WorkRecord::Finding {
             item: item("v2"),
