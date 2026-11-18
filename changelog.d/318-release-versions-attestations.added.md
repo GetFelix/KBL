@@ -1,1 +1,0 @@
-Release archives and `SHA256SUMS` carry signed build provenance (`gh attestation verify <file> -R GetFelix/KBL`). The crates are at 0.1.0, set once in the workspace, and the release workflow refuses a tag that does not match it (#318).

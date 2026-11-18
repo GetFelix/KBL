@@ -1,1 +1,0 @@
-The dashboard groups items by stage, opens one in a side panel, and has search, a command palette (`Ctrl+K` or `Cmd+K`), `?` for shortcuts and `J`/`K` movement. Loading, empty, no-match and stopped states say what to do next. It also fixes the built page never leaving "Reading history": the production bundle dropped the call that hands gateway messages to the follow loop.

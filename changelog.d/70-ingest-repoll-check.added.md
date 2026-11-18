@@ -1,1 +1,0 @@
-A dev-stack check, `dev/check-tracker-ingest.mjs`, runs `kbl-ingest` against a stand-in GitHub: an issue polled three times, and again after ingest loses its saved state, is imported and admitted once, with one triage and one augment item.

@@ -1,1 +1,0 @@
-A tracker no longer hands an agent back a claim whose hold another writer already released, as after a broker failover. Before a resumed `work_next` or an `extend` it reads the log from the end of its state and rebuilds when anything landed there, so two agents cannot work one attempt.

@@ -1,1 +1,0 @@
-A tracker restart no longer costs every Ready record a delivery attempt per holder, so restarts stop dead-lettering the backlog. A poll that fails while the restarted tracker takes back a delivery now keeps the hold and is tried again, instead of freeing a hold the agent is still extending; such a hold is freed one visibility period after the first failure.

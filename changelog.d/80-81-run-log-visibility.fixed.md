@@ -1,1 +1,0 @@
-A failed run log write is counted by the next write that lands, a record that is not a task is logged by its group offset when dead-lettered, and `task_claim_lost` says whether Felix refused the extension with `stale_claim` or none worked for a visibility window. The gap count is kept in memory, so it is reported only if that `kbl-mcp` process logs again.

@@ -1,1 +1,0 @@
-The GitLab source no longer skips an issue that is updated while its project is being read: each request restarts from the last time seen instead of paging by number. It reads times with a UTC offset (`+01:00`) instead of treating them as unknown, and a GitLab root now shows its repo in the work views.
