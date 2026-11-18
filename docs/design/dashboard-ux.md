@@ -89,7 +89,8 @@ page does and checks a message gets through, and CI runs the page itself in Chro
   (`--row-height`, card padding and gap, column width); compact rows stay above the 24 px target size.
 - **Panel sections.** Above the fields sit Now (a sentence re-read from the clock every 5 s, no live region, so a
   screen reader is not interrupted by a ticking time) and the actions; below them Linked work, Activity and
-  Attempts. Activity lists the newest record first, shows 30 and offers the rest, and folds a step's output
+  Attempts, with Handoff among the fields (the latest finished attempt's summary, recorded diff, checks, failed steps
+  and the summary mark; also above the Needs you strip). Activity lists the newest record first, shows 30 and offers the rest, and folds a step's output
   tail; a fold a person opened and the focus stay put when a record redraws the panel. The data is
   `activity_json` in the wasm fold, read for the open item and its children only. Each event carries `refused`
   (the fold's reason) when the same accept or refuse verdict that left the state alone refused it; the panel lists

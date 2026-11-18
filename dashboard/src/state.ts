@@ -5,6 +5,7 @@ import type { BlockedRow, ItemRow, ReviewLoad } from './fold.ts';
 import { decodeView, encodeView, type Facet, type Filters, type Layout, type SavedView, setFilter, type View } from './views.ts';
 import type { Overlaps } from './overlap.ts';
 import type { Activities } from './activity.ts';
+import type { Handoffs } from './handoff.ts';
 import type { InboxKind, Waiting } from './inbox.ts';
 import type { Stories } from './story.ts';
 import { putWrite, type Write, type Writes } from './writes.ts';
@@ -46,6 +47,8 @@ export interface ViewState {
   overlaps: Overlaps;
   /** The story of each item with a recorded decision, from the same fold as `items`. */
   stories: Stories;
+  /** What each item's latest finished attempt handed off, from the same fold as `items`. */
+  handoffs?: Handoffs;
   /** The tracker's review load, from the same fold as `items`. */
   reviewLoad: ReviewLoad;
   /** What happened on the open item and its children, from the same fold as `items`. */
@@ -81,7 +84,7 @@ export type Density = 'comfortable' | 'compact';
 
 export type Action =
   | { type: 'connection'; connection: Connection }
-  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; stories?: Stories; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string>; waiting?: ReadonlyMap<string, Waiting>; activity?: Activities }
+  | { type: 'items'; items: ItemRow[]; blocked: BlockedRow[]; overlaps: Overlaps; stories?: Stories; handoffs?: Handoffs; reviewLoad?: ReviewLoad; questions?: ReadonlyMap<number, string>; waiting?: ReadonlyMap<string, Waiting>; activity?: Activities }
   | { type: 'kind'; kind: InboxKind | null }
   /** What happened on the open item, read when it opens or the log moves. */
   | { type: 'activity'; activity: Activities }
@@ -119,6 +122,7 @@ export function reduce(s: ViewState, a: Action): ViewState {
         blocked: a.blocked,
         overlaps: a.overlaps,
         stories: a.stories ?? s.stories,
+        handoffs: a.handoffs ?? s.handoffs,
         reviewLoad: a.reviewLoad ?? s.reviewLoad,
         questions: a.questions ?? s.questions,
         activity: a.activity ?? s.activity,

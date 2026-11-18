@@ -140,3 +140,131 @@ fn a_refused_record_is_marked_refused_and_the_item_stays_held() {
         "an accepted record is not marked"
     );
 }
+
+fn start(fold: &mut Folder, format: Option<u32>) {
+    feed(
+        fold,
+        ("ingest", "tracker"),
+        &[
+            json!({ "kind": "imported", "item": "r1", "source": "github",
+                    "upstream_id": "GetFelix/felix#1", "title": "r1" }),
+        ],
+    );
+    let mut person = vec![json!({ "kind": "accepted", "item": "r1", "tier": 1 })];
+    if let Some(f) = format {
+        person.insert(0, json!({ "kind": "format_raised", "to": f, "v": f }));
+    }
+    feed(fold, ("gabriel", "person"), &person);
+}
+
+fn handoffs(fold: &Folder) -> Value {
+    serde_json::from_str(&fold.handoffs_json()).unwrap()
+}
+
+/// A finished attempt hands off its last note, the lines its edits touch, its failed steps
+/// and the standing mark, all from records the fold took.
+#[test]
+fn a_finished_attempt_reports_its_summary_diff_failed_steps_and_mark() {
+    let mut fold = Folder::new();
+    start(&mut fold, Some(11));
+    let hunk = "--- a/x.rs\n+++ b/x.rs\n@@ -1,2 +1,3 @@\n keep\n-old\n+new\n+newer\n";
+    feed(
+        &mut fold,
+        ("w1", "agent"),
+        &[
+            json!({ "kind": "claimed", "item": "r1", "attempt": 1, "deadline_ms": 9_000_000_000_000u64 }),
+            json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "text": "first" } }),
+            json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "text": "fixed it" } }),
+            json!({ "kind": "step", "item": "r1", "attempt": 1, "command": "cargo test",
+                    "exit_code": 101, "output": { "text": "boom" } }),
+            json!({ "kind": "step", "item": "r1", "attempt": 1, "command": "cargo fmt",
+                    "exit_code": 0, "output": { "text": "" } }),
+            json!({ "kind": "decision", "item": "r1", "attempt": 1, "phase": "fix",
+                    "so_far": "s", "question": "q", "chosen": "c", "why": "w", "commit": "abc" }),
+        ],
+    );
+    let decision = fold.at();
+    feed(
+        &mut fold,
+        ("w1", "agent"),
+        &[
+            json!({ "kind": "edit", "item": "r1", "attempt": 1, "file": "x.rs",
+                  "hunk": { "text": hunk }, "decision": decision as u64 }),
+        ],
+    );
+    assert_eq!(
+        handoffs(&fold),
+        json!({}),
+        "an attempt that has not finished hands nothing off"
+    );
+    feed(
+        &mut fold,
+        ("w1", "agent"),
+        &[json!({ "kind": "done", "item": "r1", "attempt": 1 })],
+    );
+    let h = &handoffs(&fold)["r1"];
+    assert_eq!(h["attempt"], 1);
+    assert_eq!(h["summary"], "fixed it");
+    assert_eq!(
+        (h["files"].clone(), h["added"].clone(), h["removed"].clone()),
+        (json!(1), json!(2), json!(1))
+    );
+    assert_eq!(h["failed_total"], 1);
+    assert_eq!(h["failed_steps"][0]["command"], "cargo test");
+    assert_eq!(h["accurate"], Value::Null);
+    feed(
+        &mut fold,
+        ("gabriel", "person"),
+        &[
+            json!({ "kind": "summary_rated", "v": 11, "item": "r1", "attempt": 1, "accurate": false }),
+        ],
+    );
+    assert_eq!(handoffs(&fold)["r1"]["accurate"], false);
+}
+
+/// A refused done does not make an attempt finished, and a refused mark is not a mark.
+#[test]
+fn a_refused_record_adds_nothing_to_a_handoff() {
+    let mut fold = Folder::new();
+    start(&mut fold, Some(8));
+    feed(
+        &mut fold,
+        ("w1", "agent"),
+        &[
+            json!({ "kind": "claimed", "item": "r1", "attempt": 1, "deadline_ms": 9_000_000_000_000u64 }),
+            json!({ "kind": "progress", "item": "r1", "attempt": 1, "note": { "text": "done soon" } }),
+        ],
+    );
+    let refused = json!({ "at_ms": 1000, "by": "w1", "actor": "agent", "kind": "done",
+                          "item": "r1", "attempt": 1, "cost_micros": 5 });
+    let at = fold.at() + 1.0;
+    assert!(fold.apply(at, refused.to_string().as_bytes()));
+    assert_eq!(
+        handoffs(&fold),
+        json!({}),
+        "a refused done leaves the attempt unfinished"
+    );
+}
+
+/// A mark the log refuses (here, below format 11) is not shown as the attempt's mark.
+#[test]
+fn a_refused_mark_is_not_the_standing_mark() {
+    let mut fold = Folder::new();
+    start(&mut fold, None);
+    feed(
+        &mut fold,
+        ("w1", "agent"),
+        &[
+            json!({ "kind": "claimed", "item": "r1", "attempt": 1, "deadline_ms": 9_000_000_000_000u64 }),
+            json!({ "kind": "done", "item": "r1", "attempt": 1 }),
+        ],
+    );
+    feed(
+        &mut fold,
+        ("gabriel", "person"),
+        &[
+            json!({ "kind": "summary_rated", "v": 11, "item": "r1", "attempt": 1, "accurate": true }),
+        ],
+    );
+    assert_eq!(handoffs(&fold)["r1"]["accurate"], Value::Null);
+}

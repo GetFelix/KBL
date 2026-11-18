@@ -5,8 +5,10 @@
 import type { ItemRow } from '../fold.ts';
 import { inboxKind } from '../inbox.ts';
 import type { ViewState } from '../state.ts';
-import { CAN, checkAnswer, pending, shownTier, UNCLEAR } from '../writes.ts';
+import { handoffKey } from '../handoff.ts';
+import { CAN, canRate, checkAnswer, pending, shownTier, UNCLEAR } from '../writes.ts';
 import { h } from './dom.ts';
+import { handoffBlock } from './handoff-block.ts';
 import { tierSelect } from './item-actions.ts';
 
 export interface InboxHandlers {
@@ -16,6 +18,8 @@ export interface InboxHandlers {
   acceptNow(ids: string[], tier: number | null): void;
   confirm(kind: 'accept' | 'reject' | 'close', ids: string[]): void;
   flag(ids: string[], flagged: boolean): void;
+  /** Marks the summary of `attempt` accurate or not. */
+  rate(item: string, attempt: number, accurate: boolean): void;
 }
 
 const questionText = (item: ItemRow, s: Pick<ViewState, 'questions'>): string =>
@@ -87,7 +91,9 @@ export function inboxActions(on: InboxHandlers) {
       body.push(h('div', { class: 'inbox-row' }, ...actions, h('span', { class: 'muted small' }, 'Open the item for retries, notes and assigning.')));
     }
     // data-id lets the list put focus back on this item's row when the item leaves.
-    return h('div', { class: 'inbox-act', 'data-kind': kind, 'data-id': id }, ...body, status);
+    const ho = s.handoffs?.get(id);
+    const trust = ho ? handoffBlock(item, ho, { enabled: signedIn && canRate(item), mark: (attempt, accurate) => guard(() => on.rate(id, attempt, accurate))() }, 'inbox') : null;
+    return h('div', { class: 'inbox-act', 'data-kind': kind, 'data-id': id }, trust, ...body, status);
   };
 
   return {
@@ -95,7 +101,7 @@ export function inboxActions(on: InboxHandlers) {
     strip(item: ItemRow, s: ViewState): HTMLElement {
       latest = s;
       const signedIn = s.tracker.kind === 'signed-in';
-      const sig = [signedIn, item.needs, item.stage, item.question, (item.options ?? []).join('\u0000'), item.default, item.proposed_tier, item.tier, item.flagged, item.proposal?.why].join('|');
+      const sig = [signedIn, item.needs, item.stage, item.question, (item.options ?? []).join('\u0000'), item.default, item.proposed_tier, item.tier, item.flagged, item.proposal?.why, item.format, handoffKey(item, s.handoffs?.get(item.id))].join('|');
       let kept = strips.get(item.id);
       if (!kept || kept.sig !== sig) {
         kept = { sig, el: build(item, s, signedIn) };

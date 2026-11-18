@@ -10,6 +10,7 @@ import { trackWaiting } from './inbox.ts';
 import { blocked, items, questionText, reviewLoad, type Fold } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { activities, type Activities } from './activity.ts';
+import { handoffs } from './handoff.ts';
 import { stories } from './story.ts';
 import { priceAgeDays, priceRequest, spend, type PriceEntry, type PriceUnit } from './spend.ts';
 import { follow, FollowError } from './follow.ts';
@@ -556,6 +557,7 @@ async function main() {
     overlapsJson: () => fold.overlaps_json(),
     storiesJson: () => fold.stories_json(),
     activityJson: (item) => fold.activity_json(item),
+    handoffsJson: () => fold.handoffs_json(),
     reviewLoadJson: () => fold.review_load_json(),
     spendJson: () => fold.spend_json(),
   };
@@ -563,7 +565,7 @@ async function main() {
   readActivity = () => openActivity(sink);
   const snapshot = () => {
     const rows = items(sink);
-    return { type: 'items' as const, items: rows, blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions), waiting: trackWaiting(store.get().waiting, rows, sink.at()), activity: openActivity(sink) };
+    return { type: 'items' as const, items: rows, blocked: blocked(sink), overlaps: overlapNotes(sink), stories: stories(sink), handoffs: handoffs(sink), reviewLoad: reviewLoad(sink), questions: new Map(questions), waiting: trackWaiting(store.get().waiting, rows, sink.at()), activity: openActivity(sink) };
   };
   // Redraw once per frame however many records arrive.
   let queued = false;
