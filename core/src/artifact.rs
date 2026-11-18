@@ -14,6 +14,12 @@ pub const INLINE_LIMIT: usize = 4 * 1024;
 /// An artifact over this many bytes is split into parts of this size.
 pub const PART_SIZE: usize = 1024 * 1024;
 
+/// Most parts one artifact is split into, so 16 MiB: the broker's frame limit.
+pub const MAX_PARTS: usize = 16;
+
+/// First line of a manifest. A stored blob that starts with it is always a manifest.
+const MANIFEST_MAGIC: &str = "kbl-manifest/1\n";
+
 const PREFIX: &str = "b-";
 /// `b-` and the 43 characters of an unpadded base64url SHA-256.
 const ID_LEN: usize = 45;
@@ -78,6 +84,70 @@ impl<'de> Deserialize<'de> for ArtifactId {
     }
 }
 
+/// How `bytes` are stored: one blob, or parts and the manifest that lists them.
+pub struct Stored {
+    /// The id records carry: the blob's, or the manifest's.
+    pub id: ArtifactId,
+    /// Every blob to put in the cache, the manifest last.
+    pub blobs: Vec<(ArtifactId, Vec<u8>)>,
+}
+
+impl Stored {
+    /// Splits `bytes` over [`PART_SIZE`]. Content that starts like a manifest
+    /// is also wrapped in one, so a plain blob is never read as a manifest.
+    /// Over [`MAX_PARTS`] parts is refused.
+    pub fn of(bytes: Vec<u8>) -> Result<Self, String> {
+        if bytes.len() <= PART_SIZE && !bytes.starts_with(MANIFEST_MAGIC.as_bytes()) {
+            let id = ArtifactId::of(&bytes);
+            return Ok(Self {
+                id: id.clone(),
+                blobs: vec![(id, bytes)],
+            });
+        }
+        if bytes.len() > PART_SIZE * MAX_PARTS {
+            return Err(format!(
+                "{} bytes is over the {} byte limit",
+                bytes.len(),
+                PART_SIZE * MAX_PARTS
+            ));
+        }
+        let mut blobs: Vec<(ArtifactId, Vec<u8>)> = bytes
+            .chunks(PART_SIZE)
+            .map(|part| (ArtifactId::of(part), part.to_vec()))
+            .collect();
+        let mut manifest = String::from(MANIFEST_MAGIC);
+        for (id, _) in &blobs {
+            manifest.push_str(id.as_str());
+            manifest.push('\n');
+        }
+        let manifest = manifest.into_bytes();
+        let id = ArtifactId::of(&manifest);
+        blobs.push((id.clone(), manifest));
+        Ok(Self { id, blobs })
+    }
+}
+
+/// The part ids a stored blob lists, or `None` when it is a plain artifact.
+/// `Err` when it is a manifest that is malformed or lists too many parts.
+pub fn parts_of(blob: &[u8]) -> Option<Result<Vec<ArtifactId>, InvalidArtifactId>> {
+    let body = blob.strip_prefix(MANIFEST_MAGIC.as_bytes())?;
+    let parsed = std::str::from_utf8(body)
+        .map_err(|_| InvalidArtifactId("manifest".into()))
+        .and_then(|text| {
+            text.lines()
+                .map(ArtifactId::parse)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .and_then(|ids| {
+            if ids.is_empty() || ids.len() > MAX_PARTS {
+                Err(InvalidArtifactId("manifest".into()))
+            } else {
+                Ok(ids)
+            }
+        });
+    Some(parsed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,5 +182,37 @@ mod tests {
         s.pop();
         s.push('W');
         assert!(ArtifactId::parse(&s).is_err());
+    }
+
+    #[test]
+    fn small_content_is_one_blob_and_big_content_splits_with_a_manifest() {
+        let small = Stored::of(vec![7; PART_SIZE]).unwrap();
+        assert_eq!(small.blobs.len(), 1);
+        assert_eq!(small.id, small.blobs[0].0);
+
+        let big = Stored::of(vec![7; 3 * 1024 * 1024]).unwrap();
+        assert_eq!(big.blobs.len(), 4);
+        let (manifest_id, manifest) = big.blobs.last().unwrap();
+        assert_eq!(&big.id, manifest_id);
+        assert!(manifest_id.matches(manifest));
+        let ids = parts_of(manifest).unwrap().unwrap();
+        assert_eq!(ids.len(), 3);
+        assert!(
+            big.blobs
+                .iter()
+                .take(3)
+                .all(|(id, b)| ids.contains(id) && b.len() <= PART_SIZE)
+        );
+
+        assert!(Stored::of(vec![0; PART_SIZE * MAX_PARTS + 1]).is_err());
+    }
+
+    #[test]
+    fn text_that_looks_like_a_manifest_is_wrapped_not_misread() {
+        let text = format!("{MANIFEST_MAGIC}not ids").into_bytes();
+        let stored = Stored::of(text.clone()).unwrap();
+        assert_eq!(stored.blobs.len(), 2);
+        assert_eq!(stored.blobs[0].1, text);
+        assert!(parts_of(&text).unwrap().is_err());
     }
 }
