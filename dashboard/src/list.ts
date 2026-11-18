@@ -18,6 +18,19 @@ export interface Group {
   toggle?: string;
   /** Folded away: the header and count show, its rows do not, and j and k walk past them. */
   collapsed?: boolean;
+  /** Set on a board swimlane's cell: the stage id of its column. The cell's `label` names the lane too. */
+  column?: string;
+}
+
+/** One board row: the items sharing a Group by value, split into the board's stage columns. */
+export interface Lane {
+  value: string;
+  label: string;
+  /** The key the lane's collapsed state is kept under. */
+  toggle: string;
+  collapsed: boolean;
+  /** One cell per board column, empty ones included so the columns line up from lane to lane. */
+  cells: Group[];
 }
 
 /** A root's stage as the panel and cards name it: a ready root is ready to fix, once triage is accepted. */
@@ -92,25 +105,50 @@ type Shown = Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'>
 
 /**
  * What the page shows: the items in the view, filtered, matching the search, grouped by
- * the view's Group by (stage unless a person chose otherwise). The board is always stage
- * columns. A collapsed group stays in the list with its items, marked `collapsed`.
+ * the view's Group by (stage unless a person chose otherwise). The board's columns are
+ * stages; grouped by anything else it is the cells of each swimlane, lane after lane. A
+ * collapsed group stays, with its items, marked `collapsed`.
  */
 export function visible(s: Shown): Group[] {
-  const rows = applyFilters(inScope(s), s.filters);
-  const board = s.layout === 'board' && s.view !== 'inbox';
-  const by = board ? 'stage' : effectiveGroup(s.view, s.group);
-  const found = s.query.trim() ? rows.filter((i) => matches(i, s.query)) : rows;
-  // The inbox is cleared from the top, oldest first, whatever it is grouped by.
-  const ordered = s.view === 'inbox' ? oldestFirst(found, s.waiting ?? new Map()) : found;
-  const nested = s.childCards || s.view === 'inbox' ? new Set<string>() : nestedIds(found);
-  const shown = ordered.filter((i) => !nested.has(i.id));
+  const { shown, by, board } = placed(s);
   if (s.view === 'inbox' && by === NO_GROUP) return shown.length ? [{ stage: 'inbox', label: 'Waiting on you', items: shown }] : [];
-  if (by === NO_GROUP) return shown.length ? [{ stage: NO_GROUP, label: '', items: shown }] : [];
-  if (board) return group(shown);
+  if (by === NO_GROUP && !board) return shown.length ? [{ stage: NO_GROUP, label: '', items: shown }] : [];
+  if (board) return swimlanes(s)?.flatMap((l) => l.cells) ?? group(shown);
   const folded = new Set(s.collapsed ?? []);
   return groupItems(shown, by).map((g) => {
     const toggle = collapseKey(s.view, by, g.value);
     return { stage: g.value === '' ? `no-${by}` : g.value, label: g.label, items: g.items, toggle, collapsed: folded.has(toggle) };
+  });
+}
+
+/** The items the page shows, in order, with the grouping that applies to them. */
+function placed(s: Shown) {
+  const rows = applyFilters(inScope(s), s.filters);
+  const board = s.layout === 'board' && s.view !== 'inbox';
+  const by = effectiveGroup(s.view, s.group);
+  const found = s.query.trim() ? rows.filter((i) => matches(i, s.query)) : rows;
+  // The inbox is cleared from the top, oldest first, whatever it is grouped by.
+  const ordered = s.view === 'inbox' ? oldestFirst(found, s.waiting ?? new Map()) : found;
+  const nested = s.childCards || s.view === 'inbox' ? new Set<string>() : nestedIds(found);
+  return { shown: ordered.filter((i) => !nested.has(i.id)), by, board };
+}
+
+/**
+ * The board's rows when it is grouped by something other than stage: one lane per value,
+ * each split into the same stage columns. Null when the columns stand alone.
+ */
+export function swimlanes(s: Shown): Lane[] | null {
+  const { shown, by, board } = placed(s);
+  if (!board || by === NO_GROUP || by === 'stage') return null;
+  const columns = group(shown);
+  const folded = new Set(s.collapsed ?? []);
+  return groupItems(shown, by).map((g) => {
+    const toggle = collapseKey(s.view, by, g.value);
+    const collapsed = folded.has(toggle);
+    const lane = g.value === '' ? `no-${by}` : g.value;
+    // The lane's toggle rides on its first cell, so folding every group counts each lane once.
+    const cells = columns.map((c, at): Group => ({ stage: `${lane}|${c.stage}`, column: c.stage, label: `${c.label}, ${g.label}`, items: g.items.filter((i) => i.stage === c.stage), collapsed, toggle: at === 0 ? toggle : undefined }));
+    return { value: lane, label: g.label, toggle, collapsed, cells };
   });
 }
 
@@ -188,4 +226,42 @@ export function settleSelection(s: Shown & { selected: string | null }): string 
   if (!all.includes(s.selected)) return s.selected;
   const shown = new Set(flatten(groups).map((i) => i.id));
   return shown.has(s.selected) ? s.selected : (neighbour(all, s.selected, (id) => shown.has(id)) ?? null);
+}
+
+/** The cards of one board column across the open lanes, top lane first. */
+const columnCards = (lanes: readonly Lane[], column: string): string[] =>
+  lanes.filter((l) => !l.collapsed).flatMap((l) => l.cells.filter((c) => c.column === column).flatMap((c) => c.items.map((i) => i.id)));
+
+/**
+ * `moveBoard` for swimlanes. Up and down walk the column through every open lane, so the
+ * last card of a cell steps into the next lane's cell; left and right stay in the lane and
+ * skip columns it has no card in. A collapsed lane has no cards to land on. The edges stop.
+ */
+export function moveLanes(lanes: readonly Lane[], current: string | null, dir: Direction): string | null {
+  const open = lanes.filter((l) => !l.collapsed);
+  const first = open.flatMap((l) => l.cells).find((c) => c.items.length);
+  const lane = open.find((l) => l.cells.some((c) => c.items.some((i) => i.id === current)));
+  if (!lane) return first?.items[0].id ?? null;
+  const at = lane.cells.findIndex((c) => c.items.some((i) => i.id === current));
+  const cell = lane.cells[at];
+  if (dir === 'up' || dir === 'down') {
+    const cards = columnCards(lanes, cell.column!);
+    return cards[Math.max(0, Math.min(cards.length - 1, cards.indexOf(current!) + (dir === 'down' ? 1 : -1)))];
+  }
+  const row = cell.items.findIndex((i) => i.id === current);
+  const step = dir === 'right' ? 1 : -1;
+  for (let k = at + step; k >= 0 && k < lane.cells.length; k += step) {
+    const next = lane.cells[k].items;
+    if (next.length) return next[Math.min(row, next.length - 1)].id;
+  }
+  return current;
+}
+
+/** The first or last card of `current`'s column across the open lanes; no current card uses the first column that has cards. */
+export function laneEdge(lanes: readonly Lane[], current: string | null, edge: 'first' | 'last'): string | null {
+  const open = lanes.filter((l) => !l.collapsed);
+  const column = open.flatMap((l) => l.cells).find((c) => c.items.some((i) => i.id === current))?.column ?? open.flatMap((l) => l.cells).find((c) => c.items.length)?.column;
+  if (!column) return null;
+  const cards = columnCards(lanes, column);
+  return (edge === 'first' ? cards[0] : cards.at(-1)) ?? null;
 }

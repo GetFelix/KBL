@@ -1,0 +1,1 @@
+The dashboard board can be grouped: Group by makes a swimlane per milestone, label, type, area, size, tier, repo, kind or assignee under the same stage columns. Lane headers fold, and the keyboard walks columns and lanes without landing on a folded card.

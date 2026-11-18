@@ -17,7 +17,7 @@ import { follow, FollowError } from './follow.ts';
 import { connect, GatewayError } from './gateway.ts';
 import { DEFAULT_GATEWAY, gatewayHost, pickSession } from './gateway-url.ts';
 import { commandFor, type CommandId } from './keys.ts';
-import { boardEdge, flatten, markedShown, move, moveBoard, shownRows, visible } from './list.ts';
+import { boardEdge, flatten, laneEdge, markedShown, move, moveBoard, moveLanes, shownRows, swimlanes, visible } from './list.ts';
 import { adviceFor, createStore, fromAddress, toAddress, type Density, type View, type ViewState } from './state.ts';
 import { deleteView, parseSaved, renameView, saveView, type SavedView } from './views.ts';
 import { helpView } from './ui/help-view.ts';
@@ -299,14 +299,19 @@ const run = (id: CommandId): void => {
       const groups = visible(s);
       const rows = flatten(groups);
       const board = s.layout === 'board';
+      const lanes = board ? swimlanes(s) : null;
       if (!board && (id === 'left' || id === 'right')) return;
       const dir = ({ next: 'down', previous: 'up', left: 'left', right: 'right' } as const)[id as 'next'];
       const target =
         id === 'first' || id === 'last'
-          ? board
+          ? lanes
+            ? laneEdge(lanes, s.selected, id)
+            : board
             ? boardEdge(groups, s.selected, id)
             : ((id === 'first' ? rows[0] : rows.at(-1))?.id ?? null)
-          : board
+          : lanes
+            ? moveLanes(lanes, s.selected, dir)
+            : board
               ? moveBoard(groups, s.selected, dir)
               : move(rows, s.selected, id === 'next' ? 1 : -1);
       store.dispatch({ type: 'select', id: target });

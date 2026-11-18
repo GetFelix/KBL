@@ -259,7 +259,7 @@ has one entry per filter value and per saved view.
 - **Group by.** The list groups by stage (the default), tier, repo, kind, milestone, label, type, area, size or assignee, or not at all. A card shows the milestone, type, area, size and what the work needs. An item with several labels is listed under its first label alphabetically. Each group has a
   header button with its name and count; Enter or Space folds it, and `J` and `K` skip folded groups. Folds are kept per
   view and per grouping while the page is open. The palette has a `Group by: …` entry per key and Collapse or Expand
-  all groups. The board is always stage columns, so the control is disabled there. Needs you stays one list, oldest
+  all groups. On the board the columns stay stages and a grouping makes swimlanes, one folding row per group; `J` and `K` walk a column through the open lanes, `H` and `L` move along a lane, and the grouping is kept in saved views. Needs you stays one list, oldest
   first, until a grouping is picked.
 - **The address.** `view=blocked`, `view=inbox`, `layout=board`, `group=`, `q=`, `source=`, `tier=`, `repo=` and `item=` are in the
   address, so a link opens the same view. An older `view=board` link still opens the board and is rewritten to
