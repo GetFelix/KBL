@@ -3539,6 +3539,22 @@ fn a_dismissed_or_upstream_closed_blocker_drops_out_and_asks_a_person() {
 }
 
 #[test]
+fn a_gitlab_root_is_shown_with_its_repo() {
+    let mut l = Log::default();
+    l.tracker(WorkRecord::Imported {
+        item: id("gl"),
+        source: "gitlab".into(),
+        upstream_id: "group/app#12".into(),
+        title: "gl".into(),
+    });
+    let s = fold(&l.0);
+    assert_eq!(
+        s.repo_of(&id("gl")).map(|t| t.repo.as_str()),
+        Some("group/app")
+    );
+}
+
+#[test]
 fn an_ado_roots_target_still_drives_rules_but_is_not_shown_as_a_repo() {
     let mut l = Log::default();
     l.tracker(WorkRecord::Imported {

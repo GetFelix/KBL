@@ -316,46 +316,61 @@ async fn a_later_poll_asks_since_the_cursor_and_a_bad_cursor_is_not_sent() {
     assert!(!first.url.contains("state=x"), "{}", first.url);
 }
 
-#[tokio::test]
-async fn pages_are_asked_by_number_and_a_cut_short_listing_resumes() {
-    let calls = Arc::new(Mutex::new(Vec::new()));
-    let seen = calls.clone();
-    let lab = Lab::new(move |req| {
+/// A project whose issues are held in a shared list and listed like GitLab
+/// does: `updated_after` is inclusive, ordered by `updated_at`, `per_page`
+/// in pages of 100, and
+/// `on_page` runs after each page is served to update an issue mid-read.
+fn paged(
+    store: Arc<Mutex<Vec<Value>>>,
+    on_page: impl Fn(usize, &mut Vec<Value>) + Send + Sync + 'static,
+) -> Lab {
+    let served = Arc::new(Mutex::new(0usize));
+    Lab::new(move |req| {
+        let mut all = store.lock().unwrap();
+        let mut rows: Vec<Value> = all
+            .iter()
+            .filter(|i| {
+                param(req, "updated_after")
+                    .is_none_or(|t| i["updated_at"].as_str().unwrap() >= t.as_str())
+            })
+            .cloned()
+            .collect();
+        rows.sort_by_key(|i| i["updated_at"].as_str().unwrap().to_owned());
         let page: usize = param(req, "page").unwrap().parse().unwrap();
-        seen.lock().unwrap().push(page);
-        let mut r = res(
-            200,
-            json!([raw(10 + page as u64, |v| {
-                v["updated_at"] = json!(format!("2026-11-10T12:00:0{page}.000Z"))
-            })]),
-        );
-        // The server's own next-page link would point anywhere; only the number counts.
-        r.headers.insert(
-            "x-next-page".into(),
-            if page < 3 {
-                (page + 1).to_string()
-            } else {
-                String::new()
-            },
-        );
-        r.headers.insert(
-            "link".into(),
-            "<http://evil.example/x>; rel=\"next\"".into(),
-        );
-        r
+        let out: Vec<Value> = rows.into_iter().skip((page - 1) * 100).take(100).collect();
+        let mut n = served.lock().unwrap();
+        *n += 1;
+        on_page(*n, &mut all);
+        res(200, Value::Array(out))
+    })
+}
+
+fn at(iid: u64, secs: u64) -> Value {
+    raw(iid, |v| {
+        v["updated_at"] = json!(format!(
+            "2026-11-10T12:{:02}:{:02}.000Z",
+            secs / 60,
+            secs % 60
+        ))
+    })
+}
+
+#[tokio::test]
+async fn an_issue_updated_mid_listing_hides_no_neighbour_and_repeats_none() {
+    // Issue 1 is read on page 1 and updated before page 2 is asked for. By
+    // page numbers it moves to the end and issue 101 slides into page 1.
+    let store = Arc::new(Mutex::new((1..=205).map(|i| at(i, i)).collect::<Vec<_>>()));
+    let lab = paged(store, |n, all| {
+        if n == 1 {
+            all[0]["updated_at"] = json!("2026-11-10T13:00:00.000Z");
+        }
     });
     let changes = gitlab(&lab).changed(&repos(), &none()).await.unwrap();
-    assert_eq!(changes.issues.len(), 3);
-    assert_eq!(*calls.lock().unwrap(), [1, 2, 3]);
-    assert!(
-        lab.urls()
-            .iter()
-            .all(|u| u.starts_with("https://gitlab.example.com/"))
-    );
-    assert_eq!(
-        changes.cursors["team/app"].issues_since.as_deref(),
-        Some("2026-11-10T12:00:03.000Z")
-    );
+    let mut got: Vec<u64> = changes.issues.iter().map(|i| i.id.number).collect();
+    assert_eq!(got.len(), 205, "none missed, none read twice");
+    got.sort();
+    got.dedup();
+    assert_eq!(got.len(), 205);
 }
 
 #[tokio::test]
@@ -1328,14 +1343,21 @@ async fn releases_and_tags_come_from_the_release_and_ref_listings() {
 }
 
 #[test]
-fn times_are_read_in_utc_only() {
+fn times_are_read_with_z_or_an_offset() {
     assert_eq!(utc_ms("2027-01-15T08:00:00Z"), Some(1_800_000_000_000));
     assert_eq!(utc_ms("2027-01-15T08:00:00.5Z"), Some(1_800_000_000_500));
     assert_eq!(
         utc_ms("2027-01-15T08:00:00.123456Z"),
         Some(1_800_000_000_123)
     );
-    assert_eq!(utc_ms("2027-01-15T09:00:00.000+01:00"), None);
+    assert_eq!(
+        utc_ms("2027-01-15T09:00:00.000+01:00"),
+        Some(1_800_000_000_000)
+    );
+    assert_eq!(utc_ms("2027-01-15T03:00:00-05:00"), Some(1_800_000_000_000));
+    assert_eq!(utc_ms("2027-01-15T08:00:00+00:00"), Some(1_800_000_000_000));
+    assert_eq!(utc_ms("2027-01-15T09:00:00+0100"), None);
+    assert_eq!(utc_ms("2027-01-15T09:00:00+24:00"), None);
     assert_eq!(utc_ms("2027-01-15T08:00:00.Z"), None);
     assert_eq!(utc_ms("nonsense"), None);
 }

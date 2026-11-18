@@ -1279,8 +1279,8 @@ agent links across trees only through a prerequisite (below). The waiting
 item is Blocked until the other one is done, the same as inside one tree.
 
 The fold records a target for every imported root: a GitHub id (`org/repo#n`)
-gives its repo, and an ADO id gives its `org/project`, which still selects
-rules and spend. Only a GitHub target is shown as a repo. A prerequisite has
+gives its repo, a GitLab id (`group/project#n`) the same, and an ADO id gives its `org/project`, which still selects
+rules and spend. A GitHub or GitLab target is shown as a repo. A prerequisite has
 its target, and any other item takes its root's. Jira ids name none, so
 those items have no target. The dashboard's Blocked view (in the sidebar and
 the palette, or `?view=blocked`) names each blocker with its own repo when it has one and differs from the
