@@ -345,8 +345,8 @@
  "mcp/src/server.rs#item_or_held": [
   "Some(i) => Ok(i),"
  ],
- "mcp/src/tasks.rs#artifact_text": [
-  "Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {"
+ "mcp/src/tasks.rs#read_blob": [
+  "if head.len() > PART_SIZE || !id.matches(&head) {"
  ],
  "mcp/src/tasks.rs#claim": [
   "Err(e @ TaskReadError::Newer { .. }) => {",

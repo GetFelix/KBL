@@ -413,7 +413,7 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_release` | `/v1/work/release` | Tracker row |
 | `work_post` | `/v1/work/post` | Tracker row |
 | `work_link` | `/v1/work/link` | Tracker row |
-| `work_context` | `/v1/work/context` and `/v1/work/context/add` | Tracker rows. Artifacts are shown only if the bytes hash to the id (`mcp/src/tasks.rs#artifact_text`) |
+| `work_context` | `/v1/work/context` and `/v1/work/context/add` | Tracker rows. Artifacts are shown only if the bytes hash to the id (`mcp/src/tasks.rs#read_blob`) |
 | `work_progress` | `/v1/work/progress` | Tracker row |
 | `work_finding` | `/v1/work/finding` | Tracker row. The tool also limits `severity` and `verdict` to their words (`mcp/src/server.rs#item_or_held`) |
 | `work_triage` | `/v1/work/triage` | Tracker row. The tool limits `unclear` to its three words |
@@ -426,7 +426,7 @@ with the agent's Felix token, so Felix grants are the check.
 | `work_rules` | `/v1/work/rules/read` | Tracker row |
 | `run_info` | Nothing | Reads its own settings |
 | `task_post` | The run's tasks stream and run log | **None** beyond access to the run ([#29](https://github.com/GetFelix/KBL/issues/29)). Known secret patterns are cut from the title (`mcp/src/tasks.rs#post`) and the body (`mcp/src/tasks.rs#content`) |
-| `task_claim` | The run's `workers` group | Felix hands a task to one member. An artifact body is shown only if its bytes hash to the id (`mcp/src/tasks.rs#artifact_text`). The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs#claim`, [#39](https://github.com/GetFelix/KBL/issues/39)). A task of a format newer than the worker reads is handed back, not run (`mcp/src/tasks.rs#claim`); a writer in the run can post one, and each hand-back uses a delivery until Felix dead-letters it. Known secret patterns are cut from the error text of every `refused` record, the dead-letter and run log gap notes included (`mcp/src/tasks.rs#refuse`) |
+| `task_claim` | The run's `workers` group | Felix hands a task to one member. An artifact body is shown only if its bytes hash to the id (`mcp/src/tasks.rs#read_blob`). The two-attempt limit is in `kbl-mcp` only (`mcp/src/tasks.rs#claim`, [#39](https://github.com/GetFelix/KBL/issues/39)). A task of a format newer than the worker reads is handed back, not run (`mcp/src/tasks.rs#claim`); a writer in the run can post one, and each hand-back uses a delivery until Felix dead-letters it. Known secret patterns are cut from the error text of every `refused` record, the dead-letter and run log gap notes included (`mcp/src/tasks.rs#refuse`) |
 | `task_complete` | The results cache, artifacts and run log | First result wins by a put-if-absent in Felix. Who may write: **None** (#29). Known secret patterns are cut from the result (`mcp/src/tasks.rs#complete`) |
 | `task_release` | The `workers` group and run log | `kbl-mcp` only releases the task it holds (`mcp/src/tasks.rs#holding`). In Felix: **None** (#29). Known secret patterns are cut from the reason (`mcp/src/tasks.rs#release`) |
 | `task_give_up` | The `workers` group and run log | Same, and the reason too (`mcp/src/tasks.rs#give_up`) |

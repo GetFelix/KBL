@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use felix_client::{GroupMember, GroupRecord};
-use kbl_core::artifact::{ArtifactId, PART_SIZE};
+use kbl_core::artifact::{ArtifactId, PART_SIZE, Stored, parts_of};
 use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, Key, Resources, TaskId, WORKERS_GROUP};
@@ -30,9 +30,6 @@ use crate::felix::{Backend, ExtendError};
 use crate::keepalive::{self, Claim, Health, at_risk};
 
 /// How long a claim stands without an extension.
-/// Most bytes of an artifact `artifact_text` hands back: what a store accepts.
-const MAX_ARTIFACT_TEXT: usize = PART_SIZE;
-
 const VISIBILITY: Duration = Duration::from_secs(90);
 /// How often a held claim is extended. Three tries fit in one visibility.
 const EXTEND_EVERY: Duration = Duration::from_secs(30);
@@ -509,51 +506,72 @@ impl<B: Backend> Tasks<B> {
     /// artifact before the tracker sees it.
     pub(crate) async fn content(&self, text: String) -> Result<Content, String> {
         let (content, stored) = Content::from_text(redacted(text));
-        if let Some((_, bytes)) = stored {
-            self.store(bytes).await?;
+        match stored {
+            Some((_, bytes)) => Ok(Content::Artifact(self.store(bytes).await?)),
+            None => Ok(content),
         }
-        Ok(content)
     }
 
     /// The text of an artifact, or a line saying it could not be read, was
-    /// stored under the wrong hash or is over [`MAX_ARTIFACT_TEXT`].
+    /// stored under the wrong hash or a part is missing.
     pub(crate) async fn artifact_text(&self, id: &str) -> String {
         let blobs = self.0.resources.blobs();
         let unreadable = || format!("(artifact {id} could not be read)");
         let Ok(want) = ArtifactId::parse(id) else {
             return unreadable();
         };
-        match self.0.backend.cache_get(&blobs, id).await {
-            // The cache is shared, so the bytes must hash to the id they were fetched by.
-            Ok(Some(bytes)) if bytes.len() <= MAX_ARTIFACT_TEXT && want.matches(&bytes) => {
-                String::from_utf8_lossy(&bytes).into_owned()
-            }
+        match self.read_blob(&blobs, &want).await {
+            Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
             Err(e) => {
                 self.refuse("cache_get", &blobs, Some(id), &e).await;
                 unreadable()
             }
-            _ => unreadable(),
+            Ok(None) => unreadable(),
         }
     }
 
-    /// Stores `bytes` in the artifacts cache under their hash.
-    async fn store(&self, bytes: Vec<u8>) -> Result<ArtifactId, String> {
-        if bytes.len() > PART_SIZE {
-            return Err(format!(
-                "{} bytes is over the {PART_SIZE} byte limit",
-                bytes.len()
-            ));
+    /// The bytes of `id`, joined from its parts when it is a manifest. Every
+    /// blob must hash to the id it was fetched by: the cache is shared.
+    async fn read_blob(&self, blobs: &str, id: &ArtifactId) -> anyhow::Result<Option<Vec<u8>>> {
+        let backend = &self.0.backend;
+        let Some(head) = backend.cache_get(blobs, id.as_str()).await? else {
+            return Ok(None);
+        };
+        if head.len() > PART_SIZE || !id.matches(&head) {
+            return Ok(None);
         }
-        let id = ArtifactId::of(&bytes);
+        let Some(listed) = parts_of(&head) else {
+            return Ok(Some(head));
+        };
+        let Ok(parts) = listed else {
+            return Ok(None);
+        };
+        let mut joined = Vec::new();
+        for part in parts {
+            match backend.cache_get(blobs, part.as_str()).await? {
+                Some(bytes) if bytes.len() <= PART_SIZE && part.matches(&bytes) => {
+                    joined.extend_from_slice(&bytes);
+                }
+                _ => return Ok(None),
+            }
+        }
+        Ok(Some(joined))
+    }
+
+    /// Stores `bytes` in the artifacts cache under their hash, split into parts over 1 MiB.
+    async fn store(&self, bytes: Vec<u8>) -> Result<ArtifactId, String> {
+        let stored = Stored::of(bytes)?;
         let blobs = self.0.resources.blobs();
-        self.checked(
-            "cache_put",
-            &blobs,
-            Some(id.as_str()),
-            self.0.backend.cache_put(&blobs, id.as_str(), bytes),
-        )
-        .await?;
-        Ok(id)
+        for (id, bytes) in stored.blobs {
+            self.checked(
+                "cache_put",
+                &blobs,
+                Some(id.as_str()),
+                self.0.backend.cache_put(&blobs, id.as_str(), bytes),
+            )
+            .await?;
+        }
+        Ok(stored.id)
     }
 
     /// A task as the model sees it, with an artifact body read back as text.
