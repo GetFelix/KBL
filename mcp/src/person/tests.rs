@@ -390,6 +390,11 @@ async fn a_bad_call_never_reaches_the_tracker() {
         ("close_item", json!({ "item": "a1" }), "why is needed"),
         (
             "edit_proposal",
+            json!({ "item": "a1" }),
+            "give at least one",
+        ),
+        (
+            "edit_proposal",
             json!({ "item": "a1", "split": ["x", 2] }),
             "split must be a list of strings",
         ),

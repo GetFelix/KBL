@@ -77,6 +77,14 @@ impl<T: TrackerApi> Person<T> {
     async fn call(&self, tool: &Tool, args: Map<String, Value>) -> Result<String, String> {
         let keyed = matches!(tool.route, Route::Post(_));
         let body = check(tool.params, args, keyed)?;
+        // An edit of nothing would still append a record.
+        if tool.name == "edit_proposal"
+            && !["title", "tier", "depends_on", "split"]
+                .iter()
+                .any(|k| body.contains_key(*k))
+        {
+            return Err("give at least one of title, tier, depends_on or split".into());
+        }
         let reply = match tool.route {
             Route::Post(path) => self.api.call(&self.path(path), Value::Object(body)).await,
             Route::Get(path) => {

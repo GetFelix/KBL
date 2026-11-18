@@ -824,7 +824,7 @@ KBL_PERSON_TOKEN=... KBL_TRACKER_URL=http://127.0.0.1:8080 \
 | `close_item` | Close an item as `dismissed` or `completed` |
 | `edit_proposal` | Edit a proposal's title or tier, or replace triage's `depends_on` and `split` (these need `proposal`, the offset of the answer you read) |
 
-Every action a person can take on a card is a REST route and a person tool.
+Every action the dashboard offers on a card is a REST route and a person tool.
 Each takes a person's token only; an agent's token gets `403`.
 
 | Action | REST route | Person tool | Dashboard |
@@ -850,7 +850,7 @@ Each takes a person's token only; an agent's token gets `403`.
 | Close | `POST /v1/work/close` | `close_item` | yes |
 
 A column of `no` is an action the dashboard does not show yet; it is
-reachable by REST and MCP. Not in the table: reopening a root, which only
+reachable by REST and MCP. Not in the table: `POST /v1/work/unlink`, a dependency edit with no tool (use `unblock_item`), reopening a root, which only
 upstream sync writes, and the org-level writes (budgets, prices, rules).
 
 Every write takes an optional `request_key`, as the REST calls do. A tool
