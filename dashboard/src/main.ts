@@ -26,6 +26,8 @@ import { shell } from './ui/shell.ts';
 import { metrics } from './metrics.ts';
 import { metricsView } from './ui/metrics-view.ts';
 import { spendView } from './ui/spend-view.ts';
+import { workersView } from './ui/workers-view.ts';
+import { stopEach, workers, type WorkerRow } from './workers.ts';
 import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { assignDialog, confirmDialog, redoDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
@@ -283,6 +285,8 @@ const run = (id: CommandId): void => {
       return help.open();
     case 'spend':
       return showSpend();
+    case 'workers':
+      return showWorkers();
     case 'metrics':
       return metricsBox.open();
     case 'prices':
@@ -426,6 +430,7 @@ const ui = shell(
     palette: () => run('palette'),
     help: () => run('help'),
     spend: () => run('spend'),
+    workers: () => run('workers'),
     metrics: () => run('metrics'),
     mark: (id) => store.dispatch({ type: 'mark', id }),
     signIn: () => signInBox.open(),
@@ -478,6 +483,28 @@ const spendBox = spendView({
   now: () => Date.now(),
   priceAgeDays: priceAgeDays(q.get('price_age_days')),
 });
+const stopWorkers = (names: string[]): Promise<string | null> =>
+  stopEach(async (req) => {
+    const o = tracker ? await tracker.write(req) : ({ status: 'failed', reason: 'Not signed in to the tracker.' } as const);
+    if (o.status === 'refused' && o.signedOut) {
+      tracker = null;
+      store.dispatch({ type: 'tracker', tracker: { kind: 'refused', reason: o.reason } });
+    }
+    return o;
+  }, names);
+let readWorkers: (() => WorkerRow[]) | null = null;
+const workersBox = workersView({
+  open: openItem,
+  canStop: () => tracker !== null,
+  stop: stopWorkers,
+  signIn: () => signInBox.open(),
+  now: () => Date.now(),
+});
+// Workers of a log still being read would be a partial list, so the dialog waits for live and fills in then.
+const showWorkers = () => {
+  const s = store.get();
+  workersBox.open(s.connection.kind === 'live' && readWorkers ? readWorkers() : null, s.items, s);
+};
 const metricsBox = metricsView({
   report: (days) => (store.get().connection.kind === 'live' && readMetrics ? readMetrics(days) : null),
   signedIn: () => tracker !== null,
@@ -537,7 +564,7 @@ const confirm = confirmDialog(write);
 const assignBox = assignDialog(write);
 const redoBox = redoDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, spendBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, redoBox.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, workersBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, redoBox.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -576,7 +603,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || redoBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || workersBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || redoBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;
@@ -628,8 +655,10 @@ async function main() {
     reviewLoadJson: () => fold.review_load_json(),
     spendJson: () => fold.spend_json(),
     metricsJson: (nowMs, days) => fold.metrics_json(nowMs, days),
+    workersJson: () => fold.workers_json(),
   };
   readSpend = () => spend(sink);
+  readWorkers = () => workers(sink);
   readMetrics = (days) => metrics(sink, Date.now(), days);
   readActivity = () => openActivity(sink);
   const snapshot = () => {
@@ -648,6 +677,7 @@ async function main() {
       queued = false;
       store.dispatch(snapshot());
       if (spendBox.isOpen()) showSpend();
+      if (workersBox.isOpen()) showWorkers();
       if (readSpend) pricesBox.refresh(readSpend());
     }), wait);
   };
@@ -675,6 +705,7 @@ async function main() {
           store.dispatch(snapshot());
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();
+          if (workersBox.isOpen()) showWorkers();
           if (readSpend) pricesBox.refresh(readSpend());
         },
       });

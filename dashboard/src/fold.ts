@@ -23,6 +23,8 @@ export interface Fold {
   spendJson(): string;
   /** Flow, rework, cost and supervision over the `days` before `nowMs`. */
   metricsJson(nowMs: number, days: number): string;
+  /** Every delegated worker, stopped ones included, with the item each holds. */
+  workersJson(): string;
 }
 
 export interface CheckTry {

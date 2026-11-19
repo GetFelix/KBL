@@ -25,6 +25,7 @@ export interface ShellHandlers extends ListHandlers, FilterHandlers, WriteHandle
   palette(): void;
   help(): void;
   spend(): void;
+  workers(): void;
   metrics(): void;
   /** Forgets the tracker token in this tab. */
   signOut(): void;
@@ -179,6 +180,7 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
     h('div', { class: 'sidebar-foot' },
       h('div', { class: 'account' }, who, hint, account),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.spend()) }, 'Spend'),
+      h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.workers()) }, 'Workers'),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.metrics()) }, 'Metrics'),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.palette()) }, 'Commands', kbd(displayChord(chordFor('palette'), mac))),
       h('button', { type: 'button', class: 'button ghost', onclick: () => (setMenu(false), on.help()) }, 'Shortcuts', kbd(displayChord(chordFor('help'), mac))),

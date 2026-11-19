@@ -329,3 +329,19 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .handoff-checks[data-checks='red'] { border-left: 3px solid var(--warn); padding-left: var(--space-2); }
 .handoff-mark { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .handoff-mark .button[aria-pressed="true"] { border-color: var(--text); font-weight: 600; }
+
+.dialog.workers { width: min(54rem, calc(100vw - var(--space-6))); }
+.dialog.workers .dialog-body { max-height: 80vh; overflow: auto; }
+.workers-head h3 { margin: var(--space-4) 0 var(--space-2); }
+.supervisor { color: var(--text); font-size: var(--text-md, 1rem); }
+.workers-table th[scope='row'] { white-space: nowrap; }
+.workers-table .worker-state { white-space: nowrap; }
+.workers-total { margin: var(--space-3) 0 var(--space-1); font-size: var(--text-lg); }
+.workers-head { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; justify-content: space-between; }
+.workers-table { table-layout: auto; }
+.workers-table th[scope='row'] { overflow-wrap: anywhere; }
+.workers-table td { overflow-wrap: anywhere; }
+.stop-confirm { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.worker-state { font-weight: 600; }
+.worker-state.working { color: var(--ok); }
+.worker-state.idle, .worker-state.finished, .worker-state.stopped { color: var(--muted); }

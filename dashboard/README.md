@@ -19,6 +19,15 @@ flow numbers come from the fold's `metrics_json(now_ms, days)` over accepted rec
 counts and an item reopened and done again counts once; trust still comes from the tracker and needs a sign-in.
 Definitions are in [Flow metrics](../docs/flow-metrics.md). Nothing is per person or per agent.
 
+Workers (sidebar button, or `Show supervisors and their workers` in the palette) shows each supervisor with the workers
+it started, from the fold's `workers_json()` ([supervise](../docs/design/supervise.md#dashboard)). A row has the worker's
+state (Working with an item, Idle, Finished by its own report, or Stopped), the vendor and model the supervisor recorded
+at start, how long ago it started or ended, and the item it holds with the attempt and when the holder last wrote. A
+person signed in to the tracker gets a Stop on each live worker and a Stop all per supervisor (and for every supervisor
+when there are several), which asks first and then sends one `POST /v1/work/workers/stop` per worker, so the held item
+goes back at once. Signed out, the dialog says so instead of showing the buttons. Only recorded fields are shown; the
+page never guesses whether a worker is healthy.
+
 Spend (sidebar button, or `Show spend` in the palette) lists what claims cost per root, reviewer tier and repo, largest
 first, and a By model table with each model's unit, usage and cost. It reads the fold's `spend_json()`
 ([Cost and spend](../docs/work-tracker.md#cost-and-spend)). Costs are derived from the usage agents reported and the

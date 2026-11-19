@@ -126,6 +126,16 @@ worker a person or the tracker stopped is dropped the same way and listed under 
 after 3 quick or failed ends in a row. A hosted worker that dies without calling it is still counted live until it is
 stopped.
 
+### Dashboard
+
+The dashboard's Workers dialog shows the group: each supervisor, the workers it started, and for each its state, launch
+fields, age and hold (see the [dashboard README](../../dashboard/README.md)). It reads `worker_started`,
+`worker_stopped`, `worker_finished` and the hold from the fold, nothing else, so a worker that died without
+reporting shows Working or Idle until someone stops it. A signed-in person can stop one worker or every live worker
+of a supervisor; each stop is the same `POST /v1/work/workers/stop` a supervisor calls.
+
+![The Workers dialog: two supervisors, a stop-all confirm, working, finished and stopped workers](../screenshots/dashboard-workers.png)
+
 - A fake profile (`dev/fake-worker.mjs`, a scripted MCP client) runs the tests and CI without any vendor.
 
 Example profiles for Claude Code, Codex CLI and GitHub Copilot CLI are in [supervise-profiles.md](../supervise-profiles.md).

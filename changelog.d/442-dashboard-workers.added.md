@@ -1,0 +1,1 @@
+The dashboard has a Workers dialog (sidebar button or palette): each supervisor with the workers it started, their state, launch fields and hold, finished and stopped workers kept, and a Stop for one worker or all of a supervisor's (`workers_json()` on the wasm fold). The supervise dev check now has its workers report `worker_finish`, so the finish path runs in CI.
