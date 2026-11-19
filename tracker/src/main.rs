@@ -112,6 +112,11 @@ struct Cli {
         default_value = "fast,deep"
     )]
     review_tiers: Vec<String>,
+    /// Tries an agent gets at a failed check on one pull request, each a
+    /// `fix_check` item, before the failure goes to a person. Zero turns
+    /// them off.
+    #[arg(long, env = "KBL_AUTO_FIX_TRIES", default_value_t = 1)]
+    auto_fix_tries: u8,
     /// The least each claim is charged against its root's cost budget, in
     /// millionths of a dollar, whatever the agent reports.
     #[arg(long, env = "KBL_COST_FLOOR_MICROS", default_value_t = 100_000)]
@@ -239,6 +244,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
     let visibility = Duration::from_millis(cli.claim_visibility_ms);
     let (crash_after_poll, crash_after_done) = (cli.crash_after_poll, cli.crash_after_done);
     let review_tiers = cli.review_tiers.clone();
+    let auto_fix_tries = cli.auto_fix_tries;
     // One floor for every team; each team's tracker charges it against its own fold.
     let cost_floor_micros = cli.cost_floor_micros;
     let review_limit = cli.review_limit;
@@ -263,6 +269,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             crash_after_poll,
             crash_after_done,
             review_tiers: review_tiers.clone(),
+            auto_fix_tries,
             cost_floor_micros,
             team: team.as_str().to_owned(),
             review_limit,

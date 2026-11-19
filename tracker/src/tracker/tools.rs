@@ -1383,6 +1383,28 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
         WorkRecord::FlakeRetried { check, .. } => {
             bounded("check", check, kbl_core::work::MAX_CHECK_NAME)
         }
+        WorkRecord::CheckFailed {
+            pr,
+            check,
+            url,
+            head,
+            log,
+            ..
+        } => {
+            bounded("pr", pr, kbl_core::work::MAX_PR_REF)?;
+            bounded("check", check, kbl_core::work::MAX_CHECK_NAME)?;
+            bounded("head", head, kbl_core::work::MAX_HEAD)?;
+            // A check may have no link and its log may be unreadable.
+            for (name, v, max) in [
+                ("url", url, kbl_core::work::MAX_CHECK_URL),
+                ("log", log, kbl_core::work::MAX_CHECK_LOG),
+            ] {
+                if v.len() > max {
+                    return Err(Error::Invalid(format!("{name} is over {max} bytes")));
+                }
+            }
+            Ok(())
+        }
         WorkRecord::Shipped { release, .. } => {
             field("release", release)?;
             if release.is_empty() {

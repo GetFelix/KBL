@@ -3162,6 +3162,7 @@ mod assignee;
 mod blocks;
 mod card_actions;
 mod classes;
+mod fix_check;
 mod flakes;
 mod human_wait;
 mod inbox;

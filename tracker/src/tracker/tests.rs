@@ -837,6 +837,7 @@ pub(super) fn settings() -> Settings {
         crash_after_poll: false,
         crash_after_done: false,
         review_tiers: default_review_tiers(),
+        auto_fix_tries: 1,
         cost_floor_micros: 0,
         team: String::new(),
         review_limit: 0,
@@ -2697,6 +2698,7 @@ async fn rules_read_answers_only_the_holder_and_matches_the_claim() {
 mod assignee;
 mod blocks;
 mod facets;
+mod fix_check;
 mod metrics;
 mod needs;
 mod races;

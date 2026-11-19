@@ -144,12 +144,20 @@ impl Reqwest {
             .await
             .with_context(|| format!("reach {}", req.url))?;
         let status = res.status().as_u16();
-        let headers = res
+        let headers: BTreeMap<String, String> = res
             .headers()
             .iter()
             .filter_map(|(k, v)| Some((k.as_str().to_owned(), v.to_str().ok()?.to_owned())))
             .collect();
-        let body = res.json().await.unwrap_or(Value::Null);
+        // A job log is plain text; everything else GitHub answers is JSON.
+        let text = headers
+            .get("content-type")
+            .is_some_and(|t| t.starts_with("text/plain"));
+        let body = if text {
+            res.text().await.map(Value::String).unwrap_or(Value::Null)
+        } else {
+            res.json().await.unwrap_or(Value::Null)
+        };
         Ok(Res {
             status,
             headers,

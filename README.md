@@ -197,7 +197,7 @@ different: the triaging agent posts it as a prerequisite, and the item waits on 
 and the board names where each blocker lives (its repo, else its source) when it differs from the row's repo. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
-A failed check that matches the team's [flake list](docs/work-tracker.md#known-flaky-checks) is re-run once by ingest before it becomes work; a green re-run never reaches Needs you, and each entry counts its hits.
+A failed check that matches the team's [flake list](docs/work-tracker.md#known-flaky-checks) is re-run once by ingest before it becomes work; a green re-run never reaches Needs you, and each entry counts its hits. A check that stays red becomes a `fix_check` item with the end of the job's log, which an agent claims and pushes to the same pull request; after the team's `auto_fix_tries` (default 1) it goes to a person as before ([failed checks become fix work](docs/work-tracker.md#failed-checks-become-fix-work)).
 
 Each agent runs `kbl-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
 tracker for the highest-priority ready item: the tracker claims it from the ready streams' consumer group as a

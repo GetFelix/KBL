@@ -16,7 +16,9 @@ use std::time::Duration;
 use anyhow::Context;
 use kbl_core::content::Content;
 use kbl_core::names::{ItemId, Key};
-use kbl_core::work::{Actor, CloseWhy, PrChecks, PrPhase, PrSnapshot, WorkKind, WorkRecord};
+use kbl_core::work::{
+    Actor, CloseWhy, MAX_CHECK_LOG, MAX_HEAD, PrChecks, PrPhase, PrSnapshot, WorkKind, WorkRecord,
+};
 use sha2::{Digest, Sha256};
 use tracing::Instrument as _;
 
@@ -957,6 +959,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 r.pr_status = Some(status.clone());
             }
         }
+        self.report_check(p, key, &item, &status, &failure).await?;
         // A merge is the work done; the tracker records it and never merges.
         if status.phase == PrPhase::Merged && p.roots.get(key).is_some_and(|r| !r.closed) {
             self.write(&WorkRecord::Closed {
@@ -965,6 +968,62 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             })
             .await?;
             set_closed(p, key, true);
+        }
+        Ok(())
+    }
+
+    /// Reports a red check that the flake re-run left red as `check_failed`,
+    /// once per request, check and head commit, with the end of its log. The
+    /// tracker may open fix work for it. A pending re-run never gets here red.
+    async fn report_check(
+        &self,
+        p: &mut Poll,
+        key: &str,
+        item: &ItemId,
+        status: &PrSnapshot,
+        failure: &Failure,
+    ) -> Result<(), SourceError> {
+        let Some(f) = status
+            .failing
+            .as_ref()
+            .filter(|_| status.phase == PrPhase::Open)
+        else {
+            return Ok(());
+        };
+        if failure.head.is_empty() || failure.head.len() > MAX_HEAD {
+            return Ok(());
+        }
+        let seen = (status.pr.clone(), f.name.clone(), failure.head.clone());
+        let Some(t) = p.state.items.get(key) else {
+            return Ok(());
+        };
+        if t.check_reported.as_ref() == Some(&seen) {
+            return Ok(());
+        }
+        let log = match IssueRef::parse(&status.pr).map(|r| r.repo) {
+            Some(repo) => self.source.check_log(&repo, &f.url, MAX_CHECK_LOG).await,
+            None => None,
+        };
+        // Without the job's log, the check's own output is the best evidence.
+        let log = log.unwrap_or_else(|| tail(&failure.output, MAX_CHECK_LOG));
+        let record = WorkRecord::CheckFailed {
+            item: item.clone(),
+            pr: status.pr.clone(),
+            check: f.name.clone(),
+            url: f.url.clone(),
+            head: failure.head.clone(),
+            log,
+            fix: false,
+        };
+        match self.tracker.append(&record).await? {
+            Appended::Written => {}
+            Appended::Refused(why) if why == "duplicate" => {}
+            Appended::Refused(why) => {
+                eprintln!("kbl-ingest: the failed check on {key} was refused: {why}");
+            }
+        }
+        if let Some(t) = p.state.items.get_mut(key) {
+            t.check_reported = Some(seen);
         }
         Ok(())
     }
@@ -1895,6 +1954,7 @@ fn tracked_as(item: &ItemId, rule: &str, issue: &Issue) -> Tracked {
         announce_tries: 0,
         moved_to: None,
         prerequisite: false,
+        check_reported: None,
     }
 }
 
@@ -2106,3 +2166,13 @@ fn next_slice(open: &[String], after: Option<&str>, polls: usize) -> (Vec<String
 
 #[cfg(test)]
 mod tests;
+
+/// The last `max` bytes of `s`, cut at a character boundary. A failure is
+/// usually at the end of a log.
+pub(crate) fn tail(s: &str, max: usize) -> String {
+    let mut start = s.len().saturating_sub(max);
+    while !s.is_char_boundary(start) {
+        start += 1;
+    }
+    s[start..].to_owned()
+}
