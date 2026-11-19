@@ -5,9 +5,9 @@
 
 mod config;
 mod render;
+mod tree;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
@@ -95,6 +95,8 @@ struct Running {
     model: Option<String>,
     started: Instant,
     child: Option<Child>,
+    /// What ends the child's whole process tree.
+    tree: Option<tree::Tree>,
     /// The MCP config holding the worker's token, removed when it stops.
     config_file: Option<PathBuf>,
     /// The tracker did not take the stop yet; it is sent again each round.
@@ -532,6 +534,7 @@ impl<T: TrackerApi> Supervisor<T> {
             model,
             started: Instant::now(),
             child: None,
+            tree: None,
             config_file: None,
             stop_pending: false,
         };
@@ -630,21 +633,17 @@ impl<T: TrackerApi> Supervisor<T> {
             .iter()
             .map(|a| render::fill(a, &COMMAND_VARS, &vars))
             .collect::<Result<Vec<_>>>()?;
-        let log = std::fs::OpenOptions::new()
-            .append(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(own.join("out.log"))
-            .context("open the worker's log")?;
+        let log =
+            render::create_private_log(&own.join("out.log")).context("open the worker's log")?;
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(&args)
             .current_dir(&workdir)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log.try_clone()?))
             .stderr(Stdio::from(log))
-            // Its own group, so a stop ends what the vendor's CLI started too.
-            .process_group(0)
             .kill_on_drop(true);
+        // Its own group or job, so a stop ends what the vendor's CLI started too.
+        tree::configure(&mut cmd);
         let passed = profile
             .pass_env
             .iter()
@@ -653,7 +652,9 @@ impl<T: TrackerApi> Supervisor<T> {
         for (k, v) in &profile.set_env {
             cmd.env(k, render::fill(v, &PATH_VARS, &path_vars)?);
         }
-        running.child = Some(cmd.spawn().with_context(|| format!("start {program}"))?);
+        let child = cmd.spawn().with_context(|| format!("start {program}"))?;
+        running.tree = Some(tree::Tree::attach(&child));
+        running.child = Some(child);
         Ok(())
     }
 
@@ -715,7 +716,7 @@ impl<T: TrackerApi> Supervisor<T> {
             Err(_) => false,
         };
         if let Some(child) = r.child.take() {
-            kill_group(child);
+            kill_group(r.tree.take(), child);
         }
         if let Some(f) = r.config_file.take() {
             let _ = tokio::fs::remove_file(f).await;
@@ -728,14 +729,11 @@ impl<T: TrackerApi> Supervisor<T> {
     }
 }
 
-/// Kills the worker's whole process group, then reaps the child off the
+/// Kills the worker's whole process tree, then reaps the child off the
 /// pool's lock.
-fn kill_group(mut child: Child) {
-    if let Some(pid) = child.id().and_then(|p| i32::try_from(p).ok()) {
-        // SAFETY: kill(2) on a group this process made; it touches no memory.
-        unsafe {
-            libc::kill(-pid, libc::SIGKILL);
-        }
+fn kill_group(tree: Option<tree::Tree>, mut child: Child) {
+    if let Some(tree) = tree {
+        tree.kill();
     }
     let _ = child.start_kill();
     tokio::spawn(async move {
@@ -769,5 +767,5 @@ fn fail(e: anyhow::Error) -> Launch {
     Launch::Failed(format!("{e:#}"))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;

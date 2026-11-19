@@ -102,13 +102,18 @@ hook_token_env = "CLOUD_HOOK_TOKEN"
   `{workdir}`) instead of the state directory.
 - The per-worker MCP config (`json`: `mcpServers.kbl`; `toml`: `mcp_servers.kbl`) starts `kbl-mcp` with
   `KBL_AGENT={worker}`, that worker's token, the run, the tracker and broker addresses, and the pool's filter as
-  `KBL_WORK_FILTER`. It is written mode 600 in a mode 700 directory and removed when the worker stops. The worker's
+  `KBL_WORK_FILTER`. It is written mode 600 in a mode 700 directory and removed when the worker stops. On Windows there is no mode: the
+  file and its directory keep the ACL they inherit, which under the user's profile or temp directory is limited to that
+  user, SYSTEM and administrators. A `state_dir` or `mcp_config_file` outside the profile, on a path with a broader
+  ACL, is not made private by `kbl-mcp`; keep them under the profile. The worker's
   `kbl-mcp` applies `KBL_WORK_FILTER` to every `work_next` and `work_peek`, over whatever the agent asks for.
 - Felix: an ID token source (`KBL_FELIX_ID_TOKEN_FILE` or `_COMMAND` with `KBL_FELIX_CONTROL_PLANE`) is passed by
   name. A fixed `KBL_FELIX_TOKEN` is copied into the worker's config only with `share_felix_token = true`.
 - Output goes to `<state_dir>/<worker>/out.log`, never to the supervisor's stdout, which belongs to MCP.
 - Each worker runs in a process group of its own, and a stop kills the group, so what the vendor's CLI started
-  (its `kbl-mcp` among them) ends with it. A stop is logged on the tracker first, so the token is dead before the
+  (its `kbl-mcp` among them) ends with it. On Windows the worker is put in a Job Object that kills its members when
+  it is terminated or the last handle closes, so the tree also ends if the supervisor dies. A process the CLI starts
+  in the instant between the spawn and the job assignment is not in the job. A stop is logged on the tracker first, so the token is dead before the
   kill; a stop the tracker refuses for any reason but `bad_worker` (already stopped) is sent again each round.
 - `kind = "hook"` asks the tracker for a one-time code instead of a token and posts `{worker, code, tracker_url,
   vendor, profile, model, filter}` to the URL, with a bearer from `hook_token_env` if set. The hosted agent calls

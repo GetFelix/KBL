@@ -59,6 +59,7 @@ fn the_mcp_config_names_one_server_in_either_format() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_private_file_is_mode_600_and_never_written_through_an_existing_path() {
     let dir = std::env::temp_dir().join(format!("kbl-render-{}", std::process::id()));
@@ -78,5 +79,18 @@ fn a_private_file_is_mode_600_and_never_written_through_an_existing_path() {
     std::os::unix::fs::symlink(dir.join("a/elsewhere"), &link).unwrap();
     assert!(write_private(&link, "secret").is_err());
     assert!(!dir.join("a/elsewhere").exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn a_private_file_is_never_written_through_an_existing_path_on_windows() {
+    let dir = std::env::temp_dir().join(format!("kbl-render-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let file = dir.join("a/mcp.json");
+    write_private(&file, "secret").unwrap();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
+    assert!(write_private(&file, "again").is_err());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "secret");
     std::fs::remove_dir_all(&dir).unwrap();
 }

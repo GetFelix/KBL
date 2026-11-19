@@ -364,7 +364,7 @@
  "mcp/src/supervise.rs#call_hook": [
   "let mut req = self.0.hook.post(url).json(&json!({"
  ],
- "mcp/src/supervise.rs#kill_group": [
+ "mcp/src/supervise/tree.rs#Tree::kill": [
   "libc::kill(-pid, libc::SIGKILL);"
  ],
  "mcp/src/supervise.rs#note_end": [

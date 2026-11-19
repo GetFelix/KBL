@@ -1,0 +1,1 @@
+The Windows build of `kbl-mcp`, `kbl-tool` and `kbl-ingest` compiles again, and a stopped supervise worker now ends its whole process tree there (through a Job Object) as it does on Unix. CI builds and tests the Windows binaries on every pull request.
