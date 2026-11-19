@@ -2,7 +2,7 @@
 // (WCAG 3.3.4: the person reviews what will be written, and can cancel).
 import type { ItemRow } from '../fold.ts';
 import type { DecisionLine } from '../story.ts';
-import { acceptTier, assigneeAgent, assigneePerson, assignPick, checkPerson, checkRedo, CLOSE_WHY, redoCopy, redoNeedsNote, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
+import { acceptTier, assigneeAgent, assigneePerson, assignPick, checkNeeds, checkPerson, checkRedo, CLOSE_WHY, needsOf, needsPick, redoCopy, redoNeedsNote, shownTier, UNDO, type CloseWhy, type WriteArgs } from '../writes.ts';
 import { modal } from './dialog.ts';
 import { h } from './dom.ts';
 import { tierSelect } from './item-actions.ts';
@@ -191,6 +191,64 @@ export function assignDialog(send: (ids: string[], args: WriteArgs) => void) {
       m.body.replaceChildren(form);
       m.open();
       meButton.focus();
+    },
+  };
+}
+
+/**
+ * The needs dialog: what the item's work needs, as words. Saving an empty field clears them.
+ * `known` are needs the log already shows, offered as suggestions; the tracker refuses a need
+ * outside the team's vocabulary and the refusal is shown with the write.
+ */
+export function needsDialog(send: (ids: string[], args: WriteArgs) => void) {
+  const m = modal('Needs', 'needs-dialog');
+  m.el.setAttribute('aria-labelledby', 'needs-title');
+  m.el.removeAttribute('aria-label');
+  return {
+    el: m.el,
+    isOpen: m.isOpen,
+    open(item: ItemRow, known: readonly string[]) {
+      const now = needsOf(item);
+      const input = h('input', { id: 'needs-text', type: 'text', class: 'field', list: 'needs-known', autocomplete: 'off', spellcheck: 'false', value: now.join(', '), 'aria-describedby': 'needs-help needs-error' });
+      const error = h('p', { id: 'needs-error', class: 'field-error' });
+      const apply = (text: string) => {
+        const problem = checkNeeds(text);
+        error.textContent = problem ?? '';
+        if (problem) {
+          input.setAttribute('aria-invalid', 'true');
+          return input.focus();
+        }
+        const args = needsPick(now, text);
+        if (!args) {
+          error.textContent = 'That is what it needs already.';
+          return input.focus();
+        }
+        m.close();
+        send([item.id], args);
+      };
+      const clear = h('button', { type: 'button', class: 'button danger', 'data-focus': 'needs-clear', onclick: () => apply('') }, 'Clear needs');
+      if (now.length === 0) clear.setAttribute('aria-disabled', 'true');
+      const form = h('form', { method: 'dialog' },
+        h('h2', { id: 'needs-title' }, `What ${item.id} needs`),
+        h('p', { class: 'muted' }, now.length ? `${item.title} (needs ${now.join(', ')})` : `${item.title} (needs nothing yet)`),
+        h('label', { for: 'needs-text', class: 'field-label' }, 'Needs, separated by commas'),
+        input,
+        h('datalist', { id: 'needs-known' }, ...known.map((n) => h('option', { value: n }))),
+        h('p', { id: 'needs-help', class: 'muted small' }, 'Only an agent that declares every one of these is handed the item and its fix, test and resume work. A list you set replaces what triage or an intake rule recorded.'),
+        error,
+        h('div', { class: 'dialog-actions' },
+          clear,
+          h('span', { class: 'spacer' }),
+          h('button', { type: 'button', class: 'button ghost', onclick: () => m.close() }, 'Cancel'),
+          h('button', { type: 'submit', class: 'button' }, 'Set needs')),
+      );
+      form.addEventListener('submit', (e) => {
+        e.preventDefault();
+        apply(input.value);
+      });
+      m.body.replaceChildren(form);
+      m.open();
+      input.focus();
     },
   };
 }

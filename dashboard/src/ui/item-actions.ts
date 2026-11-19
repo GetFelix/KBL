@@ -3,7 +3,7 @@
 // record never wipes a half-typed answer or takes the focus off a button.
 import type { ItemRow } from '../fold.ts';
 import type { ViewState } from '../state.ts';
-import { CAN, canAssign, canSteer, canTakeAfterLimit, checkAnswer, checkSteer, heldAttempt, latestFor, pending, shownTier, UNCLEAR, type WriteKind } from '../writes.ts';
+import { CAN, canAssign, canSetNeeds, needsOf, canSteer, canTakeAfterLimit, checkAnswer, checkSteer, heldAttempt, latestFor, pending, shownTier, UNCLEAR, type WriteKind } from '../writes.ts';
 import { byFocus, h } from './dom.ts';
 
 export interface WriteHandlers {
@@ -19,6 +19,8 @@ export interface WriteHandlers {
   take(item: string): void;
   /** Opens the assign picker for the item. */
   assign(item: string): void;
+  /** Opens the needs dialog for the item. */
+  needs(item: string): void;
   /** Opens the redo dialog for the decision at offset `at` on `attempt`. It asks first and says what happens. */
   redo(item: string, attempt: number, at: number): void;
   /** Sends a note to the agent holding `attempt`. */
@@ -63,6 +65,7 @@ const PENDING: Record<WriteKind, string> = {
   steer: 'Sending the note…',
   redo: 'Starting the redo…',
   advice: 'Adjusting the advice…',
+  needs: 'Setting the needs…',
   undo: 'Undoing…',
 };
 
@@ -151,18 +154,19 @@ export function itemActions(on: WriteHandlers) {
       current = () => s;
       const kinds = (Object.keys(CAN) as (keyof typeof CAN)[]).filter((k) => CAN[k](item));
       const assignable = canAssign(item);
+      const needsable = canSetNeeds(item);
       const limit = canTakeAfterLimit(item, s.tracker.kind === 'signed-in' ? s.tracker.person : null);
       const steerAt = canSteer(item) ? heldAttempt(item, s.stories.get(item.id)) : null;
       // `checking` keeps the last sign-in state, so checking a token does not rebuild the form.
       if (s.tracker.kind !== 'checking') auth = s.tracker.kind === 'refused' ? `refused:${s.tracker.reason}` : s.tracker.kind;
-      const key = `${item.id}|${kinds.join(',')}|${assignable}|${limit}|${steerAt}|${auth}|${item.question}|${item.unclear}|${(item.options ?? []).join('\u0000')}|${item.question == null ? '' : s.questions.get(item.question)}`;
+      const key = `${item.id}|${kinds.join(',')}|${assignable}|${needsable}|${limit}|${steerAt}|${auth}|${item.question}|${item.unclear}|${(item.options ?? []).join('\u0000')}|${item.question == null ? '' : s.questions.get(item.question)}`;
       if (key !== built) {
         built = key;
         const hadFocus = el.contains(document.activeElement) ? ((document.activeElement as HTMLElement).dataset.focus ?? '') : null;
         const head = h('h3', { id: 'actions-title', class: 'actions-title', tabindex: '-1' }, 'Actions');
         status = h('p', { class: 'write-status' });
         tier = null;
-        if (kinds.length === 0 && !assignable && steerAt === null) {
+        if (kinds.length === 0 && !assignable && !needsable && steerAt === null) {
           el.replaceChildren(head, h('p', { class: 'muted' }, 'Nothing to do here: the item is closed.'));
         } else if (s.tracker.kind !== 'signed-in') {
           el.replaceChildren(head,
@@ -182,6 +186,10 @@ export function itemActions(on: WriteHandlers) {
               ? h('div', { class: 'action-row' },
                   limit ? h('button', { type: 'button', class: 'button primary', 'data-focus': 'take', title: 'Assign it to yourself; no agent will claim it', onclick: guard(() => current(), id, () => on.take(id)) }, 'Take it yourself') : null,
                   h('button', { type: 'button', class: 'button', 'data-focus': 'assign', title: 'Pick who is doing this', onclick: guard(() => current(), id, () => on.assign(id)) }, 'Assign…'))
+              : null,
+            needsable
+              ? h('div', { class: 'action-row' },
+                  h('button', { type: 'button', class: 'button', 'data-focus': 'needs', title: 'Say what the work needs, such as gpu; only an agent that declares it is handed the item', onclick: guard(() => current(), id, () => on.needs(id)) }, needsOf(item).length ? 'Change needs…' : 'Set needs…'))
               : null,
             steerAt !== null ? steerForm(item, steerAt) : null,
             tier

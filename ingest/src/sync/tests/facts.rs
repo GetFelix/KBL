@@ -338,3 +338,54 @@ async fn a_rule_maps_at_most_the_most_needs_an_item_carries() {
         kbl_core::work::MAX_NEEDS
     );
 }
+
+#[tokio::test]
+async fn a_new_label_map_re_maps_issues_already_imported_once() {
+    let rig = rig();
+    raise(&rig, 20);
+    needs_vocabulary(&rig);
+    rig.list(vec![
+        with_facts(812, &["agent-ok", "needs-gpu"], None),
+        with_facts(813, &["agent-ok"], None),
+    ]);
+    let before = rig.ingest(json!([admit_rule()]));
+    before.poll(false).await.unwrap();
+    before.poll(false).await.unwrap();
+    assert!(
+        rig.tracker.state().items[&rig.root(UP)]
+            .class
+            .needs
+            .is_none()
+    );
+
+    // The rule gains a mapping; no label changed upstream.
+    let mut rule = admit_rule();
+    rule["label_needs"] = json!({ "needs-gpu": "gpu" });
+    let after = rig.ingest(json!([rule.clone()]));
+    after.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&rig.root(UP)].class.needs().to_vec(), ["gpu"]);
+    assert!(
+        s.items[&rig.root("GetFelix/felix#813")]
+            .class
+            .needs
+            .is_none()
+    );
+
+    // Later polls and a restart with the same rule write nothing more.
+    let edits = rig.tracker.count("edited");
+    after.poll(false).await.unwrap();
+    rig.ingest(json!([rule.clone()])).poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("edited"), edits);
+
+    // Changing the mapping maps again.
+    rule["label_needs"] = json!({ "needs-gpu": "azure" });
+    rig.ingest(json!([rule])).poll(false).await.unwrap();
+    assert_eq!(
+        rig.tracker.state().items[&rig.root(UP)]
+            .class
+            .needs()
+            .to_vec(),
+        ["azure"]
+    );
+}
