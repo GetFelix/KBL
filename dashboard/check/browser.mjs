@@ -856,6 +856,8 @@ try {
   await page.eval(`document.querySelector('.row[data-id=gh-2210]').click(); true`);
   await page.waitFor(`document.querySelector('.panel .row-id')?.textContent === 'gh-2210'`);
   await shoot('panel-in-review-dark');
+  await page.eval(`document.querySelector('.row[data-id=gh-2219]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel .row-id')?.textContent === 'gh-2219'`);
   await page.eval(`window.__tracker.delay = 800; document.querySelector('#panel-tier').value = '0'; document.querySelector('[data-focus=set-tier]').click(); true`);
   await new Promise((ok) => setTimeout(ok, 150));
   check(await page.eval(`document.querySelector('.actions').hasAttribute('aria-busy') && document.querySelector('.write-status').textContent === 'Setting the tier…' && document.querySelector('.activity-text').textContent === 'Setting the tier of gh-2219…'`), 'a write in flight shows as pending in the panel and the activity line');
