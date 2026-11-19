@@ -63,6 +63,14 @@ impl Source for Counting {
         self.hit();
         Ok(false)
     }
+    async fn rerun_failed(&self, _: &str, _: &str) -> Result<bool, SourceError> {
+        self.hit();
+        Ok(true)
+    }
+    async fn check_log(&self, _: &str, _: &str, _: usize) -> Result<Option<String>, SourceError> {
+        self.hit();
+        Ok(Some("error: unused import".into()))
+    }
     async fn open_issue(&self, repo: &str, _: &str, _: &str) -> Result<IssueRef, SourceError> {
         self.hit();
         Ok(IssueRef::new(repo, 1))
@@ -172,6 +180,60 @@ async fn a_worker_polls_and_writes_only_the_sources_it_leases() {
     lessee.renewed(lessee.sending(), BTreeMap::new());
     assert!(src.fetch(&issue("o/a")).await.is_err());
     assert!(!lessee.may_poll());
+}
+
+/// The source's defaults say "cannot re-run" and "no log", so a fence that
+/// forgot to pass these on would quietly turn both features off.
+#[tokio::test(start_paused = true)]
+async fn a_check_rerun_and_its_log_reach_the_source_through_the_fence() {
+    let lessee = leased(&["github:o/a"]);
+    let src = Fenced::new(Counting::default(), lessee.clone());
+    lessee.renewed(lessee.sending(), held(&[("github:o/a", 1)]));
+    let job = "https://github.com/o/a/actions/runs/5/job/55";
+    assert!(src.rerun_failed("o/a", job).await.unwrap());
+    let log = src.check_log("o/a", job, 4096).await.unwrap();
+    assert_eq!(log.as_deref(), Some("error: unused import"));
+    // An agent's pull request elsewhere: its log is a read and passes, a
+    // re-run is a write and is not sent.
+    assert!(
+        src.check_log("o/elsewhere", job, 4096)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(!src.rerun_failed("o/elsewhere", job).await.unwrap());
+    assert_eq!(src.inner.calls(), 3);
+    // A closed fence stops both.
+    tokio::time::advance(Duration::from_secs(61)).await;
+    assert!(src.rerun_failed("o/a", job).await.is_err());
+    assert!(src.check_log("o/a", job, 4096).await.is_err());
+    assert_eq!(src.inner.calls(), 3);
+}
+
+/// GitHub that loses the lease while the job log is being read.
+struct LosesTheLease(Arc<Lessee>);
+
+impl Transport for LosesTheLease {
+    async fn send(&self, req: Req) -> Result<Res> {
+        assert!(req.url.contains("/actions/jobs/55/logs"), "{}", req.url);
+        self.0.renewed(self.0.sending(), BTreeMap::new());
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fence_that_closes_during_a_log_read_is_an_error_not_an_empty_log() {
+    let lessee = leased(&["github:o/a"]);
+    lessee.renewed(lessee.sending(), held(&[("github:o/a", 1)]));
+    let github = crate::github::Github::new(
+        "https://api.github.com",
+        gated(LosesTheLease(lessee.clone()), lessee.clone()),
+        Vec::new(),
+    );
+    let src = Fenced::new(github, lessee.clone());
+    let job = "https://github.com/o/a/actions/runs/5/job/55";
+    let err = src.check_log("o/a", job, 4096).await.unwrap_err();
+    assert!(is_fenced(&err), "{err}");
 }
 
 #[tokio::test(start_paused = true)]

@@ -1,7 +1,7 @@
 // What a finished attempt handed off, read from the fold (wasm/src/activity.rs): the agent's
 // last note, the lines its edits touch, its failed steps and the reviewer's mark, beside the
 // pull request's recorded checks. Only recorded fields; a missing one is left out. No DOM.
-import type { Fold, ItemRow } from './fold.ts';
+import type { CheckTry, Fold, ItemRow } from './fold.ts';
 
 export interface FailedStep {
   offset: number;
@@ -54,6 +54,16 @@ export function checksText(item: Pick<ItemRow, 'pr' | 'pr_phase' | 'pr_checks' |
     case 'pending': return 'Checks running';
     default: return null;
   }
+}
+
+/** One line per failed try: the check, the short head commit and whether a fix was opened for it. */
+export function tryText(t: CheckTry, n: number): string {
+  return `Try ${n}: ${t.check} on ${t.head.slice(0, 7)}${t.fix ? `, fix ${t.fix}` : ', no fix opened'}`;
+}
+
+/** What a person reads about each failed try, in order; empty when the log recorded none. */
+export function checkTries(item: Pick<ItemRow, 'check_tries'>): { title: string; url: string; log: string }[] {
+  return (item.check_tries ?? []).map((t, i) => ({ title: tryText(t, i + 1), url: t.url, log: t.log?.trim() || 'No log excerpt was recorded.' }));
 }
 
 export function failedText(h: Handoff): string | null {

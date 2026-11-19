@@ -337,15 +337,17 @@ pub(crate) trait Source: Send + Sync {
     }
 
     /// The end of the log of the check at `url` in `repo`, at most `max`
-    /// bytes, if the source can read it. Errors read as no log.
+    /// bytes, if the source can read it. A log the vendor will not give reads
+    /// as none; a lease fence that is closed, or closes during the read, is an
+    /// error.
     fn check_log(
         &self,
         repo: &str,
         url: &str,
         max: usize,
-    ) -> impl Future<Output = Option<String>> + Send {
+    ) -> impl Future<Output = Result<Option<String>, SourceError>> + Send {
         let _ = (repo, url, max);
-        async { None }
+        async { Ok(None) }
     }
 
     /// Opens an issue in `repo` as our own credential and says which it is.

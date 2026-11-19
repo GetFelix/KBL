@@ -1001,7 +1001,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             return Ok(());
         }
         let log = match IssueRef::parse(&status.pr).map(|r| r.repo) {
-            Some(repo) => self.source.check_log(&repo, &f.url, MAX_CHECK_LOG).await,
+            Some(repo) => self.source.check_log(&repo, &f.url, MAX_CHECK_LOG).await?,
             None => None,
         };
         // Without the job's log, the check's own output is the best evidence.

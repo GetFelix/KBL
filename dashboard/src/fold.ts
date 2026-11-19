@@ -25,6 +25,15 @@ export interface Fold {
   metricsJson(nowMs: number, days: number): string;
 }
 
+export interface CheckTry {
+  offset: number;
+  check: string;
+  head: string;
+  url: string;
+  fix?: string | null;
+  log?: string | null;
+}
+
 /** A class value and who chose it. */
 export type Tag = { value: string; by: 'rule' | 'triage' | 'person' };
 
@@ -103,6 +112,8 @@ export interface ItemRow {
   pr_phase?: string | null;
   pr_checks?: string | null;
   failing_check?: string | null;
+  /** A root's failed checks, oldest first, with the log excerpt each try saw and the fix it opened. */
+  check_tries?: CheckTry[];
   /** The log's format when the page read it, the same for every row. A log below 7 refuses flags. */
   format?: number;
 }

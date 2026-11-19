@@ -612,8 +612,15 @@ impl<T: Transport> Source for Github<T> {
         }
     }
 
-    async fn check_log(&self, repo: &str, url: &str, max: usize) -> Option<String> {
-        let job = actions_job(repo, url)?;
+    async fn check_log(
+        &self,
+        repo: &str,
+        url: &str,
+        max: usize,
+    ) -> Result<Option<String>, SourceError> {
+        let Some(job) = actions_job(repo, url) else {
+            return Ok(None);
+        };
         let api = format!("{}/repos/{repo}/actions/jobs/{job}/logs", self.api);
         let mut res = self.call(Req::log(api, max, false)).await;
         // GitHub answers with a redirect to a signed link, which takes no token.
@@ -626,7 +633,7 @@ impl<T: Transport> Source for Github<T> {
         {
             res = self.call(Req::log(to.clone(), max, true)).await;
         }
-        match res {
+        Ok(match res {
             Ok(res) if res.status == 200 => res.body.as_str().map(|log| tail(log, max)),
             Ok(res) => {
                 eprintln!(
@@ -635,11 +642,14 @@ impl<T: Transport> Source for Github<T> {
                 );
                 None
             }
+            // A fence that closed mid-read is not "no log": the poll stops
+            // and the report waits for the worker that holds the lease.
+            Err(e) if crate::lease::is_fenced(&e) => return Err(e),
             Err(e) => {
                 eprintln!("kbl-ingest: could not read the log of {url}: {e}");
                 None
             }
-        }
+        })
     }
 
     async fn write_back(&self, what: &WriteBack) -> Result<(), SourceError> {

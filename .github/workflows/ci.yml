@@ -188,6 +188,12 @@ jobs:
         run: |
           cargo build --locked -p kbl-mcp -p kbl-tool -p kbl-tracker
           node dev/check-supervise.mjs
+      # After the checks that share this log, since it raises the format to 23
+      # and a later answer then returns the asker to Ready without resume work.
+      - name: Turn a failed check into fix work and close it on green
+        run: |
+          cargo build --locked -p kbl-ingest
+          node dev/check-tracker-fix-check.mjs
       # On a stack of its own with 20 s tokens, then the stack is recreated as it was.
       - name: Outlive the first Felix token, holding a claim
         run: |

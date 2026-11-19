@@ -1615,6 +1615,12 @@ applies from there. The same failure reported twice is refused as `duplicate`,
 and a root keeps at most 32 failures; past that, failures go to a person. Zero
 `auto_fix_tries` turns fix work off.
 
+In the dashboard's Needs you list, a root waiting on a failed check shows
+each try as a row: the check, the short head commit, the fix item it opened
+(or that none was opened), a link to the job, and the log excerpt that try
+saw. `dev/check-tracker-fix-check.mjs` drives a red check through the dev
+stack to a claimed fix and a green head.
+
 ### Prerequisites become upstream issues
 
 A new prerequisite lives only in the tracker until someone files it in the
