@@ -614,6 +614,9 @@
   "&& (self.lane_is_all_own(agent, tier).await",
   "if tier >= TIERS && self.is_own_work(agent, &record).await {"
  ],
+ "core/src/work_fold.rs#check_failed": [
+  "if rec.actor != Actor::Tracker {"
+ ],
  "tracker/src/tracker/ingest.rs#allowed": [
   "fn allowed(record: &WorkRecord) -> bool {"
  ],

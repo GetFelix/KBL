@@ -1625,3 +1625,29 @@ fn a_reader_of_format_21_stops_at_the_raise_to_22() {
     assert_eq!(log[0].1.v, 22);
     assert_eq!(log[4].1.min_format(), 22);
 }
+
+/// A log at format 23: ingest reports a failed check, the tracker opens one
+/// `fix_check` for it, a repeat and an agent's report are refused, and green
+/// checks close the fix. Its folded state is pinned in `wasm/golden/format_23.state.json`.
+const FORMAT_23_LOG: &str = include_str!("work_format_23.jsonl");
+
+#[test]
+fn the_twenty_third_format_stamps_check_failed_and_opens_one_fix() {
+    use kbl_core::work::WorkKind;
+    use kbl_core::work_fold::Closure;
+    assert_eq!(kbl_core::work::FORMAT_V23, 23);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V23) };
+    let log = entries(FORMAT_23_LOG);
+    for (_, r) in &log {
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    assert_eq!(log[7].1.min_format(), 23);
+    let s = fold(&log);
+    let why: Vec<_> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(why, [(8, Reject::Duplicate), (9, Reject::ActorNotAllowed)]);
+    let root = &s.items[&kbl_core::names::ItemId::new("r1").unwrap()];
+    assert_eq!(root.check_failures.len(), 1);
+    let fix = &s.items[root.check_failures[0].fix.as_ref().unwrap()];
+    assert_eq!(fix.work, WorkKind::FixCheck);
+    assert_eq!(fix.closed, Some(Closure::Completed));
+}

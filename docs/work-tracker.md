@@ -1232,6 +1232,10 @@ What it does with GitHub:
   not shown until the re-run settles or the wait runs out. If GitHub refuses (no `actions: write`, a run
   too old to re-run) or the old failure is still shown after 10 polls, the red
   is recorded as it would be without the list.
+- **Failed checks.** A red that stays red is reported as `check_failed` with
+  the end of the job's log, once per request, check and head commit, and may
+  become `fix_check` work ([below](#failed-checks-become-fix-work)). Reading
+  an Actions job's log needs Actions: read.
 - **Releases.** A merged root that an open item's link waits on for a release
   (`awaits_release` in `GET /v1/ingest/roots`) gets a `shipped` record once a
   published release carries its merge commit. The worker records the oldest
@@ -1572,6 +1576,37 @@ re-run is refused and the check goes the normal way. Only requests the
 worker already reads for an item are re-run, never one of another source's
 roots.
 
+### Failed checks become fix work
+
+A red check that the flake list does not clear can go to an agent before it
+goes to a person. From [format 23](upgrades.md#formats) ingest reports it as
+`check_failed`: the request, the check's name and link, the head commit the
+check ran on, and the end of the job's log (at most 4 KiB). The log comes from
+GitHub's job log for an Actions job; for any other check, or when GitHub will
+not give the log, it is the check's own output. Ingest reports a failure after
+any flake re-run settles, so a pending re-run reports nothing, and once per
+request, check and head commit, so a re-poll reads no log again.
+
+The tracker decides whether the failure is work. It opens a `fix_check` item
+under the root when the team's `auto_fix_tries` (`KBL_AUTO_FIX_TRIES`, default
+1) is more than the `fix_check` items that check already had on that request,
+and none of them is still open. The item is ready at once, is handed out like
+a fix (with the root's needs), and its claim reply names the request in `pr`
+and the failure in `fix_check`; context entry `check_log` reads back the log
+excerpt. The agent pushes to the same request. The failure is stored as
+evidence on the root, not as a note.
+
+While a `fix_check` for the failing check is open the root is not in Needs
+you for it. Green checks, or a different request on the root, close every open
+`fix_check` nobody holds; a held one ends with its agent's `work_complete`.
+When the fix's push fails the same check again and the tries are used, the
+tracker records the failure without opening work and the root goes to Needs
+you as before, with every failure's excerpt in its context (`check-failed-1`,
+`check-failed-2`, ...). The note rule for a redo (`note_required`) still
+applies from there. The same failure reported twice is refused as `duplicate`,
+and a root keeps at most 32 failures; past that, failures go to a person. Zero
+`auto_fix_tries` turns fix work off.
+
 ### Prerequisites become upstream issues
 
 A new prerequisite lives only in the tracker until someone files it in the
@@ -1897,6 +1932,7 @@ the operator's job.
 | `resume` | Any agent | Whatever the asker was doing, carried on from the answer. Only an answer creates it |
 | `test` | Any agent | Test follow-up for an item, as progress records |
 | `review` | An agent that names the reviewer tier, and did not work on the request | Findings, and for a final review a verdict. Only the tracker creates it. See [Review as work](#review-as-work) |
+| `fix_check` | A coding agent | A push to the root's pull request that makes the failed check pass. Only the tracker creates it, from a failed check. See [Failed checks become fix work](#failed-checks-become-fix-work) |
 
 Root-shaping changes (a tier, or a split of a root at triage) and out-of-scope
 work are proposals that a person accepts. Children under a held item are live.

@@ -1,0 +1,11 @@
+{"v":23,"at_ms":1000,"by":"gabriel","actor":"person","kind":"format_raised","to":23}
+{"at_ms":1010,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"fix the lint"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1"}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"claimed","item":"r1","attempt":1,"deadline_ms":1800000090000}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"progress","item":"r1","attempt":1,"note":{"text":"opened"},"pr":"GetFelix/felix#9"}
+{"at_ms":1050,"by":"w1","actor":"agent","kind":"done","item":"r1","attempt":1,"cost_micros":0}
+{"at_ms":1060,"by":"ingest","actor":"tracker","kind":"pr_status","item":"r1","status":{"pr":"GetFelix/felix#9","phase":"open","review":"unreviewed","checks":"red","failing":{"name":"lint","url":"https://github.com/GetFelix/felix/actions/runs/7/job/71"}}}
+{"v":23,"at_ms":1070,"by":"ingest","actor":"tracker","kind":"check_failed","item":"r1","pr":"GetFelix/felix#9","check":"lint","url":"https://github.com/GetFelix/felix/actions/runs/7/job/71","head":"abc123","log":"error: unused import `Foo`","fix":true}
+{"v":23,"at_ms":1080,"by":"ingest","actor":"tracker","kind":"check_failed","item":"r1","pr":"GetFelix/felix#9","check":"lint","url":"https://github.com/GetFelix/felix/actions/runs/7/job/71","head":"abc123","log":"error: unused import `Foo`"}
+{"v":23,"at_ms":1090,"by":"w1","actor":"agent","kind":"check_failed","item":"r1","pr":"GetFelix/felix#9","check":"lint","url":"","head":"def456","log":""}
+{"v":23,"at_ms":1100,"by":"ingest","actor":"tracker","kind":"pr_status","item":"r1","status":{"pr":"GetFelix/felix#9","phase":"open","review":"unreviewed","checks":"green"}}
