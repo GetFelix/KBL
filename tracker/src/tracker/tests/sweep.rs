@@ -20,6 +20,12 @@ const WORKERS: [&str; 3] = ["sup-a", "sup-b", "sup-c"];
 /// Everyone who claims: agents, and workers once they are started.
 const CLAIMANTS: [&str; 6] = ["w1", "w2", "w3", "sup-a", "sup-b", "sup-c"];
 const STEPS: usize = 70;
+/// Claims of work that needs something, across the seeds, so the sweep
+/// cannot stop testing the rule without saying so.
+static NEEDY_CLAIMS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The needs an item can carry and the capabilities an agent can declare.
+const NEEDS: [&str; 3] = ["azure", "gpu", "network"];
 
 struct Rng(u64);
 
@@ -160,6 +166,11 @@ struct Model {
     started: HashMap<(String, u32), (String, u64)>,
     /// The token each worker was handed when its start was acknowledged.
     tokens: HashMap<&'static str, String>,
+    /// Seed of the generator the needs and capability steps draw from.
+    aux: u64,
+    /// What each claimant declares on its next claim. It changes between
+    /// claims, since capabilities ride each call.
+    caps: HashMap<&'static str, Vec<String>>,
     /// The supervisor was removed: its workers are stopped and it starts no more.
     gone: bool,
 }
@@ -229,7 +240,16 @@ async fn seed_item(t: &Tracker<Fake>, m: &mut Model) {
     let id = format!("i{}", m.next_item);
     m.next_item += 1;
     let put = |record| t.person_record(key("gab"), record);
-    if put(imported(&id)).await.is_err() {
+    // In the repo the needs vocabulary is set for.
+    let record = WorkRecord::Imported {
+        item: item(&id),
+        source: "github".into(),
+        upstream_id: format!("GetFelix/felix#{id}"),
+        title: "t".into(),
+        labels: vec![],
+        milestone: None,
+    };
+    if put(record).await.is_err() {
         return;
     }
     m.imported.insert(id.clone());
@@ -272,8 +292,15 @@ async fn claim_with(
     who: &'static str,
     filter: &Filter,
 ) {
+    // Until a claimer narrows what it declares, it declares everything.
+    let caps = m
+        .caps
+        .get(who)
+        .cloned()
+        .unwrap_or_else(|| NEEDS.map(str::to_owned).to_vec());
+    let filter = filter.clone().with_capabilities(caps.clone()).unwrap();
     let Ok(reply) = t
-        .next_filtered(&agent(who), Duration::ZERO, &[], filter)
+        .next_filtered(&agent(who), Duration::ZERO, &[], &filter)
         .await
     else {
         return;
@@ -289,6 +316,27 @@ async fn claim_with(
         !(resumed && ended.contains(&at)),
         "{who} was resumed {id}'s claim at {at}, whose hold had ended"
     );
+    // Work goes only to a claimer whose declared capabilities cover what the
+    // root needs. Read off the root, not through the fold's own check. A
+    // resumed claim predates the call, so it is exempt.
+    if !resumed {
+        let it = &state.items[&item(&id)];
+        if matches!(
+            it.work,
+            WorkKind::Fix | WorkKind::Test | WorkKind::Resume | WorkKind::FixCheck
+        ) {
+            let needs = state.items[&it.root].class.needs();
+            if !needs.is_empty() {
+                NEEDY_CLAIMS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            for need in needs {
+                assert!(
+                    caps.iter().any(|c| c.eq_ignore_ascii_case(need)),
+                    "{who} declared {caps:?} and was handed {id}, which needs {need}"
+                );
+            }
+        }
+    }
     let hold = state.items[&item(&id)]
         .hold
         .clone()
@@ -459,6 +507,47 @@ async fn block_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, lift: bool)
         }
     };
     let _ = t.person_record(key("gab"), record).await;
+}
+
+/// A person sets or clears what an accepted item needs, or an agent changes
+/// what it declares. Either may be refused; the claim check judges the result.
+async fn needs_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
+    let mut ids: Vec<_> = m.accepted.iter().cloned().collect();
+    ids.sort();
+    if ids.is_empty() {
+        return;
+    }
+    let id = ids[rng.below(ids.len())].clone();
+    // Sparse, so most work stays open to every claimer and workers still
+    // hold items when they stop.
+    let needs: Vec<String> = pick(rng, 4);
+    let edit = WorkRecord::Edited {
+        item: item(&id),
+        title: None,
+        tier: None,
+        labels: None,
+        milestone: None,
+        item_type: None,
+        area: None,
+        size: None,
+        needs: Some(needs),
+        depends_on: None,
+        split: None,
+        proposal: None,
+    };
+    let _ = t.person_record(key("gab"), edit).await;
+}
+
+fn pick(rng: &mut Rng, one_in: usize) -> Vec<String> {
+    NEEDS
+        .iter()
+        .filter(|_| rng.below(one_in) == 0)
+        .map(|n| (*n).to_owned())
+        .collect()
+}
+
+fn caps_step(m: &mut Model, rng: &mut Rng, who: &'static str) {
+    m.caps.insert(who, pick(rng, 2));
 }
 
 async fn dismiss_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
@@ -793,7 +882,18 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
         20 => worker_end_step(serving, m, rng, false).await,
         21 => worker_end_step(serving, m, rng, true).await,
         22 if rng.below(4) == 0 => supervisor_gone_step(serving, m).await,
-        22..=23 => {}
+        22 => {}
+        // Also where a worker with a dead token lands: it does nothing.
+        23 => {
+            // Its own generator, so the other steps draw what they always did.
+            let mut aux = Rng(m.aux);
+            m.aux = aux.next();
+            match aux.below(3) {
+                0 => needs_step(serving, m, &mut aux).await,
+                1 => caps_step(m, &mut aux, who),
+                _ => {}
+            }
+        }
         24..=25 => claim_step(serving, fake, m, who).await,
         0..=1 => seed_item(serving, m).await,
         15 => block_step(serving, m, rng, false).await,
@@ -835,6 +935,12 @@ async fn heal(fake: &Fake, m: &mut Model) {
                 "{name} ended and one sweep left it holding an item"
             );
         }
+    }
+    // Everyone declares everything, so work held back for want of a
+    // capability is worked too.
+    for who in CLAIMANTS {
+        m.caps
+            .insert(who, NEEDS.iter().map(|n| (*n).to_owned()).collect());
     }
     // A person lifts every block, so what was held back is worked too.
     let blocked: Vec<ItemId> = replay(fake)
@@ -950,14 +1056,31 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             cur: start(&fake).await,
             old: None,
         };
-        // Format 24, so items can be assigned to agents, a question frees the
+        // Format 24 (needs from 20), so items can be assigned to agents, a question frees the
         // asker, a direct claim says it was one, an item can be blocked, and
         // workers can be started and can finish.
         t.cur
             .person_record(key("gab"), WorkRecord::FormatRaised { to: 24 })
             .await
             .unwrap();
-        let mut m = Model::default();
+        let vocabulary = WorkRecord::RulesSet {
+            target: kbl_core::work::Target {
+                source: "github".into(),
+                repo: "GetFelix/felix".into(),
+            },
+            root: None,
+            text: None,
+            checks: None,
+            vocabulary: Some(kbl_core::work::Vocabulary {
+                needs: NEEDS.map(str::to_owned).to_vec(),
+                ..Default::default()
+            }),
+        };
+        t.cur.person_record(key("gab"), vocabulary).await.unwrap();
+        let mut m = Model {
+            aux: seed ^ 0xA5A5,
+            ..Model::default()
+        };
         for _ in 0..STEPS {
             step(&fake, &mut t, &mut m, &mut rng).await;
         }
@@ -975,6 +1098,11 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
         }
     }
     if many {
+        let needy = NEEDY_CLAIMS.load(std::sync::atomic::Ordering::Relaxed);
+        assert!(
+            needy > 0,
+            "no claim in the sweep was of work that needs something"
+        );
         assert!(
             started > 0 && stopped > 0 && finished > 0 && released > 0,
             "the sweep left workers untouched: {started} started, {stopped} stopped, {finished} finished, {released} released"

@@ -6,7 +6,7 @@ import { ADVICE_FORMAT, canAdvise } from './advice.ts';
 import type { ItemRow } from './fold.ts';
 import { decisionAt, type DecisionLine, type Story } from './story.ts';
 
-export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'undo';
+export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'needs' | 'undo';
 
 export interface Request {
   path: string;
@@ -98,6 +98,46 @@ export const logTakesAssignees = (items: readonly ItemRow[]) => items.some(ASSIG
 /** Whether the page may offer an assignee on this item. The tracker refuses an item nobody accepted. */
 export const canAssign = (i: ItemRow): boolean => ASSIGNABLE_LOG(i) && OPEN(i) && i.accepted === true;
 
+/** The first log format that takes `needs` on an item. */
+export const NEEDS_FORMAT = 20;
+/** Most needs one item carries, as the fold counts them. */
+export const MAX_NEEDS = 8;
+
+/** Whether the log is at a format that takes needs. The palette lists the needs command only then. */
+export const logTakesNeeds = (items: readonly ItemRow[]) => items.some((i) => (i.format ?? 0) >= NEEDS_FORMAT);
+
+/** Whether the page may offer needs on this item. Needs live on a root; the tracker refuses any other item. */
+export const canSetNeeds = (i: ItemRow): boolean => (i.format ?? 0) >= NEEDS_FORMAT && OPEN(i) && !i.parent;
+
+/** What an item needs now, as its root's recorded set. */
+export const needsOf = (i: Pick<ItemRow, 'class'>): string[] => i.class?.needs?.values ?? [];
+
+/** What a needs field holds: words split on commas and spaces, each once, as the person spelled them. */
+export function parseNeeds(text: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const w of text.split(/[\s,]+/).filter(Boolean)) {
+    if (!seen.has(w.toLowerCase())) out.push(w);
+    seen.add(w.toLowerCase());
+  }
+  return out;
+}
+
+/** What is wrong with a needs field, or null. Empty is fine: it clears them. */
+export function checkNeeds(text: string): string | null {
+  const needs = parseNeeds(text);
+  if (needs.length > MAX_NEEDS) return `An item takes at most ${MAX_NEEDS} needs.`;
+  const bad = needs.find((n) => !/^[A-Za-z0-9_./-]+$/.test(n));
+  return bad ? `"${bad}" is not a plain word: use letters, digits, - _ . or /.` : null;
+}
+
+/** What the needs dialog would send for `text`, or null when it changes nothing. The fold would refuse a repeat as `no_change`. */
+export function needsPick(now: readonly string[], text: string): WriteArgs | null {
+  const next = parseNeeds(text);
+  const same = next.length === now.length && next.every((n, i) => n.toLowerCase() === now[i].toLowerCase());
+  return same ? null : { kind: 'needs', needs: next };
+}
+
 /** The attempt an agent holds, from the fold's `held_attempt`, else the newest attempt of its story still open. */
 export function heldAttempt(i: ItemRow, story?: { attempts: readonly { attempt: number; done: boolean; closed: boolean }[] }): number | null {
   if (i.stage !== 'held') return null;
@@ -138,7 +178,7 @@ export function marksAfter(marked: readonly string[], ids: readonly string[]): s
 const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
-export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo'>, (i: ItemRow) => boolean>> = {
+export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'needs'>, (i: ItemRow) => boolean>> = {
   accept: (i) => i.stage === 'triage' || i.stage === 'proposed',
   // The fold rejects only a proposal nobody accepted; an imported root is closed instead.
   reject: (i) => i.stage === 'proposed',
@@ -175,6 +215,8 @@ export type WriteArgs =
   | { kind: 'steer'; attempt: number; text: string }
   /** Starts a new attempt from the decision at offset `at` on `fromAttempt`. `note` may be empty. */
   | { kind: 'redo'; fromAttempt: number; at: number; note: string }
+  /** Sets what the item's work needs; an empty list clears it. */
+  | { kind: 'needs'; needs: string[] }
   /** Replaces triage's dependencies and split on the answer at offset `proposal`. */
   | { kind: 'advice'; depends_on: string[]; split: string[]; proposal: number };
 
@@ -210,6 +252,8 @@ export function request(item: string, a: WriteArgs): Request {
       const text = a.note.trim();
       return text ? { path: '/v1/work/redo', body, note: { path: '/v1/work/note', body: { item, text: { text } } } } : { path: '/v1/work/redo', body };
     }
+    case 'needs':
+      return { path: '/v1/work/classify', body: { item, needs: a.needs } };
     case 'advice':
       return { path: '/v1/work/proposals/edit', body: { item, depends_on: a.depends_on, split: a.split, proposal: a.proposal } };
     case 'answer': {
@@ -349,6 +393,7 @@ export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> =
   redo: 'The new attempt starts at once. It counts against the redos this item may take, and no record takes it back.',
   // Editing again sets it back, so it does not ask first.
   advice: null,
+  needs: null,
 };
 
 export interface Undo {
@@ -420,6 +465,7 @@ function stale(kind: Exclude<WriteKind, 'undo'>, id: string, items: readonly Ite
   if (!now) return `${id} is no longer in the log.`;
   if (kind === 'take' || kind === 'reassign') return canAssign(now) ? null : `${id} cannot be assigned now, so nothing was sent.`;
   if (kind === 'steer') return canSteer(now) ? null : `${id} is not held by an agent now, so nothing was sent.`;
+  if (kind === 'needs') return canSetNeeds(now) ? null : `${id} cannot take needs now, so nothing was sent.`;
   if (kind === 'advice') return canAdvise(now) ? null : `${id} is not a proposal that can be adjusted now, so nothing was sent.`;
   if (kind === 'redo') return null;
   if (kind === 'rate') return canRate(now) ? null : `The log is below format ${RATE_FORMAT}, so nothing was sent.`;
@@ -476,6 +522,7 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
   steer: ['Sending the note on', 'Sent the note on'],
   redo: ['Starting a redo of', 'Started a redo of'],
   advice: ['Adjusting the advice on', 'Adjusted the advice on'],
+  needs: ['Setting the needs of', 'Set the needs of'],
   unflag: ['Unflagging', 'Unflagged'],
   undo: ['Undoing the tier change on', 'Undid the tier change on'],
 };
@@ -503,7 +550,7 @@ export function summary(batch: readonly Write[]): { text: string; tone: 'busy' |
   for (const x of batch) if (x.status === 'ok' && x.noUndo) noUndo.set(x.noUndo, [...(noUndo.get(x.noUndo) ?? []), x.item]);
   for (const [why, ids] of noUndo) parts.push(`No undo for ${items(ids)}: ${why}`);
   for (const x of bad) {
-    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${kind === 'rate' ? `${RATE_FORMAT} to mark summaries` : kind === 'take' || kind === 'reassign' || kind === 'steer' ? `${ASSIGN_FORMAT} to assign and steer` : kind === 'advice' ? `${ADVICE_FORMAT} to adjust triage’s advice` : `${FLAG_FORMAT} to use Needs-you flags`}.`);
+    if (x.status === 'refused' && x.why === 'format') parts.push(`${x.item}: refused, raise the log to format ${kind === 'rate' ? `${RATE_FORMAT} to mark summaries` : kind === 'take' || kind === 'reassign' || kind === 'steer' ? `${ASSIGN_FORMAT} to assign and steer` : kind === 'advice' ? `${ADVICE_FORMAT} to adjust triage’s advice` : kind === 'needs' ? `${NEEDS_FORMAT} to set needs` : `${FLAG_FORMAT} to use Needs-you flags`}.`);
     else parts.push(`${x.item}: ${x.status === 'refused' ? 'refused' : 'failed'}, ${x.reason}${x.why && x.status === 'refused' ? ` (${x.why})` : ''}`);
   }
   return { text: parts.filter(Boolean).join(' '), tone: bad.length ? 'error' : 'ok', undoable: batch.filter((x) => x.status === 'ok' && x.undo).length };
