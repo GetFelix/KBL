@@ -1,1 +1,0 @@
-Stopping a worker (`POST /v1/work/workers/stop`, `supervise_stop`) now gives back the item it holds in the same call, at no cost to the item's tries, instead of when the claim runs out. If the tracker dies between the stop and the release, every sweep finishes it.

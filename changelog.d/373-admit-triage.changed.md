@@ -1,1 +1,0 @@
-Ingest docs and the quick start explain what `admit` and `propose` do and that admit queues triage first. The dashboard shows a root's stage (including Ready to fix) and a chip for its triage child. `work_next` replies for triage and augment items carry a `purpose` line.

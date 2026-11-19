@@ -1,1 +1,0 @@
-Ingest now re-runs a flaky check and reads a failed job's log in a running worker. Both calls stopped at the lease fence, which did not pass them on, so every flake became fix work and every `check_failed` carried only the check's own output.

@@ -1,1 +1,0 @@
-The Metrics dialog no longer drops the latest stays when the browser clock is behind the records: the window ends at the newest record and the dialog says the clock is behind. A budget refusal now ends the stay of the stage it moves the root out of, which the stage times missed. Tests cover both and a progress record that changes the request.
