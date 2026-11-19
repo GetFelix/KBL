@@ -1566,7 +1566,7 @@ const FORMAT_21_LOG: &str = include_str!("work_format_21.jsonl");
 #[test]
 fn the_twenty_first_format_stamps_workers_and_their_records() {
     assert_eq!(kbl_core::work::FORMAT_V21, 21);
-    assert_eq!(FORMAT, kbl_core::work::FORMAT_V21);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V21) };
     for (_, r) in &entries(FORMAT_21_LOG) {
         assert_eq!(
             r.min_format(),

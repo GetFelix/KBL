@@ -24,8 +24,8 @@ use crate::work::{
     WorkLogged, WorkRecord, valid_review_tier,
 };
 use crate::work::{
-    ClassDim, DEFAULT_SIZES, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, MAX_NEEDS, Vocabulary,
-    plain_class_value,
+    ClassDim, DEFAULT_SIZES, MAX_CHECK_NAME, MAX_FLAKE_ISSUE, MAX_FLAKE_PATTERN, MAX_FLAKES,
+    MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, MAX_NEEDS, Vocabulary, plain_class_value,
 };
 
 mod human_wait;
@@ -834,6 +834,9 @@ pub struct Item {
     /// stay red. A note newer than this was written after the failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub red_since: Option<u64>,
+    /// The latest failed check that passed on a flake re-run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flake_retried: Option<FlakeRetry>,
     /// When the first claim on the item was logged, in the tracker's clock.
     #[serde(default)]
     pub first_claim_ms: Option<u64>,
@@ -967,6 +970,8 @@ pub enum Reject {
     /// A record names a worker that is not a live worker of its supervisor, a
     /// worker wrote without its supervisor, or a supervisor is at its cap.
     BadWorker,
+    /// A flake entry that is malformed, over the list's cap, or not on the list.
+    BadFlake,
 }
 
 /// A delegated worker: an agent name a supervisor's token registered, which
@@ -987,6 +992,27 @@ pub struct Worker {
     pub started_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_ms: Option<u64>,
+}
+
+/// One entry on the flake list, with how often ingest re-ran a check for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Flake {
+    pub check: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    pub issue: String,
+    /// Re-runs made for it, passed or not. Replacing the entry keeps the count.
+    pub hits: u64,
+}
+
+/// A failed check that passed when ingest re-ran it as a known flake.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FlakeRetry {
+    pub flake: Key,
+    pub check: String,
+    /// The entry's tracking issue when the re-run was recorded.
+    pub issue: String,
+    pub offset: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1016,6 +1042,9 @@ pub struct State {
     /// The latest rules record per scope.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<RulesSet>,
+    /// The team's known flaky checks, by name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub flakes: BTreeMap<Key, Flake>,
     pub rejections: Vec<Rejection>,
     upstream: BTreeMap<String, ItemId>,
     /// `(source, repo)` to the HTTP status that stopped it being read.
@@ -2067,6 +2096,7 @@ impl State {
             pr: None,
             pr_status: None,
             red_since: None,
+            flake_retried: None,
             first_claim_ms: None,
             cost_micros: 0,
             usage: BTreeMap::new(),
@@ -3945,6 +3975,70 @@ impl State {
                     return Err(Reject::BadWorker);
                 }
                 w.stopped_ms = Some(rec.at_ms);
+            }
+            WorkRecord::FlakeSet {
+                flake,
+                check,
+                pattern,
+                issue,
+            } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let bad = check.is_empty()
+                    || check.len() > MAX_CHECK_NAME
+                    || issue.is_empty()
+                    || issue.len() > MAX_FLAKE_ISSUE
+                    || pattern
+                        .as_ref()
+                        .is_some_and(|p| p.is_empty() || p.len() > MAX_FLAKE_PATTERN)
+                    || (!self.flakes.contains_key(flake) && self.flakes.len() >= MAX_FLAKES);
+                if bad {
+                    return Err(Reject::BadFlake);
+                }
+                let hits = self.flakes.get(flake).map_or(0, |f| f.hits);
+                self.flakes.insert(
+                    flake.clone(),
+                    Flake {
+                        check: check.clone(),
+                        pattern: pattern.clone(),
+                        issue: issue.clone(),
+                        hits,
+                    },
+                );
+            }
+            WorkRecord::FlakeCleared { flake } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if self.flakes.remove(flake).is_none() {
+                    return Err(Reject::BadFlake);
+                }
+            }
+            WorkRecord::FlakeRetried {
+                item,
+                flake,
+                check,
+                passed,
+            } => {
+                if check.is_empty() || check.len() > MAX_CHECK_NAME {
+                    return Err(Reject::TooLong);
+                }
+                let Some(issue) = self.flakes.get(flake).map(|f| f.issue.clone()) else {
+                    return Err(Reject::BadFlake);
+                };
+                let it = self.upstream_sync(item, rec)?;
+                if *passed {
+                    it.flake_retried = Some(FlakeRetry {
+                        flake: flake.clone(),
+                        check: check.clone(),
+                        issue,
+                        offset,
+                    });
+                }
+                if let Some(f) = self.flakes.get_mut(flake) {
+                    f.hits += 1;
+                }
             }
             WorkRecord::FormatRaised { .. } | WorkRecord::Unknown => {}
         }

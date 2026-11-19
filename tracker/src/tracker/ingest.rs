@@ -34,6 +34,7 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::LeftScope { .. }
         | WorkRecord::ReturnedToScope { .. }
         | WorkRecord::PrStatus { .. }
+        | WorkRecord::FlakeRetried { .. }
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::Reopened { .. }
         | WorkRecord::Shipped { .. } => true,
@@ -59,6 +60,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::LeftScope { item }
         | WorkRecord::ReturnedToScope { item }
         | WorkRecord::PrStatus { item, .. }
+        | WorkRecord::FlakeRetried { item, .. }
         | WorkRecord::Reopened { item }
         | WorkRecord::Shipped { item, .. }
         | WorkRecord::Edited { item, .. }
@@ -70,6 +72,23 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         } => vec![parent],
         _ => Vec::new(),
     }
+}
+
+/// The flake list as ingest and people read it.
+pub(crate) fn flake_list(state: &kbl_core::work_fold::State) -> Vec<Value> {
+    state
+        .flakes
+        .iter()
+        .map(|(name, f)| {
+            json!({
+                "flake": name,
+                "check": f.check,
+                "pattern": f.pattern,
+                "issue": f.issue,
+                "hits": f.hits,
+            })
+        })
+        .collect()
 }
 
 /// The id of a root's review of a request: the same on every retry.
@@ -414,7 +433,12 @@ impl<B: Broker> Tracker<B> {
                     "needed_by": waiter,
                 }));
             }
-            return Ok(json!({ "roots": roots, "prerequisites": prerequisites }));
+            let flakes = flake_list(&core.state);
+            return Ok(json!({
+                "roots": roots,
+                "prerequisites": prerequisites,
+                "flakes": flakes,
+            }));
         }
     }
 

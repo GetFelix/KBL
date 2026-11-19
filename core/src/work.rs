@@ -112,8 +112,19 @@ pub const MAX_NEEDS: usize = 8;
 /// `worker_stopped`, and `sup` on a record a worker wrote.
 pub const FORMAT_V21: u32 = 21;
 
+/// The format that added the team's flake list (`flake_set`, `flake_cleared`)
+/// and `flake_retried`: ingest re-ran a known flaky check once.
+pub const FORMAT_V22: u32 = 22;
+
+/// Longest flake log pattern and tracking issue, in bytes.
+pub const MAX_FLAKE_PATTERN: usize = 200;
+pub const MAX_FLAKE_ISSUE: usize = 200;
+
+/// Most entries on the flake list.
+pub const MAX_FLAKES: usize = 100;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V21;
+pub const FORMAT: u32 = FORMAT_V22;
 
 /// Most live workers one supervisor may have, whatever the tracker's config says.
 pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
@@ -1213,6 +1224,26 @@ pub enum WorkRecord {
     },
     /// The worker's token stops working and its name is never reused. Format 21.
     WorkerStopped { worker: Key },
+    /// A person adds or replaces an entry on the team's flake list: a failed
+    /// check named `check`, whose job log contains `pattern` when one is
+    /// given, is a known flake tracked by `issue`. Format 22.
+    FlakeSet {
+        flake: Key,
+        check: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pattern: Option<String>,
+        issue: String,
+    },
+    /// A person takes an entry off the flake list. Format 22.
+    FlakeCleared { flake: Key },
+    /// Ingest re-ran the failed `check` on the item's pull request once,
+    /// because it matched `flake`, and the re-run passed or failed. Format 22.
+    FlakeRetried {
+        item: ItemId,
+        flake: Key,
+        check: String,
+        passed: bool,
+    },
     /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1288,6 +1319,9 @@ impl WorkRecord {
             WorkRecord::FormatRaised { .. } => "format_raised",
             WorkRecord::Refused { .. } => "refused",
             WorkRecord::WorkerStarted { .. } => "worker_started",
+            WorkRecord::FlakeSet { .. } => "flake_set",
+            WorkRecord::FlakeCleared { .. } => "flake_cleared",
+            WorkRecord::FlakeRetried { .. } => "flake_retried",
             WorkRecord::WorkerStopped { .. } => "worker_stopped",
             WorkRecord::Unknown => "unknown",
         }
@@ -1347,7 +1381,8 @@ impl WorkRecord {
             | WorkRecord::TierChanged { item, .. }
             | WorkRecord::Edited { item, .. }
             | WorkRecord::BudgetSet { root: item, .. }
-            | WorkRecord::PrStatus { item, .. } => Some(item),
+            | WorkRecord::PrStatus { item, .. }
+            | WorkRecord::FlakeRetried { item, .. } => Some(item),
             WorkRecord::RulesSet { root, .. } | WorkRecord::Refused { item: root, .. } => {
                 root.as_ref()
             }
@@ -1357,6 +1392,8 @@ impl WorkRecord {
             | WorkRecord::FormatRaised { .. }
             | WorkRecord::WorkerStarted { .. }
             | WorkRecord::WorkerStopped { .. }
+            | WorkRecord::FlakeSet { .. }
+            | WorkRecord::FlakeCleared { .. }
             | WorkRecord::Unknown => None,
         }
     }
@@ -1481,6 +1518,9 @@ impl WorkRecord {
             WorkRecord::Taken { .. }
             | WorkRecord::Reassigned { .. }
             | WorkRecord::Steered { .. } => FORMAT_V12,
+            WorkRecord::FlakeSet { .. }
+            | WorkRecord::FlakeCleared { .. }
+            | WorkRecord::FlakeRetried { .. } => FORMAT_V22,
             WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. } => FORMAT_V21,
             WorkRecord::Edited { needs: Some(_), .. }
             | WorkRecord::Triaged { needs: Some(_), .. }
