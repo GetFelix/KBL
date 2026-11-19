@@ -50,6 +50,7 @@ vendor = "fake"
 model = "scripted"
 mcp_config = "json"
 pass_env = ["PATH"]
+set_env = { FAKE_WORKER_CONFIG_ROOT = ${JSON.stringify(join(dir, "state"))} }
 command = [${JSON.stringify(process.execPath)}, ${JSON.stringify(resolve("dev/fake-worker.mjs"))}, "{mcp_config_path}"]
 `,
   { mode: 0o600 },
