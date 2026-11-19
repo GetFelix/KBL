@@ -248,3 +248,81 @@ fn a_hold_released_because_the_supervisor_went_away_costs_no_try() {
     l.tracker(release(crate::work::SUPERVISOR_GONE));
     assert_eq!(fold(&l.0).items[&id("r1")].paths[0].tries, 1);
 }
+
+fn raised_to(v: u32) -> Log {
+    let mut l = raised();
+    l.person(WorkRecord::FormatRaised { to: v });
+    l
+}
+
+#[test]
+fn a_worker_that_finishes_is_ended_like_a_stop_and_needs_format_24() {
+    let mut l = raised();
+    l.agent("sup", started("sup-w1", HASH_A));
+    as_worker(&mut l, "sup-w1", "sup", WorkRecord::WorkerFinished);
+    assert_eq!(last_rejection(&l), Some(Reject::Format));
+
+    let mut l = raised_to(crate::work::FORMAT_V24);
+    l.agent("sup", started("sup-w1", HASH_A));
+    as_worker(&mut l, "sup-w1", "sup", claimed("r1", 1));
+    as_worker(&mut l, "sup-w1", "sup", WorkRecord::WorkerFinished);
+    l.tracker(release(crate::work::SUPERVISOR_GONE));
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    let w = &s.workers[&key("sup-w1")];
+    assert!(w.finished && w.stopped_ms.is_some());
+    assert!(s.worker_by_token(HASH_A).is_none());
+    assert_eq!(s.live_workers(&key("sup")).count(), 0);
+    assert_eq!(s.items[&id("r1")].paths[0].tries, 0);
+    // It is over: a second finish, a stop and any further write are refused.
+    let mut again = l.0.clone();
+    for rec in [WorkRecord::WorkerFinished, claimed("r1", 1)] {
+        let mut m = Log(again.clone());
+        as_worker(&mut m, "sup-w1", "sup", rec);
+        assert_eq!(last_rejection(&m), Some(Reject::BadWorker));
+    }
+    let mut m = Log(std::mem::take(&mut again));
+    m.agent("sup", stopped("sup-w1"));
+    assert_eq!(last_rejection(&m), Some(Reject::BadWorker));
+}
+
+#[test]
+fn only_a_worker_writes_its_own_finish() {
+    let at = |build: fn(&mut Log)| {
+        let mut l = raised_to(crate::work::FORMAT_V24);
+        l.agent("sup", started("sup-w1", HASH_A));
+        build(&mut l);
+        (
+            last_rejection(&l),
+            fold(&l.0).workers[&key("sup-w1")].finished,
+        )
+    };
+    // The supervisor, a person and the tracker cannot say a worker finished.
+    for build in [
+        (|l: &mut Log| _ = l.agent("sup", WorkRecord::WorkerFinished)) as fn(&mut Log),
+        |l| _ = l.person(WorkRecord::WorkerFinished),
+        |l| _ = l.tracker(WorkRecord::WorkerFinished),
+    ] {
+        let (why, finished) = at(build);
+        assert!(why.is_some() && !finished);
+    }
+    // A person whose key is the worker's name cannot finish it either.
+    let mut l = raised_to(crate::work::FORMAT_V24);
+    l.agent("sup", started("sup-w1", HASH_A));
+    let at = l.0.len() as u64;
+    let rec = WorkLogged::new(
+        at * 10,
+        key("sup-w1"),
+        Actor::Person,
+        WorkRecord::WorkerFinished,
+    );
+    l.0.push((at, rec));
+    assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
+    assert!(!fold(&l.0).workers[&key("sup-w1")].finished);
+    // Another supervisor's worker cannot finish this one.
+    let mut l = raised_to(crate::work::FORMAT_V24);
+    l.agent("sup", started("sup-w1", HASH_A));
+    as_worker(&mut l, "sup-w1", "other", WorkRecord::WorkerFinished);
+    assert_eq!(last_rejection(&l), Some(Reject::BadWorker));
+    assert!(!fold(&l.0).workers[&key("sup-w1")].finished);
+}

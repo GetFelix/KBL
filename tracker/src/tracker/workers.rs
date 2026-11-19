@@ -105,8 +105,8 @@ impl<B: Broker> Tracker<B> {
         Ok(json!({ "kind": "worker_started", "offset": offset, "worker": worker, "token": token }))
     }
 
-    /// Stops a worker: its token stops working at once, and the item it holds
-    /// goes back when its claim runs out, as a crashed agent's would.
+    /// Stops a worker: its token stops working at once and the item it holds
+    /// goes back in the same call, at no cost to its tries.
     pub(crate) async fn stop_worker(
         &self,
         actor: Actor,
@@ -115,9 +115,91 @@ impl<B: Broker> Tracker<B> {
     ) -> Result<Value, Error> {
         self.begin().await?;
         let mut core = self.0.core.lock().await;
-        let record = WorkRecord::WorkerStopped { worker };
+        let record = WorkRecord::WorkerStopped {
+            worker: worker.clone(),
+        };
         let offset = self.append(&mut core, actor, by, record).await?;
-        Ok(json!({ "kind": "worker_stopped", "offset": offset }))
+        let released = self.release_held(&mut core, &worker).await;
+        drop(core);
+        self.sync_ready().await;
+        // A release that failed after the stop landed is retried by the next sweep.
+        Ok(
+            json!({ "kind": "worker_stopped", "offset": offset, "released": released.unwrap_or_default() }),
+        )
+    }
+
+    /// A worker reports it is done, with its own token: it ends like a stop,
+    /// and an item it still holds goes back.
+    pub(crate) async fn finish_worker(&self, worker: &AgentName) -> Result<Value, Error> {
+        self.begin().await?;
+        let by = Key::new(worker.as_str()).expect("an agent name is a key");
+        let mut core = self.0.core.lock().await;
+        let offset = self
+            .append(
+                &mut core,
+                Actor::Agent,
+                by.clone(),
+                WorkRecord::WorkerFinished,
+            )
+            .await?;
+        let released = self.release_held(&mut core, &by).await;
+        drop(core);
+        self.sync_ready().await;
+        Ok(
+            json!({ "kind": "worker_finished", "offset": offset, "released": released.unwrap_or_default() }),
+        )
+    }
+
+    /// Gives back what an ended worker still holds, as a gone supervisor's
+    /// workers do: no try is spent.
+    async fn release_held(&self, core: &mut Core, worker: &Key) -> Result<Vec<ItemId>, Error> {
+        let held: Vec<(ItemId, u32)> = core
+            .state
+            .items
+            .values()
+            .filter(|i| i.closed.is_none())
+            .filter_map(|i| {
+                let h = i.hold.as_ref()?;
+                (&h.by == worker).then(|| (i.id.clone(), h.attempt))
+            })
+            .collect();
+        let mut released = Vec::new();
+        for (item, attempt) in held {
+            let record = WorkRecord::Released {
+                item: item.clone(),
+                attempt,
+                reason: Some(SUPERVISOR_GONE.into()),
+                why: None,
+                cost_micros: 0,
+                usage: Vec::new(),
+                floor_micros: self.floor(),
+            };
+            self.append(core, Actor::Tracker, self.0.me.clone(), record)
+                .await?;
+            core.owner.remove(&item);
+            released.push(item);
+        }
+        Ok(released)
+    }
+
+    /// Releases the holds of workers that ended while the release did not
+    /// land, such as a tracker that died between the two writes.
+    pub(super) async fn release_stopped_holds(&self) {
+        let stopped: Vec<Key> = {
+            let core = self.0.core.lock().await;
+            core.state
+                .workers
+                .iter()
+                .filter(|(name, w)| {
+                    w.stopped_ms.is_some() && core.state.held_by(name.as_str()).is_some()
+                })
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
+        for worker in stopped {
+            let mut core = self.0.core.lock().await;
+            let _ = self.release_held(&mut core, &worker).await;
+        }
     }
 
     /// The workers `supervisor` started, or every worker for a person: what
@@ -145,6 +227,7 @@ impl<B: Broker> Tracker<B> {
                     "model": w.model,
                     "started_ms": w.started_ms,
                     "stopped_ms": w.stopped_ms,
+                    "finished": w.finished,
                     "holds": holds.map(|(item, attempt)| json!({ "item": item, "attempt": attempt })),
                 })
             })
@@ -194,31 +277,7 @@ impl<B: Broker> Tracker<B> {
                 self.append(&mut core, Actor::Tracker, me.clone(), record)
                     .await?;
             }
-            let held: Vec<(ItemId, u32)> = core
-                .state
-                .items
-                .values()
-                .filter(|i| i.closed.is_none())
-                .filter_map(|i| {
-                    let h = i.hold.as_ref()?;
-                    (h.by == worker).then(|| (i.id.clone(), h.attempt))
-                })
-                .collect();
-            for (item, attempt) in held {
-                let record = WorkRecord::Released {
-                    item: item.clone(),
-                    attempt,
-                    reason: Some(SUPERVISOR_GONE.into()),
-                    why: None,
-                    cost_micros: 0,
-                    usage: Vec::new(),
-                    floor_micros: self.floor(),
-                };
-                self.append(&mut core, Actor::Tracker, me.clone(), record)
-                    .await?;
-                core.owner.remove(&item);
-                released.push(item);
-            }
+            released.extend(self.release_held(&mut core, &worker).await?);
         }
         self.sync_ready().await;
         Ok(released)

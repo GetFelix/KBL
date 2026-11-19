@@ -1248,6 +1248,7 @@ impl<B: Broker> Tracker<B> {
                 core.owner.remove(&item);
             }
         }
+        self.release_stopped_holds().await;
         self.drop_away_assignees().await;
         self.sync_ready().await;
     }
@@ -2929,7 +2930,10 @@ impl<B: Broker> Tracker<B> {
         drop(apply_span);
         // A stop takes the token away before the write, landed or not: a stop
         // that did not land comes back with the rebuild.
-        if matches!(logged.record, WorkRecord::WorkerStopped { .. }) {
+        if matches!(
+            logged.record,
+            WorkRecord::WorkerStopped { .. } | WorkRecord::WorkerFinished
+        ) {
             self.refresh_workers(&core.state);
         }
         // Conditional on the tail: if another tracker took the lease and wrote,

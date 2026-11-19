@@ -232,6 +232,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
             post(worker_start::<B>).get(worker_list::<B>),
         )
         .route("/v1/work/workers/stop", post(worker_stop::<B>))
+        .route("/v1/work/workers/finish", post(worker_finish::<B>))
         .route("/v1/work/prices", post(price::<B>))
         .route("/v1/work/rules", post(rules::<B>))
         .route("/v1/work/classify", post(classify::<B>))
@@ -1013,6 +1014,10 @@ struct WorkerExchangeBody {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WorkerFinishBody {}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WorkerStopBody {
     worker: Key,
 }
@@ -1113,6 +1118,20 @@ async fn worker_stop<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerStopBod
         call.keyed(rk, call.tracker().stop_worker(actor, by, b.worker))
             .await,
     )
+}
+
+/// A worker, with its own token, reports it is done. A plain agent has no
+/// worker to finish, and nobody finishes a worker for it.
+async fn worker_finish<B: Broker>(
+    call: Call<B>,
+    Keyed(_, rk): Keyed<WorkerFinishBody>,
+) -> Response {
+    let worker = match call.agent() {
+        Ok(a) if a.supervisor().is_some() => a,
+        Ok(_) => return denied((StatusCode::FORBIDDEN, "this call is for a worker's token")),
+        Err(d) => return denied(d),
+    };
+    reply(call.keyed(rk, call.tracker().finish_worker(&worker)).await)
 }
 
 /// An agent sees the workers it started; a person sees every worker.

@@ -131,14 +131,19 @@ pub const FORMAT_V23: u32 = 23;
 pub const MAX_CHECK_LOG: usize = 4096;
 pub const MAX_HEAD: usize = 64;
 
+/// The format that added `worker_finished`: a hosted worker's own report that
+/// it is done, which ends it like a stop.
+pub const FORMAT_V24: u32 = 24;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V23;
+pub const FORMAT: u32 = FORMAT_V24;
 
 /// Most live workers one supervisor may have, whatever the tracker's config says.
 pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
 
 /// The reason on a tracker's release of a worker's hold when its supervisor
-/// was removed. From format 21 it gives the try back.
+/// was removed, or the worker was stopped or finished. From format 21 it gives
+/// the try back.
 pub const SUPERVISOR_GONE: &str = "supervisor_gone";
 
 /// Most labels an item keeps, and the longest label or milestone, in bytes.
@@ -1235,6 +1240,10 @@ pub enum WorkRecord {
     },
     /// The worker's token stops working and its name is never reused. Format 21.
     WorkerStopped { worker: Key },
+    /// A worker says it is done. Only the worker itself writes it, with its
+    /// supervisor on the record; it ends the worker as a stop does, so its
+    /// token dies and its name is never reused. Format 24.
+    WorkerFinished,
     /// A person adds or replaces an entry on the team's flake list: a failed
     /// check named `check`, whose job log contains `pattern` when one is
     /// given, is a known flake tracked by `issue`. Format 22.
@@ -1349,6 +1358,7 @@ impl WorkRecord {
             WorkRecord::FlakeRetried { .. } => "flake_retried",
             WorkRecord::CheckFailed { .. } => "check_failed",
             WorkRecord::WorkerStopped { .. } => "worker_stopped",
+            WorkRecord::WorkerFinished => "worker_finished",
             WorkRecord::Unknown => "unknown",
         }
     }
@@ -1419,6 +1429,7 @@ impl WorkRecord {
             | WorkRecord::FormatRaised { .. }
             | WorkRecord::WorkerStarted { .. }
             | WorkRecord::WorkerStopped { .. }
+            | WorkRecord::WorkerFinished
             | WorkRecord::FlakeSet { .. }
             | WorkRecord::FlakeCleared { .. }
             | WorkRecord::Unknown => None,
@@ -1548,6 +1559,7 @@ impl WorkRecord {
             WorkRecord::FlakeSet { .. }
             | WorkRecord::FlakeCleared { .. }
             | WorkRecord::FlakeRetried { .. } => FORMAT_V22,
+            WorkRecord::WorkerFinished => FORMAT_V24,
             WorkRecord::CheckFailed { .. } => FORMAT_V23,
             WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. } => FORMAT_V21,
             WorkRecord::Edited { needs: Some(_), .. }

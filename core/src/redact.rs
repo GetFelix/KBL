@@ -1215,6 +1215,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::Refused { .. }
         | WorkRecord::WorkerStarted { .. }
         | WorkRecord::WorkerStopped { .. }
+        | WorkRecord::WorkerFinished
         | WorkRecord::FlakeCleared { .. }
         | WorkRecord::Unknown => {}
     }

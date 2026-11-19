@@ -687,6 +687,13 @@ impl Server {
     }
 
     #[tool(
+        description = "Say you are done, when you run as a worker a supervisor started. The tracker ends you: this token stops working at once, and the supervisor's pool sees you finished and can start a replacement. Anything you still hold goes back at no cost. Call it once, after your last work_complete, when work_next has nothing for you. Refused for an agent that is not a worker."
+    )]
+    async fn worker_finish(&self) -> Result<String, String> {
+        self.work()?.finish_worker().await
+    }
+
+    #[tool(
         description = "Record one finding of the review you hold: severity, file, line, a title and the scenario that goes wrong. Its verdict decides what follows: `fix` becomes work for the pull request's author, `defer` a proposal a person accepts, `dismiss` is only recorded. Answers with the finding's offset."
     )]
     async fn work_finding(

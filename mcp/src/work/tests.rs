@@ -280,3 +280,17 @@ async fn a_pinned_filter_wins_over_what_the_agent_asks() {
         [json!({ "repo": "o/pinned", "tiers": [1] })]
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_worker_that_finishes_stops_extending_what_it_held() {
+    let fake = Fake::default();
+    let w = work(&fake);
+    w.next(None).await.unwrap();
+    tokio::time::sleep(Duration::from_secs(35)).await;
+    assert_eq!(fake.calls("/v1/work/extend"), 1);
+    w.finish_worker().await.unwrap();
+    assert_eq!(fake.calls("/v1/work/workers/finish"), 1);
+    assert_eq!(w.held_item().await, None);
+    tokio::time::sleep(Duration::from_secs(120)).await;
+    assert_eq!(fake.calls("/v1/work/extend"), 1);
+}

@@ -23,6 +23,14 @@ async fn at_21(fake: &Fake) -> Tracker<Fake> {
     t
 }
 
+async fn at_24(fake: &Fake) -> Tracker<Fake> {
+    let t = start(fake).await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 24 })
+        .await
+        .unwrap();
+    t
+}
+
 /// Starts `worker` for `sup`, bound to the token `sup` has in these tests.
 async fn start_for(t: &Tracker<Fake>, sup: &str, worker: &str) -> Result<Value, Error> {
     t.start_worker(
@@ -260,26 +268,88 @@ async fn revoking_a_supervisor_stops_its_workers() {
 }
 
 #[tokio::test]
-async fn a_stopped_worker_still_holding_is_released_on_the_next_pass() {
+async fn stopping_a_worker_gives_back_its_hold_at_once_at_no_cost() {
     let fake = Fake::default();
     let t = at_21(&fake).await;
     start_for(&t, "sup", "sup-w1").await.unwrap();
     seed(&t, "a1", 2).await;
     claim(&t, "sup-w1").await;
-    // Stopped, but the release after it never landed.
+    let stop = t
+        .stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
+        .await
+        .unwrap();
+    assert_eq!(stop["released"], json!(["a1"]));
+    {
+        let core = t.0.core.lock().await;
+        assert!(core.state.held_by("sup-w1").is_none());
+        assert_eq!(tries_on(&core.state, "a1"), 0);
+        assert!(core.state.rejections.is_empty());
+    }
+    // Another agent takes it without waiting for the claim to run out.
+    fake.lapse_all();
+    assert_eq!(claimed_id(&claim(&t, "w2").await).as_deref(), Some("a1"));
+}
+
+#[tokio::test]
+async fn a_stopped_worker_still_holding_is_released_on_the_next_sweep() {
+    let fake = Fake::default();
+    let t = at_21(&fake).await;
+    start_for(&t, "sup", "sup-w1").await.unwrap();
+    seed(&t, "a1", 2).await;
+    claim(&t, "sup-w1").await;
+    // The stop lands, the release after it does not: the tracker dies between.
+    fake.fail_publishes_to_after(WORK_EVENTS, 1);
     t.stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
         .await
         .unwrap();
-    let released = t
-        .stop_workers(|w| w.supervisor == key("sup"))
-        .await
-        .unwrap();
-    assert_eq!(released, vec![item("a1")]);
+    fake.lift_publish_budget();
+    assert_eq!(fake.log().last().unwrap().record.kind(), "worker_stopped");
+    let t = start(&fake).await;
+    t.sweep().await;
     let core = t.0.core.lock().await;
-    assert!(
-        core.state.rejections.is_empty(),
-        "{:?}",
-        core.state.rejections
-    );
+    assert!(core.state.held_by("sup-w1").is_none());
     assert_eq!(tries_on(&core.state, "a1"), 0);
+    assert!(core.state.rejections.is_empty());
+}
+
+#[tokio::test]
+async fn a_worker_that_finishes_ends_and_gives_back_what_it_holds() {
+    let fake = Fake::default();
+    let t = at_24(&fake).await;
+    let tok = token_of(&start_for(&t, "sup", "sup-w1").await.unwrap());
+    seed(&t, "a1", 2).await;
+    claim(&t, "sup-w1").await;
+    let done = t.finish_worker(&agent("sup-w1")).await.unwrap();
+    assert_eq!(done["released"], json!(["a1"]));
+    assert_eq!(t.worker_by_token(&tok), None);
+    let listed = t.workers(Some(&key("sup"))).await;
+    assert_eq!(listed["workers"][0]["finished"], true);
+    assert!(listed["workers"][0]["stopped_ms"].is_number());
+    assert!(listed["workers"][0]["holds"].is_null());
+    {
+        let core = t.0.core.lock().await;
+        assert_eq!(tries_on(&core.state, "a1"), 0);
+        assert!(core.state.rejections.is_empty());
+    }
+    // Once is all: the token is dead, so a second finish is refused.
+    assert!(t.finish_worker(&agent("sup-w1")).await.is_err());
+    // A restart keeps it finished.
+    let t = start(&fake).await;
+    assert_eq!(t.worker_by_token(&tok), None);
+    assert_eq!(t.workers(None).await["workers"][0]["finished"], true);
+}
+
+#[tokio::test]
+async fn finishing_needs_the_log_at_format_24() {
+    let fake = Fake::default();
+    let t = at_21(&fake).await;
+    start_for(&t, "sup", "sup-w1").await.unwrap();
+    let err = t.finish_worker(&agent("sup-w1")).await.unwrap_err();
+    assert!(
+        matches!(err, Error::Refused { ref why } if why == "format"),
+        "{err}"
+    );
+    // A plain agent has no worker to finish.
+    let t = at_24(&Fake::default()).await;
+    assert!(t.finish_worker(&agent("sup")).await.is_err());
 }

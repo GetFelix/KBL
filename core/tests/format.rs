@@ -1651,3 +1651,36 @@ fn the_twenty_third_format_stamps_check_failed_and_opens_one_fix() {
     assert_eq!(fix.work, WorkKind::FixCheck);
     assert_eq!(fix.closed, Some(Closure::Completed));
 }
+
+/// A log at format 24: a worker reports it is done and its hold goes back
+/// with no try spent; a second finish, a claim, a stop and a finish by anyone
+/// else are refused. Its folded state is pinned in `wasm/golden/format_24.state.json`.
+const FORMAT_24_LOG: &str = include_str!("work_format_24.jsonl");
+
+#[test]
+fn the_twenty_fourth_format_stamps_worker_finished_and_ends_the_worker() {
+    assert_eq!(kbl_core::work::FORMAT_V24, 24);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V24) };
+    let log = entries(FORMAT_24_LOG);
+    for (_, r) in &log {
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    assert_eq!(log[5].1.min_format(), 24);
+    let s = fold(&log);
+    let why: Vec<_> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(
+        why,
+        [
+            (7, Reject::BadWorker),
+            (8, Reject::BadWorker),
+            (9, Reject::BadWorker),
+            (10, Reject::ActorNotAllowed),
+            (11, Reject::ActorNotAllowed)
+        ]
+    );
+    let w = &s.workers[&kbl_core::names::Key::new("sup-w1").unwrap()];
+    assert!(w.finished && w.stopped_ms.is_some());
+    let item = &s.items[&kbl_core::names::ItemId::new("r1").unwrap()];
+    assert!(item.hold.is_none());
+    assert_eq!(item.paths[0].tries, 0);
+}

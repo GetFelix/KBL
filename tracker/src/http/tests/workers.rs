@@ -159,3 +159,35 @@ async fn the_workers_of_a_gone_supervisor_identity_are_stopped() {
     assert!(t.worker_by_token(&old).is_none());
     assert!(t.worker_by_token(&now).is_some());
 }
+
+#[tokio::test]
+async fn a_worker_reports_it_finished_with_its_own_token_and_only_once() {
+    let app = app_21().await;
+    raise_to(&app, 24).await;
+    let start = json!({ "worker": "w1-a" });
+    let (_, reply) = call(&app, "/v1/work/workers", Some("tok-w1"), start).await;
+    let tok = reply["token"].as_str().unwrap().to_owned();
+    let none = json!({});
+    // Not a supervisor's call, not a person's, and not an agent without workers.
+    for token in ["tok-w1", "tok-gab"] {
+        let (status, _) = call(&app, "/v1/work/workers/finish", Some(token), none.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{token}");
+    }
+    let (status, _) = call(&app, "/v1/work/workers/finish", None, none.clone()).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, body) = call(&app, "/v1/work/workers/finish", Some(&tok), none.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, listed) = get_json(&app, "/v1/work/workers", Some("tok-w1")).await;
+    assert_eq!(listed["workers"][0]["finished"], true);
+    // The token died with it.
+    let (status, _) = call(&app, "/v1/work/workers/finish", Some(&tok), none).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _) = call(
+        &app,
+        "/v1/work/next",
+        Some(&tok),
+        json!({ "wait_seconds": 0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

@@ -304,7 +304,7 @@ impl<T: TrackerApi> Supervisor<T> {
     /// pool does not track: an earlier process left them, or a start whose
     /// reply was lost made them. Runs every round, so neither holds a cap
     /// slot for long.
-    async fn adopt(&self, pool: &mut Pool) -> Result<()> {
+    async fn adopt(&self, pool: &mut Pool) -> Result<Value> {
         let listed = self.0.api.get("/v1/work/workers").await.map_err(text)?;
         for w in listed["workers"].as_array().into_iter().flatten() {
             let Some(name) = w["worker"].as_str() else {
@@ -319,13 +319,13 @@ impl<T: TrackerApi> Supervisor<T> {
                     .map_err(text)?;
             }
         }
-        Ok(())
+        Ok(listed)
     }
 
     /// Notes the workers whose process ended and stops them on the tracker,
     /// and sends again any stop the tracker did not take.
     async fn reap(&self, pool: &mut Pool) -> Result<()> {
-        self.adopt(pool).await?;
+        let listed = self.adopt(pool).await?;
         let min_run = Duration::from_secs(self.0.config.min_run_seconds);
         let mut ended = Vec::new();
         for (name, r) in pool.workers.iter_mut() {
@@ -339,31 +339,35 @@ impl<T: TrackerApi> Supervisor<T> {
             }
         }
         for (name, code, ran) in ended {
-            let r = &pool.workers[&name];
-            let outcome = json!({
-                "worker": name,
-                "profile": r.profile,
-                "model": r.model,
-                "exit": code,
-                "ran_s": ran.as_secs(),
-            });
-            if code == Some(0) {
-                pool.finished.push(outcome);
-            } else {
-                pool.failed.push(outcome);
-            }
-            if code != Some(0) || ran < min_run {
-                pool.quick_failures += 1;
-                if pool.quick_failures >= PAUSE_AFTER && pool.paused.is_none() {
-                    pool.paused = Some(format!(
-                        "{PAUSE_AFTER} workers in a row failed or exited within {} s; supervise_start resumes",
-                        min_run.as_secs()
-                    ));
-                }
-            } else {
-                pool.quick_failures = 0;
-            }
+            self.note_end(
+                pool,
+                &name,
+                code == Some(0),
+                json!({ "exit": code }),
+                ran,
+                min_run,
+            );
             self.stop_worker(pool, &name).await;
+        }
+        // A hook worker has no process to watch: the tracker shows it ended,
+        // by its own `worker_finished` or because someone stopped it.
+        let hosted: Vec<(String, bool)> = pool
+            .workers
+            .iter()
+            .filter(|(_, r)| r.kind == Kind::Hook && !r.stop_pending)
+            .filter_map(|(name, _)| {
+                let w = listed["workers"]
+                    .as_array()?
+                    .iter()
+                    .find(|w| w["worker"].as_str() == Some(name))?;
+                (!w["stopped_ms"].is_null()).then_some((name.clone(), w["finished"] == true))
+            })
+            .collect();
+        for (name, finished) in hosted {
+            let ran = pool.workers[&name].started.elapsed();
+            let how = json!({ "ended_by": if finished { "worker" } else { "stop" } });
+            self.note_end(pool, &name, finished, how, ran, min_run);
+            pool.workers.remove(&name);
         }
         let pending: Vec<String> = pool
             .workers
@@ -375,6 +379,45 @@ impl<T: TrackerApi> Supervisor<T> {
             self.stop_worker(pool, &name).await;
         }
         Ok(())
+    }
+
+    /// Records how a worker ended, and pauses the top-up after too many quick
+    /// or failed ends in a row.
+    fn note_end(
+        &self,
+        pool: &mut Pool,
+        name: &str,
+        ok: bool,
+        how: Value,
+        ran: Duration,
+        min_run: Duration,
+    ) {
+        let r = &pool.workers[name];
+        let mut outcome = json!({
+            "worker": name,
+            "profile": r.profile,
+            "model": r.model,
+            "ran_s": ran.as_secs(),
+        });
+        if let (Some(into), Some(from)) = (outcome.as_object_mut(), how.as_object()) {
+            into.extend(from.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        if ok {
+            pool.finished.push(outcome);
+        } else {
+            pool.failed.push(outcome);
+        }
+        if !ok || ran < min_run {
+            pool.quick_failures += 1;
+            if pool.quick_failures >= PAUSE_AFTER && pool.paused.is_none() {
+                pool.paused = Some(format!(
+                    "{PAUSE_AFTER} workers in a row failed or exited within {} s; supervise_start resumes",
+                    min_run.as_secs()
+                ));
+            }
+        } else {
+            pool.quick_failures = 0;
+        }
     }
 
     /// Starts workers until the pool is full or the ready work runs out, one

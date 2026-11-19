@@ -33,7 +33,8 @@ fn lists_the_run_info_tool_with_a_description() {
             "work_release",
             "work_rules",
             "work_triage",
-            "work_verdict"
+            "work_verdict",
+            "worker_finish"
         ]
     );
     assert!(tools.iter().all(|tool| tool.description.is_some()));
