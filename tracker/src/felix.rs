@@ -1103,7 +1103,6 @@ fn is_not_ready(err: &anyhow::Error) -> bool {
         return true;
     }
     // An older broker sends no class, only the words.
-    if err.downcast_ref::<BrokerError>().is_some() { return false; }
     let text = format!("{err:#}");
     NOT_READY.iter().any(|marker| text.contains(marker))
 }
