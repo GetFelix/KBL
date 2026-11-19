@@ -1005,6 +1005,9 @@ pub struct Worker {
     pub started_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped_ms: Option<u64>,
+    /// It ended by its own `worker_finished`, not a stop.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub finished: bool,
 }
 
 /// One entry on the flake list, with how often ingest re-ran a check for it.
@@ -4002,8 +4005,21 @@ impl State {
                         model: model.clone(),
                         started_ms: rec.at_ms,
                         stopped_ms: None,
+                        finished: false,
                     },
                 );
+            }
+            WorkRecord::WorkerFinished => {
+                // Only a worker itself, acting for its live supervisor: the
+                // worker check above has already tied `by` to a live worker.
+                if rec.actor != Actor::Agent || rec.sup.is_none() {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let Some(w) = self.workers.get_mut(&rec.by) else {
+                    return Err(Reject::BadWorker);
+                };
+                w.stopped_ms = Some(rec.at_ms);
+                w.finished = true;
             }
             WorkRecord::WorkerStopped { worker } => {
                 let Some(w) = self.workers.get_mut(worker) else {

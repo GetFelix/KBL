@@ -42,6 +42,9 @@
  "core/src/work_fold.rs#check_charge": [
   "fn check_charge(&self, rec: &WorkLogged) -> Result<(), Reject> {"
  ],
+ "core/src/work_fold.rs#check_failed": [
+  "if rec.actor != Actor::Tracker {"
+ ],
  "core/src/work_fold.rs#check_new_review": [
   "if rec.actor != Actor::Tracker {",
   "if reviews >= MAX_REVIEWS_PER_ROOT {"
@@ -364,8 +367,11 @@
  "mcp/src/supervise.rs#kill_group": [
   "libc::kill(-pid, libc::SIGKILL);"
  ],
- "mcp/src/supervise.rs#reap": [
+ "mcp/src/supervise.rs#note_end": [
   "if pool.quick_failures >= PAUSE_AFTER && pool.paused.is_none() {"
+ ],
+ "mcp/src/supervise.rs#reap": [
+  ".filter(|(_, r)| r.kind == Kind::Hook && !r.stop_pending)"
  ],
  "mcp/src/supervise.rs#spawn": [
   "cmd.env_clear().envs(passed);",
@@ -426,6 +432,9 @@
  "mcp/src/tasks.rs#release": [
   "reason: reason.map(redacted),"
  ],
+ "mcp/src/work.rs#finish_worker": [
+  ".call(\"/v1/work/workers/finish\", json!({}))"
+ ],
  "metrics/src/serve.rs#check_listen": [
   "allow_remote || addr.ip().to_canonical().is_loopback(),"
  ],
@@ -441,9 +450,6 @@
  "tracker/src/felix.rs#acks_are_durable": [
   "if durable && (quorum || copies == Some(1)) {"
  ],
- "tracker/src/http.rs#flakes": [
-  "Ok(_) => reply(Ok(call.tracker().flakes().await)),"
- ],
  "tracker/src/http.rs#agent": [
   "fn agent(&self) -> Result<AgentName, Denied> {"
  ],
@@ -453,6 +459,9 @@
  "tracker/src/http.rs#as_person": [
   "} => (!call.teams.is_member(&call.team, to)).then_some(\"that person is not in this team\"),",
   "(!call.teams.is_team_agent(&call.team, to)).then_some(\"that agent is not in this team\")"
+ ],
+ "tracker/src/http.rs#flakes": [
+  "Ok(_) => reply(Ok(call.tracker().flakes().await)),"
  ],
  "tracker/src/http.rs#from_request_parts": [
   "async fn from_request_parts(parts: &mut Parts, app: &Arc<App<B>>) -> Result<Self, Response> {",
@@ -486,6 +495,9 @@
  ],
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
+ ],
+ "tracker/src/http.rs#worker_finish": [
+  "Ok(a) if a.supervisor().is_some() => a,"
  ],
  "tracker/src/http.rs#worker_list": [
   "Caller::Agent(a) => Some(Key::new(a.as_str()).expect(\"an agent name is a key\")),"
@@ -614,9 +626,6 @@
   "&& (self.lane_is_all_own(agent, tier).await",
   "if tier >= TIERS && self.is_own_work(agent, &record).await {"
  ],
- "core/src/work_fold.rs#check_failed": [
-  "if rec.actor != Actor::Tracker {"
- ],
  "tracker/src/tracker/ingest.rs#allowed": [
   "fn allowed(record: &WorkRecord) -> bool {"
  ],
@@ -735,16 +744,25 @@
  "tracker/src/tracker/tools.rs#triage_lists": [
   "|| related.len() > MAX_TRIAGE_LIST"
  ],
+ "tracker/src/tracker/workers.rs#finish_worker": [
+  "WorkRecord::WorkerFinished,"
+ ],
  "tracker/src/tracker/workers.rs#grant_name": [
   ".map_or(agent.as_str(), |w| w.supervisor.as_str())"
  ],
  "tracker/src/tracker/workers.rs#refresh_workers": [
   ".filter(|(_, w)| w.stopped_ms.is_none())"
  ],
+ "tracker/src/tracker/workers.rs#release_held": [
+  "reason: Some(reason.into()),"
+ ],
+ "tracker/src/tracker/workers.rs#release_stopped_holds": [
+  "w.stopped_ms.is_some() && core.state.held_by(name.as_str()).is_some()"
+ ],
  "tracker/src/tracker/workers.rs#start_worker": [
   "if mine >= s.max_workers || all >= s.max_team_workers {"
  ],
  "tracker/src/tracker/workers.rs#stop_workers": [
-  "reason: Some(SUPERVISOR_GONE.into()),"
+  "released.extend(self.release_held(&mut core, &worker).await?);"
  ]
 }

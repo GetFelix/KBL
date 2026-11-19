@@ -21,6 +21,8 @@ struct Script {
     left: Vec<String>,
     /// Starts land but their answer is lost.
     lose_start_reply: bool,
+    /// Workers that reported they are done.
+    finished: Vec<String>,
     /// Stops are refused with this text.
     refuse_stop: Option<&'static str>,
 }
@@ -65,9 +67,11 @@ impl TrackerApi for Fake {
             .iter()
             .map(|b| {
                 let name = b["worker"].as_str().unwrap();
-                let stopped = s.stopped.iter().any(|x| x == name);
+                let done = s.finished.iter().any(|x| x == name);
+                let stopped = done || s.stopped.iter().any(|x| x == name);
                 json!({
                     "worker": name,
+                    "finished": done,
                     "stopped_ms": if stopped { json!(1) } else { Value::Null },
                     "holds": s.holds.get(name).cloned().unwrap_or(Value::Null),
                 })
@@ -341,6 +345,80 @@ async fn a_hook_gets_a_code_never_a_token_and_a_failed_hook_stops_its_worker() {
     let s = fake.0.lock().unwrap();
     assert_eq!(s.started[0]["exchange"], true);
     assert_eq!(s.stopped, ["sup-w1"]);
+}
+
+/// A hook endpoint on loopback that answers every post with 200.
+async fn hook_server() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/start", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                let mut buf = vec![0u8; 8192];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    .await;
+            });
+        }
+    });
+    url
+}
+
+#[tokio::test]
+async fn a_hook_worker_that_finished_leaves_the_pool_and_is_replaced() {
+    let dir = scratch();
+    let fake = Fake::default();
+    fake.0.lock().unwrap().ready = ready(3);
+    let url = hook_server().await;
+    let hook = format!("[profiles.cloud]\nkind = \"hook\"\nvendor = \"cloud\"\nurl = \"{url}\"\n");
+    let sup = setup(&dir, &hook, "0", "0", &fake);
+    let reply = sup
+        .start(1, json!({}), Some("cloud".into()), None)
+        .await
+        .unwrap();
+    assert_eq!(reply["started"], json!(["sup-w1"]));
+    // Still live while the tracker shows it running: nothing to replace.
+    sup.round().await;
+    assert_eq!(live(&*sup.0.pool.lock().await), 1);
+    assert_eq!(fake.0.lock().unwrap().started.len(), 1);
+
+    fake.0.lock().unwrap().finished.push("sup-w1".into());
+    sup.round().await;
+    let status = sup.status().await.unwrap();
+    assert_eq!(status["finished"][0]["worker"], "sup-w1");
+    assert_eq!(status["finished"][0]["ended_by"], "worker");
+    let names: Vec<_> = status["workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w["worker"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["sup-w2"], "the top-up replaced it");
+    sup.stop(None, true).await.unwrap();
+}
+
+#[tokio::test]
+async fn a_hook_worker_stopped_elsewhere_is_reported_as_failed() {
+    let dir = scratch();
+    let fake = Fake::default();
+    fake.0.lock().unwrap().ready = ready(1);
+    let url = hook_server().await;
+    let hook = format!("[profiles.cloud]\nkind = \"hook\"\nvendor = \"cloud\"\nurl = \"{url}\"\n");
+    let sup = setup(&dir, &hook, "0", "0", &fake);
+    sup.start(1, json!({}), Some("cloud".into()), None)
+        .await
+        .unwrap();
+    // A person stops it on the tracker.
+    fake.0.lock().unwrap().stopped.push("sup-w1".into());
+    sup.round().await;
+    let pool = sup.0.pool.lock().await;
+    assert!(!pool.workers.contains_key("sup-w1"));
+    assert_eq!(pool.failed[0]["ended_by"], "stop");
 }
 
 #[tokio::test]

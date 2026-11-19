@@ -463,7 +463,9 @@ TOML file of launch profiles (example profiles for Claude Code, Codex CLI and Gi
 | `supervise_status` | Workers and what each holds, who finished or failed since the last look, ready counts by kind and tier, and the top-up state |
 
 `kbl-mcp` makes no model calls: it runs the configured command, without a shell, or calls the configured hook, and
-picks a profile by a fixed table. A timer tops the pool up while ready work matches. `node dev/check-supervise.mjs`
+picks a profile by a fixed table. A timer tops the pool up while ready work matches. Stopping a worker gives back the
+item it holds at once. A hosted (hook) worker has no process to watch, so it calls `worker_finish` when it is done: the
+supervisor drops it from the pool and the top-up can replace it. `node dev/check-supervise.mjs`
 runs a pool of scripted workers (`dev/fake-worker.mjs`) against the dev stack. See
 [docs/design/supervise.md](docs/design/supervise.md).
 

@@ -12,7 +12,8 @@ Issue [#420](https://github.com/GetFelix/KBL/issues/420). This page is the desig
 |---|---|---|
 | `worker_started {worker, token_sha256, supervisor_token_sha256, vendor?, profile?, model?}` | The supervisor's agent token | The writer is an agent and not itself a worker (one level). `worker` is `<supervisor>-<suffix>`, never used before. Both hashes are 64 hex digits; the worker's is unique. At most 64 live workers per supervisor |
 | `worker_stopped {worker}` | The worker's supervisor, a person, or the tracker when the supervisor is gone | The worker is live. Its token stops working and its name is never reused |
-| `released` with reason `supervisor_gone` | The tracker | The hold goes back and the try it used is given back |
+| `worker_finished` (format 24) | The worker itself, with `sup` set | The writer is a live worker acting for its live supervisor. It ends the worker as a stop does, and the worker shows `finished` |
+| `released` with reason `supervisor_gone` | The tracker | The hold goes back and the try it used is given back. Written when a supervisor is gone, and also when a worker is stopped or finishes |
 | `sup` on any record | The tracker, from the token | Set exactly when `by` is a live worker, and then it must be that worker's supervisor (`bad_worker` otherwise). Any record with `sup` is format 21 |
 
 Every hold, step and decision a worker writes therefore names the worker (`by`) and its supervisor (`sup`). The
@@ -43,8 +44,9 @@ workers back.
    32), draws a 256-bit token, logs `worker_started` with its SHA-256 only, and returns the token once.
 3. The token works once the record is on the log, and only while the worker is live and its supervisor still has the
    token it started the worker with. A restart rebuilds the token map from the log.
-4. `POST /v1/work/workers/stop {worker}` logs `worker_stopped`; the token fails from then on. The worker's hold goes
-   back when its claim runs out, as a crashed agent's does.
+4. `POST /v1/work/workers/stop {worker}` logs `worker_stopped`; the token fails from then on, and the item the worker
+   held goes back in the same call with `supervisor_gone`, so it costs no try and another agent can take it at once. If
+   the tracker dies between the two writes, every sweep releases a stopped worker's hold.
 5. When the supervisor goes (revoked, removed from the token file, or given another token), the tracker stops its
    workers for good: it logs `worker_stopped` for each, then releases each hold with `supervisor_gone`, which costs
    the item no try. Revoking an agent does this at once; otherwise each team checks every 5 seconds. While the org
@@ -113,7 +115,17 @@ hook_token_env = "CLOUD_HOOK_TOKEN"
   `POST /v1/work/workers/exchange {code}` once and gets the worker's token. A code works once and for 10 minutes,
   and lives only in the tracker's memory: after a restart it is gone, so that worker never connects and holds
   nothing until it is stopped. A hook that does not answer 2xx stops the worker at once. A hook worker counts as
-  live until it is stopped, and never as idle.
+  live until it ends (see below), and never as idle.
+### Hook workers that finish
+
+A hosted worker has no process for `kbl-mcp` to watch, so it reports itself: it calls the `worker_finish` tool (or
+`POST /v1/work/workers/finish` with its own token). The tracker logs `worker_finished`, kills the token and gives back
+anything the worker still holds. That counts as abandoning it: the release carries `worker_finished` and spends the try, unlike a stop. On its next round the supervisor sees the worker ended on the tracker, drops it from the
+pool, lists it under `finished` in `supervise_status`, and the top-up starts a replacement if ready work matches. A hook
+worker a person or the tracker stopped is dropped the same way and listed under `failed`. Both count toward the pause
+after 3 quick or failed ends in a row. A hosted worker that dies without calling it is still counted live until it is
+stopped.
+
 - A fake profile (`dev/fake-worker.mjs`, a scripted MCP client) runs the tests and CI without any vendor.
 
 Example profiles for Claude Code, Codex CLI and GitHub Copilot CLI are in [supervise-profiles.md](../supervise-profiles.md).

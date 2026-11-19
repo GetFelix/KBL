@@ -281,6 +281,22 @@ impl<T: TrackerApi> Work<T> {
         Ok(reply.to_string())
     }
 
+    /// A worker says it is done: the tracker ends it, gives back any item it
+    /// holds, and kills its token. The local claim loop stops with it.
+    pub(crate) async fn finish_worker(&self) -> Result<String, String> {
+        let mut held = self.0.held.lock().await;
+        let reply = self
+            .0
+            .api
+            .call("/v1/work/workers/finish", json!({}))
+            .await
+            .map_err(message)?;
+        if let Some(h) = held.take() {
+            h.extender.abort();
+        }
+        Ok(reply.to_string())
+    }
+
     /// The item this agent holds, which the tools that act on "the item" default to.
     pub(crate) async fn held_item(&self) -> Option<String> {
         self.0.held.lock().await.as_ref().map(|h| h.item.clone())
