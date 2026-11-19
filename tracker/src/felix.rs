@@ -12,7 +12,7 @@ use bytes::Bytes;
 pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
     AckMode, BrokerError, CacheCondition, ClientConfig, Connection, CursorErrorReason, ErrorCode,
-    GroupMember, GroupPollOptions, GroupRecord, StartPosition, SubscribeCursorError,
+    GroupMember, GroupPollOptions, GroupRecord, RetryClass, StartPosition, SubscribeCursorError,
     quic_client_config, root_store_from_pem_file,
 };
 use kbl_core::org::{ORG_EVENTS, ORG_TRACKER_CACHE};
@@ -509,11 +509,11 @@ impl Felix {
     /// A value in the lease cache and its version.
     async fn cache_get_key(&self, key: &str) -> Result<Option<(Vec<u8>, u64)>> {
         let done = async {
-            let got = self
-                .main()
-                .await?
-                .cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, key)
-                .await?;
+            let client = self.main().await?;
+            let got = placed(|| {
+                client.cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, key)
+            })
+            .await?;
             Ok(got.map(|v| (v.value.to_vec(), v.version)))
         }
         .await;
@@ -532,19 +532,20 @@ impl Felix {
             Some(v) => CacheCondition::Version(v),
         };
         let done = async {
-            let put = self
-                .main()
-                .await?
-                .cache_put_if(
+            let client = self.main().await?;
+            let body = Bytes::from(value);
+            let put = placed(|| {
+                client.cache_put_if(
                     self.tenant(),
                     self.namespace(),
                     self.lease_cache,
                     key,
-                    Bytes::from(value),
+                    body.clone(),
                     None,
                     condition,
                 )
-                .await?;
+            })
+            .await?;
             Ok(put.applied.then_some(put.version).flatten())
         }
         .await;
@@ -854,19 +855,20 @@ impl Broker for Felix {
             Some(v) => CacheCondition::Version(v),
         };
         let done = async {
-            let put = self
-                .main()
-                .await?
-                .cache_put_if(
+            let client = self.main().await?;
+            let body = Bytes::from(holder);
+            let put = placed(|| {
+                client.cache_put_if(
                     self.tenant(),
                     self.namespace(),
                     self.lease_cache,
                     LEASE_KEY,
-                    Bytes::from(holder),
+                    body.clone(),
                     Some(ttl.as_millis() as u64),
                     condition,
                 )
-                .await?;
+            })
+            .await?;
             Ok(put.applied.then_some(put.version).flatten())
         }
         .await;
@@ -875,11 +877,16 @@ impl Broker for Felix {
 
     async fn lease_get(&self) -> Result<Option<(Vec<u8>, u64)>> {
         let done = async {
-            let got = self
-                .main()
-                .await?
-                .cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, LEASE_KEY)
-                .await?;
+            let client = self.main().await?;
+            let got = placed(|| {
+                client.cache_get_versioned(
+                    self.tenant(),
+                    self.namespace(),
+                    self.lease_cache,
+                    LEASE_KEY,
+                )
+            })
+            .await?;
             Ok(got.map(|v| (v.value.to_vec(), v.version)))
         }
         .await;
@@ -965,6 +972,9 @@ impl Broker for Felix {
     }
 }
 
+/// How long a missing stream or cache is retried, as felix-client does.
+const NOT_FOUND_GRACE: Duration = Duration::from_secs(5);
+
 /// What a broker says while a new stream's shard has no owner yet or is still opening.
 const NOT_READY: [&str; 2] = ["not assigned", "still opening"];
 
@@ -1007,18 +1017,37 @@ where
     }
 }
 
-/// Runs `op`, trying again while the broker says the shard is not ready. No
-/// other failure is retried: a second publish could land twice.
+/// Runs `op`, trying again while the broker says the shard is not ready or is
+/// moving (a refusal Felix classes as retry or retry_after, which it sends
+/// before applying anything). No other failure is retried: a second publish
+/// could land twice, and an unknown outcome could hide an applied lease write.
 async fn placed<T, F, Fut>(mut op: F) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
+    use tokio::time::Instant;
     let deadline = Instant::now() + PLACEMENT_WAIT;
+    let mut missing_since: Option<Instant> = None;
     loop {
         match op().await {
-            Err(err) if Instant::now() < deadline && is_not_ready(&err) => {
+            // A missing stream or cache is usually real, so it gets a short grace.
+            Err(err) if is_not_found(&err) => {
+                let since = *missing_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= NOT_FOUND_GRACE || Instant::now() >= deadline {
+                    return Err(err);
+                }
                 tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            Err(err) if Instant::now() < deadline && is_not_ready(&err) => {
+                let asked = err
+                    .downcast_ref::<BrokerError>()
+                    .and_then(|b| b.detail.as_ref())
+                    .and_then(|d| d.retry_after_ms)
+                    .map(Duration::from_millis)
+                    .unwrap_or_default();
+                tokio::time::sleep(asked.clamp(Duration::from_millis(250), Duration::from_secs(5)))
+                    .await;
             }
             done => return done,
         }
@@ -1060,7 +1089,20 @@ fn past_the_tail(err: &anyhow::Error) -> bool {
         .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
 }
 
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<BrokerError>().is_some_and(|b| {
+        b.code == ErrorCode::NotFound
+            && matches!(b.retry, RetryClass::Retry | RetryClass::RetryAfter)
+    })
+}
+
 fn is_not_ready(err: &anyhow::Error) -> bool {
+    if let Some(broker) = err.downcast_ref::<BrokerError>()
+        && matches!(broker.retry, RetryClass::Retry | RetryClass::RetryAfter)
+    {
+        return true;
+    }
+    // An older broker sends no class, only the words.
     let text = format!("{err:#}");
     NOT_READY.iter().any(|marker| text.contains(marker))
 }

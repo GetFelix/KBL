@@ -13,6 +13,10 @@ use felix_client::{
     GroupPollOptions, GroupRecord, quic_client_config, root_store_from_pem_file,
 };
 
+mod retry;
+
+use retry::retrying;
+
 /// How long the broker may take to accept the connection.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -189,53 +193,65 @@ pub(crate) trait Backend: Clone + Send + Sync + 'static {
 
 impl Backend for Felix {
     async fn publish(&self, stream: &str, payload: Vec<u8>) -> Result<u64> {
-        let publisher = self.client().publisher().await?;
-        let offset = publisher
-            .publish(
-                &self.tenant,
-                &self.namespace,
-                stream,
-                payload,
-                AckMode::PerMessage,
-            )
-            .await?;
+        let offset = retrying(|| async {
+            let publisher = self.client().publisher().await?;
+            publisher
+                .publish(
+                    &self.tenant,
+                    &self.namespace,
+                    stream,
+                    payload.clone(),
+                    AckMode::PerMessage,
+                )
+                .await
+        })
+        .await?;
         offset.context("the broker did not report an offset")
     }
 
     async fn cache_put(&self, cache: &str, key: &str, value: Vec<u8>) -> Result<()> {
-        self.client()
-            .cache_put(
-                &self.tenant,
-                &self.namespace,
-                cache,
-                key,
-                Bytes::from(value),
-                None,
-            )
-            .await
+        let value = Bytes::from(value);
+        retrying(|| async {
+            self.client()
+                .cache_put(
+                    &self.tenant,
+                    &self.namespace,
+                    cache,
+                    key,
+                    value.clone(),
+                    None,
+                )
+                .await
+        })
+        .await
     }
 
     async fn cache_get(&self, cache: &str, key: &str) -> Result<Option<Vec<u8>>> {
-        let value = self
-            .client()
-            .cache_get(&self.tenant, &self.namespace, cache, key)
-            .await?;
+        let value = retrying(|| async {
+            self.client()
+                .cache_get(&self.tenant, &self.namespace, cache, key)
+                .await
+        })
+        .await?;
         Ok(value.map(|bytes| bytes.to_vec()))
     }
 
     async fn cache_put_absent(&self, cache: &str, key: &str, value: Vec<u8>) -> Result<bool> {
-        let done = self
-            .client()
-            .cache_put_if(
-                &self.tenant,
-                &self.namespace,
-                cache,
-                key,
-                Bytes::from(value),
-                None,
-                CacheCondition::Absent,
-            )
-            .await?;
+        let value = Bytes::from(value);
+        let done = retrying(|| async {
+            self.client()
+                .cache_put_if(
+                    &self.tenant,
+                    &self.namespace,
+                    cache,
+                    key,
+                    value.clone(),
+                    None,
+                    CacheCondition::Absent,
+                )
+                .await
+        })
+        .await?;
         Ok(done.applied)
     }
 
