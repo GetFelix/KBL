@@ -1,0 +1,1 @@
+Dashboard: on a phone a row keeps room for its title and its details go under it, the worker table stacks, the command palette names the kind once, and every screen is captured light and dark at 1280 and 390 px in CI (#132).
