@@ -167,10 +167,10 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 
 @media (max-width: 720px) {
   /* Id and title share the first line; the rest of the row goes under the title instead of squeezing it. */
-  .row { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--space-3); row-gap: 0; align-items: baseline; padding-block: var(--space-2); }
+  .row { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); column-gap: var(--space-3); row-gap: 0; align-items: baseline; padding-block: var(--space-2); }
   .row-title { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  .row-waits, .row-props { grid-column: 2; justify-self: start; text-align: left; margin-left: 0; white-space: normal; overflow: visible; }
-  .row-waits:empty, .row-props:empty { display: none; }
+  .row .row-waits, .row .row-props { grid-column: 2; justify-self: start; text-align: left; margin-left: 0; white-space: normal; overflow: visible; }
+  .row .row-waits:empty, .row .row-props:empty { display: none; }
   .row-flag, .triage-chip, .assignee { grid-column: 2; justify-self: start; margin-left: 0; }
   .row-id { min-width: 0; overflow-wrap: anywhere; }
   .shell { grid-template-columns: 1fr; }
