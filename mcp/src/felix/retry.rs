@@ -8,14 +8,16 @@
 use std::future::Future;
 use std::time::Duration;
 
-use felix_client::{BrokerError, RetryClass};
+use felix_client::{BrokerError, ErrorCode, RetryClass};
 use tokio::time::Instant;
 
 /// How long one call keeps retrying before it reports the refusal.
 const BUDGET: Duration = Duration::from_secs(30);
 /// The wait when the broker names none, doubling up to `MAX_PAUSE`.
 const FIRST_PAUSE: Duration = Duration::from_millis(100);
-const MAX_PAUSE: Duration = Duration::from_secs(2);
+const MAX_PAUSE: Duration = Duration::from_secs(5);
+/// How long a missing cache or stream is retried, as felix-client does.
+const NOT_FOUND_GRACE: Duration = Duration::from_secs(5);
 
 /// Runs `call` again while Felix says to retry it, for up to `BUDGET`.
 pub(super) async fn retrying<T, F, Fut>(call: F) -> anyhow::Result<T>
@@ -31,7 +33,8 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = anyhow::Result<T>>,
 {
-    let end = Instant::now() + budget;
+    let start = Instant::now();
+    let end = start + budget;
     let mut pause = FIRST_PAUSE;
     loop {
         let error = match call().await {
@@ -42,6 +45,9 @@ where
             return Err(error);
         };
         if !matches!(broker.retry, RetryClass::Retry | RetryClass::RetryAfter) {
+            return Err(error);
+        }
+        if broker.code == ErrorCode::NotFound && start.elapsed() >= NOT_FOUND_GRACE {
             return Err(error);
         }
         let asked = broker

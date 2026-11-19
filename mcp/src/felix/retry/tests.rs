@@ -65,3 +65,38 @@ async fn a_refusal_that_will_not_change_is_not_retried() {
     assert!(err.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_missing_cache_is_given_up_on_after_the_grace() {
+    let started = Instant::now();
+    let err = retrying(|| async {
+        Err::<(), _>(anyhow::Error::from(BrokerError::new(
+            ErrorCode::NotFound,
+            RetryClass::RetryAfter,
+            "no such cache",
+        )))
+    })
+    .await;
+    assert!(err.is_err());
+    let took = started.elapsed();
+    assert!(
+        took >= Duration::from_secs(5) && took < Duration::from_secs(12),
+        "{took:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_pause_over_two_seconds_is_honored() {
+    let calls = AtomicUsize::new(0);
+    let started = Instant::now();
+    retrying(|| async {
+        if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Err(moving(4000))
+        } else {
+            Ok(())
+        }
+    })
+    .await
+    .unwrap();
+    assert!(started.elapsed() >= Duration::from_secs(4));
+}

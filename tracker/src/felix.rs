@@ -973,6 +973,9 @@ impl Broker for Felix {
 }
 
 /// What a broker says while a new stream's shard has no owner yet or is still opening.
+/// How long a missing stream or cache is retried, as felix-client does.
+const NOT_FOUND_GRACE: Duration = Duration::from_secs(5);
+
 const NOT_READY: [&str; 2] = ["not assigned", "still opening"];
 
 /// How long startup keeps retrying while a fresh broker settles its leases.
@@ -1023,9 +1026,19 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
 {
+    use tokio::time::Instant;
     let deadline = Instant::now() + PLACEMENT_WAIT;
+    let mut missing_since: Option<Instant> = None;
     loop {
         match op().await {
+            // A missing stream or cache is usually real, so it gets a short grace.
+            Err(err) if false && is_not_found(&err) => {
+                let since = *missing_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= NOT_FOUND_GRACE || Instant::now() >= deadline {
+                    return Err(err);
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
             Err(err) if Instant::now() < deadline && is_not_ready(&err) => {
                 let asked = err
                     .downcast_ref::<BrokerError>()
@@ -1076,10 +1089,21 @@ fn past_the_tail(err: &anyhow::Error) -> bool {
         .is_some_and(|c| c.reason == CursorErrorReason::InFuture)
 }
 
+fn is_not_found(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<BrokerError>().is_some_and(|b| {
+        b.code == ErrorCode::NotFound
+            && matches!(b.retry, RetryClass::Retry | RetryClass::RetryAfter)
+    })
+}
+
 fn is_not_ready(err: &anyhow::Error) -> bool {
-    if let Some(broker) = err.downcast_ref::<BrokerError>() {
-        return matches!(broker.retry, RetryClass::Retry | RetryClass::RetryAfter);
+    if let Some(broker) = err.downcast_ref::<BrokerError>()
+        && matches!(broker.retry, RetryClass::Retry | RetryClass::RetryAfter)
+    {
+        return true;
     }
+    // An older broker sends no class, only the words.
+    if err.downcast_ref::<BrokerError>().is_some() { return false; }
     let text = format!("{err:#}");
     NOT_READY.iter().any(|marker| text.contains(marker))
 }

@@ -200,3 +200,39 @@ async fn a_write_refused_while_the_shard_moves_is_sent_again() {
     assert!(err.is_err());
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_missing_cache_is_given_up_on_after_the_grace() {
+    let started = tokio::time::Instant::now();
+    let err = super::placed(|| async {
+        Err::<(), _>(anyhow::Error::from(felix_client::BrokerError::new(
+            felix_client::ErrorCode::NotFound,
+            felix_client::RetryClass::RetryAfter,
+            "no such cache",
+        )))
+    })
+    .await;
+    assert!(err.is_err());
+    let took = started.elapsed();
+    assert!(
+        took >= std::time::Duration::from_secs(5) && took < std::time::Duration::from_secs(8),
+        "{took:?}"
+    );
+}
+
+/// An older broker sends no retry class, only the words.
+#[test]
+fn a_broker_without_a_class_is_still_read_by_its_words() {
+    let fatal = felix_client::BrokerError::new(
+        felix_client::ErrorCode::ShardUnavailable,
+        felix_client::RetryClass::Fatal,
+        "shard not assigned",
+    );
+    assert!(super::is_not_ready(&anyhow::Error::from(fatal)));
+    let other = felix_client::BrokerError::new(
+        felix_client::ErrorCode::ShardUnavailable,
+        felix_client::RetryClass::Fatal,
+        "denied",
+    );
+    assert!(!super::is_not_ready(&anyhow::Error::from(other)));
+}
