@@ -191,7 +191,10 @@ try {
   const fix = await takeNext(w2, 20);
   check(fix.claimed && fix.item.work === "fix_check" && fix.item.parent === root, "w2 claimed a fix_check child of the root");
   check(fix.item.fix_check?.head === "sha-red" && fix.item.pr === PR, "the claim names the head commit and the pull request");
-  check(JSON.stringify(fix).includes("unused import"), "the claim carries the log excerpt");
+  // The claim names the entry; the excerpt is read like any other context.
+  check(fix.item.context?.includes("check_log"), "the claim points at context check_log");
+  const ctx = await w2.tool("work_context", { item: fix.item.id });
+  check(JSON.stringify(ctx).includes("unused import"), "work_context returns the log excerpt");
 
   // 4. Its push turns the check green.
   await w2.tool("work_complete", { item: fix.item.id });
