@@ -929,7 +929,7 @@ try {
   const fork = await page.eval(`document.querySelector('.story-forks li').textContent`);
   console.log(`saw fork line: ${fork}`);
   check(fork.startsWith(`Attempt 2 is a redo from decision ${redoDecision} on attempt 1.`), 'the new attempt is linked to its fork point in the panel');
-  await page.eval(`document.querySelector('.story-forks .story-ref').click(); true`);
+  await page.eval(`document.querySelector('.story-forks .story-ref').click(); true`); await new Promise((ok) => setTimeout(ok, 200));
   check(await focused(`.story-decision[data-at="${redoDecision}"]`), 'the fork link moves the focus to the decision it branched from');
   await press(page, 'r');
   const blocked = await page.eval(`document.querySelector('.redo-dialog')?.open ? document.querySelector('.redo-dialog').textContent : ''`);

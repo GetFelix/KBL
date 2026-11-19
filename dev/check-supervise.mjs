@@ -22,6 +22,7 @@ import {
   killAll,
   newRunId,
   personRecord,
+  raiseFormat,
   sleep,
   startTracker,
   TRACKER_URL,
@@ -62,7 +63,7 @@ const felix = await felixToken();
 createRun(RUN, "supervise check");
 const tracker = await startTracker(tokens, { KBL_CLAIM_VISIBILITY_MS: "8000" });
 try {
-  await personRecord("tok-gab", { kind: "format_raised", to: 24 }).catch((e) => console.log(`format not raised: ${e.message}`));
+  await raiseFormat("tok-gab", 24).catch((e) => console.log(`format not raised: ${e.message}`));
   for (const item of ITEMS) {
     await personRecord("tok-gab", {
       kind: "imported",

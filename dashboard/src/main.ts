@@ -7,7 +7,7 @@ import './ui/tokens.css';
 import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { trackWaiting } from './inbox.ts';
-import { blocked, items, questionText, reviewLoad, type Fold } from './fold.ts';
+import { blocked, items, questionText, reviewLoad, type Fold, type ItemRow } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { activities, type Activities } from './activity.ts';
 import { handoffs } from './handoff.ts';
@@ -492,7 +492,8 @@ const stopWorkers = (names: string[]): Promise<string | null> =>
     }
     return o;
   }, names);
-let readWorkers: (() => WorkerRow[]) | null = null;
+// Rows and items come from the same fold, so a hold's title is never older than the hold.
+let readWorkers: (() => { rows: WorkerRow[]; items: ItemRow[] }) | null = null;
 const workersBox = workersView({
   open: openItem,
   canStop: () => tracker !== null,
@@ -503,7 +504,8 @@ const workersBox = workersView({
 // Workers of a log still being read would be a partial list, so the dialog waits for live and fills in then.
 const showWorkers = () => {
   const s = store.get();
-  workersBox.open(s.connection.kind === 'live' && readWorkers ? readWorkers() : null, s.items, s);
+  const read = s.connection.kind === 'live' && readWorkers ? readWorkers() : null;
+  workersBox.open(read?.rows ?? null, read?.items ?? s.items, s);
 };
 const metricsBox = metricsView({
   report: (days) => (store.get().connection.kind === 'live' && readMetrics ? readMetrics(days) : null),
@@ -658,7 +660,7 @@ async function main() {
     workersJson: () => fold.workers_json(),
   };
   readSpend = () => spend(sink);
-  readWorkers = () => workers(sink);
+  readWorkers = () => ({ rows: workers(sink), items: items(sink) });
   readMetrics = (days) => metrics(sink, Date.now(), days);
   readActivity = () => openActivity(sink);
   const snapshot = () => {
