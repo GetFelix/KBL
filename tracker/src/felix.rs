@@ -972,10 +972,10 @@ impl Broker for Felix {
     }
 }
 
-/// What a broker says while a new stream's shard has no owner yet or is still opening.
 /// How long a missing stream or cache is retried, as felix-client does.
 const NOT_FOUND_GRACE: Duration = Duration::from_secs(5);
 
+/// What a broker says while a new stream's shard has no owner yet or is still opening.
 const NOT_READY: [&str; 2] = ["not assigned", "still opening"];
 
 /// How long startup keeps retrying while a fresh broker settles its leases.
