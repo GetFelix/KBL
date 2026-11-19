@@ -1032,7 +1032,7 @@ where
     loop {
         match op().await {
             // A missing stream or cache is usually real, so it gets a short grace.
-            Err(err) if false && is_not_found(&err) => {
+            Err(err) if is_not_found(&err) => {
                 let since = *missing_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= NOT_FOUND_GRACE || Instant::now() >= deadline {
                     return Err(err);
