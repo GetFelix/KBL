@@ -166,6 +166,8 @@ struct Model {
     started: HashMap<(String, u32), (String, u64)>,
     /// The token each worker was handed when its start was acknowledged.
     tokens: HashMap<&'static str, String>,
+    /// Seed of the generator the needs and capability steps draw from.
+    aux: u64,
     /// What each claimant declares on its next claim. It changes between
     /// claims, since capabilities ride each call.
     caps: HashMap<&'static str, Vec<String>>,
@@ -290,7 +292,12 @@ async fn claim_with(
     who: &'static str,
     filter: &Filter,
 ) {
-    let caps = m.caps.get(who).cloned().unwrap_or_default();
+    // Until a claimer narrows what it declares, it declares everything.
+    let caps = m
+        .caps
+        .get(who)
+        .cloned()
+        .unwrap_or_else(|| NEEDS.map(str::to_owned).to_vec());
     let filter = filter.clone().with_capabilities(caps.clone()).unwrap();
     let Ok(reply) = t
         .next_filtered(&agent(who), Duration::ZERO, &[], &filter)
@@ -511,7 +518,9 @@ async fn needs_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
         return;
     }
     let id = ids[rng.below(ids.len())].clone();
-    let needs: Vec<String> = pick(rng);
+    // Sparse, so most work stays open to every claimer and workers still
+    // hold items when they stop.
+    let needs: Vec<String> = pick(rng, 4);
     let edit = WorkRecord::Edited {
         item: item(&id),
         title: None,
@@ -529,16 +538,16 @@ async fn needs_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
     let _ = t.person_record(key("gab"), edit).await;
 }
 
-fn pick(rng: &mut Rng) -> Vec<String> {
+fn pick(rng: &mut Rng, one_in: usize) -> Vec<String> {
     NEEDS
         .iter()
-        .filter(|_| rng.below(2) == 0)
+        .filter(|_| rng.below(one_in) == 0)
         .map(|n| (*n).to_owned())
         .collect()
 }
 
 fn caps_step(m: &mut Model, rng: &mut Rng, who: &'static str) {
-    m.caps.insert(who, pick(rng));
+    m.caps.insert(who, pick(rng, 2));
 }
 
 async fn dismiss_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
@@ -863,7 +872,7 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     let who = CLAIMANTS[rng.below(CLAIMANTS.len())];
     let serving = t.serving(rng.below(100) < 40);
-    let mut op = rng.below(28);
+    let mut op = rng.below(26);
     // A worker whose token is dead gets no further than the route's auth.
     if !may_act(serving, m, who) && !(18..=23).contains(&op) {
         op = 23;
@@ -873,10 +882,19 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
         20 => worker_end_step(serving, m, rng, false).await,
         21 => worker_end_step(serving, m, rng, true).await,
         22 if rng.below(4) == 0 => supervisor_gone_step(serving, m).await,
-        22..=23 => {}
+        22 => {}
+        // Also where a worker with a dead token lands: it does nothing.
+        23 => {
+            // Its own generator, so the other steps draw what they always did.
+            let mut aux = Rng(m.aux);
+            m.aux = aux.next();
+            match aux.below(3) {
+                0 => needs_step(serving, m, &mut aux).await,
+                1 => caps_step(m, &mut aux, who),
+                _ => {}
+            }
+        }
         24..=25 => claim_step(serving, fake, m, who).await,
-        26 => needs_step(serving, m, rng).await,
-        27 => caps_step(m, rng, who),
         0..=1 => seed_item(serving, m).await,
         15 => block_step(serving, m, rng, false).await,
         16..=17 => block_step(serving, m, rng, true).await,
@@ -1059,7 +1077,10 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             }),
         };
         t.cur.person_record(key("gab"), vocabulary).await.unwrap();
-        let mut m = Model::default();
+        let mut m = Model {
+            aux: seed ^ 0xA5A5,
+            ..Model::default()
+        };
         for _ in 0..STEPS {
             step(&fake, &mut t, &mut m, &mut rng).await;
         }
