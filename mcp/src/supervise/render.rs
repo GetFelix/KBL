@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 
@@ -71,19 +72,32 @@ pub(crate) fn mcp_config(
 }
 
 /// Makes `dir` and any parents, and sets `dir` itself to mode 700 even if it
-/// was there already, since tokens are written in it.
+/// was there already, since tokens are written in it. On Windows the
+/// directory keeps the ACL it inherits; see docs/design/supervise.md.
 pub(crate) fn private_dir(dir: &Path) -> Result<()> {
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(dir)
+    let mut b = std::fs::DirBuilder::new();
+    b.recursive(true);
+    #[cfg(unix)]
+    b.mode(0o700);
+    b.create(dir)
         .with_context(|| format!("create {}", dir.display()))?;
     let meta = std::fs::symlink_metadata(dir)?;
     if !meta.is_dir() {
         bail!("{} is not a directory", dir.display());
     }
+    #[cfg(unix)]
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
-        .with_context(|| format!("make {} private", dir.display()))
+        .with_context(|| format!("make {} private", dir.display()))?;
+    Ok(())
+}
+
+/// Options for a new file only this user can read: mode 600 on Unix, the
+/// directory's inherited ACL on Windows.
+fn private_options() -> std::fs::OpenOptions {
+    let mut o = std::fs::OpenOptions::new();
+    #[cfg(unix)]
+    o.mode(0o600);
+    o
 }
 
 /// Writes `text` to a new file only this user can read. An existing file or
@@ -92,15 +106,19 @@ pub(crate) fn write_private(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         private_dir(parent)?;
     }
-    let mut f = std::fs::OpenOptions::new()
+    let mut f = private_options()
         .write(true)
         .create_new(true)
-        .mode(0o600)
         .open(path)
         .with_context(|| format!("create {}", path.display()))?;
     f.write_all(text.as_bytes())?;
     f.sync_all()?;
     Ok(())
+}
+
+/// Creates a worker's append-only log, private like its config.
+pub(crate) fn create_private_log(path: &Path) -> std::io::Result<std::fs::File> {
+    private_options().append(true).create_new(true).open(path)
 }
 
 /// `p` made absolute against the current directory, since a worker runs elsewhere.

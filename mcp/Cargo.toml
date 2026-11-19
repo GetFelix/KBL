@@ -16,7 +16,6 @@ base64 = "=0.22.1"
 bytes = "=1.12.1"
 clap = { version = "=4.5.51", features = ["derive", "env"] }
 felix-client = "=0.7.2"
-libc = "=0.2.191"
 metrics = "=0.24.6"
 reqwest = { version = "=0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 rmcp = { version = "=3.5.1", features = ["server", "macros", "transport-io"] }
@@ -27,6 +26,12 @@ serde_json = "=1.0.145"
 tokio = { version = "=1.48.0", features = ["fs", "macros", "process", "rt-multi-thread", "sync", "time"] }
 toml = "=1.2.1"
 tracing = "=0.1.44"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [dev-dependencies]
 kbl-trace = { path = "../trace", features = ["test-util"] }

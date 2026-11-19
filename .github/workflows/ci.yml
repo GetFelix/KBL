@@ -75,6 +75,16 @@ jobs:
         env:
           KBL_SWEEP_SEEDS: 400
 
+  # The released Windows binaries must keep building and passing their tests.
+  windows:
+    name: rust (windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: cargo build --locked -p kbl-mcp -p kbl-tool -p kbl-ingest
+      - run: cargo test --locked -p kbl-mcp
+
   dashboard:
     name: dashboard build (wasm, tsc, tests)
     runs-on: ubuntu-latest
@@ -276,13 +286,14 @@ jobs:
   ci-ok:
     name: CI ok
     if: always()
-    needs: [lint, intake, rust, dashboard, stack, quickstart]
+    needs: [lint, intake, rust, windows, dashboard, stack, quickstart]
     runs-on: ubuntu-latest
     steps:
       - run: |
           test "${{ needs.lint.result }}" = success
           test "${{ needs.intake.result }}" = success
           test "${{ needs.rust.result }}" = success
+          test "${{ needs.windows.result }}" = success
           test "${{ needs.dashboard.result }}" = success
           test "${{ needs.stack.result }}" = success
           test "${{ needs.quickstart.result }}" = success
