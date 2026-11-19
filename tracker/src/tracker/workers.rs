@@ -7,6 +7,10 @@ use kbl_core::work_fold::{State, Worker};
 
 use super::*;
 
+/// The reason on the release of an item a worker still held when it
+/// finished. It abandoned the item, so unlike `supervisor_gone` it spends the try.
+pub(crate) const WORKER_FINISHED: &str = "worker_finished";
+
 /// Longest vendor, profile or model name a worker records.
 pub(crate) const MAX_WORKER_LABEL: usize = 64;
 
@@ -121,10 +125,11 @@ impl<B: Broker> Tracker<B> {
         let offset = self.append(&mut core, actor, by, record).await?;
         let released = self.release_held(&mut core, &worker).await;
         drop(core);
+        let released = released_json(&worker, released);
         self.sync_ready().await;
         // A release that failed after the stop landed is retried by the next sweep.
         Ok(
-            json!({ "kind": "worker_stopped", "offset": offset, "released": released.unwrap_or_default() }),
+            json!({ "kind": "worker_stopped", "offset": offset, "released": released.0, "release_error": released.1 }),
         )
     }
 
@@ -144,15 +149,23 @@ impl<B: Broker> Tracker<B> {
             .await?;
         let released = self.release_held(&mut core, &by).await;
         drop(core);
+        let released = released_json(&by, released);
         self.sync_ready().await;
         Ok(
-            json!({ "kind": "worker_finished", "offset": offset, "released": released.unwrap_or_default() }),
+            json!({ "kind": "worker_finished", "offset": offset, "released": released.0, "release_error": released.1 }),
         )
     }
 
     /// Gives back what an ended worker still holds, as a gone supervisor's
     /// workers do: no try is spent.
     async fn release_held(&self, core: &mut Core, worker: &Key) -> Result<Vec<ItemId>, Error> {
+        // A worker that finished on its own abandoned what it held; one that
+        // was stopped, or lost its supervisor, did not fail.
+        let reason = if core.state.workers.get(worker).is_some_and(|w| w.finished) {
+            WORKER_FINISHED
+        } else {
+            SUPERVISOR_GONE
+        };
         let held: Vec<(ItemId, u32)> = core
             .state
             .items
@@ -168,7 +181,7 @@ impl<B: Broker> Tracker<B> {
             let record = WorkRecord::Released {
                 item: item.clone(),
                 attempt,
-                reason: Some(SUPERVISOR_GONE.into()),
+                reason: Some(reason.into()),
                 why: None,
                 cost_micros: 0,
                 usage: Vec::new(),
@@ -331,5 +344,20 @@ impl<B: Broker> Tracker<B> {
             })
             .collect();
         *self.0.workers.lock().unwrap_or_else(|e| e.into_inner()) = live;
+    }
+}
+
+/// The items a release gave back, and the error text when it failed after the
+/// stop or finish had landed; the next sweep releases what is left.
+fn released_json(
+    worker: &Key,
+    released: Result<Vec<ItemId>, Error>,
+) -> (Vec<ItemId>, Option<String>) {
+    match released {
+        Ok(items) => (items, None),
+        Err(e) => {
+            tracing::warn!(%worker, error = %e, "releasing an ended worker's hold failed; the next sweep retries");
+            (Vec::new(), Some(e.to_string()))
+        }
     }
 }

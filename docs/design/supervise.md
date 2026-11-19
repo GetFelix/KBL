@@ -120,7 +120,7 @@ hook_token_env = "CLOUD_HOOK_TOKEN"
 
 A hosted worker has no process for `kbl-mcp` to watch, so it reports itself: it calls the `worker_finish` tool (or
 `POST /v1/work/workers/finish` with its own token). The tracker logs `worker_finished`, kills the token and gives back
-anything the worker still holds. On its next round the supervisor sees the worker ended on the tracker, drops it from the
+anything the worker still holds. That counts as abandoning it: the release carries `worker_finished` and spends the try, unlike a stop. On its next round the supervisor sees the worker ended on the tracker, drops it from the
 pool, lists it under `finished` in `supervise_status`, and the top-up starts a replacement if ready work matches. A hook
 worker a person or the tracker stopped is dropped the same way and listed under `failed`. Both count toward the pause
 after 3 quick or failed ends in a row. A hosted worker that dies without calling it is still counted live until it is

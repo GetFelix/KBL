@@ -754,7 +754,7 @@
   ".filter(|(_, w)| w.stopped_ms.is_none())"
  ],
  "tracker/src/tracker/workers.rs#release_held": [
-  "reason: Some(SUPERVISOR_GONE.into()),"
+  "reason: Some(reason.into()),"
  ],
  "tracker/src/tracker/workers.rs#release_stopped_holds": [
   "w.stopped_ms.is_some() && core.state.held_by(name.as_str()).is_some()"

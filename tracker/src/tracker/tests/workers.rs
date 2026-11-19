@@ -328,7 +328,11 @@ async fn a_worker_that_finishes_ends_and_gives_back_what_it_holds() {
     assert!(listed["workers"][0]["holds"].is_null());
     {
         let core = t.0.core.lock().await;
-        assert_eq!(tries_on(&core.state, "a1"), 0);
+        assert_eq!(
+            tries_on(&core.state, "a1"),
+            1,
+            "finishing abandons the item"
+        );
         assert!(core.state.rejections.is_empty());
     }
     // Once is all: the token is dead, so a second finish is refused.
@@ -352,4 +356,45 @@ async fn finishing_needs_the_log_at_format_24() {
     // A plain agent has no worker to finish.
     let t = at_24(&Fake::default()).await;
     assert!(t.finish_worker(&agent("sup")).await.is_err());
+}
+
+#[tokio::test]
+async fn a_worker_cannot_get_its_try_back_by_finishing_over_and_over() {
+    let fake = Fake::default();
+    let t = at_24(&fake).await;
+    seed(&t, "a1", 2).await;
+    let mut spent = 0;
+    for n in 1..=4 {
+        let name = format!("sup-w{n}");
+        start_for(&t, "sup", &name).await.unwrap();
+        if claimed_id(&claim(&t, &name).await).is_none() {
+            break;
+        }
+        t.finish_worker(&agent(&name)).await.unwrap();
+        fake.lapse_all();
+        spent = tries_on(&t.0.core.lock().await.state, "a1");
+        // The cap is two live workers; ended ones free their slot.
+    }
+    assert!(spent >= 2, "each finish should spend a try, got {spent}");
+    // Out of tries, the item is no longer handed out.
+    start_for(&t, "sup", "sup-w9").await.unwrap();
+    assert_eq!(claimed_id(&claim(&t, "sup-w9").await), None);
+}
+
+#[tokio::test]
+async fn a_failed_release_after_a_finish_is_reported_and_the_sweep_finishes_it() {
+    let fake = Fake::default();
+    let t = at_24(&fake).await;
+    start_for(&t, "sup", "sup-w1").await.unwrap();
+    seed(&t, "a1", 2).await;
+    claim(&t, "sup-w1").await;
+    fake.fail_publishes_to_after(WORK_EVENTS, 1);
+    let done = t.finish_worker(&agent("sup-w1")).await.unwrap();
+    assert!(done["release_error"].is_string(), "{done}");
+    assert_eq!(done["released"], json!([]));
+    fake.lift_publish_budget();
+    t.sweep().await;
+    let core = t.0.core.lock().await;
+    assert!(core.state.held_by("sup-w1").is_none());
+    assert_eq!(tries_on(&core.state, "a1"), 1);
 }
