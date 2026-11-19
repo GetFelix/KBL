@@ -120,12 +120,18 @@ writeFileSync(
   }),
 );
 
+const polling = new Set();
 async function pollOnce() {
   const child = spawn(INGEST, ["--config", configFile, "--once"], {
     env: { ...process.env, KBL_CHECK_INGEST_TOKEN: "tok-ingest", KBL_CHECK_GITHUB_TOKEN: "unused" },
     stdio: ["ignore", "inherit", "inherit"],
   });
+  // A hung poll must not outlive the check: kill it after a minute.
+  const timer = setTimeout(() => child.kill("SIGKILL"), 60_000);
+  polling.add(child);
   const code = await new Promise((resolve) => child.on("exit", resolve));
+  clearTimeout(timer);
+  polling.delete(child);
   if (code !== 0) throw new Error(`kbl-ingest --once exited with ${code}`);
 }
 
@@ -196,6 +202,7 @@ try {
   check(mine("check_failed").length === 1, "the green head recorded no second failure");
 } finally {
   if (root) await personCall("tok-gab", "/v1/work/close", { item: root }).catch(() => {});
+  for (const child of polling) child.kill("SIGKILL");
   killAll();
   github.close();
 }

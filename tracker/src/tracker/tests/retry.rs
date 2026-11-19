@@ -336,7 +336,14 @@ fn check_failed(head: &str) -> WorkRecord {
 #[tokio::test]
 async fn a_redo_still_needs_a_note_once_the_fix_tries_are_spent() {
     let fake = Fake::default();
-    let t = start(&fake).await;
+    let t = start_with(
+        &fake,
+        Settings {
+            auto_fix_tries: 1,
+            ..settings()
+        },
+    )
+    .await;
     let at = finished(&t).await;
     let early = note(&t).await;
     t.person_record(key("gab"), WorkRecord::FormatRaised { to: 23 })
