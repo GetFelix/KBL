@@ -148,10 +148,11 @@ async function capture(file) {
   const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: view.width, height, scale: 1 } });
   writeFileSync(join(shots, file), Buffer.from(shot.data, 'base64'));
 }
-async function shoot(name) {
+// `single` keeps the flow's own size and theme: a pending write or an open drawer does not survive a resize.
+async function shoot(name, single = false) {
   if (!shots) return;
   await new Promise((ok) => setTimeout(ok, 200));
-  if (!MATRIX) return capture(`${name}.png`);
+  if (!MATRIX || single) return capture(`${name}.png`);
   const base = name.replace(/-(dark|light)$/, '');
   const original = { ...view };
   const theme = await page.eval(`document.documentElement.dataset.theme`);
@@ -754,7 +755,7 @@ try {
   await press(page, 'Tab');
   check(await page.eval(`document.querySelector('#sidebar').contains(document.activeElement)`), 'Tab from the last stop wraps inside the drawer');
   await axe('phone menu');
-  await shoot('phone-menu-dark');
+  await shoot('phone-menu-dark', true);
   await press(page, 'Escape');
   check(await focused('.menu-button') && (await page.eval(`document.querySelector('.menu-button').getAttribute('aria-expanded') === 'false' && !document.querySelector('.shell > .main').inert`)), 'Esc closes the menu, gives focus back to the button, and the page is live again');
   await open(connected, { width: 390, height: 844, storage: { 'kbl.dashboard.views': '[{"name":"Tier 2","search":"tier=2"}]' } });
@@ -858,7 +859,7 @@ try {
   check(await page.eval(`document.querySelector('.actions').hasAttribute('aria-busy') && document.querySelector('.write-status').textContent === 'Setting the tier…' && document.querySelector('.activity-text').textContent === 'Setting the tier of gh-2219…'`), 'a write in flight shows as pending in the panel and the activity line');
   check(await focused('[data-focus=set-tier]'), 'the pending button keeps the focus (aria-disabled, not disabled)');
   await axe('write pending');
-  await shoot('pending-dark');
+  await shoot('pending-dark', true);
   await page.waitFor(`document.querySelector('.activity-text').textContent === 'Set the tier of gh-2219.'`);
   await page.eval(`window.__tracker.delay = 0; window.__tracker.refuse['gh-2221'] = { error: 'the fold refused the record: the item is closed', why: 'closed' }; document.querySelector('.row[data-id=gh-2221]').click(); true`);
   await page.eval(`document.querySelector('#panel-tier').value = '0'; document.querySelector('[data-focus=set-tier]').click(); true`);
