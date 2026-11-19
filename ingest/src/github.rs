@@ -21,6 +21,7 @@ use crate::source::{
     Changes, Closed, Comment, Cursor, Failure, Fetched, Issue, IssueRef, Links, PullRequest,
     Release, Releases, Source, SourceError, WriteBack,
 };
+use crate::sync::tail;
 
 pub(crate) mod app;
 pub(crate) mod transport;
@@ -611,6 +612,25 @@ impl<T: Transport> Source for Github<T> {
         }
     }
 
+    async fn check_log(&self, repo: &str, url: &str, max: usize) -> Option<String> {
+        let job = actions_job(repo, url)?;
+        let req = Req::get(format!("{}/repos/{repo}/actions/jobs/{job}/logs", self.api));
+        match self.call(req).await {
+            Ok(res) if res.status == 200 => res.body.as_str().map(|log| tail(log, max)),
+            Ok(res) => {
+                eprintln!(
+                    "kbl-ingest: GitHub would not give the log of {url}: {}",
+                    res.status
+                );
+                None
+            }
+            Err(e) => {
+                eprintln!("kbl-ingest: could not read the log of {url}: {e}");
+                None
+            }
+        }
+    }
+
     async fn write_back(&self, what: &WriteBack) -> Result<(), SourceError> {
         let WriteBack::DraftPullRequest { pr, note, mark } = what else {
             return Err(anyhow!("GitHub takes only the draft write-back").into());
@@ -927,6 +947,15 @@ fn failing_output(runs: Option<&Value>, statuses: Option<&Value>, f: &FailedChec
 /// `https://github.com/{repo}/actions/runs/{run}/job/{job}`. Any other link
 /// (a commit status, another App's check) is not one ingest can re-run.
 fn actions_run(repo: &str, url: &str) -> Option<u64> {
+    actions_link(repo, url).map(|(run, _)| run)
+}
+
+/// The job of an Actions job link in `repo`, whose log ingest can read.
+fn actions_job(repo: &str, url: &str) -> Option<u64> {
+    actions_link(repo, url).map(|(_, job)| job)
+}
+
+fn actions_link(repo: &str, url: &str) -> Option<(u64, u64)> {
     let at = format!("/{}/actions/runs/", repo.to_ascii_lowercase());
     let start = url.to_ascii_lowercase().find(&at)? + at.len();
     let (run, job) = url.get(start..)?.split_once("/job/")?;
@@ -935,7 +964,7 @@ fn actions_run(repo: &str, url: &str) -> Option<u64> {
     if !(digits(run) && digits(job)) {
         return None;
     }
-    run.parse().ok()
+    Some((run.parse().ok()?, job.parse().ok()?))
 }
 
 /// Milliseconds since the epoch from `YYYY-MM-DDTHH:MM:SSZ`, as GitHub writes times.

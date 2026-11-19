@@ -119,6 +119,9 @@ pub(crate) struct Settings {
     pub(crate) max_workers: usize,
     /// Live workers the whole team may have.
     pub(crate) max_team_workers: usize,
+    /// `fix_check` items one check on one request gets before its failure
+    /// goes to a person. Zero turns them off.
+    pub(crate) auto_fix_tries: u8,
 }
 
 #[cfg(test)]
@@ -3481,6 +3484,9 @@ fn purpose(work: WorkKind) -> Option<&'static str> {
         WorkKind::Augment => Some(
             "Augment: add the missing context the root needs (reproduction, links, acceptance) so the fix can start.",
         ),
+        WorkKind::FixCheck => Some(
+            "Fix check: make the failed check pass on the root's pull request and push to that request. Read context check_log for the job's log.",
+        ),
         _ => None,
     }
 }
@@ -3491,7 +3497,7 @@ fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
     // A review reads its root's request. A fix a review asked for lands on that
     // request's branch, so its author goes on from there.
     let owner = item
-        .filter(|i| i.review.is_some() || i.finding.is_some())
+        .filter(|i| i.review.is_some() || i.finding.is_some() || i.fix_check.is_some())
         .and_then(|i| i.parent.as_ref())
         .and_then(|p| state.items.get(p));
     let pr_branch = match owner {
@@ -3517,6 +3523,8 @@ fn claimed(core: &Core, delivery: &Delivery, resumed: bool) -> Value {
             "pr": owner.or(item).and_then(|i| i.pr.as_ref()),
             "review": item.and_then(|i| i.review.as_ref()),
             "finding": item.and_then(|i| i.finding),
+            // The failed check to make pass; its log excerpt is context `check_log`.
+            "fix_check": item.and_then(|i| i.fix_check.as_ref()),
             "context": item.map(|i| i.context.keys().collect::<Vec<_>>()),
             "purpose": item.and_then(|i| purpose(i.work)),
         },

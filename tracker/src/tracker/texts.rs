@@ -110,6 +110,15 @@ pub(super) fn text_of(record: &WorkRecord) -> Option<Content> {
         WorkRecord::Decision { so_far, .. } => Some(Content::Text(so_far.clone())),
         WorkRecord::Triaged { why, .. } => Some(Content::Text(why.clone())),
         WorkRecord::Prerequisite { new: Some(n), .. } => Some(n.why.clone()),
+        WorkRecord::CheckFailed {
+            check,
+            url,
+            head,
+            log,
+            ..
+        } => Some(Content::Text(format!(
+            "{check} failed on {head}: {url}\n\n{log}"
+        ))),
         _ => None,
     }
 }

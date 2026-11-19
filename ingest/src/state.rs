@@ -65,6 +65,10 @@ pub(crate) struct Tracked {
     /// a person already accepted the work.
     #[serde(default, skip_serializing_if = "is_false")]
     pub(crate) prerequisite: bool,
+    /// The last failed check reported as `check_failed`: request, check and
+    /// head commit, so a re-poll of the same red does not fetch its log again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) check_reported: Option<(String, String, String)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

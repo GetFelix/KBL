@@ -38,6 +38,8 @@ fn allowed(record: &WorkRecord) -> bool {
         | WorkRecord::SourceStalled { .. }
         | WorkRecord::Reopened { .. }
         | WorkRecord::Shipped { .. } => true,
+        // Whether it opens fix work is the tracker's call, under `auto_fix_tries`.
+        WorkRecord::CheckFailed { fix, .. } => !fix,
         // Upstream's labels and milestone and a rule's class; never a person's title or tier.
         WorkRecord::Edited { title, tier, .. } => title.is_none() && tier.is_none(),
         // The two items an admitted root starts with.
@@ -61,6 +63,7 @@ fn targets(record: &WorkRecord) -> Vec<&ItemId> {
         | WorkRecord::ReturnedToScope { item }
         | WorkRecord::PrStatus { item, .. }
         | WorkRecord::FlakeRetried { item, .. }
+        | WorkRecord::CheckFailed { item, .. }
         | WorkRecord::Reopened { item }
         | WorkRecord::Shipped { item, .. }
         | WorkRecord::Edited { item, .. }
@@ -155,7 +158,7 @@ impl<B: Broker> Tracker<B> {
         &self,
         by: Key,
         source: Option<&str>,
-        record: WorkRecord,
+        mut record: WorkRecord,
     ) -> Result<Value, Error> {
         if !allowed(&record) {
             return Err(refused("not_allowed"));
@@ -193,7 +196,10 @@ impl<B: Broker> Tracker<B> {
                 (Some(root), Some(own)) => {
                     *root == own
                         || (own == PULL_REQUEST_SOURCE
-                            && matches!(record, WorkRecord::PrStatus { .. }))
+                            && matches!(
+                                record,
+                                WorkRecord::PrStatus { .. } | WorkRecord::CheckFailed { .. }
+                            ))
                 }
             };
             if !targets(&record).into_iter().all(reaches) {
@@ -264,6 +270,20 @@ impl<B: Broker> Tracker<B> {
                     }
                     _ => {}
                 }
+            }
+            // A failed check becomes fix work while the check has tries left
+            // and no fix for it is still open; otherwise a person reads it.
+            if let WorkRecord::CheckFailed {
+                item,
+                pr,
+                check,
+                fix,
+                ..
+            } = &mut record
+            {
+                let tries = core.state.fix_check_tries(item, pr, check);
+                *fix = tries < usize::from(self.0.settings.auto_fix_tries)
+                    && !core.state.fix_check_open(item, pr, check);
             }
             let opened = match &record {
                 WorkRecord::PrStatus { item, status } if status.phase == PrPhase::Open => {

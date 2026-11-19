@@ -336,6 +336,18 @@ pub(crate) trait Source: Send + Sync {
         async { Ok(false) }
     }
 
+    /// The end of the log of the check at `url` in `repo`, at most `max`
+    /// bytes, if the source can read it. Errors read as no log.
+    fn check_log(
+        &self,
+        repo: &str,
+        url: &str,
+        max: usize,
+    ) -> impl Future<Output = Option<String>> + Send {
+        let _ = (repo, url, max);
+        async { None }
+    }
+
     /// Opens an issue in `repo` as our own credential and says which it is.
     fn open_issue(
         &self,

@@ -24,8 +24,9 @@ use crate::work::{
     WorkLogged, WorkRecord, valid_review_tier,
 };
 use crate::work::{
-    ClassDim, DEFAULT_SIZES, MAX_CHECK_NAME, MAX_FLAKE_ISSUE, MAX_FLAKE_PATTERN, MAX_FLAKES,
-    MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN, MAX_NEEDS, Vocabulary, plain_class_value,
+    ClassDim, DEFAULT_SIZES, MAX_CHECK_LOG, MAX_CHECK_NAME, MAX_CHECK_URL, MAX_FLAKE_ISSUE,
+    MAX_FLAKE_PATTERN, MAX_FLAKES, MAX_HEAD, MAX_LABEL_LEN, MAX_LABELS, MAX_MILESTONE_LEN,
+    MAX_NEEDS, Vocabulary, plain_class_value,
 };
 
 mod human_wait;
@@ -78,6 +79,10 @@ const MAX_PENDING_PER_ROOT: usize = 8;
 const MAX_TRIAGES: u32 = 4;
 /// Distinct agents remembered as having worked an item, for the self-review rule.
 const MAX_WORKERS: usize = 32;
+
+/// Most `check_failed` records one root keeps. Past it a failure is refused
+/// and the item waits in Needs you on the red check as before.
+const MAX_CHECK_FAILURES: usize = 32;
 
 /// A root's work budget. Agent records only ever lower it; a person's
 /// `budget_set` is the one way up.
@@ -837,6 +842,12 @@ pub struct Item {
     /// The latest failed check that passed on a flake re-run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flake_retried: Option<FlakeRetry>,
+    /// On a root: every `check_failed` ingest reported, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub check_failures: Vec<CheckFailure>,
+    /// On a `fix_check` item: the failure it was opened for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix_check: Option<CheckFailure>,
     /// When the first claim on the item was logged, in the tracker's clock.
     #[serde(default)]
     pub first_claim_ms: Option<u64>,
@@ -972,6 +983,8 @@ pub enum Reject {
     BadWorker,
     /// A flake entry that is malformed, over the list's cap, or not on the list.
     BadFlake,
+    /// A `check_failed` for a check the item's last status does not show failing.
+    NotFailing,
 }
 
 /// A delegated worker: an agent name a supervisor's token registered, which
@@ -1003,6 +1016,20 @@ pub struct Flake {
     pub issue: String,
     /// Re-runs made for it, passed or not. Replacing the entry keeps the count.
     pub hits: u64,
+}
+
+/// A failed check ingest reported on a root's pull request. The log excerpt
+/// stays in the record at `offset`; the item's context entry points at it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckFailure {
+    pub pr: String,
+    pub check: String,
+    pub url: String,
+    pub head: String,
+    pub offset: u64,
+    /// The `fix_check` item it opened, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<ItemId>,
 }
 
 /// A failed check that passed when ingest re-ran it as a known flake.
@@ -1570,7 +1597,10 @@ impl State {
         let Some(it) = self.items.get(id) else {
             return &[];
         };
-        if !matches!(it.work, WorkKind::Fix | WorkKind::Test | WorkKind::Resume) {
+        if !matches!(
+            it.work,
+            WorkKind::Fix | WorkKind::Test | WorkKind::Resume | WorkKind::FixCheck
+        ) {
             return &[];
         }
         self.items.get(&it.root).map_or(&[], |r| r.class.needs())
@@ -1657,6 +1687,7 @@ impl State {
                 .pr_status
                 .as_ref()
                 .is_some_and(|s| s.phase == PrPhase::Open && s.checks == PrChecks::Red)
+            && !self.fixing_check(id)
         {
             return Some(NeedsYou::CheckFailed);
         }
@@ -2097,6 +2128,8 @@ impl State {
             pr_status: None,
             red_since: None,
             flake_retried: None,
+            check_failures: Vec::new(),
+            fix_check: None,
             first_claim_ms: None,
             cost_micros: 0,
             usage: BTreeMap::new(),
@@ -3883,7 +3916,21 @@ impl State {
                     it.changes_ask = None;
                 }
                 it.pr_status = Some(status.clone());
+                if !red(status) {
+                    self.end_fix_checks(item, None);
+                } else if let Some(f) = &status.failing {
+                    self.end_fix_checks(item, Some((&status.pr, &f.name)));
+                }
             }
+            WorkRecord::CheckFailed {
+                item,
+                pr,
+                check,
+                url,
+                head,
+                log,
+                fix,
+            } => self.check_failed(offset, rec, item, [pr, check, url, head, log], *fix)?,
             WorkRecord::SourceStalled {
                 source,
                 repo,
@@ -4074,6 +4121,161 @@ impl State {
                 && it.hold.is_none())
             .then(|| c.clone())
         })
+    }
+
+    /// The open `fix_check` items under `root`.
+    fn open_fix_checks<'a>(&'a self, root: &ItemId) -> impl Iterator<Item = &'a Item> + 'a {
+        let children = self.items.get(root).map(|r| r.children.as_slice());
+        children
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|c| self.items.get(c))
+            .filter(|c| c.fix_check.is_some() && c.closed.is_none())
+    }
+
+    /// Whether an open `fix_check` works on the check the root's request fails now.
+    fn fixing_check(&self, root: &ItemId) -> bool {
+        let Some((pr, name)) = self.items.get(root).and_then(|r| {
+            let s = r.pr_status.as_ref()?;
+            Some((s.pr.as_str(), s.failing.as_ref()?.name.as_str()))
+        }) else {
+            return false;
+        };
+        self.open_fix_checks(root).any(|c| {
+            c.fix_check
+                .as_ref()
+                .is_some_and(|f| f.pr == pr && f.check == name)
+        })
+    }
+
+    /// How many `fix_check` items `root` had for `check` on `pr`, open or not.
+    pub fn fix_check_tries(&self, root: &ItemId, pr: &str, check: &str) -> usize {
+        self.items.get(root).map_or(0, |r| {
+            r.check_failures
+                .iter()
+                .filter(|f| f.fix.is_some() && f.pr == pr && f.check == check)
+                .count()
+        })
+    }
+
+    /// Whether an open `fix_check` under `root` works on `check` of `pr`.
+    pub fn fix_check_open(&self, root: &ItemId, pr: &str, check: &str) -> bool {
+        self.open_fix_checks(root).any(|c| {
+            c.fix_check
+                .as_ref()
+                .is_some_and(|f| f.pr == pr && f.check == check)
+        })
+    }
+
+    /// Closes the open `fix_check` items no agent holds once their failure is
+    /// over: all of them, or with `still` those not on the check still failing.
+    /// A held one ends with its agent's report.
+    fn end_fix_checks(&mut self, root: &ItemId, still: Option<(&String, &String)>) {
+        let over: Vec<ItemId> = self
+            .open_fix_checks(root)
+            .filter(|c| c.hold.is_none())
+            .filter(|c| {
+                let f = c.fix_check.as_ref().expect("filtered on fix_check");
+                still.is_none_or(|(pr, name)| f.pr != *pr || f.check != *name)
+            })
+            .map(|c| c.id.clone())
+            .collect();
+        for id in over {
+            self.close(&id, Closure::Completed);
+        }
+    }
+
+    /// Records a failed check on a root, and with `fix` opens the `fix_check`
+    /// item for it. One per root, request, check and head commit.
+    fn check_failed(
+        &mut self,
+        offset: u64,
+        rec: &WorkLogged,
+        item: &ItemId,
+        [pr, check, url, head, log]: [&String; 5],
+        fix: bool,
+    ) -> Result<(), Reject> {
+        if rec.actor != Actor::Tracker {
+            return Err(Reject::ActorNotAllowed);
+        }
+        if check.is_empty() || head.is_empty() {
+            return Err(Reject::MissingField);
+        }
+        if pr.len() > MAX_PR_REF
+            || check.len() > MAX_CHECK_NAME
+            || url.len() > MAX_CHECK_URL
+            || head.len() > MAX_HEAD
+            || log.len() > MAX_CHECK_LOG
+        {
+            return Err(Reject::TooLong);
+        }
+        let it = self.upstream_sync(item, rec)?;
+        if it.pr.as_deref() != Some(pr.as_str()) {
+            return Err(Reject::WrongPr);
+        }
+        let failing = it.pr_status.as_ref().is_some_and(|s| {
+            s.pr == *pr
+                && s.phase == PrPhase::Open
+                && s.failing.as_ref().is_some_and(|f| f.name == *check)
+        });
+        if !failing {
+            return Err(Reject::NotFailing);
+        }
+        if it
+            .check_failures
+            .iter()
+            .any(|f| f.pr == *pr && f.check == *check && f.head == *head)
+        {
+            return Err(Reject::Duplicate);
+        }
+        if it.check_failures.len() >= MAX_CHECK_FAILURES {
+            return Err(Reject::LimitReached);
+        }
+        let n = it.check_failures.len() + 1;
+        let (depth, tier) = (it.depth.saturating_add(1), it.tier);
+        let entry = Key::new(format!("check-failed-{n}")).expect("a valid key");
+        it.context.insert(entry, offset);
+        // One fix at a time per check; a fix the budget cannot pay for is not
+        // opened, and the failure goes to a person as before.
+        let open = fix
+            && !self.fix_check_open(item, pr, check)
+            && self.budgets.get_mut(item).is_some_and(|b| {
+                let pays = depth <= b.max_depth && b.items_left > 0 && b.cost_left_micros > 0;
+                if pays {
+                    b.items_left -= 1;
+                }
+                pays
+            });
+        let mut failure = CheckFailure {
+            pr: pr.clone(),
+            check: check.clone(),
+            url: url.clone(),
+            head: head.clone(),
+            offset,
+            fix: None,
+        };
+        if open {
+            let id = fix_check_id(item, pr, check, head);
+            if self.items.contains_key(&id) {
+                return Err(Reject::Duplicate);
+            }
+            let title: String = format!("Fix check {check}: {pr}")
+                .chars()
+                .take(200)
+                .collect();
+            let mut f = Self::blank(&id, WorkKind::FixCheck, &title);
+            f.parent = Some(item.clone());
+            f.root = item.clone();
+            f.depth = depth;
+            f.accepted = true;
+            f.tier = tier;
+            f.context.insert(check_log_entry(), offset);
+            f.fix_check = Some(failure.clone());
+            failure.fix = Some(id);
+            self.new_item(f);
+        }
+        self.item_mut(item)?.check_failures.push(failure);
+        Ok(())
     }
 
     fn open_fixes(&self, root: &ItemId) -> bool {
@@ -4840,6 +5042,17 @@ impl State {
 fn derived_id(tag: &str, item: &ItemId, at: u64) -> ItemId {
     let hash = ArtifactId::of(format!("{tag}\n{item}\n{at}").as_bytes());
     ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
+}
+
+/// The id of the `fix_check` for a failure: the same however often it is reported.
+fn fix_check_id(root: &ItemId, pr: &str, check: &str, head: &str) -> ItemId {
+    let hash = ArtifactId::of(format!("fix_check\n{root}\n{pr}\n{check}\n{head}").as_bytes());
+    ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
+}
+
+/// The context entry that points a `fix_check` at its failure's log excerpt.
+fn check_log_entry() -> Key {
+    Key::new("check_log").expect("a valid key")
 }
 
 /// The context entry that points an item at the finding it came from.

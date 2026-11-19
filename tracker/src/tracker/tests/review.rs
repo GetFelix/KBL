@@ -541,6 +541,7 @@ async fn reviewer_tiers_must_be_names_that_fit_the_lanes() {
         fake.expire_lease();
         let bad = Settings {
             review_tiers: tiers,
+            auto_fix_tries: 1,
             ..settings()
         };
         assert!(Tracker::start(fake.reconnect(), bad).await.is_err());

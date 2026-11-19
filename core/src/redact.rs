@@ -1167,6 +1167,13 @@ pub fn redact_record(record: &mut WorkRecord) {
             redact_in(issue);
         }
         WorkRecord::FlakeRetried { check, .. } => redact_in(check),
+        WorkRecord::CheckFailed {
+            check, url, log, ..
+        } => {
+            redact_in(check);
+            redact_in(url);
+            redact_in(log);
+        }
         WorkRecord::RulesSet { text, checks, .. } => {
             redact_opt(text);
             if let Some(c) = checks {

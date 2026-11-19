@@ -123,8 +123,16 @@ pub const MAX_FLAKE_ISSUE: usize = 200;
 /// Most entries on the flake list.
 pub const MAX_FLAKES: usize = 100;
 
+/// The format that added `check_failed`: ingest's report of a failed check
+/// with an excerpt of its log, which can open `fix_check` work.
+pub const FORMAT_V23: u32 = 23;
+
+/// Longest log excerpt a `check_failed` carries, and longest head commit, in bytes.
+pub const MAX_CHECK_LOG: usize = 4096;
+pub const MAX_HEAD: usize = 64;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V22;
+pub const FORMAT: u32 = FORMAT_V23;
 
 /// Most live workers one supervisor may have, whatever the tracker's config says.
 pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
@@ -406,6 +414,9 @@ pub enum WorkKind {
     /// A first-pass or final review of an item's pull request. Only the
     /// tracker creates it, when the request opens.
     Review,
+    /// Make a failed check on an item's pull request pass, pushing to the
+    /// same request. Only the fold creates it, from a `check_failed`. Format 23.
+    FixCheck,
 }
 
 impl WorkKind {
@@ -1244,6 +1255,20 @@ pub enum WorkRecord {
         check: String,
         passed: bool,
     },
+    /// Ingest saw `check` fail on the head commit `head` of the item's pull
+    /// request `pr`, after any flake re-run. `log` is a bounded excerpt of the
+    /// job's log. With `fix` the fold opens a `fix_check` child for it; the
+    /// tracker sets it under the team's `auto_fix_tries`. Format 23.
+    CheckFailed {
+        item: ItemId,
+        pr: String,
+        check: String,
+        url: String,
+        head: String,
+        log: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        fix: bool,
+    },
     /// An operation the tracker refused and logged. Only the tracker writes it.
     Refused {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1322,6 +1347,7 @@ impl WorkRecord {
             WorkRecord::FlakeSet { .. } => "flake_set",
             WorkRecord::FlakeCleared { .. } => "flake_cleared",
             WorkRecord::FlakeRetried { .. } => "flake_retried",
+            WorkRecord::CheckFailed { .. } => "check_failed",
             WorkRecord::WorkerStopped { .. } => "worker_stopped",
             WorkRecord::Unknown => "unknown",
         }
@@ -1382,7 +1408,8 @@ impl WorkRecord {
             | WorkRecord::Edited { item, .. }
             | WorkRecord::BudgetSet { root: item, .. }
             | WorkRecord::PrStatus { item, .. }
-            | WorkRecord::FlakeRetried { item, .. } => Some(item),
+            | WorkRecord::FlakeRetried { item, .. }
+            | WorkRecord::CheckFailed { item, .. } => Some(item),
             WorkRecord::RulesSet { root, .. } | WorkRecord::Refused { item: root, .. } => {
                 root.as_ref()
             }
@@ -1521,6 +1548,7 @@ impl WorkRecord {
             WorkRecord::FlakeSet { .. }
             | WorkRecord::FlakeCleared { .. }
             | WorkRecord::FlakeRetried { .. } => FORMAT_V22,
+            WorkRecord::CheckFailed { .. } => FORMAT_V23,
             WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. } => FORMAT_V21,
             WorkRecord::Edited { needs: Some(_), .. }
             | WorkRecord::Triaged { needs: Some(_), .. }
