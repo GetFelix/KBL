@@ -975,6 +975,10 @@ try {
     await axe('workers');
     await shoot('workers-dark');
     await page.eval(`document.querySelector('dialog.workers [data-stop=sup-a]').click(); true`);
+    // The fake tracker logs only the stop, so the worker shows Releasing while it still holds; the tracker's release then ends it as Stopped.
+    await page.waitFor(`document.querySelector('dialog.workers tr[data-worker=sup-a]')?.dataset.state === 'releasing'`);
+    check(await page.eval(`!document.querySelector('dialog.workers [data-stop=sup-a]')`), 'workers: a worker being released offers no second Stop');
+    await page.eval(`window.__push({ kind: 'released', item: 'wk-1', attempt: 1, reason: 'supervisor_gone', actor: 'tracker', by: 'ingest', at_ms: Date.now() }); true`);
     await page.waitFor(`document.querySelector('dialog.workers tr[data-worker=sup-a]')?.dataset.state === 'stopped'`);
     check(await page.eval(`JSON.stringify(window.__tracker.calls.at(-1)) === '{"url":"/v1/work/workers/stop","auth":"Bearer person-token","body":{"worker":"sup-a"}}'`), 'workers: Stop sends that worker to the stop route with the viewer token');
     await page.eval(`document.querySelector('dialog.workers [data-stop-all=sup]').click(); true`);
