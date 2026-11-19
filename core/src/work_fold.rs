@@ -2334,6 +2334,9 @@ impl State {
         }
         self.track_human_wait(rec);
         self.track_waiting_since(offset, rec);
+        if let Some(item) = rec.record.item() {
+            self.settle_fix_check(item);
+        }
         Ok(())
     }
 
@@ -3916,11 +3919,7 @@ impl State {
                     it.changes_ask = None;
                 }
                 it.pr_status = Some(status.clone());
-                if !red(status) {
-                    self.end_fix_checks(item, None);
-                } else if let Some(f) = &status.failing {
-                    self.end_fix_checks(item, Some((&status.pr, &f.name)));
-                }
+                self.end_fix_checks(item, status);
             }
             WorkRecord::CheckFailed {
                 item,
@@ -4167,21 +4166,41 @@ impl State {
         })
     }
 
-    /// Closes the open `fix_check` items no agent holds once their failure is
-    /// over: all of them, or with `still` those not on the check still failing.
-    /// A held one ends with its agent's report.
-    fn end_fix_checks(&mut self, root: &ItemId, still: Option<(&String, &String)>) {
+    /// Closes the open `fix_check` items no agent holds whose failure `status`
+    /// shows is over. A held one ends with its agent's report, or when its
+    /// agent lets go (`settle_fix_check`).
+    fn end_fix_checks(&mut self, root: &ItemId, status: &PrSnapshot) {
         let over: Vec<ItemId> = self
             .open_fix_checks(root)
             .filter(|c| c.hold.is_none())
-            .filter(|c| {
-                let f = c.fix_check.as_ref().expect("filtered on fix_check");
-                still.is_none_or(|(pr, name)| f.pr != *pr || f.check != *name)
-            })
+            .filter(|c| c.fix_check.as_ref().is_some_and(|f| fix_over(f, status)))
             .map(|c| c.id.clone())
             .collect();
         for id in over {
             self.close(&id, Closure::Completed);
+        }
+    }
+
+    /// Closes a `fix_check` its agent let go of once the root's last status
+    /// shows its failure is over. Ingest writes a status only when it changes,
+    /// so no later status would close it, and it would stay claimable.
+    fn settle_fix_check(&mut self, id: &ItemId) {
+        let Some(it) = self.items.get(id) else {
+            return;
+        };
+        let Some(f) = it.fix_check.as_ref() else {
+            return;
+        };
+        if it.hold.is_some() || it.closed.is_some() {
+            return;
+        }
+        let over = self
+            .items
+            .get(&it.root)
+            .and_then(|r| r.pr_status.as_ref())
+            .is_some_and(|s| fix_over(f, s));
+        if over {
+            self.close(id, Closure::Completed);
         }
     }
 
@@ -4233,12 +4252,16 @@ impl State {
         }
         let n = it.check_failures.len() + 1;
         let (depth, tier) = (it.depth.saturating_add(1), it.tier);
-        let entry = Key::new(format!("check-failed-{n}")).expect("a valid key");
-        it.context.insert(entry, offset);
-        // One fix at a time per check; a fix the budget cannot pay for is not
-        // opened, and the failure goes to a person as before.
-        let open = fix
-            && !self.fix_check_open(item, pr, check)
+        let id = fix_check_id(item, pr, check, head);
+        // One fix at a time per check. Checked before anything changes, so a
+        // refused record leaves no trace.
+        let want = fix && !self.fix_check_open(item, pr, check);
+        if want && self.items.contains_key(&id) {
+            return Err(Reject::Duplicate);
+        }
+        // A fix the budget cannot pay for is not opened, and the failure goes
+        // to a person as before.
+        let open = want
             && self.budgets.get_mut(item).is_some_and(|b| {
                 let pays = depth <= b.max_depth && b.items_left > 0 && b.cost_left_micros > 0;
                 if pays {
@@ -4246,6 +4269,8 @@ impl State {
                 }
                 pays
             });
+        let entry = Key::new(format!("check-failed-{n}")).expect("a valid key");
+        self.item_mut(item)?.context.insert(entry, offset);
         let mut failure = CheckFailure {
             pr: pr.clone(),
             check: check.clone(),
@@ -4255,10 +4280,6 @@ impl State {
             fix: None,
         };
         if open {
-            let id = fix_check_id(item, pr, check, head);
-            if self.items.contains_key(&id) {
-                return Err(Reject::Duplicate);
-            }
             let title: String = format!("Fix check {check}: {pr}")
                 .chars()
                 .take(200)
@@ -5042,6 +5063,13 @@ impl State {
 fn derived_id(tag: &str, item: &ItemId, at: u64) -> ItemId {
     let hash = ArtifactId::of(format!("{tag}\n{item}\n{at}").as_bytes());
     ItemId::new(format!("w{}", &hash.as_str()[2..22])).expect("hash characters are valid")
+}
+
+/// Whether `status` shows the failure a `fix_check` was opened for is over:
+/// its request is green, no longer open, or no longer the item's. A red status
+/// names one failing check, so it says nothing about the others.
+fn fix_over(f: &CheckFailure, status: &PrSnapshot) -> bool {
+    f.pr != status.pr || status.phase != PrPhase::Open || status.checks == PrChecks::Green
 }
 
 /// The id of the `fix_check` for a failure: the same however often it is reported.

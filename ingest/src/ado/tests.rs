@@ -905,6 +905,8 @@ mod signing {
             url: format!("{base}/edit"),
             if_none_match: None,
             body: Some(json!([])),
+            tail: None,
+            anon: false,
         };
         let got = t.send(patch).await.unwrap();
         assert_eq!(got.body["type"], "application/json-patch+json");

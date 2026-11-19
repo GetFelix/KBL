@@ -1583,9 +1583,14 @@ goes to a person. From [format 23](upgrades.md#formats) ingest reports it as
 `check_failed`: the request, the check's name and link, the head commit the
 check ran on, and the end of the job's log (at most 4 KiB). The log comes from
 GitHub's job log for an Actions job; for any other check, or when GitHub will
-not give the log, it is the check's own output. Ingest reports a failure after
+not give the log, it is the check's own output. Ingest follows GitHub's
+redirect to the log without its token, reads the log as bytes whatever its
+content type, and keeps only the last 4 KiB as it streams; past 32 MiB it stops
+and the excerpt says it is not the log's end. Ingest reports a failure after
 any flake re-run settles, so a pending re-run reports nothing, and once per
-request, check and head commit, so a re-poll reads no log again.
+request, check and head commit, so a re-poll reads no log again. A refused
+report (for example `format` before the raise to 23) is tried again on the
+next poll.
 
 The tracker decides whether the failure is work. It opens a `fix_check` item
 under the root when the team's `auto_fix_tries` (`KBL_AUTO_FIX_TRIES`, default
@@ -1597,8 +1602,11 @@ excerpt. The agent pushes to the same request. The failure is stored as
 evidence on the root, not as a note.
 
 While a `fix_check` for the failing check is open the root is not in Needs
-you for it. Green checks, or a different request on the root, close every open
-`fix_check` nobody holds; a held one ends with its agent's `work_complete`.
+you for it. Green checks, a request that is no longer open, or a different
+request on the root close every open `fix_check` nobody holds. A red on
+another check closes nothing, since a status names only one failing check. A
+held one ends with its agent's `work_complete`, or, when its agent lets go
+after the checks went green, it closes then.
 When the fix's push fails the same check again and the tries are used, the
 tracker records the failure without opening work and the root goes to Needs
 you as before, with every failure's excerpt in its context (`check-failed-1`,

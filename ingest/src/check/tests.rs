@@ -902,6 +902,8 @@ async fn the_ado_guard_lets_through_one_query_and_nothing_else() {
             url: format!("{base}/wit/wiql"),
             if_none_match: None,
             body: Some(q.clone()),
+            tail: None,
+            anon: false,
         },
     ];
     for req in refused {

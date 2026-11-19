@@ -253,6 +253,11 @@ impl Fake {
             .collect()
     }
 
+    pub(crate) fn records(&self) -> Vec<WorkRecord> {
+        let inner = self.0.lock().unwrap();
+        inner.log.iter().map(|(_, l)| l.record.clone()).collect()
+    }
+
     pub(crate) fn count(&self, kind: &str) -> usize {
         self.kinds().iter().filter(|k| **k == kind).count()
     }

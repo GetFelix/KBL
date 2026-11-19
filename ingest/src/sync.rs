@@ -1018,8 +1018,10 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         match self.tracker.append(&record).await? {
             Appended::Written => {}
             Appended::Refused(why) if why == "duplicate" => {}
+            // Not remembered: a refusal such as `format` can pass after an upgrade.
             Appended::Refused(why) => {
                 eprintln!("kbl-ingest: the failed check on {key} was refused: {why}");
+                return Ok(());
             }
         }
         if let Some(t) = p.state.items.get_mut(key) {
