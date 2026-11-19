@@ -128,7 +128,7 @@ async fn serve() -> Result<()> {
         anyhow::bail!("--run and --agent are needed");
     };
     let run = RunId::new(run).context("--run")?;
-    let agent = AgentName::new(agent).context("--agent")?;
+    let agent = parse_agent(&agent).context("--agent")?;
     let felix_settings = FelixSettings {
         tenant: cli.tenant.clone(),
         namespace: cli.namespace.clone(),
@@ -291,4 +291,24 @@ async fn serve_person(args: PersonArgs) -> Result<()> {
         .context("start the MCP server")?;
     service.waiting().await?;
     Ok(())
+}
+
+/// `--agent`: a plain agent name, or the `<supervisor>-<suffix>` name of a
+/// delegated worker, which is what `kbl-supervise` puts in `KBL_AGENT`.
+fn parse_agent(s: &str) -> Result<AgentName, kbl_core::names::InvalidName> {
+    AgentName::agent_or_worker(s)
+}
+
+#[cfg(test)]
+mod agent_arg_tests {
+    use super::parse_agent;
+
+    #[test]
+    fn accepts_agent_and_worker_names() {
+        assert!(parse_agent("w1").is_ok());
+        assert_eq!(parse_agent("sup-w1").unwrap().as_str(), "sup-w1");
+        for bad in ["a-b-c", "plan", "-x", "x-", ""] {
+            assert!(parse_agent(bad).is_err(), "{bad}");
+        }
+    }
 }
