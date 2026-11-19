@@ -483,6 +483,7 @@ node dev/check-death.mjs                     # kills workers holding tasks, rest
 node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
 node dev/check-tracker-triage.mjs            # a scripted agent answers four triage items; a person acts on two (needs the tracker built too)
 node dev/check-tracker-ingest.mjs            # kbl-ingest polls one issue from a stand-in GitHub again and again, and after losing its state, and imports it once
+node dev/check-tracker-fix-check.mjs         # a red check on an agent's pull request becomes one claimable fix_check item, and a green head ends it
 kbl-tool run log <run>                    # prints a run's log, one JSON record per line
 ```
 

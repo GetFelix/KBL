@@ -6,7 +6,7 @@ import type { ItemRow } from '../fold.ts';
 import { inboxKind } from '../inbox.ts';
 import type { ViewState } from '../state.ts';
 import { adviceChanged, adviceText, canAdvise, checkAdvice, parseDeps, parseSplit } from '../advice.ts';
-import { handoffKey } from '../handoff.ts';
+import { checkTries, handoffKey } from '../handoff.ts';
 import { CAN, canRate, checkAnswer, pending, shownTier, UNCLEAR } from '../writes.ts';
 import { byFocus, h } from './dom.ts';
 import { handoffBlock } from './handoff-block.ts';
@@ -166,6 +166,11 @@ export function inboxActions(on: InboxHandlers) {
       body.push(h('div', { class: 'inbox-row' }, ...actions, h('span', { class: 'muted small' }, 'Open the item for retries, notes and assigning.')));
     }
     // data-id lets the list put focus back on this item's row when the item leaves.
+    const tries = item.needs === 'check_failed' ? checkTries(item) : [];
+    if (tries.length) {
+      body.unshift(h('div', { class: 'inbox-tries' }, ...tries.map((t) =>
+        h('details', {}, h('summary', {}, t.title), h('a', { href: t.url, rel: 'noreferrer', class: 'small' }, 'Open the job'), h('pre', { class: 'tl-pre' }, t.log)))));
+    }
     const ho = s.handoffs?.get(id);
     const trust = ho ? handoffBlock(item, ho, { enabled: signedIn && canRate(item), mark: (attempt, accurate) => guard(() => on.rate(id, attempt, accurate))() }, 'inbox') : null;
     return h('div', { class: 'inbox-act', 'data-kind': kind, 'data-id': id }, trust, ...body, status);
@@ -176,7 +181,7 @@ export function inboxActions(on: InboxHandlers) {
     strip(item: ItemRow, s: ViewState): HTMLElement {
       latest = s;
       const signedIn = s.tracker.kind === 'signed-in';
-      const sig = [signedIn, item.needs, item.stage, item.question, (item.options ?? []).join('\u0000'), item.default, item.proposed_tier, item.tier, item.flagged, item.proposal?.why, canAdvise(item) ? adviceBase(item) : '', item.format, handoffKey(item, s.handoffs?.get(item.id))].join('|');
+      const sig = [signedIn, item.needs, item.stage, item.question, (item.options ?? []).join('\u0000'), item.default, item.proposed_tier, item.tier, item.flagged, item.proposal?.why, JSON.stringify(item.check_tries ?? []), canAdvise(item) ? adviceBase(item) : '', item.format, handoffKey(item, s.handoffs?.get(item.id))].join('|');
       let kept = strips.get(item.id);
       if (!kept || kept.sig !== sig) {
         kept = { sig, el: build(item, s, signedIn) };

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { ItemRow } from '../src/fold.ts';
-import { checksText, diffText, failedText, handoffKey, handoffs, markText, marks, prUrl, type Handoff } from '../src/handoff.ts';
+import { checkTries, checksText, diffText, failedText, handoffKey, handoffs, markText, marks, prUrl, type Handoff } from '../src/handoff.ts';
 
 const ho = (o: Partial<Handoff> = {}): Handoff => ({ attempt: 2, summary: 'fixed it', files: 3, added: 42, removed: 7, partial: false, failed_steps: [], failed_total: 0, accurate: null, ...o });
 const item = (o: Partial<ItemRow> = {}): ItemRow => ({ id: 'r1', title: 'r1', stage: 'in_review', format: 15, ...o });
@@ -54,4 +54,15 @@ test('a block is rebuilt when the item, the attempt, the mark or the checks chan
   assert.notEqual(base, handoffKey(item(), ho({ accurate: true })));
   assert.notEqual(base, handoffKey(item({ pr_checks: 'red' }), ho()));
   assert.equal(base, handoffKey(item(), ho()));
+});
+
+test('a root shows every failed try with its check, head, fix and log', () => {
+  const rows = checkTries(item({ check_tries: [
+    { offset: 7, check: 'lint', head: 'abcdef123', url: 'https://x/job/1', fix: 'r1-f1', log: 'error: unused\n' },
+    { offset: 9, check: 'lint', head: 'def4567', url: 'https://x/job/2', fix: null, log: null },
+  ] }));
+  assert.deepEqual(rows.map((r) => r.title), ['Try 1: lint on abcdef1, fix r1-f1', 'Try 2: lint on def4567, no fix opened']);
+  assert.equal(rows[0]!.log, 'error: unused');
+  assert.equal(rows[1]!.log, 'No log excerpt was recorded.');
+  assert.deepEqual(checkTries(item()), []);
 });

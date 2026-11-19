@@ -142,6 +142,10 @@ jobs:
         run: |
           cargo build --locked -p kbl-ingest
           node dev/check-tracker-ingest.mjs
+      - name: Turn a failed check into fix work and close it on green
+        run: |
+          cargo build --locked -p kbl-ingest
+          node dev/check-tracker-fix-check.mjs
       - name: Run the work tools against Felix
         run: node dev/check-tracker-work.mjs
       - name: Create teams and keep them apart

@@ -320,3 +320,55 @@ async fn a_closed_item_gets_the_folds_refusal_not_a_request_for_a_note() {
         "{r:?}"
     );
 }
+
+fn check_failed(head: &str) -> WorkRecord {
+    WorkRecord::CheckFailed {
+        item: item("a1"),
+        pr: PR.into(),
+        check: "test".into(),
+        url: "https://ci.example/1".into(),
+        head: head.into(),
+        log: "assertion failed".into(),
+        fix: false,
+    }
+}
+
+#[tokio::test]
+async fn a_redo_still_needs_a_note_once_the_fix_tries_are_spent() {
+    let fake = Fake::default();
+    let t = start(&fake).await;
+    let at = finished(&t).await;
+    let early = note(&t).await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 23 })
+        .await
+        .unwrap();
+    let ingest = key("ingest-gh");
+    t.ingest_record(ingest.clone(), status(PrChecks::Red))
+        .await
+        .unwrap();
+    // The one try opens a fix; it pushes and the same check fails again.
+    t.ingest_record(ingest.clone(), check_failed("abc"))
+        .await
+        .unwrap();
+    let got = claim(&t, "w2").await;
+    let fix = ItemId::new(got["item"]["id"].as_str().unwrap()).unwrap();
+    t.complete(&agent("w2"), &fix, None, Vec::new())
+        .await
+        .unwrap();
+    t.ingest_record(ingest, check_failed("def")).await.unwrap();
+    {
+        let core = t.0.core.lock().await;
+        assert_eq!(
+            core.state.needs_you(&item("a1")),
+            Some(kbl_core::work_fold::NeedsYou::CheckFailed)
+        );
+    }
+
+    let before = fake.log().len();
+    assert!(note_required(redo(&t, at, None).await));
+    // A note from before the failure says nothing about it.
+    assert!(note_required(redo(&t, at, Some(early)).await));
+    assert_eq!(fake.log().len(), before);
+    let late = note(&t).await;
+    redo(&t, at, Some(late)).await.unwrap();
+}

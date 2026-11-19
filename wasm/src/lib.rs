@@ -29,6 +29,9 @@ pub struct Folder {
     /// The text of each item's current `files` entry, by its offset. The
     /// state keeps only the offset, and the page has no log to read it from.
     files: BTreeMap<u64, String>,
+    /// The log excerpt of each `check_failed` the fold took, by offset. The
+    /// state keeps only the offset, and the page has no log to read it from.
+    check_logs: BTreeMap<u64, String>,
     /// `overlaps_json` as of the last applied record. The comparison is
     /// pairwise, so a redraw with no new record reuses it.
     overlaps: RefCell<Option<String>>,
@@ -85,6 +88,7 @@ impl Folder {
                 self.activity.note(offset, &rec, charged, refused);
                 self.metrics.note(&self.state, &rec, refused.is_some());
                 self.keep_files(offset, &rec, before);
+                self.keep_check_log(offset, &rec);
                 if accepted(&self.state, offset, &rec)
                     && let Some(k) = Kept::of(&rec)
                 {
@@ -146,7 +150,8 @@ impl Folder {
     /// allows and `redo_pending` is true while a redo waits for an agent. `parent`, `work`, `upstream` (the root's
     /// `owner/repo#number`), `pr`, `pr_phase`, `pr_checks` and `failing_check`
     /// let a card nest and describe itself. `hold_deadline_ms` is when the hold lapses
-    /// unless the holder renews it.
+    /// unless the holder renews it. `check_tries` lists a root's failed checks, oldest first,
+    /// as `{offset, check, head, url, fix, log}`: the fix item it opened and the log excerpt.
     pub fn items_json(&self) -> String {
         let imported = self.state.imported_sources();
         let mut upstreams = std::collections::BTreeMap::new();
@@ -215,6 +220,7 @@ impl Folder {
                     "related": self.state.related_to(&i.id).collect::<Vec<_>>(),
                     "triage": triage,
                     "triage_skipped": i.triage_skipped,
+                    "check_tries": self.check_tries(i),
                 })
             })
             .collect();
@@ -369,6 +375,38 @@ impl Folder {
                 files_offset(self.state.items.get(item)?)
             }
             _ => None,
+        }
+    }
+
+    /// A root's failed checks with each try's log excerpt.
+    fn check_tries(&self, item: &kbl_core::work_fold::Item) -> Vec<serde_json::Value> {
+        item.check_failures
+            .iter()
+            .map(|f| {
+                json!({
+                    "offset": f.offset,
+                    "check": f.check,
+                    "head": f.head,
+                    "url": f.url,
+                    "fix": f.fix,
+                    "log": self.check_logs.get(&f.offset),
+                })
+            })
+            .collect()
+    }
+
+    /// Keeps the log excerpt of a `check_failed` the fold took.
+    fn keep_check_log(&mut self, offset: u64, rec: &WorkLogged) {
+        let WorkRecord::CheckFailed { item, log, .. } = &rec.record else {
+            return;
+        };
+        let taken = self
+            .state
+            .items
+            .get(item)
+            .is_some_and(|i| i.check_failures.iter().any(|f| f.offset == offset));
+        if taken {
+            self.check_logs.insert(offset, log.clone());
         }
     }
 

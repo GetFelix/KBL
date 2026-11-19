@@ -1,0 +1,1 @@
+Needs you shows every failed try of a check on a root (check, head commit, the fix it opened, the job link and the log excerpt), and the dev stack now drives a red check to a claimed `fix_check` and a green head (`dev/check-tracker-fix-check.mjs`). A redo after the fix tries are spent still needs a note, now covered by a test.
