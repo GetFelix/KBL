@@ -614,8 +614,19 @@ impl<T: Transport> Source for Github<T> {
 
     async fn check_log(&self, repo: &str, url: &str, max: usize) -> Option<String> {
         let job = actions_job(repo, url)?;
-        let req = Req::get(format!("{}/repos/{repo}/actions/jobs/{job}/logs", self.api));
-        match self.call(req).await {
+        let api = format!("{}/repos/{repo}/actions/jobs/{job}/logs", self.api);
+        let mut res = self.call(Req::log(api, max, false)).await;
+        // GitHub answers with a redirect to a signed link, which takes no token.
+        if let Ok(r) = &res
+            && matches!(r.status, 301 | 302 | 303 | 307 | 308)
+            && let Some(to) = r
+                .headers
+                .get("location")
+                .filter(|l| l.starts_with("https://"))
+        {
+            res = self.call(Req::log(to.clone(), max, true)).await;
+        }
+        match res {
             Ok(res) if res.status == 200 => res.body.as_str().map(|log| tail(log, max)),
             Ok(res) => {
                 eprintln!(

@@ -1154,6 +1154,8 @@ fn put_req(url: String, body: Value) -> Req {
         url,
         if_none_match: None,
         body: Some(body),
+        tail: None,
+        anon: false,
     }
 }
 

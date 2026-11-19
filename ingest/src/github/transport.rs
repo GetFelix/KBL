@@ -1,7 +1,7 @@
 //! The HTTP under the GitHub adapter, as a trait so tests run it against
 //! recorded answers and never reach GitHub.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -17,6 +17,10 @@ pub(crate) struct Req {
     pub(crate) url: String,
     pub(crate) if_none_match: Option<String>,
     pub(crate) body: Option<Value>,
+    /// Read the answer as a log: its last this-many bytes, as text.
+    pub(crate) tail: Option<usize>,
+    /// Send no token: a signed log link GitHub redirects to refuses one.
+    pub(crate) anon: bool,
 }
 
 impl Req {
@@ -26,6 +30,17 @@ impl Req {
             url,
             if_none_match: None,
             body: None,
+            tail: None,
+            anon: false,
+        }
+    }
+
+    /// A GET for a log, kept to its last `max` bytes. `anon` sends no token.
+    pub(crate) fn log(url: String, max: usize, anon: bool) -> Self {
+        Self {
+            tail: Some(max),
+            anon,
+            ..Self::get(url)
         }
     }
 
@@ -35,6 +50,8 @@ impl Req {
             url,
             if_none_match: None,
             body: Some(body),
+            tail: None,
+            anon: false,
         }
     }
 }
@@ -44,7 +61,7 @@ pub(crate) struct Res {
     pub(crate) status: u16,
     /// Header names in lower case.
     pub(crate) headers: BTreeMap<String, String>,
-    /// Null when there is no JSON body.
+    /// Null when there is no JSON body; a string for a log read.
     pub(crate) body: Value,
 }
 
@@ -100,8 +117,11 @@ impl Reqwest {
 
 impl Transport for Reqwest {
     async fn send(&self, req: Req) -> Result<Res> {
+        if req.anon {
+            return self.send_with(&req, None).await;
+        }
         let token = self.token.read().await?;
-        let res = self.send_with(&req, &token).await?;
+        let res = self.send_with(&req, Some(&token)).await?;
         let Token::App(app) = &self.token else {
             return Ok(res);
         };
@@ -112,7 +132,7 @@ impl Transport for Reqwest {
         // clock: mint once more. A second 401 is the credential, not the cache.
         app.forget(&token).await;
         let token = app.token().await?;
-        let res = self.send_with(&req, &token).await?;
+        let res = self.send_with(&req, Some(&token)).await?;
         if res.status == 401 {
             bail!(
                 "GitHub answered 401 to a freshly minted installation token for App {}; \
@@ -125,14 +145,15 @@ impl Transport for Reqwest {
 }
 
 impl Reqwest {
-    async fn send_with(&self, req: &Req, token: &str) -> Result<Res> {
+    async fn send_with(&self, req: &Req, token: Option<&str>) -> Result<Res> {
         let method = reqwest::Method::from_bytes(req.method.as_bytes())?;
-        let mut b = self
-            .client
-            .request(method, &req.url)
-            .bearer_auth(token)
-            .header("accept", "application/vnd.github+json")
-            .header("x-github-api-version", "2022-11-28");
+        let mut b = self.client.request(method, &req.url);
+        if let Some(token) = token {
+            b = b
+                .bearer_auth(token)
+                .header("accept", "application/vnd.github+json")
+                .header("x-github-api-version", "2022-11-28");
+        }
         if let Some(tag) = &req.if_none_match {
             b = b.header("if-none-match", tag);
         }
@@ -149,14 +170,10 @@ impl Reqwest {
             .iter()
             .filter_map(|(k, v)| Some((k.as_str().to_owned(), v.to_str().ok()?.to_owned())))
             .collect();
-        // A job log is plain text; everything else GitHub answers is JSON.
-        let text = headers
-            .get("content-type")
-            .is_some_and(|t| t.starts_with("text/plain"));
-        let body = if text {
-            res.text().await.map(Value::String).unwrap_or(Value::Null)
-        } else {
-            res.json().await.unwrap_or(Value::Null)
+        let body = match req.tail {
+            Some(max) if status == 200 => Value::String(read_tail(res, max).await?),
+            Some(_) => Value::Null,
+            None => res.json().await.unwrap_or(Value::Null),
         };
         Ok(Res {
             status,
@@ -165,3 +182,77 @@ impl Reqwest {
         })
     }
 }
+
+/// Most bytes of one log ingest reads. A log can be far larger than the
+/// excerpt it keeps; past this it stops and says the excerpt is not the end.
+const MAX_LOG_READ: usize = 32 << 20;
+
+/// Streams a log body into its last `max` bytes. The body is bytes whatever
+/// its content type says, and is decoded lossily.
+async fn read_tail(mut res: reqwest::Response, max: usize) -> Result<String> {
+    let mut tail = Tail::new(max, MAX_LOG_READ);
+    while let Some(chunk) = res.chunk().await.context("read a log")? {
+        if !tail.push(&chunk) {
+            break;
+        }
+    }
+    Ok(tail.finish())
+}
+
+/// The last `keep` bytes of a stream that is read for at most `cap` bytes.
+pub(crate) struct Tail {
+    keep: usize,
+    cap: usize,
+    read: usize,
+    ring: VecDeque<u8>,
+    cut: bool,
+}
+
+impl Tail {
+    pub(crate) fn new(keep: usize, cap: usize) -> Self {
+        Self {
+            keep,
+            cap,
+            read: 0,
+            ring: VecDeque::with_capacity(keep),
+            cut: false,
+        }
+    }
+
+    /// Takes the next bytes; false once the cap is passed and reading should stop.
+    pub(crate) fn push(&mut self, bytes: &[u8]) -> bool {
+        let room = self.cap - self.read;
+        let take = &bytes[..bytes.len().min(room)];
+        self.read += take.len();
+        let take = &take[take.len().saturating_sub(self.keep)..];
+        let over = (self.ring.len() + take.len()).saturating_sub(self.keep);
+        self.ring.drain(..over);
+        self.ring.extend(take);
+        if bytes.len() > room {
+            self.cut = true;
+        }
+        !self.cut
+    }
+
+    /// The excerpt as text of at most `keep` bytes, noting a cut read.
+    pub(crate) fn finish(self) -> String {
+        let bytes: Vec<u8> = self.ring.into_iter().collect();
+        // The ring may start inside a character.
+        let start = bytes
+            .iter()
+            .take(3)
+            .take_while(|b| (**b & 0b1100_0000) == 0b1000_0000)
+            .count();
+        let text = String::from_utf8_lossy(&bytes[start..]);
+        let note = if self.cut {
+            format!("[log cut after {} bytes; this is not its end]\n", self.cap)
+        } else {
+            String::new()
+        };
+        let room = self.keep.saturating_sub(note.len());
+        format!("{note}{}", crate::sync::tail(&text, room))
+    }
+}
+
+#[cfg(test)]
+mod tests;
