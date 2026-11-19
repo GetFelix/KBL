@@ -199,3 +199,91 @@ async fn a_rerun_that_never_shows_is_given_up_on() {
     assert_eq!(checks(&rig, &item), PrChecks::Red);
     assert_eq!(reruns(&rig), 1);
 }
+
+#[tokio::test]
+async fn another_check_going_red_is_not_the_reruns_outcome() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    flake(&rig, "lint", None);
+    rig.gh.on("POST", RERUN, status(201, &[]));
+
+    red(&rig, 700, "boom");
+    ingest.poll(false).await.unwrap();
+
+    // Unit fails on the same head while the lint re-run is still out.
+    rig.pr(
+        pull(|_| {}),
+        vec![],
+        vec![job("unit", "failure", 900, "other")],
+    );
+    ingest.poll(false).await.unwrap();
+    let s = rig.tracker.state();
+    assert!(s.items[&item].flake_retried.is_none());
+    assert_eq!(checks(&rig, &item), PrChecks::Pending);
+    assert!(!rig.tracker.saved_state().reruns.values().any(|r| r.spent));
+}
+
+#[tokio::test]
+async fn a_spent_rerun_stays_spent_through_a_pending_poll() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    flake(&rig, "lint", None);
+    rig.gh.on("POST", RERUN, status(201, &[]));
+
+    red(&rig, 700, "boom");
+    ingest.poll(false).await.unwrap();
+    red(&rig, 701, "boom");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(checks(&rig, &item), PrChecks::Red);
+
+    // Someone re-runs it by hand: pending, then red again on the same head.
+    rig.pr(
+        pull(|_| {}),
+        vec![],
+        vec![{
+            let mut j = job("lint", "success", 702, "");
+            j["status"] = json!("in_progress");
+            j["conclusion"] = Value::Null;
+            j
+        }],
+    );
+    ingest.poll(false).await.unwrap();
+    red(&rig, 702, "boom");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(reruns(&rig), 1);
+    assert_eq!(checks(&rig, &item), PrChecks::Red);
+}
+
+#[tokio::test]
+async fn a_pruned_item_takes_its_rerun_entry_with_it() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    flake(&rig, "lint", None);
+    rig.gh.on("POST", RERUN, status(201, &[]));
+
+    red(&rig, 700, "boom");
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.saved_state().reruns.len(), 1);
+
+    rig.pr(
+        pull(|p| {
+            p["state"] = json!("closed");
+            p["merged"] = json!(true);
+        }),
+        vec![],
+        vec![],
+    );
+    rig.list(vec![closed(
+        issue(812, |_| {}),
+        "completed",
+        "2026-11-20T12:00:00Z",
+    )]);
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    let saved = rig.tracker.saved_state();
+    assert!(saved.items.is_empty());
+    assert!(saved.reruns.is_empty());
+}

@@ -1227,7 +1227,9 @@ What it does with GitHub:
   check fails again it writes `flake_retried` (`passed: false`) and records
   the red as usual. One re-run per commit: a push, or a check that is not
   an Actions job (a commit status, another App), is never re-run. A check run
-  as cancelled is not a failure. If GitHub refuses (no `actions: write`, a run
+  as cancelled is not a failure. While a re-run is out the whole check status
+  is recorded as pending, so another check going red on the same commit is
+  not shown until the re-run settles or the wait runs out. If GitHub refuses (no `actions: write`, a run
   too old to re-run) or the old failure is still shown after 10 polls, the red
   is recorded as it would be without the list.
 - **Releases.** A merged root that an open item's link waits on for a release

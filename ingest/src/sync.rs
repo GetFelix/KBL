@@ -1021,7 +1021,9 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 Ok(if started { pending(&status) } else { status })
             }
             (PrChecks::Red, Some(f), Some(mut r)) if !r.spent => {
-                if f.url == r.url {
+                // Another check going red is not this re-run's outcome: keep
+                // waiting on the one we asked for.
+                if f.url == r.url || f.name != r.check {
                     r.waits += 1;
                     if r.waits > MAX_RERUN_WAITS {
                         r.spent = true;
@@ -1055,10 +1057,6 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 Ok(status)
             }
             (PrChecks::Red, _, Some(_)) => Ok(status),
-            (_, _, Some(r)) if r.spent => {
-                p.state.reruns.remove(key);
-                Ok(status)
-            }
             _ => Ok(status),
         }
     }
@@ -1989,6 +1987,7 @@ fn prune(p: &mut Poll) {
         .collect();
     for k in done {
         p.state.items.remove(&k);
+        p.state.reruns.remove(&k);
     }
 }
 
