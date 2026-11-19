@@ -87,6 +87,10 @@ pub(crate) struct State {
     /// saved before this existed has none, which reads as unchanged.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) selectors: BTreeMap<String, String>,
+    /// A digest of each rule's `label_needs`, by rule name, for rules that
+    /// have one. A new or changed map re-maps the rule's existing issues.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) need_maps: BTreeMap<String, String>,
     /// Repos last reported as unreadable, with the status, so the report is
     /// written when it changes and not on every poll.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -166,6 +170,32 @@ impl State {
             }
         }
         self.selectors = now;
+        self.remap_needs(rules, upgrading);
+    }
+
+    /// A rule whose `label_needs` is new or changed reads its repo in full
+    /// and forgets the labels it last wrote for its items, so the next
+    /// reconcile of each maps them again. Existing issues would otherwise be
+    /// mapped only when their labels next change. Rewriting the same needs is
+    /// a no-op in the tracker, so a repeat or a crash retry is harmless.
+    fn remap_needs(&mut self, rules: &[Rule], upgrading: bool) {
+        let now: BTreeMap<String, String> = rules
+            .iter()
+            .filter(|r| !r.label_needs.is_empty())
+            .map(|r| (r.name.clone(), needs_digest(r)))
+            .collect();
+        if !upgrading {
+            for r in rules {
+                if self.need_maps.get(&r.name) == now.get(&r.name) || r.label_needs.is_empty() {
+                    continue;
+                }
+                self.cursors.remove(&r.repo);
+                for t in self.items.values_mut().filter(|t| t.rule == r.name) {
+                    t.labels.clear();
+                }
+            }
+        }
+        self.need_maps = now;
     }
 
     /// Moves the old shared cursor into one cursor per repo in `repos` that has none.
@@ -195,6 +225,13 @@ fn selector_digest(r: &Rule) -> String {
         r.ado_query,
     ]);
     Sha256::digest(sel.to_string().as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn needs_digest(r: &Rule) -> String {
+    Sha256::digest(serde_json::json!(r.label_needs).to_string().as_bytes())
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()

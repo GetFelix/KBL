@@ -30,10 +30,10 @@ import { workersView } from './ui/workers-view.ts';
 import { stopEach, workers, type WorkerRow } from './workers.ts';
 import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
-import { assignDialog, confirmDialog, redoDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
+import { assignDialog, confirmDialog, needsDialog, redoDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
 import { forgetGateway, forgetPerson, loadGateway, loadPerson, saveGateway, savePerson } from './session.ts';
 import { Tracker } from './tracker.ts';
-import { assigneePerson, assignTarget, redoBlock, redoStale, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
+import { assigneePerson, assignTarget, canSetNeeds, needsOf, redoBlock, redoStale, CAN, canUndo, marksAfter, jobsFor, NO_WRITES, undoRequest, type Job, type WriteArgs, type WriteKind } from './writes.ts';
 
 const mac = /Mac|iPhone|iPad/.test(navigator.platform);
 const q = new URLSearchParams(location.search);
@@ -230,6 +230,14 @@ const assignItem = (id: string) => {
   assignBox.open(item, s.tracker.person, names, agents);
 };
 
+const needsItem = (id: string) => {
+  const s = store.get();
+  if (s.tracker.kind !== 'signed-in') return signInBox.open();
+  const item = s.items.find((i) => i.id === id);
+  if (!item || !canSetNeeds(item)) return;
+  needsBox.open(item, [...new Set(s.items.flatMap(needsOf))].sort());
+};
+
 /**
  * Opens the redo dialog for `id`. `pick` is a decision the person chose; without one it is the
  * last decision of the newest attempt. The dialog states why a redo is not possible rather than
@@ -388,6 +396,10 @@ const run = (id: CommandId): void => {
       const ids = targets();
       return ids.length === 1 ? assignItem(ids[0]) : undefined;
     }
+    case 'needs': {
+      const ids = targets();
+      return ids.length === 1 ? needsItem(ids[0]) : undefined;
+    }
     case 'redo': {
       // A focused decision belongs to the open item, whatever is marked.
       const pick = focusedDecision();
@@ -443,6 +455,7 @@ const ui = shell(
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
     take: (item) => write([item], { kind: 'take' }),
     assign: assignItem,
+    needs: needsItem,
     redo: (item, _attempt, at) => redoItem(item, at),
     steer: (item, attempt, text) => write([item], { kind: 'steer', attempt, text }),
     rate: (item, attempt, accurate) => write([item], { kind: 'rate', attempt, accurate }),
@@ -564,9 +577,10 @@ const views = viewDialog({
 });
 const confirm = confirmDialog(write);
 const assignBox = assignDialog(write);
+const needsBox = needsDialog(write);
 const redoBox = redoDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, spendBox.el, workersBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, redoBox.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, workersBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, needsBox.el, redoBox.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -605,7 +619,7 @@ paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || workersBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || redoBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || workersBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || needsBox.isOpen() || redoBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;

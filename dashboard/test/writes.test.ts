@@ -4,7 +4,7 @@ import type { ItemRow } from '../src/fold.ts';
 import { reduce, type ViewState } from '../src/state.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
 import type { DecisionLine } from '../src/story.ts';
-import { acceptTier, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkRedo, checkSteer, redoBlock, redoCopy, redoStale, redoNeedsNote, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
+import { acceptTier, canSetNeeds, checkNeeds, logTakesNeeds, needsPick, parseNeeds, assigneePerson, assignPick, assignTarget, CAN, canAssign, canRate, canSteer, canTakeAfterLimit, checkRedo, checkSteer, redoBlock, redoCopy, redoStale, redoNeedsNote, heldAttempt, initials, needsLine, canUndo, logTakesFlags, marksAfter, checkAnswer, jobsFor, latestFor, NO_WRITES, outcome, pending, putWrite, request, route, shownTier, summary, UNDO, undoFor, undoRequest, type Write, type Writes } from '../src/writes.ts';
 
 const item = (o: Partial<ItemRow> & { id: string }): ItemRow => ({ title: o.id, stage: 'ready', tier: 1, format: 7, ...o });
 
@@ -459,4 +459,35 @@ test('a redo confirmed earlier is refused before its note is written when the it
   assert.match(redoStale(ok, story, { ...a, fromAttempt: 2 })!, /not in the story/);
   assert.match(redoStale(ok, story, { ...a, at: 9 })!, /decision is not/);
   assert.match(redoStale({ ...ok, pr_phase: 'open', pr_checks: 'red' }, story, { ...a, note: '' })!, /check failed/);
+});
+
+test('needs are set on an open root from format 20, through the classify route, and an empty list clears', () => {
+  const root = item({ id: 'r', format: 20, class: { needs: { values: ['gpu'], by: 'person' } } });
+  const child = item({ id: 'r-f', format: 20, parent: 'r' });
+  const old = item({ id: 'o', format: 19 });
+  const done = item({ id: 'd', format: 20, stage: 'done' });
+  assert.deepEqual([canSetNeeds(root), canSetNeeds(child), canSetNeeds(old), canSetNeeds(done)], [true, false, false, false]);
+  assert.deepEqual([logTakesNeeds([old]), logTakesNeeds([old, root])], [false, true]);
+  assert.deepEqual(request('r', { kind: 'needs', needs: ['gpu', 'azure'] }), { path: '/v1/work/classify', body: { item: 'r', needs: ['gpu', 'azure'] } });
+  assert.deepEqual(request('r', { kind: 'needs', needs: [] }), { path: '/v1/work/classify', body: { item: 'r', needs: [] } });
+  const sent = jobsFor(['r', 'r-f'], { kind: 'needs', needs: [] }, [root, child], NO_WRITES);
+  assert.equal(typeof sent[0].req, 'object');
+  assert.match(String(sent[1].req), /cannot take needs/);
+});
+
+test('a needs field is words split on commas, each once, and a repeat of the recorded set sends nothing', () => {
+  assert.deepEqual(parseNeeds(' gpu, Azure  gpu,,azure '), ['gpu', 'Azure']);
+  assert.equal(checkNeeds(''), null);
+  assert.match(checkNeeds('has/ok bad!') ?? '', /bad!/);
+  assert.match(checkNeeds('a b c d e f g h i') ?? '', /at most 8/);
+  assert.equal(needsPick(['gpu', 'azure'], 'GPU, azure'), null);
+  assert.deepEqual(needsPick(['gpu'], ''), { kind: 'needs', needs: [] });
+  assert.deepEqual(needsPick([], 'gpu'), { kind: 'needs', needs: ['gpu'] });
+});
+
+test('the needs key and command exist and do not fire while typing', async () => {
+  const { commandFor, COMMANDS } = await import('../src/keys.ts');
+  assert.equal(commandFor({ key: 'n', metaKey: false, ctrlKey: false, altKey: false, inText: false }, false), 'needs');
+  assert.equal(commandFor({ key: 'n', metaKey: false, ctrlKey: false, altKey: false, inText: true }, false), undefined);
+  assert.ok(COMMANDS.some((c) => c.id === 'needs'));
 });

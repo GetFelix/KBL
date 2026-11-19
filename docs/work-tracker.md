@@ -2455,6 +2455,13 @@ only work whose needs are all in its capabilities.
   remembers who chose the set, with the precedence of the class values above:
   triage replaces a rule's set, and nothing replaces a person's. Needs are one
   set per root, not merged between actors.
+- **In the dashboard.** A signed-in person sets or clears the needs of an
+  open root from its panel (Set needs), with `N` on the selected item, or from
+  the command palette. The field is a comma-separated list with the needs the
+  log already shows as suggestions, and saving it empty clears them. It writes
+  the same `classify_item` record, so a need outside the vocabulary is refused
+  and the dashboard shows the tracker's reason. It appears from format 20, and
+  only on a root.
 - **What they cover.** The root's needs apply to the work that runs in an
   environment: its fix, test and resume items. Triage, augment, split, question
   and review items need nothing, so any agent can triage or review work it
