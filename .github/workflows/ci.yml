@@ -104,9 +104,15 @@ jobs:
         working-directory: dashboard
       - run: npm run build
         working-directory: dashboard
-      - name: Keyboard flows and axe-core in headless Chrome
-        run: npm run check
+      - name: Keyboard flows and axe-core in headless Chrome, with screenshots of every screen
+        run: SHOT_MATRIX=1 node check/browser.mjs ../dashboard-shots
         working-directory: dashboard
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: dashboard-screenshots
+          path: dashboard-shots
+          retention-days: 14
 
   stack:
     name: dev stack

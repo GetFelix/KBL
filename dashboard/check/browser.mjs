@@ -127,6 +127,7 @@ async function open(query, { mode = 'live', theme = 'dark', width = 1280, height
   loaded = `page ${mode} ${theme} ${width}px`;
   if (script) await page.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: script });
   script = (await page.send('Page.addScriptToEvaluateOnNewDocument', { source: fakeGateway(log ?? fixtureLog(), mode, pageSize) })).identifier;
+  view = { width, height };
   await page.setViewport(width, height, 1);
   // The tab keeps its session across navigations (session.ts), so a page opened without a
   // token starts from an empty session, as a new tab would.
@@ -137,11 +138,33 @@ async function open(query, { mode = 'live', theme = 'dark', width = 1280, height
 const connected = 'room=kbl&token=t&gateway=ws://127.0.0.1:9/ws';
 const live = `document.querySelector('.status')?.textContent.includes('Live')`;
 const focused = (sel) => page.eval(`document.activeElement?.matches(${JSON.stringify(sel)}) ?? false`);
+// With SHOT_MATRIX=1 every screenshot is taken light and dark at 1280 and 390 px wide, full page,
+// from the state the flow is in; otherwise one capture at the current size and theme.
+const MATRIX = process.env.SHOT_MATRIX === '1';
+let view = { width: 1280, height: 800 };
+async function capture(file) {
+  const { cssContentSize } = await page.send('Page.getLayoutMetrics');
+  const height = Math.min(Math.max(Math.ceil(cssContentSize.height), view.height), 4000);
+  const shot = await page.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true, clip: { x: 0, y: 0, width: view.width, height, scale: 1 } });
+  writeFileSync(join(shots, file), Buffer.from(shot.data, 'base64'));
+}
 async function shoot(name) {
   if (!shots) return;
   await new Promise((ok) => setTimeout(ok, 200));
-  const shot = await page.send('Page.captureScreenshot', { format: 'png' });
-  writeFileSync(join(shots, `${name}.png`), Buffer.from(shot.data, 'base64'));
+  if (!MATRIX) return capture(`${name}.png`);
+  const base = name.replace(/-(dark|light)$/, '');
+  const original = { ...view };
+  const theme = await page.eval(`document.documentElement.dataset.theme`);
+  for (const t of ['light', 'dark']) for (const width of [1280, 390]) {
+    view = { width, height: width === 390 ? 844 : 800 };
+    await page.setViewport(view.width, view.height, 1);
+    await page.eval(`document.documentElement.dataset.theme = ${JSON.stringify(t)}; true`);
+    await new Promise((ok) => setTimeout(ok, 250));
+    await capture(`${base}--${t}-${width}.png`);
+  }
+  view = original;
+  await page.setViewport(view.width, view.height, 1);
+  await page.eval(`document.documentElement.dataset.theme = ${JSON.stringify(theme)}; true`);
 }
 async function axe(name) {
   await page.eval(axeSource);
@@ -812,6 +835,7 @@ try {
   check(answered.includes('"url":"/v1/work/questions/answer"') && answered.includes('"auth":"Bearer person-token"') && answered.includes('"chosen":"Python client"'), `the answer goes to the person route with the viewer’s token (${answered})`);
   await page.waitFor(`document.querySelectorAll('.row').length === 0`);
   check(await page.eval(`document.querySelector('.empty h2')?.textContent === 'Nothing needs you'`), 'answered, the item leaves the inbox and the inbox says it is empty');
+  await shoot('empty-inbox-dark');
 
   await page.eval(`document.querySelector('.nav a[data-view=all]').click(); document.querySelector('.row[data-id=gh-2219]').click(); true`);
   const tierOf = `[...document.querySelectorAll('.panel dt')].find((d) => d.textContent === 'Tier')?.nextElementSibling.textContent`;
@@ -826,6 +850,9 @@ try {
   await page.waitFor(`${tierOf} === '1'`);
   check((await page.eval(tierOf)) === '1' && (await page.eval(`JSON.stringify(window.__tracker.calls.at(-1).body) === '{"item":"gh-2219","tier":1}'`)), `${MOD_NAME}+Z undoes it with a new tier_changed record setting the old tier back`);
   await shoot('undo-dark');
+  await page.eval(`document.querySelector('.row[data-id=gh-2210]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel .row-id')?.textContent === 'gh-2210'`);
+  await shoot('panel-in-review-dark');
   await page.eval(`window.__tracker.delay = 800; document.querySelector('#panel-tier').value = '0'; document.querySelector('[data-focus=set-tier]').click(); true`);
   await new Promise((ok) => setTimeout(ok, 150));
   check(await page.eval(`document.querySelector('.actions').hasAttribute('aria-busy') && document.querySelector('.write-status').textContent === 'Setting the tier…' && document.querySelector('.activity-text').textContent === 'Setting the tier of gh-2219…'`), 'a write in flight shows as pending in the panel and the activity line');
@@ -918,6 +945,7 @@ try {
   check(copy.includes(`from decision ${redoDecision}`) && copy.includes('counts against the redos') && /\d left now/.test(copy), 'the redo confirm names the decision, the budget and what is left');
   check(await focused('#redo-note'), 'the redo confirm puts focus in the optional note');
   await axe('redo confirm');
+  await shoot('redo-dialog-dark');
   await page.eval(`document.querySelector('#redo-note').value = 'use the lock instead'; document.querySelector('.redo-dialog form').requestSubmit(); true`);
   await page.waitFor(`document.querySelector('.activity-text').textContent.startsWith('Started a redo of rd-1')`);
   const redoCalls = await page.eval(`JSON.stringify(window.__tracker.calls.slice(-2).map((c) => [c.url, c.body]))`);
@@ -978,6 +1006,7 @@ try {
     // The fake tracker logs only the stop, so the worker shows Releasing while it still holds; the tracker's release then ends it as Stopped.
     await page.waitFor(`document.querySelector('dialog.workers tr[data-worker=sup-a]')?.dataset.state === 'releasing'`);
     check(await page.eval(`!document.querySelector('dialog.workers [data-stop=sup-a]')`), 'workers: a worker being released offers no second Stop');
+    await shoot('workers-releasing-dark');
     await page.eval(`window.__push({ kind: 'released', item: 'wk-1', attempt: 1, reason: 'supervisor_gone', actor: 'tracker', by: 'ingest', at_ms: Date.now() }); true`);
     await page.waitFor(`document.querySelector('dialog.workers tr[data-worker=sup-a]')?.dataset.state === 'stopped'`);
     check(await page.eval(`JSON.stringify(window.__tracker.calls.at(-1)) === '{"url":"/v1/work/workers/stop","auth":"Bearer person-token","body":{"worker":"sup-a"}}'`), 'workers: Stop sends that worker to the stop route with the viewer token');
@@ -988,6 +1017,10 @@ try {
     check(await page.eval(`!document.querySelector('dialog.workers [data-stop]') && !document.querySelector('dialog.workers [data-stop-all]')`), 'workers: with none live, no stop control is left');
     await press(page, 'Escape');
   }
+  await page.eval(`document.querySelector('.row[data-id=gh-2219]').click(); document.querySelector('[data-focus=needs]').click(); true`);
+  await page.waitFor(`document.querySelector('.needs-dialog')?.open === true`);
+  await shoot('needs-dialog-dark');
+  await press(page, 'Escape');
   await page.eval(`window.__tracker.token = 'rotated'; document.querySelector('.row[data-id=gh-2219]').click(); document.querySelector('[data-focus=set-tier]').click(); true`);
   await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
   check(await page.eval(`document.querySelector('.actions p').textContent.startsWith('Sign in again: the tracker does not know this token')`), 'a token the tracker stops taking signs the page out, with the reason');
