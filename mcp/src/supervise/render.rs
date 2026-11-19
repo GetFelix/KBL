@@ -94,6 +94,7 @@ pub(crate) fn private_dir(dir: &Path) -> Result<()> {
 /// Options for a new file only this user can read: mode 600 on Unix, the
 /// directory's inherited ACL on Windows.
 fn private_options() -> std::fs::OpenOptions {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut o = std::fs::OpenOptions::new();
     #[cfg(unix)]
     o.mode(0o600);

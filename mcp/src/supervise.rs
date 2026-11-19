@@ -716,7 +716,7 @@ impl<T: TrackerApi> Supervisor<T> {
             Err(_) => false,
         };
         if let Some(child) = r.child.take() {
-            kill_tree(r.tree.take(), child);
+            kill_group(r.tree.take(), child);
         }
         if let Some(f) = r.config_file.take() {
             let _ = tokio::fs::remove_file(f).await;
@@ -731,7 +731,7 @@ impl<T: TrackerApi> Supervisor<T> {
 
 /// Kills the worker's whole process tree, then reaps the child off the
 /// pool's lock.
-fn kill_tree(tree: Option<tree::Tree>, mut child: Child) {
+fn kill_group(tree: Option<tree::Tree>, mut child: Child) {
     if let Some(tree) = tree {
         tree.kill();
     }

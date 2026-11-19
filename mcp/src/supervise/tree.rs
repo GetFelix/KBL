@@ -43,11 +43,12 @@ pub(super) struct Tree(Option<windows_sys::Win32::Foundation::HANDLE>);
 // A job handle is a kernel object reference, usable from any thread.
 #[cfg(windows)]
 unsafe impl Send for Tree {}
+#[cfg(windows)]
+unsafe impl Sync for Tree {}
 
 #[cfg(windows)]
 impl Tree {
     pub(super) fn attach(child: &Child) -> Self {
-        use std::os::windows::io::AsRawHandle as _;
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
