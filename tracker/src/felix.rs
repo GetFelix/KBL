@@ -12,7 +12,7 @@ use bytes::Bytes;
 pub(crate) use felix_client::ConditionalWrite;
 use felix_client::{
     AckMode, BrokerError, CacheCondition, ClientConfig, Connection, CursorErrorReason, ErrorCode,
-    GroupMember, GroupPollOptions, GroupRecord, StartPosition, SubscribeCursorError,
+    GroupMember, GroupPollOptions, GroupRecord, RetryClass, StartPosition, SubscribeCursorError,
     quic_client_config, root_store_from_pem_file,
 };
 use kbl_core::org::{ORG_EVENTS, ORG_TRACKER_CACHE};
@@ -509,11 +509,11 @@ impl Felix {
     /// A value in the lease cache and its version.
     async fn cache_get_key(&self, key: &str) -> Result<Option<(Vec<u8>, u64)>> {
         let done = async {
-            let got = self
-                .main()
-                .await?
-                .cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, key)
-                .await?;
+            let client = self.main().await?;
+            let got = placed(|| {
+                client.cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, key)
+            })
+            .await?;
             Ok(got.map(|v| (v.value.to_vec(), v.version)))
         }
         .await;
@@ -532,19 +532,20 @@ impl Felix {
             Some(v) => CacheCondition::Version(v),
         };
         let done = async {
-            let put = self
-                .main()
-                .await?
-                .cache_put_if(
+            let client = self.main().await?;
+            let body = Bytes::from(value);
+            let put = placed(|| {
+                client.cache_put_if(
                     self.tenant(),
                     self.namespace(),
                     self.lease_cache,
                     key,
-                    Bytes::from(value),
+                    body.clone(),
                     None,
                     condition,
                 )
-                .await?;
+            })
+            .await?;
             Ok(put.applied.then_some(put.version).flatten())
         }
         .await;
@@ -854,19 +855,20 @@ impl Broker for Felix {
             Some(v) => CacheCondition::Version(v),
         };
         let done = async {
-            let put = self
-                .main()
-                .await?
-                .cache_put_if(
+            let client = self.main().await?;
+            let body = Bytes::from(holder);
+            let put = placed(|| {
+                client.cache_put_if(
                     self.tenant(),
                     self.namespace(),
                     self.lease_cache,
                     LEASE_KEY,
-                    Bytes::from(holder),
+                    body.clone(),
                     Some(ttl.as_millis() as u64),
                     condition,
                 )
-                .await?;
+            })
+            .await?;
             Ok(put.applied.then_some(put.version).flatten())
         }
         .await;
@@ -875,11 +877,16 @@ impl Broker for Felix {
 
     async fn lease_get(&self) -> Result<Option<(Vec<u8>, u64)>> {
         let done = async {
-            let got = self
-                .main()
-                .await?
-                .cache_get_versioned(self.tenant(), self.namespace(), self.lease_cache, LEASE_KEY)
-                .await?;
+            let client = self.main().await?;
+            let got = placed(|| {
+                client.cache_get_versioned(
+                    self.tenant(),
+                    self.namespace(),
+                    self.lease_cache,
+                    LEASE_KEY,
+                )
+            })
+            .await?;
             Ok(got.map(|v| (v.value.to_vec(), v.version)))
         }
         .await;
@@ -1007,8 +1014,10 @@ where
     }
 }
 
-/// Runs `op`, trying again while the broker says the shard is not ready. No
-/// other failure is retried: a second publish could land twice.
+/// Runs `op`, trying again while the broker says the shard is not ready or is
+/// moving (a refusal Felix classes as retry or retry_after, which it sends
+/// before applying anything). No other failure is retried: a second publish
+/// could land twice, and an unknown outcome could hide an applied lease write.
 async fn placed<T, F, Fut>(mut op: F) -> Result<T>
 where
     F: FnMut() -> Fut,
@@ -1018,7 +1027,14 @@ where
     loop {
         match op().await {
             Err(err) if Instant::now() < deadline && is_not_ready(&err) => {
-                tokio::time::sleep(Duration::from_millis(250)).await;
+                let asked = err
+                    .downcast_ref::<BrokerError>()
+                    .and_then(|b| b.detail.as_ref())
+                    .and_then(|d| d.retry_after_ms)
+                    .map(Duration::from_millis)
+                    .unwrap_or_default();
+                tokio::time::sleep(asked.clamp(Duration::from_millis(250), Duration::from_secs(5)))
+                    .await;
             }
             done => return done,
         }
@@ -1061,6 +1077,9 @@ fn past_the_tail(err: &anyhow::Error) -> bool {
 }
 
 fn is_not_ready(err: &anyhow::Error) -> bool {
+    if let Some(broker) = err.downcast_ref::<BrokerError>() {
+        return matches!(broker.retry, RetryClass::Retry | RetryClass::RetryAfter);
+    }
     let text = format!("{err:#}");
     NOT_READY.iter().any(|marker| text.contains(marker))
 }
