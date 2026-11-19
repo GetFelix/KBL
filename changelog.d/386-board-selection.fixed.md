@@ -1,1 +1,0 @@
-The dashboard selects the visible root when a child is opened from its chip, so keyboard navigation no longer jumps from a hidden item. Row checkboxes and the screen reader announcements for moved or removed items name an item by its upstream reference, as its card heading does.

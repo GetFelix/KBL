@@ -1,1 +1,0 @@
-A new or changed ingest rule now reads its repo or project in full on the next poll instead of resuming from the saved cursor, so issues that already match it are imported. Ingest saves a digest of each rule's selector; state from older builds has none and re-reads nothing. Works for GitHub, Jira, Azure DevOps and GitLab.

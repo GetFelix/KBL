@@ -1,1 +1,0 @@
-Folding a log no longer scans every item for each agent record to note when its holder last wrote. The fold keeps its own index from agent to held items, so a log of thousands of items and many agents folds in time proportional to its length. The folded state, snapshots and records are unchanged.

@@ -1218,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-ingest"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1277,7 +1277,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-metrics"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1289,7 +1289,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-tool"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-trace"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "http",
  "opentelemetry",
@@ -1321,7 +1321,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-tracker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "kbl-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kbl-core",
  "serde_json",
