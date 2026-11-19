@@ -68,6 +68,7 @@
 - Fixed: Confine the fake worker's MCP config path to the supervisor's state dir (regular file, no symlink); remove a worker's config with tokio::fs; drop a backtracking regex in the dashboard check.
 - Documentation: KBL now leads with what it is for: one engineer supervising far more concurrent agent work, with every decision on record. The README says so, and [docs/design/supervision.md](docs/design/supervision.md) lays out the supervision milestone and the experiment that measures it. Scale work waits on its result.
 - Documentation: The claim path fault sweep now starts, stops and finishes workers and removes their supervisor under crashes and replays, and checks worker tokens, caps and holds.
+- Fixed: The Windows build of `kbl-mcp`, `kbl-tool` and `kbl-ingest` compiles again, and a stopped supervise worker now ends its whole process tree there (through a Job Object) as it does on Unix. CI builds and tests the Windows binaries on every pull request.
 
 ## [0.1.0] - 2026-11-17
 
