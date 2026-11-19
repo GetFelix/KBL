@@ -338,7 +338,8 @@ pub(crate) trait Source: Send + Sync {
 
     /// The end of the log of the check at `url` in `repo`, at most `max`
     /// bytes, if the source can read it. A log the vendor will not give reads
-    /// as none; only a closed lease fence is an error.
+    /// as none; a lease fence that is closed, or closes during the read, is an
+    /// error.
     fn check_log(
         &self,
         repo: &str,

@@ -210,6 +210,32 @@ async fn a_check_rerun_and_its_log_reach_the_source_through_the_fence() {
     assert_eq!(src.inner.calls(), 3);
 }
 
+/// GitHub that loses the lease while the job log is being read.
+struct LosesTheLease(Arc<Lessee>);
+
+impl Transport for LosesTheLease {
+    async fn send(&self, req: Req) -> Result<Res> {
+        assert!(req.url.contains("/actions/jobs/55/logs"), "{}", req.url);
+        self.0.renewed(self.0.sending(), BTreeMap::new());
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_fence_that_closes_during_a_log_read_is_an_error_not_an_empty_log() {
+    let lessee = leased(&["github:o/a"]);
+    lessee.renewed(lessee.sending(), held(&[("github:o/a", 1)]));
+    let github = crate::github::Github::new(
+        "https://api.github.com",
+        gated(LosesTheLease(lessee.clone()), lessee.clone()),
+        Vec::new(),
+    );
+    let src = Fenced::new(github, lessee.clone());
+    let job = "https://github.com/o/a/actions/runs/5/job/55";
+    let err = src.check_log("o/a", job, 4096).await.unwrap_err();
+    assert!(is_fenced(&err), "{err}");
+}
+
 #[tokio::test(start_paused = true)]
 async fn repos_match_sources_as_the_vendor_compares_names() {
     let lessee = leased(&["github:Owner/Repo"]);

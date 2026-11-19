@@ -642,6 +642,9 @@ impl<T: Transport> Source for Github<T> {
                 );
                 None
             }
+            // A fence that closed mid-read is not "no log": the poll stops
+            // and the report waits for the worker that holds the lease.
+            Err(e) if crate::lease::is_fenced(&e) => return Err(e),
             Err(e) => {
                 eprintln!("kbl-ingest: could not read the log of {url}: {e}");
                 None

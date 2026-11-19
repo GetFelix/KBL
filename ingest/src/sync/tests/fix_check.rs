@@ -180,6 +180,26 @@ async fn a_redirect_to_plain_http_is_not_followed() {
 }
 
 #[tokio::test]
+async fn a_log_read_cut_by_the_fence_is_reported_later_with_the_log() {
+    let rig = rig();
+    let (ingest, item) = rig.with_pr().await;
+    rig.finish(&item);
+    rig.tracker
+        .person(WorkRecord::FormatRaised { to: FORMAT_V23 });
+    // What the lease gate answers when the fence closes mid-request.
+    rig.gh.on("GET", LOG, cut());
+    red(&rig, 700);
+    assert!(ingest.poll(false).await.is_err());
+    assert_eq!(rig.tracker.count("check_failed"), 0);
+
+    let mut log = status(200, &[]);
+    log.body = Value::String("error: unused import".into());
+    rig.gh.on("GET", LOG, log);
+    ingest.poll(false).await.unwrap();
+    assert_eq!(logs(&rig), ["error: unused import"]);
+}
+
+#[tokio::test]
 async fn a_failure_refused_at_the_cap_is_not_read_again() {
     let rig = rig();
     let (ingest, item) = rig.with_pr().await;
