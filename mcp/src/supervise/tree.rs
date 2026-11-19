@@ -15,39 +15,32 @@ pub(super) fn configure(cmd: &mut Command) {
     cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
 }
 
-/// The handle that reaches every process a worker started.
-#[cfg(unix)]
-pub(super) struct Tree(Option<i32>);
+/// What reaches every process a worker started: the group's pid on Unix, a
+/// Job Object on Windows. The job kills its members when the last handle
+/// closes, so on Windows the tree also ends if the supervisor itself dies.
+pub(super) struct Tree(Option<Handle>);
 
 #[cfg(unix)]
+type Handle = i32;
+#[cfg(windows)]
+type Handle = Job;
+
+#[cfg(windows)]
+struct Job(windows_sys::Win32::Foundation::HANDLE);
+
+// A job handle is a kernel object reference, usable from any thread.
+#[cfg(windows)]
+unsafe impl Send for Job {}
+#[cfg(windows)]
+unsafe impl Sync for Job {}
+
 impl Tree {
+    #[cfg(unix)]
     pub(super) fn attach(child: &Child) -> Self {
         Self(child.id().and_then(|p| i32::try_from(p).ok()))
     }
 
-    pub(super) fn kill(self) {
-        if let Some(pid) = self.0 {
-            // SAFETY: kill(2) on a group this process made; it touches no memory.
-            unsafe {
-                libc::kill(-pid, libc::SIGKILL);
-            }
-        }
-    }
-}
-
-/// A Job Object holding the worker. It is set to kill its members when the
-/// last handle closes, so the tree also ends if the supervisor itself dies.
-#[cfg(windows)]
-pub(super) struct Tree(Option<windows_sys::Win32::Foundation::HANDLE>);
-
-// A job handle is a kernel object reference, usable from any thread.
-#[cfg(windows)]
-unsafe impl Send for Tree {}
-#[cfg(windows)]
-unsafe impl Sync for Tree {}
-
-#[cfg(windows)]
-impl Tree {
+    #[cfg(windows)]
     pub(super) fn attach(child: &Child) -> Self {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::JobObjects::{
@@ -77,28 +70,34 @@ impl Tree {
                 CloseHandle(job);
                 return Self(None);
             }
-            Self(Some(job))
+            Self(Some(Job(job)))
         }
     }
 
-    /// Terminating the job ends every process in it, grandchildren included.
+    /// Ends every process in the tree, grandchildren included.
     pub(super) fn kill(self) {
-        // Drop closes the handle, which kills the job's members.
+        #[cfg(unix)]
+        if let Some(pid) = self.0 {
+            // SAFETY: kill(2) on a group this process made; it touches no memory.
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+            }
+        }
+        // On Windows, dropping terminates the job and closes it.
+        #[cfg(windows)]
         drop(self);
     }
 }
 
 #[cfg(windows)]
-impl Drop for Tree {
+impl Drop for Job {
     fn drop(&mut self) {
         use windows_sys::Win32::Foundation::CloseHandle;
         use windows_sys::Win32::System::JobObjects::TerminateJobObject;
-        if let Some(job) = self.0.take() {
-            // SAFETY: the handle is ours and is closed exactly once.
-            unsafe {
-                TerminateJobObject(job, 1);
-                CloseHandle(job);
-            }
+        // SAFETY: the handle is ours and is closed exactly once.
+        unsafe {
+            TerminateJobObject(self.0, 1);
+            CloseHandle(self.0);
         }
     }
 }
