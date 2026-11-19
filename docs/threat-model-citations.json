@@ -441,6 +441,9 @@
  "tracker/src/felix.rs#acks_are_durable": [
   "if durable && (quorum || copies == Some(1)) {"
  ],
+ "tracker/src/http.rs#flakes": [
+  "Ok(_) => reply(Ok(call.tracker().flakes().await)),"
+ ],
  "tracker/src/http.rs#agent": [
   "fn agent(&self) -> Result<AgentName, Denied> {"
  ],

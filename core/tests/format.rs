@@ -1566,7 +1566,7 @@ const FORMAT_21_LOG: &str = include_str!("work_format_21.jsonl");
 #[test]
 fn the_twenty_first_format_stamps_workers_and_their_records() {
     assert_eq!(kbl_core::work::FORMAT_V21, 21);
-    assert_eq!(FORMAT, kbl_core::work::FORMAT_V21);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V21) };
     for (_, r) in &entries(FORMAT_21_LOG) {
         assert_eq!(
             r.min_format(),
@@ -1593,4 +1593,35 @@ fn a_reader_of_format_20_stops_at_the_raise_to_21() {
     // A worker record carries format 21 even when its kind is older.
     assert_eq!(log[4].1.record.format(), 1);
     assert_eq!(log[4].1.min_format(), 21);
+}
+
+/// A log at format 22: a person keeps the flake list, ingest records its
+/// re-runs, and a re-run of an entry that is gone or a list edit by an agent
+/// is refused. Its folded state is pinned in `wasm/golden/format_22.state.json`.
+const FORMAT_22_LOG: &str = include_str!("work_format_22.jsonl");
+
+#[test]
+fn the_twenty_second_format_stamps_the_flake_records() {
+    assert_eq!(kbl_core::work::FORMAT_V22, 22);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V22) };
+    for (_, r) in &entries(FORMAT_22_LOG) {
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    let s = fold(&entries(FORMAT_22_LOG));
+    let why: Vec<_> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(why, [(6, Reject::BadFlake), (7, Reject::ActorNotAllowed)]);
+    let flake = &s.flakes[&kbl_core::names::Key::new("lint-timeout").unwrap()];
+    assert_eq!(flake.hits, 2);
+    let kept = s.items[&kbl_core::names::ItemId::new("r1").unwrap()]
+        .flake_retried
+        .as_ref()
+        .unwrap();
+    assert_eq!(kept.offset, 5);
+}
+
+#[test]
+fn a_reader_of_format_21_stops_at_the_raise_to_22() {
+    let log = entries(FORMAT_22_LOG);
+    assert_eq!(log[0].1.v, 22);
+    assert_eq!(log[4].1.min_format(), 22);
 }

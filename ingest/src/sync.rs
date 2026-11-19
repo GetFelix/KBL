@@ -16,17 +16,18 @@ use std::time::Duration;
 use anyhow::Context;
 use kbl_core::content::Content;
 use kbl_core::names::{ItemId, Key};
-use kbl_core::work::{Actor, CloseWhy, PrPhase, PrSnapshot, WorkKind, WorkRecord};
+use kbl_core::work::{Actor, CloseWhy, PrChecks, PrPhase, PrSnapshot, WorkKind, WorkRecord};
 use sha2::{Digest, Sha256};
 use tracing::Instrument as _;
 
 use crate::config::{Mode, Rule, Triage};
 use crate::rules::first_match;
 use crate::source::{
-    Changes, Closed, Comment, Fetched, Issue, IssueRef, Releases, Source, SourceError, WriteBack,
+    Changes, Closed, Comment, Failure, Fetched, Issue, IssueRef, Releases, Source, SourceError,
+    WriteBack,
 };
-use crate::state::{Awaiting, State, Tracked};
-use crate::tracker_api::{Appended, Prerequisite, Root, Tracker};
+use crate::state::{Awaiting, Rerun, State, Tracked};
+use crate::tracker_api::{Appended, Flake, Prerequisite, Root, Tracker};
 
 /// Longest comment or body kept in a record, in bytes. Longer text is cut
 /// and says so; the upstream issue has the rest.
@@ -35,6 +36,9 @@ const TEXT_LIMIT: usize = 3500;
 const TITLE_LIMIT: usize = 200;
 /// Failed write-backs per issue before ingest stops trying.
 const MAX_WRITE_BACK_TRIES: u8 = 3;
+/// Polls a re-run may keep showing the old failure before it counts as
+/// refused, which GitHub does silently for runs it will not restart.
+const MAX_RERUN_WAITS: u8 = 10;
 
 pub(crate) struct Settings {
     pub(crate) rules: Vec<Rule>,
@@ -69,6 +73,8 @@ struct Poll {
     touched: Vec<String>,
     /// Accepted prerequisites with no issue, from the same listing as `roots`.
     prerequisites: Vec<Prerequisite>,
+    /// The team's flake list, from the same listing as `roots`.
+    flakes: Vec<Flake>,
     /// The saved state's version, moved on by a save mid-poll.
     version: Option<u64>,
 }
@@ -140,6 +146,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
                 .into_iter()
                 .filter(|pre| pre.source == name)
                 .collect(),
+            flakes: listed.flakes,
             version,
         };
         let done = self.run(&mut poll, reconcile).await;
@@ -805,13 +812,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         for (key, pr) in due {
             let item = p.roots.get(&key).map(|r| r.item.clone());
             let claimed = p.roots.get(&key).and_then(|r| r.claimed_at_ms);
-            let Some(status) = self
+            let Some((status, failure)) = self
                 .linked_request(&key, &pr, item.as_ref(), claimed, Some(&key))
                 .await?
             else {
                 continue;
             };
-            self.on_pull_request(p, &key, status).await?;
+            self.on_pull_request(p, &key, status, failure).await?;
         }
         Ok(())
     }
@@ -830,7 +837,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         item: Option<&ItemId>,
         claimed: Option<u64>,
         closes: Option<&str>,
-    ) -> Result<Option<PrSnapshot>, SourceError> {
+    ) -> Result<Option<(PrSnapshot, Failure)>, SourceError> {
         let pull = match self.source.pull_request(pr).await {
             Ok(Some(pull)) => pull,
             Ok(None) => return Ok(None),
@@ -858,7 +865,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             );
             return Ok(None);
         }
-        Ok(Some(status))
+        Ok(Some((status, pull.failure)))
     }
 
     /// Records the state of the request an agent opened for a root another
@@ -890,7 +897,7 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             .collect();
         due.sort_by(|a, b| a.0.cmp(&b.0));
         for (label, root, pr) in due {
-            let Some(status) = self
+            let Some((status, _)) = self
                 .linked_request(&label, &pr, Some(&root.item), root.claimed_at_ms, None)
                 .await?
             else {
@@ -921,11 +928,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         p: &mut Poll,
         key: &str,
         status: PrSnapshot,
+        failure: Failure,
     ) -> Result<(), SourceError> {
         let Some(t) = p.state.items.get(key) else {
             return Ok(());
         };
         let item = t.item.clone();
+        // Before the compare: a re-run in flight must read as pending, or the
+        // red would be recorded and become work first.
+        let status = self.flake_rerun(p, key, &item, status, &failure).await?;
         // Compared with what the fold holds, which a change of `pr` clears.
         if p.roots.get(key).and_then(|r| r.pr_status.as_ref()) != Some(&status) {
             let record = WorkRecord::PrStatus {
@@ -956,6 +967,98 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
             set_closed(p, key, true);
         }
         Ok(())
+    }
+
+    /// Re-runs a failed check once when it matches the flake list, and
+    /// returns the status to record: pending while the re-run is out, so the
+    /// failure never becomes work, and the real one otherwise. A re-run that
+    /// passes is recorded as `flake_retried`; one that fails again, or no
+    /// match, is the normal red.
+    async fn flake_rerun(
+        &self,
+        p: &mut Poll,
+        key: &str,
+        item: &ItemId,
+        status: PrSnapshot,
+        failure: &Failure,
+    ) -> Result<PrSnapshot, SourceError> {
+        if p.state
+            .reruns
+            .get(key)
+            .is_some_and(|r| r.pr != status.pr || r.head != failure.head)
+        {
+            p.state.reruns.remove(key);
+        }
+        let entry = p.state.reruns.get(key).cloned();
+        let pending = |s: &PrSnapshot| PrSnapshot {
+            checks: PrChecks::Pending,
+            failing: None,
+            ..s.clone()
+        };
+        match (status.checks, status.failing.clone(), entry) {
+            (PrChecks::Red, Some(f), None) => {
+                let Some(flake) = matching_flake(&p.flakes, &f.name, &failure.output) else {
+                    return Ok(status);
+                };
+                let repo = IssueRef::parse(&status.pr).map(|r| r.repo);
+                let started = match repo {
+                    Some(repo) => self.source.rerun_failed(&repo, &f.url).await?,
+                    None => false,
+                };
+                // A refusal is remembered too, so it is not asked every poll.
+                p.state.reruns.insert(
+                    key.to_owned(),
+                    Rerun {
+                        pr: status.pr.clone(),
+                        head: failure.head.clone(),
+                        check: f.name,
+                        url: f.url,
+                        flake,
+                        spent: !started,
+                        waits: 0,
+                    },
+                );
+                Ok(if started { pending(&status) } else { status })
+            }
+            (PrChecks::Red, Some(f), Some(mut r)) if !r.spent => {
+                // Another check going red is not this re-run's outcome: keep
+                // waiting on the one we asked for.
+                if f.url == r.url || f.name != r.check {
+                    r.waits += 1;
+                    if r.waits > MAX_RERUN_WAITS {
+                        r.spent = true;
+                    }
+                    let wait = !r.spent;
+                    p.state.reruns.insert(key.to_owned(), r);
+                    return Ok(if wait { pending(&status) } else { status });
+                }
+                self.write(&WorkRecord::FlakeRetried {
+                    item: item.clone(),
+                    flake: r.flake.clone(),
+                    check: r.check.clone(),
+                    passed: false,
+                })
+                .await?;
+                r.spent = true;
+                p.state.reruns.insert(key.to_owned(), r);
+                Ok(status)
+            }
+            (PrChecks::Green, _, Some(r)) => {
+                if !r.spent {
+                    self.write(&WorkRecord::FlakeRetried {
+                        item: item.clone(),
+                        flake: r.flake,
+                        check: r.check,
+                        passed: true,
+                    })
+                    .await?;
+                }
+                p.state.reruns.remove(key);
+                Ok(status)
+            }
+            (PrChecks::Red, _, Some(_)) => Ok(status),
+            _ => Ok(status),
+        }
     }
 
     /// Records the oldest release after the merge that carries a merged root
@@ -1736,6 +1839,15 @@ pub(crate) const MARKER: &str = "kbl-prerequisite:";
 /// The issue body. An agent wrote `why`, so a marker line in it is dropped:
 /// only ingest's own, written last, may name the item.
 /// Whether this poll's changes are fresh enough for the lag metric.
+/// The first flake entry for `check` whose pattern, if it has one, is in the
+/// failure's output.
+fn matching_flake(flakes: &[Flake], check: &str, output: &str) -> Option<Key> {
+    flakes
+        .iter()
+        .find(|f| f.check == check && f.pattern.as_deref().is_none_or(|pat| output.contains(pat)))
+        .map(|f| f.flake.clone())
+}
+
 fn tracks_lag(reconcile: bool, cursors: &BTreeMap<String, crate::source::Cursor>) -> bool {
     !reconcile && !cursors.is_empty()
 }
@@ -1875,6 +1987,7 @@ fn prune(p: &mut Poll) {
         .collect();
     for k in done {
         p.state.items.remove(&k);
+        p.state.reruns.remove(&k);
     }
 }
 

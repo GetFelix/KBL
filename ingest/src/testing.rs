@@ -11,7 +11,7 @@ use kbl_core::work_fold::State;
 use serde_json::{Value, json};
 
 use crate::github::{Req, Res, Transport};
-use crate::tracker_api::{Appended, Listed, Prerequisite, Root, Saved, Tracker};
+use crate::tracker_api::{Appended, Flake, Listed, Prerequisite, Root, Saved, Tracker};
 
 /// The Fake tracker's clock at offset zero: 2027-01-15T08:00:00Z.
 pub(crate) const CLOCK_START_MS: u64 = 1_800_000_000_000;
@@ -460,6 +460,16 @@ impl Tracker for Fake {
         Ok(Listed {
             roots: self.root_list(),
             prerequisites: self.prerequisite_list(),
+            flakes: self
+                .state()
+                .flakes
+                .iter()
+                .map(|(name, f)| Flake {
+                    flake: name.clone(),
+                    check: f.check.clone(),
+                    pattern: f.pattern.clone(),
+                })
+                .collect(),
         })
     }
 

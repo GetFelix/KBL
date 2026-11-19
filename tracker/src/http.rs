@@ -247,6 +247,8 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/block", post(block::<B>))
         .route("/v1/work/lift-block", post(lift_block::<B>))
         .route("/v1/work/lift-resource", post(lift_resource::<B>))
+        .route("/v1/work/flakes", get(flakes::<B>).post(flake_set::<B>))
+        .route("/v1/work/flakes/clear", post(flake_clear::<B>))
         .route("/v1/work/request-review", post(request_review::<B>))
         .route("/v1/work/request-changes", post(request_changes::<B>))
         .route("/v1/work/mark-merged", post(mark_merged::<B>))
@@ -953,6 +955,20 @@ struct ClassifyBody {
 #[derive(Deserialize)]
 struct ResourceBody {
     resource: String,
+}
+
+#[derive(Deserialize)]
+struct FlakeBody {
+    flake: Key,
+    check: String,
+    #[serde(default)]
+    pattern: Option<String>,
+    issue: String,
+}
+
+#[derive(Deserialize)]
+struct FlakeClearBody {
+    flake: Key,
 }
 
 async fn next<B: Broker>(call: Call<B>, Json(body): Json<NextBody>) -> Response {
@@ -1803,6 +1819,29 @@ async fn lift_resource<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ResourceBod
         },
     )
     .await
+}
+
+/// The team's flake list with each entry's hit count.
+async fn flakes<B: Broker>(call: Call<B>) -> Response {
+    match call.person() {
+        Ok(_) => reply(Ok(call.tracker().flakes().await)),
+        Err(d) => denied(d),
+    }
+}
+
+/// Adds or replaces an entry on the flake list.
+async fn flake_set<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<FlakeBody>) -> Response {
+    let record = WorkRecord::FlakeSet {
+        flake: b.flake,
+        check: b.check,
+        pattern: b.pattern.filter(|p| !p.is_empty()),
+        issue: b.issue,
+    };
+    as_person(&call, rk, record).await
+}
+
+async fn flake_clear<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<FlakeClearBody>) -> Response {
+    as_person(&call, rk, WorkRecord::FlakeCleared { flake: b.flake }).await
 }
 
 async fn park<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {

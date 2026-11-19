@@ -744,6 +744,7 @@ impl<T: Transport> Source for Gitlab<T> {
                 created_ms,
                 status: None,
                 merge: None,
+                failure: Default::default(),
             }));
         }
         let state = mr["state"].as_str();
@@ -799,6 +800,7 @@ impl<T: Transport> Source for Gitlab<T> {
                 created_ms,
                 status: Some(status),
                 merge,
+                failure: Default::default(),
             }));
         }
         let asked = mr["reviewers"].as_array().is_some_and(|a| !a.is_empty());
@@ -813,6 +815,7 @@ impl<T: Transport> Source for Gitlab<T> {
             created_ms,
             status: Some(status),
             merge: None,
+            failure: Default::default(),
         }))
     }
 

@@ -1156,6 +1156,17 @@ pub fn redact_record(record: &mut WorkRecord) {
                 redact_in(url);
             }
         }
+        WorkRecord::FlakeSet {
+            check,
+            pattern,
+            issue,
+            ..
+        } => {
+            redact_in(check);
+            redact_opt(pattern);
+            redact_in(issue);
+        }
+        WorkRecord::FlakeRetried { check, .. } => redact_in(check),
         WorkRecord::RulesSet { text, checks, .. } => {
             redact_opt(text);
             if let Some(c) = checks {
@@ -1197,6 +1208,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::Refused { .. }
         | WorkRecord::WorkerStarted { .. }
         | WorkRecord::WorkerStopped { .. }
+        | WorkRecord::FlakeCleared { .. }
         | WorkRecord::Unknown => {}
     }
 }

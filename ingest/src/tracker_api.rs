@@ -4,7 +4,7 @@
 use std::future::Future;
 
 use anyhow::{Context, Result, bail};
-use kbl_core::names::ItemId;
+use kbl_core::names::{ItemId, Key};
 use kbl_core::work::{Actor, WorkRecord};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -72,12 +72,23 @@ pub(crate) struct Prerequisite {
     pub(crate) needed_by: Option<String>,
 }
 
-/// One `/v1/ingest/roots` answer: the imported roots and the prerequisites
-/// with no upstream issue yet.
+/// An entry on the team's flake list: a failed check ingest re-runs once.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct Flake {
+    pub(crate) flake: Key,
+    pub(crate) check: String,
+    /// Text the check's output must contain; none matches any failure of it.
+    #[serde(default)]
+    pub(crate) pattern: Option<String>,
+}
+
+/// One `/v1/ingest/roots` answer: the imported roots, the prerequisites
+/// with no upstream issue yet, and the flake list.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Listed {
     pub(crate) roots: Vec<Root>,
     pub(crate) prerequisites: Vec<Prerequisite>,
+    pub(crate) flakes: Vec<Flake>,
 }
 
 /// What the tracker did with a record.
@@ -230,9 +241,16 @@ impl Tracker for Http {
         } else {
             serde_json::from_value(body["prerequisites"].clone())?
         };
+        // A tracker older than format 22 has no flake list.
+        let flakes = if body["flakes"].is_null() {
+            Vec::new()
+        } else {
+            serde_json::from_value(body["flakes"].clone())?
+        };
         Ok(Listed {
             roots,
             prerequisites,
+            flakes,
         })
     }
 

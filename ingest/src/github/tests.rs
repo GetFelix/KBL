@@ -710,3 +710,63 @@ async fn a_draft_note_whose_post_may_have_landed_is_not_posted_again() {
     g.write_back(&draft).await.unwrap();
     assert_eq!(gh.writes().len(), 1, "{:?}", gh.writes());
 }
+
+#[test]
+fn only_an_actions_job_link_of_the_repo_names_a_run_to_re_run() {
+    let url = |p: &str| format!("https://github.com/GetFelix/felix/{p}");
+    assert_eq!(
+        actions_run("GetFelix/felix", &url("actions/runs/700/job/71")),
+        Some(700)
+    );
+    assert_eq!(
+        actions_run("getfelix/FELIX", &url("actions/runs/700/job/71?pr=2")),
+        Some(700)
+    );
+    // A run page without a job, a status link, another repo's run, junk ids.
+    assert_eq!(
+        actions_run("GetFelix/felix", &url("actions/runs/700")),
+        None
+    );
+    assert_eq!(
+        actions_run("GetFelix/felix", "https://ci.example/build/7"),
+        None
+    );
+    assert_eq!(
+        actions_run(
+            "GetFelix/felix",
+            "https://github.com/Other/repo/actions/runs/700/job/71"
+        ),
+        None
+    );
+    assert_eq!(
+        actions_run("GetFelix/felix", &url("actions/runs/7x/job/71")),
+        None
+    );
+    assert_eq!(
+        actions_run("GetFelix/felix", &url("actions/runs/700/job/")),
+        None
+    );
+}
+
+#[test]
+fn the_failing_output_is_the_failed_checks_own_text() {
+    let runs = json!({ "check_runs": [
+        { "name": "unit", "conclusion": "success", "html_url": "u/unit",
+          "output": { "title": "ok", "summary": "fine", "text": null } },
+        { "name": "lint", "conclusion": "failure", "html_url": "u/lint",
+          "output": { "title": "Lint failed", "summary": "timed out", "text": "line 4" } },
+    ] });
+    let f = FailedCheck {
+        name: "lint".into(),
+        url: "u/lint".into(),
+    };
+    let out = failing_output(Some(&runs), None, &f);
+    assert!(out.contains("Lint failed") && out.contains("timed out") && out.contains("line 4"));
+    assert!(!out.contains("fine"));
+
+    let statuses = json!({ "statuses": [
+        { "context": "lint", "target_url": "u/lint", "description": "queue timed out" },
+    ] });
+    assert_eq!(failing_output(None, Some(&statuses), &f), "queue timed out");
+    assert_eq!(failing_output(None, None, &f), "");
+}

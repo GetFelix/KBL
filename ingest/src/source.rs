@@ -139,6 +139,19 @@ pub(crate) struct PullRequest {
     pub(crate) status: Option<PrSnapshot>,
     /// The commit a counted merge made, and when, in milliseconds since the epoch.
     pub(crate) merge: Option<(String, u64)>,
+    /// More about the failing check than the record keeps. Empty unless
+    /// `status` is red.
+    pub(crate) failure: Failure,
+}
+
+/// What a flake entry is matched against. It stays in ingest: the record
+/// keeps only the check's name and link.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Failure {
+    /// The failed check's output: its title, summary and text.
+    pub(crate) output: String,
+    /// The head commit the checks ran on.
+    pub(crate) head: String,
 }
 
 /// A published release.
@@ -311,6 +324,18 @@ pub(crate) trait Source: Send + Sync {
         tag: &str,
         sha: &str,
     ) -> impl Future<Output = Result<bool, SourceError>> + Send;
+    /// Re-runs the failed jobs of the check at `url` in `repo` and says
+    /// whether the re-run was started. A source that cannot re-run a check
+    /// says no.
+    fn rerun_failed(
+        &self,
+        repo: &str,
+        url: &str,
+    ) -> impl Future<Output = Result<bool, SourceError>> + Send {
+        let _ = (repo, url);
+        async { Ok(false) }
+    }
+
     /// Opens an issue in `repo` as our own credential and says which it is.
     fn open_issue(
         &self,

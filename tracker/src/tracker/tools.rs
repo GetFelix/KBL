@@ -1367,6 +1367,22 @@ pub(super) fn check_sizes(record: &WorkRecord) -> Result<(), Error> {
             )
         }
         WorkRecord::ResourceLifted { resource } => field("resource", resource),
+        WorkRecord::FlakeSet {
+            check,
+            pattern,
+            issue,
+            ..
+        } => {
+            bounded("check", check, kbl_core::work::MAX_CHECK_NAME)?;
+            bounded("issue", issue, kbl_core::work::MAX_FLAKE_ISSUE)?;
+            if let Some(p) = pattern {
+                bounded("pattern", p, kbl_core::work::MAX_FLAKE_PATTERN)?;
+            }
+            Ok(())
+        }
+        WorkRecord::FlakeRetried { check, .. } => {
+            bounded("check", check, kbl_core::work::MAX_CHECK_NAME)
+        }
         WorkRecord::Shipped { release, .. } => {
             field("release", release)?;
             if release.is_empty() {

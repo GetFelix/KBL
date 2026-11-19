@@ -122,6 +122,12 @@ impl<B: Broker> Tracker<B> {
 
     /// The workers `supervisor` started, or every worker for a person: what
     /// each holds and when it stopped.
+    /// The team's flake list with each entry's hit count.
+    pub(crate) async fn flakes(&self) -> Value {
+        let core = self.0.core.lock().await;
+        json!({ "flakes": super::ingest::flake_list(&core.state) })
+    }
+
     pub(crate) async fn workers(&self, supervisor: Option<&Key>) -> Value {
         let core = self.0.core.lock().await;
         let list: Vec<Value> = core

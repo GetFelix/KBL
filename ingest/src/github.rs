@@ -18,8 +18,8 @@ use kbl_core::work::{
 };
 
 use crate::source::{
-    Changes, Closed, Comment, Cursor, Fetched, Issue, IssueRef, Links, PullRequest, Release,
-    Releases, Source, SourceError, WriteBack,
+    Changes, Closed, Comment, Cursor, Failure, Fetched, Issue, IssueRef, Links, PullRequest,
+    Release, Releases, Source, SourceError, WriteBack,
 };
 
 pub(crate) mod app;
@@ -374,6 +374,7 @@ impl<T: Transport> Source for Github<T> {
                 created_ms,
                 status: None,
                 merge: None,
+                failure: Default::default(),
             }));
         }
         // A merge counts only into the repo's default branch and by someone
@@ -412,6 +413,7 @@ impl<T: Transport> Source for Github<T> {
                 created_ms,
                 status: Some(status),
                 merge,
+                failure: Default::default(),
             }));
         }
         let asked = pull["requested_reviewers"]
@@ -427,6 +429,7 @@ impl<T: Transport> Source for Github<T> {
         } else {
             PrReview::Unreviewed
         };
+        let mut failure = Failure::default();
         if let Some(sha) = pull["head"]["sha"].as_str() {
             let required = self
                 .required_checks(&id.repo, pull["base"]["ref"].as_str())
@@ -442,6 +445,10 @@ impl<T: Transport> Source for Github<T> {
             let runs = (runs.status == 200).then_some(&runs.body);
             (status.checks, status.failing) =
                 check_state(runs, statuses.as_ref(), &self.own, required.as_ref());
+            failure.head = sha.to_owned();
+            if let Some(f) = &status.failing {
+                failure.output = failing_output(runs, statuses.as_ref(), f);
+            }
         } else {
             status.checks = PrChecks::Pending;
         }
@@ -452,6 +459,7 @@ impl<T: Transport> Source for Github<T> {
             created_ms,
             status: Some(status),
             merge: None,
+            failure,
         }))
     }
 
@@ -576,6 +584,30 @@ impl<T: Transport> Source for Github<T> {
         match (out.status, number) {
             (201, Some(n)) => Ok(IssueRef::new(repo, n)),
             (s, _) => Err(anyhow!("could not open an issue in {repo}: {s}").into()),
+        }
+    }
+
+    async fn rerun_failed(&self, repo: &str, url: &str) -> Result<bool, SourceError> {
+        let Some(run) = actions_run(repo, url) else {
+            return Ok(false);
+        };
+        let out = self
+            .call(Req::post(
+                format!(
+                    "{}/repos/{repo}/actions/runs/{run}/rerun-failed-jobs",
+                    self.api
+                ),
+                json!({}),
+            ))
+            .await?;
+        match out.status {
+            201 => Ok(true),
+            // Too old to re-run, still running, or no `actions: write`.
+            403 | 404 | 409 | 422 => {
+                eprintln!("kbl-ingest: GitHub would not re-run {url}: {}", out.status);
+                Ok(false)
+            }
+            s => Err(anyhow!("could not re-run {url}: {s}").into()),
         }
     }
 
@@ -862,6 +894,48 @@ fn check_state(
     } else {
         (PrChecks::Green, None)
     }
+}
+
+/// The output of the check `check_state` chose as failing, which flake
+/// patterns match: a check run's title, summary and text, or a status's
+/// description.
+fn failing_output(runs: Option<&Value>, statuses: Option<&Value>, f: &FailedCheck) -> String {
+    let same = |name: &str, url: &str| {
+        cut_bytes(name, MAX_CHECK_NAME) == f.name && cut_bytes(url, MAX_CHECK_URL) == f.url
+    };
+    let text = |v: &Value| v.as_str().unwrap_or_default().to_owned();
+    for r in runs
+        .and_then(|r| r["check_runs"].as_array())
+        .into_iter()
+        .flatten()
+    {
+        if same(&text(&r["name"]), &text(&r["html_url"])) {
+            let o = &r["output"];
+            return [text(&o["title"]), text(&o["summary"]), text(&o["text"])].join("\n");
+        }
+    }
+    statuses
+        .and_then(|s| s["statuses"].as_array())
+        .into_iter()
+        .flatten()
+        .find(|st| same(&text(&st["context"]), &text(&st["target_url"])))
+        .map(|st| text(&st["description"]))
+        .unwrap_or_default()
+}
+
+/// The workflow run of an Actions job link in `repo`, such as
+/// `https://github.com/{repo}/actions/runs/{run}/job/{job}`. Any other link
+/// (a commit status, another App's check) is not one ingest can re-run.
+fn actions_run(repo: &str, url: &str) -> Option<u64> {
+    let at = format!("/{}/actions/runs/", repo.to_ascii_lowercase());
+    let start = url.to_ascii_lowercase().find(&at)? + at.len();
+    let (run, job) = url.get(start..)?.split_once("/job/")?;
+    let job = job.split(['?', '#']).next()?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !(digits(run) && digits(job)) {
+        return None;
+    }
+    run.parse().ok()
 }
 
 /// Milliseconds since the epoch from `YYYY-MM-DDTHH:MM:SSZ`, as GitHub writes times.
