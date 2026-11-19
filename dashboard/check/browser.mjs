@@ -914,7 +914,7 @@ try {
   await page.eval(`document.querySelector('[data-focus="redo:${redoDecision}"]').click(); true`);
   const copy = await page.eval(`document.querySelector('.redo-dialog')?.textContent ?? ''`);
   console.log(`saw redo dialog: ${copy}`);
-  check(copy.includes(`from decision ${redoDecision}`) && copy.includes('counts against the redos') && /\d+ left now/.test(copy), 'the redo confirm names the decision, the budget and what is left');
+  check(copy.includes(`from decision ${redoDecision}`) && copy.includes('counts against the redos') && /\d left now/.test(copy), 'the redo confirm names the decision, the budget and what is left');
   check(await focused('#redo-note'), 'the redo confirm puts focus in the optional note');
   await axe('redo confirm');
   await page.eval(`document.querySelector('#redo-note').value = 'use the lock instead'; document.querySelector('.redo-dialog form').requestSubmit(); true`);

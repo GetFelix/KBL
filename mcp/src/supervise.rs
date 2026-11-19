@@ -675,7 +675,7 @@ impl<T: TrackerApi> Supervisor<T> {
             kill_group(child);
         }
         if let Some(f) = r.config_file.take() {
-            let _ = std::fs::remove_file(f);
+            let _ = tokio::fs::remove_file(f).await;
         }
         if stopped {
             pool.workers.remove(name);

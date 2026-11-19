@@ -5,16 +5,28 @@
 //
 //   node dev/fake-worker.mjs <mcp_config_path>
 //
+// FAKE_WORKER_CONFIG_ROOT is the directory the supervisor renders configs
+// into; a path outside it, or a symlink, is refused.
+//
 // FAKE_WORKER_EXIT makes it exit with that code after its first item instead,
 // to stand in for a worker that fails.
 import { spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
 
-const path = process.argv[2];
-if (!path) {
+import { confinedConfig } from "./lib/confine.mjs";
+
+const arg = process.argv[2];
+if (!arg) {
   console.error("usage: fake-worker.mjs <mcp_config_path>");
   process.exit(2);
+}
+let path;
+try {
+  path = confinedConfig(arg, process.env.FAKE_WORKER_CONFIG_ROOT);
+} catch (e) {
+  console.error(`refusing the config: ${e.message}`);
+  process.exit(4);
 }
 // The config holds the worker's token: anything but mode 600 is a bug.
 const mode = statSync(path).mode & 0o777;

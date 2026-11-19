@@ -84,5 +84,6 @@ vendor = "fake"
 model = "scripted"
 mcp_config = "json"
 pass_env = ["PATH"]
+set_env = { FAKE_WORKER_CONFIG_ROOT = "/path/to/state_dir" }
 command = ["node", "dev/fake-worker.mjs", "{mcp_config_path}"]
 ```
