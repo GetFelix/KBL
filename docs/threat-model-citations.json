@@ -355,8 +355,48 @@
  "mcp/src/server.rs#item_or_held": [
   "Some(i) => Ok(i),"
  ],
- "mcp/src/tasks.rs#read_blob": [
-  "if head.len() > PART_SIZE || !id.matches(&head) {"
+ "mcp/src/supervise.rs#adopt": [
+  "if w[\"stopped_ms\"].is_null() && !pool.workers.contains_key(name) {"
+ ],
+ "mcp/src/supervise.rs#call_hook": [
+  "let mut req = self.0.hook.post(url).json(&json!({"
+ ],
+ "mcp/src/supervise.rs#kill_group": [
+  "libc::kill(-pid, libc::SIGKILL);"
+ ],
+ "mcp/src/supervise.rs#reap": [
+  "if pool.quick_failures >= PAUSE_AFTER && pool.paused.is_none() {"
+ ],
+ "mcp/src/supervise.rs#spawn": [
+  "cmd.env_clear().envs(passed);",
+  "env.insert(\"KBL_TRACKER_TOKEN\".into(), token.into());"
+ ],
+ "mcp/src/supervise.rs#start": [
+  "if !(1..=MAX_POOL).contains(&count) {"
+ ],
+ "mcp/src/supervise.rs#stop_worker": [
+  "Err(CallError::Refused(m)) => m.contains(\"bad_worker\"),",
+  "r.stop_pending = true;"
+ ],
+ "mcp/src/supervise.rs#top_up": [
+  ".min(ready.len().saturating_sub(idle))",
+  ".min(LAUNCHES_PER_ROUND);",
+  "Err(Launch::Cap) => break,"
+ ],
+ "mcp/src/supervise/config.rs#check_env_name": [
+  "if v.to_ascii_uppercase().starts_with(\"KBL_\") {"
+ ],
+ "mcp/src/supervise/config.rs#check_model": [
+  "&& !m.starts_with('-')"
+ ],
+ "mcp/src/supervise/config.rs#check_template": [
+  "if !allowed.contains(&name) {"
+ ],
+ "mcp/src/supervise/render.rs#fill": [
+  "if value.contains(['{', '}', '\\0']) {"
+ ],
+ "mcp/src/supervise/render.rs#write_private": [
+  ".create_new(true)"
  ],
  "mcp/src/tasks.rs#claim": [
   "Err(e @ TaskReadError::Newer { .. }) => {",
@@ -376,6 +416,9 @@
  ],
  "mcp/src/tasks.rs#post": [
   "post.title = redacted(post.title);"
+ ],
+ "mcp/src/tasks.rs#read_blob": [
+  "if head.len() > PART_SIZE || !id.matches(&head) {"
  ],
  "mcp/src/tasks.rs#refuse": [
   "error: redacted(format!(\"{error:#}\")),"
@@ -445,7 +488,13 @@
   "Caller::Agent(a) => Some(Key::new(a.as_str()).expect(\"an agent name is a key\")),"
  ],
  "tracker/src/http.rs#worker_start": [
-  "Ok(w) if w.supervisor() == Some(sup.as_str()) => w,"
+  "Ok(w) if w.supervisor() == Some(sup.as_str()) => w,",
+  "let token = match started.as_object_mut().and_then(|o| o.remove(\"token\")) {",
+  "if started[\"replayed\"] == json!(true) {"
+ ],
+ "tracker/src/http/exchange.rs#Codes::redeem": [
+  "let p = codes.remove(TokenHash::of(code).as_str())?;",
+  "(p.until > now).then_some((p.worker, p.token))"
  ],
  "tracker/src/http/ingest.rs#config": [
   "None => return busy(),"

@@ -4,7 +4,7 @@ An engineer asks one agent to "supervise 10 agents on Felix issues". That agent 
 agents of any vendor, and tops the pool up as workers finish. KBL stays non-agentic: `kbl-mcp` and the tracker never
 call a model. They launch configured commands and apply configured tables; judgment stays with the agents.
 
-Issue [#420](https://github.com/GetFelix/KBL/issues/420). This page is the design; what is built so far is marked.
+Issue [#420](https://github.com/GetFelix/KBL/issues/420). This page is the design; what is built is marked.
 
 ## Records (format 21, built)
 
@@ -61,35 +61,99 @@ worker and start one under a new name.
   own cap is its worker count; cost per supervisor is derived from `sup` on the reports.
 - Hard caps: per supervisor and per team in the tracker, and 64 per supervisor in the fold whatever the config says.
 
-## Launch profiles (planned)
+## Launch profiles (built)
 
-`kbl-mcp` config, one entry per profile:
+The supervisor's `kbl-mcp` reads a TOML file named by `KBL_SUPERVISE_CONFIG`. Without it the `supervise_*` tools
+answer that they are not set up. One entry per profile:
 
 ```toml
+state_dir = "/var/lib/kbl/supervise"   # per-worker MCP configs and logs; default ~/.local/state/kbl/supervise
+default_profile = "claude"
+top_up_seconds = 30
+
 [profiles.claude]
 kind = "command"
 vendor = "anthropic"
-# Example only: check the flags against the vendor's current docs.
-command = ["claude", "-p", "--model", "{model}", "--mcp-config", "{mcp_config_path}"]
-mcp_config = "json"      # or "toml"
+model = "sonnet"
+command = ["claude", "-p", "Take work with work_next until there is none.", "--model", "{model}",
+           "--mcp-config", "{mcp_config_path}", "--strict-mcp-config"]
+mcp_config = "json"
 workdir = "/work/{worker}"
+pass_env = ["PATH", "HOME"]
 
 [profiles.cloud]
 kind = "hook"
+vendor = "example"
 url = "https://hooks.example/start"
+hook_token_env = "CLOUD_HOOK_TOKEN"
 ```
 
-- Templates fill only `{model}`, `{worker}`, `{mcp_config_path}` and `{workdir}`, each as a whole argv element. No
-  shell. Values come from config and the tracker's checked names, never from item text.
-- The per-worker MCP config holds `KBL_AGENT={worker}` and that worker's token only, written mode 600 and removed when
-  the worker stops. The supervisor's token is never passed to a worker.
-- `kind = "hook"` posts the worker name and a one-time code; the hosted agent exchanges the code for its token once.
-- A fake profile (a scripted MCP client from `dev/`) runs the tests and CI without any vendor.
+- `command` is an argv array, run without a shell. Its elements may hold `{model}`, `{worker}`, `{mcp_config_path}`
+  and `{workdir}`; any other `{...}` is refused when the file is read, and the program (the first element) takes no
+  placeholder. Every value is checked before it is filled in: the worker name by the tracker's name rules, the model
+  against `A-Z a-z 0-9 . _ : / @ -` (never a leading `-`), the paths built by `kbl-mcp`. Item text never reaches a
+  template.
+- The worker process starts with an empty environment plus the names in `pass_env`, copied from the supervisor's.
+  `KBL_TRACKER_TOKEN`, `KBL_PERSON_TOKEN` and `KBL_FELIX_TOKEN` may not be listed, so the supervisor's tokens never
+  reach a worker; no `KBL_` name may be listed at all. `set_env` adds fixed values, which may use `{worker}` and
+  `{workdir}`. `mcp_config_file` writes the MCP config to a fixed place the vendor reads (with `{worker}` and
+  `{workdir}`) instead of the state directory.
+- The per-worker MCP config (`json`: `mcpServers.kbl`; `toml`: `mcp_servers.kbl`) starts `kbl-mcp` with
+  `KBL_AGENT={worker}`, that worker's token, the run, the tracker and broker addresses, and the pool's filter as
+  `KBL_WORK_FILTER`. It is written mode 600 in a mode 700 directory and removed when the worker stops. The worker's
+  `kbl-mcp` applies `KBL_WORK_FILTER` to every `work_next` and `work_peek`, over whatever the agent asks for.
+- Felix: an ID token source (`KBL_FELIX_ID_TOKEN_FILE` or `_COMMAND` with `KBL_FELIX_CONTROL_PLANE`) is passed by
+  name. A fixed `KBL_FELIX_TOKEN` is copied into the worker's config only with `share_felix_token = true`.
+- Output goes to `<state_dir>/<worker>/out.log`, never to the supervisor's stdout, which belongs to MCP.
+- Each worker runs in a process group of its own, and a stop kills the group, so what the vendor's CLI started
+  (its `kbl-mcp` among them) ends with it. A stop is logged on the tracker first, so the token is dead before the
+  kill; a stop the tracker refuses for any reason but `bad_worker` (already stopped) is sent again each round.
+- `kind = "hook"` asks the tracker for a one-time code instead of a token and posts `{worker, code, tracker_url,
+  vendor, profile, model, filter}` to the URL, with a bearer from `hook_token_env` if set. The hosted agent calls
+  `POST /v1/work/workers/exchange {code}` once and gets the worker's token. A code works once and for 10 minutes,
+  and lives only in the tracker's memory: after a restart it is gone, so that worker never connects and holds
+  nothing until it is stopped. A hook that does not answer 2xx stops the worker at once. A hook worker counts as
+  live until it is stopped, and never as idle.
+- A fake profile (`dev/fake-worker.mjs`, a scripted MCP client) runs the tests and CI without any vendor.
 
-## Fit, tools and top-up (planned)
+Example profiles for Claude Code, Codex CLI and GitHub Copilot CLI are in [supervise-profiles.md](../supervise-profiles.md).
 
-- A table from recorded fields (tier, kind, type, area, size, needs) to `{profile, model}`, first match wins, with a
-  per-launch override. Each worker records vendor, profile and model.
-- MCP tools: `supervise_start {count, filter, profile?, model?}`, `supervise_stop {worker | all}`, `supervise_status`.
-- Top-up: on a timer, `kbl-mcp` keeps N workers while `work_peek` shows ready work matching the filter.
-  `supervise_status` shows workers, holds, finished and failed since the last look, and the queue shape.
+## Fit (built)
+
+`[[fit]]` rows map recorded fields to a profile and model, first match wins:
+
+```toml
+[[fit]]
+tiers = [0, 1]
+profile = "claude"
+model = "opus"
+
+[[fit]]
+types = ["docs"]
+profile = "codex"
+```
+
+A row may list `tiers`, `kinds`, `types`, `areas`, `sizes` and `needs`. Every field it lists must match (any value
+of the list); `needs` matches when the item needs any of them. A row without `model` uses the profile's. No match
+falls back to `default_profile`. For each launch, the fit reads the next ready item in `work_peek` order that no
+launch in the same round has taken, so `n` launches fit the first `n` ready items. The worker still claims with
+`work_next`, so it may get another item if the queue changes first. `profile` and `model` on `supervise_start`
+override the table for every launch of that pool. Each worker records vendor, profile and model.
+
+## Tools and top-up (built)
+
+- `supervise_start {count, filter, profile?, model?}` sets the pool to `count` workers on `filter` (the narrowing
+  fields of `work_next`), starts up to `count` minus the live ones now, at most one per ready item, and turns the
+  top-up on.
+- `supervise_stop {worker}` stops one worker and lowers the pool by one; `{all: true}` stops every worker and turns
+  the top-up off. A stop logs `worker_stopped` first, so the token dies before the process is killed.
+- `supervise_status` shows the workers (with holds), the workers that finished (exit 0) or failed since the last
+  call, the queue shape (ready counts by kind and tier from `work_peek`), and the top-up state.
+- Top-up: every `top_up_seconds` (5 to 3600), `kbl-mcp` reaps exited workers (stopping them on the tracker), then
+  starts workers until the pool is full or there is no more ready work for them. It stops for the round on
+  `worker_cap`, and pauses after 3 workers in a row fail or exit within `min_run_seconds` (default 30) of starting,
+  or 3 launches in a row fail; `supervise_start` resumes it. A worker that holds nothing yet counts against the
+  ready items, so a slow starter does not make the top-up start a second worker for the same item.
+- Every round, a supervisor's `kbl-mcp` stops the live workers the tracker lists for it that its pool does not
+  track: ones an earlier process left, or a start whose answer was lost. At most 8 workers start per round, so a
+  round, which holds the pool, stays short even when hooks are slow.

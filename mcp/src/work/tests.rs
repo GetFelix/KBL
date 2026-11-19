@@ -256,3 +256,27 @@ async fn work_next_sends_its_filters_and_peek_claims_nothing() {
         [json!({ "repo": "o/r", "exclude_roots": ["x1"] })]
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_pinned_filter_wins_over_what_the_agent_asks() {
+    let fake = Fake::default();
+    let w = Work::new(fake.clone(), None, None).pinned(json!({ "repo": "o/pinned", "tiers": [1] }));
+    w.peek(
+        None,
+        Vec::new(),
+        json!({ "repo": "o/other", "kinds": ["fix"] }),
+    )
+    .await
+    .unwrap();
+    w.next_filtered(None, Vec::new(), json!({ "repo": "o/other" }))
+        .await
+        .unwrap();
+    assert_eq!(
+        fake.bodies("/v1/work/peek"),
+        [json!({ "repo": "o/pinned", "kinds": ["fix"], "tiers": [1] })]
+    );
+    assert_eq!(
+        fake.bodies("/v1/work/next"),
+        [json!({ "repo": "o/pinned", "tiers": [1] })]
+    );
+}

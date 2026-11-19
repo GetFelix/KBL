@@ -25,7 +25,7 @@ impl fmt::Display for InvalidName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:?} is not a valid name: use 1 to {MAX_NAME_LEN} characters of A-Z, a-z, 0-9, - and _",
+            "{:?} is not a valid name: use 1 to {MAX_NAME_LEN} characters of A-Z, a-z, 0-9 and _ (keys also allow -; a delegated worker is <agent>-<suffix>)",
             self.0
         )
     }
@@ -335,6 +335,9 @@ mod tests {
         }
         assert!(AgentName::agent_or_worker("w1-a-b").is_err());
         assert!(AgentName::agent_or_worker("-a").is_err());
+        for bad in ["a-b-c", "plan", "x-"] {
+            assert!(AgentName::agent_or_worker(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
