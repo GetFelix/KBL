@@ -184,6 +184,14 @@ export async function startTracker(tokens, extraEnv = {}, bin = TRACKER) {
 
 export const TRACKER_URL = `http://${TRACKER_ADDR}`;
 
+// Raises the shared log's format to `to`, or leaves it when it is already there or higher, so
+// the order of checks that share a log does not matter (a raise below the current format is refused).
+export async function raiseFormat(token, to) {
+  const have = workLog().reduce((n, r) => (r.kind === "format_raised" ? Math.max(n, r.to) : n), 0);
+  if (have >= to) return;
+  await personRecord(token, { kind: "format_raised", to });
+}
+
 // A call to the tracker as a person; throws the tracker's error text.
 export async function personRecord(token, record) {
   const response = await fetch(`${TRACKER_URL}/v1/work/records`, {

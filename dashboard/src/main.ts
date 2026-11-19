@@ -7,7 +7,7 @@ import './ui/tokens.css';
 import './ui/app.css';
 import init, { Folder } from './wasm/kbl_wasm.js';
 import { trackWaiting } from './inbox.ts';
-import { blocked, items, questionText, reviewLoad, type Fold } from './fold.ts';
+import { blocked, items, questionText, reviewLoad, type Fold, type ItemRow } from './fold.ts';
 import { overlapNotes } from './overlap.ts';
 import { activities, type Activities } from './activity.ts';
 import { handoffs } from './handoff.ts';
@@ -26,6 +26,8 @@ import { shell } from './ui/shell.ts';
 import { metrics } from './metrics.ts';
 import { metricsView } from './ui/metrics-view.ts';
 import { spendView } from './ui/spend-view.ts';
+import { workersView } from './ui/workers-view.ts';
+import { stopEach, workers, type WorkerRow } from './workers.ts';
 import { pricesView } from './ui/prices-view.ts';
 import { viewDialog } from './ui/view-dialog.ts';
 import { assignDialog, confirmDialog, needsDialog, redoDialog, signInDialog, type ConfirmKind } from './ui/write-dialogs.ts';
@@ -291,6 +293,8 @@ const run = (id: CommandId): void => {
       return help.open();
     case 'spend':
       return showSpend();
+    case 'workers':
+      return showWorkers();
     case 'metrics':
       return metricsBox.open();
     case 'prices':
@@ -438,6 +442,7 @@ const ui = shell(
     palette: () => run('palette'),
     help: () => run('help'),
     spend: () => run('spend'),
+    workers: () => run('workers'),
     metrics: () => run('metrics'),
     mark: (id) => store.dispatch({ type: 'mark', id }),
     signIn: () => signInBox.open(),
@@ -491,6 +496,30 @@ const spendBox = spendView({
   now: () => Date.now(),
   priceAgeDays: priceAgeDays(q.get('price_age_days')),
 });
+const stopWorkers = (names: string[]): Promise<string | null> =>
+  stopEach(async (req) => {
+    const o = tracker ? await tracker.write(req) : ({ status: 'failed', reason: 'Not signed in to the tracker.' } as const);
+    if (o.status === 'refused' && o.signedOut) {
+      tracker = null;
+      store.dispatch({ type: 'tracker', tracker: { kind: 'refused', reason: o.reason } });
+    }
+    return o;
+  }, names);
+// Rows and items come from the same fold, so a hold's title is never older than the hold.
+let readWorkers: (() => { rows: WorkerRow[]; items: ItemRow[] }) | null = null;
+const workersBox = workersView({
+  open: openItem,
+  canStop: () => tracker !== null,
+  stop: stopWorkers,
+  signIn: () => signInBox.open(),
+  now: () => Date.now(),
+});
+// Workers of a log still being read would be a partial list, so the dialog waits for live and fills in then.
+const showWorkers = () => {
+  const s = store.get();
+  const read = s.connection.kind === 'live' && readWorkers ? readWorkers() : null;
+  workersBox.open(read?.rows ?? null, read?.items ?? s.items, s);
+};
 const metricsBox = metricsView({
   report: (days) => (store.get().connection.kind === 'live' && readMetrics ? readMetrics(days) : null),
   signedIn: () => tracker !== null,
@@ -551,7 +580,7 @@ const assignBox = assignDialog(write);
 const needsBox = needsDialog(write);
 const redoBox = redoDialog(write);
 const signInBox = signInDialog(signIn);
-document.body.append(palette.el, help.el, spendBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, needsBox.el, redoBox.el, signInBox.el);
+document.body.append(palette.el, help.el, spendBox.el, workersBox.el, metricsBox.el, pricesBox.el, views.el, confirm.el, assignBox.el, needsBox.el, redoBox.el, signInBox.el);
 
 // Browsers rate-limit replaceState, and typing a search would hit the limit: write the
 // address at most every 250 ms, always ending on the latest state.
@@ -585,12 +614,12 @@ store.subscribe((s) => {
   if (readActivity) store.dispatch({ type: 'activity', activity: readActivity() });
 });
 // "Last active 3 min ago" ages without a record; redraw in place so it keeps up.
-setInterval(() => ui.render(store.get()), 30_000);
+setInterval(() => (ui.render(store.get()), workersBox.tick()), 30_000);
 paint(initial);
 
 document.addEventListener('keydown', (e) => {
   // Open dialogs handle their own keys; the native <dialog> closes itself on Escape.
-  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || needsBox.isOpen() || redoBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
+  if (palette.isOpen() || help.isOpen() || spendBox.isOpen() || workersBox.isOpen() || metricsBox.isOpen() || pricesBox.isOpen() || views.isOpen() || confirm.isOpen() || assignBox.isOpen() || needsBox.isOpen() || redoBox.isOpen() || signInBox.isOpen() || e.defaultPrevented || e.isComposing) return;
   const t = e.target as HTMLElement;
   // A select owns its arrows and letters; Escape and Mod chords still work there.
   if (t instanceof HTMLSelectElement && e.key !== 'Escape' && !(mac ? e.metaKey : e.ctrlKey)) return;
@@ -642,8 +671,10 @@ async function main() {
     reviewLoadJson: () => fold.review_load_json(),
     spendJson: () => fold.spend_json(),
     metricsJson: (nowMs, days) => fold.metrics_json(nowMs, days),
+    workersJson: () => fold.workers_json(),
   };
   readSpend = () => spend(sink);
+  readWorkers = () => ({ rows: workers(sink), items: items(sink) });
   readMetrics = (days) => metrics(sink, Date.now(), days);
   readActivity = () => openActivity(sink);
   const snapshot = () => {
@@ -662,6 +693,7 @@ async function main() {
       queued = false;
       store.dispatch(snapshot());
       if (spendBox.isOpen()) showSpend();
+      if (workersBox.isOpen()) showWorkers();
       if (readSpend) pricesBox.refresh(readSpend());
     }), wait);
   };
@@ -689,6 +721,7 @@ async function main() {
           store.dispatch(snapshot());
           store.dispatch({ type: 'connection', connection: { kind: 'live', refused } });
           if (spendBox.isOpen()) showSpend();
+          if (workersBox.isOpen()) showWorkers();
           if (readSpend) pricesBox.refresh(readSpend());
         },
       });

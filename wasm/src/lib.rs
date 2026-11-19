@@ -365,6 +365,33 @@ impl Folder {
     pub fn spend_json(&self) -> String {
         serde_json::to_string(&self.state.spend()).expect("plain data serializes")
     }
+
+    /// Every delegated worker, stopped ones included, as `{worker, supervisor, vendor,
+    /// profile, model, started_ms, stopped_ms, finished, holds}` in name order. `holds` is
+    /// `{item, attempt}` while the worker holds an item, else null. Token hashes are not
+    /// included: the page has no use for them.
+    pub fn workers_json(&self) -> String {
+        let list: Vec<_> = self
+            .state
+            .workers
+            .iter()
+            .map(|(name, w)| {
+                let holds = self.state.held_by(name.as_str());
+                json!({
+                    "worker": name,
+                    "supervisor": w.supervisor,
+                    "vendor": w.vendor,
+                    "profile": w.profile,
+                    "model": w.model,
+                    "started_ms": w.started_ms,
+                    "stopped_ms": w.stopped_ms,
+                    "finished": w.finished,
+                    "holds": holds.map(|(item, attempt)| json!({ "item": item, "attempt": attempt })),
+                })
+            })
+            .collect();
+        serde_json::to_string(&list).expect("plain data serializes")
+    }
 }
 
 impl Folder {

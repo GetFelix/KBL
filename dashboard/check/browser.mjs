@@ -58,6 +58,7 @@ const fakeGateway = (log, mode, pageSize = 20) => `(() => {
     '/v1/work/tier': (b) => ({ kind: 'tier_changed', item: b.item, tier: b.tier }),
     '/v1/work/note': (b) => ({ kind: 'human_input', item: b.item, input: b.input ?? 'note', text: b.text }),
     '/v1/work/redo': (b) => ({ kind: 'forked_from', item: b.item, from_attempt: b.from_attempt, at: b.at, note: b.note }),
+    '/v1/work/workers/stop': (b) => ({ v: 24, kind: 'worker_stopped', worker: b.worker }),
     '/v1/work/close': (b) => ({ kind: 'closed', item: b.item, why: b.why }),
     '/v1/work/questions/answer': (b) => ({ kind: 'answer', item: b.item, question: b.question, text: b.text ?? { text: '' }, chosen: b.chosen, then: { then: 'resume' }, evidence: [] }),
   };
@@ -928,7 +929,7 @@ try {
   const fork = await page.eval(`document.querySelector('.story-forks li').textContent`);
   console.log(`saw fork line: ${fork}`);
   check(fork.startsWith(`Attempt 2 is a redo from decision ${redoDecision} on attempt 1.`), 'the new attempt is linked to its fork point in the panel');
-  await page.eval(`document.querySelector('.story-forks .story-ref').click(); true`);
+  await page.eval(`document.querySelector('.story-forks .story-ref').click(); true`); await new Promise((ok) => setTimeout(ok, 200));
   check(await focused(`.story-decision[data-at="${redoDecision}"]`), 'the fork link moves the focus to the decision it branched from');
   await press(page, 'r');
   const blocked = await page.eval(`document.querySelector('.redo-dialog')?.open ? document.querySelector('.redo-dialog').textContent : ''`);
@@ -954,6 +955,39 @@ try {
   check(await focused('#tracker-token'), 'Sign in from the sidebar asks for the token');
   await page.eval(`document.querySelector('#tracker-token').value = 'person-token'; document.querySelector('.sign-in-dialog form').requestSubmit(); true`);
   await page.waitFor(`!document.querySelector('.sign-in-dialog').open && document.querySelector('.account-button').textContent === 'Sign out'`);
+  // Workers: a supervisor and its workers as a group, each worker's hold, a finished worker, and stop for one or all.
+  {
+    const w = (r) => page.eval(`window.__push(${JSON.stringify({ v: 24, actor: 'agent', at_ms: Date.now(), ...r })}); true`);
+    const hash = (c) => c.repeat(64);
+    await page.eval(`window.__push({ v: 24, kind: 'format_raised', to: 24, actor: 'person', by: 'maintainer', at_ms: Date.now() }); window.__push({ kind: 'imported', item: 'wk-1', source: 'github', title: 'Held by a worker', upstream_id: 'GetFelix/felix#7001', actor: 'tracker', by: 'ingest', at_ms: Date.now() }); window.__push({ kind: 'accepted', item: 'wk-1', tier: 1, actor: 'person', by: 'maintainer', at_ms: Date.now() }); true`);
+    for (const [n, c, extra] of [['sup-a', 'a', { vendor: 'anthropic', model: 'sonnet' }], ['sup-b', 'b', { vendor: 'example', profile: 'cloud' }], ['sup-c', 'c', {}], ['sup-d', 'd', {}]]) {
+      await w({ by: 'sup', kind: 'worker_started', worker: n, token_sha256: hash(c), supervisor_token_sha256: hash('f'), ...extra });
+    }
+    await w({ by: 'sup-a', sup: 'sup', kind: 'claimed', item: 'wk-1', attempt: 1, deadline_ms: Date.now() + 3_600_000 });
+    await w({ by: 'sup-c', sup: 'sup', kind: 'worker_finished' });
+    await page.eval(`window.__push({ v: 24, kind: 'worker_stopped', worker: 'sup-d', actor: 'person', by: 'maintainer', at_ms: Date.now() }); true`);
+    await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Workers').click(); true`);
+    await page.waitFor(`!!document.querySelector('dialog.workers section[data-supervisor=sup] tr[data-worker=sup-d]')`);
+    const rows = await page.eval(`[...document.querySelectorAll('dialog.workers tr[data-worker]')].map((r) => r.dataset.worker + ':' + r.dataset.state).join(' ')`);
+    check(rows === 'sup-a:working sup-b:idle sup-c:finished sup-d:stopped', `workers: one group, live workers first, finished and stopped kept (${rows})`);
+    check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a] a[data-item=wk-1]')?.textContent === 'wk-1 Held by a worker'`), 'workers: a working worker names the item it holds');
+    check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a]').textContent.includes('anthropic · sonnet') && document.querySelector('dialog.workers tr[data-worker=sup-c]').textContent.includes('finished')`), 'workers: the recorded launch fields and the finish show');
+    await axe('workers');
+    await shoot('workers-dark');
+    await page.eval(`document.querySelector('dialog.workers [data-stop=sup-a]').click(); true`);
+    // The fake tracker logs only the stop, so the worker shows Releasing while it still holds; the tracker's release then ends it as Stopped.
+    await page.waitFor(`document.querySelector('dialog.workers tr[data-worker=sup-a]')?.dataset.state === 'releasing'`);
+    check(await page.eval(`!document.querySelector('dialog.workers [data-stop=sup-a]')`), 'workers: a worker being released offers no second Stop');
+    await page.eval(`window.__push({ kind: 'released', item: 'wk-1', attempt: 1, reason: 'supervisor_gone', actor: 'tracker', by: 'ingest', at_ms: Date.now() }); true`);
+    await page.waitFor(`document.querySelector('dialog.workers tr[data-worker=sup-a]')?.dataset.state === 'stopped'`);
+    check(await page.eval(`JSON.stringify(window.__tracker.calls.at(-1)) === '{"url":"/v1/work/workers/stop","auth":"Bearer person-token","body":{"worker":"sup-a"}}'`), 'workers: Stop sends that worker to the stop route with the viewer token');
+    await page.eval(`document.querySelector('dialog.workers [data-stop-all=sup]').click(); true`);
+    check(await page.eval(`!!document.querySelector('dialog.workers [data-confirm-stop=sup]') && !document.querySelector('dialog.workers tr[data-worker=sup-b][data-state=stopped]')`), 'workers: Stop all asks first and stops nothing yet');
+    await page.eval(`document.querySelector('dialog.workers [data-confirm-stop=sup]').click(); true`);
+    await page.waitFor(`document.querySelector('dialog.workers tr[data-worker=sup-b]')?.dataset.state === 'stopped'`);
+    check(await page.eval(`!document.querySelector('dialog.workers [data-stop]') && !document.querySelector('dialog.workers [data-stop-all]')`), 'workers: with none live, no stop control is left');
+    await press(page, 'Escape');
+  }
   await page.eval(`window.__tracker.token = 'rotated'; document.querySelector('.row[data-id=gh-2219]').click(); document.querySelector('[data-focus=set-tier]').click(); true`);
   await page.waitFor(`!!document.querySelector('.actions [data-focus=sign-in]')`);
   check(await page.eval(`document.querySelector('.actions p').textContent.startsWith('Sign in again: the tracker does not know this token')`), 'a token the tracker stops taking signs the page out, with the reason');

@@ -191,3 +191,31 @@ async fn a_worker_reports_it_finished_with_its_own_token_and_only_once() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn a_person_stops_any_worker_and_the_list_shows_it_stopped() {
+    let app = app_21().await;
+    let (_, reply) = call(
+        &app,
+        "/v1/work/workers",
+        Some("tok-w1"),
+        json!({ "worker": "w1-a" }),
+    )
+    .await;
+    let tok = reply["token"].as_str().unwrap().to_owned();
+    // The dashboard's Stop control: a person's token, the worker's name.
+    let stop = json!({ "worker": "w1-a" });
+    let (status, body) = call(&app, "/v1/work/workers/stop", Some("tok-gab"), stop.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["kind"], "worker_stopped");
+    let (_, all) = get_json(&app, "/v1/work/workers", Some("tok-gab")).await;
+    assert!(all["workers"][0]["stopped_ms"].is_u64(), "{all}");
+    assert_eq!(all["workers"][0]["finished"], false);
+    let next = json!({ "wait_seconds": 0 });
+    let (status, _) = call(&app, "/v1/work/next", Some(&tok), next).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A second stop is refused, which a Stop all that races one reads as already done.
+    let (status, again) = call(&app, "/v1/work/workers/stop", Some("tok-gab"), stop).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(again["why"], "bad_worker", "{again}");
+}

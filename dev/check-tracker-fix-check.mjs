@@ -25,6 +25,7 @@ import {
   newRunId,
   personCall,
   personRecord,
+  raiseFormat,
   startTracker,
   TRACKER_URL,
   workLog,
@@ -158,7 +159,7 @@ const agent = (name) =>
 await startTracker(tokens);
 try {
   const [w1, w2] = await Promise.all([agent("w1"), agent("w2")]);
-  await personRecord("tok-gab", { kind: "format_raised", to: 23 });
+  await raiseFormat("tok-gab", 23);
 
   // 1. The issue becomes a root, and an agent fixes it and names its pull request.
   await pollOnce();

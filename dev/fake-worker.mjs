@@ -10,6 +10,9 @@
 //
 // FAKE_WORKER_EXIT makes it exit with that code after its first item instead,
 // to stand in for a worker that fails.
+//
+// FAKE_WORKER_FINISH makes it call worker_finish once its queue is empty, as a
+// hosted worker reports it is done, so the tracker logs `worker_finished`.
 import { spawn } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { createInterface } from "node:readline";
@@ -80,6 +83,7 @@ try {
     console.error(`fake-worker ${name}: completed ${reply.item.id}`);
     if (process.env.FAKE_WORKER_EXIT) process.exit(Number(process.env.FAKE_WORKER_EXIT));
   }
+  if (process.env.FAKE_WORKER_FINISH) await tool("worker_finish", {});
   child.kill();
   process.exit(0);
 } catch (error) {

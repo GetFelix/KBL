@@ -3,7 +3,9 @@
 //      that holds 4 items; each worker is its own kbl-mcp with its own token;
 //   2. the top-up replaces workers as they finish until every item is done;
 //   3. every completion on the log is by a worker, carrying the supervisor;
-//   4. supervise_stop all leaves no live worker, and a stopped worker's token
+//   4. each worker reports it is done with worker_finish, so the tracker logs
+//      worker_finished for it (format 24) and the top-up sees it ended;
+//   5. supervise_stop all leaves no live worker, and a stopped worker's token
 //      is refused.
 //
 //   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-supervise.mjs
@@ -20,6 +22,7 @@ import {
   killAll,
   newRunId,
   personRecord,
+  raiseFormat,
   sleep,
   startTracker,
   TRACKER_URL,
@@ -50,7 +53,7 @@ vendor = "fake"
 model = "scripted"
 mcp_config = "json"
 pass_env = ["PATH"]
-set_env = { FAKE_WORKER_CONFIG_ROOT = ${JSON.stringify(join(dir, "state"))} }
+set_env = { FAKE_WORKER_CONFIG_ROOT = ${JSON.stringify(join(dir, "state"))}, FAKE_WORKER_FINISH = "1" }
 command = [${JSON.stringify(process.execPath)}, ${JSON.stringify(resolve("dev/fake-worker.mjs"))}, "{mcp_config_path}"]
 `,
   { mode: 0o600 },
@@ -60,7 +63,7 @@ const felix = await felixToken();
 createRun(RUN, "supervise check");
 const tracker = await startTracker(tokens, { KBL_CLAIM_VISIBILITY_MS: "8000" });
 try {
-  await personRecord("tok-gab", { kind: "format_raised", to: 21 }).catch((e) => console.log(`format not raised: ${e.message}`));
+  await raiseFormat("tok-gab", 24).catch((e) => console.log(`format not raised: ${e.message}`));
   for (const item of ITEMS) {
     await personRecord("tok-gab", {
       kind: "imported",
@@ -112,6 +115,18 @@ try {
   );
   check(starts.every((r) => !JSON.stringify(r).includes("kblw_")), "no worker token is on the log");
 
+  // A worker reports done only after its queue stays empty for two waits, which is after the last item is done.
+  const finishes = () => workLog().filter((r) => r.kind === "worker_finished");
+  const starts_n = workLog().filter((r) => r.kind === "worker_started" && r.by === "sup").length;
+  for (let waited = 0; finishes().length < starts_n && waited < 30; waited++) await sleep(1000);
+  const ended = finishes();
+  check(
+    ended.length === starts_n && ended.every((r) => r.by.startsWith("sup-w") && r.sup === "sup" && r.actor === "agent"),
+    `each worker that ran out of work logged worker_finished for itself: ${JSON.stringify(ended.map((r) => [r.by, r.sup]))}`,
+  );
+  finished.push(...(await sup.tool("supervise_status", {})).finished);
+  check(finished.length >= ended.length, `the supervisor saw the finished workers: ${JSON.stringify(finished)}`);
+
   const stopped = await sup.tool("supervise_stop", { all: true });
   check(stopped.stop_pending.length === 0, "supervise_stop all stopped every worker");
   const listed = await fetch(`${TRACKER_URL}/v1/work/workers`, { headers: { authorization: "Bearer tok-sup" } }).then((r) =>
@@ -120,6 +135,10 @@ try {
   check(
     listed.workers.every((w) => w.stopped_ms !== null && w.stopped_ms !== undefined),
     "the tracker lists no live worker",
+  );
+  check(
+    listed.workers.some((w) => w.finished === true),
+    "the tracker lists the workers that reported done as finished",
   );
   const left = readdirSync(join(dir, "state", "sup"), { recursive: true }).filter((f) => String(f).endsWith("mcp.json"));
   check(left.length === 0, "no worker's MCP config is left on disk");
