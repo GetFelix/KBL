@@ -775,6 +775,25 @@ impl<S: Source> Source for Fenced<S> {
         read_elsewhere(&self.lessee, repo, self.inner.contains(repo, tag, sha)).await
     }
 
+    async fn rerun_failed(&self, repo: &str, url: &str) -> Result<bool, SourceError> {
+        // A write: only in a repo this worker leases. Elsewhere it cannot
+        // re-run, and the failure becomes work as any other red does.
+        if !self.lessee.names(repo) {
+            return Ok(false);
+        }
+        self.lessee.check(Some(repo))?;
+        scoped(vec![repo.to_owned()], self.inner.rerun_failed(repo, url)).await
+    }
+
+    async fn check_log(
+        &self,
+        repo: &str,
+        url: &str,
+        max: usize,
+    ) -> Result<Option<String>, SourceError> {
+        read_elsewhere(&self.lessee, repo, self.inner.check_log(repo, url, max)).await
+    }
+
     async fn open_issue(
         &self,
         repo: &str,
