@@ -622,7 +622,7 @@ impl<T: Transport> Source for Github<T> {
             && let Some(to) = r
                 .headers
                 .get("location")
-                .filter(|l| l.starts_with("https://") || l.starts_with("http://"))
+                .filter(|l| l.starts_with("https://"))
         {
             res = self.call(Req::log(to.clone(), max, true)).await;
         }

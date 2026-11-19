@@ -237,6 +237,12 @@ impl Fake {
         self.push(by, Actor::Agent, record).expect("accepted");
     }
 
+    /// The tracker's own record, which must be accepted.
+    pub(crate) fn tracker(&self, record: WorkRecord) {
+        self.push("tracker", Actor::Tracker, record)
+            .expect("accepted");
+    }
+
     /// A person's record, which must be accepted.
     pub(crate) fn person(&self, record: WorkRecord) {
         self.push("gabriel", Actor::Person, record)

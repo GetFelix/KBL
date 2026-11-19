@@ -4,8 +4,6 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 
 use super::*;
-use crate::github::Github;
-use crate::source::Source;
 
 #[test]
 fn a_tail_keeps_the_last_bytes_of_every_chunk() {
@@ -70,15 +68,21 @@ async fn serve() -> String {
 }
 
 #[tokio::test]
-async fn a_job_log_is_streamed_through_the_redirect_as_bytes() {
+async fn a_job_log_is_streamed_from_its_signed_link_as_bytes() {
     let api = serve().await;
     let dir = std::env::temp_dir().join(format!("kbl-joblog-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("token"), "t0k3n").unwrap();
     let http = Reqwest::new(Token::File(dir.join("token"))).unwrap();
-    let gh = Github::new(&api, http, Vec::new());
-    let url = "https://github.com/GetFelix/felix/actions/runs/70/job/7001";
-    let log = gh.check_log("GetFelix/felix", url, 4096).await.unwrap();
+    let logs = format!("{api}/repos/GetFelix/felix/actions/jobs/7001/logs");
+    let res = http.send(Req::log(logs, 4096, false)).await.unwrap();
+    assert_eq!(res.status, 302);
+    // The adapter follows only https; the local server is plain http, so
+    // the signed link is read here as the adapter would read it.
+    let to = res.headers["location"].clone();
+    let res = http.send(Req::log(to, 4096, true)).await.unwrap();
+    assert_eq!(res.status, 200, "the signed link must not get the token");
+    let log = res.body.as_str().unwrap();
     assert!(log.len() <= 4096, "{}", log.len());
     assert!(log.ends_with("error: unused import\n"), "{log:?}");
     assert!(log.starts_with('é'), "{:?}", &log[..8]);

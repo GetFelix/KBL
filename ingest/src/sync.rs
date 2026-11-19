@@ -1018,10 +1018,13 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         match self.tracker.append(&record).await? {
             Appended::Written => {}
             Appended::Refused(why) if why == "duplicate" => {}
-            // Not remembered: a refusal such as `format` can pass after an upgrade.
+            // Only `format` can pass later, after the raise; any other refusal
+            // is remembered, or each poll would read the log again.
             Appended::Refused(why) => {
                 eprintln!("kbl-ingest: the failed check on {key} was refused: {why}");
-                return Ok(());
+                if why == "format" {
+                    return Ok(());
+                }
             }
         }
         if let Some(t) = p.state.items.get_mut(key) {
