@@ -1218,6 +1218,18 @@ What it does with GitHub:
   than `own_logins` (agents never merge their own work, a person does), and
   then closes the root as merged (`closed` with reason merged, which the
   ingest token may write only for a merged status of the item's own request).
+- **Known flaky checks.** A red check whose name and failure text match an
+  entry on the flake list ([below](#known-flaky-checks)) is re-run once
+  before it becomes work. The worker asks GitHub to re-run the failed jobs of
+  the check's workflow run and records the request as pending, not red, so
+  the item never goes to Needs you for it. When the re-run is green it
+  writes `flake_retried` (`passed: true`) and the item shows it; when the
+  check fails again it writes `flake_retried` (`passed: false`) and records
+  the red as usual. One re-run per commit: a push, or a check that is not
+  an Actions job (a commit status, another App), is never re-run. A check run
+  as cancelled is not a failure. If GitHub refuses (no `actions: write`, a run
+  too old to re-run) or the old failure is still shown after 10 polls, the red
+  is recorded as it would be without the list.
 - **Releases.** A merged root that an open item's link waits on for a release
   (`awaits_release` in `GET /v1/ingest/roots`) gets a `shipped` record once a
   published release carries its merge commit. The worker records the oldest
@@ -1527,6 +1539,36 @@ one; dropping it would free the waiter on unreleased work. Accepting a finished
 prerequisite applies from [format 5](upgrades.md#formats). If a person rejects
 or dismisses the prerequisite, the held item goes to Needs you as "dependency
 dropped".
+
+### Known flaky checks
+
+Many red checks are not the change's fault. A person keeps a list of known
+flakes, and ingest re-runs a matching failure once before it counts.
+
+| Route | Does |
+|---|---|
+| `GET /v1/work/flakes` (person token) | The list: name, check, pattern, tracking issue, and `hits` |
+| `POST /v1/work/flakes` `{flake, check, pattern?, issue}` (person token) | `flake_set`. Adds an entry or replaces the one with that name, keeping its hits |
+| `POST /v1/work/flakes/clear` `{flake}` (person token) | `flake_cleared` |
+
+`check` is the failed check's name as GitHub shows it. `pattern`, when given,
+must appear in the check's output (its title, summary and text, or a commit
+status's description); with none, any failure of that check matches. `issue` is
+the issue that tracks the flake. The list holds at most 100 entries, and the
+records are [format 22](upgrades.md#formats), so they are refused until the
+raise.
+
+Every re-run, passed or not, counts as a hit on its entry, so a flake that
+keeps firing is visible in the `hits` column and worth fixing. A passed
+re-run is also kept on the item as `flake_retried`, with the entry's issue.
+Matching reads the check's own output, not the job log; a failure that
+shows only in the log does not match yet.
+
+The GitHub credential needs Actions: write on the repo to re-run a job (a
+fine-grained token) or the `actions: write` App permission. Without it the
+re-run is refused and the check goes the normal way. Only requests the
+worker already reads for an item are re-run, never one of another source's
+roots.
 
 ### Prerequisites become upstream issues
 

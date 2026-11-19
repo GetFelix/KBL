@@ -445,11 +445,9 @@ impl<T: Transport> Source for Github<T> {
             let runs = (runs.status == 200).then_some(&runs.body);
             (status.checks, status.failing) =
                 check_state(runs, statuses.as_ref(), &self.own, required.as_ref());
+            failure.head = sha.to_owned();
             if let Some(f) = &status.failing {
-                failure = Failure {
-                    output: failing_output(runs, statuses.as_ref(), f),
-                    head: sha.to_owned(),
-                };
+                failure.output = failing_output(runs, statuses.as_ref(), f);
             }
         } else {
             status.checks = PrChecks::Pending;
@@ -595,7 +593,10 @@ impl<T: Transport> Source for Github<T> {
         };
         let out = self
             .call(Req::post(
-                format!("{}/repos/{repo}/actions/runs/{run}/rerun-failed-jobs", self.api),
+                format!(
+                    "{}/repos/{repo}/actions/runs/{run}/rerun-failed-jobs",
+                    self.api
+                ),
                 json!({}),
             ))
             .await?;

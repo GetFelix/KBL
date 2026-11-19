@@ -11,6 +11,7 @@ use crate::config::Tokens;
 use crate::felix::ConditionalWrite;
 use crate::teams::Team;
 
+mod flakes;
 mod metrics;
 mod org;
 mod root;

@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use kbl_core::names::ItemId;
+use kbl_core::names::{ItemId, Key};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -103,6 +103,29 @@ pub(crate) struct State {
     /// tracker ties them, so a lost write never opens a second issue.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) opened: BTreeMap<String, String>,
+    /// Failed checks ingest re-ran as a known flake, by upstream id (or
+    /// `source:id` for a foreign root), until the re-run settles.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) reruns: BTreeMap<String, Rerun>,
+}
+
+/// One flake re-run in progress, or already spent for this commit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Rerun {
+    pub(crate) pr: String,
+    /// The head commit that failed; a push starts over.
+    pub(crate) head: String,
+    pub(crate) check: String,
+    /// The failed check's link, which a re-run replaces.
+    pub(crate) url: String,
+    pub(crate) flake: Key,
+    /// The one re-run for this commit is used up: a later red goes the
+    /// normal way.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) spent: bool,
+    /// Polls that still showed the old failure after the re-run started.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) waits: u8,
 }
 
 /// What a merged root's release search has learned, so no request is repeated.

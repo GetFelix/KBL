@@ -197,6 +197,8 @@ different: the triaging agent posts it as a prerequisite, and the item waits on 
 and the board names where each blocker lives (its repo, else its source) when it differs from the row's repo. An item becomes claimable when its last
 dependency is done: the tracker folds `work.events` and publishes it to a ready stream for its priority tier.
 
+A failed check that matches the team's [flake list](docs/work-tracker.md#known-flaky-checks) is re-run once by ingest before it becomes work; a green re-run never reaches Needs you, and each entry counts its hits.
+
 Each agent runs `kbl-mcp` with its own token, and every work tool calls the tracker. `work_next` asks the
 tracker for the highest-priority ready item: the tracker claims it from the ready streams' consumer group as a
 member named after the agent and logs the claim in the same step. Roots take turns in a tier, `work_next` can be narrowed by kind, tier, repo, excluded roots, milestone, label, type, area or size, and `work_peek` lists what it would hand out next without claiming. Both skip an item a person blocked until a time or on a named resource (`block_item`, `lift_block`, and `lift_resource` for every block on one named resource; [work tracker](docs/work-tracker.md#blocking-an-item)). An item can need something only some agents have (`needs`, set by triage, a person or an intake rule); an agent passes `capabilities` on `work_next` and `work_peek` and is handed only work it can do ([work tracker](docs/work-tracker.md#what-the-work-needs-and-what-an-agent-can-do)). A person can relate two items (`relate_items`; [work tracker](docs/work-tracker.md#related-items)) so they are scheduled together, and neither waits on the other. `kbl-mcp` extends the claim every 30

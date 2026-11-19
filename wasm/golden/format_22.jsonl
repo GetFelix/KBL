@@ -1,0 +1,8 @@
+{"v":22,"at_ms":1000,"by":"gabriel","actor":"person","kind":"format_raised","to":22}
+{"at_ms":1010,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"run the perf matrix"}
+{"at_ms":1020,"by":"gabriel","actor":"person","kind":"accepted","item":"r1"}
+{"v":22,"at_ms":1030,"by":"gabriel","actor":"person","kind":"flake_set","flake":"lint-timeout","check":"lint","pattern":"timed out","issue":"GetFelix/felix#9"}
+{"v":22,"at_ms":1040,"by":"ingest","actor":"tracker","kind":"flake_retried","item":"r1","flake":"lint-timeout","check":"lint","passed":false}
+{"v":22,"at_ms":1050,"by":"ingest","actor":"tracker","kind":"flake_retried","item":"r1","flake":"lint-timeout","check":"lint","passed":true}
+{"v":22,"at_ms":1060,"by":"ingest","actor":"tracker","kind":"flake_retried","item":"r1","flake":"gone","check":"lint","passed":true}
+{"v":22,"at_ms":1070,"by":"w1","actor":"agent","kind":"flake_set","flake":"agent-made","check":"unit","issue":"GetFelix/felix#9"}

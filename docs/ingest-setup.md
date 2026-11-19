@@ -101,7 +101,7 @@ What the source credential needs:
 
 | Source | Always | Only when a rule sets it |
 |---|---|---|
-| GitHub | Read access to issues and pull requests on each rule's `repo` | `open_prerequisites`: issues write on that repo. Drafting an agent's pull request after its issue is dropped: pull requests write |
+| GitHub | Read access to issues and pull requests on each rule's `repo` | `open_prerequisites`: issues write on that repo. Drafting an agent's pull request after its issue is dropped: pull requests write. Re-running a failed check on the [flake list](work-tracker.md#known-flaky-checks): Actions write (the `actions: write` App permission) |
 | Jira | Browse projects on each rule's project | `comment`: add comments. `link_pr`: link issues. `transition_on_pr` or `transition_on_merge`: transition issues |
 | Azure DevOps | Work Items (Read) on each rule's project | `comment`, `link_pr`, `transition_on_pr` or `transition_on_merge`: Work Items (Read & write) |
 | GitLab | A token with `read_api` and a role in each rule's project | `comment`, `transition_on_pr`, `transition_on_merge`: the `api` scope and the Reporter role or higher. `open_prerequisites`: `api` and Guest or higher |

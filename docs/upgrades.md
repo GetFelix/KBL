@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 21.
+is 22.
 
 ### Formats
 
@@ -94,6 +94,7 @@ is 21.
 | 19 | Upstream `labels` and `milestone` on `imported` and on an `edited` the tracker writes for ingest; `item_type`, `area` and `size` on `triaged`, on a person's `edited` and on an `edited` a rule's label map writes; a `vocabulary` on `rules_set`. The fold keeps them on the item, refuses a type or area outside the team's vocabulary (`bad_class`; sizes default to S, M and L) and never lets triage or a rule replace a person's value ([work tracker](work-tracker.md#labels-milestone-type-area-and-size)) | Until the raise, ingest imports an issue without its labels and milestone and writes them as an edit after the raise, and `POST /v1/work/classify` and a vocabulary are refused with `format`. A reader below 19 stops at the first record that uses a new field, so it never claims against a filter it cannot read |
 | 20 | `needs` on `triaged` and on an `edited` (a person's, or the tracker's for an intake rule's `label_needs`), a `needs` list in a `rules_set` vocabulary, and `resource_lifted`: one record that ends every block still holding on a named resource. The fold keeps a root's needs with who chose them, refuses a value outside the vocabulary (`bad_class`), and `work_next` and `work_peek` hand an agent only work whose needs its declared `capabilities` cover ([work tracker](work-tracker.md#what-the-work-needs-and-what-an-agent-can-do)) | Until the raise, `needs`, a vocabulary with needs and `POST /v1/work/lift-resource` are refused with `format`, and a call with `capabilities` is as before because no item needs anything. A reader below 20 stops at the first such record, so it never hands out an item against needs it cannot read |
 | 21 | Delegated workers: `worker_started` and `worker_stopped`, and `sup` (the supervisor) on every record a worker writes. The fold refuses a worker record without its live supervisor, a worker that starts workers, and a name or token hash used before (`bad_worker`, `duplicate`) ([supervise](design/supervise.md)) | Until the raise, `POST /v1/work/workers` is refused with `format`, so no worker token exists. A reader below 21 stops at the raise |
+| 22 | The flake list and its re-runs: `flake_set` and `flake_cleared` (a person) and `flake_retried` (ingest). The fold keeps entries by name with a hit count, and records a passed re-run on the item; it refuses a re-run of an entry that is not on the list (`bad_flake`) ([work tracker](work-tracker.md#known-flaky-checks)) | Until the raise, `POST /v1/work/flakes` and `POST /v1/work/flakes/clear` are refused with `format`, so the list stays empty and no check is re-run. A reader below 22 stops at the raise |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, now 2. It follows the same rules. An org admin raises it with `POST /v1/org/records` and `{"record": {"kind": "format_raised", "to": 2}}`; a reader below the new format stops at the raise.
 
