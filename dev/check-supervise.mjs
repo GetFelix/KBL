@@ -114,11 +114,16 @@ try {
   );
   check(starts.every((r) => !JSON.stringify(r).includes("kblw_")), "no worker token is on the log");
 
-  const ended = workLog().filter((r) => r.kind === "worker_finished");
+  // A worker reports done only after its queue stays empty for two waits, which is after the last item is done.
+  const finishes = () => workLog().filter((r) => r.kind === "worker_finished");
+  const starts_n = workLog().filter((r) => r.kind === "worker_started" && r.by === "sup").length;
+  for (let waited = 0; finishes().length < starts_n && waited < 30; waited++) await sleep(1000);
+  const ended = finishes();
   check(
-    ended.length > 0 && ended.every((r) => r.by.startsWith("sup-w") && r.sup === "sup" && r.actor === "agent"),
+    ended.length === starts_n && ended.every((r) => r.by.startsWith("sup-w") && r.sup === "sup" && r.actor === "agent"),
     `each worker that ran out of work logged worker_finished for itself: ${JSON.stringify(ended.map((r) => [r.by, r.sup]))}`,
   );
+  finished.push(...(await sup.tool("supervise_status", {})).finished);
   check(finished.length >= ended.length, `the supervisor saw the finished workers: ${JSON.stringify(finished)}`);
 
   const stopped = await sup.tool("supervise_stop", { all: true });

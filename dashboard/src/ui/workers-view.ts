@@ -72,7 +72,7 @@ export function workersView(on: WorkersHandlers) {
     const key = supervisor ?? '*';
     const noun = `${names.length} ${names.length === 1 ? 'worker' : 'workers'}`;
     if (confirming !== key) {
-      return h('button', { type: 'button', class: 'button ghost', 'data-stop-all': key, disabled: busy, onclick: () => ((confirming = key), draw(true)) }, label);
+      return h('button', { type: 'button', class: 'button ghost', 'data-stop-all': key, disabled: busy, onclick: () => ((confirming = key), (message = ''), draw(true)) }, label);
     }
     return h('span', { class: 'stop-confirm' },
       h('span', { class: 'small' }, `Stop ${noun}? Each token stops working and what it holds goes back.`),
@@ -112,7 +112,7 @@ export function workersView(on: WorkersHandlers) {
     const now = on.now();
     const gs = groups(rows, items);
     // A live record that changes nothing shown must not rebuild the dialog and drop the keyboard focus.
-    const key = JSON.stringify([gs, confirming, message, busy, on.canStop()]);
+    const key = JSON.stringify([gs, confirming, message, busy, on.canStop(), Math.floor(now / 15_000)]);
     if (!force && key === drawn) return;
     drawn = key;
     status.textContent = message;
@@ -129,7 +129,7 @@ export function workersView(on: WorkersHandlers) {
       gs.length > 1 ? stopAll(gs, null, `Stop every live worker (${liveCount(gs)})`) : null,
       ...gs.map((g) => group(g, gs, s, now)),
       status,
-      h('p', { class: 'muted small spend-note' }, 'A stop ends the worker at once: its token stops working and the item it holds goes back without costing a try. A worker that reported it finished shows Finished.'),
+      h('p', { class: 'muted small spend-note' }, 'A stop ends the worker at once: its token stops working and the item it holds goes back without costing a try; Releasing is the moment between the stop and that release. A worker that reported it finished shows Finished.'),
     ];
     m.body.replaceChildren(...parts.filter((n): n is Node => n !== null));
     if (!wasOpen) return;
@@ -141,6 +141,10 @@ export function workersView(on: WorkersHandlers) {
   return {
     el: m.el,
     isOpen: m.isOpen,
+    /** Redraws in place if open, so ages keep up between records. */
+    tick() {
+      if (m.isOpen()) draw();
+    },
     /** Draws the groups, or a loading note when `rows` is null, and opens the dialog; if it is open, a live record redraws it in place. */
     open(rows: readonly WorkerRow[] | null, items: readonly ItemRow[], s: ViewState) {
       if (rows === null) {
@@ -157,6 +161,7 @@ export function workersView(on: WorkersHandlers) {
         return;
       }
       const wasOpen = m.isOpen();
+      if (!wasOpen) message = '';
       last = { rows, items, s };
       draw();
       if (wasOpen) return;

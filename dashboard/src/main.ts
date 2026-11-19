@@ -598,7 +598,7 @@ store.subscribe((s) => {
   if (readActivity) store.dispatch({ type: 'activity', activity: readActivity() });
 });
 // "Last active 3 min ago" ages without a record; redraw in place so it keeps up.
-setInterval(() => ui.render(store.get()), 30_000);
+setInterval(() => (ui.render(store.get()), workersBox.tick()), 30_000);
 paint(initial);
 
 document.addEventListener('keydown', (e) => {

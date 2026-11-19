@@ -65,10 +65,13 @@ test('a group is a supervisor with live workers first, and says how the pool end
   assert.deepEqual(liveNames(gs, 'nobody'), []);
 });
 
-test('a stopped or finished worker no longer holds, and a worker that holds a missing item still shows it', () => {
+test('a worker that holds a missing item still shows it, and an ended worker is Releasing while it still holds', () => {
   const row = (o: Partial<WorkerRow>): WorkerRow => ({ worker: 's-a', supervisor: 's', vendor: null, profile: null, model: null, started_ms: 1, stopped_ms: null, finished: false, holds: null, ...o });
   const [g] = groups([row({ holds: { item: 'gone', attempt: 2 } })], []);
   assert.deepEqual(g.workers[0].hold, { item: 'gone', attempt: 2, title: null, stage: null, active_ms: null });
+  assert.equal(stateOf(row({ stopped_ms: 5, holds: { item: 'gone', attempt: 2 } })), 'releasing');
+  assert.equal(stateOf(row({ stopped_ms: 5, finished: true, holds: { item: 'gone', attempt: 2 } })), 'releasing');
+  assert.deepEqual(liveNames(groups([row({ stopped_ms: 5, holds: { item: 'gone', attempt: 2 } })], []), null), [], 'a releasing worker is not stopped again');
   assert.equal(stateOf(row({ stopped_ms: 5, finished: true })), 'finished');
   assert.equal(stateOf(row({ stopped_ms: 5 })), 'stopped');
 });

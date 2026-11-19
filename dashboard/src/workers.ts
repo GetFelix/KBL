@@ -18,8 +18,8 @@ export interface WorkerRow {
   holds: { item: string; attempt: number } | null;
 }
 
-/** How a worker stands: running with an item, running with nothing, or over. */
-export type WorkerState = 'working' | 'idle' | 'finished' | 'stopped';
+/** How a worker stands: running with an item, running with nothing, over but its hold not yet given back, or over. */
+export type WorkerState = 'working' | 'idle' | 'releasing' | 'finished' | 'stopped';
 
 /** What a worker holds, with the item's recorded title, stage and last write. */
 export interface Hold {
@@ -50,17 +50,20 @@ export function workers(fold: { workersJson(): string }): WorkerRow[] {
 
 export function stateOf(w: WorkerRow): WorkerState {
   if (w.stopped_ms === null) return w.holds ? 'working' : 'idle';
+  // The stop or finish is logged and the release follows; until it lands the item is still held.
+  if (w.holds) return 'releasing';
   return w.finished ? 'finished' : 'stopped';
 }
 
 export const STATE_TEXT: Readonly<Record<WorkerState, string>> = {
   working: 'Working',
   idle: 'Idle',
+  releasing: 'Releasing',
   finished: 'Finished',
   stopped: 'Stopped',
 };
 
-const RANK: Readonly<Record<WorkerState, number>> = { working: 0, idle: 1, finished: 2, stopped: 3 };
+const RANK: Readonly<Record<WorkerState, number>> = { working: 0, idle: 1, releasing: 2, finished: 3, stopped: 4 };
 
 /** `anthropic · sonnet`, from the fields the supervisor recorded when it started the worker; empty when none. */
 export function launchText(w: Pick<WorkerRow, 'vendor' | 'profile' | 'model'>): string {
