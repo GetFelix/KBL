@@ -190,6 +190,7 @@ try {
 
     await press(page, 'k', MOD);
     check(await focused('.palette-input'), `${theme}: ${MOD_NAME}+K opens the palette with focus in its input`);
+    check((await page.eval(`[...document.querySelectorAll('.palette-section')].filter((s) => s.textContent === 'Command').length`)) === 1, `${theme}: the palette names the kind once for a run of commands`);
     await axe(`palette ${theme}`);
     await shoot(`palette-${theme}`);
     await press(page, 'Escape');
@@ -732,6 +733,7 @@ try {
   await open(connected, { width: 390, height: 844 });
   await page.waitFor(live);
   await axe('phone');
+  check(await page.eval(`[...document.querySelectorAll('.row-title')].every((t) => t.clientWidth >= 150 && t.scrollWidth <= t.clientWidth + 1 || t.getClientRects().length === 0 || t.clientHeight > 20)`), 'on a phone, a row keeps room for its title (its details go under it)');
   await shoot('phone-dark');
   await press(page, 'End');
   await press(page, 'Enter');

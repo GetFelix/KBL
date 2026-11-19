@@ -94,7 +94,8 @@ export function paletteView(getState: () => ViewState, on: PaletteHandlers, mac:
             }
           },
         },
-          h('span', { class: 'palette-section' }, e.section === 'Items' ? 'Item' : 'Command'),
+          // The kind is said once per run of rows, as section headings do elsewhere.
+          h('span', { class: 'palette-section', 'aria-hidden': i > 0 && shown[i - 1]!.section === e.section ? 'true' : undefined }, i > 0 && shown[i - 1]!.section === e.section ? '' : e.section === 'Items' ? 'Item' : 'Command'),
           h('span', { class: 'palette-label' }, e.label),
           e.hint ? h('span', { class: 'palette-hint' }, e.hint) : null,
           cmd?.keys[0] ? kbd(displayChord(cmd.keys[0], mac)) : null,
