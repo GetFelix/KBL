@@ -3,8 +3,8 @@ name: kbl
 description: The KBL work tracker, its dashboard and optionally the ingest worker. Felix is installed separately.
 type: application
 # Both move with the workspace version; scripts/lint.mjs fails when they drift.
-version: 0.2.0
-appVersion: 0.2.0
+version: 0.2.1
+appVersion: 0.2.1
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/GetFelix/KBL
 sources:

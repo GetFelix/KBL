@@ -65,11 +65,11 @@ dev/quickstart.sh
 the stack can pull them instead of building:
 
 ```bash
-KBL_IMAGE_TAG=v0.1.0 dev/quickstart.sh
+KBL_IMAGE_TAG=v0.2.1 dev/quickstart.sh
 ```
 
 With `KBL_IMAGE_TAG` set, the script never builds. It refuses a checkout whose version differs from the tag
-("check out v0.1.0, or unset KBL_IMAGE_TAG to build") and prints at the start whether it is pulling or building.
+("check out v0.2.1, or unset KBL_IMAGE_TAG to build") and prints at the start whether it is pulling or building.
 
 Download `kbl-mcp`, `kbl-tool` and `kbl-ingest` from the same release ([Getting the binaries](#getting-the-binaries)).
 The images exist only after the first tag. The tracker, dashboard and every `dev/*.mjs` script need only Node and the
@@ -347,7 +347,7 @@ binaries on your `PATH`. Each archive and `SHA256SUMS` carry a signed attestatio
 them; `gh attestation verify` (GitHub CLI 2.49 or later) checks it, and `SHA256SUMS` catches a corrupt download:
 
 ```bash
-tag=v0.1.0   # the release you want
+tag=v0.2.1   # the release you want
 target=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
 base=https://github.com/GetFelix/KBL/releases/download/$tag
 curl -fLO "$base/kbl-$tag-$target.tar.gz" -O "$base/SHA256SUMS"

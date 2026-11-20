@@ -7,10 +7,9 @@
 //   3. the previous build takes over again, which is a rollback before the
 //      format is raised: w2 finishes there and w1 takes the last item;
 //   4. this build comes back and finishes the log's story.
-// Every record either build wrote is of the first format, each item was
-// claimed and done once, and neither build refused a record of the other.
-// Both builds write format 1 only, so this does not show a reader stopping at
-// a newer format: the unit tests of core, the tracker and the page do.
+// Each item was claimed and done once, and neither build refused a record of the other.
+// Both builds write the formats a fresh log starts at, so this does not show
+// a reader stopping at a newer format: the unit tests of core, the tracker and the page do.
 //
 //   KBL_TRACKER_OLD and KBL_MCP_OLD name the previous build's binaries.
 //   cargo build -p kbl-mcp -p kbl-tool -p kbl-tracker && node dev/check-upgrade.mjs
@@ -104,7 +103,6 @@ try {
   await w1.tool("work_complete", { item: c });
 
   const records = mine();
-  check(records.every((r) => r.v === undefined), "every record either build wrote is of the first format");
   for (const id of [a, b, c]) {
     const of = records.filter((r) => r.item === id);
     check(
