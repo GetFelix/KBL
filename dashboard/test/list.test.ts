@@ -148,6 +148,7 @@ test('a root the policy accepted says which rule did, and a person-accepted one 
   assert.equal(admissionNote({ root: true, admitted_by: null }), null);
   assert.equal(admissionNote({ root: false, admitted_by: 'routine' }), null);
   assert.equal(triageChip({ root: true, triage: 'done', admitted_by: null }), 'Triage: done');
+});
 
 test('the sidebar count is what the list shows, with sub-tasks counted beside it', () => {
   const items = [
