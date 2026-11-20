@@ -152,8 +152,7 @@ export async function startTracker(tokens, extraEnv = {}, bin = TRACKER) {
   const dir = mkdtempSync(join(tmpdir(), "tracker-"));
   const tokensFile = join(dir, "tokens.json");
   writeFileSync(tokensFile, JSON.stringify(tokens), { mode: 0o600 });
-  const child = spawn(bin, [], {
-    env: withLegacyNames({
+  const env = {
       ...process.env,
       KBL_TRACKER_TOKENS_FILE: tokensFile,
       KBL_TRACKER_LISTEN: TRACKER_ADDR,
@@ -161,10 +160,13 @@ export async function startTracker(tokens, extraEnv = {}, bin = TRACKER) {
       KBL_TRACKER_LEASE_TTL_MS: "3000",
       // The tracker's default review limit (3) would pause fix claims partway through a check that finishes many fixes.
       KBL_REVIEW_LIMIT: "0",
+      // The checks were written for a log that starts at format 1 and raise it themselves;
+      // "current" asks for the tracker's own default, a log that starts at the current format.
+      KBL_FRESH_LOG_FORMAT: "1",
       ...extraEnv,
-    }),
-    stdio: ["ignore", "inherit", "inherit"],
-  });
+  };
+  if (env.KBL_FRESH_LOG_FORMAT === "current") delete env.KBL_FRESH_LOG_FORMAT;
+  const child = spawn(bin, [], { env: withLegacyNames(env), stdio: ["ignore", "inherit", "inherit"] });
   running.add(child);
   const exited = new Promise((resolve) => child.on("exit", () => resolve()));
   for (let tries = 0; ; tries++) {

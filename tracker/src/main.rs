@@ -147,6 +147,10 @@ struct Cli {
     /// Live delegated workers a team may have, over all its supervisors.
     #[arg(long, env = "KBL_MAX_TEAM_WORKERS", default_value_t = 32)]
     max_team_workers: usize,
+    /// The format a work log with no records starts at. Dev-stack checks set 1
+    /// to exercise the older behaviour; a person has no reason to.
+    #[arg(long, env = "KBL_FRESH_LOG_FORMAT", default_value_t = kbl_core::work::FORMAT, hide = true)]
+    fresh_log_format: u32,
     /// Exit after polling a ready item and before logging its claim. For the dev-stack check.
     #[arg(long, env = "KBL_TRACKER_CRASH_AFTER_POLL", hide = true)]
     crash_after_poll: bool,
@@ -252,6 +256,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
     let snapshot_every = cli.snapshot_every;
     let assignee_away = Duration::from_secs(cli.assignee_away_secs);
     let (max_workers, max_team_workers) = (cli.max_workers, cli.max_team_workers);
+    let fresh_format = cli.fresh_log_format.min(kbl_core::work::FORMAT);
     let base = target(cli, "");
     Arc::new(move |team: TeamName| {
         let mut target = base.clone();
@@ -278,7 +283,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             assignee_away,
             max_workers,
             max_team_workers,
-            fresh_format: kbl_core::work::FORMAT,
+            fresh_format,
         };
         Box::pin(async move {
             let felix = felix::connect(target, Kind::Team).await?;

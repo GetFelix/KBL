@@ -63,7 +63,7 @@ const felix = await felixToken();
 createRun(RUN, "supervise check");
 // A log that holds nothing yet starts at the current format, so supervise needs no raise by hand.
 const fresh = workLog().length === 0;
-const tracker = await startTracker(tokens, { KBL_CLAIM_VISIBILITY_MS: "8000" });
+const tracker = await startTracker(tokens, { KBL_CLAIM_VISIBILITY_MS: "8000", KBL_FRESH_LOG_FORMAT: "current" });
 try {
   if (fresh) {
     const at = workLog().reduce((n, r) => (r.kind === "format_raised" ? Math.max(n, r.to) : n), 1);
