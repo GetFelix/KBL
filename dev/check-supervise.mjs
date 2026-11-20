@@ -53,7 +53,8 @@ vendor = "fake"
 model = "scripted"
 mcp_config = "json"
 pass_env = ["PATH"]
-set_env = { FAKE_WORKER_CONFIG_ROOT = ${JSON.stringify(join(dir, "state"))}, FAKE_WORKER_FINISH = "1" }
+set_env = { FAKE_WORKER_CONFIG_ROOT = ${JSON.stringify(join(dir, "state"))}, FAKE_WORKER_FINISH = "1", FAKE_WORKER_SEEN_DIR = ${JSON.stringify(join(dir, "seen"))} }
+git_identity = { name = "Fake Worker", email = "fake-worker@example.test" }
 command = [${JSON.stringify(process.execPath)}, ${JSON.stringify(resolve("dev/fake-worker.mjs"))}, "{mcp_config_path}"]
 `,
   { mode: 0o600 },
@@ -116,6 +117,11 @@ try {
     `each completion names a worker and its supervisor: ${JSON.stringify(completed.map((r) => [r.by, r.sup]))}`,
   );
   const starts = workLog().filter((r) => r.kind === "worker_started" && r.by === "sup");
+  const seen = readdirSync(join(dir, "seen")).map((f) => readFileSync(join(dir, "seen", f), "utf8"));
+  check(
+    seen.length > 0 && seen.every((t) => t === "fake-worker@example.test|fake-worker@example.test"),
+    `each worker process saw the configured git identity: ${JSON.stringify(seen)}`,
+  );
   check(
     starts.every((r) => r.vendor === "fake" && r.profile === "fake" && r.model === "scripted"),
     "each worker records its vendor, profile and model",
