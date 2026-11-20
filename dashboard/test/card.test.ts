@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ago, blockText, chipText, childIndex, lead, properties, reasonLine, relatedLine, summarize, upstreamRef, upstreamUrl, workingLine } from '../src/card.ts';
+import { ago, blockText, chipText, childIndex, lead, parsePr, properties, reasonLine, relatedLine, summarize, upstreamRef, upstreamUrl, workingLine } from '../src/card.ts';
 import type { ItemRow } from '../src/fold.ts';
 
 const root: ItemRow = { id: 'g0378517ddd9edf0f', title: 'Reads miss', stage: 'ready', upstream: 'GetFelix/felix#1694', source: 'github', root: true };
@@ -82,4 +82,11 @@ test('a related item is named on both cards and is not a reason the card waits',
   assert.equal(relatedLine({ related: [] }, [a, b]), null);
   assert.equal(reasonLine(a, undefined), '', 'a relation is not a wait');
   assert.equal(relatedLine({ related: ['w', 'x', 'y', 'z', 'q'] }, []), 'Related: w, x, y and 2 more');
+});
+
+test('a pull request address reads owner/repo#N, never a URL after a hash', () => {
+  assert.deepEqual(parsePr('https://github.com/GetFelix/felix/pull/2859'), { label: 'GetFelix/felix#2859', url: 'https://github.com/GetFelix/felix/pull/2859' });
+  assert.deepEqual(parsePr('GetFelix/felix#2300'), { label: '#2300', url: 'https://github.com/GetFelix/felix/pull/2300' });
+  assert.equal(parsePr('not a reference').url, null);
+  assert.equal(properties({ ...root, pr: 'https://github.com/GetFelix/felix/pull/2859' }).at(-1), 'PR GetFelix/felix#2859');
 });

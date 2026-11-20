@@ -367,11 +367,17 @@ try {
   check(await page.eval(`!document.querySelector('.card[data-id=rev-2300]')`), 'a review child is not a card of its own');
   check(await page.eval(`document.querySelector('.card[data-id=gh-2300] .card-lead').textContent === 'felix#2300'`), 'a card leads with the upstream reference, not the KBL id');
   check(await page.eval(`document.querySelector('[data-chip=gh-2300]')?.textContent.includes('1 sub-task, 1 done')`), 'the root carries a sub-task count and progress chip');
+  await shoot('children-collapsed-dark');
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
+  await page.waitFor(`!document.querySelector('#children-gh-2300').hidden`);
+  check(await page.eval(`(() => { const l = [...document.querySelectorAll('#children-gh-2300 .child-link')]; return l.length > 0 && l.every((a) => { const st = a.querySelector('.child-state'); return st.getClientRects().length === 1 && st.getBoundingClientRect().height < 30 && a.getBoundingClientRect().height < 60 && !a.textContent.includes('gh-2300'); }); })()`), 'an expanded sub-task is one line: kind, state chip on one line, no repeat of the parent');
+  await shoot('children-expanded-dark');
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
   check(await page.eval(`document.querySelector('[data-chip=gh-2300]').getAttribute('aria-expanded') === 'false'`), 'the chip starts closed');
   // A script click does not focus a button the way a real one does, so focus first.
   await page.eval(`document.querySelector('[data-chip=gh-2300]').focus(); document.querySelector('[data-chip=gh-2300]').click(); true`);
   await page.waitFor(`document.querySelector('[data-chip=gh-2300]')?.getAttribute('aria-expanded') === 'true'`);
-  check(await page.eval(`document.querySelector('#children-gh-2300 .child-link').textContent.includes('Review the cache fix')`), 'the chip opens the children as links');
+  check(await page.eval(`document.querySelector('#children-gh-2300 .child-link').textContent.includes('Review') && document.querySelector('#children-gh-2300 .child-link').title.includes('Review the cache fix')`), 'the chip opens the children as links');
   check(await focused('[data-chip=gh-2300]'), 'the chip keeps the focus when it opens');
   // Opening a child from its root's chip must leave the selection on a card that is drawn.
   await page.eval(`document.querySelector('#children-gh-2300 .child-link').click(); true`);
@@ -719,6 +725,7 @@ try {
   await open(connected, { mode: 'forbidden' });
   await page.waitFor(`document.querySelector('.status')?.dataset.tone === 'error'`);
   check(await page.eval(`!!document.querySelector('[role=alert] button') && document.querySelector('[role=alert]').textContent.includes('sign-in link')`), 'a rejected token stops with a reason, the sign-in hint and a Reload button');
+  check(await page.eval(`(() => { const p = [...document.querySelectorAll('[role=alert] p')]; return p[0].textContent === 'Your session ended.' && !/signed_out/.test(p[0].textContent) && p.some((x) => x.dataset.stopDetail !== undefined && x.textContent.startsWith('signed_out')) && !document.querySelector('.status').textContent.includes('signed_out'); })()`), 'a rejected token says the session ended and keeps the raw code in a details line');
   await axe('stopped');
   await shoot('error-dark');
 
@@ -732,8 +739,44 @@ try {
   await axe('unreachable');
   await shoot('unreachable-dark');
 
+  // The same sub-task rows in the list.
+  await open(connected);
+  await page.waitFor(live);
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
+  await page.waitFor(`!document.querySelector('#children-gh-2300').hidden`);
+  check(await page.eval(`(() => { const l = [...document.querySelectorAll('#children-gh-2300 .child-link')]; return l.length > 0 && l.every((a) => { const st = a.querySelector('.child-state'); return st.getClientRects().length === 1 && st.getBoundingClientRect().height < 30 && a.getBoundingClientRect().height < 60; }); })()`), 'in the list, an expanded sub-task is one line with its state chip on one line');
+  await shoot('children-list-expanded-dark');
+  // The item panel with a linked pull request and child work.
+  await page.eval(`document.querySelector('.row[data-id=gh-2300]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-ref')?.textContent === 'felix#2300'`);
+  check(await page.eval(`document.querySelector('.panel-head .row-id').textContent === 'gh-2300'`), 'the panel header leads with the upstream reference and keeps the item id beside it');
+  check(await page.eval(`(() => { const a = document.querySelector('.linked-work a[data-focus=pr-link]'); return !!a && !/#https?:/.test(a.textContent) && a.textContent.startsWith('PR #2300'); })()`), 'the pull request reads PR #N and links out');
+  check(await page.eval(`(() => { const a = document.querySelector('.linked-work .child-link'); return !!a && a.querySelector('.child-state').getClientRects().length === 1 && a.getBoundingClientRect().height < 60 && !a.textContent.includes('Review the cache fix'); })()`), 'the panel lists child work as a compact row, without the parent title repeated');
+  check(await page.eval(`![...document.querySelectorAll('.panel dd')].some((d) => /triage:/i.test(d.textContent))`), 'the stage does not lead with triage while a pull request is linked');
+  await shoot('panel-linked-dark');
+  clean();
+
+  // Board with the item panel open: the columns keep their width and the board scrolls under the panel.
+  await open(`${connected}&layout=board`);
+  await page.waitFor(live);
+  await page.waitFor(`!!document.querySelector('.board .column')`);
+  check(await page.eval(`getComputedStyle(document.querySelector('.save-view')).borderTopWidth !== '0px' && getComputedStyle(document.querySelector('.filter-toggle')).display === 'none'`), 'Save view is a bordered button on a desktop and the Filters button is a phone-only control');
+  await page.eval(`document.querySelector('.board .card').click(); true`);
+  await page.waitFor(`!document.querySelector('.panel').hidden`);
+  check(await page.eval(`(() => { const b = document.querySelector('.board'); const cols = [...b.querySelectorAll('.column')]; return b.clientWidth > 1000 && cols.every((c) => c.getBoundingClientRect().width >= 230) && b.scrollWidth > b.clientWidth - 1; })()`), 'with the item panel open, board columns keep their width and the board spans the page');
+  await page.eval(`document.querySelector('.board').scrollLeft = 9999; true`);
+  check(await page.eval(`(() => { const last = [...document.querySelectorAll('.board .column')].at(-1).getBoundingClientRect(); return last.right <= document.querySelector('.panel').getBoundingClientRect().left + 1; })()`), 'the last column scrolls clear of the open panel');
+  await shoot('board-panel-dark');
+  clean();
+
   await open(connected, { width: 390, height: 844 });
   await page.waitFor(live);
+  const phoneFilters = await page.eval(`JSON.stringify((() => { const t = document.querySelector('.filter-toggle'); return { toggle: getComputedStyle(t).display, expanded: t.getAttribute('aria-expanded'), filters: getComputedStyle(document.querySelector('.filters')).display, save: document.querySelector('.save-view').getClientRects().length, rowTop: Math.round(document.querySelector('.row').getBoundingClientRect().top) }; })())`);
+  const pf = JSON.parse(phoneFilters);
+  check(pf.toggle !== 'none' && pf.expanded === 'false' && pf.filters === 'none' && pf.save === 0 && pf.rowTop < 330, `on a phone the filters fold behind one button and the list starts near the top (${phoneFilters})`);
+  await page.eval(`document.querySelector('.filter-toggle').click(); true`);
+  check(await page.eval(`document.querySelector('.filter-toggle').getAttribute('aria-expanded') === 'true' && getComputedStyle(document.querySelector('.filters')).display !== 'none' && document.querySelector('.save-view').getClientRects().length > 0`), 'the Filters button opens the selects and Save view');
+  await page.eval(`document.querySelector('.filter-toggle').click(); true`);
   await axe('phone');
   check(await page.eval(`[...document.querySelectorAll('.row-title')].every((t) => t.clientWidth >= 150 && t.scrollWidth <= t.clientWidth + 1 || t.getClientRects().length === 0 || t.clientHeight > 20)`), 'on a phone, a row keeps room for its title (its details go under it)');
   await shoot('phone-dark');
@@ -1007,6 +1050,7 @@ try {
     check(rows === 'sup-a:working sup-b:idle sup-c:finished sup-d:stopped', `workers: one group, live workers first, finished and stopped kept (${rows})`);
     check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a] a[data-item=wk-1]')?.textContent === 'wk-1 Held by a worker'`), 'workers: a working worker names the item it holds');
     check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a]').textContent.includes('anthropic · sonnet') && document.querySelector('dialog.workers tr[data-worker=sup-c]').textContent.includes('finished')`), 'workers: the recorded launch fields and the finish show');
+    check(await page.eval(`(() => { const t = (n) => document.querySelector('dialog.workers tr[data-worker=' + n + ']').textContent; return !/not recorded|None/.test(t('sup-c') + t('sup-d')) && t('sup-c').includes('Nothing held') && t('sup-d').includes('Nothing held'); })()`), 'workers: a finished or stopped worker with nothing recorded shows no filler and Nothing held');
     await axe('workers');
     await shoot('workers-dark');
     await page.eval(`document.querySelector('dialog.workers [data-stop=sup-a]').click(); true`);

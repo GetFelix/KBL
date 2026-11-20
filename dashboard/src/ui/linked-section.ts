@@ -2,9 +2,9 @@
 // recorded, and what this item waits on or holds back. Each id opens that item.
 import { linked, type Activities } from '../activity.ts';
 import { blockerLines, blockerNote } from '../fold.ts';
-import { prText } from '../card.ts';
+import { parsePr, prText } from '../card.ts';
 import type { ItemRow } from '../fold.ts';
-import { stageLabel } from '../list.ts';
+import { childLink } from './child-strip.ts';
 import type { ViewState } from '../state.ts';
 import { h } from './dom.ts';
 import { itemHref } from './item-list.ts';
@@ -30,9 +30,9 @@ export function prLink(item: ItemRow): Node | null {
   const t = prText(item);
   if (!t) return null;
   const text = item.failing_check ? `${t}: ${item.failing_check}` : t;
-  const m = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(item.pr ?? '');
-  return m && item.source === 'github'
-    ? h('a', { 'data-focus': 'pr-link', href: `https://github.com/${m[1]}/${m[2]}/pull/${m[3]}`, target: '_blank', rel: 'noopener noreferrer' }, text)
+  const url = item.pr ? parsePr(item.pr).url : null;
+  return url && (item.source === 'github' || /^https?:/.test(item.pr ?? ''))
+    ? h('a', { 'data-focus': 'pr-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, text)
     : document.createTextNode(text);
 }
 
@@ -48,8 +48,8 @@ export function linkedSection(item: ItemRow, s: ViewState, acts: Activities, on:
   return h('section', { class: 'linked-work', 'aria-labelledby': 'linked-title' },
     h('h3', { id: 'linked-title', class: 'section-title' }, 'Linked work'),
     ...group('Pull request', ...(pr ? [h('li', {}, pr)] : [])),
-    ...group('Child work', ...l.children.map((c) => h('li', {},
-      itemLink(c.id, s, on), h('span', { class: 'muted' }, ` ${c.work}, ${stageLabel(c.stage).toLowerCase()} `), c.title,
+    ...group('Child work', ...l.children.map((c) => h('li', { class: 'child-item' },
+      childLink(s.items.find((i) => i.id === c.id) ?? { id: c.id, title: c.title, stage: c.stage, work: c.work } as ItemRow, { 'data-item': c.id, 'data-focus': `linked:${c.id}` }, itemHref(c.id, s), () => on.open(c.id)),
       c.answer ? h('p', { class: 'linked-answer' }, h('span', { class: 'story-label' }, 'Answer '), c.answer) : null))),
     // The same list the Blocked view shows, with where each blocker lives.
     h('div', { class: 'blockers-box' }, ...group('Waits on', ...waits.map((b) => h('li', {}, itemLink(b.id, s, on, 'blocker'), b.title ? h('span', {}, ` ${b.title}`) : null, blockerNote(b) ? h('span', { class: 'muted' }, ` ${blockerNote(b)}`) : null)))),

@@ -34,11 +34,12 @@ export interface Field {
 }
 
 const stageField: Field = {
-  key: (item) => `${item.triage ?? ''}|${item.triage_skipped ?? ''}`,
+  key: (item) => `${item.triage ?? ''}|${item.triage_skipped ?? ''}|${item.pr ? 'pr' : ''}`,
   render: (item) => {
     const why = triageSkipReason(item);
     if (why) return ['Stage', document.createTextNode(`${rootStageLabel(item)} (${why})`)];
-    const chip = triageChip(item);
+    // Once a fix is linked, triage's state is history and would contradict the pull request.
+    const chip = item.pr ? null : triageChip(item);
     return ['Stage', document.createTextNode(chip ? `${rootStageLabel(item)} (${chip.toLowerCase()})` : rootStageLabel(item))];
   },
 };
@@ -85,6 +86,22 @@ const WHY = {
   reading: () => 'Still reading the log.',
   unreachable: () => 'The gateway cannot be reached, so the log has not been read. Trying again.',
 };
+
+/** The upstream reference leads; the internal id stays beside it, and a click copies it. */
+function headId(item: ItemRow | undefined, id: string | null): HTMLElement {
+  const ref = item ? upstreamRef(item) : null;
+  const copy = h('button', {
+    type: 'button',
+    class: 'row-id id-copy',
+    title: 'Copy the item id',
+    'aria-label': `Copy item id ${id}`,
+    onclick: () => {
+      void navigator.clipboard?.writeText(id ?? '').then(() => (copy.dataset.copied = ''), () => {});
+      setTimeout(() => delete copy.dataset.copied, 1500);
+    },
+  }, id ?? '');
+  return h('span', { class: 'panel-ids' }, ref ? h('strong', { class: 'panel-ref' }, ref) : null, copy);
+}
 
 export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewState): void; focus(): void } {
   // Focusable itself, so opening an item can move focus here without landing on Close.
@@ -134,7 +151,7 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
       const fallbackKey = active instanceof HTMLElement ? active.dataset.focusFallback : undefined;
       const close = h('button', { type: 'button', class: 'button ghost', 'data-focus': 'close', 'aria-label': 'Close the item', onclick: on.closeItem }, 'Close');
       el.replaceChildren(
-        h('header', { class: 'panel-head' }, h('span', { class: 'row-id' }, s.open), close),
+        h('header', { class: 'panel-head' }, headId(item, s.open), close),
         item
           ? h('div', {},
               h('h2', { id: 'panel-title', class: 'panel-title' }, item.title),
@@ -173,7 +190,7 @@ export function itemPanel(on: PanelHandlers): { el: HTMLElement; render(s: ViewS
 /** What the sections below the fields read, so the panel redraws when any of it moves. */
 function sectionsKey(item: ItemRow, s: ViewState): string {
   const ev = s.activity?.get(item.id) ?? [];
-  const kids = s.items.filter((i) => i.parent === item.id).map((i) => `${i.id}:${i.stage}:${s.activity?.get(i.id)?.length ?? 0}`);
+  const kids = s.items.filter((i) => i.parent === item.id).map((i) => `${i.id}:${i.stage}:${i.holder ?? ''}:${s.activity?.get(i.id)?.length ?? 0}`);
   const blocking = s.blocked.filter((b) => b.id === item.id || b.waits_on.some((w) => w.id === item.id));
   return [ev.length, ev.at(-1)?.offset ?? '', item.pr ?? '', item.pr_phase ?? '', item.pr_checks ?? '', item.failing_check ?? '', kids.join(','), JSON.stringify(blocking), s.stories.get(item.id)?.rev ?? '', handoffKey(item, s.handoffs?.get(item.id))].join('|');
 }
