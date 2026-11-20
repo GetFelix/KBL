@@ -102,6 +102,8 @@ struct Running {
     tree: Option<tree::Tree>,
     /// The MCP config holding the worker's token, removed when it stops.
     config_file: Option<PathBuf>,
+    /// The worker's output log, read for its last line when it ends badly.
+    log: Option<PathBuf>,
     /// The tracker did not take the stop yet; it is sent again each round.
     stop_pending: bool,
 }
@@ -377,19 +379,20 @@ impl<T: TrackerApi> Supervisor<T> {
             };
             if let Ok(Some(status)) = child.try_wait() {
                 let ran = r.started.elapsed();
-                ended.push((name.clone(), status.code(), ran));
+                // A worker that fails or leaves at once says why in its log.
+                let last = (status.code() != Some(0) || ran < min_run)
+                    .then(|| r.log.as_deref().and_then(last_log_line))
+                    .flatten();
+                ended.push((name.clone(), status.code(), ran, last));
                 r.child = None;
             }
         }
-        for (name, code, ran) in ended {
-            self.note_end(
-                pool,
-                &name,
-                code == Some(0),
-                json!({ "exit": code }),
-                ran,
-                min_run,
-            );
+        for (name, code, ran, last) in ended {
+            let mut how = json!({ "exit": code });
+            if let Some(line) = last {
+                how["last_log_line"] = json!(line);
+            }
+            self.note_end(pool, &name, code == Some(0), how, ran, min_run);
             self.stop_worker(pool, &name).await;
         }
         // A hook worker has no process to watch: the tracker shows it ended,
@@ -578,6 +581,7 @@ impl<T: TrackerApi> Supervisor<T> {
             child: None,
             tree: None,
             config_file: None,
+            log: None,
             stop_pending: false,
         };
         let went = match profile.kind {
@@ -675,8 +679,9 @@ impl<T: TrackerApi> Supervisor<T> {
             .iter()
             .map(|a| render::fill(a, &COMMAND_VARS, &vars))
             .collect::<Result<Vec<_>>>()?;
-        let log =
-            render::create_private_log(&own.join("out.log")).context("open the worker's log")?;
+        let log_path = own.join("out.log");
+        let log = render::create_private_log(&log_path).context("open the worker's log")?;
+        running.log = Some(log_path);
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(&args)
             .current_dir(&workdir)
@@ -781,6 +786,28 @@ fn kill_group(tree: Option<tree::Tree>, mut child: Child) {
     tokio::spawn(async move {
         let _ = child.wait().await;
     });
+}
+
+/// Longest log line `supervise_status` repeats.
+const LOG_LINE_MAX: usize = 300;
+
+/// The last non-blank line of a worker's log, read from its final 4 KiB,
+/// without control characters and cut to `LOG_LINE_MAX` characters.
+fn last_log_line(path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(4096))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let line = text.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+    Some(
+        line.chars()
+            .filter(|c| !c.is_control())
+            .take(LOG_LINE_MAX)
+            .collect(),
+    )
 }
 
 fn live(pool: &Pool) -> usize {

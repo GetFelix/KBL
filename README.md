@@ -470,7 +470,7 @@ TOML file of launch profiles (example profiles for Claude Code, Codex CLI and Gi
 |---|---|
 | `supervise_start {count, filter, profile?, model?}` | Keeps `count` workers on the work the filter matches, each with its own worker token, held to the filter. The profile and model come from the config's fit table unless given |
 | `supervise_stop {worker}` or `{all: true}` | Stops one worker, or every worker and the top-up |
-| `supervise_status` | Workers and what each holds, who finished or failed since the last look, ready counts by kind and tier, and the top-up state |
+| `supervise_status` | Workers and what each holds, who finished or failed since the last look (a worker that fails or exits at once also shows the last line of its log), ready counts by kind and tier, and the top-up state |
 
 Set `git_identity` on a profile so workers commit as an identity you choose, and turn off the vendor's `Co-Authored-By` trailer (Claude Code: `--settings` with `{"attribution": false}`, v2.1.281+); see [commit identity](docs/supervise-profiles.md#commit-identity-and-vendor-attribution).
 

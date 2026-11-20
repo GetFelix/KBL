@@ -200,7 +200,8 @@ the fit table picks a worker for it. A triage that matched no rule stays in Need
 - `supervise_stop {worker}` stops one worker and lowers the pool by one; `{all: true}` stops every worker and turns
   the top-up off. A stop logs `worker_stopped` first, so the token dies before the process is killed.
 - `supervise_status` shows the workers (with holds), the workers that finished (exit 0) or failed since the last
-  call, the queue shape (ready counts by kind and tier from `work_peek`), and the top-up state.
+  call (a command worker that failed or ended within `min_run_seconds` also carries `last_log_line`, the last
+  non-blank line of its `out.log`, at most 300 characters, so a "Not logged in" shows without opening the log), the queue shape (ready counts by kind and tier from `work_peek`), and the top-up state.
 - Top-up: every `top_up_seconds` (5 to 3600), `kbl-mcp` reaps exited workers (stopping them on the tracker), then
   starts workers until the pool is full or there is no more ready work for them. It stops for the round on
   `worker_cap`, and pauses after 3 workers in a row fail or exit within `min_run_seconds` (default 30) of starting,

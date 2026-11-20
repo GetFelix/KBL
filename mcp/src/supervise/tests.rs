@@ -114,6 +114,8 @@ printf '%s\n' "$@" > "$PWD/argv"
 env > "$PWD/env"
 cp "$1" "$PWD/config.copy"
 ls -l "$1" | cut -c1-10 > "$PWD/mode"
+echo starting
+[ "${EXIT:-0}" = 0 ] || echo "Not logged in" >&2
 sleep "${SLEEP:-0}"
 exit "${EXIT:-0}"
 "#;
@@ -346,6 +348,31 @@ async fn a_heartbeat_names_the_workers_whose_process_is_running_and_no_other() {
         1,
         "a stopped worker is not vouched for"
     );
+}
+
+#[tokio::test]
+async fn a_worker_that_fails_fast_reports_the_last_line_of_its_log() {
+    let dir = scratch();
+    let fake = Fake::default();
+    fake.0.lock().unwrap().ready = ready(1);
+    let sup = setup(&dir, "", "1", "0", &fake);
+    sup.start(1, json!({}), None, None).await.unwrap();
+    until_reaped(&sup, 1).await;
+    let status = sup.status().await.unwrap();
+    assert_eq!(status["failed"][0]["exit"], 1, "{status}");
+    assert_eq!(status["failed"][0]["last_log_line"], "Not logged in");
+}
+
+#[test]
+fn the_log_line_is_the_last_nonblank_one_without_control_characters() {
+    let dir = scratch();
+    let log = dir.join("l.log");
+    std::fs::write(&log, "first\nboom\x1b[31m red\x07\n\n  \n").unwrap();
+    assert_eq!(last_log_line(&log).as_deref(), Some("boom[31m red"));
+    std::fs::write(&log, "x".repeat(10_000)).unwrap();
+    assert_eq!(last_log_line(&log).unwrap().len(), LOG_LINE_MAX);
+    std::fs::write(&log, "").unwrap();
+    assert_eq!(last_log_line(&log), None);
 }
 
 #[tokio::test]
