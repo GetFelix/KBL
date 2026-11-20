@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, triageSkipReason, admissionNote, rootStageLabel, visible } from '../src/list.ts';
+import { boardEdge, flatten, group, inScope, scopeCounts, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, triageSkipReason, admissionNote, rootStageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -148,4 +148,17 @@ test('a root the policy accepted says which rule did, and a person-accepted one 
   assert.equal(admissionNote({ root: true, admitted_by: null }), null);
   assert.equal(admissionNote({ root: false, admitted_by: 'routine' }), null);
   assert.equal(triageChip({ root: true, triage: 'done', admitted_by: null }), 'Triage: done');
+
+test('the sidebar count is what the list shows, with sub-tasks counted beside it', () => {
+  const items = [
+    { id: 'r', title: 'root', stage: 'ready' },
+    { id: 'r-t', title: 'triage', stage: 'done', parent: 'r' },
+    { id: 'r-a', title: 'augment', stage: 'ready', parent: 'r' },
+    { id: 'r-q', title: 'asks', stage: 'needs_you', parent: 'r' },
+    { id: 'o', title: 'other', stage: 'ready' },
+  ];
+  const base = { items, blocked: [], view: 'all' as const };
+  assert.deepEqual(scopeCounts(base), { shown: 3, children: 2 });
+  assert.equal(visible({ ...base, query: '', filters: {} } as never).flatMap((g) => g.items).length, 3);
+  assert.deepEqual(scopeCounts({ ...base, childCards: true }), { shown: 5, children: 0 });
 });

@@ -392,11 +392,13 @@ try {
   await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).click(); true`);
   await page.waitFor(`!!document.querySelector('.card[data-id=rev-2300]')`);
   check(await page.eval(`!document.querySelector('.child-strip') && [...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).getAttribute('aria-pressed') === 'true'`), 'the toggle shows child work as cards and drops the strips');
+  check(await page.eval(`!document.querySelector('.nav a[data-view=all] .sub-count')`), 'with Child cards on the All work count has no sub-task note');
   await axe('board child cards');
   await shoot('board-child-cards-dark');
   // The choice is remembered per viewer, so turn it off or the list below shows child cards too.
   await page.eval(`[...document.querySelectorAll('.filter-bar button')].find((b) => b.textContent.startsWith('Child cards')).click(); true`);
   await page.waitFor(`!document.querySelector('.card[data-id=rev-2300]')`);
+  check(await page.eval(`(() => { const a = document.querySelector('.nav a[data-view=all]'); const sub = a.querySelector('.sub-count'); return !!sub && /^\\+\\d+$/.test(sub.textContent) && sub.title.includes('sub-task'); })()`), 'with Child cards off the All work count shows the sub-tasks beside it');
   await open(connected);
   await page.waitFor(live);
   check(await page.eval(`!document.querySelector('.row[data-id=rev-2300]') && !!document.querySelector('.row[data-id=gh-2300] ~ .child-strip, li:has(.row[data-id=gh-2300]) .child-strip')`), 'the list nests children under their root too');

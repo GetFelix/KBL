@@ -10,7 +10,9 @@
 //                       [--keep-config] [--once] [--check-only]
 //                       [--ingest /path/to/kbl-ingest]
 //
-// --labels needs every label listed, --exclude-label skips an issue with any of
+// With no filter at all the rule needs the label agent-ok. Any other filter
+// (--milestone, --exclude-label) drops that default; --labels "" means no label
+// filter. The rule is printed before the check. --labels needs every label listed, --exclude-label skips an issue with any of
 // its labels, and --cap bounds the open roots the rule may have. --mode propose
 // parks matches in Triage until a person accepts them. --triage skip admits an
 // already specified issue with no triage or augment item, so it is Ready to fix
@@ -21,19 +23,20 @@
 // Without --token-file the GitHub token is read from $GITHUB_TOKEN.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
+import { findBinary, notFoundMessage } from "./lib/binaries.mjs";
+import { buildRule } from "./lib/ingest-rule.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, "..");
 
 const { values } = parseArgs({
   options: {
     repo: { type: "string" },
     "token-file": { type: "string" },
-    labels: { type: "string", default: "agent-ok" },
+    labels: { type: "string" },
     // The old single-label spelling.
     label: { type: "string" },
     "exclude-label": { type: "string" },
@@ -55,12 +58,19 @@ function fail(message) {
   process.exit(1);
 }
 
-const list = (text) => (text ?? "").split(",").map((l) => l.trim()).filter(Boolean);
-const labels = list(values.label ?? values.labels);
-const excluded = list(values["exclude-label"]);
+const rule = buildRule({
+  repo: values.repo,
+  labels: values.label ?? values.labels,
+  excludeLabel: values["exclude-label"],
+  milestone: values.milestone,
+  cap: values.cap === undefined ? undefined : Number(values.cap),
+  mode: values.mode,
+  triage: values.triage,
+});
+const labels = rule.labels_all;
 if (!["admit", "propose"].includes(values.mode)) fail("--mode is admit or propose");
 if (!["run", "skip"].includes(values.triage)) fail("--triage is run or skip");
-if (values.triage === "skip" && (labels.join("+") || values.repo || "").length > 120) fail("--triage skip records the rule name, which is the labels joined: keep it to 120 bytes");
+if (values.triage === "skip" && rule.name.length > 120) fail("--triage skip records the rule name, built from the filters: keep it to 120 bytes");
 if (values.triage === "skip" && values.mode !== "admit") fail("--triage skip needs --mode admit; a proposed issue waits for a person");
 const cap = values.cap === undefined ? undefined : Number(values.cap);
 if (cap !== undefined && !(Number.isInteger(cap) && cap > 0)) fail("--cap is a whole number above 0");
@@ -78,16 +88,8 @@ if (!existsSync(tokensPath)) fail("the quick start is not running: start it with
 const ingestToken = Object.keys(JSON.parse(readFileSync(tokensPath, "utf8")).ingest ?? {})[0];
 if (!ingestToken) fail("the tracker's token file has no ingest token: restart the stack with dev/quickstart.sh");
 
-const candidates = [
-  values.ingest,
-  process.env.KBL_INGEST,
-  join(repo, "target/release/kbl-ingest"),
-  join(repo, "target/debug/kbl-ingest"),
-  join(homedir(), ".kbl/bin/kbl-ingest"),
-  join(here, "state/bin/kbl-ingest"),
-];
-const bin = candidates.filter(Boolean).map((p) => resolve(p)).find(existsSync);
-if (!bin) fail("kbl-ingest not found: set KBL_INGEST or pass --ingest <path>, put it in ~/.kbl/bin or dev/state/bin, or run `cargo build --release -p kbl-ingest`");
+const bin = findBinary("kbl-ingest", { given: values.ingest, envValue: process.env.KBL_INGEST });
+if (!bin) fail(notFoundMessage("kbl-ingest", { flag: "--ingest", envName: "KBL_INGEST", build: "cargo build --release -p kbl-ingest" }));
 
 // The config holds no secret: it names the token file or variable.
 if (!values["keep-config"]) {
@@ -95,11 +97,7 @@ if (!values["keep-config"]) {
     ? { token_file: resolve(values["token-file"]) }
     : { token_env: "GITHUB_TOKEN" };
   if (values["github-api"]) github.api = values["github-api"];
-  const rule = { name: labels.join("+") || values.repo, repo: values.repo, mode: values.mode, labels_all: labels };
-  if (values.triage === "skip") rule.triage = "skip";
-  if (excluded.length) rule.labels_excluded = excluded;
-  if (values.milestone) rule.milestone = values.milestone;
-  if (cap !== undefined) rule.cap = cap;
+  console.log(`rule: ${JSON.stringify(rule)}`);
   writeFileSync(
     config,
     `${JSON.stringify(
@@ -122,7 +120,7 @@ if (values["check-only"]) process.exit(0);
 console.log(
   values["keep-config"]
     ? `ingest is running with ${config}. Ctrl-C stops it.`
-    : `ingest is running; issues in ${values.repo} labelled ${labels.join(", ")} arrive on the dashboard${values.triage === "skip" ? " as Ready to fix" : ""}${values.mode === "propose" ? " (in Triage)" : ""}. Ctrl-C stops it.`,
+    : `ingest is running; issues in ${values.repo} matching ${rule.name} arrive on the dashboard${values.triage === "skip" ? " as Ready to fix" : ""}${values.mode === "propose" ? " (in Triage)" : ""}. Ctrl-C stops it.`,
 );
 const worker = spawn(bin, ["--config", config, ...(values.once ? ["--once"] : [])], { env, stdio: "inherit" });
 worker.on("exit", (code) => process.exit(code ?? 1));

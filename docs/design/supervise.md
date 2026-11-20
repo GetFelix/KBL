@@ -81,7 +81,7 @@ command = ["claude", "-p", "Take work with work_next until there is none.", "--m
            "--mcp-config", "{mcp_config_path}", "--strict-mcp-config"]
 mcp_config = "json"
 workdir = "/work/{worker}"
-pass_env = ["PATH", "HOME"]
+pass_env = ["PATH", "HOME", "USER"]
 
 [profiles.cloud]
 kind = "hook"
@@ -95,7 +95,7 @@ hook_token_env = "CLOUD_HOOK_TOKEN"
   placeholder. Every value is checked before it is filled in: the worker name by the tracker's name rules, the model
   against `A-Z a-z 0-9 . _ : / @ -` (never a leading `-`), the paths built by `kbl-mcp`. Item text never reaches a
   template.
-- The worker process starts with an empty environment plus the names in `pass_env`, copied from the supervisor's.
+- The worker process starts with an empty environment plus the names in `pass_env`, copied from the supervisor's. On macOS `claude` needs `USER` to read a saved login (or pass `ANTHROPIC_API_KEY`); a worker missing it exits with "Not logged in".
   `KBL_TRACKER_TOKEN`, `KBL_PERSON_TOKEN` and `KBL_FELIX_TOKEN` may not be listed, so the supervisor's tokens never
   reach a worker; no `KBL_` name may be listed at all. `set_env` adds fixed values, which may use `{worker}` and
   `{workdir}`. `mcp_config_file` writes the MCP config to a fixed place the vendor reads (with `{worker}` and

@@ -107,6 +107,17 @@ export function inScope(s: Pick<ViewState, 'items' | 'blocked' | 'view'> & { tra
   return s.items.filter((i) => blocked.has(i.id));
 }
 
+/**
+ * What a sidebar count says: `shown` is what the list shows for the view's scope with no
+ * filters, `children` the sub-tasks nested under those roots. With Child cards on every
+ * item is a card, so nothing is nested.
+ */
+export function scopeCounts(s: Pick<ViewState, 'items' | 'blocked' | 'view'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; childCards?: boolean }): { shown: number; children: number } {
+  const rows = inScope(s);
+  const nested = s.childCards || s.view === 'inbox' ? 0 : nestedIds(rows).size;
+  return { shown: rows.length - nested, children: nested };
+}
+
 type Shown = Pick<ViewState, 'items' | 'blocked' | 'view' | 'query' | 'filters'> & { tracker?: ViewState['tracker']; kind?: ViewState['kind']; waiting?: ViewState['waiting']; childCards?: boolean; layout?: ViewState['layout']; group?: ViewState['group']; collapsed?: ViewState['collapsed'] };
 
 /**

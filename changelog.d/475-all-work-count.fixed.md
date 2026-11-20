@@ -1,0 +1,1 @@
+The dashboard's sidebar count for All work is the number the list shows, with the sub-tasks beside it (for example 257 and +514, with a hover title) while Child cards is off; with Child cards on every item is a card and the count has no note (#475).

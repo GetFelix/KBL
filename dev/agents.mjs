@@ -9,26 +9,23 @@
 // A session that exits without saying the queue is empty is started again.
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
+
+import { findBinary, notFoundMessage } from "./lib/binaries.mjs";
 import { pathToFileURL } from "node:url";
 
 // What a session prints, on a line of its own, when work_next says nothing is ready.
 export const EMPTY_MARKER = "KBL_QUEUE_EMPTY";
 
 // An explicit path wins, then KBL_MCP, then the first binary found in the
-// build output, ~/.kbl/bin or dev/state/bin. With none found the build path is
-// returned, so a missing binary fails where it is launched, naming KBL_MCP.
+// build output, ~/.kbl/bin, dev/state/bin or on PATH. With none found the build
+// path is returned, so a missing binary fails where it is launched, naming KBL_MCP.
 function findMcp(given) {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const found = [given, process.env.KBL_MCP, "target/debug/kbl-mcp", "target/release/kbl-mcp", join(homedir(), ".kbl/bin/kbl-mcp"), join(here, "state/bin/kbl-mcp")]
-    .filter(Boolean)
-    .map((p) => resolve(p))
-    .find(existsSync);
-  return found ?? resolve(given ?? "target/debug/kbl-mcp");
+  if (given) return resolve(given);
+  return findBinary("kbl-mcp", { given, envValue: process.env.KBL_MCP }) ?? resolve(given ?? "target/debug/kbl-mcp");
 }
 
 export const LOOP_PROMPT = `Use the kbl tools to take work, and keep going until there is none.
@@ -315,7 +312,7 @@ export async function runAgents(argv, log = console.log) {
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   const mcp = findMcp(undefined);
   if (!process.argv.includes("--mcp") && !existsSync(mcp)) {
-    console.error("kbl-mcp not found: set KBL_MCP or pass --mcp <path>, put it in ~/.kbl/bin or dev/state/bin, or run `cargo build -p kbl-mcp`");
+    console.error(notFoundMessage("kbl-mcp", { flag: "--mcp", envName: "KBL_MCP", build: "cargo build -p kbl-mcp" }));
     process.exit(1);
   }
   runAgents(process.argv.slice(2)).then(

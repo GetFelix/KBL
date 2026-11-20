@@ -41,7 +41,7 @@ jobs:
       # A changed stored fold result in wasm/golden needs a changelog fragment naming it.
       - run: node scripts/check-golden.mjs origin/${{ github.base_ref }}
         if: github.event_name == 'pull_request'
-      - run: node --test dev/lib/script.test.mjs dev/lib/agents.test.mjs dev/confine.test.mjs
+      - run: node --test dev/lib/binaries.test.mjs dev/lib/script.test.mjs dev/lib/agents.test.mjs dev/confine.test.mjs
       # Malformed changelog fragments, and the assembler's own tests.
       - run: python3 scripts/changelog_assemble.py --check
       - run: python3 -m unittest scripts/test_changelog_assemble.py
