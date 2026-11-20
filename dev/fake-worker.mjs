@@ -11,10 +11,13 @@
 // FAKE_WORKER_EXIT makes it exit with that code after its first item instead,
 // to stand in for a worker that fails.
 //
+// FAKE_WORKER_SEEN_DIR makes it write the git author and committer emails it was
+// started with to a file there, so a check can see what the supervisor set.
+//
 // FAKE_WORKER_FINISH makes it call worker_finish once its queue is empty, as a
 // hosted worker reports it is done, so the tracker logs `worker_finished`.
 import { spawn } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 import { confinedConfig } from "./lib/confine.mjs";
@@ -66,6 +69,14 @@ async function tool(tool, args) {
   const text = result.content[0]?.text ?? "";
   if (result.isError) throw new Error(`${tool}: ${text}`);
   return JSON.parse(text);
+}
+
+if (process.env.FAKE_WORKER_SEEN_DIR) {
+  mkdirSync(process.env.FAKE_WORKER_SEEN_DIR, { recursive: true });
+  writeFileSync(
+    `${process.env.FAKE_WORKER_SEEN_DIR}/${name}`,
+    `${process.env.GIT_AUTHOR_EMAIL}|${process.env.GIT_COMMITTER_EMAIL}`,
+  );
 }
 
 try {

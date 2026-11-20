@@ -172,3 +172,40 @@ fn peeked_fields_are_read_from_the_peek_reply() {
         }
     );
 }
+
+#[test]
+fn a_git_identity_becomes_the_four_git_variables_and_set_env_wins() {
+    let ident = r#"git_identity = { name = "Bot", email = "bot@example.com" }"#;
+    let c = Config::parse(&format!("{BASE}{ident}")).unwrap();
+    let env = c.profile("fake").unwrap().fixed_env();
+    for k in ["GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"] {
+        assert_eq!(env[k], "bot@example.com");
+    }
+    for k in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] {
+        assert_eq!(env[k], "Bot");
+    }
+    let both = format!("{BASE}{ident}\nset_env = {{ GIT_AUTHOR_EMAIL = \"other@example.com\" }}");
+    let env = Config::parse(&both)
+        .unwrap()
+        .profile("fake")
+        .unwrap()
+        .fixed_env();
+    assert_eq!(env["GIT_AUTHOR_EMAIL"], "other@example.com");
+    assert_eq!(env["GIT_COMMITTER_EMAIL"], "bot@example.com");
+}
+
+#[test]
+fn a_git_identity_with_a_bad_email_or_name_is_refused() {
+    for email in [
+        "nobody",
+        "a@b",
+        "@example.com",
+        "a b@example.com",
+        "a@@example.com",
+        "",
+    ] {
+        let text = format!("git_identity = {{ name = \"Bot\", email = \"{email}\" }}");
+        assert!(refused(&text).contains("not an email"), "{email}");
+    }
+    assert!(refused(r#"git_identity = { name = " ", email = "a@b.co" }"#).contains("name"));
+}
