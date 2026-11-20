@@ -237,6 +237,7 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         )
         .route("/v1/work/workers/stop", post(worker_stop::<B>))
         .route("/v1/work/workers/finish", post(worker_finish::<B>))
+        .route("/v1/work/workers/alive", post(worker_alive::<B>))
         .route("/v1/work/prices", post(price::<B>))
         .route("/v1/work/rules", post(rules::<B>))
         .route("/v1/work/classify", post(classify::<B>))
@@ -1030,6 +1031,12 @@ struct WorkerFinishBody {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WorkerAliveBody {
+    workers: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WorkerStopBody {
     worker: Key,
 }
@@ -1144,6 +1151,25 @@ async fn worker_finish<B: Broker>(
         Err(d) => return denied(d),
     };
     reply(call.keyed(rk, call.tracker().finish_worker(&worker)).await)
+}
+
+/// A supervisor says which of its workers' processes are still running. A
+/// worker has no workers to vouch for.
+async fn worker_alive<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<WorkerAliveBody>) -> Response {
+    let sup = match call.agent() {
+        Ok(a) if a.supervisor().is_none() => a,
+        Ok(_) => {
+            return denied((
+                StatusCode::FORBIDDEN,
+                "this call is for a supervisor's token",
+            ));
+        }
+        Err(d) => return denied(d),
+    };
+    reply(
+        call.keyed(rk, call.tracker().workers_alive(&sup, b.workers))
+            .await,
+    )
 }
 
 /// An agent sees the workers it started; a person sees every worker.

@@ -1720,3 +1720,36 @@ fn the_twenty_fifth_format_stamps_the_policy_acceptance_and_its_take_back() {
     assert_eq!(r2.admitted_by.as_deref(), Some("routine"));
     assert!(r2.hold.is_some());
 }
+
+/// A log at format 26: a supervisor records which of its own live workers
+/// are running; a note naming another supervisor's worker, no worker, a
+/// stopped worker, or written by a worker or a person is refused. Its folded
+/// state is pinned in `wasm/golden/format_26.state.json`.
+const FORMAT_26_LOG: &str = include_str!("work_format_26.jsonl");
+
+#[test]
+fn the_twenty_sixth_format_stamps_worker_alive_and_records_only_a_supervisors_own_workers() {
+    assert_eq!(kbl_core::work::FORMAT_V26, 26);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V26) };
+    let log = entries(FORMAT_26_LOG);
+    for (_, r) in &log {
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    assert_eq!(log[4].1.min_format(), 26);
+    let s = fold(&log);
+    let why: Vec<_> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(
+        why,
+        [
+            (5, Reject::BadWorker),
+            (6, Reject::BadWorker),
+            (7, Reject::ActorNotAllowed),
+            (8, Reject::ActorNotAllowed),
+            (10, Reject::BadWorker)
+        ]
+    );
+    let alive = |w: &str| s.workers[&kbl_core::names::Key::new(w).unwrap()].alive_ms;
+    assert_eq!(alive("sup-w1"), Some(1040));
+    assert_eq!(alive("sup-w2"), None);
+    assert_eq!(alive("other-w1"), None);
+}

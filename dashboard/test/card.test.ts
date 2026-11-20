@@ -32,7 +32,11 @@ test('children roll up under their top root with a progress chip', () => {
 
 test('the working line names the agent, attempt and time since it last wrote', () => {
   const held: ItemRow = { ...root, holder: 'agent-1', held_attempt: 2, active_ms: 1_000_000 };
-  assert.equal(workingLine(held, 1_000_000 + 3 * 60_000), 'agent-1 working, attempt 2, last active 3 min ago');
+  assert.equal(workingLine(held, 1_000_000 + 3 * 60_000), 'agent-1 working, attempt 2, last tracker write 3 min ago');
+  // The supervisor's recorded heartbeat tells a busy worker from a stuck one.
+  const now = 1_000_000 + 6 * 60_000;
+  assert.equal(workingLine({ ...held, holder_alive_ms: now - 30_000 }, now), 'agent-1 working, attempt 2, last tracker write 6 min ago, process running');
+  assert.equal(workingLine({ ...held, holder_alive_ms: now - 5 * 60_000 }, now), 'agent-1 working, attempt 2, last tracker write 6 min ago, no heartbeat for 5 min');
   assert.equal(workingLine(root, 0), null);
   assert.equal(ago(0, 30_000), 'just now');
   assert.equal(ago(0, 2 * 3_600_000), '2 h ago');

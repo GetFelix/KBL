@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { test } from 'node:test';
 import { COMMANDS } from '../src/keys.ts';
 import { Tracker, type Fetch } from '../src/tracker.ts';
+import { beat } from '../src/card.ts';
 import { groups, launchText, liveNames, stateOf, stopEach, stopRequest, summary, workers, type WorkerRow } from '../src/workers.ts';
 import { items } from '../src/fold.ts';
 import type { Outcome } from '../src/writes.ts';
@@ -21,7 +22,7 @@ function folded() {
   const person = (o: object) => apply({ by: 'gabriel', actor: 'person', ...o });
   const agent = (by: string, o: object) => apply({ v: 24, by, actor: 'agent', ...o });
   const as = (by: string, sup: string, o: object) => apply({ v: 24, by, sup, actor: 'agent', ...o });
-  person({ v: 24, kind: 'format_raised', to: 24 });
+  person({ v: 26, kind: 'format_raised', to: 26 });
   apply({ kind: 'imported', item: 'r1', source: 'github', upstream_id: 'GetFelix/felix#1', title: 'Fix the lease', actor: 'tracker', by: 'ingest' });
   person({ kind: 'accepted', item: 'r1', tier: 1 });
   const start = (by: string, worker: string, hash: string, extra: object = {}) =>
@@ -32,6 +33,7 @@ function folded() {
   start('sup', 'sup-d', 'd');
   start('other', 'other-x', 'e');
   as('sup-a', 'sup', { kind: 'claimed', item: 'r1', attempt: 1, deadline_ms: 1800000090000 });
+  agent('sup', { v: 26, kind: 'worker_alive', workers: ['sup-a', 'sup-b'] });
   as('sup-c', 'sup', { kind: 'worker_finished' });
   person({ v: 24, kind: 'worker_stopped', worker: 'sup-d' });
   assert.deepEqual(JSON.parse(fold.state_json()).rejections, []);
@@ -66,7 +68,7 @@ test('a group is a supervisor with live workers first, and says how the pool end
 });
 
 test('a worker that holds a missing item still shows it, and an ended worker is Releasing while it still holds', () => {
-  const row = (o: Partial<WorkerRow>): WorkerRow => ({ worker: 's-a', supervisor: 's', vendor: null, profile: null, model: null, started_ms: 1, stopped_ms: null, finished: false, holds: null, ...o });
+  const row = (o: Partial<WorkerRow>): WorkerRow => ({ worker: 's-a', supervisor: 's', vendor: null, profile: null, model: null, started_ms: 1, stopped_ms: null, finished: false, alive_ms: null, holds: null, ...o });
   const [g] = groups([row({ holds: { item: 'gone', attempt: 2 } })], []);
   assert.deepEqual(g.workers[0].hold, { item: 'gone', attempt: 2, title: null, stage: null, active_ms: null });
   assert.equal(stateOf(row({ stopped_ms: 5, holds: { item: 'gone', attempt: 2 } })), 'releasing');
@@ -120,4 +122,24 @@ test('stopping several workers skips one already stopped and reports the first r
 
 test('Workers is a palette command', () => {
   assert.ok(COMMANDS.some((c) => c.id === 'workers'));
+});
+
+test('a heartbeat the supervisor recorded reaches the worker row and the held item, and no other', () => {
+  const fold = folded();
+  const rows = workers({ workersJson: () => fold.workers_json() });
+  const at = (n: string) => rows.find((w) => w.worker === n)!.alive_ms;
+  assert.equal(typeof at('sup-a'), 'number');
+  assert.equal(at('sup-a'), at('sup-b'));
+  assert.equal(at('sup-c'), null);
+  assert.equal(at('other-x'), null);
+  const held = items({ itemsJson: () => fold.items_json(), format: () => 26 } as never).find((i) => i.id === 'r1')!;
+  assert.equal(held.holder_alive_ms, at('sup-a'));
+});
+
+test('a recent heartbeat reads as running, an old one as silence, and none says nothing', () => {
+  const now = 10_000_000;
+  assert.deepEqual(beat(now - 30_000, now), { silent: false, text: 'process running' });
+  assert.deepEqual(beat(now - 7 * 60_000, now), { silent: true, text: 'no heartbeat for 7 min' });
+  assert.equal(beat(null, now), null);
+  assert.equal(beat(undefined, now), null);
 });

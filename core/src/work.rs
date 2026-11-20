@@ -140,8 +140,12 @@ pub const FORMAT_V24: u32 = 24;
 /// person's take-back of it.
 pub const FORMAT_V25: u32 = 25;
 
+/// The format that added `worker_alive`: a supervisor's periodic note that
+/// the processes of its workers are still running.
+pub const FORMAT_V26: u32 = 26;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V25;
+pub const FORMAT: u32 = FORMAT_V26;
 
 /// Most live workers one supervisor may have, whatever the tracker's config says.
 pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
@@ -1263,6 +1267,11 @@ pub enum WorkRecord {
     /// supervisor on the record; it ends the worker as a stop does, so its
     /// token dies and its name is never reused. Format 24.
     WorkerFinished,
+    /// A supervisor says the processes of these workers of its own are still
+    /// running. Recorded at most once a minute; a worker nothing is written for
+    /// has no process the supervisor watches, or its supervisor is down.
+    /// Format 26.
+    WorkerAlive { workers: Vec<Key> },
     /// A person adds or replaces an entry on the team's flake list: a failed
     /// check named `check`, whose job log contains `pattern` when one is
     /// given, is a known flake tracked by `issue`. Format 22.
@@ -1380,6 +1389,7 @@ impl WorkRecord {
             WorkRecord::CheckFailed { .. } => "check_failed",
             WorkRecord::WorkerStopped { .. } => "worker_stopped",
             WorkRecord::WorkerFinished => "worker_finished",
+            WorkRecord::WorkerAlive { .. } => "worker_alive",
             WorkRecord::Unknown => "unknown",
         }
     }
@@ -1453,6 +1463,7 @@ impl WorkRecord {
             | WorkRecord::WorkerStarted { .. }
             | WorkRecord::WorkerStopped { .. }
             | WorkRecord::WorkerFinished
+            | WorkRecord::WorkerAlive { .. }
             | WorkRecord::FlakeSet { .. }
             | WorkRecord::FlakeCleared { .. }
             | WorkRecord::Unknown => None,
@@ -1583,6 +1594,7 @@ impl WorkRecord {
             | WorkRecord::FlakeCleared { .. }
             | WorkRecord::FlakeRetried { .. } => FORMAT_V22,
             WorkRecord::WorkerFinished => FORMAT_V24,
+            WorkRecord::WorkerAlive { .. } => FORMAT_V26,
             WorkRecord::AdmissionUndone { .. }
             | WorkRecord::IntakeTier { .. }
             | WorkRecord::Accepted {

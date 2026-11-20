@@ -23,6 +23,8 @@ struct Script {
     lose_start_reply: bool,
     /// Workers that reported they are done.
     finished: Vec<String>,
+    /// The worker lists of each heartbeat.
+    alive: Vec<Value>,
     /// Stops are refused with this text.
     refuse_stop: Option<&'static str>,
     /// Starts are refused with this text.
@@ -52,6 +54,10 @@ impl TrackerApi for Fake {
                 } else {
                     Ok(json!({ "worker": name, "token": format!("kblw_{name}") }))
                 }
+            }
+            "/v1/work/workers/alive" => {
+                s.alive.push(body["workers"].clone());
+                Ok(json!({ "written": true }))
             }
             "/v1/work/workers/stop" => {
                 if let Some(why) = s.refuse_stop {
@@ -181,7 +187,7 @@ async fn until_reaped(sup: &Supervisor<Fake>, want: usize) {
 async fn a_worker_gets_its_own_token_in_a_private_file_and_none_of_the_supervisors() {
     let dir = scratch();
     let fake = Fake::default();
-    fake.0.lock().unwrap().ready = ready(3);
+    fake.0.lock().unwrap().ready = ready(2);
     let sup = setup(&dir, "", "0", "0", &fake);
     let reply = sup
         .start(2, json!({ "repo": "o/r" }), None, None)
@@ -318,6 +324,30 @@ async fn workers_that_keep_failing_pause_the_top_up() {
     );
     // A second look shows no failures it already showed.
     assert_eq!(sup.status().await.unwrap()["failed"], json!([]));
+}
+
+#[tokio::test]
+async fn a_heartbeat_names_the_workers_whose_process_is_running_and_no_other() {
+    let dir = scratch();
+    let fake = Fake::default();
+    fake.0.lock().unwrap().ready = ready(1);
+    // The worker sleeps, so its process is running at the first beat.
+    let sup = setup(&dir, "", "0", "30", &fake);
+    sup.beat().await;
+    assert!(
+        fake.0.lock().unwrap().alive.is_empty(),
+        "no worker, no beat"
+    );
+    sup.start(1, json!({}), None, None).await.unwrap();
+    sup.beat().await;
+    assert_eq!(fake.0.lock().unwrap().alive, [json!(["sup-w1"])]);
+    sup.stop(None, true).await.unwrap();
+    sup.beat().await;
+    assert_eq!(
+        fake.0.lock().unwrap().alive.len(),
+        1,
+        "a stopped worker is not vouched for"
+    );
 }
 
 #[tokio::test]

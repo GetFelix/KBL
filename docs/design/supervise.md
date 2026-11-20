@@ -13,6 +13,7 @@ Issue [#420](https://github.com/GetFelix/KBL/issues/420). This page is the desig
 | `worker_started {worker, token_sha256, supervisor_token_sha256, vendor?, profile?, model?}` | The supervisor's agent token | The writer is an agent and not itself a worker (one level). `worker` is `<supervisor>-<suffix>`, never used before. Both hashes are 64 hex digits; the worker's is unique. At most 64 live workers per supervisor |
 | `worker_stopped {worker}` | The worker's supervisor, a person, or the tracker when the supervisor is gone | The worker is live. Its token stops working and its name is never reused |
 | `worker_finished` (format 24) | The worker itself, with `sup` set | The writer is a live worker acting for its live supervisor. It ends the worker as a stop does, and the worker shows `finished` |
+| `worker_alive {workers}` (format 26) | The supervisor's agent token | Every name is a live worker of the writer, and there are 1 to 64. All or none: one name that is not refused the note. Sets each worker's `alive_ms` |
 | `released` with reason `supervisor_gone` | The tracker | The hold goes back and the try it used is given back. Written when a supervisor is gone, and also when a worker is stopped or finishes |
 | `sup` on any record | The tracker, from the token | Set exactly when `by` is a live worker, and then it must be that worker's supervisor (`bad_worker` otherwise). Any record with `sup` is format 21 |
 
@@ -132,12 +133,27 @@ worker a person or the tracker stopped is dropped the same way and listed under 
 after 3 quick or failed ends in a row. A hosted worker that dies without calling it is still counted live until it is
 stopped.
 
+### Heartbeat
+
+A worker's last tracker write says little: a long step, such as a build, goes minutes without one. So once a minute
+`kbl-mcp` checks which command workers' processes are still running and records them with one `worker_alive`
+(`POST /v1/work/workers/alive {workers}`). The tracker leaves out any name that is not the supervisor's live worker, so a
+worker that ended since the check does not refuse the note, and writes nothing when none is left. A tracker below
+format 26 refuses the call and the supervisor carries on. A hosted worker has no process to check, so it never gets one.
+
+The dashboard reads the field and does not infer anything from it. A live worker whose last heartbeat is under 3 minutes
+old shows `process running`, an older one `no heartbeat for 7 min`, and one with no heartbeat shows nothing. The same
+words follow the holder on a card, a row and the item's Now line, next to `last tracker write 6 min ago`, so a long
+quiet step reads as a running process and a dead supervisor or process reads as silence. A worker whose process ended is
+stopped by its supervisor in the same round, so it shows Stopped, never silent.
+
 ### Dashboard
 
 The dashboard's Workers dialog shows the group: each supervisor, the workers it started, and for each its state, launch
 fields, age and hold (see the [dashboard README](../../dashboard/README.md)). It reads `worker_started`,
-`worker_stopped`, `worker_finished` and the hold from the fold, nothing else, so a worker that died without
-reporting shows Working or Idle until someone stops it. A signed-in person can stop one worker or every live worker
+`worker_stopped`, `worker_finished`, `worker_alive` and the hold from the fold, nothing else. A hosted worker that died
+without reporting shows Working or Idle until someone stops it; a command worker whose process ended is stopped by its
+supervisor, and one whose supervisor went quiet shows `no heartbeat` ([heartbeat](#heartbeat)). A signed-in person can stop one worker or every live worker
 of a supervisor; each stop is the same `POST /v1/work/workers/stop` a supervisor calls.
 
 ![The Workers dialog: two supervisors, a stop-all confirm, working, finished and stopped workers](../screenshots/dashboard-workers.png)

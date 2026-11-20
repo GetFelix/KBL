@@ -374,6 +374,7 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .worker-state { font-weight: 600; }
 .worker-state.working { color: var(--ok); }
 .worker-state.releasing { color: var(--warn); }
+.workers-table .beat.silent { color: var(--warn); font-weight: 600; }
 .worker-state.idle, .worker-state.finished, .worker-state.stopped { color: var(--muted); }
 
 /* The worker table is five columns; on a phone each worker becomes a small block instead. */

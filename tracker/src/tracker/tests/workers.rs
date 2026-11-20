@@ -31,6 +31,14 @@ async fn at_24(fake: &Fake) -> Tracker<Fake> {
     t
 }
 
+async fn at_26(fake: &Fake) -> Tracker<Fake> {
+    let t = start(fake).await;
+    t.person_record(key("gab"), WorkRecord::FormatRaised { to: 26 })
+        .await
+        .unwrap();
+    t
+}
+
 /// Starts `worker` for `sup`, bound to the token `sup` has in these tests.
 async fn start_for(t: &Tracker<Fake>, sup: &str, worker: &str) -> Result<Value, Error> {
     t.start_worker(
@@ -394,4 +402,52 @@ async fn a_failed_release_after_a_finish_is_reported_and_the_sweep_finishes_it()
     let core = t.0.core.lock().await;
     assert!(core.state.held_by("sup-w1").is_none());
     assert_eq!(tries_on(&core.state, "a1"), 1);
+}
+
+#[tokio::test]
+async fn a_supervisor_records_which_of_its_own_live_workers_are_running() {
+    let fake = Fake::default();
+    let t = at_26(&fake).await;
+    start_for(&t, "sup", "sup-w1").await.unwrap();
+    start_for(&t, "sup", "sup-w2").await.unwrap();
+    start_for(&t, "other", "other-w1").await.unwrap();
+    t.stop_worker(Actor::Agent, key("sup"), key("sup-w2"))
+        .await
+        .unwrap();
+    let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let done = t
+        .workers_alive(&agent("sup"), names(&["sup-w1", "sup-w2", "other-w1"]))
+        .await
+        .unwrap();
+    assert_eq!(done["written"], true);
+    {
+        let core = t.0.core.lock().await;
+        assert!(core.state.workers[&key("sup-w1")].alive_ms.is_some());
+        assert_eq!(core.state.workers[&key("sup-w2")].alive_ms, None);
+        assert_eq!(core.state.workers[&key("other-w1")].alive_ms, None);
+        assert!(core.state.rejections.is_empty());
+    }
+    // Nothing of its own and live: nothing is written.
+    let before = fake.log().len();
+    let none = t
+        .workers_alive(&agent("sup"), names(&["sup-w2", "other-w1"]))
+        .await
+        .unwrap();
+    assert_eq!(none["written"], false);
+    assert_eq!(fake.log().len(), before);
+    // A restart keeps the heartbeat.
+    let t = start(&fake).await;
+    assert!(t.workers(Some(&key("sup"))).await["workers"][0]["alive_ms"].is_number());
+}
+
+#[tokio::test]
+async fn a_heartbeat_needs_the_log_at_format_26() {
+    let fake = Fake::default();
+    let t = at_24(&fake).await;
+    start_for(&t, "sup", "sup-w1").await.unwrap();
+    let err = t
+        .workers_alive(&agent("sup"), vec!["sup-w1".into()])
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Format(_)), "{err}");
 }

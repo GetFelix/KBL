@@ -1042,6 +1042,11 @@ pub struct Worker {
     /// It ended by its own `worker_finished`, not a stop.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub finished: bool,
+    /// When its supervisor last recorded the worker's process as running
+    /// (`worker_alive`, format 26). None for a worker no heartbeat named,
+    /// such as a hosted one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alive_ms: Option<u64>,
 }
 
 /// One entry on the flake list, with how often ingest re-ran a check for it.
@@ -4161,8 +4166,32 @@ impl State {
                         started_ms: rec.at_ms,
                         stopped_ms: None,
                         finished: false,
+                        alive_ms: None,
                     },
                 );
+            }
+            WorkRecord::WorkerAlive { workers } => {
+                if rec.actor != Actor::Agent || rec.sup.is_some() {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                // All or none: a name that is not a live worker of this
+                // supervisor refuses the whole note.
+                let mine = |k: &Key| {
+                    self.workers
+                        .get(k)
+                        .is_some_and(|w| w.supervisor == rec.by && w.stopped_ms.is_none())
+                };
+                if workers.is_empty()
+                    || workers.len() > MAX_WORKERS_PER_SUPERVISOR
+                    || !workers.iter().all(mine)
+                {
+                    return Err(Reject::BadWorker);
+                }
+                for k in workers {
+                    if let Some(w) = self.workers.get_mut(k) {
+                        w.alive_ms = Some(rec.at_ms);
+                    }
+                }
             }
             WorkRecord::WorkerFinished => {
                 // Only a worker itself, acting for its live supervisor: the
