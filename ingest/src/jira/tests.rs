@@ -437,7 +437,11 @@ async fn re_polling_never_imports_an_issue_twice() {
         ingest.poll(false).await.unwrap();
     }
     assert_eq!(tracker.count("imported"), 1);
-    assert_eq!(tracker.count("accepted"), 1);
+    assert_eq!(
+        tracker.count("accepted"),
+        0,
+        "an admitted root waits for its triage"
+    );
     // A lost cursor re-lists everything and still imports nothing new.
     tracker.forget_saved();
     ingest.poll(false).await.unwrap();
@@ -470,6 +474,7 @@ async fn an_agents_pull_request_is_announced_once() {
     let ingest = engine(&site, &tracker, json!({}));
     ingest.poll(false).await.unwrap();
     let item = tracker.item_of("acme/FEL#12");
+    tracker.accept(&item);
     tracker.agent(
         "w1",
         kbl_core::work::WorkRecord::Claimed {
@@ -654,6 +659,7 @@ async fn cross(pr: &str, head: impl FnOnce(&kbl_core::names::ItemId) -> String) 
     let jira = engine(&site, &tracker, rule);
     jira.poll(false).await.unwrap();
     let item = tracker.item_of("acme/FEL#12");
+    tracker.accept(&item);
     tracker.agent(
         "w1",
         WorkRecord::Claimed {

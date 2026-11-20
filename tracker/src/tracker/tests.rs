@@ -822,6 +822,7 @@ pub(super) async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
             item: item(id),
             tier: Some(tier),
             triage_skipped: None,
+            admitted_by: None,
         },
     )
     .await
@@ -831,6 +832,7 @@ pub(super) async fn seed(t: &Tracker<Fake>, id: &str, tier: u8) {
 pub(super) fn settings() -> Settings {
     Settings {
         grants: Default::default(),
+        triage_policy: Default::default(),
         visibility: VIS,
         lease_ttl: Duration::from_secs(15),
         lease_wait: Duration::ZERO,
@@ -1608,6 +1610,7 @@ async fn the_lease_must_outlast_a_write_before_the_tracker_writes() {
                 item: item("a1"),
                 tier: Some(1),
                 triage_skipped: None,
+                admitted_by: None,
             },
         )
         .await,
@@ -1890,6 +1893,7 @@ async fn jira_and_github_roots(t: &Tracker<Fake>, pr: &str) {
         item: item("j1"),
         tier: Some(2),
         triage_skipped: None,
+        admitted_by: None,
     })
     .await
     .unwrap();
@@ -2213,6 +2217,7 @@ async fn ingest_cannot_touch_an_item_it_did_not_import() {
             item: item("theirs"),
             tier: Some(0),
             triage_skipped: None,
+            admitted_by: None,
         },
         WorkRecord::Closed {
             item: item("theirs"),
@@ -2585,6 +2590,7 @@ pub(super) async fn seed_in_felix(t: &Tracker<Fake>, id: &str) {
             item: item(id),
             tier: Some(2),
             triage_skipped: None,
+            admitted_by: None,
         },
     )
     .await
@@ -2701,6 +2707,7 @@ mod facets;
 mod fix_check;
 mod metrics;
 mod needs;
+mod policy;
 mod races;
 mod recover;
 mod renewal;
@@ -2815,6 +2822,7 @@ async fn no_route_writes_an_oversized_string() {
             item: item("big"),
             tier: Some(2),
             triage_skipped: None,
+            admitted_by: None,
         },
     )
     .await
@@ -4066,6 +4074,7 @@ async fn ingest_skips_triage_only_on_a_root_of_its_own_source() {
         item: item(id),
         tier: Some(1),
         triage_skipped: Some("curated".into()),
+        admitted_by: None,
     };
     // The Jira worker cannot mark the GitHub worker's root.
     let err = t

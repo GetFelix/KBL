@@ -25,8 +25,9 @@ const PULL_REQUEST_SOURCE: &str = "github";
 /// records a person writes are not among them.
 fn allowed(record: &WorkRecord) -> bool {
     match record {
+        // A policy acceptance is the tracker's own write, never ingest's.
+        WorkRecord::Accepted { admitted_by, .. } => admitted_by.is_none(),
         WorkRecord::Imported { .. }
-        | WorkRecord::Accepted { .. }
         | WorkRecord::Context { .. }
         | WorkRecord::Linked { .. }
         | WorkRecord::Unlinked { .. }

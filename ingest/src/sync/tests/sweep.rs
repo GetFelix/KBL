@@ -160,7 +160,7 @@ fn settled(rig: &Rig, w: &World) -> Findings {
                 // A reopen puts the root back in triage for a person, whatever
                 // admission it had.
                 if it.reopened_by.is_none() {
-                    let admitted = it.accepted && it.children.len() == 2;
+                    let admitted = it.children.len() == 2;
                     if !admitted {
                         found.unadmitted.push(n);
                     }

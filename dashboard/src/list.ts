@@ -39,14 +39,20 @@ export function rootStageLabel(item: Pick<ItemRow, 'stage' | 'root'>): string {
 }
 
 /** The small chip text for a root's triage child, or null when it has none. */
-export function triageChip(item: Pick<ItemRow, 'triage' | 'triage_skipped' | 'root'>): string | null {
+export function triageChip(item: Pick<ItemRow, 'triage' | 'triage_skipped' | 'admitted_by' | 'root'>): string | null {
   if (item.root && item.triage_skipped) return 'Triage skipped';
+  if (item.root && item.admitted_by) return 'Admitted by policy';
   return item.root && item.triage ? `Triage: ${stageLabel(item.triage).toLowerCase()}` : null;
 }
 
 /** Why a root has no triage child, or null: the rule that admitted it past triage. */
 export function triageSkipReason(item: Pick<ItemRow, 'triage_skipped' | 'root'>): string | null {
   return item.root && item.triage_skipped ? `triage skipped by rule ${item.triage_skipped}` : null;
+}
+
+/** Why a root was accepted without a person, or null: the triage policy rule that did it. */
+export function admissionNote(item: Pick<ItemRow, 'admitted_by' | 'root'>): string | null {
+  return item.root && item.admitted_by ? `Admitted by policy ${item.admitted_by}` : null;
 }
 
 /** Items matching `query` by id or title, grouped by stage in board order, empty groups left out. */

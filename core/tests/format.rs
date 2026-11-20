@@ -1684,3 +1684,39 @@ fn the_twenty_fourth_format_stamps_worker_finished_and_ends_the_worker() {
     assert!(item.hold.is_none());
     assert_eq!(item.paths[0].tries, 0);
 }
+
+/// A log at format 25: the tracker accepts a root for a rule once its triage
+/// is done, a person takes that back and the rule stays off, and a rule's
+/// acceptance is refused before triage finishes, from an agent, twice, and
+/// once work has started. Its folded state is pinned in `wasm/golden/format_25.state.json`.
+const FORMAT_25_LOG: &str = include_str!("work_format_25.jsonl");
+
+#[test]
+fn the_twenty_fifth_format_stamps_the_policy_acceptance_and_its_take_back() {
+    assert_eq!(kbl_core::work::FORMAT_V25, 25);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V25) };
+    let log = entries(FORMAT_25_LOG);
+    for (_, r) in &log {
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    assert_eq!(log[5].1.min_format(), 25);
+    assert_eq!(log[10].1.min_format(), 25);
+    let s = fold(&log);
+    let why: Vec<_> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(
+        why,
+        [
+            (5, Reject::NotAdmissible),
+            (8, Reject::ActorNotAllowed),
+            (9, Reject::NotAdmissible),
+            (11, Reject::NotAdmissible),
+            (19, Reject::NotAdmissible),
+            (20, Reject::ActorNotAllowed)
+        ]
+    );
+    let r1 = &s.items[&kbl_core::names::ItemId::new("r1").unwrap()];
+    assert!(!r1.accepted && r1.policy_held && r1.admitted_by.is_none());
+    let r2 = &s.items[&kbl_core::names::ItemId::new("r2").unwrap()];
+    assert_eq!(r2.admitted_by.as_deref(), Some("routine"));
+    assert!(r2.hold.is_some());
+}

@@ -575,6 +575,7 @@ async fn a_deferred_finding_cites_the_finding_it_came_from() {
             item: deferred.clone(),
             tier: Some(2),
             triage_skipped: None,
+            admitted_by: None,
         },
     )
     .await

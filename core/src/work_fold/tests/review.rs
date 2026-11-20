@@ -44,6 +44,7 @@ fn reviewed() -> Log {
         item: id("r1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent(
@@ -584,6 +585,7 @@ fn spend_sums_claim_costs_per_root_reviewer_tier_and_repo() {
         item: id("r2"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     l.agent("w1", claimed("r2", 1));
     l.agent("w1", done("r2", 1, 1_000));
@@ -625,6 +627,7 @@ fn spend_of_a_root_without_a_repo_counts_in_totals_but_not_by_repo() {
         item: id("r1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent("w1", done("r1", 1, 500));

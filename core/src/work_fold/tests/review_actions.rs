@@ -13,6 +13,7 @@ fn raised() -> Log {
         item: id("r1"),
         tier: Some(1),
         triage_skipped: None,
+        admitted_by: None,
     });
     l.agent("w1", claimed("r1", 1));
     l.agent(

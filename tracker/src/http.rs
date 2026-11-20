@@ -219,6 +219,10 @@ fn work_routes<B: Broker>() -> Router<Arc<App<B>>> {
         .route("/v1/work/proposals/accept", post(accept::<B>))
         .route("/v1/work/proposals/edit", post(edit_proposal::<B>))
         .route("/v1/work/proposals/reject", post(reject::<B>))
+        .route(
+            "/v1/work/proposals/undo-admission",
+            post(undo_admission::<B>),
+        )
         .route("/v1/work/questions/answer", post(person_answer::<B>))
         .route("/v1/work/note", post(note::<B>))
         .route("/v1/work/tier", post(tier::<B>))
@@ -1573,6 +1577,7 @@ async fn accept<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<AcceptBody>) -> Re
         item: b.item,
         tier: b.tier,
         triage_skipped: None,
+        admitted_by: None,
     };
     as_person(&call, rk, record).await
 }
@@ -1596,6 +1601,10 @@ async fn edit_proposal<B: Broker>(
         proposal: b.proposal,
     };
     as_person(&call, rk, record).await
+}
+
+async fn undo_admission<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {
+    as_person(&call, rk, WorkRecord::AdmissionUndone { item: b.item }).await
 }
 
 async fn reject<B: Broker>(call: Call<B>, Keyed(b, rk): Keyed<ItemBody>) -> Response {

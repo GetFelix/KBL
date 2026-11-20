@@ -113,3 +113,12 @@ test('a held item waiting on a person never reads as working', () => {
   const answered = item({ stage: 'held', holder: 'w1', held_attempt: 1 });
   assert.equal(history(asked, answered)[0].outcome, 'Working');
 });
+
+test('the timeline names the policy rule that accepted an item and the take-back', () => {
+  const ev = (o: Partial<ActivityEvent>): ActivityEvent => ({ offset: 1, at_ms: 1, by: 'tracker', kind: 'accepted', ...o });
+  const t = timeline([ev({ tier: 2, rule: 'routine' }), ev({ offset: 2, by: 'gab', kind: 'admission_undone' }), ev({ offset: 3, by: 'gab', tier: 1 })]);
+  // Newest first.
+  assert.equal(t[0].title, 'Accepted at tier 1');
+  assert.equal(t[1].title, 'Policy acceptance taken back');
+  assert.equal(t[2].title, 'Admitted by policy routine at tier 2');
+});

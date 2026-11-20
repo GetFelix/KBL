@@ -130,8 +130,8 @@ async fn a_rules_maps_set_tier_type_and_area_and_stay_inside_the_vocabulary() {
     ingest.poll(false).await.unwrap();
     let s = rig.tracker.state();
     let it = &s.items[&rig.root(UP)];
-    // The milestone's tier beats the default of its p1 label, and the labels map to class.
-    assert_eq!(it.tier, Some(0));
+    // An admitted root waits for its triage, so it has no tier yet; the labels map to class.
+    assert_eq!(it.tier, None);
     assert_eq!(it.class.item_type.as_ref().unwrap().value, "perf");
     assert_eq!(it.class.area.as_ref().unwrap().value, "storage");
     // "dashboard" is not in the vocabulary: the tracker refuses it and the import stands.

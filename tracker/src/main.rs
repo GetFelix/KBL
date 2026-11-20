@@ -6,6 +6,7 @@ mod config;
 mod felix;
 mod http;
 mod org;
+mod policy;
 mod teams;
 mod tracker;
 
@@ -23,6 +24,7 @@ use kbl_core::names::Key;
 use kbl_core::org::{ORG_NAMESPACE, OrgRecord, TeamName};
 use kbl_core::org_fold::OrgState;
 use org::Org;
+use policy::TriagePolicy;
 use teams::{OrgSide, Starter, Team, Teams};
 use tracker::{Settings, Tracker};
 
@@ -126,6 +128,11 @@ struct Cli {
     /// is a guess with no measurement behind it (docs/dashboard-research.md).
     #[arg(long, env = "KBL_REVIEW_LIMIT", default_value_t = 3)]
     review_limit: usize,
+    /// A JSON file of triage policy rules. A rule that matches a finished triage
+    /// has the tracker accept it, naming the rule; everything else waits for a
+    /// person. Unset keeps every triage for a person (docs/work-tracker.md).
+    #[arg(long, env = "KBL_TRIAGE_POLICY_FILE")]
+    triage_policy_file: Option<PathBuf>,
     /// A folder for fold snapshots, one subfolder per team. A restart then folds
     /// only the records since the newest instead of all of work.events. Unset keeps none.
     #[arg(long, env = "KBL_TRACKER_SNAPSHOT_DIR")]
@@ -200,7 +207,11 @@ async fn serve() -> Result<()> {
     }
     let tokens = Tokens::load(&cli.tokens_file)?;
     let ttl = Duration::from_millis(cli.lease_ttl_ms);
-    let start = starter(&cli, team.clone(), tokens.grants());
+    let policy = match &cli.triage_policy_file {
+        Some(path) => TriagePolicy::load(path)?,
+        None => TriagePolicy::default(),
+    };
+    let start = starter(&cli, team.clone(), tokens.grants(), policy);
     let teams = match cli.org_namespace.is_some() {
         false => {
             // Without teams a team that cannot start stops the process, as before.
@@ -239,7 +250,12 @@ fn target(cli: &Cli, namespace: &str) -> Target {
 
 /// Starts a team's tracker. The token file's grants belong to `first`, the
 /// team its agents are in.
-fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> {
+fn starter(
+    cli: &Cli,
+    first: TeamName,
+    grants: Grants,
+    triage_policy: TriagePolicy,
+) -> Starter<felix::Felix> {
     let ttl = Duration::from_millis(cli.lease_ttl_ms);
     let visibility = Duration::from_millis(cli.claim_visibility_ms);
     let (crash_after_poll, crash_after_done) = (cli.crash_after_poll, cli.crash_after_done);
@@ -263,6 +279,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
                 Grants::default()
             },
             visibility,
+            triage_policy: triage_policy.clone(),
             lease_ttl: ttl,
             // Long enough for a killed tracker's lease to run out.
             lease_wait: ttl * 2,

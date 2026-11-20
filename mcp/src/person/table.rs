@@ -85,6 +85,12 @@ pub(super) const TOOLS: &[Tool] = &[
         params: &[ITEM],
     },
     Tool {
+        name: "undo_admission",
+        about: "Take back an acceptance the triage policy made, before any agent worked the item. It returns to Triage with triage's answer, and the policy leaves it alone from then on.",
+        route: Route::Post("/v1/work/proposals/undo-admission"),
+        params: &[ITEM],
+    },
+    Tool {
         name: "answer_question",
         about: "Answer the question an item waits on, by choosing one of its options or in your own words. The item resumes for any agent to claim.",
         route: Route::Post("/v1/work/questions/answer"),

@@ -63,6 +63,8 @@ export interface ItemRow {
   triage?: string | null;
   /** The ingest rule that admitted a root with no triage item, or null. */
   triage_skipped?: string | null;
+  /** The triage policy rule that accepted a root after its triage, or null. */
+  admitted_by?: string | null;
   /** True for an item with no parent. */
   root?: boolean;
   /** A person accepted it. Only an accepted item can be flagged. */

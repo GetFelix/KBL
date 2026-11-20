@@ -13,6 +13,8 @@ export interface WriteHandlers {
   setTier(ids: string[], tier: number): void;
   /** Flags the items for a person, or clears the flag. Neither asks first: each takes the other back. */
   flag(ids: string[], flagged: boolean): void;
+  /** Takes back the triage policy's acceptance of the item. It asks nothing first: accepting it again undoes it. */
+  unadmit(item: string): void;
   /** Marks the summary of an attempt accurate or not. The other mark replaces it, so it asks nothing first. */
   rate(item: string, attempt: number, accurate: boolean): void;
   /** Assigns the item to the signed-in person. */
@@ -59,6 +61,7 @@ const PENDING: Record<WriteKind, string> = {
   answer: 'Sending the answer…',
   flag: 'Flagging…',
   unflag: 'Unflagging…',
+  unadmit: 'Taking back the acceptance…',
   rate: 'Marking the summary…',
   take: 'Taking…',
   reassign: 'Assigning…',
@@ -178,6 +181,10 @@ export function itemActions(on: WriteHandlers) {
             kinds.includes(kind) ? h('button', { type: 'button', class: cls, 'data-focus': kind, onclick: guard(() => current(), id, () => on.confirm(kind, [id])) }, label) : null;
           if (kinds.includes('tier')) tier = tierSelect('panel-tier', shownTier(item));
           const parts: (HTMLElement | null)[] = [head,
+            kinds.includes('unadmit')
+              ? h('div', { class: 'action-row' },
+                  h('button', { type: 'button', class: 'button', 'data-focus': 'unadmit', title: `Admitted by policy ${item.admitted_by}. Put it back in Triage for a person to decide; the policy will not accept it again`, onclick: guard(() => current(), id, () => on.unadmit(id)) }, 'Take back the policy acceptance'))
+              : null,
             h('div', { class: 'action-row' }, button('accept', 'Accept…', 'button primary'), button('reject', 'Reject…', 'button danger'), button('close', 'Close…', 'button danger'),
               ...(['flag', 'unflag'] as const).map((k) => kinds.includes(k)
                 ? h('button', { type: 'button', class: 'button', 'data-focus': k, title: k === 'flag' ? 'Move it to Needs you and keep agents off it' : 'Take it out of Needs you', onclick: guard(() => current(), id, () => on.flag([id], k === 'flag')) }, k === 'flag' ? 'Flag for a person' : 'Unflag')

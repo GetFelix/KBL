@@ -295,6 +295,7 @@ impl Broker for Quiet {
 fn quiet_settings() -> crate::tracker::Settings {
     crate::tracker::Settings {
         grants: Default::default(),
+        triage_policy: Default::default(),
         visibility: Duration::from_secs(90),
         lease_ttl: Duration::from_secs(15),
         lease_wait: Duration::ZERO,
@@ -318,6 +319,7 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
         broker,
         crate::tracker::Settings {
             grants: Default::default(),
+            triage_policy: Default::default(),
             visibility: Duration::from_secs(90),
             lease_ttl: Duration::from_secs(15),
             lease_wait: Duration::ZERO,
@@ -1069,6 +1071,7 @@ async fn the_work_tools_are_for_agents_and_the_dashboard_routes_for_people() {
             json!({ "item": "a1", "tier": 1 }),
         ),
         ("/v1/work/proposals/reject", json!({ "item": "a1" })),
+        ("/v1/work/proposals/undo-admission", json!({ "item": "a1" })),
         (
             "/v1/work/questions/answer",
             json!({ "item": "a1", "text": { "text": "x" } }),

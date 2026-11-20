@@ -530,8 +530,8 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         Ok(())
     }
 
-    /// An admitted root starts accepted, with one triage item and one augment
-    /// item, or with neither when the rule skips triage. `accept` is false once a person may have acted on the root, so a
+    /// An admitted root starts in Triage with one triage item and one augment
+    /// item, or accepted with neither when the rule skips triage. `accept` is false once a person may have acted on the root, so a
     /// retry does not undo their tier.
     async fn admit(
         &self,
@@ -540,11 +540,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         issue: &Issue,
         accept: bool,
     ) -> Result<(), SourceError> {
-        if accept {
+        // Only a rule that skips triage accepts the root now. Otherwise the root waits in
+        // Triage, so no agent is handed its fix before its triage is accepted by a
+        // person or by the tracker's triage policy.
+        if accept && rule.triage == Triage::Skip {
             self.write(&WorkRecord::Accepted {
                 item: item.clone(),
                 tier: Some(rule.tier_for(issue)),
                 triage_skipped: (rule.triage == Triage::Skip).then(|| rule.name.clone()),
+                admitted_by: None,
             })
             .await?;
         }

@@ -105,6 +105,9 @@
  "core/src/work_fold.rs#review_of": [
   "let spec = it.review.clone().ok_or(Reject::NotReview)?;"
  ],
+ "core/src/work_fold.rs#policy_blocker": [
+  "if imported && triaged && finished && plain && free {"
+ ],
  "core/src/work_fold.rs#step_record": [
   "if self.upstream.contains_key(&up) {",
   "self.item_mut(item)?.proposal = Some(Proposal {",

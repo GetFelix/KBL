@@ -42,6 +42,7 @@ fn raised() -> Log {
         item: id("r1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     l
 }

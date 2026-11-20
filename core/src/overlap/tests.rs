@@ -53,6 +53,7 @@ impl Log {
             item: id(item),
             tier: Some(1),
             triage_skipped: None,
+            admitted_by: None,
         });
     }
     fn files(&mut self, item: &str, text: &str) {

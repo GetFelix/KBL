@@ -66,7 +66,7 @@ mapped set, and a label that is later removed upstream does not remove a need al
 
 With `admit`, a match is imported as a root and its children come with it: a triage item and an augment item are
 queued first, so agents are handed that work before any fix. The root becomes ready to fix once a person accepts the
-triage. That is why a freshly admitted root shows `has_children: true` and agents seem to be doing something other
+triage, or a [triage policy](work-tracker.md#accepting-routine-triage-by-policy) rule does. That is why a freshly admitted root shows `has_children: true` and agents seem to be doing something other
 than the fix. The dashboard shows the root's stage (Triage, Ready to fix, Held, Needs you) and a chip for its triage
 child.
 

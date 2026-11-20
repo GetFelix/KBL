@@ -110,7 +110,7 @@ try {
   check(imported.length === 1, `${UPSTREAM} was imported once`);
   root = imported[0].item;
   const first = tree();
-  check(first.filter((k) => k === `accepted:${root}`).length === 1, "the root was accepted once");
+  check(first.filter((k) => k === `accepted:${root}`).length === 0, "the root waits in Triage: nothing accepted it yet");
   check(
     JSON.stringify(first.filter((k) => k.startsWith("proposed:")).sort()) ===
       JSON.stringify([`proposed:${root}-a`, `proposed:${root}-t`]),
@@ -135,7 +135,7 @@ try {
   check(added.length === 0, "a poll with no saved state wrote nothing, since the context text is unchanged");
   check(
     JSON.stringify(after) === JSON.stringify(first),
-    "a poll with no saved state kept one import, accept, triage and augment and added no context records",
+    "a poll with no saved state kept one import, triage and augment and added no context records",
   );
 } finally {
   // The root and its triage and augment items are ready; later checks on this stack must not be handed them.

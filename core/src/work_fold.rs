@@ -14,14 +14,14 @@ use crate::artifact::ArtifactId;
 use crate::names::{AgentName, ItemId, Key};
 use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
-    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FORMAT_V21, FindingVerdict, MAX_ASK_OPTION_LEN,
-    MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE, MAX_CHECK_BYTES, MAX_FINDING_FILE,
-    MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST, MAX_REVIEWER,
-    MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT, MAX_SCENARIO,
-    MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MAX_WORKERS_PER_SUPERVISOR, MergeVerdict,
-    NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy,
-    ReviewPass, ReviewSpec, SUPERVISOR_GONE, TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind,
-    WorkLogged, WorkRecord, valid_review_tier,
+    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FORMAT_V21, FORMAT_V25, FindingVerdict,
+    MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE, MAX_CHECK_BYTES,
+    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST,
+    MAX_REVIEWER, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT,
+    MAX_SCENARIO, MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MAX_WORKERS_PER_SUPERVISOR,
+    MergeVerdict, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit,
+    RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec, SUPERVISOR_GONE, TIERS, Target, Then,
+    Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 use crate::work::{
     ClassDim, DEFAULT_SIZES, MAX_CHECK_LOG, MAX_CHECK_NAME, MAX_CHECK_URL, MAX_FLAKE_ISSUE,
@@ -799,6 +799,14 @@ pub struct Item {
     /// The ingest rule that admitted this root with no triage item.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triage_skipped: Option<String>,
+    /// The triage policy rule that accepted this root after its triage. A
+    /// person's own `accepted` clears it. Format 25.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admitted_by: Option<String>,
+    /// The policy never accepts this root again: a person took its acceptance
+    /// back, or reopened it. Cleared by no record. Format 25.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub policy_held: bool,
     /// Upstream's labels and milestone, set at import and kept in step by
     /// reconcile. Format 19.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -985,6 +993,11 @@ pub enum Reject {
     BadFlake,
     /// A `check_failed` for a check the item's last status does not show failing.
     NotFailing,
+    /// A policy `accepted` or `admission_undone` that the item's state does
+    /// not allow: a triage answer that asks a person something, was edited
+    /// or went stale, or an item a person already decided on or that work
+    /// has started on.
+    NotAdmissible,
 }
 
 /// A delegated worker: an agent name a supervisor's token registered, which
@@ -2112,6 +2125,8 @@ impl State {
             accepted: false,
             accepted_by_person: false,
             triage_skipped: None,
+            admitted_by: None,
+            policy_held: false,
             labels: Vec::new(),
             milestone: None,
             class: Class::default(),
@@ -2528,9 +2543,22 @@ impl State {
                 item,
                 tier,
                 triage_skipped,
+                admitted_by,
             } => {
                 if rec.actor == Actor::Agent {
                     return Err(Reject::ActorNotAllowed);
+                }
+                if let Some(rule) = admitted_by {
+                    // Only the tracker's policy accepts for a rule, and only a
+                    // triage answer nobody has touched; it never replaces a
+                    // person's acceptance.
+                    if rec.actor != Actor::Tracker || triage_skipped.is_some() {
+                        return Err(Reject::ActorNotAllowed);
+                    }
+                    if rule.is_empty() || rule.len() > MAX_RULE_NAME {
+                        return Err(Reject::TooLong);
+                    }
+                    self.policy_blocker(item)?;
                 }
                 if let Some(rule) = triage_skipped {
                     // Only ingest, writing as the tracker, admits a root past
@@ -2558,6 +2586,7 @@ impl State {
                     .or(Some(DEFAULT_TIER));
                 it.accepted = true;
                 it.triage_skipped.clone_from(triage_skipped);
+                it.admitted_by.clone_from(admitted_by);
                 it.accepted_by_person = rec.actor == Actor::Person && format >= FORMAT_V6;
                 // A proposal gets its root budget when a person accepts it, not before.
                 if it.parent.is_none() {
@@ -2577,6 +2606,27 @@ impl State {
                         c.tier = tier;
                     }
                 }
+            }
+            WorkRecord::AdmissionUndone { item } => {
+                if rec.actor != Actor::Person {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                let it = self.item(item)?;
+                if it.closed.is_some() {
+                    return Err(Reject::Closed);
+                }
+                // Once work has started, closing the item is the way out.
+                if it.admitted_by.is_none() || it.hold.is_some() || !it.paths.is_empty() {
+                    return Err(Reject::NotAdmissible);
+                }
+                let it = self.item_mut(item)?;
+                it.accepted = false;
+                it.accepted_by_person = false;
+                it.admitted_by = None;
+                it.policy_held = true;
+                it.tier = None;
+                it.flagged = false;
+                self.track(item);
             }
             WorkRecord::Prerequisite {
                 item,
@@ -2832,12 +2882,24 @@ impl State {
                     return Err(Reject::Closed);
                 }
                 // Reviews of a pull request do not hold back its author's own completion.
-                if self.open_children(item).iter().any(|c| {
-                    self.items
-                        .get(*c)
-                        .is_some_and(|c| c.work != WorkKind::Review)
-                }) {
-                    return Err(Reject::OpenChildren);
+                // From format 25 neither do triage and augment items nobody started: the
+                // fix is done, so they are moot and are cancelled with it.
+                let moot_ok = self.format() >= FORMAT_V25;
+                let mut moot = Vec::new();
+                for c in self.open_children(item) {
+                    let Some(child) = self.items.get(c) else {
+                        continue;
+                    };
+                    if child.work == WorkKind::Review {
+                        continue;
+                    }
+                    let unstarted = child.hold.is_none() && child.paths.is_empty();
+                    let routine = matches!(child.work, WorkKind::Triage | WorkKind::Augment);
+                    if moot_ok && routine && unstarted {
+                        moot.push(c.clone());
+                    } else {
+                        return Err(Reject::OpenChildren);
+                    }
                 }
                 if let Some(spec) = &it.review
                     && spec.pass == ReviewPass::Final
@@ -2865,6 +2927,9 @@ impl State {
                 }
                 self.track(item);
                 self.charge(item, &root, rec);
+                for c in moot {
+                    self.close(&c, Closure::Cancelled);
+                }
             }
             WorkRecord::Released {
                 item,
@@ -3569,6 +3634,9 @@ impl State {
                 // Back to Triage: a person accepts it again.
                 it.accepted = false;
                 it.triage_skipped = None;
+                it.admitted_by = None;
+                // The old triage answer says nothing about the reopened item.
+                it.policy_held = true;
                 it.accepted_by_person = false;
                 self.track(item);
                 let it = self.item_mut(item)?;
@@ -5038,6 +5106,37 @@ impl State {
                 })
                 .map(Some)
                 .ok_or(Reject::NotHolder),
+        }
+    }
+
+    /// Why the triage policy may not accept `item` now, or Ok when it may.
+    /// The fold and the tracker both ask, so a rule can only accept a root
+    /// whose triage finished with a plain answer and that nobody has decided on.
+    pub fn policy_blocker(&self, item: &ItemId) -> Result<(), Reject> {
+        let it = self.item(item)?;
+        let imported = self.upstream.values().any(|i| i == item);
+        let triage = |w: WorkKind| w == WorkKind::Triage || w == WorkKind::Augment;
+        let mut kids = it.children.iter().filter_map(|c| self.items.get(c));
+        let finished = kids.clone().all(|c| !triage(c.work) || c.closed.is_some());
+        let triaged = kids.any(|c| c.work == WorkKind::Triage);
+        let plain = it.proposal.as_ref().is_some_and(|p| {
+            !p.edited
+                && p.unclear.is_none()
+                && p.duplicate_of.is_none()
+                && p.split.is_empty()
+                && p.depends_on.is_empty()
+        });
+        let free = it.parent.is_none()
+            && it.closed.is_none()
+            && !it.accepted
+            && !it.policy_held
+            && !it.changed_upstream
+            && !it.left_scope
+            && it.open_question.is_none();
+        if imported && triaged && finished && plain && free {
+            Ok(())
+        } else {
+            Err(Reject::NotAdmissible)
         }
     }
 

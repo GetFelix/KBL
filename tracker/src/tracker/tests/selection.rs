@@ -44,6 +44,7 @@ async fn child(t: &Tracker<Fake>, id: &str, parent: &str, work: WorkKind, tier: 
             item: item(id),
             tier: Some(tier),
             triage_skipped: None,
+            admitted_by: None,
         },
     )
     .await

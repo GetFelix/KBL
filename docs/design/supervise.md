@@ -167,6 +167,14 @@ launch in the same round has taken, so `n` launches fit the first `n` ready item
 `work_next`, so it may get another item if the queue changes first. `profile` and `model` on `supervise_start`
 override the table for every launch of that pool. Each worker records vendor, profile and model.
 
+## Triage by policy (built)
+
+The fit table routes ready work to a profile; the tracker's triage policy decides what becomes ready without a person.
+Both are rules over fields triage recorded, and neither calls a model. A policy rule accepts a finished triage whose
+tier, area, size and needs match, writing `accepted` as the tracker with the rule's name; the item is then ready and
+the fit table picks a worker for it. A triage that matched no rule stays in Needs you. See
+[accepting routine triage by policy](../work-tracker.md#accepting-routine-triage-by-policy).
+
 ## Tools and top-up (built)
 
 - `supervise_start {count, filter, profile?, model?}` sets the pool to `count` workers on `filter` (the narrowing

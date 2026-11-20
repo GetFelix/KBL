@@ -168,6 +168,8 @@ jobs:
         run: node dev/check-tracker-review.mjs
       - name: Run triage as work against Felix
         run: node dev/check-tracker-triage.mjs
+      - name: Accept routine triage by policy against Felix
+        run: node dev/check-tracker-policy.mjs
       - name: Run three agent sessions from the launcher until the queue is empty
         run: node dev/check-agents.mjs
       - name: Upgrade from the previous build and back, over one log

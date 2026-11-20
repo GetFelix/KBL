@@ -24,6 +24,7 @@ fn a_proposal_waits_until_a_person_accepts_it() {
         item: id("c1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     }); // 5: at 50
     let s = stats(&l);
     assert_eq!((s.open, s.all.count, s.all.p50_ms), (0, 1, Some(10)));
@@ -269,6 +270,7 @@ fn the_queue_lists_waits_oldest_first_then_by_tier() {
         item: id("c1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     assert_eq!(ids(&l), ["c2"]);
 }

@@ -24,6 +24,7 @@ did not:
 | One inbox for everything waiting on a person, answered in one action | #388 | Done |
 | Summary, diff and checks beside each finished attempt, with a trust mark | #389, #307 | #307 (trust numbers) done; #389 planned |
 | Steer the queue: skip work that cannot run now, ask for a kind of work, soft links, skip triage per rule | #376, #377, #378, #384 | #377 and #384 done; #376 and #378 planned |
+| Accept routine triage by configured rules, so only what needs a person reaches Needs you | #476 | Done ([work tracker](../work-tracker.md#accepting-routine-triage-by-policy)) |
 
 These form the milestone "Supervision: one engineer, many agents".
 

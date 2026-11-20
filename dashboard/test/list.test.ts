@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, triageSkipReason, rootStageLabel, visible } from '../src/list.ts';
+import { boardEdge, flatten, group, inScope, move, moveBoard, neighbour, shownRows, stageLabel, triageChip, triageSkipReason, admissionNote, rootStageLabel, visible } from '../src/list.ts';
 
 const rows = [
   { id: 'a', title: 'ship the release', stage: 'done' },
@@ -139,4 +139,13 @@ test('a root admitted without triage says which rule skipped it', () => {
   assert.equal(triageSkipReason(skipped), 'triage skipped by rule curated');
   assert.equal(triageSkipReason({ root: true, triage: null, triage_skipped: null }), null);
   assert.equal(triageSkipReason({ root: false, triage_skipped: 'curated' }), null);
+});
+
+test('a root the policy accepted says which rule did, and a person-accepted one says nothing', () => {
+  const admitted = { root: true, triage: 'done', admitted_by: 'routine' };
+  assert.equal(triageChip(admitted), 'Admitted by policy');
+  assert.equal(admissionNote(admitted), 'Admitted by policy routine');
+  assert.equal(admissionNote({ root: true, admitted_by: null }), null);
+  assert.equal(admissionNote({ root: false, admitted_by: 'routine' }), null);
+  assert.equal(triageChip({ root: true, triage: 'done', admitted_by: null }), 'Triage: done');
 });
