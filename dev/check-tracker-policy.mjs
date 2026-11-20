@@ -145,7 +145,8 @@ try {
   check(mine.length === 1 && mine[0].actor === "person" && mine[0].admitted_by === undefined, "a person's acceptance names no rule");
 
   // Only accepted items are next in line: the policy's and the person's, nothing else.
-  const peek = await w1.tool("work_peek", { kinds: ["fix"], limit: 50 });
+  // pol-safe needs a safety review, so only an agent that declares it is shown the item.
+  const peek = await w1.tool("work_peek", { kinds: ["fix"], capabilities: ["safety-review"], limit: 50 });
   const next = new Set(peek.next.map((i) => i.item));
   check(next.has("pol-docs") && next.has("pol-safe"), "the policy's item and the person's item are next in line");
   for (const id of ["pol-docs2", "pol-repl", "pol-vague"]) check(!next.has(id), `${id} is not next in line`);
