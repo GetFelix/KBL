@@ -99,7 +99,7 @@ hook_token_env = "CLOUD_HOOK_TOKEN"
   `KBL_TRACKER_TOKEN`, `KBL_PERSON_TOKEN` and `KBL_FELIX_TOKEN` may not be listed, so the supervisor's tokens never
   reach a worker; no `KBL_` name may be listed at all. `set_env` adds fixed values, which may use `{worker}` and
   `{workdir}`. `git_identity = { name, email }` adds the four `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables (the email is checked at load, and `set_env` wins
-  for any name both set), so a worker's commits do not fall back to the host's global identity. `mcp_config_file` writes the MCP config to a fixed place the vendor reads (with `{worker}` and
+  for any name both set), so a worker's commits do not fall back to the host's global identity. Vendor attribution is turned off in the vendor's own settings; see [the profile examples](../supervise-profiles.md). `mcp_config_file` writes the MCP config to a fixed place the vendor reads (with `{worker}` and
   `{workdir}`) instead of the state directory.
 - The per-worker MCP config (`json`: `mcpServers.kbl`; `toml`: `mcp_servers.kbl`) starts `kbl-mcp` with
   `KBL_AGENT={worker}`, that worker's token, the run, the tracker and broker addresses, and the pool's filter as

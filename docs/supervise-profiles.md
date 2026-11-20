@@ -45,13 +45,20 @@ command = [
 with `/work/claude-settings.json` holding
 
 ```json
-{ "includeCoAuthoredBy": false, "attribution": { "commit": "", "pr": "" } }
+{ "attribution": false }
 ```
 
-`includeCoAuthoredBy: false` is the older switch for the commit trailer and `attribution.commit` / `attribution.pr`
-(empty strings) replace it in newer Claude Code, which also covers the pull request footer. Older versions ignore
-`attribution` and newer ones still accept `includeCoAuthoredBy` but may mark it deprecated, so keep both and check
-Claude Code's settings docs for the version you run.
+`attribution: false` hides all attribution (commit trailer, pull request footer, session URL) and needs Claude Code
+v2.1.281 or later. On older versions use the object form, where empty `commit` and `pr` strings hide each part:
+
+```json
+{ "attribution": { "commit": "", "pr": "", "sessionUrl": false } }
+```
+
+`includeCoAuthoredBy` is deprecated since v2.0.62 and is ignored once `attribution.commit` or `attribution.pr` is set,
+so leave it out. See the [settings reference](https://code.claude.com/docs/en/settings-reference.md). `--settings` can
+set any user-settings key, so keep that file to what the worker needs. Check the trailer of the first worker commit
+once to confirm it is gone.
 
 `--strict-mcp-config` keeps the worker to the one server in its config. Add `--allowedTools` for the tools the
 worker may use without asking, as the Claude Code docs describe.
