@@ -84,6 +84,10 @@ for up to two minutes meanwhile, so a few `retrying` lines in its log are normal
 answered 502", check `docker compose -f dev/compose.yml --profile quickstart logs tracker` (or `podman compose`); the
 dashboard looks the tracker up again by name, so a restarted tracker needs no dashboard restart.
 
+The stack's work log starts at the format this build writes, so `supervise_start` and the other newer tools work with no
+`format_raised` by hand. The script prints the log's format; a log carried over from an older build that is below it
+gets the one command to raise it, as in [upgrading](docs/upgrades.md#upgrade).
+
 1. **Open the dashboard.** Open the printed link. Its queue is empty.
 2. **Add work.** Post an item to the tracker with the person token (the dashboard's Sign in takes the same token for its accept, reject, tier and close actions):
    ```bash

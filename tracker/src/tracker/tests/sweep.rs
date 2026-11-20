@@ -228,8 +228,17 @@ impl Model {
     }
 }
 
+/// Every start is on a log that begins at the current format, so a seed's
+/// first start also exercises the creation of the log.
 async fn restart(fake: &Fake) -> Tracker<Fake> {
-    start(fake).await
+    start_with(fake, fresh()).await
+}
+
+fn fresh() -> Settings {
+    Settings {
+        fresh_format: kbl_core::work::FORMAT,
+        ..settings()
+    }
 }
 
 fn ready_streams() -> [String; 4] {
@@ -1053,16 +1062,13 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             fake.raft_blanks();
         }
         let mut t = Trackers {
-            cur: start(&fake).await,
+            cur: restart(&fake).await,
             old: None,
         };
-        // Format 24 (needs from 20), so items can be assigned to agents, a question frees the
-        // asker, a direct claim says it was one, an item can be blocked, and
-        // workers can be started and can finish.
-        t.cur
-            .person_record(key("gab"), WorkRecord::FormatRaised { to: 24 })
-            .await
-            .unwrap();
+        // The new log starts at the current format (24 or above), so items can
+        // be assigned to agents, a question frees the asker, a direct claim says
+        // it was one, an item can be blocked, and workers can be started and can finish.
+        assert!(t.cur.0.core.lock().await.state.format() >= 24);
         let vocabulary = WorkRecord::RulesSet {
             target: kbl_core::work::Target {
                 source: "github".into(),

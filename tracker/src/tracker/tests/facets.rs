@@ -254,10 +254,7 @@ async fn a_facet_is_refused_below_format_19() {
         )
         .await
         .unwrap_err();
-    assert!(
-        matches!(err, Error::Refused { ref why } if why == "format"),
-        "{err:?}"
-    );
+    assert!(matches!(err, Error::Format(_)), "{err:?}");
 }
 
 #[tokio::test]

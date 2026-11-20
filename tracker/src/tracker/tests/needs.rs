@@ -284,10 +284,7 @@ async fn needs_are_refused_below_format_20() {
         )
         .await
         .unwrap_err();
-    assert!(
-        matches!(err, Error::Refused { ref why } if why == "format"),
-        "{err:?}"
-    );
+    assert!(matches!(err, Error::Format(_)), "{err:?}");
 }
 
 fn answer(needs: Option<Vec<String>>) -> super::super::tools::TriageAnswer {
