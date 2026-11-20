@@ -351,7 +351,7 @@ export function itemList(
         if (leadEl.textContent !== text2) leadEl.textContent = text2;
         const pe = a.querySelector<HTMLElement>('.row-props')!;
         if (pe.textContent !== props) pe.textContent = props;
-        paintTriage(a, item);
+        paintTriage(a, item, open.has(id) && !!kids.get(id)?.some((k) => k.work === 'triage'));
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }

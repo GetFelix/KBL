@@ -367,6 +367,12 @@ try {
   check(await page.eval(`!document.querySelector('.card[data-id=rev-2300]')`), 'a review child is not a card of its own');
   check(await page.eval(`document.querySelector('.card[data-id=gh-2300] .card-lead').textContent === 'felix#2300'`), 'a card leads with the upstream reference, not the KBL id');
   check(await page.eval(`document.querySelector('[data-chip=gh-2300]')?.textContent.includes('1 sub-task, 1 done')`), 'the root carries a sub-task count and progress chip');
+  await shoot('children-collapsed-dark');
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
+  await page.waitFor(`!document.querySelector('#children-gh-2300').hidden`);
+  check(await page.eval(`(() => { const l = [...document.querySelectorAll('#children-gh-2300 .child-link')]; return l.length > 0 && l.every((a) => { const st = a.querySelector('.child-state'); return st.getClientRects().length === 1 && st.getBoundingClientRect().height < 30 && a.getBoundingClientRect().height < 60 && !a.textContent.includes('gh-2300'); }); })()`), 'an expanded sub-task is one line: kind, state chip on one line, no repeat of the parent');
+  await shoot('children-expanded-dark');
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
   check(await page.eval(`document.querySelector('[data-chip=gh-2300]').getAttribute('aria-expanded') === 'false'`), 'the chip starts closed');
   // A script click does not focus a button the way a real one does, so focus first.
   await page.eval(`document.querySelector('[data-chip=gh-2300]').focus(); document.querySelector('[data-chip=gh-2300]').click(); true`);
@@ -730,6 +736,15 @@ try {
   check(await page.eval(`document.querySelector('.empty h2')?.textContent === 'Cannot reach the gateway'`), 'a gateway that is down at open says nothing has been read, not that there is no work');
   await axe('unreachable');
   await shoot('unreachable-dark');
+
+  // The same sub-task rows in the list.
+  await open(connected);
+  await page.waitFor(live);
+  await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
+  await page.waitFor(`!document.querySelector('#children-gh-2300').hidden`);
+  check(await page.eval(`(() => { const l = [...document.querySelectorAll('#children-gh-2300 .child-link')]; return l.length > 0 && l.every((a) => { const st = a.querySelector('.child-state'); return st.getClientRects().length === 1 && st.getBoundingClientRect().height < 30 && a.getBoundingClientRect().height < 60; }); })()`), 'in the list, an expanded sub-task is one line with its state chip on one line');
+  await shoot('children-list-expanded-dark');
+  clean();
 
   // Board with the item panel open: the columns keep their width and the board scrolls under the panel.
   await open(`${connected}&layout=board`);

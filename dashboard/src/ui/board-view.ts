@@ -141,7 +141,7 @@ export function boardView(on: ListHandlers & StripHandlers, announce: Announce) 
           set('.card-props', properties(item, now).join(' · '));
           set('.card-related', relatedLine(item, s.items) ?? '');
         }
-        paintTriage(a, item);
+        paintTriage(a, item, open.has(id) && !!kids.get(id)?.some((k) => k.work === 'triage'));
         // Same "waits on" line as a Blocked row in the list.
         const w = a.querySelector<HTMLElement>('.card-waits')!;
         const line = item ? reasonLine(item, waits.get(id)) : '';
