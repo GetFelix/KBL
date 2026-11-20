@@ -692,15 +692,8 @@ async fn policy_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, rng: &mut Rn
                 m.undone.insert(id);
             }
         }
-        // After triage finished: an earlier accept would let a later unclear answer
-        // open a question on a root an agent already holds, a case this sweep leaves alone.
-        5 if rng.below(3) == 0
-            && replay(fake)
-                .state
-                .items
-                .get(&item(&child))
-                .is_some_and(|c| c.closed.is_some()) =>
-        {
+        // Also before triage finished: a later unclear answer then meets a root an agent holds.
+        5 if rng.below(3) == 0 => {
             let accept = WorkRecord::Accepted {
                 item: item(&id),
                 tier: Some(1),

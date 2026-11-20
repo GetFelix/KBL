@@ -1779,6 +1779,12 @@ go of the item instead of holding it while it waits:
   the item since. The reply says `late: true`. Anything else after a lapse is
   refused as before.
 
+- Triage that marks an item `unclear` opens a question on it the same way. A
+  person may have accepted the item before triage finished, and an agent may
+  already hold it. From format 27 that agent's hold ends too, with its claim
+  given back, so no item is both held and waiting on a person. Below 27 the
+  holder keeps it. Its next write is refused as `not_holder`.
+
 Only failures count toward the two tries. An agent that calls a failure a wait
 gains nothing: every wait stops in Needs you until a person acts, and questions
 stay capped at 20 per attempt.
@@ -1791,8 +1797,9 @@ Every `work_next` reply carries a `questions` line that says so, and so do the
 
 Triage can mark an item `unclear` with a reason, `scope`, `repo` or
 `acceptance`. The item then reaches a person as a question in Needs you
-("unclear"), not as Ready work, even after someone accepts it. The person's
-answer starts resume work like any other.
+("unclear"), not as Ready work, even after someone accepts it, and an agent
+that already holds it lets go (format 27). The person's answer starts resume
+work like any other.
 
 Questions that fold before this existed carry no options and their answers
 start no work, so older logs fold as they did.

@@ -67,7 +67,7 @@ byte as before.
 
 Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
-is 26.
+is 27.
 
 A log with no records starts at `FORMAT`: the tracker writes the raise as the
 log's first record when it starts on an empty log, so a new stack needs no
@@ -112,6 +112,7 @@ on it.
 | 24 | `worker_finished`: a hosted worker's own report that it is done ([supervise](design/supervise.md#hook-workers-that-finish)). Only the worker writes it, with its supervisor on the record; the fold ends the worker as a stop does, so its token dies and its name is never reused. Anyone else's is refused (`actor_not_allowed`, `bad_worker`) | Until the raise, `POST /v1/work/workers/finish` is refused with `format`, and a hook worker counts as live until its supervisor stops it. A reader below 24 stops at the raise |
 | 25 | The triage policy ([work tracker](work-tracker.md#accepting-routine-triage-by-policy)): `accepted` with `admitted_by`, which only the tracker writes for a rule, `intake_tier`, the tracker's record of an intake rule's tier for an admitted root, and `admission_undone`, a person's take-back of such an acceptance. An `accepted` with `admitted_by` before the raise is refused (`format`), and so is `admission_undone` | Until the raise the tracker runs no rule, so every triage waits for a person as before, and `POST /v1/work/proposals/undo-admission` is refused with `format`. A reader below 25 stops at the raise |
 | 26 | `worker_alive`: a supervisor's note that the processes of some of its own live workers are running ([supervise](design/supervise.md#heartbeat)). Only the supervisor's agent token writes it. The fold sets the worker's `alive_ms` and refuses the whole note when a name is not a live worker of that supervisor, the list is empty or over 64, or a worker or a person wrote it (`bad_worker`, `actor_not_allowed`) | Until the raise, `POST /v1/work/workers/alive` is refused with `format`, a supervisor ignores that, and the dashboard shows no heartbeat. A reader below 26 stops at the raise |
+| 27 | No record or field: a `triaged` that marks an item `unclear` frees the agent that holds that item, as any question does. The hold ends, the claim it used is given back, and the item waits in Needs you. A person can accept an item before its triage ends, so an agent may already hold it ([work tracker](work-tracker.md#questions-and-waits-free-the-agent)) | Until the raise, the holder keeps the item while the question is open, so the item is both held and waiting on a person. A reader below 27 stops at the raise |
 
 `org.events` ([teams](design.md#teams)) has its own number, `ORG_FORMAT` in `core/src/org.rs`, now 2. It follows the same rules. An org admin raises it with `POST /v1/org/records` and `{"record": {"kind": "format_raised", "to": 2}}`; a reader below the new format stops at the raise.
 

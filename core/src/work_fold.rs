@@ -14,14 +14,14 @@ use crate::artifact::ArtifactId;
 use crate::names::{AgentName, ItemId, Key};
 use crate::work::{
     Actor, Assignee, CloseWhy, DoneWhen, Evidence, FORMAT, FORMAT_V1, FORMAT_V4, FORMAT_V5,
-    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FORMAT_V21, FORMAT_V25, FindingVerdict,
-    MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE, MAX_CHECK_BYTES,
-    MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED, MAX_REVERT_TEST,
-    MAX_REVIEWER, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES, MAX_RULES_TEXT,
-    MAX_SCENARIO, MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY, MAX_WORKERS_PER_SUPERVISOR,
-    MergeVerdict, NewPrerequisite, PrChecks, PrPhase, PrReview, PrSnapshot, PriceUnit,
-    RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec, SUPERVISOR_GONE, TIERS, Target, Then,
-    Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
+    FORMAT_V6, FORMAT_V8, FORMAT_V13, FORMAT_V14, FORMAT_V21, FORMAT_V25, FORMAT_V27,
+    FindingVerdict, MAX_ASK_OPTION_LEN, MAX_ASK_OPTIONS, MAX_BLOCK_REASON, MAX_BLOCK_RESOURCE,
+    MAX_CHECK_BYTES, MAX_FINDING_FILE, MAX_FINDING_TITLE, MAX_FINDINGS, MAX_PR_REF, MAX_RELATED,
+    MAX_REVERT_TEST, MAX_REVIEWER, MAX_REVIEWS_PER_ROOT, MAX_RULE_CHECKS, MAX_RULE_SCOPES,
+    MAX_RULES_TEXT, MAX_SCENARIO, MAX_TITLE, MAX_USAGE_ENTRIES, MAX_VERDICT_WHY,
+    MAX_WORKERS_PER_SUPERVISOR, MergeVerdict, NewPrerequisite, PrChecks, PrPhase, PrReview,
+    PrSnapshot, PriceUnit, RefusalReason, ReleaseWhy, ReviewPass, ReviewSpec, SUPERVISOR_GONE,
+    TIERS, Target, Then, Unclear, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, valid_review_tier,
 };
 use crate::work::{
     ClassDim, DEFAULT_SIZES, MAX_CHECK_LOG, MAX_CHECK_NAME, MAX_CHECK_URL, MAX_FLAKE_ISSUE,
@@ -2559,6 +2559,9 @@ impl State {
                         path.triages = path.triages.saturating_add(1);
                     }
                 }
+                // An agent may hold the item already: a person can accept it
+                // before triage ends, and an agent claims the fix.
+                let holder = self.item(item)?.hold.as_ref().map(|h| h.attempt);
                 self.item_mut(item)?.proposal = Some(Proposal {
                     tier: *tier,
                     why: why.clone(),
@@ -2588,6 +2591,12 @@ impl State {
                         attempt: 0,
                         unclear: *unclear,
                     });
+                    // A question frees its asker: whoever holds the item lets go.
+                    if let Some(attempt) = holder
+                        && self.format() >= FORMAT_V27
+                    {
+                        self.park_wait(item, attempt, rec, false)?;
+                    }
                 }
             }
             WorkRecord::Accepted {
