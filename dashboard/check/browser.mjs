@@ -746,11 +746,11 @@ try {
 
   await open(connected, { width: 390, height: 844 });
   await page.waitFor(live);
-  const phoneFilters = await page.eval(`JSON.stringify((() => { const t = document.querySelector('.filter-toggle'); return { toggle: getComputedStyle(t).display, expanded: t.getAttribute('aria-expanded'), filters: getComputedStyle(document.querySelector('.filters')).display, save: getComputedStyle(document.querySelector('.save-view')).display, rowTop: Math.round(document.querySelector('.row').getBoundingClientRect().top) }; })())`);
+  const phoneFilters = await page.eval(`JSON.stringify((() => { const t = document.querySelector('.filter-toggle'); return { toggle: getComputedStyle(t).display, expanded: t.getAttribute('aria-expanded'), filters: getComputedStyle(document.querySelector('.filters')).display, save: document.querySelector('.save-view').getClientRects().length, rowTop: Math.round(document.querySelector('.row').getBoundingClientRect().top) }; })())`);
   const pf = JSON.parse(phoneFilters);
-  check(pf.toggle !== 'none' && pf.expanded === 'false' && pf.filters === 'none' && pf.save === 'none' && pf.rowTop < 330, `on a phone the filters fold behind one button and the list starts near the top (${phoneFilters})`);
+  check(pf.toggle !== 'none' && pf.expanded === 'false' && pf.filters === 'none' && pf.save === 0 && pf.rowTop < 330, `on a phone the filters fold behind one button and the list starts near the top (${phoneFilters})`);
   await page.eval(`document.querySelector('.filter-toggle').click(); true`);
-  check(await page.eval(`document.querySelector('.filter-toggle').getAttribute('aria-expanded') === 'true' && getComputedStyle(document.querySelector('.filters')).display !== 'none' && getComputedStyle(document.querySelector('.save-view')).display !== 'none'`), 'the Filters button opens the selects and Save view');
+  check(await page.eval(`document.querySelector('.filter-toggle').getAttribute('aria-expanded') === 'true' && getComputedStyle(document.querySelector('.filters')).display !== 'none' && document.querySelector('.save-view').getClientRects().length > 0`), 'the Filters button opens the selects and Save view');
   await page.eval(`document.querySelector('.filter-toggle').click(); true`);
   await axe('phone');
   check(await page.eval(`[...document.querySelectorAll('.row-title')].every((t) => t.clientWidth >= 150 && t.scrollWidth <= t.clientWidth + 1 || t.getClientRects().length === 0 || t.clientHeight > 20)`), 'on a phone, a row keeps room for its title (its details go under it)');
