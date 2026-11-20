@@ -136,6 +136,8 @@ The view link works once: the page removes the token from the address and keeps 
    What the mode means: `admit` imports each match as a root and queues its triage and augment work first, so agents
    are handed that before any fix, and the root becomes ready to fix once a person accepts the triage. `propose` waits
    for a person before anything is queued. A rule that sets `"triage": "skip"` (with `admit`) imports an issue that is already well specified straight to Ready to fix, with no triage or augment item. [Setting up ingest](docs/ingest-setup.md) explains the rest.
+
+   To keep a person out of the routine decisions, give the tracker a triage policy (`KBL_TRIAGE_POLICY_FILE`): rules over what triage recorded, such as "tier 2 or 3, not replication, storage or safety review". The tracker accepts a finished triage that matches a rule, naming the rule on the record, and everything else stays in Needs you. A person can take any such acceptance back from the dashboard. See [accepting routine triage by policy](docs/work-tracker.md#accepting-routine-triage-by-policy).
 5. **Stop it** with `dev/down.sh`, which also deletes its data.
 
 ### Troubleshooting
@@ -496,6 +498,7 @@ node --test dev/lib/script.test.mjs          # the seed rules, with no Felix
 node dev/check-death.mjs                     # kills workers holding tasks, restarts one, and finishes a task twice
 node dev/check-poison.mjs                    # a task that always fails and one that is given up are both task_dead
 node dev/check-tracker-triage.mjs            # a scripted agent answers four triage items; a person acts on two (needs the tracker built too)
+node dev/check-tracker-policy.mjs            # a policy file accepts routine triage by rule and leaves safety-tagged triage for a person (needs the tracker built too)
 node dev/check-tracker-ingest.mjs            # kbl-ingest polls one issue from a stand-in GitHub again and again, and after losing its state, and imports it once
 node dev/check-tracker-fix-check.mjs         # a red check on an agent's pull request becomes one claimable fix_check item, and a green head ends it
 kbl-tool run log <run>                    # prints a run's log, one JSON record per line

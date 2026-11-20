@@ -2,7 +2,7 @@
 //! claims, extensions, completions, dismissals and restarts against a Raft-style `Fake`
 //! while the broker misbehaves, and checks the log after every step.
 //!
-//! `KBL_SWEEP_SEEDS=n` runs seeds 0..n (default 40), `KBL_SWEEP_SEED=s` replays
+//! `KBL_SWEEP_SEEDS=n` runs seeds 0..n (default 100), `KBL_SWEEP_SEED=s` replays
 //! one seed. A failure names the seed. See docs/fault-sweep.md.
 
 use kbl_core::content::Content;
@@ -62,7 +62,7 @@ fn seeds() -> std::ops::Range<u64> {
     if let Some(one) = var("KBL_SWEEP_SEED") {
         return one..one + 1;
     }
-    0..var("KBL_SWEEP_SEEDS").unwrap_or(40)
+    0..var("KBL_SWEEP_SEEDS").unwrap_or(100)
 }
 
 /// The log folded from nothing, and the offsets of the claims whose hold has
@@ -173,6 +173,11 @@ struct Model {
     caps: HashMap<&'static str, Vec<String>>,
     /// The supervisor was removed: its workers are stopped and it starts no more.
     gone: bool,
+    /// Roots imported for the triage policy, each with a triage item `<id>-t`
+    /// and no accept. A person's undo that was taken is in `undone`.
+    policy_roots: HashSet<String>,
+    policy_aux: u64,
+    undone: HashSet<String>,
 }
 
 impl Model {
@@ -217,6 +222,54 @@ impl Model {
             assert!(name.as_str().starts_with("sup-"), "{name} is not sup's");
         }
         assert!(state.live_workers(&key("sup")).count() <= cap.max_workers);
+        // The policy accepts only what it may: its rule, a finished plain triage, no
+        // person's hand on it. A taken-back acceptance stays taken back.
+        for it in state.items.values().filter(|i| i.admitted_by.is_some()) {
+            let p = it
+                .proposal
+                .as_ref()
+                .expect("an admitted root has an answer");
+            assert_eq!(it.admitted_by.as_deref(), Some("sweep"));
+            assert!(
+                matches!(p.tier, 2 | 3),
+                "{} was admitted at tier {}",
+                it.id,
+                p.tier
+            );
+            assert!(it.accepted && !it.accepted_by_person, "{}", it.id);
+            assert!(p.unclear.is_none() && !p.edited, "{}", it.id);
+            let open_triage = it
+                .children
+                .iter()
+                .filter_map(|c| state.items.get(c))
+                .any(|c| c.work == WorkKind::Triage && c.closed.is_none());
+            assert!(
+                !open_triage,
+                "{} was admitted before its triage finished",
+                it.id
+            );
+        }
+        // Finishing a fix cancels only triage and augment items nobody started.
+        for it in state.items.values() {
+            let parent_done = it
+                .parent
+                .as_ref()
+                .and_then(|p| state.items.get(p))
+                .is_some_and(|p| {
+                    p.closed != Some(Closure::Dismissed) && p.paths.iter().any(|x| x.done)
+                });
+            if it.closed == Some(Closure::Cancelled) && parent_done {
+                assert!(
+                    it.paths.is_empty(),
+                    "{} was cancelled after work started",
+                    it.id
+                );
+            }
+        }
+        for id in &self.undone {
+            let it = &state.items[&item(id)];
+            assert!(it.admitted_by.is_none() && it.policy_held, "{id}");
+        }
         // A question frees its asker, so nobody holds an item it waits on.
         for it in state.items.values() {
             assert!(
@@ -228,10 +281,20 @@ impl Model {
     }
 }
 
-/// Every start is on a log that begins at the current format, so a seed's
-/// first start also exercises the creation of the log.
+/// A tracker with a triage policy that accepts a finished plain triage of tier 2 or 3.
+/// Every start is on a log that begins at the current format, so a seed's first start
+/// also exercises the creation of the log.
+async fn with_policy(fake: &Fake) -> Tracker<Fake> {
+    let policy = r#"{"rules": [{"name": "sweep", "tiers": [2, 3]}]}"#;
+    let settings = Settings {
+        triage_policy: crate::policy::TriagePolicy::parse(policy).unwrap(),
+        ..fresh()
+    };
+    start_with(fake, settings).await
+}
+
 async fn restart(fake: &Fake) -> Tracker<Fake> {
-    start_with(fake, fresh()).await
+    with_policy(fake).await
 }
 
 fn fresh() -> Settings {
@@ -266,6 +329,7 @@ async fn seed_item(t: &Tracker<Fake>, m: &mut Model) {
         item: item(&id),
         tier: Some(2),
         triage_skipped: None,
+        admitted_by: None,
     };
     if put(accepted).await.is_ok() {
         m.accepted.insert(id);
@@ -553,6 +617,100 @@ fn pick(rng: &mut Rng, one_in: usize) -> Vec<String> {
         .filter(|_| rng.below(one_in) == 0)
         .map(|n| (*n).to_owned())
         .collect()
+}
+
+/// A root awaiting triage, an agent answering and finishing its triage item,
+/// and a person undoing or accepting. Every step may be refused or cut by a
+/// fault; what is checked is what the log holds.
+async fn policy_step(t: &Tracker<Fake>, fake: &Fake, m: &mut Model, rng: &mut Rng) {
+    let mut roots: Vec<_> = m.policy_roots.iter().cloned().collect();
+    roots.sort();
+    if roots.is_empty() || rng.below(4) == 0 {
+        let id = format!("p{}", m.policy_roots.len());
+        let imported = WorkRecord::Imported {
+            item: item(&id),
+            source: "github".into(),
+            upstream_id: format!("GetFelix/felix#{id}"),
+            title: "t".into(),
+            labels: vec![],
+            milestone: None,
+        };
+        if t.person_record(key("gab"), imported).await.is_err() {
+            return;
+        }
+        m.policy_roots.insert(id.clone());
+        let child = WorkRecord::Proposed {
+            item: item(&format!("{id}-t")),
+            parent: Some(item(&id)),
+            key: key("triage"),
+            work: WorkKind::Triage,
+            title: "Triage".into(),
+            review: None,
+        };
+        let _ = t.ingest_record(key("ingest"), child).await;
+        return;
+    }
+    let id = roots[rng.below(roots.len())].clone();
+    let child = format!("{id}-t");
+    // An agent only: a worker with a dead token never gets this far.
+    let who = AGENTS[rng.below(AGENTS.len())];
+    let answer = |rng: &mut Rng| super::super::tools::TriageAnswer {
+        tier: rng.below(4) as u8,
+        why: "w".into(),
+        duplicate_of: None,
+        unclear: (rng.below(6) == 0).then_some(kbl_core::work::Unclear::Repo),
+        depends_on: vec![],
+        related: vec![],
+        split: vec![],
+        item_type: None,
+        area: None,
+        size: None,
+        needs: None,
+    };
+    match rng.below(8) {
+        0..=3 => {
+            let only = Filter::parse(&["triage".into()], &[], None, &[]).unwrap();
+            claim_with(t, fake, m, who, &only).await;
+            if m.beliefs.get(who) != Some(&child) {
+                return;
+            }
+            // Most triage items are answered and finished in one go.
+            if rng.below(4) > 0 {
+                let _ = t.triage(&agent(who), &item(&child), answer(rng)).await;
+            }
+            if rng.below(4) > 0
+                && t.complete(&agent(who), &item(&child), None, Vec::new())
+                    .await
+                    .is_ok()
+            {
+                m.beliefs.remove(who);
+            }
+        }
+        4 => {
+            let undo = WorkRecord::AdmissionUndone { item: item(&id) };
+            if t.person_record(key("gab"), undo).await.is_ok() {
+                m.undone.insert(id);
+            }
+        }
+        // After triage finished: an earlier accept would let a later unclear answer
+        // open a question on a root an agent already holds, a case this sweep leaves alone.
+        5 if rng.below(3) == 0
+            && replay(fake)
+                .state
+                .items
+                .get(&item(&child))
+                .is_some_and(|c| c.closed.is_some()) =>
+        {
+            let accept = WorkRecord::Accepted {
+                item: item(&id),
+                tier: Some(1),
+                triage_skipped: None,
+                admitted_by: None,
+            };
+            let _ = t.person_record(key("gab"), accept).await;
+        }
+        _ => {}
+    }
 }
 
 fn caps_step(m: &mut Model, rng: &mut Rng, who: &'static str) {
@@ -916,6 +1074,12 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
         12 => answer_step(serving, fake, rng).await,
         _ => dismiss_step(serving, m, rng).await,
     }
+    // The policy's steps draw from their own generator, so the other steps are unchanged.
+    let mut aux = Rng(m.policy_aux);
+    m.policy_aux = aux.next();
+    if aux.below(3) == 0 {
+        policy_step(t.serving(false), fake, m, &mut aux).await;
+    }
     fake.fail_polls(None);
     // Another writer takes over at the offset the cut freed, racing the
     // tracker's recovery from the lost reply.
@@ -975,6 +1139,7 @@ async fn heal(fake: &Fake, m: &mut Model) {
             item: item(&id),
             tier: Some(2),
             triage_skipped: None,
+            admitted_by: None,
         };
         if t.person_record(key("gab"), accepted).await.is_ok() {
             m.accepted.insert(id);
@@ -1027,6 +1192,16 @@ async fn heal(fake: &Fake, m: &mut Model) {
         let live = state.workers[&key(name)].stopped_ms.is_none();
         assert_eq!(t.worker_by_token(token).is_some(), live, "{name}'s token");
     }
+    // Nothing the policy may accept was left for a person.
+    for it in state.items.values() {
+        let tier = it.proposal.as_ref().map(|p| p.tier);
+        if matches!(tier, Some(2 | 3)) && state.policy_blocker(&it.id).is_ok() {
+            panic!(
+                "{} was left unaccepted though the policy may accept it",
+                it.id
+            );
+        }
+    }
     let log = fake.log();
     for id in &m.accepted {
         if m.dismissed.contains(id) {
@@ -1051,6 +1226,7 @@ async fn heal(fake: &Fake, m: &mut Model) {
 async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
     // What the workers did across the seeds, so the sweep cannot go quiet.
     let (mut started, mut stopped, mut finished, mut released) = (0, 0, 0, 0);
+    let (mut admitted, mut undone) = (0, 0);
     let range = seeds();
     let many = range.end - range.start >= 20;
     for seed in range {
@@ -1065,10 +1241,10 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             cur: restart(&fake).await,
             old: None,
         };
-        // The new log starts at the current format (24 or above), so items can
-        // be assigned to agents, a question frees the asker, a direct claim says
-        // it was one, an item can be blocked, and workers can be started and can finish.
-        assert!(t.cur.0.core.lock().await.state.format() >= 24);
+        // The new log starts at the current format, so items can be assigned to agents, a
+        // question frees the asker, a direct claim says it was one, an item can be blocked,
+        // workers can be started and can finish, and the triage policy can accept.
+        assert!(t.cur.0.core.lock().await.state.format() >= 25);
         let vocabulary = WorkRecord::RulesSet {
             target: kbl_core::work::Target {
                 source: "github".into(),
@@ -1085,6 +1261,7 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
         t.cur.person_record(key("gab"), vocabulary).await.unwrap();
         let mut m = Model {
             aux: seed ^ 0xA5A5,
+            policy_aux: seed ^ 0x5A5A,
             ..Model::default()
         };
         for _ in 0..STEPS {
@@ -1096,6 +1273,11 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
                 WorkRecord::WorkerStarted { .. } => started += 1,
                 WorkRecord::WorkerStopped { .. } => stopped += 1,
                 WorkRecord::WorkerFinished => finished += 1,
+                WorkRecord::Accepted {
+                    admitted_by: Some(_),
+                    ..
+                } => admitted += 1,
+                WorkRecord::AdmissionUndone { .. } => undone += 1,
                 WorkRecord::Released {
                     reason: Some(r), ..
                 } if r == kbl_core::work::SUPERVISOR_GONE => released += 1,
@@ -1108,6 +1290,10 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
         assert!(
             needy > 0,
             "no claim in the sweep was of work that needs something"
+        );
+        assert!(
+            admitted > 0 && undone > 0,
+            "the sweep never exercised the policy: {admitted} admitted, {undone} taken back"
         );
         assert!(
             started > 0 && stopped > 0 && finished > 0 && released > 0,

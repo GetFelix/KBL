@@ -360,7 +360,7 @@ Agent routes: `post` (not a `prerequisite`, which is retried by its claim and
 refuses a `request_key`), `link`, `context/add`, `progress`, `decide`,
 `finding`, `verdict`, `triage`, `step`, `edit`, `ask`, `answer`. Person routes:
 `records`, `proposals/accept`, `proposals/edit`, `proposals/reject`,
-`questions/answer`, `note`, `tier`, `close`, `unlink`, `budget`, `prices`,
+`proposals/undo-admission`, `questions/answer`, `note`, `tier`, `close`, `unlink`, `budget`, `prices`,
 `rules`, `flag`, `unflag`. The `kbl-mcp` tools for these take `request_key` too.
 
 - **Where it is kept.** On the record the call wrote, as `req` beside `at_ms`
@@ -484,6 +484,7 @@ record if the fold accepts it:
 | `POST /v1/work/proposals/accept` `{item, tier?}` | `accepted`. A proposal's tier comes from the edit, then this call, then triage |
 | `POST /v1/work/proposals/edit` `{item, title?, tier?, depends_on?, split?, proposal?}` | `edited`, for an item nobody has accepted yet. `depends_on` and `split` replace the lists in triage's answer for the item and need `proposal`, the offset of the answer the person read (`proposal.at` in the item's row); see [Adjusting triage's advice](#adjusting-triages-advice). Needs format 17 |
 | `POST /v1/work/proposals/reject` `{item}` | `rejected`, for an item nobody has accepted |
+| `POST /v1/work/proposals/undo-admission` `{item}` | `admission_undone`, for a root the [triage policy](#accepting-routine-triage-by-policy) accepted and no agent has held. It goes back to Triage and the policy leaves it alone. Needs format 25 |
 | `POST /v1/work/questions/answer` `{item, text?, chosen?, moves_to?, question?, evidence?}` | `answer`. The question defaults to the open one. `moves_to` is `{source, repo, title}` |
 | `POST /v1/work/tier` `{item, tier}` | `tier_changed`. A ready item is published again on its new tier |
 | `POST /v1/work/note` `{item, text, attempt?, input?}` (`text` is `{"text": ...}`) | `human_input`: a note, a review comment, an answer or a priority change, with the person who wrote it. `input` is `note` (the default), `review_comment`, `answer` or `priority_change`; it only labels the note, and a tier changes through `/v1/work/tier`. `attempt` ties it to one attempt; without it the note is on the item. A redo names one of these as its note. Known secret shapes in `text` are replaced with `[redacted]` |
@@ -851,6 +852,7 @@ Each takes a person's token only; an agent's token gets `403`.
 | My queue | `GET /v1/work/queue` | `my_queue` | Needs you |
 | Accept | `POST /v1/work/proposals/accept` | `accept_proposal` | yes |
 | Reject | `POST /v1/work/proposals/reject` | `reject_proposal` | yes |
+| Take back a policy acceptance | `POST /v1/work/proposals/undo-admission` | `undo_admission` | yes |
 | Edit a proposal (title, tier, dependencies, split) | `POST /v1/work/proposals/edit` | `edit_proposal` | dependencies and split |
 | Answer a question | `POST /v1/work/questions/answer` | `answer_question` | yes |
 | Set tier | `POST /v1/work/tier` | `set_tier` | yes |
@@ -1172,9 +1174,8 @@ What it does with GitHub:
 - **Import once.** The item id is derived from the upstream id, and the fold
   refuses a second `imported` for it. A poll that stops before it saves finds
   its root again on the next poll and adds nothing.
-- **Admit** writes `imported`, context for the issue text and the rule,
-  `accepted` with the tier, and a triage and an augment item. With `"triage": "skip"` it writes the `accepted` (carrying the rule's name as `triage_skipped`) and no items, so the root is Ready to fix at once. **Propose**
-  writes `imported` and the context, and leaves the root in Triage.
+- **Admit** writes `imported`, context for the issue text and the rule, and a triage and an augment item. The root stays in Triage, so no agent is handed its fix until its triage is accepted by a person or by a [triage policy](#accepting-routine-triage-by-policy); an accept takes the tier a person picks, else triage's, else the intake rule's (`intake_tier`). With `"triage": "skip"` it writes the `accepted` (carrying the rule's name as `triage_skipped`) and no items, so the root is Ready to fix at once. **Propose**
+  writes `imported` and the context, and leaves the root in Triage. With a [triage policy](#accepting-routine-triage-by-policy) the tracker accepts an admitted root itself once its triage matches a rule.
 - **Cap.** A match over its rule's cap is not imported and is looked at again
   on later polls, oldest first, as roots close.
 - **Comments** become `context` entries (`gh-c<id>`) that name the author.
@@ -2490,7 +2491,7 @@ Each source has one or more intake rules. A rule is the source's own filter
 (the "Scope by" row above, combined with AND) plus:
 
 - **Mode.** `admit` makes a matching issue a root at once, with one triage
-  item and one augment item; it suits a label a person applies on purpose,
+  item and one augment item, and its fix waits until the triage is accepted; it suits a label a person applies on purpose,
   such as `agent-ok`. `propose` puts it in Triage as a proposal that becomes a
   root only when a person accepts it; it suits broad filters such as "the 0.8
   milestone". Add `"triage": "skip"` to an `admit` rule for issues that are already well specified, such as a curated milestone or an `agent-ok` label a person applied after writing the acceptance: the root skips triage and augment and an agent can fix it at once.
@@ -2505,6 +2506,69 @@ Each source has one or more intake rules. A rule is the source's own filter
 Each upstream id is imported once (`cache_put_if` absent on the id), so
 re-polls and redelivered webhooks never duplicate an item. An issue that
 matches two rules belongs to the first one listed.
+
+### Accepting routine triage by policy
+
+Admit mode leaves each root waiting for a person to accept its triage. With hundreds of imported
+issues that is hundreds of decisions. A triage policy lets the tracker accept the routine ones itself and
+leaves the rest in Needs you. It is a list of rules you write; the tracker makes no model call, and a rule
+reads only what triage recorded: its tier, area, type, size and needs.
+
+Point the tracker at a JSON file with `KBL_TRIAGE_POLICY_FILE` (or `--triage-policy-file`). Without it every
+triage waits for a person. This example keeps replication, storage and anything that needs a
+safety review with a person, and admits the rest at tier 2 or 3:
+
+```json
+{
+  "rules": [
+    {
+      "name": "routine",
+      "tiers": [2, 3],
+      "deny_areas": ["replication", "storage", "safety"],
+      "deny_needs": ["safety-review"]
+    }
+  ]
+}
+```
+
+A rule has a `name` and at least one condition. Every condition it lists must hold, and the first rule that
+matches names the acceptance:
+
+| Field | Holds when |
+|---|---|
+| `tiers` | The tier triage chose is one of these (0 is the most urgent) |
+| `areas`, `types`, `sizes` | Triage recorded one of these values. A triage that recorded none does not match |
+| `deny_areas` | Triage did not record any of these areas. A triage with no area passes, so also list `areas` to require one |
+| `deny_needs` | The item needs none of these |
+
+Values come from the repo's [vocabulary](#labels-milestone-type-area-and-size) and compare without regard to case.
+
+Some triage is never accepted by a rule, whatever it says: one that marks itself unclear or asks a question, names a
+duplicate, advises a split or dependencies, or that a person edited. An item that changed upstream since triage,
+left its intake rule's scope, was reopened, was closed, or that a person already accepted waits for a person too.
+A rule acts only when the triage item is finished, so an agent never starts the fix while the answer is still
+being written. It also needs the log at format 25 ([upgrading](upgrades.md)); on a lower log no rule fires, and
+raising the format does not sweep up a triage that was already waiting: only answers written after the raise count.
+Any record a person writes about the root (a note, a tier, an edit, a block) also keeps the rule off it.
+
+When a rule matches, the tracker writes an `accepted` record as itself, with the rule's name in `admitted_by`.
+The sweep does the same for any triage that was finished when a crash cut the first attempt, and writing it
+twice is refused, so the record lands once. The dashboard shows "Admitted by policy routine" on the item and in its
+history.
+
+Admitted roots are not handed out as fix work until they are accepted, so `work_next` and `work_peek` show agents the triage and augment items first and only then the roots a person or a rule accepted.
+
+If a worker finishes a fix while its triage or augment items are still open (a root accepted before this rule, or by hand), `work_complete` cancels the ones nobody holds and that have no recorded work, from format 25. A child that is held or has recorded work still blocks it, and the refusal names each such child and who holds it. The cancelled items show as Cancelled under the finished root.
+
+A person's decision always wins:
+
+- A person who accepts first keeps their own acceptance; the rule does not replace it, and a person's
+  accept after the rule's replaces the rule's name with theirs.
+- To take back a policy acceptance, use **Take back the policy acceptance** on the item (or `undo_admission`,
+  `POST /v1/work/proposals/undo-admission {item}`). The root goes back to Triage with triage's answer intact, no rule
+  accepts it again, and a person can accept or reject it as usual. The tier goes back to what it was unless a person changed it since, and resume items the acceptance released become unclaimable again. It is offered only until an agent has taken the
+  item; after that, close it.
+- A policy never rejects, closes or lowers anything. It can only accept.
 
 ### When the upstream issue changes
 

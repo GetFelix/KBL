@@ -58,11 +58,13 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("r1"),
             tier: Some(1),
             triage_skipped: None,
+            admitted_by: None,
         },
         WorkRecord::Accepted {
             item: item("c1"),
             tier: None,
             triage_skipped: None,
+            admitted_by: None,
         },
         WorkRecord::Linked {
             item: item("c2"),
@@ -359,6 +361,7 @@ fn every_record() -> Vec<WorkRecord> {
             item: item("rv"),
             tier: Some(1),
             triage_skipped: None,
+            admitted_by: None,
         },
         WorkRecord::Claimed {
             item: item("rv"),

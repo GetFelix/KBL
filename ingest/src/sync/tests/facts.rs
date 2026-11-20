@@ -116,7 +116,7 @@ async fn a_log_below_format_19_imports_without_facts_and_catches_up_after_the_ra
 #[tokio::test]
 async fn a_rules_maps_set_tier_type_and_area_and_stay_inside_the_vocabulary() {
     let rig = rig();
-    raise(&rig, 19);
+    raise(&rig, 25);
     vocabulary(&rig);
     let mut rule = admit_rule();
     rule["milestone_tiers"] = json!({ "0.8": 0 });
@@ -130,8 +130,10 @@ async fn a_rules_maps_set_tier_type_and_area_and_stay_inside_the_vocabulary() {
     ingest.poll(false).await.unwrap();
     let s = rig.tracker.state();
     let it = &s.items[&rig.root(UP)];
-    // The milestone's tier beats the default of its p1 label, and the labels map to class.
-    assert_eq!(it.tier, Some(0));
+    // An admitted root waits for its triage: the milestone's tier is the intake tier, used
+    // only when triage and a person choose none. The labels map to class.
+    assert_eq!(it.tier, None);
+    assert_eq!(it.intake_tier, Some(0));
     assert_eq!(it.class.item_type.as_ref().unwrap().value, "perf");
     assert_eq!(it.class.area.as_ref().unwrap().value, "storage");
     // "dashboard" is not in the vocabulary: the tracker refuses it and the import stands.
@@ -388,4 +390,21 @@ async fn a_new_label_map_re_maps_issues_already_imported_once() {
             .to_vec(),
         ["azure"]
     );
+}
+
+#[tokio::test]
+async fn an_admitted_root_keeps_the_rules_tier_as_the_last_choice_when_it_is_accepted() {
+    let rig = rig();
+    raise(&rig, 25);
+    let mut rule = admit_rule();
+    rule["milestone_tiers"] = json!({ "0.8": 0 });
+    let ingest = rig.ingest(json!([rule]));
+    rig.list(vec![with_facts(812, &["agent-ok"], Some("0.8"))]);
+    ingest.poll(false).await.unwrap();
+    ingest.poll(false).await.unwrap();
+    assert_eq!(rig.tracker.count("intake_tier"), 1, "written once");
+    let root = rig.root(UP);
+    rig.tracker.accept(&root);
+    let s = rig.tracker.state();
+    assert_eq!(s.items[&root].tier, Some(0));
 }

@@ -453,6 +453,7 @@ const ui = shell(
     advice: (item, proposal, depends_on, split) => write([item], { kind: 'advice', depends_on, split, proposal }),
     kind: (kind) => store.dispatch({ type: 'kind', kind }),
     flag: (ids, flagged) => write(ids, { kind: flagged ? 'flag' : 'unflag' }),
+    unadmit: (item) => write([item], { kind: 'unadmit' }),
     take: (item) => write([item], { kind: 'take' }),
     assign: assignItem,
     needs: needsItem,

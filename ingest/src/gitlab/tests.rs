@@ -785,6 +785,7 @@ async fn reported(
     let ingest = engine(lab, tracker, json!({}));
     ingest.poll(false).await.unwrap();
     let item = tracker.item_of("team/app#12");
+    tracker.accept(&item);
     tracker.agent(
         "w1",
         WorkRecord::Claimed {
@@ -901,6 +902,7 @@ async fn a_request_in_another_project_is_not_read_for_the_item() {
     let ingest = engine(&lab, &tracker, json!({}));
     ingest.poll(false).await.unwrap();
     let item = tracker.item_of("team/app#12");
+    tracker.accept(&item);
     tracker.agent(
         "w1",
         WorkRecord::Claimed {

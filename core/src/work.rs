@@ -135,8 +135,13 @@ pub const MAX_HEAD: usize = 64;
 /// it is done, which ends it like a stop.
 pub const FORMAT_V24: u32 = 24;
 
+/// The format that added the triage acceptance policy: an `accepted` the
+/// tracker writes for a rule (`admitted_by`), and `admission_undone`, a
+/// person's take-back of it.
+pub const FORMAT_V25: u32 = 25;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V24;
+pub const FORMAT: u32 = FORMAT_V25;
 
 /// Most live workers one supervisor may have, whatever the tracker's config says.
 pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
@@ -855,7 +860,21 @@ pub enum WorkRecord {
         /// changes no stage: it is shown so a person sees why no triage ran.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         triage_skipped: Option<String>,
+        /// The triage policy rule that accepted this root after its triage.
+        /// Only the tracker writes it, and the fold takes it only when the
+        /// triage answer is complete and plain (see `State::policy_blocker`).
+        /// A person's own `accepted` clears it. Format 25.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        admitted_by: Option<String>,
     },
+    /// The tier the intake rule gave an admitted root. It is the last choice: a
+    /// person's tier and triage's both outrank it when the root is accepted.
+    /// Only the tracker writes it, for an unaccepted root. Format 25.
+    IntakeTier { item: ItemId, tier: u8 },
+    /// A person takes back an acceptance the triage policy made, before any
+    /// work started: the root goes back to Triage with its proposal, and the
+    /// policy leaves it alone from then on. Format 25.
+    AdmissionUndone { item: ItemId },
     /// `item` waits on `to`.
     Linked { item: ItemId, to: ItemId },
     /// A person removes the edge, for example after a dependency was dropped.
@@ -1300,6 +1319,8 @@ impl WorkRecord {
             WorkRecord::Proposed { .. } => "proposed",
             WorkRecord::Triaged { .. } => "triaged",
             WorkRecord::Accepted { .. } => "accepted",
+            WorkRecord::AdmissionUndone { .. } => "admission_undone",
+            WorkRecord::IntakeTier { .. } => "intake_tier",
             WorkRecord::Prerequisite { .. } => "prerequisite",
             WorkRecord::Shipped { .. } => "shipped",
             WorkRecord::Linked { .. } => "linked",
@@ -1372,6 +1393,8 @@ impl WorkRecord {
             | WorkRecord::Proposed { item, .. }
             | WorkRecord::Triaged { item, .. }
             | WorkRecord::Accepted { item, .. }
+            | WorkRecord::AdmissionUndone { item }
+            | WorkRecord::IntakeTier { item, .. }
             | WorkRecord::Prerequisite { item, .. }
             | WorkRecord::Shipped { item, .. }
             | WorkRecord::Linked { item, .. }
@@ -1560,6 +1583,12 @@ impl WorkRecord {
             | WorkRecord::FlakeCleared { .. }
             | WorkRecord::FlakeRetried { .. } => FORMAT_V22,
             WorkRecord::WorkerFinished => FORMAT_V24,
+            WorkRecord::AdmissionUndone { .. }
+            | WorkRecord::IntakeTier { .. }
+            | WorkRecord::Accepted {
+                admitted_by: Some(_),
+                ..
+            } => FORMAT_V25,
             WorkRecord::CheckFailed { .. } => FORMAT_V23,
             WorkRecord::WorkerStarted { .. } | WorkRecord::WorkerStopped { .. } => FORMAT_V21,
             WorkRecord::Edited { needs: Some(_), .. }

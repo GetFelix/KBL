@@ -51,6 +51,7 @@ async fn root(t: &Tracker<Fake>, id: &str, needs: &[&str]) {
             item: item(id),
             tier: Some(2),
             triage_skipped: None,
+            admitted_by: None,
         },
     )
     .await

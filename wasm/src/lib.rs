@@ -220,6 +220,7 @@ impl Folder {
                     "related": self.state.related_to(&i.id).collect::<Vec<_>>(),
                     "triage": triage,
                     "triage_skipped": i.triage_skipped,
+                    "admitted_by": i.admitted_by,
                     "check_tries": self.check_tries(i),
                 })
             })
@@ -329,7 +330,7 @@ impl Folder {
     /// What happened on one item, oldest first, as `[{offset, at_ms, by, kind, attempt?,
     /// cost_micros?, ...}]`. `kind` is one of `claimed`, `progress`, `step` (with `command`,
     /// `exit_code` and the tail of `output`), `edit`, `decision`, `question`, `answer`,
-    /// `note`, `done`, `released`, `gave_up`, `attempt_closed`, `rated`, `accepted`, `tier`,
+    /// `note`, `done`, `released`, `gave_up`, `attempt_closed`, `rated`, `accepted` (with `rule` when the triage policy accepted it), `admission_undone`, `tier`,
     /// `taken`, `reassigned`, `closed` and `reopened`. `cost_micros` is what the fold charged
     /// the item for that record. A record the fold refused carries `refused` (the reason, such
     /// as `bad_usage`): it did not take effect, so the page shows it as refused and counts it nowhere.

@@ -105,6 +105,9 @@
  "core/src/work_fold.rs#review_of": [
   "let spec = it.review.clone().ok_or(Reject::NotReview)?;"
  ],
+ "core/src/work_fold.rs#policy_blocker": [
+  "if imported && triaged && finished && plain && free {"
+ ],
  "core/src/work_fold.rs#step_record": [
   "if self.upstream.contains_key(&up) {",
   "self.item_mut(item)?.proposal = Some(Proposal {",
@@ -126,7 +129,7 @@
   "return Err(Reject::PrInUse);",
   "if p.progress >= MAX_PROGRESS {",
   "let it = self.acting_on(item, *attempt, rec)?;",
-  "if self.open_children(item).iter().any(|c| {",
+  "for c in self.open_children(item) {",
   "&& !self.verdict_given(item)",
   "let Some(hold) = it.hold.clone() else {",
   "WorkRecord::GaveUp { item, attempt, .. } => {",

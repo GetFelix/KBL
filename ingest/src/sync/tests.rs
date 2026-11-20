@@ -86,6 +86,7 @@ impl Rig {
     /// An agent claims the root and reports a pull request.
     fn hold(&self, up: &str, pr: Option<&str>) -> kbl_core::names::ItemId {
         let item = self.root(up);
+        self.tracker.accept(&item);
         self.tracker.agent(
             "w1",
             WorkRecord::Claimed {
@@ -132,28 +133,26 @@ async fn an_issue_is_imported_once_across_re_polls_and_a_lost_cursor() {
     ingest.poll(false).await.unwrap();
     assert_eq!(
         rig.tracker.kinds(),
-        [
-            "imported", "context", "context", "accepted", "proposed", "proposed"
-        ]
+        ["imported", "context", "context", "proposed", "proposed"]
     );
     let s = rig.tracker.state();
     let root = &s.items[&rig.root(UP)];
     // The p1 label sets the tier, and an admitted root gets its two items.
-    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.tier, None);
     assert_eq!(root.children.len(), 2);
-    assert_eq!(s.stage(&root.id), Some(Stage::Ready));
+    assert_eq!(s.stage(&root.id), Some(Stage::Triage));
 
     // The same listing again, and a redelivered webhook's extra poll.
     ingest.poll(false).await.unwrap();
     ingest.poll(false).await.unwrap();
     assert_eq!(rig.tracker.count("imported"), 1);
-    assert_eq!(rig.tracker.kinds().len(), 6);
+    assert_eq!(rig.tracker.kinds().len(), 5);
 
     // A restart that lost its saved state finds the root and adds nothing.
     rig.tracker.forget_saved();
     rig.ingest(json!([admit_rule()])).poll(false).await.unwrap();
     assert_eq!(rig.tracker.count("imported"), 1);
-    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("accepted"), 0);
     assert_eq!(rig.tracker.state().items.len(), 3);
 }
 
@@ -168,7 +167,7 @@ fn imported_record() -> WorkRecord {
     }
 }
 
-async fn finishes_the_import(first: Vec<WorkRecord>) {
+async fn finishes_the_import(first: Vec<WorkRecord>, tier: Option<u8>, stage: Stage) {
     let rig = rig();
     for r in first {
         rig.tracker.append(&r).await.unwrap();
@@ -180,27 +179,32 @@ async fn finishes_the_import(first: Vec<WorkRecord>) {
     let root = &s.items[&item_id(UP)];
     let entries: Vec<_> = root.context.keys().map(|k| k.as_str().to_owned()).collect();
     assert_eq!(entries, ["intake", "issue"]);
-    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.tier, tier);
     assert_eq!(root.children.len(), 2);
-    assert_eq!(s.stage(&root.id), Some(Stage::Ready));
+    assert_eq!(s.stage(&root.id), Some(stage));
     assert_eq!(rig.tracker.count("imported"), 1);
 }
 
 #[tokio::test]
 async fn a_crash_right_after_imported_is_finished_by_the_next_poll() {
-    finishes_the_import(vec![imported_record()]).await;
+    finishes_the_import(vec![imported_record()], None, Stage::Triage).await;
 }
 
 #[tokio::test]
-async fn a_crash_right_after_accepted_is_finished_by_the_next_poll() {
-    finishes_the_import(vec![
-        imported_record(),
-        WorkRecord::Accepted {
-            item: item_id(UP),
-            tier: Some(1),
-            triage_skipped: None,
-        },
-    ])
+async fn a_root_an_older_build_accepted_and_crashed_on_is_finished_by_the_next_poll() {
+    finishes_the_import(
+        vec![
+            imported_record(),
+            WorkRecord::Accepted {
+                item: item_id(UP),
+                tier: Some(1),
+                triage_skipped: None,
+                admitted_by: None,
+            },
+        ],
+        Some(1),
+        Stage::Ready,
+    )
     .await;
 }
 
@@ -357,7 +361,7 @@ async fn an_issue_that_returns_to_its_rule_leaves_needs_you() {
     assert_eq!(rig.tracker.count("returned_to_scope"), 1);
     let s = rig.tracker.state();
     assert_eq!(s.needs_you(&item), None);
-    assert_eq!(s.stage(&item), Some(Stage::Ready));
+    assert_eq!(s.stage(&item), Some(Stage::Triage));
 
     // It can leave again.
     rig.list(vec![at(
@@ -446,7 +450,7 @@ async fn a_return_before_the_format_is_raised_is_written_after_the_raise() {
     raise_format(&rig);
     ingest.poll(false).await.unwrap();
     assert_eq!(rig.tracker.count("returned_to_scope"), 1);
-    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Ready));
+    assert_eq!(rig.tracker.state().stage(&item), Some(Stage::Triage));
     assert!(rig.tracker.saved_state().items[UP].in_scope);
 }
 
@@ -637,8 +641,9 @@ async fn a_poll_that_fails_mid_admission_of_an_imported_root_finishes_it_next_ti
     ingest.poll(false).await.unwrap();
     let s = rig.tracker.state();
     let root = &s.items[&item_id(UP)];
-    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.tier, None);
     assert_eq!(root.children.len(), 2);
+    assert_eq!(s.stage(&root.id), Some(Stage::Triage));
 }
 
 #[tokio::test]
@@ -754,7 +759,7 @@ async fn a_failed_admit_write_leaves_the_root_untracked_and_the_next_poll_finish
     let ingest = rig.ingest(json!([admit_rule()]));
     rig.list(vec![issue(812, |_| {})]);
     // The context writes land; the admit write does not.
-    rig.tracker.fail_kind(Some("accepted"));
+    rig.tracker.fail_kind(Some("proposed"));
     ingest.poll(false).await.unwrap_err();
     assert_eq!(rig.tracker.count("context"), 2);
     assert!(
@@ -767,9 +772,9 @@ async fn a_failed_admit_write_leaves_the_root_untracked_and_the_next_poll_finish
     ingest.poll(false).await.unwrap();
     let s = rig.tracker.state();
     let root = &s.items[&item_id(UP)];
-    assert_eq!(root.tier, Some(1));
+    assert_eq!(root.tier, None);
     assert_eq!(root.children.len(), 2);
-    assert_eq!(s.stage(&root.id), Some(Stage::Ready));
+    assert_eq!(s.stage(&root.id), Some(Stage::Triage));
 }
 
 #[tokio::test]
@@ -780,12 +785,12 @@ async fn a_crash_after_the_admission_writes_and_before_the_save_adds_no_duplicat
     rig.list(vec![issue(812, |_| {})]);
     rig.tracker.fail_saves();
     ingest.poll(false).await.unwrap_err();
-    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("accepted"), 0);
     assert_eq!(rig.tracker.count("proposed"), 2);
     rig.tracker.allow_saves();
     ingest.poll(false).await.unwrap();
     // The fold refuses the repeated records as duplicates, so none lands.
-    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("accepted"), 0);
     assert_eq!(rig.tracker.count("proposed"), 2);
     assert_eq!(rig.tracker.state().items[&item_id(UP)].children.len(), 2);
 }
@@ -839,7 +844,7 @@ async fn a_reopen_whose_save_failed_does_not_accept_the_root_again() {
     ingest.poll(false).await.unwrap_err();
     rig.tracker.allow_saves();
     ingest.poll(false).await.unwrap();
-    assert_eq!(rig.tracker.count("accepted"), 1);
+    assert_eq!(rig.tracker.count("accepted"), 0);
     assert_eq!(
         rig.tracker.state().stage(&rig.root(UP)),
         Some(Stage::Triage)
@@ -916,6 +921,7 @@ async fn a_childless_root_ingest_reopened_is_not_accepted_on_a_retry() {
         item: item.clone(),
         tier: Some(3),
         triage_skipped: None,
+        admitted_by: None,
     });
     rig.list(vec![closed(
         issue(812, |_| {}),
@@ -1150,8 +1156,8 @@ async fn the_first_matching_rule_takes_the_issue() {
     let ingest = rig.ingest(json!([admit_rule(), propose]));
     rig.list(vec![issue(812, |_| {})]);
     ingest.poll(false).await.unwrap();
-    // The admit rule is first, so it is admitted, not proposed.
-    assert_eq!(rig.tracker.count("accepted"), 1);
+    // The admit rule is first, so it is admitted (with its triage item), not proposed.
+    assert_eq!(rig.tracker.count("accepted"), 0);
 }
 
 #[tokio::test]
@@ -1319,8 +1325,9 @@ async fn blocked_by_becomes_an_edge_once_both_issues_are_imported() {
     );
     ingest.poll(false).await.unwrap();
     ingest.poll(false).await.unwrap();
-    let s = rig.tracker.state();
     let (a, b) = (rig.root(UP), rig.root("GetFelix/felix#813"));
+    rig.tracker.accept(&b);
+    let s = rig.tracker.state();
     assert_eq!(s.edges.iter().collect::<Vec<_>>(), [&(b.clone(), a)]);
     assert_eq!(s.stage(&b), Some(Stage::Blocked));
     assert_eq!(rig.tracker.count("linked"), 1, "{:?}", rig.tracker.kinds());
@@ -1352,6 +1359,7 @@ async fn a_dependency_removed_upstream_is_unlinked_and_frees_the_item() {
     let rig = rig();
     let ingest = linked_pair(&rig).await;
     let b = rig.root("GetFelix/felix#813");
+    rig.tracker.accept(&b);
     assert_eq!(rig.tracker.state().stage(&b), Some(Stage::Blocked));
     rig.gh
         .on("GET", "/issues/813/dependencies/blocked_by", ok(json!([])));
@@ -2294,8 +2302,9 @@ async fn blocked_by_an_issue_in_another_repo_blocks_across_them() {
         ])),
     );
     ingest.poll(false).await.unwrap();
-    let s = rig.tracker.state();
     let (blk, gw) = (rig.root(UP), rig.root("GetFelix/other#7"));
+    rig.tracker.accept(&blk);
+    let s = rig.tracker.state();
     assert_eq!(s.stage(&blk), Some(Stage::Blocked));
     assert_eq!(s.blockers(&blk), [&gw]);
     assert_eq!(
@@ -2333,6 +2342,7 @@ impl Rig {
         ingest.poll(false).await.unwrap();
         let item = self.hold(UP, Some(PR));
         let waiting = self.root("GetFelix/felix#813");
+        self.tracker.accept(&waiting);
         self.tracker.agent(
             "w2",
             WorkRecord::Claimed {
@@ -2931,6 +2941,7 @@ async fn prerequisite_rig_until(
             item: g1,
             tier: None,
             triage_skipped: None,
+            admitted_by: None,
         });
     }
     rig.gh.on(

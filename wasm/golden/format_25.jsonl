@@ -1,0 +1,21 @@
+{"v":25,"at_ms":1000,"by":"gabriel","actor":"person","kind":"format_raised","to":25}
+{"at_ms":1010,"by":"ingest","actor":"tracker","kind":"imported","item":"r1","source":"github","upstream_id":"GetFelix/felix#1","title":"fix a typo in the docs"}
+{"at_ms":1020,"by":"ingest","actor":"tracker","kind":"proposed","item":"t1","parent":"r1","key":"triage","work":"triage","title":"triage"}
+{"at_ms":1030,"by":"w1","actor":"agent","kind":"claimed","item":"t1","attempt":1,"deadline_ms":99999}
+{"at_ms":1040,"by":"w1","actor":"agent","kind":"triaged","item":"r1","tier":2,"why":"a typo"}
+{"v":25,"at_ms":1050,"by":"tracker","actor":"tracker","kind":"accepted","item":"r1","admitted_by":"routine"}
+{"at_ms":1060,"by":"w1","actor":"agent","kind":"done","item":"t1","attempt":1}
+{"v":25,"at_ms":1070,"by":"tracker","actor":"tracker","kind":"accepted","item":"r1","admitted_by":"routine"}
+{"v":25,"at_ms":1080,"by":"w1","actor":"agent","kind":"accepted","item":"r1","admitted_by":"routine"}
+{"v":25,"at_ms":1090,"by":"tracker","actor":"tracker","kind":"accepted","item":"r1","admitted_by":"routine"}
+{"v":25,"at_ms":1100,"by":"gabriel","actor":"person","kind":"admission_undone","item":"r1"}
+{"v":25,"at_ms":1110,"by":"tracker","actor":"tracker","kind":"accepted","item":"r1","admitted_by":"routine"}
+{"at_ms":1120,"by":"ingest","actor":"tracker","kind":"imported","item":"r2","source":"github","upstream_id":"GetFelix/felix#2","title":"rename a flag"}
+{"at_ms":1130,"by":"ingest","actor":"tracker","kind":"proposed","item":"t2","parent":"r2","key":"triage","work":"triage","title":"triage"}
+{"at_ms":1140,"by":"w1","actor":"agent","kind":"claimed","item":"t2","attempt":1,"deadline_ms":99999}
+{"at_ms":1150,"by":"w1","actor":"agent","kind":"triaged","item":"r2","tier":1,"why":"a rename"}
+{"at_ms":1160,"by":"w1","actor":"agent","kind":"done","item":"t2","attempt":1}
+{"v":25,"at_ms":1170,"by":"tracker","actor":"tracker","kind":"accepted","item":"r2","admitted_by":"routine"}
+{"at_ms":1180,"by":"w2","actor":"agent","kind":"claimed","item":"r2","attempt":1,"deadline_ms":99999}
+{"v":25,"at_ms":1190,"by":"gabriel","actor":"person","kind":"admission_undone","item":"r2"}
+{"v":25,"at_ms":1200,"by":"tracker","actor":"tracker","kind":"admission_undone","item":"r2"}

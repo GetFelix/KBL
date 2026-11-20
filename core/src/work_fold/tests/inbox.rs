@@ -68,6 +68,7 @@ fn an_item_waits_from_the_record_that_put_it_in_the_inbox() {
         item: id("b"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     assert_eq!(since(&l, "b"), None);
 }
@@ -170,6 +171,7 @@ fn only_a_person_adjusts_it_and_not_after_acceptance() {
         item: id("r1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     l.person(edit("r1", None, Some(&["x"]), Some(at)));
     assert_eq!(last_rejection(&l), Some(Reject::NotAProposal));

@@ -491,3 +491,16 @@ test('the needs key and command exist and do not fire while typing', async () =>
   assert.equal(commandFor({ key: 'n', metaKey: false, ctrlKey: false, altKey: false, inText: true }, false), undefined);
   assert.ok(COMMANDS.some((c) => c.id === 'needs'));
 });
+
+test('taking back a policy acceptance is offered only on a ready root the policy accepted', () => {
+  const base = { id: 'r1', title: 't', stage: 'ready', root: true, accepted: true, admitted_by: 'routine' } as ItemRow;
+  assert.equal(CAN.unadmit(base), true);
+  assert.equal(CAN.unadmit({ ...base, admitted_by: null }), false, 'a person accepted it');
+  assert.equal(CAN.unadmit({ ...base, stage: 'working' }), false, 'an agent holds it');
+  assert.equal(CAN.unadmit({ ...base, stage: 'done' }), false);
+  assert.deepEqual(request('r1', { kind: 'unadmit' }), { path: '/v1/work/proposals/undo-admission', body: { item: 'r1' } });
+  const [job] = jobsFor(['r1'], { kind: 'unadmit' }, [base], NO_WRITES);
+  assert.deepEqual(job.req, request('r1', { kind: 'unadmit' }));
+  const [late] = jobsFor(['r1'], { kind: 'unadmit' }, [{ ...base, stage: 'working' }], NO_WRITES);
+  assert.equal(typeof late.req, 'string');
+});

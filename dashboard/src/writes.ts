@@ -6,7 +6,7 @@ import { ADVICE_FORMAT, canAdvise } from './advice.ts';
 import type { ItemRow } from './fold.ts';
 import { decisionAt, type DecisionLine, type Story } from './story.ts';
 
-export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'needs' | 'undo';
+export type WriteKind = 'accept' | 'reject' | 'tier' | 'close' | 'answer' | 'flag' | 'unflag' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'needs' | 'unadmit' | 'undo';
 
 export interface Request {
   path: string;
@@ -180,6 +180,8 @@ const OPEN = (i: ItemRow) => i.stage !== 'done' && i.stage !== 'closed';
 /** Which writes the fold would take for this item. The tracker still decides; this only hides what it would refuse. */
 export const CAN: Readonly<Record<Exclude<WriteKind, 'undo' | 'rate' | 'take' | 'reassign' | 'steer' | 'advice' | 'redo' | 'needs'>, (i: ItemRow) => boolean>> = {
   accept: (i) => i.stage === 'triage' || i.stage === 'proposed',
+  // Only while no agent has taken it: the fold refuses once work started, and closing is the way out then.
+  unadmit: (i) => i.root === true && !!i.admitted_by && i.accepted === true && i.stage === 'ready',
   // The fold rejects only a proposal nobody accepted; an imported root is closed instead.
   reject: (i) => i.stage === 'proposed',
   tier: OPEN,
@@ -205,6 +207,8 @@ export type WriteArgs =
   | { kind: 'answer'; question: number; text: string; chosen: string | null }
   | { kind: 'flag' }
   | { kind: 'unflag' }
+  /** Takes back an acceptance the triage policy made: the item returns to Triage and the policy leaves it alone. */
+  | { kind: 'unadmit' }
   /** Marks the summary an attempt handed off as accurate or not. The latest mark stands. */
   | { kind: 'rate'; attempt: number; accurate: boolean }
   /** Assigns the item to the signed-in person. */
@@ -239,6 +243,8 @@ export function request(item: string, a: WriteArgs): Request {
       return { path: '/v1/work/flag', body: { item } };
     case 'unflag':
       return { path: '/v1/work/unflag', body: { item } };
+    case 'unadmit':
+      return { path: '/v1/work/proposals/undo-admission', body: { item } };
     case 'rate':
       return { path: '/v1/work/rate-summary', body: { item, attempt: a.attempt, accurate: a.accurate } };
     case 'take':
@@ -377,7 +383,7 @@ export function outcome(status: number | null, body: unknown, network = ''): Out
  */
 export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> = {
   tier: null,
-  accept: 'No record takes back an acceptance, and an accepted item is published for agents at once.',
+  accept: 'No record takes back a person’s acceptance, and an accepted item is published for agents at once. Only one the triage policy made can be taken back.',
   reject: 'A rejected proposal stays rejected; nothing reopens it.',
   close: 'Closing cancels the item’s open children. A root can be reopened, but it goes back to Triage and its children stay cancelled.',
   answer: 'An answer starts the work that resumes from it.',
@@ -390,6 +396,8 @@ export const UNDO: Readonly<Record<Exclude<WriteKind, 'undo'>, string | null>> =
   take: null,
   reassign: null,
   steer: 'A note goes to the agent as it works; it cannot be taken back.',
+  // Accepting it again is one click, so this asks nothing first.
+  unadmit: null,
   redo: 'The new attempt starts at once. It counts against the redos this item may take, and no record takes it back.',
   // Editing again sets it back, so it does not ask first.
   advice: null,
@@ -524,6 +532,7 @@ const DONE: Readonly<Record<WriteKind, [string, string]>> = {
   advice: ['Adjusting the advice on', 'Adjusted the advice on'],
   needs: ['Setting the needs of', 'Set the needs of'],
   unflag: ['Unflagging', 'Unflagged'],
+  unadmit: ['Taking back the policy acceptance of', 'Took back the policy acceptance of'],
   undo: ['Undoing the tier change on', 'Undid the tier change on'],
 };
 

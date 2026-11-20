@@ -2,7 +2,7 @@
 // Each entry in FIELDS adds one labelled row, so a new kind of detail is one module.
 import { upstreamRef, upstreamUrl } from '../card.ts';
 import type { ItemRow } from '../fold.ts';
-import { rootStageLabel, triageChip, triageSkipReason } from '../list.ts';
+import { admissionNote, rootStageLabel, triageChip, triageSkipReason } from '../list.ts';
 import type { ViewState } from '../state.ts';
 import { FACETS, valueOf } from '../views.ts';
 import { byFocus, h } from './dom.ts';
@@ -34,8 +34,10 @@ export interface Field {
 }
 
 const stageField: Field = {
-  key: (item) => `${item.triage ?? ''}|${item.triage_skipped ?? ''}|${item.pr ? 'pr' : ''}`,
+  key: (item) => `${item.triage ?? ''}|${item.triage_skipped ?? ''}|${item.admitted_by ?? ''}|${item.pr ? 'pr' : ''}`,
   render: (item) => {
+    const admitted = admissionNote(item);
+    if (admitted) return ['Stage', document.createTextNode(`${rootStageLabel(item)} (${admitted.toLowerCase()})`)];
     const why = triageSkipReason(item);
     if (why) return ['Stage', document.createTextNode(`${rootStageLabel(item)} (${why})`)];
     // Once a fix is linked, triage's state is history and would contradict the pull request.

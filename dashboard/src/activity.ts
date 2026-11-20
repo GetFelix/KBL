@@ -26,6 +26,8 @@ export interface ActivityEvent {
   options?: string[];
   question?: number;
   accurate?: boolean;
+  /** The triage policy rule that wrote an `accepted`. */
+  rule?: string | null;
   tier?: number;
   deadline_ms?: number;
   steered?: boolean;
@@ -159,7 +161,11 @@ function describe(e: ActivityEvent): Pick<TimelineEntry, 'title' | 'detail' | 'o
     case 'gave_up': return { ...base, title: 'Gave up', detail: e.reason ?? null, failed: true };
     case 'attempt_closed': return { ...base, title: 'Attempt closed by a person' };
     case 'rated': return { ...base, title: e.accurate ? 'Summary marked accurate' : 'Summary marked not accurate', failed: e.accurate === false };
-    case 'accepted': return { ...base, title: e.tier == null ? 'Accepted' : `Accepted at tier ${e.tier}` };
+    case 'accepted': {
+      const tier = e.tier == null ? '' : ` at tier ${e.tier}`;
+      return { ...base, title: e.rule ? `Admitted by policy ${e.rule}${tier}` : `Accepted${tier}` };
+    }
+    case 'admission_undone': return { ...base, title: 'Policy acceptance taken back', detail: 'Back in Triage; the policy leaves it alone now' };
     case 'tier': return { ...base, title: `Tier set to ${e.tier}` };
     case 'taken': return { ...base, title: 'Taken' };
     case 'reassigned': return { ...base, title: e.to ? `Assigned to ${'person' in e.to ? e.to.person : e.to.agent}` : 'Unassigned' };

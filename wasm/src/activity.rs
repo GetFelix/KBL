@@ -205,7 +205,16 @@ impl Activity {
             WorkRecord::SummaryRated {
                 attempt, accurate, ..
             } => e("rated", Some(*attempt), json!({ "accurate": accurate })),
-            WorkRecord::Accepted { tier, .. } => e("accepted", None, json!({ "tier": tier })),
+            WorkRecord::Accepted {
+                tier, admitted_by, ..
+            } => {
+                let mut more = json!({ "tier": tier });
+                if let Some(rule) = admitted_by {
+                    more["rule"] = json!(rule);
+                }
+                e("accepted", None, more)
+            }
+            WorkRecord::AdmissionUndone { .. } => e("admission_undone", None, json!({})),
             WorkRecord::TierChanged { tier, .. } => e("tier", None, json!({ "tier": tier })),
             WorkRecord::Taken { .. } => e("taken", None, json!({})),
             WorkRecord::Reassigned { to, .. } => e("reassigned", None, json!({ "to": to })),

@@ -177,6 +177,7 @@ fn a_root_s_needs_apply_to_the_work_that_runs_and_not_to_triage_or_review() {
         item: id("r1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     l.person(edited("r1", list(&["gpu", "azure"])));
     l.person(proposed("r1-t", Some("r1"), "k", WorkKind::Triage));
@@ -310,6 +311,7 @@ fn needs_on_an_item_that_is_not_a_root_are_refused() {
         item: id("r1"),
         tier: None,
         triage_skipped: None,
+        admitted_by: None,
     });
     l.person(proposed("r1-t", Some("r1"), "k", WorkKind::Triage));
     l.person(edited("r1-t", list(&["gpu"])));

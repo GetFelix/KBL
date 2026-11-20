@@ -243,6 +243,16 @@ impl Fake {
             .expect("accepted");
     }
 
+    /// A person accepts the root's triage, which an admitted root waits for before it is ready.
+    pub(crate) fn accept(&self, item: &kbl_core::names::ItemId) {
+        self.person(WorkRecord::Accepted {
+            item: item.clone(),
+            tier: None,
+            triage_skipped: None,
+            admitted_by: None,
+        });
+    }
+
     /// A person's record, which must be accepted.
     pub(crate) fn person(&self, record: WorkRecord) {
         self.push("gabriel", Actor::Person, record)

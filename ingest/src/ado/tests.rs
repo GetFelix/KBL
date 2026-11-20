@@ -751,6 +751,7 @@ async fn re_polling_never_imports_an_item_twice_and_a_pull_request_is_announced_
     let ingest = engine(&org, &tracker, json!({}));
     ingest.poll(false).await.unwrap();
     let item = tracker.item_of("contoso/Platform#12");
+    tracker.accept(&item);
     tracker.agent(
         "w1",
         kbl_core::work::WorkRecord::Claimed {
@@ -792,6 +793,7 @@ async fn a_pull_request_outside_the_mapped_repositories_is_not_announced() {
     let ingest = engine(&org, &tracker, json!({}));
     ingest.poll(false).await.unwrap();
     let item = tracker.item_of("contoso/Platform#12");
+    tracker.accept(&item);
     tracker.agent(
         "w1",
         kbl_core::work::WorkRecord::Claimed {

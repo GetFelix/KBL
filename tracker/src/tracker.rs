@@ -87,6 +87,9 @@ pub(crate) struct Settings {
     pub(crate) grants: crate::config::Grants,
     /// How long a claim stands without an extension.
     pub(crate) visibility: Duration,
+    /// Rules that accept a finished triage without a person. Empty means every
+    /// triage waits for one.
+    pub(crate) triage_policy: crate::policy::TriagePolicy,
     /// How long the writer lease stands without a renewal.
     pub(crate) lease_ttl: Duration,
     /// How long a starting tracker waits for another's lease to run out.
@@ -1305,7 +1308,61 @@ impl<B: Broker> Tracker<B> {
         }
         self.release_stopped_holds().await;
         self.drop_away_assignees().await;
+        self.admit_by_policy().await;
         self.sync_ready().await;
+    }
+
+    /// Accepts each root whose triage is finished and that a policy rule
+    /// matches, as the tracker, naming the rule. Safe to repeat: the fold
+    /// refuses a second acceptance, so a crash between a triage's `done` and
+    /// its acceptance is finished by the next sweep. Never rejects, closes or
+    /// lowers anything, and leaves an item a person touched alone.
+    pub(crate) async fn admit_by_policy(&self) {
+        let policy = &self.0.settings.triage_policy;
+        if policy.is_empty() {
+            return;
+        }
+        let due: Vec<ItemId> = {
+            let core = self.0.core.lock().await;
+            // A log below the format refuses the record.
+            if core.state.format() < kbl_core::work::FORMAT_V25 {
+                return;
+            }
+            core.state
+                .items
+                .values()
+                .filter(|i| i.parent.is_none() && !i.accepted && i.closed.is_none())
+                .filter(|i| core.state.policy_blocker(&i.id).is_ok())
+                .filter(|i| policy.matching(i).is_some())
+                .map(|i| i.id.clone())
+                .collect()
+        };
+        for item in due {
+            let mut core = self.0.core.lock().await;
+            // Checked again under the lock: a person may have acted since.
+            if core.state.policy_blocker(&item).is_err() {
+                continue;
+            }
+            let Some(rule) = core
+                .state
+                .items
+                .get(&item)
+                .and_then(|i| policy.matching(i))
+                .map(str::to_owned)
+            else {
+                continue;
+            };
+            let accepted = WorkRecord::Accepted {
+                item: item.clone(),
+                tier: None,
+                triage_skipped: None,
+                admitted_by: Some(rule),
+            };
+            // A failed write is retried by the next sweep.
+            let _ = self
+                .append(&mut core, Actor::Tracker, self.0.me.clone(), accepted)
+                .await;
+        }
     }
 
     /// The items `agent` holds, by the log.
@@ -2381,9 +2438,17 @@ impl<B: Broker> Tracker<B> {
                 }
             };
             core.published.remove(item);
-            offset = self
+            offset = match self
                 .append(&mut core, Actor::Agent, agent_key(agent), record(held))
-                .await?;
+                .await
+            {
+                Err(Error::Refused { why }) if why == "open_children" => {
+                    return Err(Error::Refused {
+                        why: format!("open_children: {}", open_children_note(&core.state, item)),
+                    });
+                }
+                done => done?,
+            };
             // Below format 14 a question keeps the hold, and its delivery with it.
             let goes_on = core.state.items.get(item).is_some_and(|i| holds(i, agent));
             if kind == "question" {
@@ -2409,6 +2474,9 @@ impl<B: Broker> Tracker<B> {
         let warning = settled
             .err()
             .map(|e| format!("the work is recorded but the delivery was not settled: {e:#}"));
+        if kind == "done" {
+            self.admit_by_policy().await;
+        }
         self.sync_ready().await;
         reply["offset"] = offset.into();
         let counter = match kind {
@@ -3464,6 +3532,23 @@ fn settle_op(
         ops.push(Op::Ack(stream, agent.clone(), record.offset));
         false
     }
+}
+
+/// Names the children that keep `item` from finishing and who holds each, so
+/// the agent knows what to finish or release.
+fn open_children_note(state: &State, item: &ItemId) -> String {
+    let named: Vec<String> = state
+        .open_children(item)
+        .into_iter()
+        .filter_map(|c| state.items.get(c))
+        .filter(|c| c.work != WorkKind::Review)
+        .map(|c| match &c.hold {
+            Some(h) => format!("{} ({:?}, held by {})", c.id, c.work, h.by),
+            None if c.paths.is_empty() => format!("{} ({:?}, not started)", c.id, c.work),
+            None => format!("{} ({:?}, has recorded work)", c.id, c.work),
+        })
+        .collect();
+    format!("{item} has open children: {}", named.join(", "))
 }
 
 fn holds(item: &kbl_core::work_fold::Item, agent: &AgentName) -> bool {

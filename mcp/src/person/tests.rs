@@ -87,6 +87,7 @@ async fn a_person_token_lists_every_tool() {
             "my_queue",
             "accept_proposal",
             "reject_proposal",
+            "undo_admission",
             "answer_question",
             "set_tier",
             "flag_item",
@@ -135,7 +136,7 @@ async fn the_agent_tools_are_not_here() {
 
 #[tokio::test]
 async fn each_tool_posts_to_its_route_with_its_body() {
-    let cases: [(&str, Value, &str, Value); 31] = [
+    let cases: [(&str, Value, &str, Value); 32] = [
         (
             "accept_proposal",
             json!({ "item": "a1", "tier": 2 }),
@@ -146,6 +147,12 @@ async fn each_tool_posts_to_its_route_with_its_body() {
             "reject_proposal",
             json!({ "item": "a1" }),
             "/v1/work/proposals/reject",
+            json!({ "item": "a1" }),
+        ),
+        (
+            "undo_admission",
+            json!({ "item": "a1" }),
+            "/v1/work/proposals/undo-admission",
             json!({ "item": "a1" }),
         ),
         (
@@ -334,8 +341,8 @@ async fn each_tool_posts_to_its_route_with_its_body() {
 
 #[tokio::test]
 async fn every_table_entry_is_covered_by_a_case() {
-    // 28 writes above and the queue below: a new entry needs its case.
-    assert_eq!(TOOLS.len(), 29);
+    // 29 writes above and the queue below: a new entry needs its case.
+    assert_eq!(TOOLS.len(), 30);
 }
 
 #[tokio::test]
