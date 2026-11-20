@@ -717,7 +717,7 @@ try {
   await open(connected, { mode: 'forbidden' });
   await page.waitFor(`document.querySelector('.status')?.dataset.tone === 'error'`);
   check(await page.eval(`!!document.querySelector('[role=alert] button') && document.querySelector('[role=alert]').textContent.includes('sign-in link')`), 'a rejected token stops with a reason, the sign-in hint and a Reload button');
-  check(await page.eval(`(() => { const p = [...document.querySelectorAll('[role=alert] p')]; return p[0].textContent === 'Your session ended.' && !/signed_out/.test(p[0].textContent) && p.some((x) => x.dataset.stopDetail !== undefined && x.textContent.startsWith('signed_out')); })()`), 'a rejected token says the session ended and keeps the raw code in a details line');
+  check(await page.eval(`(() => { const p = [...document.querySelectorAll('[role=alert] p')]; return p[0].textContent === 'Your session ended.' && !/signed_out/.test(p[0].textContent) && p.some((x) => x.dataset.stopDetail !== undefined && x.textContent.startsWith('signed_out')) && !document.querySelector('.status').textContent.includes('signed_out'); })()`), 'a rejected token says the session ended and keeps the raw code in a details line');
   await axe('stopped');
   await shoot('error-dark');
 
@@ -746,7 +746,9 @@ try {
 
   await open(connected, { width: 390, height: 844 });
   await page.waitFor(live);
-  check(await page.eval(`(() => { const t = document.querySelector('.filter-toggle'); return getComputedStyle(t).display !== 'none' && t.getAttribute('aria-expanded') === 'false' && getComputedStyle(document.querySelector('.filters')).display === 'none' && getComputedStyle(document.querySelector('.save-view')).display === 'none' && document.querySelector('.row').getBoundingClientRect().top < 330; })()`), 'on a phone the filters fold behind one button and the list starts near the top');
+  const phoneFilters = await page.eval(`JSON.stringify((() => { const t = document.querySelector('.filter-toggle'); return { toggle: getComputedStyle(t).display, expanded: t.getAttribute('aria-expanded'), filters: getComputedStyle(document.querySelector('.filters')).display, save: getComputedStyle(document.querySelector('.save-view')).display, rowTop: Math.round(document.querySelector('.row').getBoundingClientRect().top) }; })())`);
+  const pf = JSON.parse(phoneFilters);
+  check(pf.toggle !== 'none' && pf.expanded === 'false' && pf.filters === 'none' && pf.save === 'none' && pf.rowTop < 330, `on a phone the filters fold behind one button and the list starts near the top (${phoneFilters})`);
   await page.eval(`document.querySelector('.filter-toggle').click(); true`);
   check(await page.eval(`document.querySelector('.filter-toggle').getAttribute('aria-expanded') === 'true' && getComputedStyle(document.querySelector('.filters')).display !== 'none' && getComputedStyle(document.querySelector('.save-view')).display !== 'none'`), 'the Filters button opens the selects and Save view');
   await page.eval(`document.querySelector('.filter-toggle').click(); true`);

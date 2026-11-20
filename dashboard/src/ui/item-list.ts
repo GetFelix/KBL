@@ -5,7 +5,7 @@ import { childIndex, lead, nameOf, properties, reasonLine, summarize, workingLin
 import { waitsOn } from '../fold.ts';
 import { inScope, neighbour, visible, type Group } from '../list.ts';
 import { flagText } from '../overlap.ts';
-import { toAddress, type AddressState, type ViewState } from '../state.ts';
+import { STOP_TEXT, toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
 import { assigneePerson } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
@@ -36,13 +36,6 @@ function emptyState(title: string, body: Node | string, action?: HTMLElement): H
 function code(text: string): HTMLElement {
   return h('code', {}, text);
 }
-
-/** What a person reads for a stop code; the code and the gateway's words stay in a details line. */
-const STOP_TEXT: Record<string, string> = {
-  signed_out: 'Your session ended.',
-  forbidden: 'This link no longer gives access.',
-  newer_format: 'This page is older than the log.',
-};
 
 const ADVICE = {
   'sign-in': 'A new sign-in link fixes a rejected or expired token. Reload once you have one.',
