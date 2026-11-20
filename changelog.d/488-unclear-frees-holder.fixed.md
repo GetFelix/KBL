@@ -1,0 +1,1 @@
+A `triaged` answer marked `unclear` on an item an agent already holds now ends that hold as a question does (format 27). A person can accept an item before its triage finishes, and until now the item was then both held and waiting on a person. The fault sweep covers it again.

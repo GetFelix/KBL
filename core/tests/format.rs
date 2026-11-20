@@ -1753,3 +1753,37 @@ fn the_twenty_sixth_format_stamps_worker_alive_and_records_only_a_supervisors_ow
     assert_eq!(alive("sup-w2"), None);
     assert_eq!(alive("other-w1"), None);
 }
+
+/// A log at format 27: an item accepted before its triage ends is claimed, and
+/// triage then answers that it is unclear. The question frees the holder, so
+/// its later `done` is refused. Its folded state is pinned in
+/// `wasm/golden/format_27.state.json`.
+const FORMAT_27_LOG: &str = include_str!("work_format_27.jsonl");
+
+#[test]
+fn the_twenty_seventh_format_frees_the_holder_of_an_item_triage_finds_unclear() {
+    assert_eq!(kbl_core::work::FORMAT_V27, 27);
+    const { assert!(FORMAT >= kbl_core::work::FORMAT_V27) };
+    let log = entries(FORMAT_27_LOG);
+    for (_, r) in &log {
+        assert!(r.v >= r.min_format(), "{}", r.record.kind());
+    }
+    let s = fold(&log);
+    let why: Vec<_> = s.rejections.iter().map(|r| (r.offset, r.why)).collect();
+    assert_eq!(why, [(7, Reject::NotHolder)]);
+    let r1 = &s.items[&kbl_core::names::ItemId::new("r1").unwrap()];
+    assert!(r1.open_question.is_some() && r1.hold.is_none());
+    // Below the format the same answer leaves both, which is what the raise stops.
+    let old = log
+        .iter()
+        .map(|(o, r)| {
+            let mut r = r.clone();
+            if let WorkRecord::FormatRaised { to } = &mut r.record {
+                *to = 26;
+            }
+            (*o, r)
+        })
+        .collect::<Vec<_>>();
+    let r1 = &fold(&old).items[&kbl_core::names::ItemId::new("r1").unwrap()];
+    assert!(r1.open_question.is_some() && r1.hold.is_some());
+}

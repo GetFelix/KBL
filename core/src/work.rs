@@ -144,8 +144,12 @@ pub const FORMAT_V25: u32 = 25;
 /// the processes of its workers are still running.
 pub const FORMAT_V26: u32 = 26;
 
+/// The format from which an unclear triage answer frees the agent that holds
+/// the item it opens a question on, as any question does. No new record.
+pub const FORMAT_V27: u32 = 27;
+
 /// The highest record format this build reads and writes.
-pub const FORMAT: u32 = FORMAT_V26;
+pub const FORMAT: u32 = FORMAT_V27;
 
 /// Most live workers one supervisor may have, whatever the tracker's config says.
 pub const MAX_WORKERS_PER_SUPERVISOR: usize = 64;
