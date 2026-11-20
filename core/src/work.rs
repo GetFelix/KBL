@@ -867,6 +867,10 @@ pub enum WorkRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         admitted_by: Option<String>,
     },
+    /// The tier the intake rule gave an admitted root. It is the last choice: a
+    /// person's tier and triage's both outrank it when the root is accepted.
+    /// Only the tracker writes it, for an unaccepted root. Format 25.
+    IntakeTier { item: ItemId, tier: u8 },
     /// A person takes back an acceptance the triage policy made, before any
     /// work started: the root goes back to Triage with its proposal, and the
     /// policy leaves it alone from then on. Format 25.
@@ -1316,6 +1320,7 @@ impl WorkRecord {
             WorkRecord::Triaged { .. } => "triaged",
             WorkRecord::Accepted { .. } => "accepted",
             WorkRecord::AdmissionUndone { .. } => "admission_undone",
+            WorkRecord::IntakeTier { .. } => "intake_tier",
             WorkRecord::Prerequisite { .. } => "prerequisite",
             WorkRecord::Shipped { .. } => "shipped",
             WorkRecord::Linked { .. } => "linked",
@@ -1389,6 +1394,7 @@ impl WorkRecord {
             | WorkRecord::Triaged { item, .. }
             | WorkRecord::Accepted { item, .. }
             | WorkRecord::AdmissionUndone { item }
+            | WorkRecord::IntakeTier { item, .. }
             | WorkRecord::Prerequisite { item, .. }
             | WorkRecord::Shipped { item, .. }
             | WorkRecord::Linked { item, .. }
@@ -1578,6 +1584,7 @@ impl WorkRecord {
             | WorkRecord::FlakeRetried { .. } => FORMAT_V22,
             WorkRecord::WorkerFinished => FORMAT_V24,
             WorkRecord::AdmissionUndone { .. }
+            | WorkRecord::IntakeTier { .. }
             | WorkRecord::Accepted {
                 admitted_by: Some(_),
                 ..

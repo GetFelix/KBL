@@ -65,6 +65,8 @@ const SCRIPT = {
   "pol-vague": { tier: 2, why: "no repro in the issue", unclear: "acceptance" },
 };
 const ids = Object.keys(SCRIPT);
+// Other checks share the log and import their own issues; keep these numbers apart from theirs.
+const BASE = 700000 + (Math.floor(Date.now() / 1000) % 100000);
 
 const felix = await felixToken();
 createRun(RUN, "triage policy check");
@@ -88,7 +90,7 @@ try {
   });
   // Roots as admit mode leaves them: imported, not accepted, with a triage item.
   for (const [n, id] of ids.entries()) {
-    await personRecord("tok-gab", { kind: "imported", item: id, source: "check", upstream_id: `check/repo#${n + 1}`, title: `${id} issue` });
+    await personRecord("tok-gab", { kind: "imported", item: id, source: "check", upstream_id: `check/repo#${BASE + n}`, title: `${id} issue` });
     await personRecord("tok-gab", { kind: "proposed", item: `${id}-t`, parent: id, key: "triage", work: "triage", title: `Triage: ${id} issue` });
   }
 

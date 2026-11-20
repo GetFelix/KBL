@@ -1174,7 +1174,7 @@ What it does with GitHub:
 - **Import once.** The item id is derived from the upstream id, and the fold
   refuses a second `imported` for it. A poll that stops before it saves finds
   its root again on the next poll and adds nothing.
-- **Admit** writes `imported`, context for the issue text and the rule, and a triage and an augment item. The root stays in Triage, so no agent is handed its fix until its triage is accepted by a person or by a [triage policy](#accepting-routine-triage-by-policy); the rule's tier is not carried over, and an accept takes triage's tier unless the person picks one. With `"triage": "skip"` it writes the `accepted` (carrying the rule's name as `triage_skipped`) and no items, so the root is Ready to fix at once. **Propose**
+- **Admit** writes `imported`, context for the issue text and the rule, and a triage and an augment item. The root stays in Triage, so no agent is handed its fix until its triage is accepted by a person or by a [triage policy](#accepting-routine-triage-by-policy); an accept takes the tier a person picks, else triage's, else the intake rule's (`intake_tier`). With `"triage": "skip"` it writes the `accepted` (carrying the rule's name as `triage_skipped`) and no items, so the root is Ready to fix at once. **Propose**
   writes `imported` and the context, and leaves the root in Triage. With a [triage policy](#accepting-routine-triage-by-policy) the tracker accepts an admitted root itself once its triage matches a rule.
 - **Cap.** A match over its rule's cap is not imported and is looked at again
   on later polls, oldest first, as roots close.
@@ -2515,7 +2515,7 @@ leaves the rest in Needs you. It is a list of rules you write; the tracker makes
 reads only what triage recorded: its tier, area, type, size and needs.
 
 Point the tracker at a JSON file with `KBL_TRIAGE_POLICY_FILE` (or `--triage-policy-file`). Without it every
-triage waits for a person, as before. This example keeps replication, storage and anything that needs a
+triage waits for a person. This example keeps replication, storage and anything that needs a
 safety review with a person, and admits the rest at tier 2 or 3:
 
 ```json
@@ -2547,7 +2547,9 @@ Some triage is never accepted by a rule, whatever it says: one that marks itself
 duplicate, advises a split or dependencies, or that a person edited. An item that changed upstream since triage,
 left its intake rule's scope, was reopened, was closed, or that a person already accepted waits for a person too.
 A rule acts only when the triage item is finished, so an agent never starts the fix while the answer is still
-being written. It also needs the log at format 25 ([upgrading](upgrades.md)); on a lower log no rule fires.
+being written. It also needs the log at format 25 ([upgrading](upgrades.md)); on a lower log no rule fires, and
+raising the format does not sweep up a triage that was already waiting: only answers written after the raise count.
+Any record a person writes about the root (a note, a tier, an edit, a block) also keeps the rule off it.
 
 When a rule matches, the tracker writes an `accepted` record as itself, with the rule's name in `admitted_by`.
 The sweep does the same for any triage that was finished when a crash cut the first attempt, and writing it
@@ -2564,7 +2566,7 @@ A person's decision always wins:
   accept after the rule's replaces the rule's name with theirs.
 - To take back a policy acceptance, use **Take back the policy acceptance** on the item (or `undo_admission`,
   `POST /v1/work/proposals/undo-admission {item}`). The root goes back to Triage with triage's answer intact, no rule
-  accepts it again, and a person can accept or reject it as usual. It is offered only until an agent has taken the
+  accepts it again, and a person can accept or reject it as usual. The tier goes back to what it was unless a person changed it since, and resume items the acceptance released become unclaimable again. It is offered only until an agent has taken the
   item; after that, close it.
 - A policy never rejects, closes or lowers anything. It can only accept.
 

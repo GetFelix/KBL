@@ -27,6 +27,7 @@ fn allowed(record: &WorkRecord) -> bool {
     match record {
         // A policy acceptance is the tracker's own write, never ingest's.
         WorkRecord::Accepted { admitted_by, .. } => admitted_by.is_none(),
+        WorkRecord::IntakeTier { .. } => true,
         WorkRecord::Imported { .. }
         | WorkRecord::Context { .. }
         | WorkRecord::Linked { .. }
@@ -58,6 +59,7 @@ fn allowed(record: &WorkRecord) -> bool {
 fn targets(record: &WorkRecord) -> Vec<&ItemId> {
     match record {
         WorkRecord::Accepted { item, .. }
+        | WorkRecord::IntakeTier { item, .. }
         | WorkRecord::Context { item, .. }
         | WorkRecord::Updated { item, .. }
         | WorkRecord::LeftScope { item }

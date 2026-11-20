@@ -304,6 +304,17 @@ async fn a_log_below_the_format_gets_no_policy_acceptance() {
     t.sweep().await;
     assert!(!root(&t, "a1").accepted);
     assert_eq!(accepts(&fake), 0);
+    // Raising the format does not sweep up a triage that was already waiting for a person.
+    person(
+        &t,
+        WorkRecord::FormatRaised {
+            to: kbl_core::work::FORMAT,
+        },
+    )
+    .await;
+    t.sweep().await;
+    assert!(!root(&t, "a1").accepted);
+    assert_eq!(accepts(&fake), 0);
 }
 
 #[tokio::test]

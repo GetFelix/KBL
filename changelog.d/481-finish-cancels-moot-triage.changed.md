@@ -1,0 +1,1 @@
+From format 25, finishing a fix cancels triage and augment items nobody holds and that have no recorded work instead of refusing with `open_children`. Any other open child still blocks it, and the refusal now names each one and who holds it.

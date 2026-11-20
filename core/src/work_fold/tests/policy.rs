@@ -336,3 +336,145 @@ fn below_format_25_open_triage_children_still_block_the_finish() {
     l.agent("w1", done("r1", 1, 0));
     assert_eq!(last_rejection(&l), Some(Reject::OpenChildren));
 }
+
+#[test]
+fn an_answer_from_before_the_log_reached_format_25_is_left_for_a_person() {
+    let mut l = Log::default();
+    l.tracker(imported("r1"));
+    l.tracker(proposed("t1", Some("r1"), "triage", WorkKind::Triage));
+    l.agent("w2", claimed("t1", 1));
+    l.agent("w2", triaged("r1", |_| {}));
+    l.agent("w2", done("t1", 1, 0));
+    l.person(WorkRecord::FormatRaised { to: 25 });
+    l.tracker(by_rule("r1", "docs-only"));
+    assert_eq!(last_rejection(&l), Some(Reject::NotAdmissible));
+    assert!(!fold(&l.0).items[&id("r1")].accepted);
+}
+
+#[test]
+fn anything_a_person_wrote_on_the_root_keeps_the_rule_off() {
+    let records = [
+        WorkRecord::Context {
+            item: id("r1"),
+            entry: key("note"),
+            text: text("check the old behaviour first"),
+        },
+        WorkRecord::Edited {
+            item: id("r1"),
+            title: Some("renamed".into()),
+            tier: None,
+            labels: None,
+            milestone: None,
+            item_type: None,
+            area: None,
+            size: None,
+            needs: None,
+            depends_on: None,
+            split: None,
+            proposal: None,
+        },
+    ];
+    for r in records {
+        let mut l = plain();
+        l.person(r);
+        assert!(fold(&l.0).rejections.is_empty());
+        l.tracker(by_rule("r1", "docs-only"));
+        assert_eq!(last_rejection(&l), Some(Reject::NotAdmissible));
+    }
+}
+
+#[test]
+fn taking_back_restores_the_tier_and_keeps_one_a_person_set_since() {
+    let mut l = plain();
+    l.tracker(by_rule("r1", "docs-only"));
+    l.person(WorkRecord::AdmissionUndone { item: id("r1") });
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, None);
+
+    let mut l = plain();
+    l.tracker(by_rule("r1", "docs-only"));
+    l.person(WorkRecord::TierChanged {
+        item: id("r1"),
+        tier: 0,
+    });
+    l.person(WorkRecord::AdmissionUndone { item: id("r1") });
+    let s = fold(&l.0);
+    assert!(s.rejections.is_empty(), "{:?}", s.rejections);
+    assert_eq!(s.items[&id("r1")].tier, Some(0), "a person's tier stands");
+}
+
+#[test]
+fn taking_back_makes_the_resume_items_the_acceptance_released_unclaimable_again() {
+    let mut l = plain();
+    let mut s = fold(&l.0);
+    // A resume item waiting on the unaccepted root, as a fold of an answered question makes.
+    let mut resume = s.items[&id("t1")].clone();
+    resume.id = id("r1-resume");
+    resume.work = WorkKind::Resume;
+    resume.closed = None;
+    resume.accepted = false;
+    s.items
+        .get_mut(&id("r1"))
+        .unwrap()
+        .children
+        .push(resume.id.clone());
+    s.items.insert(resume.id.clone(), resume);
+    let at = l.0.len() as u64;
+    let logged = |actor, r| WorkLogged::new(at * 10, key("x"), actor, r);
+    s.try_apply(at, &logged(Actor::Tracker, by_rule("r1", "docs-only")))
+        .unwrap();
+    assert!(s.items[&id("r1-resume")].accepted);
+    s.try_apply(
+        at + 1,
+        &logged(
+            Actor::Person,
+            WorkRecord::AdmissionUndone { item: id("r1") },
+        ),
+    )
+    .unwrap();
+    assert!(!s.items[&id("r1-resume")].accepted);
+    assert!(!s.items[&id("r1")].accepted);
+}
+
+#[test]
+fn the_intake_tier_is_the_last_choice() {
+    let intake = |tier| WorkRecord::IntakeTier {
+        item: id("r1"),
+        tier,
+    };
+    // Nothing else chose one: the intake rule's.
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 25 });
+    l.tracker(imported("r1"));
+    l.tracker(intake(1));
+    l.person(accept("r1"));
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(1));
+    // Triage's proposal beats it.
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 25 });
+    l.tracker(imported("r1"));
+    l.tracker(intake(1));
+    l.person(triaged("r1", |_| {}));
+    l.person(accept("r1"));
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(2));
+    // A person's pick beats both.
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 25 });
+    l.tracker(imported("r1"));
+    l.tracker(intake(1));
+    l.person(WorkRecord::Accepted {
+        item: id("r1"),
+        tier: Some(3),
+        triage_skipped: None,
+        admitted_by: None,
+    });
+    assert_eq!(fold(&l.0).items[&id("r1")].tier, Some(3));
+    // Only the tracker writes it, and not once accepted.
+    let mut l = Log::default();
+    l.person(WorkRecord::FormatRaised { to: 25 });
+    l.tracker(imported("r1"));
+    l.person(intake(1));
+    assert_eq!(last_rejection(&l), Some(Reject::ActorNotAllowed));
+    l.person(accept("r1"));
+    l.tracker(intake(2));
+    assert_eq!(last_rejection(&l), Some(Reject::NotAdmissible));
+}

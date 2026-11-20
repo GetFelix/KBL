@@ -555,6 +555,15 @@ impl<S: Source, T: Tracker> Ingest<S, T> {
         if rule.triage == Triage::Skip {
             return Ok(());
         }
+        // The rule's tier is the fallback when triage and a person choose none. A log
+        // below format 25 refuses it, and then the accept's own default stands.
+        if accept {
+            let tier = WorkRecord::IntakeTier {
+                item: item.clone(),
+                tier: rule.tier_for(issue),
+            };
+            self.tracker.append(&tier).await?;
+        }
         for (suffix, work, key, title) in [
             ("t", WorkKind::Triage, "triage", "Triage"),
             ("a", WorkKind::Augment, "augment", "Augment"),

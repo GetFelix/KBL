@@ -807,6 +807,16 @@ pub struct Item {
     /// back, or reopened it. Cleared by no record. Format 25.
     #[serde(default, skip_serializing_if = "is_false")]
     pub policy_held: bool,
+    /// A person wrote a record about this root (a note, a tier, an edit, ...)
+    /// since its import, so the triage policy leaves it alone. Format 25.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub person_touched: bool,
+    /// What the policy's acceptance changed, so a take-back can restore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub admission: Option<Admission>,
+    /// The tier the intake rule gave, used when neither a person nor triage chose one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intake_tier: Option<u8>,
     /// Upstream's labels and milestone, set at import and kept in step by
     /// reconcile. Format 19.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1000,6 +1010,17 @@ pub enum Reject {
     NotAdmissible,
 }
 
+/// What a triage policy acceptance changed on a root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Admission {
+    /// The root's tier before the acceptance.
+    pub tier_before: Option<u8>,
+    /// The tier the acceptance set. A take-back keeps a tier that differs from it.
+    pub tier_set: u8,
+    /// Resume items the acceptance made claimable.
+    pub resumed: Vec<ItemId>,
+}
+
 /// A delegated worker: an agent name a supervisor's token registered, which
 /// acts with the supervisor's grants and is attributed to both.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1098,6 +1119,10 @@ pub struct State {
     /// The log's format when a `format_raised` record raised it. None is the first format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     format: Option<u32>,
+    /// The offset of the `format_raised` that took the log to 25. A triage
+    /// answered before it is never accepted by the policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    policy_since: Option<u64>,
     /// Per model and unit, `(effective_from_ms, price_micros)` in effect order.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     prices: BTreeMap<String, BTreeMap<PriceUnit, Vec<(u64, u64)>>>,
@@ -2127,6 +2152,9 @@ impl State {
             triage_skipped: None,
             admitted_by: None,
             policy_held: false,
+            person_touched: false,
+            admission: None,
+            intake_tier: None,
             labels: Vec::new(),
             milestone: None,
             class: Class::default(),
@@ -2354,6 +2382,21 @@ impl State {
         self.track_waiting_since(offset, rec);
         if let Some(item) = rec.record.item() {
             self.settle_fix_check(item);
+            // Creating the item, and a person's own triage, leave it as the
+            // policy found it; anything else a person writes is their say.
+            let creating = matches!(
+                rec.record,
+                WorkRecord::Imported { .. }
+                    | WorkRecord::Proposed { .. }
+                    | WorkRecord::Triaged { .. }
+            );
+            // Only on a log at the policy's format: older states stay as they were.
+            if rec.actor == Actor::Person && !creating && self.format() >= FORMAT_V25 {
+                let root = self.items.get(item).map(|i| i.root.clone());
+                if let Some(it) = root.and_then(|r| self.items.get_mut(&r)) {
+                    it.person_touched = true;
+                }
+            }
         }
         Ok(())
     }
@@ -2402,6 +2445,9 @@ impl State {
     fn step_record(&mut self, offset: u64, rec: &WorkLogged) -> Result<(), Reject> {
         if let Some(raised) = format_gate(FORMAT, self.format(), rec)? {
             self.format = Some(raised);
+            if raised >= FORMAT_V25 && self.policy_since.is_none() {
+                self.policy_since = Some(offset);
+            }
             return Ok(());
         }
         self.check_charge(rec)?;
@@ -2579,11 +2625,15 @@ impl State {
                 }
                 let format = self.format();
                 let it = self.item_mut(item)?;
-                // A tier a person set while editing outranks the triage proposal.
+                let before = it.tier;
+                // A tier a person set while editing outranks the triage proposal, which
+                // outranks the intake rule's.
                 it.tier = tier
                     .or(it.tier)
                     .or(it.proposal.as_ref().map(|p| p.tier))
+                    .or(it.intake_tier)
                     .or(Some(DEFAULT_TIER));
+                let set = it.tier.unwrap_or(DEFAULT_TIER);
                 it.accepted = true;
                 it.triage_skipped.clone_from(triage_skipped);
                 it.admitted_by.clone_from(admitted_by);
@@ -2598,14 +2648,39 @@ impl State {
                 // Resume work an unaccepted item's answer made waits for this.
                 let tier = self.item(item)?.tier;
                 let waiting: Vec<ItemId> = self.item(item)?.children.clone();
+                let mut resumed = Vec::new();
                 for c in waiting {
                     if let Some(c) = self.items.get_mut(&c)
                         && c.work == WorkKind::Resume
                     {
+                        if !c.accepted {
+                            resumed.push(c.id.clone());
+                        }
                         c.accepted = true;
                         c.tier = tier;
                     }
                 }
+                self.item_mut(item)?.admission = admitted_by.as_ref().map(|_| Admission {
+                    tier_before: before,
+                    tier_set: set,
+                    resumed,
+                });
+            }
+            WorkRecord::IntakeTier { item, tier } => {
+                if rec.actor != Actor::Tracker {
+                    return Err(Reject::ActorNotAllowed);
+                }
+                if *tier >= TIERS {
+                    return Err(Reject::BadTier);
+                }
+                let it = self.item_mut(item)?;
+                if it.parent.is_some() || it.accepted || it.closed.is_some() {
+                    return Err(Reject::NotAdmissible);
+                }
+                if it.intake_tier == Some(*tier) {
+                    return Err(Reject::NoChange);
+                }
+                it.intake_tier = Some(*tier);
             }
             WorkRecord::AdmissionUndone { item } => {
                 if rec.actor != Actor::Person {
@@ -2624,9 +2699,21 @@ impl State {
                 it.accepted_by_person = false;
                 it.admitted_by = None;
                 it.policy_held = true;
-                it.tier = None;
                 it.flagged = false;
+                // Back to the tier the item had, unless a person changed it since.
+                let admission = it.admission.take();
+                if let Some(a) = &admission
+                    && it.tier == Some(a.tier_set)
+                {
+                    it.tier = a.tier_before;
+                }
                 self.track(item);
+                for c in admission.map(|a| a.resumed).unwrap_or_default() {
+                    if let Some(c) = self.items.get_mut(&c) {
+                        c.accepted = false;
+                        c.tier = None;
+                    }
+                }
             }
             WorkRecord::Prerequisite {
                 item,
@@ -5119,8 +5206,11 @@ impl State {
         let mut kids = it.children.iter().filter_map(|c| self.items.get(c));
         let finished = kids.clone().all(|c| !triage(c.work) || c.closed.is_some());
         let triaged = kids.any(|c| c.work == WorkKind::Triage);
+        // Only an answer written after the log reached the policy's format.
+        let fresh = |at: u64| self.policy_since.is_some_and(|s| at > s);
         let plain = it.proposal.as_ref().is_some_and(|p| {
-            !p.edited
+            fresh(p.at)
+                && !p.edited
                 && p.unclear.is_none()
                 && p.duplicate_of.is_none()
                 && p.split.is_empty()
@@ -5130,6 +5220,7 @@ impl State {
             && it.closed.is_none()
             && !it.accepted
             && !it.policy_held
+            && !it.person_touched
             && !it.changed_upstream
             && !it.left_scope
             && it.open_question.is_none();
