@@ -309,8 +309,10 @@ async fn a_log_below_the_format_gets_no_policy_acceptance() {
 #[tokio::test]
 async fn ingest_cannot_write_a_policy_acceptance() {
     let fake = Fake::default();
-    let t = tracker(&fake, Some(RULES)).await;
+    // No policy runs, and the triage is finished and plain: only the route's refusal stops it.
+    let t = tracker(&fake, None).await;
     imported(&t, "a1").await;
+    triage_and_finish(&t, "a1", answer(2, "docs", &[])).await;
     let err = t
         .ingest_record(
             key("ingest"),
