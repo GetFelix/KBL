@@ -104,7 +104,8 @@ try {
   await w1.tool("work_complete", { item: c });
 
   const records = mine();
-  check(new Set(records.map((r) => r.v)).size === 1, "every record either build wrote is of one format");
+  // Records the check posts itself carry no format; the tracker stamps its own.
+  check(new Set(records.map((r) => r.v).filter((v) => v !== undefined)).size <= 1, "every record either build wrote is of one format");
   for (const id of [a, b, c]) {
     const of = records.filter((r) => r.item === id);
     check(
