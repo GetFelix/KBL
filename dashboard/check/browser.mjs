@@ -663,7 +663,7 @@ try {
   // Item detail: the Now line, the live timeline and the attempts. Times are relative and live, and
   // a fold a person opened stays open when a record redraws the panel.
   const text = (sel) => page.eval(`document.querySelector(${JSON.stringify(sel)})?.textContent ?? ''`);
-  check(/^agent-1 is working on this, attempt 1, last activity /.test(await text('.panel .now-text')), `the panel says who works on the item (${await text('.panel .now-text')})`);
+  check(/^agent-1 is working on this, attempt 1, last tracker write /.test(await text('.panel .now-text')), `the panel says who works on the item (${await text('.panel .now-text')})`);
   const newest = await text('.panel .tl-entry:first-child .tl-head strong');
   check(newest === 'Edited core/src/cache.rs', `the timeline lists the newest record first (saw "${newest}")`);
   check(await page.eval(`!!document.querySelector('.panel .tl-entry time[datetime]')`), 'each timeline entry has a machine-readable time');
@@ -1038,17 +1038,21 @@ try {
   {
     const w = (r) => page.eval(`window.__push(${JSON.stringify({ v: 24, actor: 'agent', at_ms: Date.now(), ...r })}); true`);
     const hash = (c) => c.repeat(64);
-    await page.eval(`window.__push({ v: 24, kind: 'format_raised', to: 24, actor: 'person', by: 'maintainer', at_ms: Date.now() }); window.__push({ kind: 'imported', item: 'wk-1', source: 'github', title: 'Held by a worker', upstream_id: 'GetFelix/felix#7001', actor: 'tracker', by: 'ingest', at_ms: Date.now() }); window.__push({ kind: 'accepted', item: 'wk-1', tier: 1, actor: 'person', by: 'maintainer', at_ms: Date.now() }); true`);
+    await page.eval(`window.__push({ v: 26, kind: 'format_raised', to: 26, actor: 'person', by: 'maintainer', at_ms: Date.now() }); window.__push({ kind: 'imported', item: 'wk-1', source: 'github', title: 'Held by a worker', upstream_id: 'GetFelix/felix#7001', actor: 'tracker', by: 'ingest', at_ms: Date.now() }); window.__push({ kind: 'accepted', item: 'wk-1', tier: 1, actor: 'person', by: 'maintainer', at_ms: Date.now() }); true`);
     for (const [n, c, extra] of [['sup-a', 'a', { vendor: 'anthropic', model: 'sonnet' }], ['sup-b', 'b', { vendor: 'example', profile: 'cloud' }], ['sup-c', 'c', {}], ['sup-d', 'd', {}]]) {
       await w({ by: 'sup', kind: 'worker_started', worker: n, token_sha256: hash(c), supervisor_token_sha256: hash('f'), ...extra });
     }
     await w({ by: 'sup-a', sup: 'sup', kind: 'claimed', item: 'wk-1', attempt: 1, deadline_ms: Date.now() + 3_600_000 });
     await w({ by: 'sup-c', sup: 'sup', kind: 'worker_finished' });
+    // The supervisor last vouched for sup-a a moment ago and for sup-b ten minutes ago; a hosted worker has no heartbeat.
+    await w({ v: 26, by: 'sup', kind: 'worker_alive', workers: ['sup-a'] });
+    await w({ v: 26, by: 'sup', kind: 'worker_alive', workers: ['sup-b'], at_ms: Date.now() - 10 * 60_000 });
     await page.eval(`window.__push({ v: 24, kind: 'worker_stopped', worker: 'sup-d', actor: 'person', by: 'maintainer', at_ms: Date.now() }); true`);
     await page.eval(`[...document.querySelectorAll('.sidebar-foot button')].find((b) => b.textContent === 'Workers').click(); true`);
     await page.waitFor(`!!document.querySelector('dialog.workers section[data-supervisor=sup] tr[data-worker=sup-d]')`);
     const rows = await page.eval(`[...document.querySelectorAll('dialog.workers tr[data-worker]')].map((r) => r.dataset.worker + ':' + r.dataset.state).join(' ')`);
     check(rows === 'sup-a:working sup-b:idle sup-c:finished sup-d:stopped', `workers: one group, live workers first, finished and stopped kept (${rows})`);
+    check(await page.eval(`(() => { const b = (n) => document.querySelector('dialog.workers tr[data-worker=' + n + '] [data-beat]'); return b('sup-a')?.dataset.beat === 'running' && b('sup-a').textContent === 'process running' && b('sup-b')?.dataset.beat === 'silent' && /^no heartbeat for 1\\d min$/.test(b('sup-b').textContent) && !b('sup-c') && !b('sup-d'); })()`), 'workers: a recent heartbeat reads as running, an old one as silent, and a worker with none says nothing');
     check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a] a[data-item=wk-1]')?.textContent === 'wk-1 Held by a worker'`), 'workers: a working worker names the item it holds');
     check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a]').textContent.includes('anthropic · sonnet') && document.querySelector('dialog.workers tr[data-worker=sup-c]').textContent.includes('finished')`), 'workers: the recorded launch fields and the finish show');
     check(await page.eval(`(() => { const t = (n) => document.querySelector('dialog.workers tr[data-worker=' + n + ']').textContent; return !/not recorded|None/.test(t('sup-c') + t('sup-d')) && t('sup-c').includes('Nothing held') && t('sup-d').includes('Nothing held'); })()`), 'workers: a finished or stopped worker with nothing recorded shows no filler and Nothing held');

@@ -1,9 +1,10 @@
 // The Workers dialog: each supervisor with the workers it started, what each holds now, how
 // the ones that ended ended, and a stop for one worker or for a whole group. Everything shown is
-// a recorded field of `worker_started`, `worker_stopped` or `worker_finished`, or of the hold.
+// a recorded field of `worker_started`, `worker_stopped`, `worker_finished` or `worker_alive`, or of the hold.
 import { since } from '../activity.ts';
 import type { ItemRow } from '../fold.ts';
 import type { ViewState } from '../state.ts';
+import { beat } from '../card.ts';
 import { groups, launchText, liveCount, liveNames, STATE_TEXT, summary, type Group, type WorkerLine, type WorkerRow } from '../workers.ts';
 import { modal } from './dialog.ts';
 import { h } from './dom.ts';
@@ -34,8 +35,14 @@ function holdCell(w: WorkerLine, s: ViewState, now: number, open: (id: string) =
       open(hold.item);
     },
   }, hold.title ? `${hold.item} ${hold.title}` : hold.item);
-  const quiet = hold.active_ms ? `last active ${since(hold.active_ms, now)}` : '';
+  const quiet = hold.active_ms ? `last tracker write ${since(hold.active_ms, now)}` : '';
   return h('span', {}, link, h('span', { class: 'muted small' }, ` attempt ${hold.attempt}${quiet ? `, ${quiet}` : ''}`));
+}
+
+/** What the supervisor's last heartbeat says about a live worker's process; nothing for one that was never named in one. */
+function beatLine(w: WorkerLine, now: number): Node | null {
+  const b = w.state === 'working' || w.state === 'idle' ? beat(w.alive_ms, now) : null;
+  return b ? h('div', { class: `beat small ${b.silent ? 'silent' : 'muted'}`, 'data-beat': b.silent ? 'silent' : 'running' }, b.text) : null;
 }
 
 function ended(w: WorkerLine, now: number): string {
@@ -94,7 +101,7 @@ export function workersView(on: WorkersHandlers) {
           const live = w.state === 'working' || w.state === 'idle';
           return h('tr', { 'data-worker': w.worker, 'data-state': w.state },
             h('th', { scope: 'row' }, w.worker, h('div', { class: 'muted small' }, ended(w, now))),
-            h('td', {}, h('span', { class: `worker-state ${w.state}` }, STATE_TEXT[w.state])),
+            h('td', {}, h('span', { class: `worker-state ${w.state}` }, STATE_TEXT[w.state]), beatLine(w, now)),
             h('td', {}, launchText(w) || null),
             h('td', {}, holdCell(w, s, now, on.open, () => m.close())),
             h('td', { class: 'num' }, live && on.canStop()

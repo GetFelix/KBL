@@ -219,3 +219,37 @@ async fn a_person_stops_any_worker_and_the_list_shows_it_stopped() {
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(again["why"], "bad_worker", "{again}");
 }
+
+#[tokio::test]
+async fn only_a_supervisor_records_its_workers_alive() {
+    let app = app_21().await;
+    raise_to(&app, 26).await;
+    let (_, reply) = call(
+        &app,
+        "/v1/work/workers",
+        Some("tok-w1"),
+        json!({ "worker": "w1-a" }),
+    )
+    .await;
+    let tok = reply["token"].as_str().unwrap().to_owned();
+    let alive = json!({ "workers": ["w1-a"] });
+    // Not a person, not another supervisor's token, not the worker itself.
+    for token in ["tok-gab", &tok] {
+        let (status, _) = call(&app, "/v1/work/workers/alive", Some(token), alive.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{token}");
+    }
+    let (status, body) = call(
+        &app,
+        "/v1/work/workers/alive",
+        Some("tok-dup"),
+        alive.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["written"], false, "not its worker");
+    let (status, body) = call(&app, "/v1/work/workers/alive", Some("tok-w1"), alive).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["written"], true);
+    let (_, listed) = get_json(&app, "/v1/work/workers", Some("tok-w1")).await;
+    assert!(listed["workers"][0]["alive_ms"].is_u64(), "{listed}");
+}

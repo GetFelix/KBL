@@ -104,6 +104,8 @@ export interface ItemRow {
   /** The agent that holds it and when it last wrote, in the tracker's clock (ms). */
   holder?: string | null;
   active_ms?: number | null;
+  /** When the holder's supervisor last recorded its process as running (`worker_alive`), or null. */
+  holder_alive_ms?: number | null;
   /** When the agent's claim runs out, in the tracker's clock (ms). */
   hold_deadline_ms?: number | null;
   /** The item this one is a child of, and what kind of work it is (`fix`, `triage`, `augment`, `review`, ...). */

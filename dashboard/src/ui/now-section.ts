@@ -1,5 +1,5 @@
 // The panel's Now line: one sentence on who holds the item and how recently it moved, or why
-// it is not moving. It re-reads the clock on a timer, so "last activity 40 s ago" stays true.
+// it is not moving. It re-reads the clock on a timer, so "last tracker write 40 s ago" stays true.
 import { nowLine, type ActivityEvent } from '../activity.ts';
 import type { ItemRow } from '../fold.ts';
 import type { ViewState } from '../state.ts';

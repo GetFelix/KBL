@@ -32,6 +32,9 @@ pub(crate) const MAX_POOL: usize = 64;
 const MAX_NAMES: u32 = 99_999;
 /// Workers in a row that fail or exit too soon before the top-up pauses.
 const PAUSE_AFTER: u32 = 3;
+/// How often the supervisor records that its workers' processes are running.
+/// The dashboard calls a worker silent after several of these are missed.
+const HEARTBEAT: Duration = Duration::from_secs(60);
 /// How many ready items one look at the queue reads.
 const PEEK: u64 = 50;
 /// How long a hook may take to answer.
@@ -167,6 +170,44 @@ impl<T: TrackerApi> Supervisor<T> {
                 me.round().await;
             }
         });
+    }
+
+    /// Records every `HEARTBEAT` which command workers' processes are still
+    /// running, so a person can tell a busy worker from a stuck one.
+    pub(crate) fn spawn_heartbeat(&self) {
+        let me = self.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(HEARTBEAT);
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                me.beat().await;
+            }
+        });
+    }
+
+    /// One heartbeat: a `worker_alive` for the workers whose process is
+    /// running now. A tracker below format 26 refuses it, which is fine.
+    pub(crate) async fn beat(&self) {
+        let alive: Vec<String> = {
+            let mut pool = self.0.pool.lock().await;
+            pool.workers
+                .iter_mut()
+                .filter(|(_, r)| !r.stop_pending)
+                .filter_map(|(name, r)| {
+                    let child = r.child.as_mut()?;
+                    matches!(child.try_wait(), Ok(None)).then(|| name.clone())
+                })
+                .collect()
+        };
+        if alive.is_empty() {
+            return;
+        }
+        let _ = self
+            .0
+            .api
+            .call("/v1/work/workers/alive", json!({ "workers": alive }))
+            .await;
     }
 
     /// One top-up round: reap, then fill the pool.

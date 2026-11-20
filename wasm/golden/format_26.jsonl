@@ -1,0 +1,11 @@
+{"v":26,"at_ms":1000,"by":"gabriel","actor":"person","kind":"format_raised","to":26}
+{"v":21,"at_ms":1010,"by":"sup","actor":"agent","kind":"worker_started","worker":"sup-w1","token_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","supervisor_token_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+{"v":21,"at_ms":1011,"by":"sup","actor":"agent","kind":"worker_started","worker":"sup-w2","token_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","supervisor_token_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+{"v":21,"at_ms":1012,"by":"other","actor":"agent","kind":"worker_started","worker":"other-w1","token_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","supervisor_token_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+{"v":26,"at_ms":1040,"by":"sup","actor":"agent","kind":"worker_alive","workers":["sup-w1"]}
+{"v":26,"at_ms":1050,"by":"sup","actor":"agent","kind":"worker_alive","workers":["sup-w2","other-w1"]}
+{"v":26,"at_ms":1060,"by":"sup","actor":"agent","kind":"worker_alive","workers":[]}
+{"v":26,"at_ms":1070,"by":"sup-w1","actor":"agent","sup":"sup","kind":"worker_alive","workers":["sup-w1"]}
+{"v":26,"at_ms":1080,"by":"gabriel","actor":"person","kind":"worker_alive","workers":["sup-w1"]}
+{"v":21,"at_ms":1090,"by":"sup","actor":"agent","kind":"worker_stopped","worker":"sup-w2"}
+{"v":26,"at_ms":1100,"by":"sup","actor":"agent","kind":"worker_alive","workers":["sup-w2"]}

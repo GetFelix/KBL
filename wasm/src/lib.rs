@@ -146,7 +146,8 @@ impl Folder {
     /// or null; one with an `until_ms` in the past no longer holds, which the page checks
     /// against its own clock. `assignee` is who works it (`{"person": k}`), or null; `held_attempt` is
     /// the attempt an agent holds, or null; `holder` and `active_ms` name that
-    /// agent and when it last wrote. `redos_left` is how many redos the item's budget still
+    /// agent and when it last wrote; `holder_alive_ms` is when its supervisor last recorded the
+    /// holder's process as running, or null (no heartbeat, or the holder is not a live worker). `redos_left` is how many redos the item's budget still
     /// allows and `redo_pending` is true while a redo waits for an agent. `parent`, `work`, `upstream` (the root's
     /// `owner/repo#number`), `pr`, `pr_phase`, `pr_checks` and `failing_check`
     /// let a card nest and describe itself. `hold_deadline_ms` is when the hold lapses
@@ -188,6 +189,12 @@ impl Folder {
                     "pr_checks": pr.map(|p| p.checks),
                     "failing_check": pr.and_then(|p| p.failing.as_ref()).map(|f| &f.name),
                     "holder": i.hold.as_ref().map(|h| &h.by),
+                    "holder_alive_ms": i
+                        .hold
+                        .as_ref()
+                        .and_then(|h| self.state.workers.get(&h.by))
+                        .filter(|w| w.stopped_ms.is_none())
+                        .and_then(|w| w.alive_ms),
                     "active_ms": i.hold.as_ref().map(|h| h.active_ms),
                     "stage": self.state.stage(&i.id),
                     "tier": i.tier,
@@ -368,7 +375,7 @@ impl Folder {
     }
 
     /// Every delegated worker, stopped ones included, as `{worker, supervisor, vendor,
-    /// profile, model, started_ms, stopped_ms, finished, holds}` in name order. `holds` is
+    /// profile, model, started_ms, stopped_ms, finished, alive_ms, holds}` in name order. `holds` is
     /// `{item, attempt}` while the worker holds an item, else null. Token hashes are not
     /// included: the page has no use for them.
     pub fn workers_json(&self) -> String {
@@ -387,6 +394,7 @@ impl Folder {
                     "started_ms": w.started_ms,
                     "stopped_ms": w.stopped_ms,
                     "finished": w.finished,
+                    "alive_ms": w.alive_ms,
                     "holds": holds.map(|(item, attempt)| json!({ "item": item, "attempt": attempt })),
                 })
             })

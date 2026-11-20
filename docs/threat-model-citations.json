@@ -173,7 +173,8 @@
   "if it.accepted {",
   "if rec.actor != Actor::Tracker {",
   "if it.pr.as_deref() != Some(status.pr.as_str()) {",
-  "if source.len() > MAX_PR_REF || repo.len() > MAX_PR_REF {"
+  "if source.len() > MAX_PR_REF || repo.len() > MAX_PR_REF {",
+  "|| !workers.iter().all(mine)"
  ],
  "core/src/work_fold.rs#upstream_sync": [
   "if it.parent.is_some() {",
@@ -499,6 +500,9 @@
  "tracker/src/http.rs#usage_of": [
   "fn usage_of(usage: Vec<Usage>, cost_micros: Option<u64>) -> Result<Vec<Usage>, Error> {"
  ],
+ "tracker/src/http.rs#worker_alive": [
+  "Ok(a) if a.supervisor().is_none() => a,"
+ ],
  "tracker/src/http.rs#worker_finish": [
   "Ok(a) if a.supervisor().is_some() => a,"
  ],
@@ -746,6 +750,9 @@
  ],
  "tracker/src/tracker/tools.rs#triage_lists": [
   "|| related.len() > MAX_TRIAGE_LIST"
+ ],
+ "tracker/src/tracker/workers.rs#workers_alive": [
+  ".filter(|k| names.contains(k))"
  ],
  "tracker/src/tracker/workers.rs#finish_worker": [
   "WorkRecord::WorkerFinished,"

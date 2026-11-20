@@ -15,6 +15,8 @@ export interface WorkerRow {
   stopped_ms: number | null;
   /** It ended by its own `worker_finished` (format 24), not a stop. */
   finished: boolean;
+  /** When its supervisor last recorded the process as running (`worker_alive`, format 26); null if never. */
+  alive_ms: number | null;
   holds: { item: string; attempt: number } | null;
 }
 

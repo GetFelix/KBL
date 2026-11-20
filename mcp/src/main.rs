@@ -183,6 +183,7 @@ async fn serve() -> Result<()> {
                 Box::new(|name| std::env::var(name).ok()),
             )?;
             sup.spawn_top_up();
+            sup.spawn_heartbeat();
             Some(sup)
         }
         _ => None,

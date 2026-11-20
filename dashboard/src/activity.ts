@@ -3,7 +3,7 @@
 import type { BlockedRow, ItemRow } from './fold.ts';
 import { stageLabel } from './list.ts';
 import { assigneePerson, needsLine } from './writes.ts';
-import { blockText, prText } from './card.ts';
+import { beat, blockText, prText } from './card.ts';
 
 export interface ActivityEvent {
   offset: number;
@@ -85,11 +85,13 @@ export function nowLine(item: ItemRow, blocked: readonly BlockedRow[], events: r
   // while the item is in Needs you, nobody is working it.
   if (item.holder && item.held_attempt && item.stage !== 'needs_you') {
     const last = item.active_ms ?? lastWrite(events, item.held_attempt)?.at_ms ?? null;
-    const quiet = last === null ? 'no activity recorded yet' : `last activity ${since(last, now)}`;
+    const quiet = last === null ? 'no activity recorded yet' : `last tracker write ${since(last, now)}`;
     // Renewals are not recorded, so a passed claim-time deadline says nothing about a live agent.
     const deadline = item.hold_deadline_ms;
     const lapse = deadline != null && deadline > now ? `. Claimed with a deadline ${since(deadline, now)}` : '';
-    return { text: `${item.holder} is working on this, attempt ${item.held_attempt}, ${quiet}${lapse}.`, tone: 'ok' };
+    const alive = beat(item.holder_alive_ms, now);
+    const process = alive ? `, ${alive.text}` : '';
+    return { text: `${item.holder} is working on this, attempt ${item.held_attempt}, ${quiet}${process}${lapse}.`, tone: alive?.silent ? 'warn' : 'ok' };
   }
   const waits = waitsText(item, blocked);
   switch (item.stage) {

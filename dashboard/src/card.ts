@@ -42,11 +42,32 @@ export function ago(ms: number, now: number): string {
   return h < 24 ? `${h} h ago` : `${Math.round(h / 24)} d ago`;
 }
 
+/** A heartbeat older than this reads as silence: three of the supervisor's one-minute beats missed. */
+export const BEAT_STALE_MS = 3 * 60_000;
+
+/** What the supervisor's last heartbeat says about a worker's process. */
+export interface Beat {
+  /** Beats stopped coming; the process may be gone or the supervisor down. */
+  silent: boolean;
+  text: string;
+}
+
+/**
+ * The recorded heartbeat as words: `process running` while beats are recent, `no heartbeat for 7 min` after.
+ * Null when none was ever recorded, which is also what a hosted worker has, so nothing is said.
+ */
+export function beat(alive_ms: number | null | undefined, now: number): Beat | null {
+  if (alive_ms == null) return null;
+  if (now - alive_ms <= BEAT_STALE_MS) return { silent: false, text: 'process running' };
+  return { silent: true, text: `no heartbeat for ${ago(alive_ms, now).replace(/ ago$/, '')}` };
+}
+
 /** Who holds the item, on which attempt, and how long it has been quiet. Null when no agent holds it. */
 export function workingLine(i: ItemRow, now: number): string | null {
   if (!i.holder || !i.held_attempt) return null;
-  const quiet = i.active_ms ? `, last active ${ago(i.active_ms, now)}` : '';
-  return `${i.holder} working, attempt ${i.held_attempt}${quiet}`;
+  const quiet = i.active_ms ? `, last tracker write ${ago(i.active_ms, now)}` : '';
+  const alive = beat(i.holder_alive_ms, now);
+  return `${i.holder} working, attempt ${i.held_attempt}${quiet}${alive ? `, ${alive.text}` : ''}`;
 }
 
 export interface ChildSummary {

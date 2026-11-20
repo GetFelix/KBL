@@ -18,11 +18,21 @@ test('since says how long ago, and how far ahead', () => {
 test('the Now line names the holder, the attempt, the last activity and the claim deadline', () => {
   const held = item({ stage: 'held', holder: 'agent1', held_attempt: 2, active_ms: NOW - 40_000, hold_deadline_ms: NOW + 50_000 });
   const n = nowLine(held, [], [], NOW);
-  assert.equal(n.text, 'agent1 is working on this, attempt 2, last activity 40 s ago. Claimed with a deadline in 50 s.');
+  assert.equal(n.text, 'agent1 is working on this, attempt 2, last tracker write 40 s ago. Claimed with a deadline in 50 s.');
   assert.equal(n.tone, 'ok');
   const late = nowLine({ ...held, hold_deadline_ms: NOW - 5_000 }, [], [], NOW);
   assert.equal(late.tone, 'ok');
-  assert.equal(late.text, 'agent1 is working on this, attempt 2, last activity 40 s ago.');
+  assert.equal(late.text, 'agent1 is working on this, attempt 2, last tracker write 40 s ago.');
+});
+
+test('the Now line adds the worker heartbeat and warns when it went quiet', () => {
+  const held = item({ stage: 'held', holder: 'agent1', held_attempt: 2, active_ms: NOW - 6 * 60_000 });
+  const busy = nowLine({ ...held, holder_alive_ms: NOW - 20_000 }, [], [], NOW);
+  assert.equal(busy.text, 'agent1 is working on this, attempt 2, last tracker write 6 min ago, process running.');
+  assert.equal(busy.tone, 'ok');
+  const stuck = nowLine({ ...held, holder_alive_ms: NOW - 9 * 60_000 }, [], [], NOW);
+  assert.equal(stuck.text, 'agent1 is working on this, attempt 2, last tracker write 6 min ago, no heartbeat for 9 min.');
+  assert.equal(stuck.tone, 'warn');
 });
 
 test('the Now line says what a waiting item waits on', () => {
@@ -97,7 +107,7 @@ test('a refused record is shown as refused and counts for nothing', () => {
   assert.match(t[3].detail ?? '', /did not take effect/);
   assert.equal(t[3].failed, true);
   const n = nowLine({ ...held, active_ms: null }, [], events, NOW);
-  assert.match(n.text, /last activity 10 min ago/, 'a refused write is not activity');
+  assert.match(n.text, /last tracker write 10 min ago/, 'a refused write is not activity');
   const acts = new Map([['k', [ev({ kind: 'answer', chosen: 'nope', refused: 'not_open_question' })]]]);
   const kid = item({ id: 'k', parent: 'a', work: 'triage', stage: 'ready' });
   assert.equal(linked(item(), [item(), kid], [], acts).children[0].answer, null);

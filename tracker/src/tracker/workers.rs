@@ -2,7 +2,7 @@
 //! its own token, acting with the supervisor's grants and under its caps.
 
 use kbl_core::org::TokenHash;
-use kbl_core::work::SUPERVISOR_GONE;
+use kbl_core::work::{MAX_WORKERS_PER_SUPERVISOR, SUPERVISOR_GONE};
 use kbl_core::work_fold::{State, Worker};
 
 use super::*;
@@ -156,6 +156,42 @@ impl<B: Broker> Tracker<B> {
         )
     }
 
+    /// A supervisor records that the processes of these workers are running.
+    /// Names that are not its live workers are left out, since a worker may
+    /// have ended since the supervisor looked; nothing is written when none
+    /// is left.
+    pub(crate) async fn workers_alive(
+        &self,
+        supervisor: &AgentName,
+        names: Vec<String>,
+    ) -> Result<Value, Error> {
+        if names.len() > MAX_WORKERS_PER_SUPERVISOR {
+            return Err(Error::Invalid(format!(
+                "at most {MAX_WORKERS_PER_SUPERVISOR} workers"
+            )));
+        }
+        let names = names
+            .iter()
+            .map(|n| Key::new(n).map_err(|_| Error::Invalid(format!("{n} is not a worker name"))))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.begin().await?;
+        let by = Key::new(supervisor.as_str()).expect("an agent name is a key");
+        let mut core = self.0.core.lock().await;
+        let mut workers: Vec<Key> = core
+            .state
+            .live_workers(&by)
+            .map(|(k, _)| k.clone())
+            .filter(|k| names.contains(k))
+            .collect();
+        workers.dedup();
+        if workers.is_empty() {
+            return Ok(json!({ "kind": "worker_alive", "written": false }));
+        }
+        let record = WorkRecord::WorkerAlive { workers };
+        let offset = self.append(&mut core, Actor::Agent, by, record).await?;
+        Ok(json!({ "kind": "worker_alive", "written": true, "offset": offset }))
+    }
+
     /// Gives back what an ended worker still holds, as a gone supervisor's
     /// workers do: no try is spent.
     async fn release_held(&self, core: &mut Core, worker: &Key) -> Result<Vec<ItemId>, Error> {
@@ -241,6 +277,7 @@ impl<B: Broker> Tracker<B> {
                     "started_ms": w.started_ms,
                     "stopped_ms": w.stopped_ms,
                     "finished": w.finished,
+                    "alive_ms": w.alive_ms,
                     "holds": holds.map(|(item, attempt)| json!({ "item": item, "attempt": attempt })),
                 })
             })

@@ -1216,6 +1216,7 @@ pub fn redact_record(record: &mut WorkRecord) {
         | WorkRecord::WorkerStarted { .. }
         | WorkRecord::WorkerStopped { .. }
         | WorkRecord::WorkerFinished
+        | WorkRecord::WorkerAlive { .. }
         | WorkRecord::AdmissionUndone { .. }
         | WorkRecord::IntakeTier { .. }
         | WorkRecord::FlakeCleared { .. }
