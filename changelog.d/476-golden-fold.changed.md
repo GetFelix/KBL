@@ -1,1 +1,0 @@
-The stored fold results in `wasm/golden` change: `format_25` is new, and `every_record` now shows `policy_held` on the root its `reopened` record returns to Triage, because a reopened root waits for a person and the triage policy leaves it alone.
