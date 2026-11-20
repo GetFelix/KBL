@@ -491,15 +491,23 @@ async fn me<B: Broker>(State(app): State<Arc<App<B>>>, headers: HeaderMap) -> Re
     let Caller::Person(person) = first else {
         return denied((StatusCode::FORBIDDEN, "this call is for a person's token"));
     };
-    let teams: Vec<Value> = found
-        .iter()
-        .map(|(t, _)| {
-            // Null while the team is not serving, like its other calls answer 503.
-            let limit = t.tracker().map(|tr| tr.review_limit());
-            json!({ "team": t.name(), "role": "admin", "review_limit": limit })
-        })
-        .collect();
-    Json(json!({ "person": person, "org_admin": true, "teams": teams })).into_response()
+    let mut teams: Vec<Value> = Vec::new();
+    for (t, _) in &found {
+        // Null while the team is not serving, like its other calls answer 503.
+        let limit = t.tracker().map(|tr| tr.review_limit());
+        let format = match t.tracker() {
+            Some(tr) => Some(tr.log_format().await),
+            None => None,
+        };
+        teams.push(json!({
+            "team": t.name(), "role": "admin", "review_limit": limit, "log_format": format,
+        }));
+    }
+    Json(json!({
+        "person": person, "org_admin": true, "teams": teams,
+        "current_format": kbl_core::work::FORMAT,
+    }))
+    .into_response()
 }
 
 #[derive(Deserialize)]
@@ -2059,6 +2067,7 @@ fn reply(result: Result<Value, Error>) -> Response {
         Err(e) => {
             let (status, extra) = match &e {
                 Error::Refused { why } => (StatusCode::CONFLICT, json!({ "why": why })),
+                Error::Format(_) => (StatusCode::CONFLICT, json!({ "why": "format" })),
                 Error::Invalid(_) => (StatusCode::BAD_REQUEST, json!({ "why": "invalid" })),
                 Error::NotHeld(_) => (StatusCode::CONFLICT, json!({ "why": "not_held" })),
                 Error::Lost(_) => (StatusCode::CONFLICT, json!({ "why": "lost" })),

@@ -84,6 +84,10 @@ for up to two minutes meanwhile, so a few `retrying` lines in its log are normal
 answered 502", check `docker compose -f dev/compose.yml --profile quickstart logs tracker` (or `podman compose`); the
 dashboard looks the tracker up again by name, so a restarted tracker needs no dashboard restart.
 
+The stack's work log starts at the format this build writes, so `supervise_start` and the other newer tools work with no
+`format_raised` by hand. The script prints the log's format; a log carried over from an older build that is below it
+gets the one command to raise it, as in [upgrading](docs/upgrades.md#upgrade).
+
 1. **Open the dashboard.** Open the printed link. Its queue is empty.
 2. **Add work.** Post an item to the tracker with the person token (the dashboard's Sign in takes the same token for its accept, reject, tier and close actions):
    ```bash
@@ -467,6 +471,8 @@ TOML file of launch profiles (example profiles for Claude Code, Codex CLI and Gi
 | `supervise_start {count, filter, profile?, model?}` | Keeps `count` workers on the work the filter matches, each with its own worker token, held to the filter. The profile and model come from the config's fit table unless given |
 | `supervise_stop {worker}` or `{all: true}` | Stops one worker, or every worker and the top-up |
 | `supervise_status` | Workers and what each holds, who finished or failed since the last look, ready counts by kind and tier, and the top-up state |
+
+Set `git_identity` on a profile so workers commit as an identity you choose, and turn off the vendor's `Co-Authored-By` trailer (Claude Code: `--settings` with `{"attribution": false}`, v2.1.281+); see [commit identity](docs/supervise-profiles.md#commit-identity-and-vendor-attribution).
 
 A worker starts with only the environment names in its profile's `pass_env`. On macOS, Claude Code needs `USER` there to read its saved login, or an `ANTHROPIC_API_KEY`; otherwise workers exit with "Not logged in".
 

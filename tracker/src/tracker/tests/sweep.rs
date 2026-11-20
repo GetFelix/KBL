@@ -282,17 +282,26 @@ impl Model {
 }
 
 /// A tracker with a triage policy that accepts a finished plain triage of tier 2 or 3.
+/// Every start is on a log that begins at the current format, so a seed's first start
+/// also exercises the creation of the log.
 async fn with_policy(fake: &Fake) -> Tracker<Fake> {
     let policy = r#"{"rules": [{"name": "sweep", "tiers": [2, 3]}]}"#;
     let settings = Settings {
         triage_policy: crate::policy::TriagePolicy::parse(policy).unwrap(),
-        ..settings()
+        ..fresh()
     };
     start_with(fake, settings).await
 }
 
 async fn restart(fake: &Fake) -> Tracker<Fake> {
     with_policy(fake).await
+}
+
+fn fresh() -> Settings {
+    Settings {
+        fresh_format: kbl_core::work::FORMAT,
+        ..settings()
+    }
 }
 
 fn ready_streams() -> [String; 4] {
@@ -1229,16 +1238,13 @@ async fn the_claim_path_holds_its_invariants_under_seeded_faults() {
             fake.raft_blanks();
         }
         let mut t = Trackers {
-            cur: with_policy(&fake).await,
+            cur: restart(&fake).await,
             old: None,
         };
-        // Format 25 (needs from 20), so items can be assigned to agents, a question frees the
-        // asker, a direct claim says it was one, an item can be blocked, and
+        // The new log starts at the current format, so items can be assigned to agents, a
+        // question frees the asker, a direct claim says it was one, an item can be blocked,
         // workers can be started and can finish, and the triage policy can accept.
-        t.cur
-            .person_record(key("gab"), WorkRecord::FormatRaised { to: 25 })
-            .await
-            .unwrap();
+        assert!(t.cur.0.core.lock().await.state.format() >= 25);
         let vocabulary = WorkRecord::RulesSet {
             target: kbl_core::work::Target {
                 source: "github".into(),

@@ -53,7 +53,8 @@ vendor = "fake"
 model = "scripted"
 mcp_config = "json"
 pass_env = ["PATH"]
-set_env = { FAKE_WORKER_CONFIG_ROOT = ${JSON.stringify(join(dir, "state"))}, FAKE_WORKER_FINISH = "1" }
+set_env = { FAKE_WORKER_CONFIG_ROOT = ${JSON.stringify(join(dir, "state"))}, FAKE_WORKER_FINISH = "1", FAKE_WORKER_SEEN_DIR = ${JSON.stringify(join(dir, "seen"))} }
+git_identity = { name = "Fake Worker", email = "fake-worker@example.test" }
 command = [${JSON.stringify(process.execPath)}, ${JSON.stringify(resolve("dev/fake-worker.mjs"))}, "{mcp_config_path}"]
 `,
   { mode: 0o600 },
@@ -61,9 +62,16 @@ command = [${JSON.stringify(process.execPath)}, ${JSON.stringify(resolve("dev/fa
 
 const felix = await felixToken();
 createRun(RUN, "supervise check");
-const tracker = await startTracker(tokens, { KBL_CLAIM_VISIBILITY_MS: "8000" });
+// A log that holds nothing yet starts at the current format, so supervise needs no raise by hand.
+const fresh = workLog().length === 0;
+const tracker = await startTracker(tokens, { KBL_CLAIM_VISIBILITY_MS: "8000", KBL_FRESH_LOG_FORMAT: "current" });
 try {
-  await raiseFormat("tok-gab", 24).catch((e) => console.log(`format not raised: ${e.message}`));
+  if (fresh) {
+    const at = workLog().reduce((n, r) => (r.kind === "format_raised" ? Math.max(n, r.to) : n), 1);
+    check(at >= 24, `a new log starts at the current format (it is at ${at}), with no format_raised by hand`);
+  } else {
+    await raiseFormat("tok-gab", 24).catch((e) => console.log(`format not raised: ${e.message}`));
+  }
   for (const item of ITEMS) {
     await personRecord("tok-gab", {
       kind: "imported",
@@ -109,6 +117,11 @@ try {
     `each completion names a worker and its supervisor: ${JSON.stringify(completed.map((r) => [r.by, r.sup]))}`,
   );
   const starts = workLog().filter((r) => r.kind === "worker_started" && r.by === "sup");
+  const seen = readdirSync(join(dir, "seen")).map((f) => readFileSync(join(dir, "seen", f), "utf8"));
+  check(
+    seen.length > 0 && seen.every((t) => t === "fake-worker@example.test|fake-worker@example.test"),
+    `each worker process saw the configured git identity: ${JSON.stringify(seen)}`,
+  );
   check(
     starts.every((r) => r.vendor === "fake" && r.profile === "fake" && r.model === "scripted"),
     "each worker records its vendor, profile and model",

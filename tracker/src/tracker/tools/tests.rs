@@ -21,6 +21,7 @@ fn text(s: &str) -> Content {
 fn why(r: Result<Value, Error>) -> String {
     match r.expect_err("expected a refusal") {
         Error::Refused { why } => why,
+        Error::Format(_) => "format".into(),
         Error::NotHeld(_) => "not_held".into(),
         Error::Lost(_) => "lost".into(),
         Error::Invalid(_) => "invalid".into(),

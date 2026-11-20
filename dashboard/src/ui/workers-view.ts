@@ -21,7 +21,7 @@ export interface WorkersHandlers {
 }
 
 function holdCell(w: WorkerLine, s: ViewState, now: number, open: (id: string) => void, close: () => void): Node {
-  if (!w.hold) return h('span', { class: 'muted' }, w.state === 'idle' ? 'Nothing held' : 'None');
+  if (!w.hold) return h('span', { class: 'muted' }, 'Nothing held');
   const hold = w.hold;
   const link = h('a', {
     href: itemHref(hold.item, s),
@@ -95,7 +95,7 @@ export function workersView(on: WorkersHandlers) {
           return h('tr', { 'data-worker': w.worker, 'data-state': w.state },
             h('th', { scope: 'row' }, w.worker, h('div', { class: 'muted small' }, ended(w, now))),
             h('td', {}, h('span', { class: `worker-state ${w.state}` }, STATE_TEXT[w.state])),
-            h('td', {}, launchText(w) || h('span', { class: 'muted' }, 'not recorded')),
+            h('td', {}, launchText(w) || null),
             h('td', {}, holdCell(w, s, now, on.open, () => m.close())),
             h('td', { class: 'num' }, live && on.canStop()
               ? h('button', { type: 'button', class: 'button ghost', 'data-stop': w.worker, 'aria-label': `Stop ${w.worker}`, disabled: busy, onclick: () => void run([w.worker], w.worker) }, 'Stop')

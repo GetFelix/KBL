@@ -444,14 +444,15 @@ impl<T: TrackerApi> Supervisor<T> {
                 Ok(name) => started.push(name),
                 Err(Launch::Cap) => break,
                 Err(Launch::Failed(why)) => {
-                    pool.last_error = Some(why);
                     pool.quick_failures += 1;
                     if pool.quick_failures >= PAUSE_AFTER {
                         pool.paused = Some(format!(
-                            "{PAUSE_AFTER} launches in a row failed; supervise_start resumes"
+                            "{PAUSE_AFTER} launches in a row failed, the last with: {why}; supervise_start resumes"
                         ));
+                        pool.last_error = Some(why);
                         break;
                     }
+                    pool.last_error = Some(why);
                 }
             }
         }
@@ -649,7 +650,7 @@ impl<T: TrackerApi> Supervisor<T> {
             .iter()
             .filter_map(|name| Some((name, (self.0.env)(name)?)));
         cmd.env_clear().envs(passed);
-        for (k, v) in &profile.set_env {
+        for (k, v) in &profile.fixed_env() {
             cmd.env(k, render::fill(v, &PATH_VARS, &path_vars)?);
         }
         let child = cmd.spawn().with_context(|| format!("start {program}"))?;
