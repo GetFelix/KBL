@@ -49,6 +49,12 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .content { display: grid; grid-template-columns: 1fr; flex: 1; }
 #work { min-width: 0; }
 .content:has(.panel:not([hidden])) { grid-template-columns: 1fr minmax(280px, 380px); }
+/* On the board the panel floats over the right edge, so the stage columns keep their width and scroll under it. */
+@media (min-width: 721px) {
+  .content:has(.board):has(.panel:not([hidden])) { grid-template-columns: minmax(0, 1fr); }
+  .content:has(.board) .panel:not([hidden]) { position: fixed; top: var(--topbar-height); right: 0; bottom: 0; width: min(380px, 90vw); max-height: none; z-index: 1; box-shadow: var(--shadow); }
+  .content:has(.board):has(.panel:not([hidden])) .board { padding-right: min(396px, 90vw); }
+}
 .list { padding: var(--space-3) var(--space-5) var(--space-6); }
 .group-title { display: flex; gap: var(--space-2); align-items: baseline; font-size: var(--text-sm); font-weight: var(--weight-bold); color: var(--muted); margin: var(--space-4) 0 var(--space-1); padding: 0 var(--space-2); }
 .count { font-weight: var(--weight-medium); }
@@ -139,6 +145,8 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
 .filter { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); }
 .filter-label { color: var(--muted); }
 .filter select { min-height: var(--control-sm); max-width: var(--filter-max); border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--bg); color: var(--text); font: inherit; padding: 0 var(--space-1); }
+.filter-toggle { display: none; }
+.filter-actions { display: inline-flex; gap: var(--space-2); margin-left: auto; }
 .filter-summary { margin: 0; font-size: var(--text-sm); flex-basis: 100%; order: 10; }
 /* Collapsed, not display: none, so the live region stays in the tree and announces its first text. */
 .filter-summary:empty { flex-basis: 0; }
@@ -179,6 +187,9 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
   .drawer-backdrop { display: block; position: fixed; inset: 0; background: var(--scrim); z-index: 2; }
   .menu-button { display: inline-flex; border-color: var(--line-strong); }
   .filter-bar { padding: var(--space-2) var(--space-4); }
+  .filter-toggle { display: inline-flex; align-items: center; }
+  .filter-bar:not([data-open]) :is(.filters, .group-by, .filter-actions) { display: none; }
+  .filter-bar[data-open] .filters, .filter-bar[data-open] .filter-selects { flex-basis: 100%; }
   .board { flex-direction: column; align-items: stretch; }
   .column { flex-basis: auto; }
   .lane-cells { flex-direction: column; align-items: stretch; }
@@ -361,4 +372,7 @@ kbd { min-width: 20px; padding: 1px var(--space-1); border: 1px solid var(--line
   .workers-table tr { display: grid; grid-template-columns: 1fr auto; gap: var(--space-1) var(--space-3); align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid var(--line); }
   .workers-table th, .workers-table td { padding: 0; border: 0; text-align: left; }
   .workers-table td:nth-child(n + 3) { grid-column: 1 / -1; }
+  .workers-table td:empty { display: none; }
+  /* A bordered Stop lines its edge up with the text above; a ghost one looked indented by its padding. */
+  .workers-table .button.ghost { border-color: var(--line-strong); }
 }

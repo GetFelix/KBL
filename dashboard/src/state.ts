@@ -24,7 +24,7 @@ export type Connection =
   | { kind: 'loading'; what: 'history' | 'reconnecting'; /** The socket is joined and the log is being read. */ linked?: boolean }
   | { kind: 'live'; refused: number }
   | { kind: 'retrying'; reason: string; seconds: number }
-  | { kind: 'stopped'; reason: string; advice: Advice };
+  | { kind: 'stopped'; reason: string; advice: Advice; /** The gateway's stop code, when it gave one. */ code?: string };
 
 /** The next step a stop reason backs: a new sign-in link, a reload for a newer page, or nothing to suggest. */
 export type Advice = 'sign-in' | 'reload' | null;

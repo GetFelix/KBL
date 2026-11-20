@@ -37,6 +37,13 @@ function code(text: string): HTMLElement {
   return h('code', {}, text);
 }
 
+/** What a person reads for a stop code; the code and the gateway's words stay in a details line. */
+const STOP_TEXT: Record<string, string> = {
+  signed_out: 'Your session ended.',
+  forbidden: 'This link no longer gives access.',
+  newer_format: 'This page is older than the log.',
+};
+
 const ADVICE = {
   'sign-in': 'A new sign-in link fixes a rejected or expired token. Reload once you have one.',
   reload: 'The log has records newer than this page reads. Reload to get the current page.',
@@ -203,10 +210,12 @@ export function itemList(
       if (c.kind === 'stopped') {
         // Rebuilt only when the stop changes, so the alert is announced once.
         const advice = c.advice ? ADVICE[c.advice] : null;
+        const plain = c.code ? STOP_TEXT[c.code] : undefined;
         return show(`stopped|${c.reason}|${c.advice}`,
           h('div', { class: 'empty error', role: 'alert' },
             h('h2', {}, 'The dashboard stopped'),
-            h('p', {}, c.reason),
+            h('p', {}, plain ?? c.reason),
+            plain ? h('p', { class: 'muted small', 'data-stop-detail': '' }, c.reason) : null,
             advice ? h('p', {}, advice) : null,
             advice ? h('button', { type: 'button', class: 'button', onclick: () => location.reload() }, 'Reload') : null,
           ),

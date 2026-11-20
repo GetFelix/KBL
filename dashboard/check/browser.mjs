@@ -717,6 +717,7 @@ try {
   await open(connected, { mode: 'forbidden' });
   await page.waitFor(`document.querySelector('.status')?.dataset.tone === 'error'`);
   check(await page.eval(`!!document.querySelector('[role=alert] button') && document.querySelector('[role=alert]').textContent.includes('sign-in link')`), 'a rejected token stops with a reason, the sign-in hint and a Reload button');
+  check(await page.eval(`(() => { const p = [...document.querySelectorAll('[role=alert] p')]; return p[0].textContent === 'Your session ended.' && !/signed_out/.test(p[0].textContent) && p.some((x) => x.dataset.stopDetail !== undefined && x.textContent.startsWith('signed_out')); })()`), 'a rejected token says the session ended and keeps the raw code in a details line');
   await axe('stopped');
   await shoot('error-dark');
 
@@ -730,8 +731,25 @@ try {
   await axe('unreachable');
   await shoot('unreachable-dark');
 
+  // Board with the item panel open: the columns keep their width and the board scrolls under the panel.
+  await open(`${connected}&layout=board`);
+  await page.waitFor(live);
+  await page.waitFor(`!!document.querySelector('.board .column')`);
+  check(await page.eval(`getComputedStyle(document.querySelector('.save-view')).borderTopWidth !== '0px' && getComputedStyle(document.querySelector('.filter-toggle')).display === 'none'`), 'Save view is a bordered button on a desktop and the Filters button is a phone-only control');
+  await page.eval(`document.querySelector('.board .card').click(); true`);
+  await page.waitFor(`!document.querySelector('.panel').hidden`);
+  check(await page.eval(`(() => { const b = document.querySelector('.board'); const cols = [...b.querySelectorAll('.column')]; return b.clientWidth > 1000 && cols.every((c) => c.getBoundingClientRect().width >= 230) && b.scrollWidth > b.clientWidth - 1; })()`), 'with the item panel open, board columns keep their width and the board spans the page');
+  await page.eval(`document.querySelector('.board').scrollLeft = 9999; true`);
+  check(await page.eval(`(() => { const last = [...document.querySelectorAll('.board .column')].at(-1).getBoundingClientRect(); return last.right <= document.querySelector('.panel').getBoundingClientRect().left + 1; })()`), 'the last column scrolls clear of the open panel');
+  await shoot('board-panel-dark');
+  clean();
+
   await open(connected, { width: 390, height: 844 });
   await page.waitFor(live);
+  check(await page.eval(`(() => { const t = document.querySelector('.filter-toggle'); return getComputedStyle(t).display !== 'none' && t.getAttribute('aria-expanded') === 'false' && getComputedStyle(document.querySelector('.filters')).display === 'none' && getComputedStyle(document.querySelector('.save-view')).display === 'none' && document.querySelector('.row').getBoundingClientRect().top < 330; })()`), 'on a phone the filters fold behind one button and the list starts near the top');
+  await page.eval(`document.querySelector('.filter-toggle').click(); true`);
+  check(await page.eval(`document.querySelector('.filter-toggle').getAttribute('aria-expanded') === 'true' && getComputedStyle(document.querySelector('.filters')).display !== 'none' && getComputedStyle(document.querySelector('.save-view')).display !== 'none'`), 'the Filters button opens the selects and Save view');
+  await page.eval(`document.querySelector('.filter-toggle').click(); true`);
   await axe('phone');
   check(await page.eval(`[...document.querySelectorAll('.row-title')].every((t) => t.clientWidth >= 150 && t.scrollWidth <= t.clientWidth + 1 || t.getClientRects().length === 0 || t.clientHeight > 20)`), 'on a phone, a row keeps room for its title (its details go under it)');
   await shoot('phone-dark');
@@ -1005,6 +1023,7 @@ try {
     check(rows === 'sup-a:working sup-b:idle sup-c:finished sup-d:stopped', `workers: one group, live workers first, finished and stopped kept (${rows})`);
     check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a] a[data-item=wk-1]')?.textContent === 'wk-1 Held by a worker'`), 'workers: a working worker names the item it holds');
     check(await page.eval(`document.querySelector('dialog.workers tr[data-worker=sup-a]').textContent.includes('anthropic · sonnet') && document.querySelector('dialog.workers tr[data-worker=sup-c]').textContent.includes('finished')`), 'workers: the recorded launch fields and the finish show');
+    check(await page.eval(`(() => { const t = (n) => document.querySelector('dialog.workers tr[data-worker=' + n + ']').textContent; return !/not recorded|None/.test(t('sup-c') + t('sup-d')) && t('sup-c').includes('Nothing held') && t('sup-d').includes('Nothing held'); })()`), 'workers: a finished or stopped worker with nothing recorded shows no filler and Nothing held');
     await axe('workers');
     await shoot('workers-dark');
     await page.eval(`document.querySelector('dialog.workers [data-stop=sup-a]').click(); true`);
