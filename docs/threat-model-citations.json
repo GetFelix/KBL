@@ -370,6 +370,9 @@
  "mcp/src/supervise/tree.rs#Tree::kill": [
   "libc::kill(-pid, libc::SIGKILL);"
  ],
+ "mcp/src/supervise.rs#last_log_line": [
+  ".take(LOG_LINE_MAX)"
+ ],
  "mcp/src/supervise.rs#note_end": [
   "if pool.quick_failures >= PAUSE_AFTER && pool.paused.is_none() {"
  ],
