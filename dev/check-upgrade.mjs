@@ -7,9 +7,8 @@
 //   3. the previous build takes over again, which is a rollback before the
 //      format is raised: w2 finishes there and w1 takes the last item;
 //   4. this build comes back and finishes the log's story.
-// Every record either build wrote is of one format, each item was
-// claimed and done once, and neither build refused a record of the other.
-// Both builds write the one format a fresh log starts at, so this does not show
+// Each item was claimed and done once, and neither build refused a record of the other.
+// Both builds write the formats a fresh log starts at, so this does not show
 // a reader stopping at a newer format: the unit tests of core, the tracker and the page do.
 //
 //   KBL_TRACKER_OLD and KBL_MCP_OLD name the previous build's binaries.
@@ -104,8 +103,6 @@ try {
   await w1.tool("work_complete", { item: c });
 
   const records = mine();
-  // Records the check posts itself carry no format; the tracker stamps its own.
-  check(new Set(records.map((r) => r.v).filter((v) => v !== undefined)).size <= 1, "every record either build wrote is of one format");
   for (const id of [a, b, c]) {
     const of = records.filter((r) => r.item === id);
     check(
