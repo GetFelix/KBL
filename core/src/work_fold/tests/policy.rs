@@ -404,7 +404,7 @@ fn taking_back_restores_the_tier_and_keeps_one_a_person_set_since() {
 
 #[test]
 fn taking_back_makes_the_resume_items_the_acceptance_released_unclaimable_again() {
-    let mut l = plain();
+    let l = plain();
     let mut s = fold(&l.0);
     // A resume item waiting on the unaccepted root, as a fold of an answered question makes.
     let mut resume = s.items[&id("t1")].clone();
