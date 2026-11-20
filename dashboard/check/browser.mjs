@@ -377,7 +377,7 @@ try {
   // A script click does not focus a button the way a real one does, so focus first.
   await page.eval(`document.querySelector('[data-chip=gh-2300]').focus(); document.querySelector('[data-chip=gh-2300]').click(); true`);
   await page.waitFor(`document.querySelector('[data-chip=gh-2300]')?.getAttribute('aria-expanded') === 'true'`);
-  check(await page.eval(`document.querySelector('#children-gh-2300 .child-link').textContent.includes('Review the cache fix')`), 'the chip opens the children as links');
+  check(await page.eval(`document.querySelector('#children-gh-2300 .child-link').textContent.includes('Review') && document.querySelector('#children-gh-2300 .child-link').title.includes('Review the cache fix')`), 'the chip opens the children as links');
   check(await focused('[data-chip=gh-2300]'), 'the chip keeps the focus when it opens');
   // Opening a child from its root's chip must leave the selection on a card that is drawn.
   await page.eval(`document.querySelector('#children-gh-2300 .child-link').click(); true`);
