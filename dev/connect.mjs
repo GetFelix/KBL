@@ -8,16 +8,15 @@
 //
 //   node dev/connect.mjs [agent1] [--out .mcp.json] [--mcp /path/to/kbl-mcp] [--fixed-token]
 import { existsSync, readFileSync, writeFileSync, chmodSync, renameSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { pathToFileURL } from "node:url";
 import { mcpConfig } from "./agents.mjs";
+import { findBinary, notFoundMessage } from "./lib/binaries.mjs";
 import { felixToken, idToken } from "./lib/stack.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, "..");
 
 export async function connect(argv) {
   const { values, positionals } = parseArgs({
@@ -36,9 +35,8 @@ export async function connect(argv) {
   if (!tracker) {
     throw new Error(`no agent ${name}: the quick start has ${Object.values(tokens.agents).join(", ")}`);
   }
-  const candidates = [values.mcp, process.env.KBL_MCP, join(repo, "target/release/kbl-mcp"), join(repo, "target/debug/kbl-mcp"), join(homedir(), ".kbl/bin/kbl-mcp"), join(here, "state/bin/kbl-mcp")];
-  const mcp = candidates.filter(Boolean).map((p) => resolve(p)).find(existsSync);
-  if (!mcp) throw new Error("kbl-mcp not found: set KBL_MCP or pass --mcp <path>, put it in ~/.kbl/bin or dev/state/bin, or run `cargo build --release -p kbl-mcp`");
+  const mcp = findBinary("kbl-mcp", { given: values.mcp, envValue: process.env.KBL_MCP });
+  if (!mcp) throw new Error(notFoundMessage("kbl-mcp", { flag: "--mcp", envName: "KBL_MCP", build: "cargo build --release -p kbl-mcp" }));
   let felix;
   if (values["fixed-token"]) {
     felix = { felix: await felixToken() };

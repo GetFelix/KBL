@@ -6,7 +6,9 @@ vendor: a profile is an argv array and an MCP config format, nothing more.
 
 Every profile below runs without a shell. `{model}`, `{worker}`, `{mcp_config_path}` and `{workdir}` are the only
 placeholders. The worker gets an empty environment plus `pass_env`, so list what the vendor's CLI needs to log in
-(an API key variable, or `HOME` for a saved login).
+(an API key variable, or `HOME` for a saved login). On macOS, `claude` also needs `USER` to read its saved login from
+the Keychain; without it every worker exits within seconds with "Not logged in". Use `USER`, or `ANTHROPIC_API_KEY`
+instead. Add `LOGNAME` or `TMPDIR` if a vendor's CLI asks for them.
 
 ## Claude Code
 
@@ -17,7 +19,7 @@ vendor = "anthropic"
 model = "sonnet"
 mcp_config = "json"
 workdir = "/work/{worker}"
-pass_env = ["PATH", "HOME", "ANTHROPIC_API_KEY"]
+pass_env = ["PATH", "HOME", "USER", "ANTHROPIC_API_KEY"]
 command = [
   "claude", "-p", "Take work with the kbl work_next tool and do it, until it hands you none.",
   "--model", "{model}",
@@ -42,7 +44,7 @@ mcp_config = "toml"
 mcp_config_file = "{workdir}/.codex/config.toml"
 workdir = "/work/{worker}"
 set_env = { CODEX_HOME = "{workdir}/.codex" }
-pass_env = ["PATH", "HOME", "OPENAI_API_KEY"]
+pass_env = ["PATH", "HOME", "USER", "OPENAI_API_KEY"]
 command = [
   "codex", "exec", "--model", "{model}", "--cd", "{workdir}",
   "Take work with the kbl work_next tool and do it, until it hands you none.",
@@ -63,7 +65,7 @@ vendor = "github"
 model = "claude-sonnet-4.5"
 mcp_config = "json"
 workdir = "/work/{worker}"
-pass_env = ["PATH", "HOME", "GH_TOKEN"]
+pass_env = ["PATH", "HOME", "USER", "GH_TOKEN"]
 command = [
   "copilot", "-p", "Take work with the kbl work_next tool and do it, until it hands you none.",
   "--model", "{model}",
