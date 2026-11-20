@@ -118,6 +118,10 @@ The view link works once: the page removes the token from the address and keeps 
    cargo build --release -p kbl-ingest
    node dev/ingest.mjs --repo OWNER/NAME --token-file ~/.github-token --labels agent-ok
    ```
+   With the release binaries on your `PATH` there is nothing to build; skip the `cargo build`. To take a milestone
+   instead of a label, `node dev/ingest.mjs --repo OWNER/NAME --token-file ~/.github-token --milestone v0.8.0`.
+   Any filter other than `--labels` drops the `agent-ok` default (it applies only when you give no filter), and the
+   script prints the rule it will use before the check. `--labels ""` means no label filter.
    It first runs `kbl-ingest check`, which tests the token and lists what the first poll would import without writing
    anything, then keeps polling the local tracker until you press Ctrl-C. The issues appear in the dashboard's Ready
    column. Add `--check-only` to stop after the check, or `--once` for a single poll. The config it writes is
@@ -140,7 +144,7 @@ The view link works once: the page removes the token from the address and keeps 
 - **"Viewing (read-only)" and the board is full.** The view link only reads. "Sign in to act" takes the person token for
   actions (printed with the link, or in `dev/state/tracker-tokens.json`).
 - **`kbl-mcp` or `kbl-ingest` not found.** The scripts look at the flag, `KBL_MCP` / `KBL_INGEST`, `target/release`,
-  `target/debug`, `~/.kbl/bin` and `dev/state/bin`, in that order. Build the binary or put it in one of them.
+  `target/debug`, `~/.kbl/bin`, `dev/state/bin` and your `PATH`, in that order. Build the binary or put it in one of them.
 - **A port is taken.** 8081, 8788 and 8790 must be free; `dev/down.sh` then `dev/quickstart.sh` starts clean.
 
 The tracker and the dashboard run as unprivileged users inside their containers, under both Docker and Podman. The

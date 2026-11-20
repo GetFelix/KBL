@@ -3,7 +3,7 @@
 import { chordFor, displayChord } from '../keys.ts';
 import { decodeView, encodeView, sameView, summary, type SavedView, type ViewSpec } from '../views.ts';
 import { INBOX_KINDS, inboxFor, kindCounts, type InboxKind } from '../inbox.ts';
-import { inScope } from '../list.ts';
+import { scopeCounts } from '../list.ts';
 import { reviewFull, toAddress, type View, type ViewState } from '../state.ts';
 import { boardView } from './board-view.ts';
 import { h, kbd } from './dom.ts';
@@ -246,8 +246,12 @@ export function shell(root: HTMLElement, on: ShellHandlers, mac: boolean) {
       if (account.textContent !== label) account.textContent = label;
       const named = s.saved.find((v) => sameView(s, decodeView(v.search)));
       for (const n of nav) {
-        const total = inScope({ ...s, view: n.view, kind: null }).length;
-        n.count.textContent = total ? String(total) : '';
+        const { shown, children } = scopeCounts({ ...s, view: n.view, kind: null });
+        n.count.textContent = shown ? String(shown) : '';
+        if (children) {
+          const sub = h('span', { class: 'sub-count', title: `${children} sub-task${children === 1 ? '' : 's'}, nested under their parents` }, `+${children}`);
+          n.count.append(' ', sub);
+        }
         n.a.setAttribute('href', toAddress(location.search, { ...plain(n.view), open: null }) || '?');
         if (!named && sameView(s, plain(n.view))) n.a.setAttribute('aria-current', 'page');
         else n.a.removeAttribute('aria-current');
