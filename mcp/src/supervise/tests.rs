@@ -187,7 +187,7 @@ async fn until_reaped(sup: &Supervisor<Fake>, want: usize) {
 async fn a_worker_gets_its_own_token_in_a_private_file_and_none_of_the_supervisors() {
     let dir = scratch();
     let fake = Fake::default();
-    fake.0.lock().unwrap().ready = ready(3);
+    fake.0.lock().unwrap().ready = ready(2);
     let sup = setup(&dir, "", "0", "0", &fake);
     let reply = sup
         .start(2, json!({ "repo": "o/r" }), None, None)
