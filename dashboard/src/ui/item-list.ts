@@ -5,7 +5,7 @@ import { childIndex, lead, nameOf, properties, reasonLine, summarize, workingLin
 import { waitsOn } from '../fold.ts';
 import { inScope, neighbour, visible, type Group } from '../list.ts';
 import { flagText } from '../overlap.ts';
-import { toAddress, type AddressState, type ViewState } from '../state.ts';
+import { STOP_TEXT, toAddress, type AddressState, type ViewState } from '../state.ts';
 import { activeCount } from '../views.ts';
 import { assigneePerson } from '../writes.ts';
 import { paintAssignee } from './assignee-chip.ts';
@@ -203,10 +203,12 @@ export function itemList(
       if (c.kind === 'stopped') {
         // Rebuilt only when the stop changes, so the alert is announced once.
         const advice = c.advice ? ADVICE[c.advice] : null;
+        const plain = c.code ? STOP_TEXT[c.code] : undefined;
         return show(`stopped|${c.reason}|${c.advice}`,
           h('div', { class: 'empty error', role: 'alert' },
             h('h2', {}, 'The dashboard stopped'),
-            h('p', {}, c.reason),
+            h('p', {}, plain ?? c.reason),
+            plain ? h('p', { class: 'muted small', 'data-stop-detail': '' }, c.reason) : null,
             advice ? h('p', {}, advice) : null,
             advice ? h('button', { type: 'button', class: 'button', onclick: () => location.reload() }, 'Reload') : null,
           ),
@@ -349,7 +351,7 @@ export function itemList(
         if (leadEl.textContent !== text2) leadEl.textContent = text2;
         const pe = a.querySelector<HTMLElement>('.row-props')!;
         if (pe.textContent !== props) pe.textContent = props;
-        paintTriage(a, item);
+        paintTriage(a, item, open.has(id) && !!kids.get(id)?.some((k) => k.work === 'triage'));
         if (id === s.open) a.setAttribute('aria-current', 'true');
         else a.removeAttribute('aria-current');
       }
