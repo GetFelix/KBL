@@ -846,6 +846,7 @@ pub(super) fn settings() -> Settings {
         assignee_away: Duration::from_secs(600),
         max_workers: 2,
         max_team_workers: 3,
+        fresh_format: 1,
     }
 }
 
@@ -2418,6 +2419,7 @@ async fn a_person_works_a_pull_request_and_marks_the_summary() {
     let person = |r| t.person_record(key("gab"), r);
     let refused = |e: Error| match e {
         Error::Refused { why } => why,
+        Error::Format(_) => "format".to_owned(),
         e => panic!("{e}"),
     };
     let ask = WorkRecord::ReviewRequested {
@@ -2699,6 +2701,7 @@ mod assignee;
 mod blocks;
 mod facets;
 mod fix_check;
+mod fresh_log;
 mod metrics;
 mod needs;
 mod races;
@@ -3061,7 +3064,7 @@ async fn a_raise_past_what_the_tracker_reads_is_refused_and_not_logged() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Refused { why } if why == "format"));
+    assert!(matches!(err, Error::Format(_)));
     assert!(fake.log().is_empty());
 }
 
@@ -3078,7 +3081,7 @@ async fn ingest_returns_an_item_to_scope_once_the_format_is_raised() {
     assert_eq!(claimed_id(&claim(&t, "w1").await), None);
     let back = || WorkRecord::ReturnedToScope { item: item("a1") };
     let err = t.ingest_record(key("ingest-gh"), back()).await.unwrap_err();
-    assert!(matches!(err, Error::Refused { why } if why == "format"));
+    assert!(matches!(err, Error::Format(_)));
 
     t.person_record(key("gab"), WorkRecord::FormatRaised { to: 2 })
         .await
@@ -3107,7 +3110,7 @@ async fn a_related_item_is_claimable_while_its_partner_is_open_and_a_dependency_
         .person_record(key("gab"), rel("a1", "a2"))
         .await
         .unwrap_err();
-    assert!(matches!(err, Error::Refused { why } if why == "format"));
+    assert!(matches!(err, Error::Format(_)));
     t.person_record(key("gab"), WorkRecord::FormatRaised { to: 18 })
         .await
         .unwrap();

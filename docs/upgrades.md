@@ -69,6 +69,19 @@ Each build has one number, `FORMAT` in `core/src/work.rs`: the highest format
 it reads and writes. It reads every format from 1 up to that. Today `FORMAT`
 is 24.
 
+A log with no records starts at `FORMAT`: the tracker writes the raise as the
+log's first record when it starts on an empty log, so a new stack needs no
+raise by hand. A log that already has records keeps its format until a person
+raises it, because an older build may still be reading it. `GET /v1/me` shows
+each team's `log_format` beside `current_format`, and `dev/quickstart.sh`
+prints both and the command to raise a log that is behind.
+
+A refusal for the format says what the record needs and where the log is, for
+example `refused: format: worker_started needs log format 21, this log is at
+13; a person raises it with format_raised (see docs/upgrades.md#formats)`.
+`supervise_status` shows the same text as `paused_because` when launches pause
+on it.
+
 ### Formats
 
 | Format | Adds | What waits for the raise |
@@ -105,8 +118,8 @@ is 24.
 | 1 | Every org record before org formats | Nothing |
 | 2 | `format_raised`, `connection_set` (a team's connection: vendor, worker group, budget pool and which of its sources it serves) and `budget_set` (a pool's calls per hour, the part kept back, the wake cap), and `GET /v1/ingest/config`, which answers a worker's connection and its pool's budget. Source leases and group membership are cache entries, not records, so they need no format ([Sources](design/sources.md)) | Until the raise, `connection_set` and `budget_set` are refused with `format`, and every worker's config answers `connection: null`, so ingest stays file-managed |
 
-The log has a format too. It starts at 1 and a `format_raised` record moves it
-up. Only a person can write one.
+The log has a format too. A `format_raised` record moves it up. Only a person
+can write one.
 
 ## Rules for readers
 

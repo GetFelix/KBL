@@ -278,6 +278,7 @@ fn starter(cli: &Cli, first: TeamName, grants: Grants) -> Starter<felix::Felix> 
             assignee_away,
             max_workers,
             max_team_workers,
+            fresh_format: kbl_core::work::FORMAT,
         };
         Box::pin(async move {
             let felix = felix::connect(target, Kind::Team).await?;

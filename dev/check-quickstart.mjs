@@ -37,7 +37,13 @@ const get = (url, token) => fetch(url, token ? { headers: { authorization: `Bear
 try {
   check((await get(`${TRACKER}/healthz`)).ok, "the tracker answers /healthz");
   check((await get(`${TRACKER}/v1/me`)).status === 401, "the tracker refuses a call with no token");
-  check((await get(`${TRACKER}/v1/me`, me)).ok, "the tracker knows the person token");
+  const mine = await get(`${TRACKER}/v1/me`, me);
+  check(mine.ok, "the tracker knows the person token");
+  const { teams, current_format } = await mine.json();
+  check(
+    teams.every((t) => t.log_format === current_format),
+    `a fresh stack's work log starts at the current format (${current_format}), so supervise_start needs no format_raised`,
+  );
   const page = await get(`${DASHBOARD}/`);
   const html = await page.text();
   check(page.ok && html.includes("<html"), "the dashboard serves its page");

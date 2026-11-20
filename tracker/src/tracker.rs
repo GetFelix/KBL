@@ -22,11 +22,11 @@ use kbl_core::codec::Codec;
 use kbl_core::content::Content;
 use kbl_core::names::{AgentName, ItemId, Key};
 use kbl_core::work::{
-    Actor, Assignee, FORMAT_V15, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord,
+    Actor, Assignee, FORMAT_V1, FORMAT_V15, LANES, PrChecks, PrPhase, REVIEW_LANES, ReadError, ReadyRecord,
     RefusalReason, ReleaseWhy, TIERS, Usage, WORK_EVENTS, WorkKind, WorkLogged, WorkRecord, read,
     ready_stream, valid_review_tier,
 };
-use kbl_core::work_fold::{Stage, State};
+use kbl_core::work_fold::{Reject, Stage, State};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -119,6 +119,8 @@ pub(crate) struct Settings {
     pub(crate) max_workers: usize,
     /// Live workers the whole team may have.
     pub(crate) max_team_workers: usize,
+    /// The format a log with no records starts at. One or below writes nothing.
+    pub(crate) fresh_format: u32,
     /// `fix_check` items one check on one request gets before its failure
     /// goes to a person. Zero turns them off.
     pub(crate) auto_fix_tries: u8,
@@ -162,6 +164,9 @@ impl Settings {
 pub(crate) enum Error {
     /// The fold would not take the record. `why` is its reason in snake case.
     Refused { why: String },
+    /// The log's format is below what the record needs. Carries the whole
+    /// message: which kind, which formats, and who raises it.
+    Format(String),
     /// The call is malformed or over a size limit; nothing was tried.
     Invalid(String),
     /// The caller does not hold the item.
@@ -179,11 +184,27 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Error::Refused { why } => write!(f, "refused: {why}"),
+            Error::Format(m) => write!(f, "refused: {m}"),
             Error::NotHeld(m) | Error::Lost(m) | Error::Unavailable(m) | Error::Invalid(m) => {
                 f.write_str(m)
             }
             Error::Felix(e) => write!(f, "Felix failed: {e:#}"),
         }
+    }
+}
+
+/// Why a record was refused for its format, in words a person can act on.
+fn format_refusal(kind: &str, need: u32, log: u32) -> String {
+    if need > log {
+        format!(
+            "format: {kind} needs log format {need}, this log is at {log}; a person raises it with \
+             format_raised (see docs/upgrades.md#formats)"
+        )
+    } else {
+        format!(
+            "format: {kind} is not allowed at log format {log}; a format_raised must go above the \
+             log's format (see docs/upgrades.md#formats)"
+        )
     }
 }
 
@@ -827,10 +848,43 @@ impl<B: Broker> Tracker<B> {
         for agent in holders {
             tracker.recover(&agent).await;
         }
+        tracker
+            .seed_empty_log()
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         // A hold whose delivery was not found is gone: free the item.
         tracker.sweep().await;
         tracker.sync_ready().await;
         Ok(tracker)
+    }
+
+    /// A log with no records starts at `fresh_format`: no older reader exists
+    /// to protect, and the raise is the log's first record. A log with records
+    /// keeps its format until a person raises it.
+    async fn seed_empty_log(&self) -> Result<(), Error> {
+        let to = self.0.settings.fresh_format;
+        if to <= FORMAT_V1 {
+            return Ok(());
+        }
+        self.begin().await?;
+        let mut core = self.0.core.lock().await;
+        if core.state.at.is_some() || core.tail > 0 {
+            return Ok(());
+        }
+        // A raise is a person's record; the tracker writes it on the person's behalf.
+        self.append(
+            &mut core,
+            Actor::Person,
+            self.0.me.clone(),
+            WorkRecord::FormatRaised { to },
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// The format the log is at: the highest a record on it may have.
+    pub(crate) async fn log_format(&self) -> u32 {
+        self.0.core.lock().await.state.format()
     }
 
     /// Agent pull requests in In review at which new fix claims pause; zero is no limit.
@@ -2920,6 +2974,13 @@ impl<B: Broker> Tracker<B> {
         // Applied before the write: a refusal changes nothing, and a failed write
         // marks the state stale so the next call rebuilds it from the log.
         if let Err(why) = core.state.try_apply(guess, &logged) {
+            if why == Reject::Format {
+                return Err(Error::Format(format_refusal(
+                    logged.record.kind(),
+                    logged.min_format().max(logged.v),
+                    core.state.format(),
+                )));
+            }
             let why = serde_json::to_value(why)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_owned))

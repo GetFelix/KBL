@@ -310,6 +310,7 @@ fn quiet_settings() -> crate::tracker::Settings {
         assignee_away: Duration::from_secs(600),
         max_workers: 2,
         max_team_workers: 3,
+        fresh_format: 1,
     }
 }
 
@@ -333,6 +334,7 @@ async fn team(name: &str, broker: Quiet, tokens: &str, inflight: usize) -> Team<
             assignee_away: Duration::from_secs(600),
             max_workers: 2,
             max_team_workers: 3,
+            fresh_format: 1,
         },
     )
     .await
@@ -1352,7 +1354,7 @@ async fn me_lists_the_persons_own_teams() {
     assert_eq!(reply["person"], "ana");
     assert_eq!(
         reply["teams"],
-        json!([{ "team": "b", "role": "admin", "review_limit": 3 }])
+        json!([{ "team": "b", "role": "admin", "review_limit": 3, "log_format": 1 }])
     );
     let (_, reply) = get_json(&two.app, "/v1/me", Some("tok-both")).await;
     let names: Vec<&str> = reply["teams"]

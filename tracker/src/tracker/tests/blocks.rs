@@ -221,7 +221,7 @@ async fn a_block_is_refused_below_format_16() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, Error::Refused { ref why } if why == "format"),
+        matches!(err, Error::Format(_)),
         "{err:?}"
     );
     assert!(!fake.kinds().iter().any(|k| k == "block_set"));

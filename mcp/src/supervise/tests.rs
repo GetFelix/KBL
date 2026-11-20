@@ -25,6 +25,8 @@ struct Script {
     finished: Vec<String>,
     /// Stops are refused with this text.
     refuse_stop: Option<&'static str>,
+    /// Starts are refused with this text.
+    refuse_start: Option<&'static str>,
 }
 
 impl TrackerApi for Fake {
@@ -33,6 +35,9 @@ impl TrackerApi for Fake {
         match path {
             "/v1/work/peek" => Ok(json!({ "next": s.ready })),
             "/v1/work/workers" => {
+                if let Some(why) = s.refuse_start {
+                    return Err(CallError::Refused(why.into()));
+                }
                 let live = s.started.len().saturating_sub(s.stopped.len());
                 if s.cap.is_some_and(|c| live >= c) {
                     return Err(CallError::Refused("refused: worker_cap".into()));
@@ -311,6 +316,31 @@ async fn workers_that_keep_failing_pause_the_top_up() {
     );
     // A second look shows no failures it already showed.
     assert_eq!(sup.status().await.unwrap()["failed"], json!([]));
+}
+
+#[tokio::test]
+async fn a_pause_from_refused_launches_says_why() {
+    let dir = scratch();
+    let fake = Fake::default();
+    {
+        let mut s = fake.0.lock().unwrap();
+        s.ready = ready(50);
+        s.refuse_start = Some(
+            "refused: format: worker_started needs log format 21, this log is at 13; a person raises it with format_raised (see docs/upgrades.md#formats)",
+        );
+    }
+    let sup = setup(&dir, "", "1", "0", &fake);
+    sup.start(1, json!({}), None, None).await.ok();
+    for _ in 0..5 {
+        sup.round().await;
+    }
+    let status = sup.status().await.unwrap();
+    assert_eq!(status["top_up"], "paused", "{status}");
+    let why = status["paused_because"].as_str().unwrap();
+    assert!(
+        why.contains("needs log format 21") && why.contains("format_raised"),
+        "{why}"
+    );
 }
 
 #[tokio::test]

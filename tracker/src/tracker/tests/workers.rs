@@ -350,7 +350,7 @@ async fn finishing_needs_the_log_at_format_24() {
     start_for(&t, "sup", "sup-w1").await.unwrap();
     let err = t.finish_worker(&agent("sup-w1")).await.unwrap_err();
     assert!(
-        matches!(err, Error::Refused { ref why } if why == "format"),
+        matches!(err, Error::Format(_)),
         "{err}"
     );
     // A plain agent has no worker to finish.
