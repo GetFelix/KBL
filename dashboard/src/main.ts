@@ -731,7 +731,7 @@ async function main() {
       if (e instanceof FollowError || (e instanceof GatewayError && e.fatal)) {
         // The saved session is no use to a reload either; the next one asks for a new link.
         forgetGateway();
-        store.dispatch({ type: 'connection', connection: { kind: 'stopped', reason: msg, advice: adviceFor(e.code), code: e.code } });
+        store.dispatch({ type: 'connection', connection: { kind: 'stopped', reason: msg, advice: adviceFor(e.code) } });
         return;
       }
       store.dispatch({ type: 'connection', connection: { kind: 'retrying', reason: msg, seconds: Math.round(delay / 1000) } });

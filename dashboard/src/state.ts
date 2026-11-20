@@ -24,17 +24,10 @@ export type Connection =
   | { kind: 'loading'; what: 'history' | 'reconnecting'; /** The socket is joined and the log is being read. */ linked?: boolean }
   | { kind: 'live'; refused: number }
   | { kind: 'retrying'; reason: string; seconds: number }
-  | { kind: 'stopped'; reason: string; advice: Advice; /** The gateway's stop code, when it gave one. */ code?: string };
+  | { kind: 'stopped'; reason: string; advice: Advice };
 
 /** The next step a stop reason backs: a new sign-in link, a reload for a newer page, or nothing to suggest. */
 export type Advice = 'sign-in' | 'reload' | null;
-
-/** What a person reads for a stop code; the code and the gateway's words stay in a details line. */
-export const STOP_TEXT: Record<string, string> = {
-  signed_out: 'Your session ended.',
-  forbidden: 'This link no longer gives access.',
-  newer_format: 'This page is older than the log.',
-};
 
 /** The advice for a stop code. Only codes that say why get a hint; the rest show the reason alone. */
 export function adviceFor(code: string): Advice {
@@ -275,6 +268,6 @@ export function describe(c: Connection, count: number): { text: string; tone: 'o
     case 'retrying':
       return { text: `Disconnected: ${c.reason}. Retrying in ${c.seconds} s`, tone: 'warn' };
     case 'stopped':
-      return { text: `Stopped: ${(c.code && STOP_TEXT[c.code]?.replace(/\.$/, '')) || c.reason}`, tone: 'error' };
+      return { text: `Stopped: ${c.reason}`, tone: 'error' };
   }
 }

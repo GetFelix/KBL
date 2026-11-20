@@ -31,19 +31,13 @@ export function childStrip(root: string, c: ChildSummary, open: boolean, href: (
       class: 'child-link',
       'data-child': k.id,
       href: href(k.id),
-      // The row shows the kind, state and holder; the full name stays for a screen reader and a hover.
-      'aria-label': `${lead(k)} ${k.title}, ${stageLabel(k.stage)}${k.holder ? `, held by ${k.holder}` : ''}`,
-      title: `${lead(k)} ${k.title}`,
       onclick: (e) => {
         const m = e as MouseEvent;
         if (m.metaKey || m.ctrlKey || m.shiftKey || m.button !== 0) return;
         e.preventDefault();
         on.open(k.id);
       },
-    },
-    h('span', { class: 'child-kind' }, k.work ? k.work.charAt(0).toUpperCase() + k.work.slice(1) : k.title),
-    h('span', { class: 'child-state' }, stageLabel(k.stage)),
-    k.holder ? h('span', { class: 'child-holder muted' }, k.holder) : null))),
+    }, `${lead(k)} ${k.title}`, h('span', { class: 'muted' }, ` ${stageLabel(k.stage)}`)))),
   );
   return h('div', { class: 'child-strip' }, chip, list);
 }

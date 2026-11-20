@@ -30,9 +30,7 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   const groupSelect = h('select', { id: 'group-by', 'data-group-by': '', onchange: (e) => on.group((e.target as HTMLSelectElement).value) });
   const groupLabel = h('label', { class: 'filter group-by' }, h('span', { class: 'filter-label' }, 'Group by'), groupSelect);
   const clear = h('button', { type: 'button', class: 'button ghost', onclick: on.clearFilters, hidden: true }, 'Clear filters');
-  const save = h('button', { type: 'button', class: 'button save-view', onclick: on.saveView }, 'Save view');
-  // On a phone the selects fold behind this button so the list starts under the layout switch.
-  const toggle = h('button', { type: 'button', class: 'button filter-toggle', 'aria-expanded': 'false', onclick: () => setOpen(el.dataset.open === undefined) }, 'Filters');
+  const save = h('button', { type: 'button', class: 'button ghost', onclick: on.saveView }, 'Save view');
   // Polite, so a new filter is announced once it applies, without stealing focus. The
   // text sits directly in the region so :empty can collapse it.
   const summaryEl = h('p', { class: 'filter-summary muted', 'aria-live': 'polite' });
@@ -40,16 +38,11 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     h('div', { class: 'segmented', role: 'group', 'aria-label': 'Layout' }, list, board, kbd(displayChord(chordFor('layout'), mac))),
     children,
     groupLabel,
-    toggle,
     h('div', { class: 'filters', role: 'group', 'aria-label': 'Filters' }, selects),
     summaryEl,
-    h('span', { class: 'filter-actions' }, clear, save),
+    clear,
+    save,
   );
-  const setOpen = (open: boolean) => {
-    if (open) el.dataset.open = '';
-    else delete el.dataset.open;
-    toggle.setAttribute('aria-expanded', String(open));
-  };
   // Selects are kept per facet and their options updated in place: rebuilding a
   // select under a keyboard or an open picker would close it and lose the place.
   const kept = new Map<Facet, { label: HTMLLabelElement; select: HTMLSelectElement }>();
@@ -116,8 +109,6 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
     });
     const n = activeCount(s.filters);
     clear.hidden = n === 0;
-    const count = n + (s.group && s.group !== NO_GROUP ? 1 : 0);
-    toggle.textContent = count ? `Filters (${count})` : 'Filters';
     // Counts what the filters leave, folded groups included.
     const shownCount = visible(s).reduce((n, g) => n + g.items.length, 0);
     const parts = [s.query.trim() && `search “${s.query.trim()}”`, summary(s.filters)].filter(Boolean);
@@ -127,20 +118,11 @@ export function filterBar(on: FilterHandlers, mac: boolean) {
   return {
     el,
     /** The first filter, for the F key; null when nothing recorded a facet. */
-    first: () => {
-      if (toggle.offsetParent) setOpen(true);
-      return selects.querySelector('select');
-    },
+    first: () => selects.querySelector('select'),
     /** Group by, for the G key. */
-    focusGroup: () => {
-      if (toggle.offsetParent) setOpen(true);
-      groupSelect.focus();
-    },
+    focusGroup: () => groupSelect.focus(),
     /** Save view, where focus goes when the last saved view is deleted. */
-    focusSave: () => {
-      if (toggle.offsetParent) setOpen(true);
-      save.focus();
-    },
+    focusSave: () => save.focus(),
     render,
   };
 }
