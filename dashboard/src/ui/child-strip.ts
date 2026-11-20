@@ -2,6 +2,7 @@
 // children as a list of links. A button beside the card, not inside it, because a
 // card is a link and a link cannot hold a button.
 import { chipText, type ChildSummary } from '../card.ts';
+import type { ItemRow } from '../fold.ts';
 import { lead } from '../card.ts';
 import { stageLabel } from '../list.ts';
 import { h } from './dom.ts';
@@ -16,6 +17,27 @@ export function stripKey(c: ChildSummary | undefined, open: boolean): string {
   return c ? `${open}|${chipText(c)}|${c.kids.map((k) => `${k.id}:${k.stage}`).join(',')}` : '';
 }
 
+/** One sub-task as a compact row: its kind, a state chip and who holds it. The id and the parent's title are already on screen. */
+export function childLink(k: ItemRow, attrs: Record<string, string>, href: string, open: () => void): HTMLElement {
+  return h('a', {
+    class: 'child-link',
+    ...attrs,
+    href,
+    // The row shows the kind, state and holder; the full name stays for a screen reader and a hover.
+    'aria-label': `${lead(k)} ${k.title}, ${stageLabel(k.stage)}${k.holder ? `, held by ${k.holder}` : ''}`,
+    title: `${lead(k)} ${k.title}`,
+    onclick: (e) => {
+      const m = e as MouseEvent;
+      if (m.metaKey || m.ctrlKey || m.shiftKey || m.button !== 0) return;
+      e.preventDefault();
+      open();
+    },
+  },
+  h('span', { class: 'child-kind' }, k.work ? k.work.charAt(0).toUpperCase() + k.work.slice(1) : k.title),
+  h('span', { class: 'child-state' }, stageLabel(k.stage)),
+  k.holder ? h('span', { class: 'child-holder muted' }, k.holder) : null);
+}
+
 export function childStrip(root: string, c: ChildSummary, open: boolean, href: (id: string) => string, on: StripHandlers): HTMLElement {
   const listId = `children-${root}`;
   const chip = h('button', {
@@ -27,23 +49,7 @@ export function childStrip(root: string, c: ChildSummary, open: boolean, href: (
     onclick: () => on.toggle(root),
   }, h('span', { class: 'chip-caret', 'aria-hidden': 'true' }, open ? '▾' : '▸'), chipText(c));
   const list = h('ul', { id: listId, class: 'child-list', hidden: !open },
-    ...c.kids.map((k) => h('li', {}, h('a', {
-      class: 'child-link',
-      'data-child': k.id,
-      href: href(k.id),
-      // The row shows the kind, state and holder; the full name stays for a screen reader and a hover.
-      'aria-label': `${lead(k)} ${k.title}, ${stageLabel(k.stage)}${k.holder ? `, held by ${k.holder}` : ''}`,
-      title: `${lead(k)} ${k.title}`,
-      onclick: (e) => {
-        const m = e as MouseEvent;
-        if (m.metaKey || m.ctrlKey || m.shiftKey || m.button !== 0) return;
-        e.preventDefault();
-        on.open(k.id);
-      },
-    },
-    h('span', { class: 'child-kind' }, k.work ? k.work.charAt(0).toUpperCase() + k.work.slice(1) : k.title),
-    h('span', { class: 'child-state' }, stageLabel(k.stage)),
-    k.holder ? h('span', { class: 'child-holder muted' }, k.holder) : null))),
+    ...c.kids.map((k) => h('li', {}, childLink(k, { 'data-child': k.id }, href(k.id), () => on.open(k.id)))),
   );
   return h('div', { class: 'child-strip' }, chip, list);
 }

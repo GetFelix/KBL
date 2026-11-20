@@ -106,11 +106,21 @@ export function relatedLine(i: Pick<ItemRow, 'related'>, items: readonly ItemRow
 }
 
 /** The pull request as `PR #2300` with what upstream shows: merged, closed, or the checks. */
+/** A pull request reference as recorded: `owner/repo#N`, or a pull request address. */
+export function parsePr(pr: string): { label: string; url: string | null } {
+  const id = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(pr);
+  if (id) return { label: `#${id[3]}`, url: `https://github.com/${id[1]}/${id[2]}/pull/${id[3]}` };
+  const url = /^(https?:\/\/[^\s/]+\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+))(?:[/?#]\S*)?$/.exec(pr);
+  if (url) return { label: `${url[2]}/${url[3]}#${url[4]}`, url: url[1] };
+  const n = /#(\d+)$/.exec(pr);
+  return { label: n ? `#${n[1]}` : pr, url: null };
+}
+
 export function prText(i: ItemRow): string | null {
   if (!i.pr) return null;
-  const n = i.pr.split('#').pop();
+  const n = parsePr(i.pr).label;
   const state = i.pr_phase === 'merged' ? 'merged' : i.pr_phase === 'closed' ? 'closed' : i.pr_checks === 'green' ? 'checks pass' : i.pr_checks === 'red' ? 'checks fail' : i.pr_checks === 'pending' ? 'checks running' : '';
-  return state ? `PR #${n}, ${state}` : `PR #${n}`;
+  return state ? `PR ${n}, ${state}` : `PR ${n}`;
 }
 
 /** What a person blocked the item on, such as `Blocked on azure-vms until 21 Nov: no credit`. Null when it has no block that still holds. */

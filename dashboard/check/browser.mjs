@@ -744,6 +744,14 @@ try {
   await page.waitFor(`!document.querySelector('#children-gh-2300').hidden`);
   check(await page.eval(`(() => { const l = [...document.querySelectorAll('#children-gh-2300 .child-link')]; return l.length > 0 && l.every((a) => { const st = a.querySelector('.child-state'); return st.getClientRects().length === 1 && st.getBoundingClientRect().height < 30 && a.getBoundingClientRect().height < 60; }); })()`), 'in the list, an expanded sub-task is one line with its state chip on one line');
   await shoot('children-list-expanded-dark');
+  // The item panel with a linked pull request and child work.
+  await page.eval(`document.querySelector('.row[data-id=gh-2300]').click(); true`);
+  await page.waitFor(`document.querySelector('.panel-ref')?.textContent === 'felix#2300'`);
+  check(await page.eval(`document.querySelector('.panel-head .row-id').textContent === 'gh-2300'`), 'the panel header leads with the upstream reference and keeps the item id beside it');
+  check(await page.eval(`(() => { const a = document.querySelector('.linked-work a[data-focus=pr-link]'); return !!a && !/#https?:/.test(a.textContent) && a.textContent.startsWith('PR #2300'); })()`), 'the pull request reads PR #N and links out');
+  check(await page.eval(`(() => { const a = document.querySelector('.linked-work .child-link'); return !!a && a.querySelector('.child-state').getClientRects().length === 1 && a.getBoundingClientRect().height < 60 && !a.textContent.includes('Review the cache fix'); })()`), 'the panel lists child work as a compact row, without the parent title repeated');
+  check(await page.eval(`![...document.querySelectorAll('.panel dd')].some((d) => /triage:/i.test(d.textContent))`), 'the stage does not lead with triage while a pull request is linked');
+  await shoot('panel-linked-dark');
   clean();
 
   // Board with the item panel open: the columns keep their width and the board scrolls under the panel.

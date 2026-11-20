@@ -88,6 +88,12 @@ code, kbd, .row-id { font-family: var(--font-mono); font-size: var(--text-sm); }
 .button.ghost { border-color: transparent; background: transparent; }
 
 .panel { border-left: 1px solid var(--line); background: var(--panel); padding: var(--space-4) var(--space-5); position: sticky; top: var(--topbar-height); align-self: start; max-height: calc(100vh - var(--topbar-height)); overflow-y: auto; }
+.panel-ids { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); min-width: 0; }
+.panel-ref { font-family: var(--font-mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.id-copy { border: 0; background: none; padding: 0; cursor: pointer; font-size: var(--text-xs); min-width: 0; }
+.id-copy:hover { text-decoration: underline; }
+.id-copy[data-copied]::after { content: ' copied'; }
+.child-item .child-link { margin-left: calc(var(--space-2) * -1); }
 .panel-head { display: flex; justify-content: space-between; align-items: center; }
 .panel-title { font-size: var(--text-xl); margin: var(--space-3) 0; }
 .fields { display: grid; grid-template-columns: auto 1fr; gap: var(--space-2) var(--space-4); margin: 0; }
