@@ -649,7 +649,7 @@ impl<T: TrackerApi> Supervisor<T> {
             .iter()
             .filter_map(|name| Some((name, (self.0.env)(name)?)));
         cmd.env_clear().envs(passed);
-        for (k, v) in &profile.set_env {
+        for (k, v) in &profile.fixed_env() {
             cmd.env(k, render::fill(v, &PATH_VARS, &path_vars)?);
         }
         let child = cmd.spawn().with_context(|| format!("start {program}"))?;

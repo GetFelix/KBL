@@ -1,0 +1,1 @@
+A supervise profile can set `git_identity = { name, email }`, which `kbl-mcp` turns into the four `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables for that worker (`set_env` wins if both name one). The email is checked when the config loads. The profile docs show how to turn off Claude Code's `Co-Authored-By` trailer and PR footer, which fail CLA checks.

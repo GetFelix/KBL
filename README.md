@@ -466,6 +466,8 @@ TOML file of launch profiles (example profiles for Claude Code, Codex CLI and Gi
 | `supervise_stop {worker}` or `{all: true}` | Stops one worker, or every worker and the top-up |
 | `supervise_status` | Workers and what each holds, who finished or failed since the last look, ready counts by kind and tier, and the top-up state |
 
+Set `git_identity` on a profile so workers commit as an identity you choose, and turn off the vendor's `Co-Authored-By` trailer (Claude Code: `--settings` with `{"attribution": false}`, v2.1.281+); see [commit identity](docs/supervise-profiles.md#commit-identity-and-vendor-attribution).
+
 A worker starts with only the environment names in its profile's `pass_env`. On macOS, Claude Code needs `USER` there to read its saved login, or an `ANTHROPIC_API_KEY`; otherwise workers exit with "Not logged in".
 
 `kbl-mcp` makes no model calls: it runs the configured command, without a shell, or calls the configured hook, and

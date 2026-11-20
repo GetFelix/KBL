@@ -79,9 +79,53 @@ pub(crate) struct Profile {
     pub(crate) pass_env: Vec<String>,
     #[serde(default)]
     pub(crate) set_env: BTreeMap<String, String>,
+    /// The name and email the worker's commits carry, set as the four `GIT_*` variables.
+    pub(crate) git_identity: Option<GitIdentity>,
     pub(crate) url: Option<String>,
     /// The supervisor's variable holding a bearer for the hook.
     pub(crate) hook_token_env: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GitIdentity {
+    pub(crate) name: String,
+    pub(crate) email: String,
+}
+
+impl GitIdentity {
+    fn check(&self) -> Result<()> {
+        let bad = |s: &str| s.chars().any(char::is_control) || s.len() > 254;
+        if self.name.trim().is_empty() || bad(&self.name) {
+            bail!("git_identity name must be 1 to 254 characters with no control characters");
+        }
+        let ok = !bad(&self.email)
+            && self.email.split_once('@').is_some_and(|(local, domain)| {
+                !local.is_empty()
+                    && !domain.contains('@')
+                    && domain.contains('.')
+                    && !domain.starts_with('.')
+                    && !domain.ends_with('.')
+            })
+            && !self.email.contains(char::is_whitespace);
+        if !ok {
+            bail!(
+                "git_identity email {:?} is not an email address",
+                self.email
+            );
+        }
+        Ok(())
+    }
+
+    /// The four variables git reads for the author and the committer.
+    pub(crate) fn env(&self) -> [(&'static str, &str); 4] {
+        [
+            ("GIT_AUTHOR_NAME", &self.name),
+            ("GIT_AUTHOR_EMAIL", &self.email),
+            ("GIT_COMMITTER_NAME", &self.name),
+            ("GIT_COMMITTER_EMAIL", &self.email),
+        ]
+    }
 }
 
 /// One row of the fit table. Every field it lists must match; a list matches
@@ -228,6 +272,9 @@ impl Profile {
             check_env_name(k, "set_env")?;
             check_template(v, &PATH_VARS).with_context(|| format!("set_env {k}"))?;
         }
+        if let Some(g) = &self.git_identity {
+            g.check()?;
+        }
         match self.kind {
             Kind::Command => {
                 if self.url.is_some() || self.hook_token_env.is_some() {
@@ -255,9 +302,10 @@ impl Profile {
                     || self.mcp_config_file.is_some()
                     || !self.pass_env.is_empty()
                     || !self.set_env.is_empty()
+                    || self.git_identity.is_some()
                 {
                     bail!(
-                        "command, workdir, mcp_config_file, pass_env and set_env are for kind = \"command\""
+                        "command, workdir, mcp_config_file, pass_env, set_env and git_identity are for kind = \"command\""
                     );
                 }
                 let url = self.url.as_deref().context("a hook needs url")?;
@@ -274,6 +322,19 @@ impl Profile {
             }
         }
         Ok(())
+    }
+
+    /// The variables the worker process gets beyond `pass_env`: `git_identity` first, then
+    /// `set_env`, so a `set_env` entry wins over the identity.
+    pub(crate) fn fixed_env(&self) -> BTreeMap<String, String> {
+        let mut env: BTreeMap<String, String> = self
+            .git_identity
+            .iter()
+            .flat_map(GitIdentity::env)
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+        env.extend(self.set_env.clone());
+        env
     }
 
     /// Whether the command fills `{model}`, so a launch without one must fail.
