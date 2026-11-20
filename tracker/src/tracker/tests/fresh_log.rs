@@ -79,3 +79,11 @@ async fn a_format_refusal_says_what_is_needed_and_how() {
         "{m}"
     );
 }
+
+#[tokio::test]
+async fn a_log_whose_offsets_hold_only_blanks_is_still_new() {
+    let fake = Fake::default();
+    fake.blank(WORK_EVENTS);
+    let t = start_with(&fake, fresh()).await;
+    assert_eq!(t.0.core.lock().await.state.format(), FORMAT);
+}

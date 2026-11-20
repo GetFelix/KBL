@@ -868,7 +868,8 @@ impl<B: Broker> Tracker<B> {
         }
         self.begin().await?;
         let mut core = self.0.core.lock().await;
-        if core.state.at.is_some() || core.tail > 0 {
+        // Offsets with no record (a new Raft leader's blank) do not make a log used.
+        if core.state.at.is_some() {
             return Ok(());
         }
         // A raise is a person's record; the tracker writes it on the person's behalf.
