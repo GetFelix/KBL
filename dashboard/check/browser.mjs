@@ -366,6 +366,9 @@ try {
   await page.waitFor(live);
   await page.eval(`document.querySelector('[data-chip=gh-2300]').click(); true`);
   await shoot('children-list-expanded-dark');
+  await page.eval(`document.querySelector('.row[data-id=gh-2300]').click(); true`);
+  await new Promise((ok) => setTimeout(ok, 400));
+  await shoot('panel-linked-dark');
   clean();
   await open(`${connected}&layout=board`);
   await page.waitFor(live);
