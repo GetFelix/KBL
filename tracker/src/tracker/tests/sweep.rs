@@ -961,12 +961,26 @@ async fn worker_start_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng) {
 
 /// The supervisor stops a worker, or the worker says it is done. Either one
 /// kills the token and frees what the worker held, with no try spent.
-async fn worker_end_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, finish: bool) {
+async fn worker_end_step(
+    fake: &Fake,
+    t: &Tracker<Fake>,
+    m: &mut Model,
+    rng: &mut Rng,
+    finish: bool,
+) {
     let name = WORKERS[rng.below(WORKERS.len())];
     let Some(token) = m.tokens.get(name).cloned() else {
         return;
     };
     let live = t.worker_by_token(&token).is_some();
+    // The log decides whether the worker already ended. The token map is only
+    // as fresh as the tracker's state: a write that did not land drops the token
+    // until the next rebuild, with the worker still live on the log.
+    let ended_before = replay(fake)
+        .state
+        .workers
+        .get(&key(name))
+        .is_some_and(|w| w.stopped_ms.is_some());
     let ended = if finish {
         if !live {
             return;
@@ -976,7 +990,7 @@ async fn worker_end_step(t: &Tracker<Fake>, m: &mut Model, rng: &mut Rng, finish
         t.stop_worker(Actor::Agent, key("sup"), key(name)).await
     };
     if ended.is_ok() {
-        assert!(live, "{name} ended twice");
+        assert!(!ended_before, "{name} ended twice");
         assert!(t.worker_by_token(&token).is_none(), "{name}'s token lives");
         m.beliefs.remove(name);
     }
@@ -1039,8 +1053,8 @@ async fn step(fake: &Fake, t: &mut Trackers, m: &mut Model, rng: &mut Rng) {
     }
     match op {
         18..=19 => worker_start_step(serving, m, rng).await,
-        20 => worker_end_step(serving, m, rng, false).await,
-        21 => worker_end_step(serving, m, rng, true).await,
+        20 => worker_end_step(fake, serving, m, rng, false).await,
+        21 => worker_end_step(fake, serving, m, rng, true).await,
         22 if rng.below(4) == 0 => supervisor_gone_step(serving, m).await,
         22 => {}
         // Also where a worker with a dead token lands: it does nothing.
