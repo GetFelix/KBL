@@ -451,3 +451,54 @@ async fn a_heartbeat_needs_the_log_at_format_26() {
         .unwrap_err();
     assert!(matches!(err, Error::Format(_)), "{err}");
 }
+
+#[tokio::test]
+async fn ending_a_dead_worker_again_is_refused_and_writes_nothing() {
+    let fake = Fake::default();
+    let t = at_21(&fake).await;
+    start_for(&t, "sup", "sup-w1").await.unwrap();
+    t.stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
+        .await
+        .unwrap();
+    let before = fake.log().len();
+    assert!(
+        t.stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
+            .await
+            .is_err()
+    );
+    assert!(t.finish_worker(&agent("sup-w1")).await.is_err());
+    assert_eq!(fake.log().len(), before);
+}
+
+#[tokio::test]
+async fn a_stop_that_did_not_land_can_be_retried_once() {
+    let fake = Fake::default();
+    let t = at_21(&fake).await;
+    let tok = token_of(&start_for(&t, "sup", "sup-w1").await.unwrap());
+    fake.fail_publishes_to_after(WORK_EVENTS, 0);
+    assert!(
+        t.stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
+            .await
+            .is_err()
+    );
+    // The token is gone until the rebuild, but the worker was never stopped
+    // on the log, so the retry is its first end and the next one is refused.
+    assert_eq!(t.worker_by_token(&tok), None);
+    fake.net.lock().unwrap().publish_budget = None;
+    t.stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
+        .await
+        .unwrap();
+    let stops = |f: &Fake| {
+        f.log()
+            .iter()
+            .filter(|r| matches!(r.record, WorkRecord::WorkerStopped { .. }))
+            .count()
+    };
+    assert_eq!(stops(&fake), 1);
+    assert!(
+        t.stop_worker(Actor::Agent, key("sup"), key("sup-w1"))
+            .await
+            .is_err()
+    );
+    assert_eq!(stops(&fake), 1);
+}
